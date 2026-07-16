@@ -224,7 +224,7 @@
               var slot = el('div', {});
               done.forEach(function (sx) { slot.appendChild(sessionRow(sx, true)); });
               return slot;
-            }));
+            }, { stateKey: 'simulation-finished-sessions' }));
         }
       }
 
@@ -1479,7 +1479,7 @@
         coverageCard.appendChild(UI.expandable('Review basis and sources for all ' + syms.length + ' symbols', function () {
           return table(['Symbol', 'Underlying range', 'Evidence', 'Bars', 'Basis & sources', 'Options'],
             syms.map(function (s) { return coverageRow(s, true); }));
-        }));
+        }, { stateKey: 'data-symbol-coverage-sources' }));
       }
     })();
 
@@ -1807,7 +1807,8 @@
           el('div', { class: 'small' }, s.hint)));
       });
       if (!support.childElementCount) support.appendChild(el('p', { class: 'muted' }, 'No supporting feeds are registered.'));
-      sourcesCard.appendChild(UI.expandable('Review ' + (data.feeds || []).length + ' feed details', function () { return support; }));
+      sourcesCard.appendChild(UI.expandable('Review ' + (data.feeds || []).length + ' feed details', function () { return support; },
+        { stateKey: 'data-feed-details' }));
     })();
 
     // --- Provider health (the old status view, kept as detail) ---

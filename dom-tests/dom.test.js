@@ -24,6 +24,13 @@ const JAVA = process.env.JAVA_BIN || 'java';
 let server, browser, context, page, pg;
 let planSequence = 0;
 
+function latestMtime(root) {
+  return fs.readdirSync(root, { withFileTypes: true }).reduce((latest, entry) => {
+    const file = path.join(root, entry.name);
+    return Math.max(latest, entry.isDirectory() ? latestMtime(file) : fs.statSync(file).mtimeMs);
+  }, 0);
+}
+
 async function waitForServer(tries = 60) {
   for (let i = 0; i < tries; i++) {
     try {
@@ -179,6 +186,9 @@ async function openResearchTab(key) {
 }
 
 before(async () => {
+  assert.ok(fs.existsSync(JAR), 'Build target/strikebench.jar before running the browser suite');
+  assert.ok(fs.statSync(JAR).mtimeMs >= latestMtime(path.resolve(__dirname, '../src/main')),
+    'target/strikebench.jar is older than src/main; run mvn package so browser evidence cannot certify stale UI or backend code');
   pg = freshDb();
   server = spawn(JAVA, ['-jar', JAR], {
     env: { ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true' },
@@ -3426,9 +3436,33 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     /Other Section 1256 contract[\s\S]*SPX, SPXW, SPXpm, XSP, NDX, NDXP, VIX, VIXW, RUT, RUTW, DJX, OEX, XEO/,
     'manual entry names the complete automatic broad-based index taxonomy');
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('ASSIGNMENT');
+  await page.waitForTimeout(50);
+  const assignmentEditorState = await page.evaluate(() => ({
+    event: document.querySelector('#portfolio-book-event')?.value,
+    rows: document.querySelectorAll('#portfolio-book-legs .book-leg-row').length,
+    hidden: document.querySelector('#portfolio-book-legs')?.hidden,
+    guidance: document.querySelector('.book-event-guidance')?.textContent,
+    symbolLabels: Array.from(document.querySelectorAll('#portfolio-book-legs .book-leg-row input[type="text"]'))
+      .map(input => input.id && document.querySelector('label[for="' + input.id + '"]')?.textContent.trim())
+  }));
+  assert.equal(assignmentEditorState.rows, 2,
+    'assignment builds its option and resulting-share rows: ' + JSON.stringify(assignmentEditorState));
+  assert.deepEqual(assignmentEditorState.symbolLabels, ['Symbol', 'Symbol'],
+    'both assignment legs retain explicit accessible symbol labels');
   assert.match(await page.textContent('.book-event-guidance'),
     /broad-based Section 1256 index options are cash-settled[\s\S]*closing option transaction/i,
     'physical-delivery entry tells users how to record an index cash settlement instead');
+  const assignmentOption = page.locator('#portfolio-book-legs .book-leg-row').first();
+  await assignmentOption.locator('input[type="text"]').first().fill('AAPL');
+  await assignmentOption.locator('input[type="number"][step="0.01"]').fill('250');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('EXPIRATION');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('ASSIGNMENT');
+  assert.equal(await page.locator('#portfolio-book-legs .book-leg-row').first()
+    .locator('input[type="text"]').first().inputValue(), 'AAPL',
+  'changing activity type preserves the assignment legs instead of erasing entered broker facts');
+  assert.equal(await page.locator('#portfolio-book-legs .book-leg-row').first()
+    .locator('input[type="number"][step="0.01"]').inputValue(), '250',
+  'returning to an activity type restores its exact contract draft');
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
   await page.waitForSelector('.book-shared-position-editor .position-editor');
   await page.locator('.book-shared-position-editor input[type="datetime-local"]').fill('2026-07-15T10:30');
@@ -3447,7 +3481,11 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('textbox', { name: 'Stable broker reference', exact: true }).fill('dom-stock-open-1');
   await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
   await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("Recorded in")');
-  await page.getByRole('button', { name: 'Refresh account activity', exact: true }).click();
+  assert.match(await page.locator('.book-shared-position-editor .position-editor-result').innerText(),
+    /BOOK AFTER THIS RECORD[\s\S]*Realized P\/L[\s\S]*Unrealized P\/L[\s\S]*Cash in this book/i,
+  'recording answers with refreshed profit and cash beside the exact trade editor');
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('tab', { name: 'Activity', exact: true }).click();
   await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''))
     .catch(async error => {
       throw new Error('Recorded stock did not reconcile into the journal: '
@@ -3460,6 +3498,12 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('spinbutton', { name: 'Amount $', exact: true }).fill('5');
   await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-interest-1');
   await page.getByRole('button', { name: 'Record activity', exact: true }).click();
+  await page.waitForSelector('.book-record-result:has-text("Activity recorded")');
+  assert.match(await page.locator('.book-record-result').innerText(),
+    /Realized P\/L[\s\S]*Unrealized P\/L[\s\S]*Cash in this book[\s\S]*\$99,004\.00/i,
+  'cash activity reports its refreshed book consequence beside the command without repainting the page');
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('tab', { name: 'Activity', exact: true }).click();
   await page.waitForFunction(() => /3 shown/.test(document.querySelector('.book-journal')?.textContent || ''))
     .catch(async error => {
       throw new Error('Interest did not reconcile into the journal: '
@@ -3812,12 +3856,86 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   });
   assert.deepEqual(disclosureIdentity, [true, false],
     'identical disclosure headings retain independent state across a repaint');
+  const viewportDisclosure = await page.evaluate(() => {
+    function mount(label) {
+      const host = document.createElement('div');
+      host.appendChild(UI.expandable(label, () => document.createTextNode('detail'),
+        { open: 'desktop', stateKey: 'viewport-disclosure-contract' }));
+      document.body.appendChild(host);
+      return host;
+    }
+    const first = mount('Dynamic count (3)');
+    const openedByDesktop = first.querySelector('.xp').classList.contains('open');
+    first.querySelector('.xp-head').click();
+    first.remove();
+    const second = mount('Dynamic count (9)');
+    const userChoiceSurvivesLabelChange = !second.querySelector('.xp').classList.contains('open');
+    const stableKey = second.querySelector('.xp').dataset.expandableKey;
+    second.remove();
+    return { openedByDesktop, userChoiceSurvivesLabelChange,
+      stableKey: /viewport-disclosure-contract/.test(stableKey || '') };
+  });
+  assert.deepEqual(viewportDisclosure,
+    { openedByDesktop: true, userChoiceSurvivesLabelChange: true, stableKey: true },
+  'desktop defaults and explicit user choices use stable disclosure identity rather than changing labels');
   const editorPlan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish');
   await page.click('#plan-tool-yourTrade');
   await page.waitForSelector('#plan-strategy-body .position-editor');
   await page.waitForSelector('#plan-strategy-body .position-chain-contract');
   await page.locator('#plan-strategy-body .position-chain-contract').first().click();
   await page.waitForSelector('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]:not([value=""])');
+  await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
+  await page.evaluate(() => {
+    window.__positionEditorShell = document.querySelector('#plan-strategy-body .position-editor');
+    window.__positionChartRegion = document.querySelector('#plan-strategy-body .position-chart-region');
+  });
+  const legCountBeforeAdd = await page.locator('#plan-strategy-body .position-leg').count();
+  await page.getByRole('button', { name: '+ Add leg', exact: true }).click();
+  await page.waitForFunction(expected => document.querySelectorAll('#plan-strategy-body .position-leg').length === expected,
+    legCountBeforeAdd + 1);
+  await page.waitForTimeout(260);
+  const incrementalAdd = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll('#plan-strategy-body .position-leg'));
+    const added = rows[rows.length - 1];
+    const chartRegion = document.querySelector('#plan-strategy-body .position-chart-region');
+    const remove = rows[0].querySelector('.position-leg-remove');
+    const typeField = Array.from(rows[0].querySelectorAll('label')).find(label => /^Type\b/.test(label.textContent.trim()));
+    const removeBox = remove.getBoundingClientRect();
+    const typeBox = typeField && typeField.getBoundingClientRect();
+    const overlaps = typeBox && !(removeBox.right <= typeBox.left || removeBox.left >= typeBox.right
+      || removeBox.bottom <= typeBox.top || removeBox.top >= typeBox.bottom);
+    const box = added.getBoundingClientRect();
+    return {
+      shellPreserved: window.__positionEditorShell === document.querySelector('#plan-strategy-body .position-editor'),
+      chartRegionPreserved: window.__positionChartRegion === chartRegion,
+      chartVisible: !!chartRegion.querySelector('svg.chart'),
+      partial: chartRegion.classList.contains('is-partial'),
+      highlighted: added.classList.contains('arrival-highlight'),
+      focused: added.contains(document.activeElement),
+      inViewport: box.top < innerHeight && box.bottom > 0,
+      removeInHeader: !!remove.closest('.position-leg-head'),
+      removeOverlapsType: !!overlaps
+    };
+  });
+  assert.deepEqual(incrementalAdd, {
+    shellPreserved: true, chartRegionPreserved: true, chartVisible: true, partial: true,
+    highlighted: true, focused: true, inViewport: true, removeInHeader: true, removeOverlapsType: false
+  }, 'adding a leg updates one row in place, brings it to the user, and keeps a plainly partial payoff visible');
+  await page.locator('#plan-strategy-body .position-leg').last().getByRole('button', { name: /Remove leg/ }).click();
+  await page.waitForFunction(expected => document.querySelectorAll('#plan-strategy-body .position-leg').length === expected,
+    legCountBeforeAdd);
+  await page.evaluate(() => { window.__mountedExactEditor = document.querySelector('#plan-strategy-panel-yourTrade .position-editor'); });
+  await page.getByRole('tab', { name: /All strategies/ }).click();
+  await page.waitForSelector('#plan-strategy-panel-builder:not([hidden])');
+  assert.equal(await page.locator('#plan-strategy-panel-yourTrade[hidden] .position-editor').count(), 1,
+    'switching to Builder hides the exact-package workspace without destroying it');
+  await page.getByRole('tab', { name: /Your trade/ }).click();
+  await page.waitForSelector('#plan-strategy-panel-yourTrade:not([hidden]) .position-editor');
+  assert.equal(await page.evaluate(() => window.__mountedExactEditor
+    === document.querySelector('#plan-strategy-panel-yourTrade .position-editor')), true,
+  'Builder and Your Trade are persistent views over their own work instead of mutually destructive remounts');
+  assert.equal(await page.locator('#plan-strategy-panel-yourTrade .position-leg').count(), legCountBeforeAdd,
+    'the exact package remains intact after visiting the guided Builder');
   await page.waitForSelector('#plan-strategy-body .strike-grip');
   const strikeBeforeKeyboardDrag = await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue();
   const strikeHandle = page.locator('#plan-strategy-body .strike-grip').first();
@@ -3870,7 +3988,7 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   await page.getByRole('button', { name: 'Apply lines', exact: true }).click();
   await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
   assert.match(await page.locator('#plan-strategy-body .position-identity').innerText(),
-    /Exact position package[\s\S]*Analyze once to match these exact legs/i,
+    /Your exact package[\s\S]*payoff updates[\s\S]*Analyze to name the structure[\s\S]*use these exact contracts in this Plan/i,
   'the editor does not invent a catalog identity before the server analyzes the exact package');
   assert.doesNotMatch(await page.getAttribute('#plan-strategy-body .position-editor-visual path.line', 'd'), /NaN/,
     'the exact 20-lot payoff never writes invalid path coordinates');
@@ -3965,9 +4083,16 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     'a selected package seeds the shared editor after its local draft is cleared');
   await page.getByRole('button', { name: 'Visual', exact: true }).click();
   await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
-  const beginnerColumns = await page.locator('.position-entry-workbench').evaluate(node =>
-    getComputedStyle(node).gridTemplateColumns.split(' ').length);
-  assert.equal(beginnerColumns, 1, 'Beginner keeps leg editing and its payoff in one visual sequence');
+  const beginnerLayout = await page.locator('.position-entry-workbench').evaluate(node => {
+    const legs = node.querySelector('.position-entry-legs').getBoundingClientRect();
+    const visual = node.querySelector('.position-entry-visual').getBoundingClientRect();
+    const command = node.querySelector('[data-position-command="analyze"]').getBoundingClientRect();
+    return { columns: getComputedStyle(node).gridTemplateColumns.split(' ').length,
+      aligned: Math.abs(legs.top - visual.top) <= 2,
+      actionWithinWorkbenchViewport: command.bottom <= node.getBoundingClientRect().top + 800 };
+  });
+  assert.deepEqual(beginnerLayout, { columns: 2, aligned: true, actionWithinWorkbenchViewport: true },
+    'Beginner gets the same legs-and-payoff workbench with its primary action in the first workbench viewport');
   await captureSettled('trader-own-p3-editor-beginner.png');
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
@@ -3993,9 +4118,19 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   'the selected exact package keeps its complete assessment and next action after a level repaint');
   const selectedPackageNet = await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).inputValue();
   await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill('0.01');
-  assert.equal(await page.locator('#plan-strategy-body .position-editor-result:has-text("Selected in this Plan")').count(), 0,
-    'editing an input immediately clears a stale selected-package confirmation');
+  const staleSelection = await page.locator('#plan-strategy-body .position-editor-result').evaluate(node => ({
+    stale: node.classList.contains('is-stale'),
+    text: node.textContent,
+    continueDisabled: node.querySelector('button') && node.querySelector('button').disabled
+  }));
+  assert.equal(staleSelection.stale, true, 'editing marks the retained result stale in place');
+  assert.match(staleSelection.text, /Preview needs another analysis[\s\S]*Selected in this Plan/i,
+    'the prior selection stays visible for comparison with an explicit stale warning');
+  assert.equal(staleSelection.continueDisabled, true,
+    'a stale retained selection cannot advance to Outcomes as though it matched the edited package');
   await page.getByRole('spinbutton', { name: 'Package net $', exact: true }).fill(selectedPackageNet);
+  assert.equal(await page.locator('#plan-strategy-body .position-editor-result.is-stale').count(), 0,
+    'restoring the exact selected fields reactivates the matching result without a repaint');
   await page.evaluate(() => App.render());
   await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor-result:has-text("Selected in this Plan")');
   await page.getByRole('button', { name: 'Visual', exact: true }).click();
@@ -4007,11 +4142,15 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     document: document.documentElement.scrollWidth,
     columns: getComputedStyle(document.querySelector('.position-entry-workbench')).gridTemplateColumns.split(' ').length,
     editorRight: Math.round(document.querySelector('.position-entry-workbench').getBoundingClientRect().right),
-    appRight: Math.round(document.getElementById('app').getBoundingClientRect().right)
+    appRight: Math.round(document.getElementById('app').getBoundingClientRect().right),
+    visualBeforeLegs: document.querySelector('.position-entry-visual').getBoundingClientRect().top
+      < document.querySelector('.position-entry-legs').getBoundingClientRect().top
   }));
   assert.ok(mobile.document <= mobile.viewport + 2 && mobile.editorRight <= mobile.appRight + 2,
     'the shared editor stays inside the mobile page: ' + JSON.stringify(mobile));
   assert.equal(mobile.columns, 1, 'mobile keeps the legs and visual in one readable sequence');
+  assert.equal(mobile.visualBeforeLegs, true,
+    'mobile presents the payoff and primary command before the long leg form instead of burying them below it');
   await captureSettled('trader-own-p3-editor-mobile.png');
   await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -4885,18 +5024,9 @@ test('shared editor records exact broker facts in the tracked book without touch
   const responseText = await response.text();
   assert.equal(response.status(), 201, 'tracked broker package was refused: ' + responseText);
   await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("Recorded in")');
-  await page.getByRole('button', { name: 'Refresh account activity', exact: true }).click();
-  await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''),
-    null, { timeout: 15000 });
-  assert.equal(await page.locator('.book-journal [data-transaction-id].plan-return-focus').count(), 1,
-    'refreshing after Record focuses the exact new ledger consequence in view');
-  const tradeDisclosure = page.locator('.book-journal .xp-head').filter({ hasText: /trade/i }).first();
-  await ensureExpanded(tradeDisclosure);
-  const tradeDetail = await tradeDisclosure.locator('..').textContent();
-  assert.match(tradeDetail, /AAPL[\s\S]*put/i,
-    'the tracked transaction disclosure preserves both exact option legs');
-  assert.match(tradeDetail, /ReferenceDOM-SHARED-EDITOR-001/i,
-    'the tracked transaction disclosure preserves both exact option legs and the broker reference');
+  assert.match(await page.locator('.book-shared-position-editor .position-editor-result').innerText(),
+    /BOOK AFTER THIS RECORD[\s\S]*Realized P\/L[\s\S]*Unrealized P\/L[\s\S]*Cash in this book/i,
+  'the factual command answers with current book profit and cash at the point of action');
   const summary = await page.evaluate(async id => API.getFresh('/api/portfolio/accounts/' + id + '/summary'), account.id);
   assert.equal(summary.bookCashCents, 10017300,
     'the tracked book receives the exact $175 package credit less $2 fees');
@@ -4922,6 +5052,20 @@ test('shared editor records exact broker facts in the tracked book without touch
     'the shared tracked-book editor remains contained on mobile: ' + JSON.stringify(containment));
   await captureSettled('trader-own-p3-record-mobile.png');
   await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+  await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''),
+    null, { timeout: 15000 });
+  assert.equal(await page.locator('.book-journal [data-transaction-id].plan-return-focus').count(), 1,
+    'opening Activity focuses the exact newly recorded ledger consequence');
+  const tradeDisclosure = page.locator('.book-journal .xp-head').filter({ hasText: /trade/i }).first();
+  await ensureExpanded(tradeDisclosure);
+  const tradeDetail = await tradeDisclosure.locator('..').textContent();
+  assert.match(tradeDetail, /AAPL[\s\S]*put/i,
+    'the tracked transaction disclosure preserves both exact option legs');
+  assert.match(tradeDetail, /ReferenceDOM-SHARED-EDITOR-001/i,
+    'the tracked transaction disclosure preserves both exact option legs and the broker reference');
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
   await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
   await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("already recorded as")');
   const duplicateMessage = await page.textContent('.book-shared-position-editor .position-editor-result');

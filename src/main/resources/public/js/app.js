@@ -9,6 +9,19 @@
     window.history.scrollRestoration = 'manual';
   }
 
+  function workspaceRoute(hash) {
+    var path = String(hash || '#/').split('?')[0];
+    var plan = /^#\/plan\/([^/]+)/.exec(path);
+    if (plan) return 'plan:' + plan[1];
+    var trade = /^#\/portfolio\/trade\/([^/]+)/.exec(path);
+    if (trade) return 'trade:' + trade[1];
+    var book = /^#\/portfolio\/book(?:\/([^/]+))?/.exec(path);
+    if (book) return 'book';
+    var research = /^#\/research(?:\/([^/]+))?/.exec(path);
+    if (research) return 'research:' + (research[1] || 'index');
+    return path.split('/').slice(0, 2).join('/');
+  }
+
   var App = {
     state: { serverStale: false, plans: [], planCollections: {}, activePlanId: null,
       activePlanByMarket: {}, provisionalPlansByMarket: {}, planUi: {} },
@@ -94,11 +107,11 @@
     alive: function (token) { return token === App.navToken; },
 
     navigate: function (hash) {
-      // A destination route starts at its own top. Research's sector explorer is the
-      // deliberate exception: it restores its saved position after the index repaints.
-      window.scrollTo(0, 0);
+      var preservePosition = workspaceRoute(window.location.hash) === workspaceRoute(hash);
+      App._preserveNextRoutePosition = preservePosition;
+      if (!preservePosition) window.scrollTo(0, 0);
       if (window.location.hash === hash) {
-        App._scrollOnRender = true;
+        App._scrollOnRender = !preservePosition;
         App.render();
       } else {
         window.location.hash = hash;
@@ -1114,11 +1127,15 @@
     setInterval(function () {
       if (document.visibilityState === 'visible' && !marketStreamHealthy()) refreshTape();
     }, 45 * 1000);
+    App._lastRouteHash = window.location.hash || '#/';
     window.addEventListener('hashchange', function () {
-      // Native hash links (ticker cards, tabs and browser Back) do not pass through
-      // App.navigate, so enforce the same destination contract here as well.
-      window.scrollTo(0, 0);
-      App._scrollOnRender = true;
+      var nextHash = window.location.hash || '#/';
+      var preservePosition = App._preserveNextRoutePosition === true
+        || workspaceRoute(App._lastRouteHash) === workspaceRoute(nextHash);
+      App._preserveNextRoutePosition = false;
+      App._lastRouteHash = nextHash;
+      if (!preservePosition) window.scrollTo(0, 0);
+      App._scrollOnRender = !preservePosition;
       App.render();
     });
     // A direct deep link is still a destination transition. Browser scroll restoration can

@@ -303,25 +303,43 @@
   }
 
   function provisionalDraft(draft, market, chainData) {
-    var copy = JSON.parse(JSON.stringify(draft)), modeled = false;
+    var copy = JSON.parse(JSON.stringify(draft)), modeled = false, missing = [], usable = [];
     for (var i = 0; i < copy.legs.length; i++) {
       var leg = copy.legs[i];
-      if (leg.price !== '') continue;
-      if (leg.instrumentType === 'STOCK') {
-        if (!market || !Number.isFinite(Number(market.spot))) return null;
-        leg.price = String(market.spot); modeled = true; continue;
+      if (!validLeg(leg, false)) {
+        missing.push({ index: i, reason: 'complete this leg' });
+        continue;
       }
-      if (!market) return null;
+      if (leg.price !== '') { usable.push(leg); continue; }
+      if (leg.instrumentType === 'STOCK') {
+        if (!market || !Number.isFinite(Number(market.spot))) {
+          missing.push({ index: i, reason: 'share price unavailable' });
+          continue;
+        }
+        leg.price = String(market.spot); modeled = true; usable.push(leg); continue;
+      }
+      if (!market) {
+        missing.push({ index: i, reason: 'market data loading' });
+        continue;
+      }
       var chain = chainData[market.symbol + '|' + leg.expiration];
       var rows = chain && (leg.optionType === 'CALL' ? chain.calls : chain.puts) || [];
       var quote = rows.find(function (row) { return Number(row.strike) === Number(leg.strike); });
-      if (!quote) return null;
+      if (!quote) {
+        missing.push({ index: i, reason: chain ? 'listed quote unavailable' : 'option chain loading' });
+        continue;
+      }
       var bid = Number(quote.bid), ask = Number(quote.ask), mark = Number(quote.mid);
       if (!Number.isFinite(mark)) mark = Number.isFinite(bid) && Number.isFinite(ask) ? (bid + ask) / 2 : NaN;
-      if (!Number.isFinite(mark) || mark < 0) return null;
-      leg.price = String(mark); modeled = true;
+      if (!Number.isFinite(mark) || mark < 0) {
+        missing.push({ index: i, reason: 'listed midpoint unavailable' });
+        continue;
+      }
+      leg.price = String(mark); modeled = true; usable.push(leg);
     }
-    return { draft: copy, modeled: modeled };
+    copy.legs = usable;
+    return { draft: copy, modeled: modeled, missing: missing,
+      complete: missing.length === 0 && usable.length === draft.legs.length };
   }
 
   function render(root, options) {
@@ -352,16 +370,51 @@
     stores[key] = draft;
     var lastAnalysis = null, lastAnalysisFingerprint = null;
     var market = null, chainCache = {}, chainData = {}, chainErrors = {}, loadToken = 0, commandBusy = false;
+    var headerHost = null, editorHost = null, chainPickerHost = null, visualHost = null, visualIdentityHost = null;
+    var visualStatusHost = null, chartHost = null, commandHost = null, resultHost = null;
+    var modeButtons = {}, visualTimer = null, terminalTimer = null;
 
-    function remember() {
+    function markResultStale(reason) {
+      if (!resultHost || !resultHost.hasChildNodes()) return;
+      resultHost.classList.add('is-stale');
+      Array.from(resultHost.querySelectorAll('button:not(.xp-head)')).forEach(function (button) {
+        if (!button.disabled) {
+          button.dataset.positionStaleDisabled = 'true';
+          button.disabled = true;
+        }
+      });
+      var notice = resultHost.querySelector(':scope > .position-result-stale');
+      if (!notice) {
+        notice = UI.actionFeedback('caution', 'Preview needs another analysis', reason
+          || 'The package changed. The last result stays visible for comparison, but it no longer describes the fields on screen.');
+        notice.classList.add('position-result-stale');
+        resultHost.prepend(notice);
+      }
+    }
+
+    function clearResultStale() {
+      if (!resultHost) return;
+      resultHost.classList.remove('is-stale');
+      var notice = resultHost.querySelector(':scope > .position-result-stale');
+      if (notice) notice.remove();
+      Array.from(resultHost.querySelectorAll('button[data-position-stale-disabled="true"]')).forEach(function (button) {
+        delete button.dataset.positionStaleDisabled;
+        button.disabled = false;
+      });
+    }
+
+    function remember(forceStale) {
       var currentFingerprint = draftFingerprint(draft);
-      if (lastAnalysis && lastAnalysisFingerprint !== currentFingerprint) {
-        lastAnalysis = null; lastAnalysisFingerprint = null;
-        if (resultHost) resultHost.innerHTML = '';
+      var matchesRenderedResult = lastAnalysis && lastAnalysisFingerprint === currentFingerprint
+        || draft.selectedFingerprint && draft.selectedFingerprint === currentFingerprint;
+      if (matchesRenderedResult && !forceStale) clearResultStale();
+      else if (lastAnalysis && lastAnalysisFingerprint !== currentFingerprint) {
+        markResultStale();
       }
       if (resultHost && draft.selectedFingerprint && draft.selectedFingerprint !== currentFingerprint) {
-        resultHost.innerHTML = '';
+        markResultStale('The edited package no longer matches the structure selected in this Plan. Analyze again before continuing.');
       }
+      if (forceStale) markResultStale();
       stores[key] = JSON.parse(JSON.stringify(draft));
       if (window.Workspace) Workspace.save();
       if (typeof options.onStateChange === 'function') options.onStateChange(draft);
@@ -369,8 +422,11 @@
 
     function showInputError(error) {
       if (!resultHost) return;
-      resultHost.innerHTML = '';
-      resultHost.appendChild(UI.actionFeedback('danger', 'Terminal input needs attention', error.message || String(error)));
+      var old = resultHost.querySelector(':scope > .position-input-error');
+      if (old) old.remove();
+      var next = UI.actionFeedback('danger', 'Terminal input needs attention', error.message || String(error));
+      next.classList.add('position-input-error');
+      resultHost.prepend(next);
     }
 
     function syncTerminal() {
@@ -378,7 +434,7 @@
       draft.legs = parseTerminal(draft.terminal, options.lockedSymbol && String(options.lockedSymbol).toUpperCase());
       draft.symbol = options.lockedSymbol || draft.legs[0].symbol;
       draft.terminalDirty = false;
-      remember();
+      remember(true);
     }
 
     function setMode(mode) {
@@ -388,7 +444,7 @@
       }
       draft.mode = mode;
       if (mode === 'terminal') { draft.terminal = terminalText(draft.legs); draft.terminalDirty = false; }
-      remember(); paint();
+      remember(); renderHeader(); renderInputs(); refreshVisual();
     }
 
     function ensureMarket() {
@@ -400,11 +456,11 @@
         market = { symbol: symbol, loading: false, data: data, spot: data.quote && Number(data.quote.last),
           expirations: data.expirations || [] };
         if (!draft.chainExpiration && market.expirations.length) draft.chainExpiration = market.expirations[Math.min(2, market.expirations.length - 1)];
-        remember(); paint();
+        remember(); refreshChainPicker(); refreshVisual();
       }).catch(function (error) {
         if (token !== loadToken) return;
         market = { symbol: symbol, loading: false, error: error.message || String(error), expirations: [] };
-        paint();
+        refreshChainPicker(); refreshVisual();
       });
     }
 
@@ -421,10 +477,18 @@
       return chainCache[cacheKey];
     }
 
-    function bind(input, target, keyName, rerender) {
-      function save() { target[keyName] = input.type === 'number' ? (input.value === '' ? '' : Number(input.value)) : input.value; remember(); }
+    function scheduleVisual() {
+      if (visualTimer) clearTimeout(visualTimer);
+      visualTimer = setTimeout(refreshVisual, 120);
+    }
+
+    function bind(input, target, keyName, onChange) {
+      function save() {
+        target[keyName] = input.type === 'number' ? (input.value === '' ? '' : Number(input.value)) : input.value;
+        remember(); scheduleVisual();
+      }
       input.addEventListener('input', save);
-      input.addEventListener('change', function () { save(); if (rerender) paint(); else refreshVisual(); });
+      input.addEventListener('change', function () { save(); if (typeof onChange === 'function') onChange(); });
       return input;
     }
 
@@ -438,22 +502,23 @@
         leg.multiplier = leg.instrumentType === 'STOCK' ? 1
           : Number(leg.multiplier) === 1 ? 100 : Number(leg.multiplier);
         remember();
-        paint();
+        replaceLegRow(index);
+        refreshVisual();
       });
       var action = bind(el('select', {}, el('option', { value: 'BUY', selected: leg.action === 'BUY' ? 'selected' : null }, 'Buy'),
-        el('option', { value: 'SELL', selected: leg.action === 'SELL' ? 'selected' : null }, 'Sell')), leg, 'action', true);
+        el('option', { value: 'SELL', selected: leg.action === 'SELL' ? 'selected' : null }, 'Sell')), leg, 'action', function () { syncLegRows(); });
       var effect = bind(el('select', {}, el('option', { value: 'OPEN', selected: leg.positionEffect === 'OPEN' ? 'selected' : null }, 'Open'),
-        el('option', { value: 'CLOSE', selected: leg.positionEffect === 'CLOSE' ? 'selected' : null }, 'Close')), leg, 'positionEffect', true);
+        el('option', { value: 'CLOSE', selected: leg.positionEffect === 'CLOSE' ? 'selected' : null }, 'Close')), leg, 'positionEffect');
       var symbol = bind(el('input', { type: 'text', maxlength: '20', value: options.lockedSymbol || leg.symbol,
-        disabled: options.lockedSymbol ? 'disabled' : null, placeholder: 'MU' }), leg, 'symbol', false);
+        disabled: options.lockedSymbol ? 'disabled' : null, placeholder: 'MU' }), leg, 'symbol');
       var optionType = bind(el('select', {}, el('option', { value: 'CALL', selected: leg.optionType === 'CALL' ? 'selected' : null }, 'Call'),
-        el('option', { value: 'PUT', selected: leg.optionType === 'PUT' ? 'selected' : null }, 'Put')), leg, 'optionType', true);
-      var strike = bind(el('input', { type: 'number', min: '0.0001', step: '0.01', value: leg.strike, placeholder: '980' }), leg, 'strike', false);
-      var expiration = bind(el('input', { type: 'date', value: leg.expiration }), leg, 'expiration', false);
-      var quantity = bind(el('input', { type: 'number', min: '1', max: '10000000', step: '1', value: leg.quantity }), leg, 'quantity', false);
-      var multiplier = bind(el('input', { type: 'number', min: '1', max: '10000', step: '1', value: leg.multiplier }), leg, 'multiplier', false);
+        el('option', { value: 'PUT', selected: leg.optionType === 'PUT' ? 'selected' : null }, 'Put')), leg, 'optionType', function () { syncLegRows(); });
+      var strike = bind(el('input', { type: 'number', min: '0.0001', step: '0.01', value: leg.strike, placeholder: '980' }), leg, 'strike');
+      var expiration = bind(el('input', { type: 'date', value: leg.expiration }), leg, 'expiration');
+      var quantity = bind(el('input', { type: 'number', min: '1', max: '10000000', step: '1', value: leg.quantity }), leg, 'quantity');
+      var multiplier = bind(el('input', { type: 'number', min: '1', max: '10000', step: '1', value: leg.multiplier }), leg, 'multiplier');
       var price = bind(el('input', { type: 'number', min: '0', step: '0.0001', value: leg.price,
-        placeholder: 'blank = price for analysis' }), leg, 'price', false);
+        placeholder: 'blank = price for analysis' }), leg, 'price');
       var section1256 = el('input', { type: 'checkbox', checked: leg.section1256 === true ? 'checked' : null });
       section1256.onchange = function () { leg.section1256 = section1256.checked ? true : null; remember(); };
       var automatic1256 = App.config && Array.isArray(App.config.broadBasedIndexOptionSymbols)
@@ -474,35 +539,113 @@
         leg.instrumentType === 'OPTION' ? field('Multiplier', multiplier, '100 standard; adjusted contracts may differ.') : null,
         options.compositionOnly ? null : field(options.allowRecord ? 'Exact fill $' : 'Fill or proposed price $', price,
           options.allowRecord ? 'Required by RECORD. ANALYZE may price a blank fill from available evidence.' : 'Optional; blank uses the available market/model evidence.'));
-      return el('fieldset', { class: 'position-leg', 'data-leg-index': String(index) },
-        el('legend', {}, 'Leg ' + (index + 1) + ' · ' + leg.action.toLowerCase() + ' ' + (leg.instrumentType === 'STOCK' ? 'shares' : String(leg.optionType || '').toLowerCase())),
-        grid, taxDisclosure, el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-leg-remove',
-          disabled: draft.legs.length === 1 ? 'disabled' : null, 'aria-label': 'Remove leg ' + (index + 1),
-          onclick: function () { draft.legs.splice(index, 1); remember(); paint(); } }, 'Remove'));
+      var remove = el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-leg-remove',
+        disabled: draft.legs.length === 1 ? 'disabled' : null, 'aria-label': 'Remove leg ' + (index + 1),
+        onclick: function () {
+          var row = this.closest('.position-leg');
+          draft.legs.splice(Number(row.dataset.legIndex), 1);
+          remember(); row.remove(); syncLegRows(); refreshVisual();
+        } }, 'Remove');
+      return el('fieldset', { class: 'position-leg', 'data-leg-index': String(index),
+        'aria-label': 'Leg ' + (index + 1) },
+        el('div', { class: 'position-leg-head' },
+          el('div', {}, el('span', { class: 'eyebrow position-leg-number' }, 'LEG ' + (index + 1)),
+            el('b', { class: 'position-leg-summary' }, leg.action.toLowerCase() + ' '
+              + (leg.instrumentType === 'STOCK' ? 'shares' : String(leg.optionType || 'option').toLowerCase())),
+            el('span', { class: 'muted small' }, leg.positionEffect === 'CLOSE' ? 'reduces the open position' : 'adds exposure')),
+          remove),
+        grid, taxDisclosure);
     }
 
-    var visualHost = null, resultHost = null;
+    function syncLegRows() {
+      if (!editorHost) return;
+      var rows = Array.from(editorHost.querySelectorAll('.position-leg'));
+      rows.forEach(function (row, index) {
+        row.dataset.legIndex = String(index);
+        row.setAttribute('aria-label', 'Leg ' + (index + 1));
+        var number = row.querySelector('.position-leg-number');
+        var summary = row.querySelector('.position-leg-summary');
+        var remove = row.querySelector('.position-leg-remove');
+        var leg = draft.legs[index];
+        if (number) number.textContent = 'LEG ' + (index + 1);
+        if (summary) summary.textContent = leg.action.toLowerCase() + ' '
+          + (leg.instrumentType === 'STOCK' ? 'shares' : String(leg.optionType || 'option').toLowerCase());
+        if (remove) {
+          remove.disabled = rows.length === 1;
+          remove.setAttribute('aria-label', 'Remove leg ' + (index + 1));
+        }
+      });
+    }
+
+    function replaceLegRow(index) {
+      if (!editorHost) return;
+      var old = editorHost.querySelector('.position-leg[data-leg-index="' + index + '"]');
+      if (!old) return;
+      var next = legRow(draft.legs[index], index);
+      old.replaceWith(next);
+      var focus = next.querySelector('select:not([disabled]),input:not([disabled])');
+      if (focus) focus.focus({ preventScroll: true });
+    }
+
+    function addLeg(nextLeg, replaceBlank) {
+      var legList = editorHost && editorHost.querySelector('.position-leg-list');
+      if (!legList) return;
+      var index;
+      if (replaceBlank) {
+        draft.legs[0] = nextLeg; index = 0;
+        var existing = legList.querySelector('.position-leg[data-leg-index="0"]');
+        var replacement = legRow(nextLeg, 0);
+        if (existing) existing.replaceWith(replacement); else legList.appendChild(replacement);
+      } else {
+        draft.legs.push(nextLeg); index = draft.legs.length - 1;
+        legList.appendChild(legRow(nextLeg, index));
+      }
+      remember(); syncLegRows(); refreshVisual();
+      var row = legList.querySelector('.position-leg[data-leg-index="' + index + '"]');
+      if (!row) return;
+      row.classList.add('arrival-highlight');
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      var first = row.querySelector('select:not([disabled]),input:not([disabled])');
+      if (first) setTimeout(function () { if (first.isConnected) first.focus({ preventScroll: true }); }, 220);
+      setTimeout(function () { if (row.isConnected) row.classList.remove('arrival-highlight'); }, 1400);
+    }
     function refreshVisual() {
-      if (!visualHost || !visualHost.isConnected) return;
-      visualHost.innerHTML = '';
-      var identified = lastAnalysis && lastAnalysis.identity || {
-        family: null, label: 'Exact position package', blockedByDefault: false,
-        summary: 'Analyze once to match these exact legs to the server-owned strategy catalog.'
+      if (!visualHost || !visualHost.isConnected || !visualIdentityHost || !chartHost) return;
+      var currentFingerprint = draftFingerprint(draft);
+      var analysisCurrent = !!lastAnalysis && lastAnalysisFingerprint === currentFingerprint && !draft.terminalDirty;
+      var identified = analysisCurrent && lastAnalysis.identity || {
+        family: null, label: 'Your exact package', blockedByDefault: false,
+        summary: 'The payoff updates from the legs and defensible prices on screen. Analyze to name the structure and use these exact contracts in this Plan.'
       };
+      visualIdentityHost.innerHTML = '';
       var payoffUnavailable = localPayoffUnavailableReason(draft);
-      visualHost.appendChild(el('div', { class: 'position-identity' },
-        el('span', { class: 'eyebrow' }, 'CATALOG MATCH'),
+      visualIdentityHost.appendChild(el('div', { class: 'position-identity' },
+        el('span', { class: 'eyebrow' }, analysisCurrent ? 'IDENTIFIED STRUCTURE' : 'YOUR TRADE'),
         el('h3', {}, identified.label),
         identified.summary ? el('p', { class: 'muted small' }, identified.summary) : null,
         identified.blockedByDefault ? UI.alertBox('caution', 'Shown for learning, blocked by default', [
           'The exact structure remains analyzable. Practice placement keeps its existing safety block; recording an actual broker fact is never refused for being risky.'
         ]) : null));
-      var response = lastAnalysis && (lastAnalysis.preview || lastAnalysis);
+      draft.legs.forEach(function (leg) {
+        if (!market || leg.instrumentType !== 'OPTION' || !leg.expiration) return;
+        var cacheKey = market.symbol + '|' + leg.expiration;
+        if (!chainData[cacheKey] && !chainCache[cacheKey]) {
+          loadChain(leg.expiration).then(function () { refreshVisual(); });
+        }
+      });
+      var response = analysisCurrent && (lastAnalysis.preview || lastAnalysis);
       var points = response && response.payoff;
       var provisional = null;
-      if ((!points || points.length < 2) && !payoffUnavailable) {
+      if ((!points || points.length < 2) && !payoffUnavailable && !draft.terminalDirty) {
         provisional = provisionalDraft(draft, market, chainData);
-        points = provisional ? localPayoff(provisional.draft, market && market.spot) : null;
+        if (provisional && provisional.draft.legs.length) {
+          if (!provisional.complete) {
+            provisional.draft.packageNet = '';
+            provisional.draft.fees = '';
+            provisional.draft.feeMode = 'DEFAULT';
+          }
+          points = localPayoff(provisional.draft, market && market.spot);
+        }
       }
       var handles = [];
       if (draft.mode === 'visual' && market) draft.legs.forEach(function (leg, index) {
@@ -518,32 +661,58 @@
         if (strikes.length < 2) return;
         handles.push({ id: 'position-leg-' + index, strike: Number(leg.strike),
           label: leg.action + ' ' + leg.optionType.charAt(0) + ' ' + leg.strike, strikes: strikes,
-          onChange: function (next) { draft.legs[index].strike = String(next); remember(); paint(); } });
+          onChange: function (next) {
+            draft.legs[index].strike = String(next); remember();
+            var row = editorHost && editorHost.querySelector('.position-leg[data-leg-index="' + index + '"]');
+            var strikeInput = row && Array.from(row.querySelectorAll('input[type="number"]')).find(function (input) {
+              return input.step === '0.01' && input.min === '0.0001';
+            });
+            if (strikeInput) strikeInput.value = String(next);
+            refreshVisual();
+          } });
       });
       var exactEnteredFills = draft.legs.length > 0 && draft.legs.every(function (leg) {
         return leg.price !== '' && Number.isFinite(Number(leg.price));
       });
-      visualHost.appendChild(el('div', { class: 'position-editor-chart-head' },
-        el('b', {}, lastAnalysis ? 'Analyzed payoff' : 'Payoff shape while editing'),
-        el('span', { class: 'muted small' }, lastAnalysis ? 'Exact analyzed package'
-          : provisional && provisional.modeled ? 'Blank fills use current listed midpoints for this preview'
-            : exactEnteredFills ? 'Entered leg prices drive this payoff preview'
-              : 'Enter fills or load matching listed contracts')));
+      var missing = provisional && provisional.missing || [];
+      var chartStale = draft.terminalDirty || payoffUnavailable || !points || points.length < 2;
+      visualStatusHost.innerHTML = '';
+      visualStatusHost.appendChild(el('div', { class: 'position-editor-chart-head' },
+        el('b', {}, analysisCurrent ? 'Analyzed payoff' : 'Payoff shape while editing'),
+        el('span', { class: 'muted small' }, draft.terminalDirty ? 'Typing in progress · preview held'
+          : analysisCurrent ? 'Exact analyzed package'
+            : provisional && !provisional.complete ? 'Partial preview · ' + provisional.draft.legs.length + ' of ' + draft.legs.length + ' legs priced'
+              : provisional && provisional.modeled ? 'Blank fills use current listed midpoints for this preview'
+                : exactEnteredFills ? 'Entered leg prices drive this payoff preview'
+                  : 'Choose listed contracts or enter fills')));
       if (points && points.length > 1) {
-        visualHost.appendChild(UI.payoffChart(points, { spot: market && market.spot || null,
+        chartHost.innerHTML = '';
+        chartHost.appendChild(UI.payoffChart(points, { spot: market && market.spot || null,
           handles: handles.length ? handles : null }));
+        chartHost.classList.toggle('is-partial', missing.length > 0);
+        chartHost.classList.remove('is-stale');
+        if (missing.length) visualStatusHost.appendChild(UI.actionFeedback('caution', 'Partial payoff only',
+          missing.map(function (item) { return 'Leg ' + (item.index + 1) + ': ' + item.reason; }).join(' · ')
+            + '. The curve excludes those legs; it is not the full position result.'));
       } else if (payoffUnavailable) {
-        visualHost.appendChild(UI.emptyState('A single expiry payoff would be misleading', payoffUnavailable));
+        chartHost.classList.add('is-stale');
+        visualStatusHost.appendChild(UI.actionFeedback('caution', 'A single-expiry curve does not fit this position', payoffUnavailable));
+      } else if (chartHost.hasChildNodes()) {
+        chartHost.classList.add('is-stale');
+        visualStatusHost.appendChild(UI.actionFeedback('caution', 'Last defensible curve kept on screen',
+          draft.terminalDirty ? 'Finish the terminal line or pause typing; the chart will update automatically.'
+            : 'Complete the unfinished leg or load its listed quote. The dimmed curve describes the last priceable edit, not the current package.'));
       } else {
-        visualHost.appendChild(UI.emptyState('Payoff waiting for a defensible price',
+        chartHost.appendChild(UI.emptyState('Payoff waiting for a defensible price',
           'Enter a proposed fill, or choose a listed contract so the preview can use its current midpoint. Blank never means zero.'));
       }
+      visualHost.classList.toggle('is-stale', chartStale && chartHost.hasChildNodes());
     }
 
     function renderChainPicker(parent) {
       var box = el('section', { class: 'position-chain-picker' },
         el('div', { class: 'plan-section-head' }, el('div', {}, el('h3', {}, 'Add from the chain'),
-          el('p', { class: 'muted small' }, 'Choose a contract listed in this market, then edit every field below.'))));
+          el('p', { class: 'muted small' }, 'Each strike button adds one listed contract to Your trade. The leg appears and receives focus immediately.'))));
       parent.appendChild(box);
       if (!market || market.loading) { box.appendChild(el('p', { class: 'muted' }, 'Loading listed contracts...')); return; }
       if (market.error || !market.expirations.length) {
@@ -552,19 +721,24 @@
       var exp = el('select', {}, market.expirations.map(function (value) {
         return el('option', { value: value, selected: value === draft.chainExpiration ? 'selected' : null }, value);
       }));
-      exp.onchange = function () { draft.chainExpiration = exp.value; remember(); paint(); };
       var type = el('select', {}, ['PUT', 'CALL'].map(function (value) {
         return el('option', { value: value, selected: value === draft.chainType ? 'selected' : null }, value === 'PUT' ? 'Puts' : 'Calls');
       }));
-      type.onchange = function () { draft.chainType = type.value; remember(); paint(); };
       var action = el('select', {}, ['BUY', 'SELL'].map(function (value) {
         return el('option', { value: value, selected: value === draft.chainAction ? 'selected' : null }, value === 'BUY' ? 'Buy' : 'Sell');
       }));
       action.onchange = function () { draft.chainAction = action.value; remember(); };
-      box.appendChild(el('div', { class: 'position-chain-controls' }, field('Expiration', exp), field('Contract', type), field('Action', action)));
+      box.appendChild(el('div', { class: 'position-chain-controls' }, field('Expiration', exp), field('Contract', type),
+        field('Add as', action, 'This side applies only to the next strike you add. Every leg remains editable below.')));
       var rail = el('div', { class: 'position-chain-rail', 'aria-live': 'polite' }, el('span', { class: 'muted' }, 'Loading strikes...'));
       box.appendChild(rail);
-      loadChain(draft.chainExpiration).then(function (chain) {
+      var railToken = 0;
+      function paintRail() {
+        var token = ++railToken;
+        rail.innerHTML = '';
+        rail.appendChild(el('span', { class: 'muted' }, 'Loading strikes...'));
+        loadChain(draft.chainExpiration).then(function (chain) {
+        if (token !== railToken) return;
         if (!rail.isConnected) return;
         rail.innerHTML = '';
         var rows = chain && (draft.chainType === 'CALL' ? chain.calls : chain.puts) || [];
@@ -575,7 +749,7 @@
         if (!rows.length && chainErrors[cacheKey]) {
           rail.append(el('span', { class: 'muted' }, 'Could not load this chain. Manual entry remains available. ' + chainErrors[cacheKey]),
             el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
-              delete chainCache[cacheKey]; delete chainErrors[cacheKey]; paint();
+              delete chainCache[cacheKey]; delete chainErrors[cacheKey]; paintRail();
             } }, 'Retry'));
           return;
         }
@@ -587,13 +761,17 @@
               expiration: draft.chainExpiration, quantity: 1, multiplier: 100, price: '', section1256: null };
             var replace = draft.legs.length === 1 && !draft.legs[0].strike && !draft.legs[0].expiration
               && draft.legs[0].price === '';
-            if (replace) draft.legs[0] = selectedLeg; else draft.legs.push(selectedLeg);
-            remember(); paint();
+            addLeg(selectedLeg, replace);
           } }, el('b', {}, '$' + Number(quote.strike).toFixed(2)),
           el('span', { class: 'muted small' }, (quote.bid == null ? '-' : Number(quote.bid).toFixed(2))
             + ' / ' + (quote.ask == null ? '-' : Number(quote.ask).toFixed(2)))));
         });
+        refreshVisual();
       });
+      }
+      exp.onchange = function () { draft.chainExpiration = exp.value; remember(); paintRail(); refreshVisual(); };
+      type.onchange = function () { draft.chainType = type.value; remember(); paintRail(); };
+      paintRail();
     }
 
     function renderAnalysis(out) {
@@ -652,6 +830,7 @@
         'Entry-price receipt: ' + fillBases.map(function (basis) { return String(basis).replaceAll('_', ' ').toLowerCase(); }).join(' + ') + '.'));
       if (options.planId && response.ok !== false && selected && selected.selected === true) resultHost.appendChild(el('button', { type: 'button', class: 'btn',
         onclick: function () { App.navigate('#/plan/' + options.planId + '/outcomes'); } }, 'Continue to Outcomes'));
+      revealResult();
     }
 
     function renderDurableSelection() {
@@ -679,10 +858,32 @@
         onclick: function () { App.navigate('#/plan/' + options.planId + '/outcomes'); } }, 'Continue to Outcomes'));
     }
 
+    function revealResult() {
+      if (!resultHost) return;
+      clearResultStale();
+      resultHost.classList.add('arrival-highlight');
+      resultHost.setAttribute('tabindex', '-1');
+      resultHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      resultHost.focus({ preventScroll: true });
+      setTimeout(function () {
+        if (resultHost && resultHost.isConnected) resultHost.classList.remove('arrival-highlight');
+      }, 1400);
+    }
+
+    function showCommandError(title, error) {
+      if (!resultHost) return;
+      var old = resultHost.querySelector(':scope > .position-command-error');
+      if (old) old.remove();
+      var feedback = UI.actionFeedback('danger', title, error.message || String(error));
+      feedback.classList.add('position-command-error');
+      resultHost.prepend(feedback);
+      revealResult();
+    }
+
     async function runAnalyze() {
       if (commandBusy) return null;
       try { syncTerminal(); } catch (error) { showInputError(error); throw error; }
-      commandBusy = true; paint(false);
+      commandBusy = true; syncBusy();
       try {
         var payload = normalizedForAnalysis(draft);
         var out = await options.onAnalyze(payload, draft);
@@ -703,9 +904,9 @@
         renderAnalysis(out);
         return out;
       } catch (error) {
-        if (resultHost) { resultHost.innerHTML = ''; resultHost.appendChild(UI.actionFeedback('danger', 'Could not analyze', error.message || String(error))); }
+        showCommandError('Could not analyze', error);
         return Promise.reject(error);
-      } finally { commandBusy = false; paint(false); }
+      } finally { commandBusy = false; syncBusy(); refreshVisual(); }
     }
 
     async function recordNow() {
@@ -719,23 +920,21 @@
       }
       var out = await options.onRecord(payload, draft);
       draft.similarityDecision = null;
+      var recordedOutcome = null;
+      if (typeof options.onRecorded === 'function') {
+        try { recordedOutcome = await options.onRecorded(out, draft); }
+        catch (error) {
+          recordedOutcome = UI.actionFeedback('caution', 'Recorded; account totals could not refresh',
+            error.message || String(error));
+        }
+      }
       if (resultHost) {
         resultHost.innerHTML = '';
         resultHost.appendChild(UI.actionFeedback('ok', 'Recorded in ' + (options.accountName || 'tracked account'),
           'The factual activity is now part of the append-only tracked ledger.'));
-        if (typeof options.onRecorded === 'function') {
-          resultHost.appendChild(el('button', { type: 'button', class: 'btn btn-secondary', onclick: async function () {
-            var button = this;
-            button.disabled = true; button.setAttribute('aria-busy', 'true');
-            try { await options.onRecorded(out, draft); }
-            catch (error) {
-              button.disabled = false; button.removeAttribute('aria-busy');
-              resultHost.appendChild(UI.actionFeedback('danger', 'Could not refresh the account view', error.message || String(error)));
-            }
-          } }, options.recordedActionLabel || 'View account activity'));
-        }
+        if (recordedOutcome) resultHost.appendChild(recordedOutcome);
+        revealResult();
       }
-      UI.toast('Broker activity recorded', 'ok');
       return out;
     }
 
@@ -751,9 +950,9 @@
         } }, 'Open existing'),
         el('button', { type: 'button', class: 'btn', onclick: async function () {
           draft.similarityDecision = 'ADD'; remember();
-          try { commandBusy = true; paint(false); await recordNow(); }
+          try { commandBusy = true; syncBusy(); await recordNow(); }
           catch (error) { resultHost.appendChild(UI.actionFeedback('danger', 'Could not record', error.message || String(error))); }
-          finally { commandBusy = false; paint(false); }
+          finally { commandBusy = false; syncBusy(); }
         } }, 'Add as a new lot'),
         el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
           draft.similarityDecision = 'CANCEL'; remember(); resultHost.innerHTML = '';
@@ -763,12 +962,12 @@
     async function runRecord() {
       if (commandBusy) return null;
       try { syncTerminal(); } catch (error) { showInputError(error); throw error; }
-      commandBusy = true; paint(false);
+      commandBusy = true; syncBusy();
       try { return await recordNow(); }
       catch (error) {
-        if (resultHost) { resultHost.innerHTML = ''; resultHost.appendChild(UI.actionFeedback('danger', 'Could not record', error.message || String(error))); }
+        showCommandError('Could not record', error);
         return Promise.reject(error);
-      } finally { commandBusy = false; paint(false); }
+      } finally { commandBusy = false; syncBusy(); }
     }
 
     async function runBoth() {
@@ -776,12 +975,12 @@
       try { syncTerminal(); } catch (error) { showInputError(error); throw error; }
       // Validate both contracts before either command mutates anything.
       normalizedForAnalysis(draft); recordPayload(draft);
-      commandBusy = true; paint(false);
+      commandBusy = true; syncBusy();
       var analyzed = null, recorded = null, analysisError = null;
       try { analyzed = await options.onAnalyze(normalizedForAnalysis(draft), draft); lastAnalysis = analyzed; }
       catch (error) { analysisError = error; }
       try { recorded = await recordNow(); }
-      finally { commandBusy = false; paint(false); }
+      finally { commandBusy = false; syncBusy(); }
       if (!recorded && resultHost && resultHost.querySelector('.inline-action-feedback')) return { analysis: analyzed, record: null };
       if (recorded && analysisError && resultHost) resultHost.appendChild(UI.actionFeedback('caution', 'Recorded; analysis unavailable', analysisError.message || String(analysisError)));
       else if (analyzed && recorded && resultHost) {
@@ -792,72 +991,56 @@
       return { analysis: analyzed, record: recorded };
     }
 
-    function paint(rebuild) {
-      if (rebuild === false) {
-        root.classList.toggle('is-busy', commandBusy);
-        if (commandBusy) root.setAttribute('aria-busy', 'true'); else root.removeAttribute('aria-busy');
-        Array.from(root.querySelectorAll('input,select,textarea,button')).forEach(function (control) {
-          if (commandBusy && !control.disabled) {
-            control.dataset.positionBusyDisabled = 'true'; control.disabled = true;
-          } else if (!commandBusy && control.dataset.positionBusyDisabled === 'true') {
-            delete control.dataset.positionBusyDisabled; control.disabled = false;
-          }
-          if (control.dataset.positionCommand) {
-            var recordCommand = control.dataset.positionCommand === 'record' || control.dataset.positionCommand === 'both';
-            control.disabled = commandBusy || recordCommand && options.recordDisabled;
-            if (commandBusy) control.setAttribute('aria-busy', 'true'); else control.removeAttribute('aria-busy');
-          }
-        });
-        refreshVisual(); return;
-      }
-      root.innerHTML = '';
-      root.className = 'position-editor';
-      root.onkeydown = function (event) {
-        if (event.altKey && event.key.toLowerCase() === 'v') { event.preventDefault(); setMode(draft.mode === 'visual' ? 'terminal' : 'visual'); }
-      };
-      var mode = el('div', { class: 'segmented position-editor-mode', role: 'group', 'aria-label': 'Trade entry mode' },
-        el('button', { type: 'button', class: draft.mode === 'visual' ? 'active' : '', 'aria-pressed': draft.mode === 'visual' ? 'true' : 'false', onclick: function () { setMode('visual'); } }, 'Visual'),
-        el('button', { type: 'button', class: draft.mode === 'terminal' ? 'active' : '', 'aria-pressed': draft.mode === 'terminal' ? 'true' : 'false', onclick: function () { setMode('terminal'); } }, 'Terminal'));
-      root.appendChild(el('div', { class: 'plan-tool-intro position-editor-head' },
+    function syncBusy() {
+      root.classList.toggle('is-busy', commandBusy);
+      if (commandBusy) root.setAttribute('aria-busy', 'true'); else root.removeAttribute('aria-busy');
+      Array.from(root.querySelectorAll('input,select,textarea,button')).forEach(function (control) {
+        if (commandBusy && !control.disabled) {
+          control.dataset.positionBusyDisabled = 'true'; control.disabled = true;
+        } else if (!commandBusy && control.dataset.positionBusyDisabled === 'true') {
+          delete control.dataset.positionBusyDisabled; control.disabled = false;
+        }
+        if (control.dataset.positionCommand) {
+          var recording = control.dataset.positionCommand === 'record' || control.dataset.positionCommand === 'both';
+          control.disabled = commandBusy || recording && options.recordDisabled;
+          if (commandBusy) control.setAttribute('aria-busy', 'true'); else control.removeAttribute('aria-busy');
+        }
+      });
+    }
+
+    function renderHeader() {
+      headerHost.innerHTML = '';
+      modeButtons = {};
+      var mode = el('div', { class: 'segmented position-editor-mode', role: 'group', 'aria-label': 'Trade entry mode' });
+      ['visual', 'terminal'].forEach(function (value) {
+        var button = el('button', { type: 'button', class: draft.mode === value ? 'active' : '',
+          'aria-pressed': draft.mode === value ? 'true' : 'false', onclick: function () { setMode(value); }
+        }, value === 'visual' ? 'Visual' : 'Terminal');
+        modeButtons[value] = button; mode.appendChild(button);
+      });
+      headerHost.appendChild(el('div', { class: 'plan-tool-intro position-editor-head' },
         el('div', {}, el('span', { class: 'eyebrow' }, 'YOUR TRADE'),
           el('h3', {}, options.title || 'Build, analyze, or record the exact package'),
           el('p', { class: 'muted' }, options.description || 'The edited legs are shared. Analyze may fill evidence gaps; Record accepts factual broker fills only.')),
-        el('div', {}, mode, el('span', { class: 'muted small position-mode-key' }, 'Alt+V switches views'))));
-      if (rejectedDraftReason) {
-        root.appendChild(UI.actionFeedback('caution', 'Incomplete local draft was rejected',
-          rejectedDraftReason + ' A new current-format draft is shown instead.'));
-        rejectedDraftReason = null;
-      }
+        el('div', {}, mode, Learn.currentLevel() === 'expert'
+          ? el('span', { class: 'muted small position-mode-key' }, 'Keyboard: Alt+V') : null)));
+    }
 
-      var editor = el('div', { class: 'position-editor-inputs' });
-      if (draft.mode === 'terminal') {
-        var terminal = el('textarea', { class: 'position-terminal', rows: '8', spellcheck: 'false', 'aria-label': 'Terminal position lines',
-          value: draft.terminal || terminalText(draft.legs),
-          placeholder: '-1 MU 13Jul26 980P @20.00\n+100 MU @979.30' });
-        terminal.value = draft.terminal || terminalText(draft.legs);
-        terminal.oninput = function () { draft.terminal = terminal.value; draft.terminalDirty = true; remember(); };
-        editor.append(el('p', { class: 'muted small' }, 'Signed quantity sets buy (+) or sell (-). Add x10 for an adjusted contract, CLOSE for a closing leg, and 1256 for a broker-confirmed eligible option. Fill after @ is optional for Analyze.'),
-          terminal, el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
-            try {
-              draft.terminal = terminal.value; draft.terminalDirty = true; syncTerminal(); paint();
-            } catch (error) { showInputError(error); }
-          } }, 'Apply lines')));
-      } else {
-        if (options.chain !== false) renderChainPicker(editor);
-        var legList = el('div', { class: 'position-leg-list' });
-        draft.legs.forEach(function (leg, index) { legList.appendChild(legRow(leg, index)); });
-        editor.append(legList, el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
-          draft.legs.push(blankLeg(options.lockedSymbol || draft.symbol)); remember(); paint();
-        } }, '+ Add leg'));
-      }
+    function refreshChainPicker() {
+      if (!chainPickerHost || !chainPickerHost.isConnected) return;
+      chainPickerHost.innerHTML = '';
+      renderChainPicker(chainPickerHost);
+    }
 
+    function renderPackageMeta(host) {
+      host.innerHTML = '';
       var packageNet = bind(el('input', { type: 'number', step: '0.01', value: draft.packageNet,
-        placeholder: '+ credit / - debit' }), draft, 'packageNet', false);
+        placeholder: '+ credit / - debit' }), draft, 'packageNet');
       var feeMode = el('select', {}, el('option', { value: 'DEFAULT', selected: draft.feeMode === 'DEFAULT' ? 'selected' : null }, 'Use StrikeBench estimate for Analyze'),
         el('option', { value: 'EXACT', selected: draft.feeMode === 'EXACT' ? 'selected' : null }, 'Enter exact total fees'));
-      feeMode.onchange = function () { draft.feeMode = feeMode.value; remember(); paint(); };
+      feeMode.onchange = function () { draft.feeMode = feeMode.value; remember(); renderPackageMeta(host); refreshVisual(); };
       var fees = bind(el('input', { type: 'number', min: '0', step: '0.01', value: draft.fees,
-        placeholder: draft.feeMode === 'EXACT' ? '0.00' : 'platform default' }), draft, 'fees', false);
+        placeholder: draft.feeMode === 'EXACT' ? '0.00' : 'platform default' }), draft, 'fees');
       var meta = el('div', { class: 'form-grid position-package-meta' },
         field('Package net $', packageNet, 'Optional signed total before fees: positive credit, negative debit.'),
         field('Fee treatment', feeMode), draft.feeMode === 'EXACT' || options.allowRecord ? field('Total fees $', fees,
@@ -865,8 +1048,8 @@
       if (options.onAnalyze) {
         var fillNature = bind(el('select', {},
           el('option', { value: 'PROPOSED', selected: draft.fillNature === 'PROPOSED' ? 'selected' : null }, 'Proposed / hypothetical'),
-          el('option', { value: 'EXECUTED', selected: draft.fillNature === 'EXECUTED' ? 'selected' : null }, 'Executed fill')), draft, 'fillNature', true);
-        var analysisAt = bind(el('input', { type: 'datetime-local', step: '1', value: draft.occurredAt }), draft, 'occurredAt', false);
+          el('option', { value: 'EXECUTED', selected: draft.fillNature === 'EXECUTED' ? 'selected' : null }, 'Executed fill')), draft, 'fillNature');
+        var analysisAt = bind(el('input', { type: 'datetime-local', step: '1', value: draft.occurredAt }), draft, 'occurredAt');
         meta.append(field('Price meaning', fillNature,
           'A proposed price is tested as an order. An executed price is treated as a fact, while blank legs still use labeled evidence.'),
           field(options.allowRecord ? 'Executed / analyzed at' : 'Entry / analysis date', analysisAt,
@@ -874,23 +1057,68 @@
       }
       if (options.allowRecord) {
         var source = bind(el('select', {}, el('option', { value: 'MANUAL', selected: draft.source === 'MANUAL' ? 'selected' : null }, 'Entered manually'),
-          el('option', { value: 'BROKER', selected: draft.source === 'BROKER' ? 'selected' : null }, 'Copied from broker')), draft, 'source', true);
-        var ref = bind(el('input', { type: 'text', maxlength: '160', value: draft.externalRef, placeholder: 'Order or statement reference' }), draft, 'externalRef', false);
+          el('option', { value: 'BROKER', selected: draft.source === 'BROKER' ? 'selected' : null }, 'Copied from broker')), draft, 'source');
+        var ref = bind(el('input', { type: 'text', maxlength: '160', value: draft.externalRef,
+          placeholder: 'Order or statement reference' }), draft, 'externalRef');
         meta.append(field('Record source', source),
-          field('Stable broker reference', ref, 'Required only for broker-sourced activity; it is the idempotency key.'));
+          field('Stable broker reference', ref, 'Required only for broker-sourced activity; it stops the same fill being recorded twice.'));
       }
-      var notes = bind(el('textarea', { rows: '2', maxlength: '1000', value: draft.notes, placeholder: 'Optional context' }), draft, 'notes', false);
+      var notes = bind(el('textarea', { rows: '2', maxlength: '1000', value: draft.notes,
+        placeholder: 'Optional context' }), draft, 'notes');
       notes.value = draft.notes;
-      if (options.compositionOnly) {
-        editor.append(el('p', { class: 'muted small position-composition-note' },
-          'This editor describes what remains open. Stored fills stay attached to unchanged quantities; only added or removed quantities use current executable prices.'));
-      } else {
-        editor.append(meta, field('Notes', notes));
-      }
+      host.append(meta, field('Notes', notes));
+    }
 
-      visualHost = el('aside', { class: 'position-editor-visual' });
-      root.appendChild(UI.positionWorkbench(editor, visualHost));
-      resultHost = el('div', { class: 'position-editor-result', 'aria-live': 'polite' });
+    function renderInputs() {
+      editorHost.innerHTML = '';
+      chainPickerHost = null;
+      if (draft.mode === 'terminal') {
+        var terminal = el('textarea', { class: 'position-terminal', rows: '7', spellcheck: 'false',
+          'aria-label': 'Terminal position lines', value: draft.terminal || terminalText(draft.legs),
+          placeholder: '-1 MU 13Jul26 980P @20.00\n+100 MU @979.30' });
+        terminal.value = draft.terminal || terminalText(draft.legs);
+        terminal.oninput = function () {
+          draft.terminal = terminal.value; draft.terminalDirty = true; remember(true); refreshVisual();
+          if (terminalTimer) clearTimeout(terminalTimer);
+          terminalTimer = setTimeout(function () {
+            try {
+              var parsed = parseTerminal(draft.terminal, options.lockedSymbol && String(options.lockedSymbol).toUpperCase());
+              draft.legs = parsed; draft.symbol = options.lockedSymbol || parsed[0].symbol;
+              draft.terminalDirty = false; remember(true); refreshVisual();
+            } catch (ignored) { /* incomplete terminal text keeps the prior curve visibly stale */ }
+          }, 350);
+        };
+        editorHost.append(el('p', { class: 'muted small' },
+          'Signed quantity sets buy (+) or sell (-). Fill after @ is optional for analysis; use Apply when you want immediate validation.'),
+          terminal, el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
+            try { draft.terminal = terminal.value; draft.terminalDirty = true; syncTerminal(); refreshVisual(); }
+            catch (error) { showInputError(error); }
+          } }, 'Apply lines')));
+      } else {
+        if (options.chain !== false) {
+          chainPickerHost = el('div', { class: 'position-chain-picker-host' });
+          editorHost.appendChild(chainPickerHost); refreshChainPicker();
+        }
+        var legList = el('div', { class: 'position-leg-list' });
+        draft.legs.forEach(function (leg, index) { legList.appendChild(legRow(leg, index)); });
+        editorHost.append(legList, el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-add-leg',
+          onclick: function () { addLeg(blankLeg(options.lockedSymbol || draft.symbol), false); } }, '+ Add leg'));
+      }
+      if (options.compositionOnly) {
+        editorHost.appendChild(el('p', { class: 'muted small position-composition-note' },
+          'This describes what remains open. Unchanged quantities keep stored fills; changed quantities use current executable prices.'));
+      } else {
+        var metaHost = el('div', { class: 'position-package-meta-host' });
+        editorHost.appendChild(metaHost); renderPackageMeta(metaHost);
+      }
+      syncBusy();
+    }
+
+    function renderCommands() {
+      commandHost.innerHTML = '';
+      commandHost.appendChild(el('div', { class: 'position-command-heading' },
+        el('b', {}, options.allowRecord && options.recordPrimary ? 'Record or inspect' : 'Use this exact package'),
+        el('span', { class: 'muted small' }, 'The result appears directly below this workbench.')));
       var commands = el('div', { class: 'btn-row position-editor-commands' });
       var analyzeCommand = options.onAnalyze ? el('button', { type: 'button',
         class: options.recordPrimary ? 'btn btn-secondary' : 'btn', 'data-position-command': 'analyze',
@@ -898,14 +1126,14 @@
       }, options.analyzeLabel || 'Analyze this trade') : null;
       var recordCommand = null, bothCommand = null;
       if (options.allowRecord && options.onRecord) {
-        recordCommand = el('button', { type: 'button', class: options.recordPrimary ? 'btn' : 'btn btn-secondary', 'data-position-command': 'record',
-          disabled: commandBusy || options.recordDisabled ? 'disabled' : null,
+        recordCommand = el('button', { type: 'button', class: options.recordPrimary ? 'btn' : 'btn btn-secondary',
+          'data-position-command': 'record', disabled: commandBusy || options.recordDisabled ? 'disabled' : null,
           'aria-describedby': options.recordDisabled ? 'position-record-disabled-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') : null,
           onclick: function () { runRecord().catch(function () {}); } }, 'Record factual activity');
-        if (options.onAnalyze) bothCommand = el('button', { type: 'button', class: 'btn btn-secondary', 'data-position-command': 'both',
-          disabled: commandBusy || options.recordDisabled ? 'disabled' : null, onclick: function () { runBoth().catch(function (error) {
-            resultHost.innerHTML = ''; resultHost.appendChild(UI.actionFeedback('danger', 'Could not complete both commands', error.message || String(error)));
-          }); } }, 'Analyze and record');
+        if (options.onAnalyze) bothCommand = el('button', { type: 'button', class: 'btn btn-secondary',
+          'data-position-command': 'both', disabled: commandBusy || options.recordDisabled ? 'disabled' : null,
+          onclick: function () { runBoth().catch(function (error) { showCommandError('Could not complete both commands', error); }); }
+        }, 'Analyze and record');
       }
       [options.recordPrimary && recordCommand, analyzeCommand,
         !options.recordPrimary && recordCommand, bothCommand].filter(Boolean).forEach(function (button) {
@@ -914,14 +1142,41 @@
       if (options.recordDisabled) commands.appendChild(el('span', {
         id: 'position-record-disabled-' + key.replace(/[^a-zA-Z0-9_-]/g, '-'), class: 'muted small'
       }, options.recordDisabledReason || 'Recording is unavailable here.'));
-      root.append(commands, resultHost);
+      commandHost.appendChild(commands);
+      syncBusy();
+    }
+
+    function renderShell() {
+      root.innerHTML = '';
+      root.className = 'position-editor';
+      root.onkeydown = function (event) {
+        if (event.altKey && event.key.toLowerCase() === 'v') {
+          event.preventDefault(); setMode(draft.mode === 'visual' ? 'terminal' : 'visual');
+        }
+      };
+      headerHost = el('div', { class: 'position-editor-header-region' });
+      editorHost = el('div', { class: 'position-editor-inputs' });
+      visualHost = el('div', { class: 'position-editor-visual' });
+      visualIdentityHost = el('div', { class: 'position-visual-identity-region' });
+      visualStatusHost = el('div', { class: 'position-visual-status-region', 'aria-live': 'polite' });
+      chartHost = el('div', { class: 'position-chart-region' });
+      commandHost = el('div', { class: 'position-command-region' });
+      visualHost.append(visualIdentityHost, visualStatusHost, chartHost, commandHost);
+      resultHost = el('div', { class: 'position-editor-result', 'aria-live': 'polite' });
+      root.append(headerHost, UI.positionWorkbench(editorHost, visualHost), resultHost);
+      renderHeader(); renderInputs(); renderCommands();
+      if (rejectedDraftReason) {
+        var rejected = UI.actionFeedback('caution', 'Incomplete local draft was rejected',
+          rejectedDraftReason + ' A new current-format draft is shown instead.');
+        root.insertBefore(rejected, root.children[1]); rejectedDraftReason = null;
+      }
       refreshVisual();
       if (lastAnalysis && lastAnalysisFingerprint === draftFingerprint(draft)) renderAnalysis(lastAnalysis);
       else renderDurableSelection();
       ensureMarket();
     }
 
-    paint();
+    renderShell();
     return { draft: function () { return draft; }, analyze: runAnalyze, record: runRecord,
       readAnalysis: function () { syncTerminal(); return normalizedForAnalysis(draft); },
       readRecord: function () { syncTerminal(); return recordPayload(draft); } };

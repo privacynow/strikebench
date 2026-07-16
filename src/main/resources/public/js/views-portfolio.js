@@ -15,6 +15,24 @@
   var guideBlock = window.ViewPlan.guideBlock,
       planMarketLabel = window.ViewPlan.marketLabel;
 
+  async function refreshTradeDetailNear(node, tradeId, title, detail) {
+    var host = node && node.closest ? node.closest('.trade-detail-content') : null;
+    if (!host) { await App.render(); return; }
+    host.setAttribute('aria-busy', 'true');
+    try {
+      API.flushCache();
+      var data = await API.getFresh('/api/trades/' + tradeId);
+      host.replaceChildren();
+      await tradeDetail(host, [tradeId], { data: data, insideContent: true });
+      var feedback = UI.actionFeedback('ok', title, detail);
+      host.prepend(feedback);
+      feedback.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      feedback.classList.add('arrival-highlight');
+    } finally {
+      host.removeAttribute('aria-busy');
+    }
+  }
+
   function practiceTransformationRequest(trade, plan, action, previewToken) {
     var request = {
       source: 'PRACTICE_TRADE', sourceId: trade.id, action: action
@@ -75,7 +93,8 @@
       if (managedPlan && applied.plan) {
         await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
       } else {
-        await App.render();
+        await refreshTradeDetailNear(button, trade.id, 'Position closed',
+          'The realized result, released reserve, and closing cash are now reflected below.');
       }
     });
   }
@@ -154,9 +173,9 @@
             return API.post('/api/position-transformations/apply', request);
           }, 'The reviewed option event could not be applied.');
           if (!applied) return;
-          UI.toast(lifecycleActionLabel(action) + ' recorded · ' + lifecycleShareResult(lifecycle), 'ok');
           if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
-          else await App.render();
+          else await refreshTradeDetailNear(host, trade.id, lifecycleActionLabel(action) + ' recorded',
+            lifecycleShareResult(lifecycle) + '. Cash, reserve, and surviving contracts are refreshed below.');
         }
       }, 'Apply reviewed ' + lifecycleActionLabel(action).toLowerCase())
         : alertBox('danger', 'This option event cannot be applied',
@@ -272,9 +291,9 @@
             return API.post('/api/position-transformations/apply', request);
           }, 'The reviewed partial close could not be applied.');
           if (!applied) return;
-          UI.toast('Closed ' + closeQuantity + ' · ' + applied.trade.qty + ' remain open', 'ok');
           if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
-          else await App.render();
+          else await refreshTradeDetailNear(host, trade.id, 'Partial close recorded',
+            'Closed ' + closeQuantity + '; ' + applied.trade.qty + ' remain open with their original history.');
         }
       }, 'Apply partial close') : alertBox('danger', 'This partial close cannot be applied',
         change.afterRisk && change.afterRisk.blockReasons || ['Review the resulting position.'])));
@@ -629,9 +648,9 @@
           }, 'The reviewed position adjustment could not be applied.');
           if (!applied) return;
           if (App.state.positionDrafts) delete App.state.positionDrafts[stateKey];
-          UI.toast(adjustmentLabel(action) + ' applied · position history preserved', 'ok');
           if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
-          else await App.render();
+          else await refreshTradeDetailNear(host, trade.id, adjustmentLabel(action) + ' applied',
+            'The position history is preserved and the resulting exposure is refreshed below.');
         } }, required.length ? 'Apply change & acknowledge risks' : 'Apply reviewed change') : null));
     host.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -1297,6 +1316,7 @@
     var guidance = el('div', { class: 'muted small book-event-guidance' });
     var sharedTradeHost = el('div', { class: 'book-shared-position-editor', hidden: 'hidden' });
     var sharedTradeEditor = null, eventMeta = null, notesField = null, saveRow = null, addLegRow = null;
+    var activeEvent = event.value, savedLegSets = {};
 
     function ensureSharedTradeEditor() {
       if (sharedTradeEditor) return sharedTradeEditor;
@@ -1320,11 +1340,20 @@
           API.flushCache();
           return out;
         },
-        onRecorded: function (out) {
+        onRecorded: async function (out) {
           App.state.portfolioBookFocusTransaction = out && out.id || null;
-          return App.render();
+          API.flushCache();
+          var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+          return el('section', { class: 'position-record-profit' },
+            el('div', {}, el('span', { class: 'eyebrow' }, 'BOOK AFTER THIS RECORD'),
+              el('h3', {}, 'Profit and cash, refreshed')),
+            el('div', { class: 'grid grid-3' },
+              stat('Realized P/L', pnlSpan(summary.realizedPnlCents)),
+              stat('Unrealized P/L', summary.unrealizedPnlCents == null ? 'Unavailable' : pnlSpan(summary.unrealizedPnlCents)),
+              stat('Cash in this book', fmtMoney(summary.bookCashCents))),
+            el('p', { class: 'muted small' }, 'The Activity journal will include transaction '
+              + ((out && out.id) || 'just recorded') + ' the next time this section is opened.'));
         },
-        recordedActionLabel: 'Refresh account activity',
         findSimilar: async function (payload) {
           if (payload.externalRef) {
             var identity = await API.getFresh('/api/portfolio/accounts/' + account.id + '/transactions?source='
@@ -1409,7 +1438,15 @@
     }
 
     function syncEvent() {
-      legs.innerHTML = '';
+      var nextEvent = event.value;
+      if (activeEvent && activeEvent !== nextEvent && legs.childNodes.length) {
+        var saved = document.createDocumentFragment();
+        while (legs.firstChild) saved.appendChild(legs.firstChild);
+        savedLegSets[activeEvent] = saved;
+      } else if (activeEvent !== nextEvent) {
+        legs.replaceChildren();
+      }
+      activeEvent = nextEvent;
       var isCash = cashEvents.indexOf(event.value) >= 0;
       var isTrade = event.value === 'TRADE';
       cashField.hidden = !isCash;
@@ -1438,17 +1475,22 @@
           : 'This records cash in the tracked account only. It never changes the practice account.';
         return;
       }
+      var savedLegs = savedLegSets[event.value];
+      var restored = !!(savedLegs && savedLegs.childNodes.length);
+      if (restored) legs.appendChild(savedLegs);
       if (event.value === 'ASSIGNMENT' || event.value === 'EXERCISE') {
-        addConversionLegs(event.value);
+        if (!restored) addConversionLegs(event.value);
         guidance.textContent = 'Record exactly one closing equity-option leg and its resulting stock delivery. Broad-based Section 1256 index options are cash-settled: record their exact settlement as a closing option transaction instead. Share quantity follows contracts × the contract multiplier, including adjusted contracts. The put/call sets buy versus sell; choose Open or Close to match whether the delivery created a new share position or offset one you already held.';
       } else if (event.value === 'ROLL') {
-        addRollLegs();
+        if (!restored) addRollLegs();
         guidance.textContent = 'Close the recorded option and open its replacement together. Choose Sell to close a long position or Buy to close a short position. Strike or expiration must change; exact realized P/L, replacement basis, fees, and net premium carryover are stored separately.';
       } else {
-        var first = portfolioLegEditor({ instrumentType: 'OPTION', positionEffect: event.value === 'EXPIRATION' ? 'CLOSE' : 'OPEN',
-          action: event.value === 'EXPIRATION' ? 'SELL' : 'BUY', price: event.value === 'EXPIRATION' ? '0.00' : '' }, false);
-        if (event.value === 'EXPIRATION') { first.controls.effect.disabled = true; first.controls.price.disabled = true; }
-        legs.appendChild(first);
+        if (!restored) {
+          var first = portfolioLegEditor({ instrumentType: 'OPTION', positionEffect: event.value === 'EXPIRATION' ? 'CLOSE' : 'OPEN',
+            action: event.value === 'EXPIRATION' ? 'SELL' : 'BUY', price: event.value === 'EXPIRATION' ? '0.00' : '' }, false);
+          if (event.value === 'EXPIRATION') { first.controls.effect.disabled = true; first.controls.price.disabled = true; }
+          legs.appendChild(first);
+        }
         guidance.textContent = event.value === 'EXPIRATION'
           ? 'Add each expired contract as a closing leg at $0. The lot matcher verifies that the exact position was open.'
           : 'One transaction may contain every stock and option leg in an exact package. Use Open/Close explicitly so basis cannot be inferred incorrectly.';
@@ -1469,15 +1511,24 @@
           }
           if (!Number.isFinite(feeAmount) || feeAmount < 0) throw new Error('Fees must be zero or more.');
           var legInputs = isCash ? [] : Array.from(legs.querySelectorAll('.book-leg-row')).map(function (row) { return row.read(); });
-          await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
+          var recorded = await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
             occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: event.value,
             fillNature: isCash ? 'NOT_APPLICABLE' : 'EXECUTED',
             cashAmountCents: isCash ? Math.round(cashAmount * 100) : null,
             feesCents: Math.round(feeAmount * 100), taxCategory: taxCategory.value || null,
             source: source.value, externalRef: reference.value || null, notes: notes.value || null, legs: legInputs
           });
-          UI.toast('Activity recorded in ' + account.name, 'ok');
-          await App.render();
+          API.flushCache();
+          var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+          message.className = 'book-record-result';
+          message.replaceChildren(
+            UI.actionFeedback('ok', 'Activity recorded in ' + account.name,
+              'Transaction ' + ((recorded && recorded.id) || 'recorded') + ' is now part of this tracked book.'),
+            el('div', { class: 'grid grid-3' },
+              stat('Realized P/L', pnlSpan(summary.realizedPnlCents)),
+              stat('Unrealized P/L', summary.unrealizedPnlCents == null ? 'Unavailable' : pnlSpan(summary.unrealizedPnlCents)),
+              stat('Cash in this book', fmtMoney(summary.bookCashCents))));
+          message.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
         finally { save.disabled = account.status === 'ARCHIVED'; save.removeAttribute('aria-busy'); }
       } }, 'Record activity');
@@ -1543,9 +1594,13 @@
           var out = await API.upload('/api/portfolio/accounts/' + account.id + '/import.csv', fd);
           App.state.portfolioImportResults = App.state.portfolioImportResults || {};
           App.state.portfolioImportResults[account.id] = out;
-          UI.toast('Imported ' + out.transactionsWritten + ' transaction' + (out.transactionsWritten === 1 ? '' : 's')
-            + (out.rejectedRows ? ' · ' + out.rejectedRows + ' rows need attention' : ''), out.rejectedRows ? 'warn' : 'ok');
-          await App.render();
+          API.flushCache();
+          renderImportResult(out);
+          result.prepend(UI.actionFeedback(out.rejectedRows ? 'caution' : 'ok',
+            'Import finished beside the file you chose', out.transactionsWritten + ' transaction'
+              + (out.transactionsWritten === 1 ? '' : 's') + ' recorded'
+              + (out.rejectedRows ? '; ' + out.rejectedRows + ' row' + (out.rejectedRows === 1 ? '' : 's') + ' need review.' : '.')));
+          result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } catch (e) { result.textContent = e.message || String(e); result.className = 'small loss'; }
         finally { upload.disabled = account.status === 'ARCHIVED'; upload.removeAttribute('aria-busy'); }
       } }, 'Import CSV');
@@ -2513,6 +2568,11 @@
   async function tradeDetail(root, params, options) {
     options = options || {};
     var id = options.tradeId || params[0];
+    if (!options.insideContent) {
+      var contentHost = el('div', { class: 'trade-detail-content' });
+      root.appendChild(contentHost);
+      return tradeDetail(contentHost, params, Object.assign({}, options, { insideContent: true }));
+    }
     var d = options.data || await API.get('/api/trades/' + id);
     var managedPlan = options.plan || null;
     var t = d.trade;
@@ -2629,117 +2689,106 @@
       var partialHost = el('div', { class: 'position-partial-workbench', hidden: 'hidden' });
       var adjustHost = el('div', { class: 'position-adjust-workbench', hidden: 'hidden' });
       var lifecycleHost = el('div', { class: 'position-lifecycle-workbench', hidden: 'hidden' });
-      root.appendChild(el('div', { class: 'card' },
-        UI.cardHeader('Actions'),
-        el('div', { class: 'btn-row', style: 'margin-top:0' },
-          el('button', {
-            class: 'btn btn-secondary', id: 'refresh-btn', onclick: async function (ev) {
-              var btn = ev.currentTarget;
-              btn.disabled = true;
-              try {
-                if (managedPlan) await PlanStore.manage(managedPlan, 'refresh', {});
-                else await API.post('/api/trades/' + id + '/refresh');
-                await App.render();
-              } catch (e) {
-                btn.disabled = false;
-                var old = document.getElementById('refresh-error');
-                if (old) old.remove();
-                var err = alertBox('danger', 'Refresh failed', [e.message]);
-                err.id = 'refresh-error';
-                btn.closest('.card').appendChild(err);
+      var refreshButton = el('button', {
+        class: 'btn btn-secondary', id: 'refresh-btn', onclick: async function (ev) {
+          var btn = ev.currentTarget;
+          btn.disabled = true;
+          try {
+            if (managedPlan) await PlanStore.manage(managedPlan, 'refresh', {});
+            else await API.post('/api/trades/' + id + '/refresh');
+            if (managedPlan) await App.render();
+            else await refreshTradeDetailNear(btn, id, 'Marks refreshed',
+              'Current executable marks, P/L, odds, and sensitivities are shown below.');
+          } catch (e) {
+            btn.disabled = false;
+            var old = document.getElementById('refresh-error');
+            if (old) old.remove();
+            var err = alertBox('danger', 'Refresh failed', [e.message]);
+            err.id = 'refresh-error';
+            btn.closest('.card').appendChild(err);
+          }
+        }
+      }, 'Refresh marks');
+      var unwindButton = el('button', {
+        class: 'btn', id: 'unwind-btn', onclick: function (ev) {
+          openCloseTransformation(t, managedPlan, ev.currentTarget);
+        }
+      }, 'Unwind…', el('span', { class: 'btn-sub' }, 'close now at market'));
+      var partialButton = Number(t.qty) > 1 ? el('button', {
+        class: 'btn btn-secondary', id: 'partial-close-btn', onclick: function (event) {
+          rollHost.hidden = true; adjustHost.hidden = true; lifecycleHost.hidden = true;
+          openPartialCloseTransformation(t, managedPlan, event.currentTarget, partialHost)
+            .catch(function (error) {
+              partialHost.hidden = false; partialHost.innerHTML = '';
+              partialHost.appendChild(UI.actionFeedback('danger', 'Could not start the partial close', error.message || String(error)));
+            });
+        }
+      }, 'Partial close…', el('span', { class: 'btn-sub' }, 'reduce quantity, keep history')) : null;
+      var adjustButton = el('button', {
+        class: 'btn btn-secondary', id: 'adjust-position-btn', onclick: async function (event) {
+          partialHost.hidden = true; rollHost.hidden = true; lifecycleHost.hidden = true;
+          var button = event.currentTarget; button.disabled = true;
+          try { await openAdjustmentTransformation(t, managedPlan, adjustHost); }
+          catch (error) {
+            adjustHost.hidden = false; adjustHost.innerHTML = '';
+            adjustHost.appendChild(UI.actionFeedback('danger', 'Could not start the position editor', error.message || String(error)));
+          } finally { button.disabled = false; }
+        }
+      }, 'Adjust position…', el('span', { class: 'btn-sub' }, 'add or remove legs / shares'));
+      var lifecycleButton = el('button', {
+        class: 'btn btn-secondary', id: 'option-lifecycle-btn', onclick: async function (event) {
+          partialHost.hidden = true; adjustHost.hidden = true; rollHost.hidden = true;
+          var actionButton = event.currentTarget; actionButton.disabled = true;
+          try { await openOptionLifecycleTransformation(t, managedPlan, actionButton, lifecycleHost); }
+          catch (error) {
+            lifecycleHost.hidden = false; lifecycleHost.innerHTML = '';
+            lifecycleHost.appendChild(UI.actionFeedback('danger', 'Could not open the option event review', error.message || String(error)));
+          } finally { actionButton.disabled = false; }
+        }
+      }, 'Option event…', el('span', { class: 'btn-sub' }, 'assignment / exercise / expiration'));
+      var rollButton = el('button', {
+        class: 'btn btn-secondary', id: 'roll-btn', onclick: function (event) {
+          partialHost.hidden = true; adjustHost.hidden = true; lifecycleHost.hidden = true;
+          openRollTransformation(t, managedPlan, event.currentTarget, rollHost)
+            .catch(function (error) {
+              rollHost.hidden = false; rollHost.innerHTML = '';
+              rollHost.appendChild(UI.actionFeedback('danger', 'Could not start the roll', error.message || String(error)));
+            });
+        }
+      }, 'Roll…', el('span', { class: 'btn-sub' }, 'edit + review + apply together'));
+      var voidButton = el('button', {
+        class: 'btn btn-danger', id: 'delete-btn', onclick: function () {
+          UI.confirmModal('Void this trade?',
+            el('div', {},
+              el('p', {}, 'This voids the trade as if it never happened: entry cash and fees are reversed, and broker reserve is released.'),
+              UI.alertBox('warn', 'Practice-only affordance: real brokers have no undo — losses do not un-happen. Voiding a losing trade erases the lesson with it; prefer Unwind to practice honest exits.'),
+              explain('Everything stays visible in the ledger and audit log — nothing is hidden.')),
+            'Void trade', async function () {
+              if (managedPlan) {
+                var out = await PlanStore.manage(managedPlan, 'void', { confirm: true });
+                await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+              } else {
+                await API.del('/api/trades/' + id + '?confirm=true');
+                await refreshTradeDetailNear(voidButton, id, 'Practice entry voided',
+                  'Entry cash, fees, and reserve were reversed; the audit history remains visible.');
               }
-            }
-          }, 'Refresh marks'),
-          el('button', {
-            class: 'btn', id: 'unwind-btn', onclick: function (ev) {
-              openCloseTransformation(t, managedPlan, ev.currentTarget);
-            }
-          }, 'Unwind…', el('span', { class: 'btn-sub' }, 'close now at market')),
-          Number(t.qty) > 1 ? el('button', {
-            class: 'btn btn-secondary', id: 'partial-close-btn', onclick: function (event) {
-              rollHost.hidden = true;
-              adjustHost.hidden = true;
-              lifecycleHost.hidden = true;
-              openPartialCloseTransformation(t, managedPlan, event.currentTarget, partialHost)
-                .catch(function (error) {
-                  partialHost.hidden = false;
-                  partialHost.innerHTML = '';
-                  partialHost.appendChild(UI.actionFeedback('danger', 'Could not start the partial close',
-                    error.message || String(error)));
-                });
-            }
-          }, 'Partial close…', el('span', { class: 'btn-sub' }, 'reduce quantity, keep history')) : null,
-          el('button', {
-            class: 'btn btn-secondary', id: 'adjust-position-btn', onclick: async function (event) {
-              partialHost.hidden = true;
-              rollHost.hidden = true;
-              lifecycleHost.hidden = true;
-              var button = event.currentTarget;
-              button.disabled = true;
-              try {
-                await openAdjustmentTransformation(t, managedPlan, adjustHost);
-              } catch (error) {
-                adjustHost.hidden = false;
-                adjustHost.innerHTML = '';
-                adjustHost.appendChild(UI.actionFeedback('danger', 'Could not start the position editor',
-                  error.message || String(error)));
-              } finally {
-                button.disabled = false;
-              }
-            }
-          }, 'Adjust position…', el('span', { class: 'btn-sub' }, 'add or remove legs / shares')),
-          el('button', {
-            class: 'btn btn-secondary', id: 'option-lifecycle-btn', onclick: async function (event) {
-              partialHost.hidden = true;
-              adjustHost.hidden = true;
-              rollHost.hidden = true;
-              var actionButton = event.currentTarget;
-              actionButton.disabled = true;
-              try {
-                await openOptionLifecycleTransformation(t, managedPlan, actionButton, lifecycleHost);
-              } catch (error) {
-                lifecycleHost.hidden = false;
-                lifecycleHost.innerHTML = '';
-                lifecycleHost.appendChild(UI.actionFeedback('danger', 'Could not open the option event review',
-                  error.message || String(error)));
-              } finally {
-                actionButton.disabled = false;
-              }
-            }
-          }, 'Option event…', el('span', { class: 'btn-sub' }, 'assignment / exercise / expiration')),
-          el('button', {
-            class: 'btn btn-secondary', id: 'roll-btn', onclick: function (event) {
-              partialHost.hidden = true;
-              adjustHost.hidden = true;
-              lifecycleHost.hidden = true;
-              openRollTransformation(t, managedPlan, event.currentTarget, rollHost)
-                .catch(function (error) {
-                  rollHost.hidden = false;
-                  rollHost.innerHTML = '';
-                  rollHost.appendChild(UI.actionFeedback('danger', 'Could not start the roll', error.message || String(error)));
-                });
-            }
-          }, 'Roll…', el('span', { class: 'btn-sub' }, 'edit + review + apply together')),
-          el('span', { class: 'spacer' }),
-          el('button', {
-            class: 'btn btn-danger', id: 'delete-btn', onclick: function () {
-              UI.confirmModal('Void this trade?',
-                el('div', {},
-                  el('p', {}, 'This voids the trade as if it never happened: entry cash and fees are reversed, and broker reserve is released.'),
-                  UI.alertBox('warn', 'Practice-only affordance: real brokers have no undo — losses do not un-happen. Voiding a losing trade erases the lesson with it; prefer Unwind to practice honest exits.'),
-                  explain('Everything stays visible in the ledger and audit log — nothing is hidden.')),
-                'Void trade',
-                async function () {
-                  if (managedPlan) {
-                    var out = await PlanStore.manage(managedPlan, 'void', { confirm: true });
-                    await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
-                  } else {
-                    await API.del('/api/trades/' + id + '?confirm=true');
-                    App.render();
-                  }
-                }, true);
-            }
-          }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'))),
+            }, true);
+        }
+      }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'));
+      root.appendChild(el('div', { class: 'card position-action-card' },
+        UI.cardHeader('Manage this position'),
+        el('div', { class: 'position-action-layout' },
+          el('section', { class: 'position-action-group position-action-manage' },
+            el('span', { class: 'eyebrow' }, 'CHANGE THE POSITION'),
+            el('p', { class: 'muted small' }, 'Every action previews the resulting cash, risk, and surviving contracts before it applies.'),
+            el('div', { class: 'btn-row' }, unwindButton, partialButton, rollButton, adjustButton, lifecycleButton)),
+          el('section', { class: 'position-action-group position-action-update' },
+            el('span', { class: 'eyebrow' }, 'KEEP IT CURRENT'),
+            el('p', { class: 'muted small' }, 'Reprice the open position without changing it.'), refreshButton)),
+        el('section', { class: 'position-action-danger' },
+          el('div', {}, el('span', { class: 'eyebrow' }, 'PRACTICE RECORD'),
+            el('p', { class: 'muted small' }, 'Void reverses a practice entry. It is not a trading decision or a substitute for closing.')),
+          voidButton),
         partialHost,
         adjustHost,
         lifecycleHost,

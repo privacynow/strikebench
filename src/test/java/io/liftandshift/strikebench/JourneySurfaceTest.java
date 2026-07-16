@@ -631,14 +631,15 @@ class JourneySurfaceTest {
                         .isLessThan(value.indexOf("/js/views-plan.js")));
         assertThat(editor).contains("window.PositionEditor =", "function parseTerminal(",
                         "function normalizedForAnalysis(", "function recordPayload(",
-                        "strategy: 'CUSTOM'", "lastAnalysis && lastAnalysis.identity",
+                        "strategy: 'CUSTOM'", "analysisCurrent && lastAnalysis.identity",
                         "identified.summary",
                         "Blank never means zero", "Similarity is advisory, never idempotency",
                         "Broker-sourced activity requires a stable order or statement reference",
                         "exact total fees from the broker", "one underlying per position package",
-                        "adjusted contract", "Alt+V switches views", "Record factual activity")
+                        "adjusted contract", "function refreshVisual()", "Partial payoff only",
+                        "Last defensible curve kept on screen", "Record factual activity")
                 .doesNotContain("API.post('/api/trades/external'", "function identify(",
-                        "PositionEditor.identify");
+                        "PositionEditor.identify", "function paint()");
         assertThat(plan).contains("key: 'yourTrade'", "PositionEditor.render(body",
                 "Analyze and use in this Plan");
         assertThat(portfolio).contains("PositionEditor.render(sharedTradeHost",

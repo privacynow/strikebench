@@ -394,7 +394,7 @@
         el('div', { class: 'mono', style: 'margin-bottom:6px' }, c.label),
         el('ul', {}, c.legs.map(function (l) { return el('li', {}, legLabel(l)); })),
         el('p', {}, 'Prices shown are the executable ', UI.term('bid/ask', 'bid/ask'), ' sides — what a fill would actually cost right now.'));
-    }));
+    }, { stateKey: 'candidate-contracts-' + (c.id || c.strategy || 'package') }));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Before you decide', c.warnings));
     if (withUse) card.appendChild(candidateWorkflowActions(c, symbolForTicket, true));
     return card;
@@ -1357,6 +1357,7 @@
     var selector = el('div', { class: 'plan-tool-selector', role: 'tablist',
       'aria-label': 'Strategy tools' });
     var body = el('div', { class: 'plan-strategy-body', id: 'plan-strategy-body' });
+    var panels = {}, mountedPanels = {};
     content.appendChild(selector);
     content.appendChild(body);
 
@@ -1395,56 +1396,76 @@
     var beginner = Learn.currentLevel() === 'beginner';
     var modes = beginner ? [
       { key: 'compare', label: 'Proposed trades', icon: 'scope', note: 'Ranked for this Plan' },
-      { key: 'builder', label: 'All strategies', icon: 'pen', note: 'Visual payoff guide' },
-      { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Enter any exact package' },
+      { key: 'builder', label: 'All strategies', icon: 'pen', note: 'Choose a shape, then contracts' },
+      { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Edit or paste an exact package' },
       { key: 'chain', label: 'Option prices', icon: 'grid', note: 'Calls, puts and strikes' },
       { key: 'scout', label: 'Scout', icon: 'compass', note: 'Similar setups and offsets' }
     ] : [
       { key: 'compare', label: 'Ranked field', icon: 'scope', note: 'Economics · score · fit' },
-      { key: 'builder', label: 'Builder', icon: 'pen', note: 'Exact contracts' },
-      { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Terminal or visual entry' },
+      { key: 'builder', label: 'Builder', icon: 'pen', note: 'Strategy-first construction' },
+      { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Direct package editing' },
       { key: 'chain', label: 'Chain', icon: 'grid', note: 'Inspect the book' },
       { key: 'scout', label: 'Scout', icon: 'compass', note: 'Similar setups · better fits · offsets' }
     ];
-    body.setAttribute('role', 'tabpanel');
-    body.setAttribute('aria-labelledby', 'plan-tool-' + ui.strategyView);
+    function panelFor(key) {
+      if (panels[key]) return panels[key];
+      var panel = el('section', { id: 'plan-strategy-panel-' + key, role: 'tabpanel',
+        'aria-labelledby': 'plan-tool-' + key, class: 'plan-strategy-panel', hidden: 'hidden' });
+      panels[key] = panel;
+      body.appendChild(panel);
+      return panel;
+    }
+    function activatePanel(key) {
+      modes.forEach(function (mode) { panelFor(mode.key).hidden = mode.key !== key; });
+    }
+    function repaint() { return paint(true); }
     modes.forEach(function (mode) {
+      panelFor(mode.key);
       selector.appendChild(el('button', { type: 'button', role: 'tab',
-        id: 'plan-tool-' + mode.key, 'aria-controls': 'plan-strategy-body',
+        id: 'plan-tool-' + mode.key, 'aria-controls': 'plan-strategy-panel-' + mode.key,
         class: 'plan-tool' + (ui.strategyView === mode.key ? ' active' : ''),
         'data-strategy-tool': mode.key,
         'aria-selected': ui.strategyView === mode.key ? 'true' : 'false',
         onclick: function () {
           ui.strategyView = mode.key;
           if (window.Workspace) Workspace.save();
-          paint().catch(function (e) { UI.toast(e.message, 'error'); });
+          paint(false).catch(function (e) { UI.toast(e.message, 'error'); });
         }
       }, icon(mode.icon), el('span', {}, el('b', {}, mode.label), el('small', {}, mode.note))));
     });
     UI.bindTabList(selector, function (button) {
       ui.strategyView = button.getAttribute('data-strategy-tool');
       if (window.Workspace) Workspace.save();
-      paint().then(function () { button.focus(); }).catch(function (e) { UI.toast(e.message, 'error'); });
+      paint(false).then(function () { button.focus(); }).catch(function (e) { UI.toast(e.message, 'error'); });
     });
 
-    async function paint() {
+    async function paint(refresh) {
       selector.querySelectorAll('.plan-tool').forEach(function (button, index) {
         var active = modes[index].key === ui.strategyView;
         button.classList.toggle('active', active);
         button.setAttribute('aria-selected', String(active));
       });
       selector.syncTabs();
-      body.setAttribute('aria-labelledby', 'plan-tool-' + ui.strategyView);
-      body.innerHTML = '';
-      if (ui.strategyView === 'yourTrade') {
+      var mode = ui.strategyView;
+      activatePanel(mode);
+      if (!refresh && mountedPanels[mode]) return;
+      var panel = panelFor(mode);
+      panel.innerHTML = '';
+      mountedPanels[mode] = true;
+      try { await renderMode(panel, mode); }
+      catch (error) { mountedPanels[mode] = false; throw error; }
+    }
+
+    async function renderMode(body, mode) {
+      if (mode === 'yourTrade') {
         PositionEditor.render(body, {
           stateKey: 'plan:' + planRef.plan.id,
           planId: planRef.plan.id,
           lockedSymbol: planRef.plan.symbol,
-          title: beginner ? 'Enter the trade you are considering' : 'Enter an exact position package',
+          title: beginner ? 'Edit or paste the exact trade you have in mind' : 'Edit an exact position package directly',
           description: beginner
-            ? 'Start from the chain or type the legs yourself. Blank fills are allowed here: Analyze will say which values came from the market or a model.'
-            : 'Terminal and visual entry share one draft. Exact fills reprice the package; blank fills remain hypothetical and receive a coverage receipt.',
+            ? 'Use this when you already know the contracts. Add from the chain or type the legs; the payoff updates here, and Analyze names and assesses the finished package.'
+            : 'This is the direct package editor, distinct from the strategy-first Builder. Terminal and visual entry share one draft; blank fills remain hypothetical and receive a coverage receipt.',
           analyzeLabel: 'Analyze and use in this Plan',
           initialSelection: planRef.selected,
           onAnalyze: async function (position) {
@@ -1464,18 +1485,19 @@
               planRef.selected = null;
               ui.selectedCandidate = null;
             }
+            mountedPanels.compare = false;
             return out;
           }
         });
         return;
       }
-      if (ui.strategyView === 'builder') {
+      if (mode === 'builder') {
         body.appendChild(el('div', { class: 'plan-tool-intro' },
-          el('h3', {}, beginner ? 'Every strategy, shown by payoff shape' : 'Build the exact package'),
+          el('h3', {}, beginner ? 'Choose a strategy by payoff shape, then build it' : 'Construct from a strategy template'),
           el('p', { class: 'muted' }, beginner
-            ? 'Choose a visual strategy card, then walk through what each contract adds. No strategy is removed; risky structures explain why the safety screen refuses them.'
-            : 'The Plan fixes ' + planRef.plan.symbol + ' and ' + planIntentLabel(planRef.plan.intent)
-              + '. Every structure, strike, quantity and limit remains available here.')));
+            ? 'Builder starts with the complete visual strategy catalog and guides each contract choice. Your Trade is the direct editor when you already know the package.'
+            : 'Builder starts from a named strategy and guides construction for ' + planRef.plan.symbol + ' · '
+              + planIntentLabel(planRef.plan.intent) + '. Your Trade remains the direct terminal and leg editor.')));
         await Builder.render(body, {
           state: ui.buildState, lockedSymbol: planRef.plan.symbol, lockedGoal: planRef.plan.intent,
           startInCatalog: beginner,
@@ -1508,24 +1530,30 @@
               }
               planRef.selected = selected;
               ui.strategyView = 'compare';
+              mountedPanels.compare = false;
               UI.toast('Exact contracts saved to this Plan');
-              return paint();
+              return paint(true);
             }).catch(function (e) { UI.toast(e.message, 'error'); });
           }
         });
         return;
       }
-      if (ui.strategyView === 'chain') {
+      if (mode === 'chain') {
         body.appendChild(el('div', { class: 'plan-tool-intro' },
           el('h3', {}, planRef.plan.symbol + ' option chain'),
           el('p', { class: 'muted' }, 'Inspect the live book. In Expert, B starts a custom package from that exact contract.')));
         await research(body, ['__plan', planRef.plan.symbol, 'strategy'], {
           plan: planRef.plan, stage: 'strategy', chainOnly: true,
-          onBuildLeg: function (seed) { ui.buildState.builderForm = seed; ui.strategyView = 'builder'; paint(); }
+          onBuildLeg: function (seed) {
+            ui.buildState.builderForm = seed;
+            ui.strategyView = 'builder';
+            mountedPanels.builder = false;
+            paint(true).catch(function (e) { UI.toast(e.message, 'error'); });
+          }
         });
         return;
       }
-      if (ui.strategyView === 'scout') {
+      if (mode === 'scout') {
         ui.scoutScope = ui.scoutScope || 'PEERS';
         ui.scoutResults = ui.scoutResults || {};
         var scoutScopes = [
@@ -1540,12 +1568,12 @@
             'data-scout-scope': scope.key,
             class: ui.scoutScope === scope.key ? 'active' : '',
             'aria-selected': String(ui.scoutScope === scope.key), onclick: function () {
-              ui.scoutScope = scope.key; paint().catch(function (e) { UI.toast(e.message, 'error'); });
+              ui.scoutScope = scope.key; paint(true).catch(function (e) { UI.toast(e.message, 'error'); });
             } }, scope.label));
         });
         UI.bindTabList(scopeRow, function (button) {
           ui.scoutScope = button.getAttribute('data-scout-scope');
-          paint().then(function () {
+          paint(true).then(function () {
             var selectedScope = body.querySelector('[data-scout-scope="' + ui.scoutScope + '"]');
             if (selectedScope) selectedScope.focus();
           }).catch(function (e) { UI.toast(e.message, 'error'); });
@@ -1564,7 +1592,7 @@
               try {
                 var out = await PlanStore.runScout(planRef.plan, { scope: ui.scoutScope, maxPicks: 4, allow0dte: false });
                 ui.scoutResults[ui.scoutScope] = out.scout && out.scout.result;
-                await paint();
+                await paint(true);
               } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
             } }, ui.scoutResults[ui.scoutScope] ? 'Refresh this scan' : 'Scan ' + scopeMeta.label.toLowerCase())));
         body.appendChild(scoutHead);
@@ -1620,7 +1648,7 @@
         filters.allow0dte = allow0.checked;
         planRef.result = null;
         ui.strategyDraftDirty = true;
-        paint().catch(function (e) { UI.toast(e.message, 'error'); });
+        paint(true).catch(function (e) { UI.toast(e.message, 'error'); });
       });
       function requestValues() {
         var f = {};
@@ -1650,7 +1678,7 @@
           ]);
           var ladder = ladderAndResearch[0];
           ladder.spot = ladderAndResearch[1] && ladderAndResearch[1].displayPrice;
-          body.appendChild(planLadderView(ladder, planRef, ui, paint));
+          body.appendChild(planLadderView(ladder, planRef, ui, repaint));
         } catch (e) {
           body.appendChild(alertBox('warn', 'The intent ladder is unavailable', [e.message]));
         }
@@ -1672,7 +1700,7 @@
         planStrategyFilterPanel(ui, function () {
           planRef.result = null;
           ui.strategyDraftDirty = true;
-          paint().catch(function (e) { UI.toast(e.message, 'error'); });
+          paint(true).catch(function (e) { UI.toast(e.message, 'error'); });
         }),
         el('label', { class: 'check-row', for: 'plan-strategy-0dte' }, allow0, ' Include same-day expirations (0DTE)'),
         el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-strategy',
@@ -1683,7 +1711,7 @@
               planRef.plan = out.plan;
               planRef.result = out.strategy && out.strategy.result;
               ui.strategyDraftDirty = false;
-              await paint();
+              await paint(true);
             } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
           } }, planRef.result ? 'Refresh proposed trades' : beginner ? 'Find proposed trades' : 'Run ranked field')));
       if (ui.strategyAction && ui.strategyAction.kind === 'clear') {
@@ -1698,7 +1726,7 @@
           el('p', { class: 'muted' }, 'This exact package came from the Builder or a linked Scout pick. Run Compare to place it beside the full field.'));
         selectedCard.appendChild(candidateCard(planRef.selected, false, planRef.plan.symbol));
         selectedCard.appendChild(el('div', { class: 'btn-row' },
-          planCandidateActions(planRef, planRef.selected, ui, paint), clearPlanStructureButton(planRef, ui, paint)));
+          planCandidateActions(planRef, planRef.selected, ui, repaint), clearPlanStructureButton(planRef, ui, repaint)));
         body.appendChild(selectedCard);
       }
       if (!planRef.result) {
@@ -1718,18 +1746,18 @@
           chip('Unfavorable', planRef.result.unfavorableCount || 0), chip('Unavailable', planRef.result.unavailableCount || 0))));
       var field = el('div', { id: 'plan-strategy-results' });
       body.appendChild(field);
-      renderPlanCandidateField(field, planRef, ui, paint);
+      renderPlanCandidateField(field, planRef, ui, repaint);
       if (planRef.selected) {
-        body.appendChild(el('div', { class: 'plan-selection-actions' }, clearPlanStructureButton(planRef, ui, paint)));
+        body.appendChild(el('div', { class: 'plan-selection-actions' }, clearPlanStructureButton(planRef, ui, repaint)));
       }
       if (planRef.result.rejected && planRef.result.rejected.length) {
-        body.appendChild(planRejectedTeaching(planRef.result.rejected, ui, paint));
+        body.appendChild(planRejectedTeaching(planRef.result.rejected, ui, repaint));
       }
       if (planRef.selected || (planRef.result.candidates || []).some(function (c) { return c.selected; })) {
         appendPlanStrategyNext(body, planRef, paint);
       }
     }
-    await paint();
+    await paint(false);
   }
 
   function appendPlanStrategyNext(host, planRef) {
@@ -2186,7 +2214,7 @@
                 ? el('span', { class: 'badge badge-ok' }, 'CURRENT ASSUMPTIONS')
                 : el('span', { class: 'badge badge-dim' }, 'OLDER ASSUMPTIONS'), load));
           }));
-        }));
+        }, { stateKey: 'plan-previous-replays' }));
       }
       var rangePresets = el('div', { class: 'segmented plan-backtest-presets', 'aria-label': 'Replay date range' },
         [['6M',6],['1Y',12],['3Y',36],['MAX','max']].map(function (preset) {
@@ -2370,6 +2398,8 @@
       var economics = evaluation.assessment && evaluation.assessment.economics;
       review.innerHTML = '';
       review.appendChild(economicAssessmentBlock({ evaluation: evaluation }));
+      var decisionActionAnchor = el('div', { class: 'plan-decision-action-anchor' });
+      review.appendChild(decisionActionAnchor);
       review.appendChild(decisionMetricsReceipt(evaluation, Learn.currentLevel() === 'beginner'));
       review.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);
       var blocks = (p.blockReasons || []).concat(result.guardrails && result.guardrails.blockReasons || []);
@@ -2439,7 +2469,7 @@
           } catch (e) { UI.toast(e.message, 'error'); }
         });
       } }, 'Stay in cash');
-      review.appendChild(el('div', { class: 'plan-decision-actions' },
+      decisionActionAnchor.appendChild(el('div', { class: 'plan-decision-actions' },
         el('div', {}, el('b', {}, 'Make the decision'), el('p', { class: 'muted' },
           'Trade and cash both preserve this exact comparison for later review.')),
         el('div', { class: 'btn-row' }, trade, cash)));
@@ -2872,7 +2902,7 @@
             focusPlanFrom(this, plan, plan.furthestStage);
           } }, 'Review'));
       }));
-    }));
+    }, { stateKey: 'plans-archived' }));
     if (closedTabs.length) host.appendChild(UI.expandable('Closed Plan tabs (' + closedTabs.length + ')', function () {
       return el('div', { class: 'home-plan-archive home-plan-closed-tabs' }, closedTabs.map(function (plan) {
         var actions = el('div', { class: 'btn-row' },
@@ -2888,7 +2918,7 @@
         return el('div', { class: 'status-item' }, el('b', {}, plan.symbol), el('span', {}, plan.title),
           el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)), actions);
       }));
-    }));
+    }, { stateKey: 'plans-closed-tabs' }));
   }
 
   async function plansHome(root) {
