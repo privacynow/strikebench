@@ -135,7 +135,9 @@ final class PortfolioController {
                 preview.ok(), preview.blockReasons(), Math.multiplyExact(preview.feesOpenCents(), 2L), exposure);
         String analysisLane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
         ctx.json(new ApiResponses.TrackedPackageAnalysis(preview,
-                ApiResponses.EvaluationReceipt.of(evaluation), id, account.name(),
+                ApiResponses.EvaluationReceipt.of(evaluation),
+                io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                        request.symbol(), request.qty(), request.legs()), id, account.name(),
                 summary.bookCashCents(), analysisLane,
                 "Read-only analysis uses " + analysisLane.toLowerCase(java.util.Locale.ROOT)
                         + " evidence and this tracked account's cash. It never changes tracked lots, tax basis,"

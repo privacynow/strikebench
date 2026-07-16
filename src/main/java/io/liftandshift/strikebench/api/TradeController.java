@@ -296,7 +296,9 @@ final class TradeController {
                     pctOfRiskCapital, overRiskCapital);
         }
         return new ApiResponses.TradePreviewResponse(preview, ApiResponses.EvaluationReceipt.of(evaluation), guardrails,
-                required.isEmpty() ? null : required, token, accountFit);
+                required.isEmpty() ? null : required, token, accountFit,
+                io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                        request.symbol(), request.qty(), request.legs()));
     }
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
@@ -431,8 +433,12 @@ final class TradeController {
         }
         List<Leg> legs = body.legs().stream().map(LegView::toLeg).toList();
         if (body.intent() != null && !body.intent().isBlank()) StrategyIntent.parse(body.intent());
-        return new TradeService.OpenRequest(accountId, body.symbol().trim().toUpperCase(Locale.ROOT),
-                body.strategy().trim().toUpperCase(Locale.ROOT),
+        String suppliedStrategy = body.strategy().trim().toUpperCase(Locale.ROOT);
+        var identified = io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                body.symbol().trim().toUpperCase(Locale.ROOT), body.qty(), legs);
+        String strategy = "CUSTOM".equals(suppliedStrategy) && identified.family() != null
+                ? identified.family() : suppliedStrategy;
+        return new TradeService.OpenRequest(accountId, body.symbol().trim().toUpperCase(Locale.ROOT), strategy,
                 body.qty(), legs, body.thesis(), body.horizon(),
                 body.riskMode(), body.intent(), body.useHeldShares(), body.proposedNetCents(),
                 body.feesOverrideCents(),

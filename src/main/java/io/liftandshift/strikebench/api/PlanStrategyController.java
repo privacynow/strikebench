@@ -192,7 +192,9 @@ final class PlanStrategyController {
         var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
                 body.expectedVersion(), preview.ok());
         ctx.json(new ApiResponses.PlanStrategyPreview<>(
-                planSvc.get(root.ownerId(ctx), plan.id()), saved, preview));
+                planSvc.get(root.ownerId(ctx), plan.id()), saved, preview,
+                io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                        request.symbol(), request.qty(), request.legs())));
     }
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
