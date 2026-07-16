@@ -373,6 +373,15 @@
     return out;
   }
 
+  /** The third decision outcome: the structure was placed at the user's real broker and the
+   *  fills are recorded into the chosen tracked account atomically with the frozen decision. */
+  async function brokerDecision(plan, request) {
+    var out = await API.post('/api/plans/' + plan.id + '/decision/broker',
+      Object.assign({ expectedVersion: plan.version }, request || {}));
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   function latestManagement(planId, force) {
     var path = '/api/plans/' + planId + '/manage';
     return force ? API.getFresh(path) : API.get(path);
@@ -594,7 +603,7 @@
     runOutcome: runOutcome, compareOutcomes: compareOutcomes, runBacktest: runBacktest,
     rehearsals: rehearsals, createRehearsal: createRehearsal,
     latestDecision: latestDecision, previewDecision: previewDecision,
-    tradeDecision: tradeDecision, cashDecision: cashDecision,
+    tradeDecision: tradeDecision, cashDecision: cashDecision, brokerDecision: brokerDecision,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching, identity: identity,
     archive: archive, deleteDraft: deleteDraft,

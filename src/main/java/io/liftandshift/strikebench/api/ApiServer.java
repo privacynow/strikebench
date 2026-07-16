@@ -311,14 +311,17 @@ public final class ApiServer {
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
                 marketVolatility, this::activeWorld, this::ownerId, this::analysisCtx,
                 discoveryController::decisionCompetition);
+        var positionArtifacts = new io.liftandshift.strikebench.position.PositionArtifactStore(db);
+        var planPromotions = new io.liftandshift.strikebench.plan.PlanPromotionService(
+                db, planDecisions, portfolioBooks, positionArtifacts);
         planController = new PlanController(cfg, clock, db, market,
                 positions, trades, backtester, auto, evaluations, planSvc, planEvidence,
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
-                pathEnsembles, simEngine, discoveryController, outcomeController, tradeController,
-                this::currentAccount, this::ownerId, this::activeWorld, this::analysisCtx);
+                planPromotions, pathEnsembles, simEngine, discoveryController, outcomeController,
+                tradeController, this::currentAccount, this::ownerId, this::activeWorld, this::analysisCtx);
         PositionTransformationController positionTransformations = new PositionTransformationController(
                 clock, trades, tradeController, planController, planSvc, planManagement,
-                new io.liftandshift.strikebench.position.PositionArtifactStore(db));
+                positionArtifacts);
         SparklineController sparklineController = new SparklineController(clock, market, universe,
                 evaluations, this::activeWorld, this::analysisCtx);
         dataJobs.setDataChangedHook(sparklineController::invalidate);

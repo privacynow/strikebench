@@ -2000,6 +2000,14 @@
     await paint(false);
   }
 
+  /** The stored fan a saved outcome run repriced on — ApiResponses.EnsembleRef shape or null. */
+  function outcomeFanRef(run) {
+    if (!run) return null;
+    if (run.ensembleRef && run.ensembleRef.fingerprint) return run.ensembleRef;
+    return run.ensembleFingerprint
+      ? { id: run.ensembleId, fingerprint: run.ensembleFingerprint, basis: run.basis } : null;
+  }
+
   function planOutcomeBasisCard(run) {
     var result = run && run.result || run || {};
     var title = { RISK_NEUTRAL: 'Market-implied odds', PARAMETRIC: 'Model futures',
@@ -2010,9 +2018,11 @@
     var pop = result.winRatePct;
     if (pop == null && result.probabilityMap) pop = result.probabilityMap.pAnyProfit * 100;
     if (pop == null && result.metrics) pop = Number(result.metrics['probabilityMap.pAnyProfit']) * 100;
+    var fan = outcomeFanRef(run);
     return el('div', { class: 'plan-outcome-summary-card', 'data-basis-summary': run.basis },
       el('div', { class: 'plan-outcome-summary-head' }, el('b', {}, title),
-        run.ensembleId ? el('span', { class: 'badge badge-dim' }, 'PINNED PATHS') : null),
+        fan ? UI.lineageChip(fan)
+          : run.ensembleId ? el('span', { class: 'badge badge-dim' }, 'PINNED PATHS') : null),
       el('div', { class: 'chip-row' },
         pop != null && isFinite(pop) ? chip('Chance of profit', Math.round(pop) + '%') : null,
         ev != null ? chip('Expected P/L', pnlSpan(ev)) : null,
@@ -2182,7 +2192,8 @@
       el('div', { class: 'plan-section-head' }, el('div', {}, el('span', { class: 'eyebrow' }, 'SAME PATHS · DIFFERENT STRUCTURES'),
         el('h3', {}, 'Which proposal handles this evidence best?'),
         el('p', { class: 'muted' }, comparison.interpretation || 'Every proposal used one exact path ensemble.')),
-        comparison.ensembleFingerprint ? el('span', { class: 'badge badge-dim' }, 'STORED FUTURES VERIFIED') : null),
+        comparison.ensembleFingerprint ? UI.lineageChip({ id: comparison.ensembleId,
+          fingerprint: comparison.ensembleFingerprint, basis: comparison.basis }, 'same fan as Evidence') : null),
       leader && leader.key === 'CASH' ? alertBox('caution', 'Cash leads on this outcome lens', [
         'Every valued proposal ranked below the zero-risk, zero-cost baseline after estimated costs. The trades remain available to study; this lens does not endorse them.'
       ]) : null,
@@ -2302,6 +2313,7 @@
       try {
         var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
         var out = await PlanStore.runOutcome(live, Object.assign({ basis: basis }, extra || {}));
+        if (out.outcome && out.ensemble) out.outcome.ensembleRef = out.ensemble;
         ui.outcomeRuns[basis] = out.outcome;
         paintComparison();
         return out.outcome;
@@ -2335,7 +2347,10 @@
       var compared = ui.outcomeComparisons.PARAMETRIC;
       var evidenceUi = PlanStore.ui(planRef.plan.id);
       var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
-      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Use the Evidence ensemble'),
+      var fanRef = outcomeFanRef(saved) || (evidenceUi.planEnsembleFingerprint
+        ? { id: evidenceUi.planEnsembleId, fingerprint: evidenceUi.planEnsembleFingerprint, basis: 'PARAMETRIC' } : null);
+      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Use the Evidence ensemble',
+        fanRef ? UI.lineageChip(fanRef, 'same fan as Evidence') : null),
         el('p', { class: 'muted' }, evidenceUi.planEnsembleFingerprint
           ? 'Ready: the exact stored futures are verified and tied to this Plan.'
           : 'If Evidence already ran possible futures, the server restores that exact matrix. Otherwise open Evidence and set the scenario first.'),
@@ -2688,9 +2703,26 @@
       var required = result.requiredAcks || [];
       state.acks = {};
       var trade = el('button', { type: 'button', class: 'btn', id: 'plan-place-trade', disabled: 'disabled' }, 'Open practice position');
+      var broker = null, brokerHost = null;
+      if ((planRef.plan.marketKind || initialPlan.marketKind) !== 'SIMULATED') {
+        // The third outcome (real lane): the user already executed at their broker; StrikeBench
+        // records the actual fills — it never places real orders. Practice buying-power blocks
+        // do not gate this, but material-risk acknowledgments do.
+        broker = el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-record-broker',
+          disabled: 'disabled' }, 'I placed this with my broker');
+        brokerHost = el('div', { class: 'plan-broker-record', id: 'plan-broker-record', hidden: '' });
+        broker.onclick = function () {
+          brokerHost.hidden = !brokerHost.hidden;
+          if (!brokerHost.hidden) {
+            paintBrokerCard();
+            brokerHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        };
+      }
       function refresh() {
         var complete = required.every(function (ack) { return state.acks[ack.id]; });
         trade.disabled = !p.ok || !complete;
+        if (broker) broker.disabled = !complete;
       }
       if (required.length) primary.appendChild(el('div', { class: 'card card-slim ack-gate' },
         UI.cardHeader('Acknowledge material risks'), required.map(function (ack) {
@@ -2723,8 +2755,114 @@
       primary.appendChild(decisionActionAnchor);
       decisionActionAnchor.appendChild(el('div', { class: 'plan-decision-actions' },
         el('div', {}, el('b', {}, 'Make the decision'), el('p', { class: 'muted' },
-          'Trade and cash both preserve this exact comparison for later review.')),
-        el('div', { class: 'btn-row' }, trade, cash)));
+          broker ? 'Practice it, stay in cash, or record the placement you already made at your broker — every outcome preserves this exact comparison for review.'
+            : 'Trade and cash both preserve this exact comparison for later review.')),
+        el('div', { class: 'btn-row' }, trade, cash, broker)));
+      if (brokerHost) decisionActionAnchor.appendChild(brokerHost);
+
+      function brokerLegLabel(leg) {
+        if (!leg) return 'Leg';
+        var action = leg.action === 'SELL' ? 'Sell' : 'Buy';
+        if (leg.type === 'STOCK') {
+          return action + ' ' + ((leg.ratio || 1) * (leg.multiplier || 1) * (state.qty || 1)) + ' shares';
+        }
+        return action + ' ' + ((leg.ratio || 1) * (state.qty || 1)) + '× ' + (leg.strike || '') + ' '
+          + (leg.type || '').toLowerCase() + (leg.expiration ? ' · ' + leg.expiration : '');
+      }
+      function paintBrokerCard() {
+        state.broker = state.broker || { accountId: null, externalRef: '', feesCents: null };
+        var saved = state.broker;
+        brokerHost.innerHTML = '';
+        var card = el('div', { class: 'card card-slim plan-broker-card' },
+          UI.cardHeader('Record the broker placement'),
+          el('p', { class: 'muted' },
+            'You executed this exact package at your real broker. StrikeBench records the actual fills in your tracked book — it never places real orders — and this Plan keeps managing the position.'));
+        brokerHost.appendChild(card);
+        var status = el('div', { class: 'plan-broker-status', 'aria-live': 'polite' });
+        card.appendChild(UI.spinner('Loading tracked accounts…'));
+        API.getFresh('/api/portfolio/accounts').then(function (data) {
+          card.querySelectorAll('.loading').forEach(function (node) { node.remove(); });
+          var accounts = (data.accounts || []).filter(function (account) { return account.status === 'ACTIVE'; });
+          if (!accounts.length) {
+            card.appendChild(UI.emptyState('No tracked account yet',
+              'The Book records real brokerage activity. Set up a tracked account first; this decision stays open.',
+              'Set up a tracked account', function () { App.navigate('#/portfolio/book/overview'); }));
+            return;
+          }
+          if (!saved.accountId || !accounts.some(function (account) { return account.id === saved.accountId; })) {
+            saved.accountId = accounts[0].id;
+          }
+          function accountName(id) {
+            var match = accounts.find(function (account) { return account.id === id; });
+            return match ? match.name : 'the tracked account';
+          }
+          card.appendChild(UI.chipSet({ id: 'plan-broker-account', label: 'Tracked account',
+            options: accounts.map(function (account) {
+              return { value: account.id, label: account.name,
+                sub: account.broker || account.accountType };
+            }),
+            value: saved.accountId,
+            onChange: function (value) { saved.accountId = value; },
+            consequence: function (value) {
+              return 'Fills are recorded in ' + accountName(value)
+                + '; the Book computes profit from them, and the Live band of this Plan follows the position.';
+            } }));
+          var ref = el('input', { type: 'text', id: 'plan-broker-ref', value: saved.externalRef || '',
+            placeholder: 'e.g. order # or confirmation id' });
+          var feesInput = el('input', { type: 'number', step: '0.01', min: '0', id: 'plan-broker-fees',
+            value: saved.feesCents == null ? '' : (saved.feesCents / 100).toFixed(2), placeholder: '0.00' });
+          var fillInputs = (selected.legs || []).map(function (leg, index) {
+            var defaultFill = p.legs && p.legs[index] && p.legs[index].mid != null
+              ? p.legs[index].mid : leg.entryPrice;
+            return el('input', { type: 'number', step: '0.01', min: '0', id: 'plan-broker-fill-' + index,
+              value: defaultFill == null ? '' : String(defaultFill) });
+          });
+          card.appendChild(el('div', { class: 'form-grid plan-broker-form' },
+            el('div', { class: 'field' }, el('label', { for: 'plan-broker-ref' }, 'Broker order reference'), ref),
+            el('div', { class: 'field' }, el('label', { for: 'plan-broker-fees' }, 'Total fees $'), feesInput)));
+          card.appendChild(el('div', { class: 'form-grid plan-broker-fills' },
+            (selected.legs || []).map(function (leg, index) {
+              return el('div', { class: 'field' },
+                el('label', { for: 'plan-broker-fill-' + index }, brokerLegLabel(leg) + ' — fill $ / share'),
+                fillInputs[index]);
+            })));
+          var submit = el('button', { type: 'button', class: 'btn', id: 'plan-broker-submit' }, 'Record placement');
+          card.appendChild(el('div', { class: 'plan-decision-actions' },
+            el('div', {}, el('p', { class: 'muted' },
+              'One record: the frozen decision, the tracked fills, and the Plan-to-position link commit together — or not at all.')),
+            el('div', { class: 'btn-row' }, submit)));
+          card.appendChild(status);
+          submit.onclick = async function () {
+            submit.disabled = true; status.innerHTML = '';
+            try {
+              if (!ref.value.trim()) throw new Error('The broker order or confirmation reference is required.');
+              saved.externalRef = ref.value.trim();
+              saved.feesCents = dollars(feesInput, 'Fees', true);
+              var fills = fillInputs.map(function (input, index) {
+                if (!input.value) throw new Error('Leg ' + (index + 1) + ' needs its exact fill price.');
+                return { legIndex: index, fillPrice: String(input.value) };
+              });
+              var live = await PlanStore.get(planRef.plan.id, true);
+              var out = await PlanStore.brokerDecision(live, {
+                qty: state.qty, proposedNetCents: state.proposedNetCents,
+                portfolioAccountId: saved.accountId, externalRef: saved.externalRef,
+                feesCents: saved.feesCents, fills: fills, note: state.note,
+                ackToken: result.ackToken,
+                acknowledgedRisks: required.filter(function (ack) { return state.acks[ack.id]; })
+                  .map(function (ack) { return ack.id; })
+              });
+              state.preview = null;
+              await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
+            } catch (e) {
+              submit.disabled = false;
+              status.appendChild(alertBox('danger', 'The placement was not recorded', [e.message]));
+            }
+          };
+        }).catch(function (e) {
+          card.querySelectorAll('.loading').forEach(function (node) { node.remove(); });
+          card.appendChild(alertBox('danger', 'Tracked accounts could not load', [e.message]));
+        });
+      }
       if (scenarioSummary) primary.appendChild(scenarioSummary);
       primary.appendChild(decisionMath);
       refresh();
@@ -2792,6 +2930,43 @@
         el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
           App.navigate('#/portfolio');
         } }, 'Open Practice holdings')));
+  }
+
+  /** The live strip for a broker-recorded position: identity, account, and broker-reported
+   *  fills from the receipt. Profit and tax depth stays in the Book — one accounting surface. */
+  function trackedStructureCard(tracked) {
+    var legs = tracked.legs || [];
+    var open = (tracked.openQuantityRemaining || 0) > 0;
+    function fact(label, value, note) {
+      return el('div', { class: 'plan-current-position-fact' },
+        el('span', { class: 'eyebrow' }, label),
+        el('strong', {}, value),
+        note ? el('span', { class: 'muted small' }, note) : null);
+    }
+    return el('section', { class: 'card plan-tracked-structure', id: 'plan-tracked-structure' },
+      UI.cardHeader('Live at your broker', el('span', { class: 'badge ' + (open ? 'badge-ok' : 'badge-dim') },
+        open ? 'OPEN' : 'CLOSED IN BOOK')),
+      el('div', { class: 'plan-current-position-summary' },
+        fact('Structure', tracked.label || 'Tracked structure', 'Broker-reported fills, recorded with this decision'),
+        fact('Tracked account', tracked.accountName || 'Tracked account', tracked.symbol),
+        fact('Recorded', UI.fmtDate(tracked.marksAsOf || tracked.createdAt),
+          String(tracked.role || 'ENTRY').replaceAll('_', ' ').toLowerCase() + ' · '
+            + String(tracked.positionState || '').replaceAll('_', ' ').toLowerCase())),
+      legs.length ? table(['Holding', 'Quantity', 'Fill'], legs.map(function (leg) {
+        var holding = leg.instrumentType === 'STOCK' ? leg.symbol + ' shares'
+          : [leg.symbol, leg.expiration, leg.strike, leg.optionType].filter(Boolean).join(' ');
+        return el('tr', {},
+          el('td', {}, holding),
+          el('td', {}, String(leg.quantity)),
+          el('td', {}, leg.fillPrice == null ? 'Not reported'
+            : fmtMoney(Math.round(Number(leg.fillPrice) * 100))));
+      })) : null,
+      el('p', { class: 'muted small' },
+        'Profit, lots, and tax detail for this position live in the Book; this Plan reviews the decision against its declared view.'),
+      el('div', { class: 'btn-row' },
+        el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-open-book', onclick: function () {
+          App.navigate('#/portfolio/book/overview');
+        } }, 'Open in Book')));
   }
 
   function planCashReview(host, plan, decision, management) {
@@ -2876,6 +3051,16 @@
     if (decision.action === 'CASH') {
       planCashReview(content, plan, decision, data.management);
       planManagementTimeline(content, data.management, false);
+      return;
+    }
+    if (decision.action === 'BROKER') {
+      var tracked = data.management && data.management.trackedStructure;
+      if (tracked) content.appendChild(trackedStructureCard(tracked));
+      else content.appendChild(alertBox('danger', 'The tracked position is unavailable', [
+        'The broker decision is preserved, but its tracked-book artifacts could not be loaded. Nothing was changed.'
+      ]));
+      renderFrozenPlanDecision(content, plan, decision, true);
+      planManagementTimeline(content, data.management);
       return;
     }
     if (!data.trade && data.management && data.management.currentPosition

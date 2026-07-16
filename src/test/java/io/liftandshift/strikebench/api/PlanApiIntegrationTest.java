@@ -856,6 +856,100 @@ class PlanApiIntegrationTest {
         }
     }
 
+    @Test void brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically() throws Exception {
+        JsonNode account = json(post("/api/portfolio/accounts", """
+                {"name":"Real brokerage","accountType":"TAXABLE","broker":"Example Broker","openingCashCents":5000000}
+                """));
+        String accountId = account.get("id").asText();
+
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"decision-broker-plan","symbol":"AAPL","intent":"DIRECTIONAL","title":"Broker decision plan",
+                 "thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        JsonNode field = json(post("/api/plans/" + planId + "/strategy/run", "{}"));
+        JsonNode candidate = null;
+        for (JsonNode item : field.at("/strategy/result/candidates")) {
+            java.util.Set<String> expirations = new java.util.HashSet<>();
+            for (JsonNode leg : item.withArray("legs")) if (!"STOCK".equals(leg.path("type").asText())) {
+                expirations.add(leg.path("expiration").asText());
+            }
+            if (expirations.size() == 1) { candidate = item; break; }
+        }
+        assertThat(candidate).as("fixture field has a same-expiry package").isNotNull();
+        JsonNode selected = json(put("/api/plans/" + planId + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + field.at("/plan/version").asLong() + "}"));
+        long version = selected.at("/plan/version").asLong();
+        JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1}"));
+
+        var request = Json.MAPPER.createObjectNode();
+        request.put("expectedVersion", version);
+        request.put("qty", 1);
+        request.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        request.put("portfolioAccountId", accountId);
+        request.put("externalRef", "broker-order-77");
+        request.put("feesCents", 130);
+        if (preview.has("ackToken")) request.put("ackToken", preview.get("ackToken").asText());
+        var acknowledgments = request.putArray("acknowledgedRisks");
+        for (JsonNode ack : preview.withArray("requiredAcks")) acknowledgments.add(ack.get("id").asText());
+        var fills = request.putArray("fills");
+        JsonNode previewLegs = preview.at("/preview/legs");
+        for (int index = 0; index < candidate.withArray("legs").size(); index++) {
+            JsonNode previewLeg = previewLegs.path(index);
+            String price = previewLeg.hasNonNull("mid") ? previewLeg.get("mid").asText()
+                    : candidate.at("/legs/" + index + "/entryPrice").asText();
+            var fill = fills.addObject();
+            fill.put("legIndex", index);
+            fill.put("fillPrice", price);
+        }
+
+        // Atomicity: a fill the tracked book rejects (inside the transaction, after the decision
+        // freeze already executed) rolls the frozen decision back with it.
+        var poisoned = request.deepCopy();
+        ((ObjectNode) poisoned.withArray("fills").get(0)).put("fillPrice", "-1");
+        HttpResponse<String> rejected = post("/api/plans/" + planId + "/decision/broker", poisoned.toString());
+        assertThat(rejected.statusCode()).isBetween(400, 499);
+        assertThat(rejected.body()).contains("price cannot be negative");
+        JsonNode afterRollback = json(get("/api/plans/" + planId + "/decision/latest"));
+        assertThat(afterRollback.at("/decision").isMissingNode())
+                .as("no partially frozen decision survives").isTrue();
+        assertThat(afterRollback.at("/plan/status").asText()).isEqualTo("ACTIVE");
+        assertThat(afterRollback.at("/plan/version").asLong()).isEqualTo(version);
+
+        JsonNode placed = json(post("/api/plans/" + planId + "/decision/broker", request.toString()));
+        assertThat(placed.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(placed.at("/plan/furthestStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(placed.at("/decision/action").asText()).isEqualTo("BROKER");
+        assertThat(placed.at("/decision/qty").asInt()).isEqualTo(1);
+        assertThat(placed.at("/decision/tradeId").isMissingNode())
+                .as("a broker placement links through artifacts, never a Practice trade").isTrue();
+        assertThat(placed.at("/transaction/source").asText()).isEqualTo("BROKER");
+        assertThat(placed.at("/transaction/externalRef").asText()).isEqualTo("broker-order-77");
+        assertThat(placed.at("/transaction/feesCents").asLong()).isEqualTo(130L);
+        assertThat(placed.at("/transaction/legs")).hasSize(candidate.withArray("legs").size());
+        assertThat(placed.get("structureId").asText()).isNotBlank();
+        assertThat(placed.get("receiptId").asText()).isNotBlank();
+
+        JsonNode manage = json(get("/api/plans/" + planId + "/manage"));
+        assertThat(manage.at("/management/activeTradeId").isMissingNode()).isTrue();
+        JsonNode tracked = manage.at("/management/trackedStructure");
+        assertThat(tracked.path("structureId").asText()).isEqualTo(placed.get("structureId").asText());
+        assertThat(tracked.path("accountName").asText()).isEqualTo("Real brokerage");
+        assertThat(tracked.path("positionState").asText()).isEqualTo("OPEN");
+        assertThat(tracked.path("role").asText()).isEqualTo("ENTRY");
+        assertThat(tracked.path("openQuantityRemaining").asLong()).isGreaterThan(0);
+        assertThat(tracked.path("legs")).hasSize(candidate.withArray("legs").size());
+        for (JsonNode leg : tracked.path("legs")) {
+            assertThat(leg.hasNonNull("fillPrice")).as("broker-reported fills are on the receipt").isTrue();
+        }
+
+        // The frozen plan refuses another decision; the tracked book refuses the duplicate reference.
+        assertThat(post("/api/plans/" + planId + "/decision/broker", request.toString()).statusCode())
+                .isBetween(400, 499);
+    }
+
     @Test void planPartialCloseKeepsThePositionOpenAndRecordsOneAtomicManagementAction() throws Exception {
         assertThat(put("/api/account/risk-context", """
                 {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}

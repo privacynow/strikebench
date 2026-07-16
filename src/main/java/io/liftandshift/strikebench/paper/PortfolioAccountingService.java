@@ -392,6 +392,13 @@ public final class PortfolioAccountingService {
         }
     }
 
+    /** Records inside a caller-owned transaction so a Plan promotion commits the ledger row
+     *  and its position artifacts atomically. Same validation as {@link #record}. */
+    public TransactionView recordOn(Connection c, String ownerId, String accountId, TransactionInput input)
+            throws SQLException {
+        return recordOn(c, requireAccount(c, owner(ownerId), accountId, true), input);
+    }
+
     private TransactionView recordOn(Connection c, AccountProfile account, TransactionInput input) throws SQLException {
         return recordOn(c, account, input, false);
     }

@@ -392,6 +392,7 @@ public final class PlanOutcomeService {
             ObjectNode out = Json.MAPPER.createObjectNode();
             ArrayNode runs = out.putArray("outcomes");
             List<OutcomeRow> rows = Db.queryOn(c, "SELECT id,basis,candidate_id,ensemble_id,interpretation," +
+                            "(SELECT pe.fingerprint FROM plan_ensemble pe WHERE pe.id=ensemble_id) ensemble_fingerprint," +
                             "entry_cost_cents,paths,horizon_days,p5_cents,p25_cents,p50_cents,p75_cents,p95_cents," +
                             "expected_pnl_cents,win_rate_pct,best_cents,worst_cents,breach_probability_pct," +
                             "created_at::text created_at FROM plan_outcome_run WHERE plan_id=? AND context_rev=? " +
@@ -439,7 +440,8 @@ public final class PlanOutcomeService {
     private static ObjectNode loadOutcome(java.sql.Connection c, OutcomeRow r) throws java.sql.SQLException {
         ObjectNode n = Json.MAPPER.createObjectNode();
         put(n, "id", r.id()); put(n, "basis", r.basis()); put(n, "candidateId", r.candidateId());
-        put(n, "ensembleId", r.ensembleId()); put(n, "interpretation", r.interpretation());
+        put(n, "ensembleId", r.ensembleId()); put(n, "ensembleFingerprint", r.ensembleFingerprint());
+        put(n, "interpretation", r.interpretation());
         put(n, "entryCostCents", r.entry()); put(n, "paths", r.paths()); put(n, "horizonDays", r.horizon());
         put(n, "p5Cents", r.p5()); put(n, "p25Cents", r.p25()); put(n, "p50Cents", r.p50());
         put(n, "p75Cents", r.p75()); put(n, "p95Cents", r.p95()); put(n, "expectedPnlCents", r.expected());
@@ -693,6 +695,7 @@ public final class PlanOutcomeService {
 
     private static OutcomeRow outcomeRow(Db.Row r) {
         return new OutcomeRow(r.str("id"), r.str("basis"), r.str("candidate_id"), r.str("ensemble_id"),
+                r.str("ensemble_fingerprint"),
                 r.str("interpretation"), r.lngOrNull("entry_cost_cents"), intOrNull(r, "paths"),
                 intOrNull(r, "horizon_days"), r.lngOrNull("p5_cents"), r.lngOrNull("p25_cents"),
                 r.lngOrNull("p50_cents"), r.lngOrNull("p75_cents"), r.lngOrNull("p95_cents"),
@@ -718,7 +721,8 @@ public final class PlanOutcomeService {
 
     private record CurrentPlan(String symbol, String marketKind, String worldId, int contextRev, long version, String contextHash) {}
     private record MetricRow(String key, Double number, Long cents, String text) {}
-    private record OutcomeRow(String id,String basis,String candidateId,String ensembleId,String interpretation,Long entry,
+    private record OutcomeRow(String id,String basis,String candidateId,String ensembleId,
+                              String ensembleFingerprint,String interpretation,Long entry,
                               Integer paths,Integer horizon,Long p5,Long p25,Long p50,Long p75,Long p95,Long expected,
                               Double winRate,Long best,Long worst,Double breach,String createdAt) {}
     private record ComparisonRow(String id,String basis,String ensembleId,String fingerprint,

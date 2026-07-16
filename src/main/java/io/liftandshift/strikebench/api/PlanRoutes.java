@@ -39,6 +39,7 @@ public final class PlanRoutes {
             Handler previewDecision,
             Handler placeDecisionTrade,
             Handler chooseCashDecision,
+            Handler recordDecisionBroker,
             Handler manage,
             Handler refreshManagement,
             Handler review
@@ -80,6 +81,7 @@ public final class PlanRoutes {
         config.routes.post("/api/plans/{id}/decision/preview", h.previewDecision());
         config.routes.post("/api/plans/{id}/decision/trade", h.placeDecisionTrade());
         config.routes.post("/api/plans/{id}/decision/cash", h.chooseCashDecision());
+        config.routes.post("/api/plans/{id}/decision/broker", h.recordDecisionBroker());
         config.routes.get("/api/plans/{id}/manage", h.manage());
         config.routes.post("/api/plans/{id}/manage/refresh", h.refreshManagement());
         config.routes.post("/api/plans/{id}/manage/review", h.review());
