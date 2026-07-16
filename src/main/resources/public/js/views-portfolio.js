@@ -1058,59 +1058,8 @@
   }
 
   function portfolioRollPosition(account, position) {
-    var longSide = position.side === 'LONG';
-    var quantity = el('input', { type: 'number', min: '1', max: String(position.quantity), step: '1', value: String(position.quantity) });
-    var closePrice = el('input', { type: 'number', min: '0', step: '0.0001',
-      value: position.liquidationPrice == null ? '' : Number(position.liquidationPrice).toFixed(4), placeholder: 'Exact closing fill' });
-    var nextStrike = el('input', { type: 'number', min: '0.0001', step: '0.01', value: Number(position.strike).toFixed(2) });
-    var nextExpiry = el('input', { type: 'date' });
-    var openPrice = el('input', { type: 'number', min: '0', step: '0.0001', placeholder: 'Exact replacement fill' });
-    var fees = el('input', { type: 'number', min: '0', step: '0.01', value: '0.00' });
-    var occurred = el('input', { type: 'datetime-local', step: '1', value: portfolioNowLocal() });
-    var source = portfolioSelect([['MANUAL', 'Entered manually'], ['BROKER', 'Copied from broker']], 'MANUAL');
-    var reference = el('input', { type: 'text', maxlength: '160', placeholder: 'Optional order or statement reference' });
-    var notes = el('textarea', { rows: '2', maxlength: '1000', placeholder: 'Why you rolled or what changed' });
-    var section1256 = el('input', { type: 'checkbox', checked: position.section1256 ? 'checked' : null,
-      disabled: 'disabled' });
-    var body = el('div', { class: 'book-roll-form' },
-      el('p', {}, el('b', {}, portfolioPositionLabel(position)), ' · ', longSide ? 'long' : 'short', ' · ', position.quantity, ' open'),
-      el('p', { class: 'muted small' }, 'This records one linked transaction: the old contract closes and realizes its gain or loss; the replacement opens with its own exact basis. Net premium carryover is reported separately and never substituted into tracked tax basis.'),
-      el('div', { class: 'form-grid book-roll-grid' },
-        UI.field('Contracts to roll', quantity), UI.field('Activity date and time', occurred),
-        UI.field('Exact closing price $', closePrice), UI.field('Replacement strike $', nextStrike),
-        UI.field('Replacement expiration', nextExpiry), UI.field('Exact replacement price $', openPrice),
-        UI.field('Total fees $', fees), UI.field('Source', source),
-        UI.field('Broker reference', reference)),
-      Learn.currentLevel() === 'expert' ? el('label', { class: 'check-row' }, section1256,
-        el('span', {}, 'Section 1256 contract', el('small', {}, 'Tax classification carries from the position being rolled.'))) : null,
-      UI.field('Notes', notes));
-    UI.confirmModal('Roll ' + position.symbol + ' ' + position.optionType.toLowerCase(), body, 'Record roll', async function () {
-      var qty = Number(quantity.value), closing = Number(closePrice.value), opening = Number(openPrice.value);
-      var strike = Number(nextStrike.value), feeAmount = Number(fees.value || 0);
-      if (!Number.isInteger(qty) || qty < 1 || qty > position.quantity) throw new Error('Contracts must be between 1 and ' + position.quantity + '.');
-      if (!Number.isFinite(closing) || closing < 0) throw new Error('Enter the exact closing fill price.');
-      if (!Number.isFinite(opening) || opening < 0) throw new Error('Enter the exact replacement fill price.');
-      if (!Number.isFinite(strike) || strike <= 0 || !nextExpiry.value) throw new Error('Enter the replacement strike and expiration.');
-      if (!Number.isFinite(feeAmount) || feeAmount < 0) throw new Error('Fees must be zero or more.');
-      var explicit1256 = Boolean(position.section1256);
-      var out = await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
-        occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: 'ROLL', fillNature: 'EXECUTED',
-        cashAmountCents: null, feesCents: Math.round(feeAmount * 100), taxCategory: null,
-        source: source.value, externalRef: reference.value || null, notes: notes.value || null,
-        legs: [
-          { instrumentType: 'OPTION', action: longSide ? 'SELL' : 'BUY', positionEffect: 'CLOSE',
-            symbol: position.symbol, optionType: position.optionType, strike: position.strike,
-            expiration: position.expiration, quantity: qty, multiplier: position.multiplier,
-            price: closing, section1256: explicit1256 },
-          { instrumentType: 'OPTION', action: longSide ? 'BUY' : 'SELL', positionEffect: 'OPEN',
-            symbol: position.symbol, optionType: position.optionType, strike: strike,
-            expiration: nextExpiry.value, quantity: qty, multiplier: position.multiplier,
-            price: opening, section1256: explicit1256 }
-        ]
-      });
-      UI.toast('Roll recorded · net premium ' + fmtMoney(out.roll.premiumCarryoverCents, { plus: true }) + ' before fees', 'ok');
-      await App.render();
-    });
+    App.state.portfolioBookRollTarget = { accountId: account.id, position: position };
+    App.navigate('#/portfolio/book/activity');
   }
 
   function renderPortfolioBookOverview(root, account, summary) {
@@ -1316,7 +1265,26 @@
     return row;
   }
 
+  function trackedRollDraft(position) {
+    var longSide = position.side === 'LONG';
+    var carried1256 = position.section1256 === true ? true : null;
+    return { symbol: position.symbol, occurredAt: portfolioNowLocal(), fees: '0.00',
+      fillNature: 'EXECUTED', feeMode: 'EXACT', packageNet: '',
+      chainExpiration: position.expiration, legs: [
+        { instrumentType: 'OPTION', action: longSide ? 'SELL' : 'BUY', positionEffect: 'CLOSE',
+          symbol: position.symbol, optionType: position.optionType, strike: String(position.strike),
+          expiration: position.expiration, quantity: position.quantity, multiplier: position.multiplier,
+          price: '', section1256: carried1256 },
+        { instrumentType: 'OPTION', action: longSide ? 'BUY' : 'SELL', positionEffect: 'OPEN',
+          symbol: position.symbol, optionType: position.optionType, strike: String(position.strike),
+          expiration: position.expiration, quantity: position.quantity, multiplier: position.multiplier,
+          price: '', section1256: carried1256 }
+      ] };
+  }
+
   function portfolioTransactionForm(account) {
+    var pendingRoll = App.state.portfolioBookRollTarget;
+    var initialEvent = pendingRoll && pendingRoll.accountId === account.id ? 'ROLL' : 'TRADE';
     var cashEvents = ['DEPOSIT', 'WITHDRAWAL', 'TRANSFER_IN', 'TRANSFER_OUT', 'INTEREST', 'DIVIDEND', 'FEE', 'ADJUSTMENT'];
     var event = portfolioSelect([
       ['TRADE', 'Buy, sell, open, or close securities'], ['ROLL', 'Roll an option position'], ['ASSIGNMENT', 'Record an option assignment'],
@@ -1324,7 +1292,7 @@
       ['DEPOSIT', 'Deposit'], ['WITHDRAWAL', 'Withdrawal'], ['TRANSFER_IN', 'Transfer in'],
       ['TRANSFER_OUT', 'Transfer out'], ['INTEREST', 'Interest received'], ['DIVIDEND', 'Dividend received'],
       ['FEE', 'Account fee'], ['ADJUSTMENT', 'Cash adjustment']
-    ], 'TRADE', { id: 'portfolio-book-event' });
+    ], initialEvent, { id: 'portfolio-book-event' });
     var occurred = el('input', { type: 'datetime-local', step: '1', value: portfolioNowLocal() });
     var amount = el('input', { type: 'number', step: '0.01', value: '', placeholder: '0.00' });
     var fees = el('input', { type: 'number', min: '0', step: '0.01', value: '0.00' });
@@ -1348,11 +1316,13 @@
     } }, '+ Security leg');
     var guidance = el('div', { class: 'muted small book-event-guidance' });
     var sharedTradeHost = el('div', { class: 'book-shared-position-editor', hidden: 'hidden' });
-    var sharedTradeEditor = null, eventMeta = null, notesField = null, saveRow = null, addLegRow = null;
+    var sharedTradeEditor = null, sharedEditorKind = null;
+    var eventMeta = null, notesField = null, saveRow = null, addLegRow = null;
     var activeEvent = event.value, savedLegSets = {};
 
     function ensureSharedTradeEditor() {
-      if (sharedTradeEditor) return sharedTradeEditor;
+      if (sharedTradeEditor && sharedEditorKind === 'TRADE') return sharedTradeEditor;
+      sharedTradeHost.replaceChildren(); sharedTradeEditor = null; sharedEditorKind = 'TRADE';
       sharedTradeEditor = PositionEditor.render(sharedTradeHost, {
         stateKey: 'account:' + account.id + ':trade',
         title: 'Enter the exact broker trade',
@@ -1418,6 +1388,72 @@
       return sharedTradeEditor;
     }
 
+    function mountTrackedRollEditor(position) {
+      var kind = 'ROLL:' + position.instrumentKey;
+      if (sharedTradeEditor && sharedEditorKind === kind) return sharedTradeEditor;
+      sharedTradeHost.replaceChildren(); sharedTradeEditor = null; sharedEditorKind = kind;
+      sharedTradeEditor = PositionEditor.render(sharedTradeHost, {
+        stateKey: 'account:' + account.id + ':roll:' + position.instrumentKey,
+        lockedSymbol: position.symbol, chain: true, allowRecord: true, recordPrimary: true,
+        recordEffects: true, recordEventType: 'ROLL', recordLabel: 'Record exact roll',
+        rollRecord: true, fixedLegs: true, accountName: account.name,
+        title: 'Roll ' + portfolioPositionLabel(position),
+        description: 'The first leg closes the recorded option; the second opens its replacement. Choose the listed replacement contract, enter both exact fills and fees, then record one linked roll.',
+        initial: trackedRollDraft(position),
+        recordDisabled: account.status === 'ARCHIVED',
+        recordDisabledReason: 'This tracked account is archived. Restore it before recording a roll.',
+        onRecord: async function (payload) {
+          var out = await API.post('/api/portfolio/accounts/' + account.id + '/transactions', payload);
+          API.flushCache(); return out;
+        },
+        onRecorded: async function (out) {
+          App.state.portfolioBookRollTarget = null;
+          App.state.portfolioBookFocusTransaction = out && out.id || null;
+          API.flushCache();
+          var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+          return el('section', { class: 'position-record-profit' },
+            el('div', {}, el('span', { class: 'eyebrow' }, 'ROLL RECORDED'),
+              el('h3', {}, 'Old result realized; replacement open')),
+            out && out.roll ? el('div', { class: 'chip-row' },
+              chip('Net premium before fees', fmtMoney(out.roll.premiumCarryoverCents, { plus: true }))) : null,
+            el('div', { class: 'grid grid-3' },
+              stat('Realized P/L', pnlSpan(summary.realizedPnlCents)),
+              stat('Unrealized P/L', summary.unrealizedPnlCents == null ? 'Unavailable' : pnlSpan(summary.unrealizedPnlCents)),
+              stat('Cash in this book', fmtMoney(summary.bookCashCents))));
+        }
+      });
+      return sharedTradeEditor;
+    }
+
+    async function showTrackedRollPicker() {
+      var token = Date.now(); sharedTradeHost.dataset.rollPickerToken = String(token);
+      sharedTradeHost.replaceChildren(UI.spinner('Loading open options…'));
+      sharedTradeEditor = null; sharedEditorKind = 'ROLL_PICKER';
+      try {
+        var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+        if (activeEvent !== 'ROLL' || sharedTradeHost.dataset.rollPickerToken !== String(token)) return;
+        var positions = (summary.positions || []).filter(function (position) {
+          return position.instrumentType === 'OPTION' && Number(position.quantity) > 0;
+        });
+        var picker = el('section', { class: 'position-roll-picker' },
+          UI.cardHeader('Choose the option to roll'),
+          el('p', { class: 'muted' }, 'A roll closes one recorded option and opens its replacement together. Select the open lot first so the close cannot target the wrong contract.'));
+        if (!positions.length) picker.appendChild(UI.emptyState('No open option is available to roll',
+          'Record the opening option first, or choose another activity type.'));
+        else picker.appendChild(el('div', { class: 'position-roll-picker-list' }, positions.map(function (position) {
+          return el('button', { type: 'button', class: 'choice', onclick: function () {
+            App.state.portfolioBookRollTarget = { accountId: account.id, position: position };
+            mountTrackedRollEditor(position);
+          } }, el('b', {}, portfolioPositionLabel(position)),
+          el('span', {}, positionSideLabel(position.side) + ' · ' + position.quantity + ' open'));
+        })));
+        sharedTradeHost.replaceChildren(picker);
+      } catch (error) {
+        if (activeEvent !== 'ROLL') return;
+        sharedTradeHost.replaceChildren(UI.actionFeedback('danger', 'Open options could not be loaded', error.message || String(error)));
+      }
+    }
+
     function addConversionLegs(kind) {
       var optionAction = kind === 'ASSIGNMENT' ? 'BUY' : 'SELL';
       var option = portfolioLegEditor({ legend: kind === 'ASSIGNMENT' ? 'Assigned option (close at $0)' : 'Exercised option (close at $0)',
@@ -1446,30 +1482,6 @@
       legs.append(option, stock);
     }
 
-    function addRollLegs() {
-      var closing = portfolioLegEditor({ legend: 'Contract being closed', instrumentType: 'OPTION',
-        action: 'SELL', positionEffect: 'CLOSE' }, false);
-      var replacement = portfolioLegEditor({ legend: 'Replacement contract being opened', instrumentType: 'OPTION',
-        action: 'BUY', positionEffect: 'OPEN' }, false);
-      closing.controls.instrument.disabled = true; closing.controls.effect.disabled = true;
-      replacement.controls.instrument.disabled = true; replacement.controls.effect.disabled = true;
-      replacement.controls.action.disabled = true; replacement.controls.symbol.disabled = true;
-      replacement.controls.optionType.disabled = true; replacement.controls.quantity.disabled = true;
-      replacement.controls.multiplier.disabled = true; replacement.controls.section1256.disabled = true;
-      function syncRoll() {
-        replacement.controls.action.value = closing.controls.action.value === 'SELL' ? 'BUY' : 'SELL';
-        replacement.controls.symbol.value = closing.controls.symbol.value;
-        replacement.controls.optionType.value = closing.controls.optionType.value;
-        replacement.controls.quantity.value = closing.controls.quantity.value;
-        replacement.controls.multiplier.value = closing.controls.multiplier.value;
-        replacement.controls.section1256.checked = closing.controls.section1256.checked;
-      }
-      [closing.controls.action, closing.controls.symbol, closing.controls.optionType,
-        closing.controls.quantity, closing.controls.multiplier, closing.controls.section1256]
-        .forEach(function (control) { control.addEventListener('input', syncRoll); control.addEventListener('change', syncRoll); });
-      syncRoll(); legs.append(closing, replacement);
-    }
-
     function syncEvent() {
       var nextEvent = event.value;
       if (activeEvent && activeEvent !== nextEvent && legs.childNodes.length) {
@@ -1482,24 +1494,33 @@
       activeEvent = nextEvent;
       var isCash = cashEvents.indexOf(event.value) >= 0;
       var isTrade = event.value === 'TRADE';
+      var isRoll = event.value === 'ROLL';
+      var usesSharedEditor = isTrade || isRoll;
       cashField.hidden = !isCash;
-      feeField.hidden = isCash || isTrade;
+      feeField.hidden = isCash || usesSharedEditor;
       if (taxOverride) taxOverride.hidden = event.value !== 'DIVIDEND';
       taxCategory.innerHTML = '';
       [['', 'Ordinary dividend'], ['QUALIFIED_DIVIDEND', 'Qualified dividend'],
         ['CAPITAL_GAIN_DISTRIBUTION', 'Capital-gain distribution']].forEach(function (row) {
         taxCategory.appendChild(el('option', { value: row[0] }, row[1]));
       });
-      legs.hidden = isCash || isTrade;
-      sharedTradeHost.hidden = !isTrade;
-      addLeg.hidden = isCash || isTrade || ['ASSIGNMENT', 'EXERCISE', 'ROLL'].indexOf(event.value) >= 0;
-      if (eventMeta) eventMeta.hidden = isTrade;
-      if (notesField) notesField.hidden = isTrade;
-      if (saveRow) saveRow.hidden = isTrade;
-      if (addLegRow) addLegRow.hidden = isCash || isTrade || ['ASSIGNMENT', 'EXERCISE', 'ROLL'].indexOf(event.value) >= 0;
+      legs.hidden = isCash || usesSharedEditor;
+      sharedTradeHost.hidden = !usesSharedEditor;
+      addLeg.hidden = isCash || usesSharedEditor || ['ASSIGNMENT', 'EXERCISE'].indexOf(event.value) >= 0;
+      if (eventMeta) eventMeta.hidden = usesSharedEditor;
+      if (notesField) notesField.hidden = usesSharedEditor;
+      if (saveRow) saveRow.hidden = usesSharedEditor;
+      if (addLegRow) addLegRow.hidden = isCash || usesSharedEditor || ['ASSIGNMENT', 'EXERCISE'].indexOf(event.value) >= 0;
       if (isTrade) {
         ensureSharedTradeEditor();
         guidance.textContent = 'The shared editor keeps ANALYZE and RECORD separate: missing fills may be modeled for learning, but the tracked ledger accepts factual fills only.';
+        return;
+      }
+      if (isRoll) {
+        guidance.textContent = 'Choose the recorded option first. One exact workbench owns the close, replacement, fees, linked premium, and resulting profit.';
+        var target = App.state.portfolioBookRollTarget;
+        if (target && target.accountId === account.id && target.position) mountTrackedRollEditor(target.position);
+        else showTrackedRollPicker();
         return;
       }
       if (isCash) {
@@ -1514,9 +1535,6 @@
       if (event.value === 'ASSIGNMENT' || event.value === 'EXERCISE') {
         if (!restored) addConversionLegs(event.value);
         guidance.textContent = 'Record exactly one closing equity-option leg and its resulting stock delivery. Broad-based Section 1256 index options are cash-settled: record their exact settlement as a closing option transaction instead. Share quantity follows contracts × the contract multiplier, including adjusted contracts. The put/call sets buy versus sell; choose Open or Close to match whether the delivery created a new share position or offset one you already held.';
-      } else if (event.value === 'ROLL') {
-        if (!restored) addRollLegs();
-        guidance.textContent = 'Close the recorded option and open its replacement together. Choose Sell to close a long position or Buy to close a short position. Strike or expiration must change; exact realized P/L, replacement basis, fees, and net premium carryover are stored separately.';
       } else {
         if (!restored) {
           var first = portfolioLegEditor({ instrumentType: 'OPTION', positionEffect: event.value === 'EXPIRATION' ? 'CLOSE' : 'OPEN',

@@ -3569,22 +3569,36 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   assert.equal(rollOpen.cashEffectCents, -50100, 'the option opening and fee post in exact cents');
   await go('#/portfolio/book/overview');
   await page.getByRole('button', { name: 'Roll position', exact: true }).click();
-  const rollDialog = page.getByRole('dialog');
-  await rollDialog.waitFor();
-  assert.equal(await rollDialog.getByRole('checkbox', { name: /Section 1256 contract/ }).count(), 0,
+  await page.waitForSelector('.book-shared-position-editor .position-editor:has-text("Roll QQQ")');
+  const rollEditor = page.locator('.book-shared-position-editor .position-editor');
+  assert.equal(await page.getByRole('dialog').count(), 0,
+    'Overview routes into the canonical Activity workbench instead of opening another roll UI');
+  assert.equal(await rollEditor.getByRole('checkbox', { name: /Section 1256 contract/ }).count(), 0,
     'the linked roll preserves classification without exposing a Beginner tax override');
-  await rollDialog.getByRole('spinbutton', { name: 'Exact closing price $', exact: true }).fill('7');
-  await rollDialog.getByRole('spinbutton', { name: 'Replacement strike $', exact: true }).fill('510');
-  await rollDialog.getByRole('textbox', { name: 'Replacement expiration', exact: true }).fill('2027-09-17');
-  await rollDialog.getByRole('spinbutton', { name: 'Exact replacement price $', exact: true }).fill('9');
-  await rollDialog.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('2');
-  await rollDialog.getByRole('button', { name: 'Record roll', exact: true }).click();
-  await page.waitForFunction(() => /Roll recorded · net premium/.test(document.getElementById('toast-region')?.textContent || ''));
-  await rollDialog.waitFor({ state: 'detached' });
+  const closeLeg = rollEditor.locator('.position-leg').nth(0);
+  const replacementLeg = rollEditor.locator('.position-leg').nth(1);
+  await closeLeg.getByRole('spinbutton', { name: 'Exact fill $', exact: true }).fill('7');
+  await replacementLeg.getByRole('combobox', { name: 'Expiration', exact: true }).selectOption('__custom__');
+  await replacementLeg.getByRole('textbox', { name: 'Unlisted expiration', exact: true }).fill('2027-09-17');
+  await replacementLeg.getByRole('combobox', { name: 'Strike $', exact: true }).selectOption('__custom__');
+  await replacementLeg.getByRole('spinbutton', { name: 'Unlisted strike', exact: true }).fill('510');
+  await replacementLeg.getByRole('spinbutton', { name: 'Exact fill $', exact: true }).fill('9');
+  await rollEditor.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('2');
+  await rollEditor.getByRole('button', { name: 'Record exact roll', exact: true }).click();
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("ROLL RECORDED")');
+  assert.match(await rollEditor.locator('.position-editor-result').innerText(),
+    /Old result realized; replacement open[\s\S]*Net premium before fees[\s\S]*−\$200\.00/,
+    'the canonical workbench reports the linked premium and refreshed book consequence in place');
   await go('#/portfolio/book/activity');
   await page.locator('.book-journal .xp-head').filter({ hasText: /roll/i }).first().click();
   assert.match(await page.textContent('.book-roll-summary'), /Linked roll[\s\S]*Net premium before fees[\s\S]*−\$200\.00/i,
     'one roll control records the realized close, linked replacement, and premium carryover');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('ROLL');
+  await page.waitForSelector('.position-roll-picker');
+  assert.match(await page.textContent('.position-roll-picker'), /Choose the option to roll[\s\S]*QQQ.*510\.00 call/i,
+    'choosing Roll directly in Activity routes through the same open-position picker and canonical editor');
+  await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
+  await page.waitForSelector('.book-shared-position-editor .position-editor');
 
   const importDate = await page.evaluate(() => {
     const now = new Date();
@@ -3938,7 +3952,11 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   await page.waitForSelector('#plan-strategy-body .position-editor');
   await page.waitForSelector('#plan-strategy-body .position-chain-contract');
   await page.locator('#plan-strategy-body .position-chain-contract').first().click();
-  await page.waitForSelector('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]:not([value=""])');
+  await page.waitForFunction(() => document.querySelector('#plan-strategy-body .position-leg .position-strike-select')?.value);
+  assert.equal(await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').count(), 0,
+    'visual mode uses chain-snapped strike selectors instead of free-number entry');
+  assert.ok(await page.locator('#plan-strategy-body .position-leg .position-expiration-select option').count() > 2,
+    'each visual leg owns its listed expiration choices');
   await page.waitForSelector('#plan-strategy-body .position-editor-visual svg.chart');
   await page.evaluate(() => {
     window.__positionEditorShell = document.querySelector('#plan-strategy-body .position-editor');
@@ -3992,16 +4010,16 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.equal(await page.locator('#plan-strategy-panel-yourTrade .position-leg').count(), legCountBeforeAdd,
     'the exact package remains intact after visiting the guided Builder');
   await page.waitForSelector('#plan-strategy-body .strike-grip');
-  const strikeBeforeKeyboardDrag = await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue();
+  const strikeBeforeKeyboardDrag = await page.locator('#plan-strategy-body .position-leg .position-strike-select').first().inputValue();
   const strikeHandle = page.locator('#plan-strategy-body .strike-grip').first();
   await strikeHandle.focus();
   await strikeHandle.press('ArrowRight');
   await strikeHandle.press('Enter');
   await page.waitForFunction(before => {
-    const input = document.querySelector('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]');
+    const input = document.querySelector('#plan-strategy-body .position-leg .position-strike-select');
     return input && input.value !== before;
   }, strikeBeforeKeyboardDrag);
-  const strikeAfterKeyboardDrag = await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue();
+  const strikeAfterKeyboardDrag = await page.locator('#plan-strategy-body .position-leg .position-strike-select').first().inputValue();
   assert.notEqual(strikeAfterKeyboardDrag, strikeBeforeKeyboardDrag,
     'the accessible strike handle commits a neighboring listed strike into the shared leg state');
   await page.locator('#plan-strategy-body textarea[placeholder="Optional context"]').fill('Phase 3 draft survives reload and tabs');
@@ -4018,7 +4036,7 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   await page.waitForSelector('#app[data-ready="true"] #plan-strategy-body .position-editor');
   assert.equal(await page.locator('#plan-strategy-body textarea[placeholder="Optional context"]').inputValue(),
     'Phase 3 draft survives reload and tabs', 'reload restores the exact shared editor draft');
-  assert.equal(await page.locator('#plan-strategy-body .position-leg input[type="number"][placeholder="980"]').first().inputValue(),
+  assert.equal(await page.locator('#plan-strategy-body .position-leg .position-strike-select').first().inputValue(),
     strikeAfterKeyboardDrag, 'reload restores the chain-selected and handle-adjusted strike');
   assert.equal(await page.locator('#plan-tool-yourTrade').getAttribute('aria-selected'), 'true',
     'reload returns to the editor rather than hiding the restored draft behind another Strategy tool');

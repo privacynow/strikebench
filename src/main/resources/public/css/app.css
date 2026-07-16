@@ -636,8 +636,10 @@ body.lvl-expert .not-expert { display: none !important; }
 .position-leg-head > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .position-leg-number { margin: 0; }
 .position-leg-summary { text-transform: capitalize; }
-.position-leg-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 8px; min-width: 0; }
+.position-leg-grid { display: grid; grid-template-columns: repeat(4, minmax(92px, 1fr)); gap: 8px; min-width: 0; }
 .position-leg-remove { flex: 0 0 auto; }
+.position-contract-controls { display: grid; gap: 5px; min-width: 0; }
+.position-contract-controls select, .position-contract-controls input { min-width: 0; width: 100%; }
 .position-package-meta { margin-top: 12px; }
 .position-terminal { width: 100%; min-height: 172px; resize: vertical; font: 600 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .position-identity { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
@@ -677,6 +679,9 @@ body.lvl-expert .not-expert { display: none !important; }
 .position-chain-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 6px; margin-top: 9px; }
 .position-chain-contract { display: grid; gap: 2px; min-height: 50px; padding: 7px 9px; text-align: left; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .position-chain-contract:hover, .position-chain-contract:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.position-roll-picker { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.position-roll-picker-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.position-roll-picker-list .choice { min-height: 72px; text-align: left; }
 .book-shared-position-editor { margin-top: 10px; }
 .inline-action-feedback { display: flex; align-items: flex-start; gap: 9px; margin-top: 9px;
   padding: 10px 12px; border: 1px solid var(--risk-ok); border-left: 3px solid var(--risk-ok);

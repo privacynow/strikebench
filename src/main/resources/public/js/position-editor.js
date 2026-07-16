@@ -142,7 +142,7 @@
     return Number.isFinite(parsed.getTime()) && parsed.getTime() < Date.now() - 24 * 60 * 60 * 1000;
   }
 
-  function recordPayload(draft) {
+  function recordPayload(draft, eventType) {
     if (!draft.occurredAt || !Number.isFinite(new Date(draft.occurredAt).getTime())) {
       throw new Error('RECORD requires the date and time the broker activity occurred.');
     }
@@ -157,7 +157,7 @@
     var netCents = enteredPackageNetCents(draft);
     if (netCents == null) throw new Error('Every recorded leg needs its exact fill price.');
     var externalRef = draft.externalRef.trim();
-    return { occurredAt: new Date(draft.occurredAt).toISOString(), eventType: 'TRADE', fillNature: 'EXECUTED',
+    return { occurredAt: new Date(draft.occurredAt).toISOString(), eventType: eventType || 'TRADE', fillNature: 'EXECUTED',
       cashAmountCents: netCents - Math.round(fees * 100),
       feesCents: Math.round(fees * 100), taxCategory: null, source: externalRef ? 'BROKER' : 'MANUAL',
       externalRef: externalRef || null, notes: draft.notes.trim() || null,
@@ -461,11 +461,11 @@
         market = { symbol: symbol, loading: false, data: data, spot: data.quote && Number(data.quote.last),
           expirations: data.expirations || [] };
         if (!draft.chainExpiration && market.expirations.length) draft.chainExpiration = market.expirations[Math.min(2, market.expirations.length - 1)];
-        remember(); refreshChainPicker(); refreshVisual();
+        remember(); refreshChainPicker(); refreshContractSelectors(); refreshVisual();
       }).catch(function (error) {
         if (token !== loadToken) return;
         market = { symbol: symbol, loading: false, error: error.message || String(error), expirations: [] };
-        refreshChainPicker(); refreshVisual();
+        refreshChainPicker(); refreshContractSelectors(); refreshVisual();
       });
     }
 
@@ -555,6 +555,79 @@
 
     function field(label, input, hint) { return UI.field(label, input, hint ? { hint: hint } : null); }
 
+    function contractField(label, select, custom, hint) {
+      if (!select.id) select.id = 'position-contract-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-'
+        + label.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).slice(2, 7);
+      return el('div', { class: 'field position-contract-field' },
+        el('label', { for: select.id }, label),
+        el('div', { class: 'position-contract-controls' }, select, custom),
+        hint ? el('span', { class: 'muted small' }, hint) : null);
+    }
+
+    function uniqueSorted(values, numeric) {
+      var seen = new Set();
+      return values.filter(function (value) {
+        var keyValue = numeric ? String(Number(value)) : String(value);
+        if (!keyValue || keyValue === 'NaN' || seen.has(keyValue)) return false;
+        seen.add(keyValue); return true;
+      }).sort(numeric ? function (a, b) { return Number(a) - Number(b); } : undefined);
+    }
+
+    function populateExpirationSelect(select, leg) {
+      if (!select) return;
+      var current = String(leg.expiration || '');
+      var listed = market && Array.isArray(market.expirations) ? market.expirations.slice() : [];
+      if (current && listed.indexOf(current) < 0) listed.unshift(current);
+      listed = uniqueSorted(listed, false);
+      select.replaceChildren(el('option', { value: '' }, market && market.loading ? 'Loading expirations…' : 'Choose expiration'));
+      listed.forEach(function (value) {
+        select.appendChild(el('option', { value: value }, value
+          + (market && Array.isArray(market.expirations) && market.expirations.indexOf(value) < 0 ? ' · recorded' : '')));
+      });
+      select.appendChild(el('option', { value: '__custom__' }, 'Enter unlisted date…'));
+      select.value = current && listed.indexOf(current) >= 0 ? current : '';
+    }
+
+    function populateStrikeSelect(select, leg) {
+      if (!select) return;
+      var current = String(leg.strike || '');
+      var expiration = String(leg.expiration || '');
+      var token = String((Number(select.dataset.loadToken || 0) + 1));
+      select.dataset.loadToken = token;
+      function paint(chain) {
+        if (select.dataset.loadToken !== token) return;
+        var rows = chain && (leg.optionType === 'CALL' ? chain.calls : chain.puts) || [];
+        var strikes = uniqueSorted(rows.map(function (quote) { return String(quote.strike); }), true);
+        if (current && strikes.every(function (value) { return Number(value) !== Number(current); })) strikes.unshift(current);
+        var cacheKey = market && expiration ? market.symbol + '|' + expiration : '';
+        select.replaceChildren(el('option', { value: '' }, expiration
+          ? (chain ? 'Choose listed strike' : chainErrors[cacheKey] ? 'Listed strikes unavailable' : 'Loading strikes…')
+          : 'Choose expiration first'));
+        strikes.forEach(function (value) {
+          var listed = rows.some(function (quote) { return Number(quote.strike) === Number(value); });
+          select.appendChild(el('option', { value: String(value) }, '$' + Number(value).toFixed(2)
+            + (listed ? '' : ' · recorded')));
+        });
+        select.appendChild(el('option', { value: '__custom__' }, 'Enter unlisted strike…'));
+        select.value = current && strikes.some(function (value) { return Number(value) === Number(current); }) ? current : '';
+      }
+      if (!expiration || !market) { paint(null); return; }
+      var cacheKey = market.symbol + '|' + expiration;
+      if (chainData[cacheKey]) { paint(chainData[cacheKey]); return; }
+      paint(null);
+      loadChain(expiration).then(function (chain) { paint(chain); refreshVisual(); });
+    }
+
+    function refreshContractSelectors() {
+      if (!editorHost) return;
+      Array.from(editorHost.querySelectorAll('.position-leg')).forEach(function (row) {
+        var index = Number(row.dataset.legIndex), leg = draft.legs[index];
+        if (!leg || leg.instrumentType !== 'OPTION') return;
+        populateExpirationSelect(row.querySelector('.position-expiration-select'), leg);
+        populateStrikeSelect(row.querySelector('.position-strike-select'), leg);
+      });
+    }
+
     function legRow(leg, index) {
       var instrument = el('select', {}, el('option', { value: 'OPTION', selected: leg.instrumentType === 'OPTION' ? 'selected' : null }, 'Option'),
         el('option', { value: 'STOCK', selected: leg.instrumentType === 'STOCK' ? 'selected' : null }, 'Shares'));
@@ -573,18 +646,59 @@
       var symbol = bind(el('input', { type: 'text', maxlength: '20', value: options.lockedSymbol || leg.symbol,
         disabled: options.lockedSymbol ? 'disabled' : null, placeholder: 'MU' }), leg, 'symbol');
       var optionType = bind(el('select', {}, el('option', { value: 'CALL', selected: leg.optionType === 'CALL' ? 'selected' : null }, 'Call'),
-        el('option', { value: 'PUT', selected: leg.optionType === 'PUT' ? 'selected' : null }, 'Put')), leg, 'optionType', function () { syncLegRows(); });
-      var strike = bind(el('input', { type: 'number', min: '0.0001', step: '0.01', value: leg.strike, placeholder: '980' }), leg, 'strike');
-      var expiration = bind(el('input', { type: 'date', value: leg.expiration }), leg, 'expiration');
-      var quantity = bind(el('input', { type: 'number', min: '1', max: '10000000', step: '1', value: leg.quantity }), leg, 'quantity');
-      var multiplier = bind(el('input', { type: 'number', min: '1', max: '10000', step: '1', value: leg.multiplier }), leg, 'multiplier');
+        el('option', { value: 'PUT', selected: leg.optionType === 'PUT' ? 'selected' : null }, 'Put')), leg, 'optionType', function () {
+          syncLegRows(); populateStrikeSelect(strike, leg);
+        });
+      var strike = el('select', { class: 'position-strike-select' });
+      var customStrike = el('input', { type: 'number', min: '0.0001', step: '0.01', value: leg.strike,
+        hidden: 'hidden', 'aria-label': 'Unlisted strike' });
+      strike.onchange = function () {
+        if (strike.value === '__custom__') {
+          customStrike.hidden = false; customStrike.value = leg.strike || ''; customStrike.focus(); return;
+        }
+        customStrike.hidden = true; leg.strike = strike.value; remember(); refreshVisual();
+      };
+      customStrike.onchange = function () {
+        if (!customStrike.value) return;
+        leg.strike = customStrike.value; customStrike.hidden = true;
+        remember(); populateStrikeSelect(strike, leg); refreshVisual();
+      };
+      var expiration = el('select', { class: 'position-expiration-select' });
+      var customExpiration = el('input', { type: 'date', value: leg.expiration, hidden: 'hidden',
+        'aria-label': 'Unlisted expiration' });
+      expiration.onchange = function () {
+        if (expiration.value === '__custom__') {
+          customExpiration.hidden = false; customExpiration.value = leg.expiration || ''; customExpiration.focus(); return;
+        }
+        customExpiration.hidden = true; leg.expiration = expiration.value; leg.strike = '';
+        remember(); populateStrikeSelect(strike, leg); refreshVisual();
+      };
+      customExpiration.onchange = function () {
+        if (!customExpiration.value) return;
+        leg.expiration = customExpiration.value; leg.strike = ''; customExpiration.hidden = true;
+        remember(); populateExpirationSelect(expiration, leg); populateStrikeSelect(strike, leg); refreshVisual();
+      };
+      populateExpirationSelect(expiration, leg); populateStrikeSelect(strike, leg);
+      var quantity = bind(el('input', { type: 'number', class: 'position-leg-quantity', min: '1', max: '10000000', step: '1', value: leg.quantity }), leg, 'quantity', function () {
+        if (!options.rollRecord || index !== 0 || !draft.legs[1]) return;
+        draft.legs[1].quantity = leg.quantity;
+        var nextQuantity = editorHost && editorHost.querySelector('.position-leg[data-leg-index="1"] .position-leg-quantity');
+        if (nextQuantity) nextQuantity.value = String(leg.quantity);
+        remember();
+      });
+      var multiplier = bind(el('input', { type: 'number', class: 'position-leg-multiplier', min: '1', max: '10000', step: '1', value: leg.multiplier }), leg, 'multiplier');
       var price = bind(el('input', { type: 'number', min: '0', step: '0.0001', value: leg.price,
         placeholder: 'blank = price for analysis' }), leg, 'price');
       var section1256 = el('input', { type: 'checkbox', checked: leg.section1256 === true ? 'checked' : null });
       section1256.onchange = function () { leg.section1256 = section1256.checked ? true : null; remember(); };
       var automatic1256 = App.config && Array.isArray(App.config.broadBasedIndexOptionSymbols)
         ? App.config.broadBasedIndexOptionSymbols.join(', ') : 'known broad-based index roots and listed series';
-      var section1256Field = options.allowRecord && Learn.currentLevel() === 'expert'
+      if (options.rollRecord) {
+        [instrument, action, effect, optionType, multiplier].forEach(function (control) { control.disabled = true; });
+        if (index === 0) { strike.disabled = true; expiration.disabled = true; }
+        else quantity.disabled = true;
+      }
+      var section1256Field = options.allowRecord && !options.rollRecord && Learn.currentLevel() === 'expert'
         && leg.instrumentType === 'OPTION'
         ? el('label', { class: 'check-row position-1256-flag' }, section1256,
           el('span', {}, 'Other Section 1256 contract', el('small', {}, 'Automatic: ' + automatic1256
@@ -595,13 +709,13 @@
       var grid = el('div', { class: 'position-leg-grid' }, field('Instrument', instrument), field('Action', action),
         options.compositionOnly ? null : field('Position', effect, 'Open adds exposure; Close reduces an existing position.'), field('Symbol', symbol),
         leg.instrumentType === 'OPTION' ? field('Type', optionType) : null,
-        leg.instrumentType === 'OPTION' ? field('Strike $', strike) : null,
-        leg.instrumentType === 'OPTION' ? field('Expiration', expiration) : null,
+        leg.instrumentType === 'OPTION' ? contractField('Strike $', strike, customStrike) : null,
+        leg.instrumentType === 'OPTION' ? contractField('Expiration', expiration, customExpiration) : null,
         field(leg.instrumentType === 'STOCK' ? 'Shares' : 'Contracts', quantity),
         leg.instrumentType === 'OPTION' ? field('Multiplier', multiplier, '100 standard; adjusted contracts may differ.') : null,
         options.compositionOnly ? null : field(options.allowRecord ? 'Exact fill $' : 'Fill or proposed price $', price,
           options.allowRecord ? 'Required by RECORD. ANALYZE may price a blank fill from available evidence.' : 'Optional; blank uses the available market/model evidence.'));
-      var remove = el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-leg-remove',
+      var remove = options.fixedLegs ? null : el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-leg-remove',
         disabled: draft.legs.length === 1 ? 'disabled' : null, 'aria-label': 'Remove leg ' + (index + 1),
         onclick: function () {
           var row = this.closest('.position-leg');
@@ -633,7 +747,7 @@
         if (summary) summary.textContent = leg.action.toLowerCase() + ' '
           + (leg.instrumentType === 'STOCK' ? 'shares' : String(leg.optionType || 'option').toLowerCase());
         if (remove) {
-          remove.disabled = rows.length === 1;
+          remove.disabled = options.fixedLegs || rows.length === 1;
           remove.setAttribute('aria-label', 'Remove leg ' + (index + 1));
         }
       });
@@ -715,10 +829,8 @@
           onChange: function (next) {
             draft.legs[index].strike = String(next); remember();
             var row = editorHost && editorHost.querySelector('.position-leg[data-leg-index="' + index + '"]');
-            var strikeInput = row && Array.from(row.querySelectorAll('input[type="number"]')).find(function (input) {
-              return input.step === '0.01' && input.min === '0.0001';
-            });
-            if (strikeInput) strikeInput.value = String(next);
+            var strikeInput = row && row.querySelector('.position-strike-select');
+            if (strikeInput) populateStrikeSelect(strikeInput, draft.legs[index]);
             refreshVisual();
           } });
       });
@@ -968,7 +1080,7 @@
 
     async function recordNow() {
       if (options.recordDisabled) throw new Error(options.recordDisabledReason || 'Recording is unavailable here.');
-      var payload = recordPayload(draft);
+      var payload = recordPayload(draft, options.recordEventType);
       if (typeof options.findSimilar === 'function' && draft.similarityDecision !== 'ADD') {
         var similar = await options.findSimilar(payload, draft) || [];
         if (similar.length) {
@@ -1035,7 +1147,7 @@
       if (commandBusy) return;
       try { syncTerminal(); } catch (error) { showInputError(error); throw error; }
       // Validate both contracts before either command mutates anything.
-      normalizedForAnalysis(draft); recordPayload(draft);
+      normalizedForAnalysis(draft); recordPayload(draft, options.recordEventType);
       commandBusy = true; syncBusy();
       var analyzed = null, recorded = null, analysisError = null;
       try { analyzed = await options.onAnalyze(normalizedForAnalysis(draft), draft); lastAnalysis = analyzed; }
@@ -1194,7 +1306,7 @@
         }
         var legList = el('div', { class: 'position-leg-list' });
         draft.legs.forEach(function (leg, index) { legList.appendChild(legRow(leg, index)); });
-        editorHost.append(legList, el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-add-leg',
+        editorHost.append(legList, options.fixedLegs ? null : el('button', { type: 'button', class: 'btn btn-secondary btn-sm position-add-leg',
           onclick: function () { addLeg(blankLeg(options.lockedSymbol || draft.symbol), false); } }, '+ Add leg'));
       }
       if (options.compositionOnly) {
@@ -1210,7 +1322,8 @@
     function renderCommands() {
       commandHost.innerHTML = '';
       commandHost.appendChild(el('div', { class: 'position-command-heading' },
-        el('b', {}, options.allowRecord && options.recordPrimary ? 'Record or inspect' : 'Use this exact package'),
+        el('b', {}, options.allowRecord && options.recordPrimary
+          ? (options.onAnalyze ? 'Record or inspect' : 'Record this exact activity') : 'Use this exact package'),
         el('span', { class: 'muted small' }, 'The result appears directly below this workbench.')));
       var commands = el('div', { class: 'btn-row position-editor-commands' });
       var analyzeCommand = options.onAnalyze ? el('button', { type: 'button',
@@ -1222,7 +1335,7 @@
         recordCommand = el('button', { type: 'button', class: options.recordPrimary ? 'btn' : 'btn btn-secondary',
           'data-position-command': 'record', disabled: commandBusy || options.recordDisabled ? 'disabled' : null,
           'aria-describedby': options.recordDisabled ? 'position-record-disabled-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') : null,
-          onclick: function () { runRecord().catch(function () {}); } }, 'Record factual activity');
+          onclick: function () { runRecord().catch(function () {}); } }, options.recordLabel || 'Record factual activity');
         if (options.onAnalyze) bothCommand = el('button', { type: 'button', class: 'btn btn-secondary',
           'data-position-command': 'both', disabled: commandBusy || options.recordDisabled ? 'disabled' : null,
           onclick: function () { runBoth().catch(function (error) { showCommandError('Could not complete both commands', error); }); }
@@ -1273,7 +1386,7 @@
     renderShell();
     return { draft: function () { return draft; }, analyze: runAnalyze, record: runRecord,
       readAnalysis: function () { syncTerminal(); return normalizedForAnalysis(draft); },
-      readRecord: function () { syncTerminal(); return recordPayload(draft); } };
+      readRecord: function () { syncTerminal(); return recordPayload(draft, options.recordEventType); } };
   }
 
   window.PositionEditor = { render: render, cleanDraft: cleanDraft, parseTerminal: parseTerminal,

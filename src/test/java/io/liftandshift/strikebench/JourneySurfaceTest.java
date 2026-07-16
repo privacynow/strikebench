@@ -640,7 +640,8 @@ class JourneySurfaceTest {
                         "adjusted contract", "function refreshVisual()", "Partial payoff only",
                         "Last defensible curve kept on screen", "Record factual activity",
                         "UI.vocabulary('hypothetical')",
-                        "API.post('/api/strategies/identify'", "scheduleIdentity()")
+                        "API.post('/api/strategies/identify'", "scheduleIdentity()",
+                        "position-expiration-select", "position-strike-select", "Enter unlisted strike")
                 .doesNotContain("API.post('/api/trades/external'", "function identify(",
                         "PositionEditor.identify", "function paint()");
         assertThat(plan).contains("key: 'yourTrade'", "PositionEditor.render(body",
@@ -648,8 +649,10 @@ class JourneySurfaceTest {
                 "UI.vocabulary('scenarioLoss')", "UI.vocabulary('practice')");
         assertThat(portfolio).contains("PositionEditor.render(sharedTradeHost",
                         "ensureSharedTradeEditor()", "recordPrimary: true",
-                        "UI.vocabulary('campaignEconomicBasis')")
-                .doesNotContain("id: 'record-real-card'", "id: 'ext-symbol'", "/api/trades/external");
+                        "UI.vocabulary('campaignEconomicBasis')", "mountTrackedRollEditor(position)",
+                        "recordEventType: 'ROLL'", "position-roll-picker")
+                .doesNotContain("id: 'record-real-card'", "id: 'ext-symbol'", "/api/trades/external",
+                        "function addRollLegs()", "book-roll-form");
         assertThat(workspace).contains("'positionDrafts'");
     }
 
