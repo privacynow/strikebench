@@ -24,6 +24,13 @@ public final class PositionArtifactStore {
         return db.tx(c -> recordNewStructureAction(c, userId, input));
     }
 
+    /** Writes the four-artifact set inside a caller-owned transaction (a Plan promotion commits
+     *  the frozen decision, the ledger row, and these artifacts together or not at all). */
+    public ArtifactSet recordNewStructureAction(Connection c, NewStructureAction input) throws SQLException {
+        if (c == null || input == null) throw new IllegalArgumentException("position action is required");
+        return recordNewStructureAction(c, OwnerScope.id(input.userId()), input);
+    }
+
     private ArtifactSet recordNewStructureAction(Connection c, String userId, NewStructureAction input)
             throws SQLException {
         requireExists(c, "SELECT 1 ok FROM plans WHERE id=? AND user_id=?", "Plan", input.planId(), userId);

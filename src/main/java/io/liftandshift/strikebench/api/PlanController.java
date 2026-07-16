@@ -55,6 +55,7 @@ final class PlanController {
                    PlanEvidenceService planEvidence, PlanStrategyService planStrategy,
                    PlanOutcomeService planOutcomes, PlanRehearsalService planRehearsals,
                    PlanDecisionService planDecisions, PlanManagementService planManagement,
+                   io.liftandshift.strikebench.plan.PlanPromotionService planPromotions,
                    PathEnsembleService pathEnsembles, SimulationEngine simEngine,
                    DiscoveryController discoveryController, OutcomeController outcomeController,
                    TradeController tradeController,
@@ -79,7 +80,7 @@ final class PlanController {
                 planSvc, planEvidence, planStrategy, planOutcomes, pathEnsembles, simEngine,
                 outcomeController);
         this.planDecisionController = new PlanDecisionController(this, clock, db, market, trades,
-                planSvc, planRehearsals, planDecisions, planManagement, tradeController);
+                planSvc, planRehearsals, planDecisions, planManagement, tradeController, planPromotions);
     }
 
     void register(JavalinConfig config) {
@@ -99,6 +100,7 @@ final class PlanController {
                 planDecisionController::planRehearsalCreate,
                 planDecisionController::planDecisionLatest, planDecisionController::planDecisionPreview,
                 planDecisionController::planDecisionTrade, planDecisionController::planDecisionCash,
+                planDecisionController::planDecisionBroker,
                 planDecisionController::planManageGet, planDecisionController::planManageRefresh,
                 planDecisionController::planManageReview));
         config.routes.exception(PlanMarketMismatchException.class, (e, ctx) ->

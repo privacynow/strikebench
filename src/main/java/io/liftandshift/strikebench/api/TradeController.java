@@ -333,6 +333,23 @@ final class TradeController {
         }
     }
 
+    /** Enforces the risk-acknowledgment contract for a decision executed outside the Practice
+     *  ledger (a broker-recorded placement). Material risks only: Practice buying-power verdicts
+     *  do not gate what already happened at the user's real broker. */
+    void requireRecordedPlacementApproval(Context ctx, TradeOpenRequest body) {
+        PlacementCheck check = placementCheck(ctx, body, null);
+        if (check.requiredAcknowledgments().isEmpty()) return;
+        Set<String> acknowledged = body.acknowledgedRisks() == null
+                ? Set.of() : new HashSet<>(body.acknowledgedRisks());
+        List<String> missing = check.requiredAcknowledgments().stream()
+                .map(ApiResponses.RiskAcknowledgment::id)
+                .filter(id -> !acknowledged.contains(id)).toList();
+        if (!missing.isEmpty() || !verifyAcknowledgmentToken(body.ackToken(), check.request())) {
+            throw new TradeRejectedException(List.of("This position's material risks must be "
+                    + "acknowledged from this exact preview before the broker record is written."));
+        }
+    }
+
     ApiResponses.TradePreviewResponse previewPayloadForAccount(Context ctx, TradeOpenRequest body,
                                                                 String expectedAccountId,
                                                                 PlacementProjection projection) {

@@ -1469,8 +1469,8 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   await page.click('#plan-outcomes-basis-model');
   await page.waitForSelector('.plan-proposal-comparison-result', { timeout: 20000 });
-  assert.match(await page.textContent('.plan-proposal-comparison-result'), /STORED FUTURES VERIFIED/,
-    'the normalized comparison restores after reload with its durable receipt without exposing an internal token');
+  assert.match(await page.textContent('.plan-proposal-comparison-result .lineage-chip'), /Simulation\s*#[0-9a-f]{6}/i,
+    'the restored comparison names the exact stored fan it reprices — a durable receipt without an internal token');
 
   const reviewTrade = page.locator('.plan-proposal-comparison-result button').filter({ hasText: 'Review this trade' }).first();
   assert.equal(await reviewTrade.count(), 1, 'an alternative has an explicit return path to the owning Strategy step');
@@ -2119,6 +2119,75 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Portfolio');
   assert.equal(await page.locator('#pf-sec-plans').count(), 0,
     'Portfolio owns money and positions without a second Plan library');
+});
+
+test('the third decision outcome records a broker placement into the tracked book', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'strategy');
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
+  await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    const candidate = latest.strategy.result.candidates.find(item => {
+      const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK').map(leg => leg.expiration));
+      return expirations.size === 1;
+    });
+    const live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    await App.render();
+  }, plan.id);
+  await go('#/plan/' + plan.id + '/decide');
+  await page.waitForSelector('#plan-review-order');
+  await page.click('#plan-review-order');
+  await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 30000 });
+
+  assert.equal(await page.locator('#plan-record-broker').count(), 1,
+    'the commitment card offers the real-lane outcome beside practice and cash');
+  const brokerAcks = await page.locator('#plan-decision-review .ack-gate input[type="checkbox"]').all();
+  if (brokerAcks.length) {
+    assert.ok(await page.locator('#plan-record-broker').isDisabled(),
+      'material risks gate the broker record exactly like a practice placement');
+    for (const checkbox of brokerAcks) await checkbox.check();
+  }
+  await page.waitForFunction(() => !document.querySelector('#plan-record-broker').disabled);
+  await page.click('#plan-record-broker');
+  await page.waitForSelector('#plan-broker-record .empty', { timeout: 15000 });
+  assert.match(await page.textContent('#plan-broker-record'), /No tracked account yet/,
+    'without a tracked account the card guides to the Book instead of dead-ending');
+
+  await page.evaluate(async () => {
+    await API.post('/api/portfolio/accounts', { name: 'Real brokerage', accountType: 'TAXABLE',
+      broker: 'Example Broker', openingCashCents: 5000000 });
+  });
+  await page.click('#plan-record-broker');
+  await page.click('#plan-record-broker');
+  await page.waitForSelector('#plan-broker-account .choice-option', { timeout: 15000 });
+  assert.match(await page.textContent('#plan-broker-record'), /Fills are recorded in Real brokerage/,
+    'choosing the destination narrates its consequence');
+  const fillInputs = await page.locator('#plan-broker-record .plan-broker-fills input').all();
+  assert.ok(fillInputs.length >= 1, 'every leg gets an exact fill field');
+  for (const input of fillInputs) {
+    assert.ok((await input.inputValue()) !== '', 'fills prefill from the reviewed package prices');
+  }
+  await page.fill('#plan-broker-ref', 'order-4242');
+  await page.fill('#plan-broker-fees', '1.30');
+  await page.click('#plan-broker-submit');
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id, { timeout: 30000 });
+  await page.waitForSelector('#plan-tracked-structure', { timeout: 15000 });
+  const liveStrip = await page.textContent('#plan-tracked-structure');
+  assert.match(liveStrip, /Live at your broker/);
+  assert.match(liveStrip, /Real brokerage/);
+  assert.match(liveStrip, /OPEN/);
+  const frozen = await page.evaluate(async id => API.getFresh('/api/plans/' + id + '/decision/latest'), plan.id);
+  assert.equal(frozen.decision.action, 'BROKER');
+  assert.equal(frozen.plan.status, 'POSITION_OPEN');
+  assert.ok(!frozen.decision.tradeId, 'a broker placement opens no practice trade');
+
+  await page.click('#plan-open-book');
+  await page.waitForFunction(() => location.hash.startsWith('#/portfolio/book'));
+  await page.waitForSelector('#app[data-ready="true"]');
+  assert.match(await page.textContent('#app'), /Real brokerage/,
+    'the live strip hands off to the one accounting surface instead of duplicating it');
 });
 
 test('Practice roll edits, reviews, and applies one atomic before-after transformation at both levels', async () => {

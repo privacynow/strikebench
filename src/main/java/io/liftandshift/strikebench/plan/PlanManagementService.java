@@ -160,6 +160,8 @@ public final class PlanManagementService {
                     r -> r.str("trade_id"), planId).stream().findFirst().orElse(null));
             ObjectNode currentPosition = latestPositionReceipt(c, planId);
             if (currentPosition != null) out.set("currentPosition", currentPosition);
+            ObjectNode tracked = latestTrackedStructure(c, planId);
+            if (tracked != null) out.set("trackedStructure", tracked);
             ArrayNode links = out.putArray("links");
             Db.queryOn(c, "SELECT role,trade_id,sim_session_id,related_plan_id,created_at::text created_at " +
                             "FROM plan_link WHERE plan_id=? ORDER BY created_at", r -> {
@@ -249,6 +251,67 @@ public final class PlanManagementService {
                         put(out, "holdingAvgCostCents", holding[1]);
                     });
         }
+        return out;
+    }
+
+    /**
+     * The REAL-lane read model: a broker-recorded placement links this Plan to a tracked-book
+     * structure through plan_portfolio_action. Same artifact-read principle as the Practice
+     * receipt above — never a second accounting path.
+     */
+    private static ObjectNode latestTrackedStructure(Connection c, String planId) throws SQLException {
+        List<ObjectNode> rows = Db.queryOn(c, "SELECT ppa.role,ppa.receipt_id,ppa.transaction_id," +
+                        "ppa.created_at::text created_at,psr.position_state,ps.id structure_id,ps.label," +
+                        "ps.symbol,ps.status,ps.portfolio_account_id,pa.name account_name," +
+                        "pr.marks_as_of::text marks_as_of,pr.authority,pr.kind receipt_kind " +
+                        "FROM plan_portfolio_action ppa " +
+                        "JOIN portfolio_structure_revision psr ON psr.id=ppa.structure_revision_id " +
+                        "JOIN portfolio_structure ps ON ps.id=psr.structure_id " +
+                        "JOIN portfolio_account pa ON pa.id=ps.portfolio_account_id " +
+                        "JOIN position_receipt pr ON pr.id=ppa.receipt_id " +
+                        "WHERE ppa.plan_id=? ORDER BY ppa.created_at DESC LIMIT 1", r -> {
+                    ObjectNode n = Json.MAPPER.createObjectNode();
+                    put(n, "structureId", r.str("structure_id"));
+                    put(n, "label", r.str("label"));
+                    put(n, "symbol", r.str("symbol"));
+                    put(n, "status", r.str("status"));
+                    put(n, "positionState", r.str("position_state"));
+                    put(n, "role", r.str("role"));
+                    put(n, "receiptId", r.str("receipt_id"));
+                    put(n, "receiptKind", r.str("receipt_kind"));
+                    put(n, "authority", r.str("authority"));
+                    put(n, "transactionId", r.str("transaction_id"));
+                    put(n, "accountId", r.str("portfolio_account_id"));
+                    put(n, "accountName", r.str("account_name"));
+                    put(n, "marksAsOf", r.str("marks_as_of"));
+                    put(n, "createdAt", r.str("created_at"));
+                    return n;
+                }, planId);
+        if (rows.isEmpty()) return null;
+        ObjectNode out = rows.getFirst();
+        ArrayNode legs = out.putArray("legs");
+        Db.queryOn(c, "SELECT leg_no,instrument_type,action,symbol,option_type,strike::text strike," +
+                        "expiration::text expiration,quantity,multiplier,fill_price::text fill_price " +
+                        "FROM position_receipt_leg WHERE receipt_id=? AND position_phase='AFTER' ORDER BY leg_no", r -> {
+                    ObjectNode leg = Json.MAPPER.createObjectNode();
+                    put(leg, "legNo", r.intv("leg_no"));
+                    put(leg, "instrumentType", r.str("instrument_type"));
+                    put(leg, "action", r.str("action"));
+                    put(leg, "symbol", r.str("symbol"));
+                    put(leg, "optionType", r.str("option_type"));
+                    put(leg, "strike", r.str("strike"));
+                    put(leg, "expiration", r.str("expiration"));
+                    put(leg, "quantity", r.lng("quantity"));
+                    put(leg, "multiplier", r.intv("multiplier"));
+                    put(leg, "fillPrice", r.str("fill_price"));
+                    return leg;
+                }, out.get("receiptId").asText()).forEach(legs::add);
+        long remaining = Db.queryOn(c, "SELECT COALESCE(SUM(pl.remaining_quantity),0) remaining " +
+                        "FROM portfolio_structure ps JOIN portfolio_structure_member psm " +
+                        "ON psm.revision_id=ps.current_revision_id " +
+                        "JOIN portfolio_lot pl ON pl.id=psm.lot_id WHERE ps.id=?",
+                r -> r.lng("remaining"), out.get("structureId").asText()).getFirst();
+        out.put("openQuantityRemaining", remaining);
         return out;
     }
 

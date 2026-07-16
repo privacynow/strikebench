@@ -34,11 +34,13 @@ final class PlanDecisionController {
     private final PlanDecisionService planDecisions;
     private final PlanManagementService planManagement;
     private final TradeController tradeController;
+    private final io.liftandshift.strikebench.plan.PlanPromotionService promotions;
 
     PlanDecisionController(PlanController root, Clock clock, Db db, MarketDataService market,
                            TradeService trades, PlanService planSvc,
                            PlanRehearsalService planRehearsals, PlanDecisionService planDecisions,
-                           PlanManagementService planManagement, TradeController tradeController) {
+                           PlanManagementService planManagement, TradeController tradeController,
+                           io.liftandshift.strikebench.plan.PlanPromotionService promotions) {
         this.root = root;
         this.clock = clock;
         this.db = db;
@@ -49,12 +51,18 @@ final class PlanDecisionController {
         this.planDecisions = planDecisions;
         this.planManagement = planManagement;
         this.tradeController = tradeController;
+        this.promotions = promotions;
     }
 
     public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
                                       Long feesOverrideCents, List<String> acknowledgedRisks,
                                       String ackToken, String note) {}
     public record PlanManageRequest(Long expectedVersion) {}
+    public record BrokerFill(Integer legIndex, String fillPrice) {}
+    public record PlanBrokerRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
+                                    String portfolioAccountId, String externalRef, String occurredAt,
+                                    Long feesCents, List<BrokerFill> fills,
+                                    List<String> acknowledgedRisks, String ackToken, String note) {}
 
     void planRehearsalsList(Context ctx) {
         ctx.json(planRehearsals.list(root.ownerId(ctx), ctx.pathParam("id")));
@@ -129,6 +137,88 @@ final class PlanDecisionController {
         ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload));
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanDecision<>(updated, decision));
+    }
+
+    /** The third outcome: the exact selected structure was placed at the user's real broker.
+     *  One transaction freezes the BROKER decision, records the fills in the chosen tracked
+     *  account, and links Plan to structure through the four-artifact receipt set. */
+    void planDecisionBroker(Context ctx) {
+        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanBrokerRequest.class));
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        root.requireActivePlanMarket(ctx, plan);
+        PlanController.requirePlanVersion(plan, body.expectedVersion());
+        // A simulated world is synthetic by construction — nothing in it can have happened at a
+        // real broker. Demo/observed Plans may record one: the placement's reality comes from the
+        // user's assertion and the book record; the receipt keeps the analysis lane's evidence level.
+        if (plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED) {
+            throw new IllegalStateException("A simulated-market Plan cannot record a real broker "
+                    + "placement; finish the simulation in the Practice lane.");
+        }
+        ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
+        // The broker's actual total fees live in the book transaction only; the frozen analysis
+        // keeps its own fee model, so feesOverrideCents stays null here (it is also bound into
+        // the acknowledgment token, which the preview minted without an override).
+        PlanDecisionRequest decisionBody = new PlanDecisionRequest(body.expectedVersion(), body.qty(),
+                body.proposedNetCents(), null, body.acknowledgedRisks(), body.ackToken(), body.note());
+        TradeOpenRequest order = planDecisionOrder(plan, candidate, decisionBody, true);
+        tradeController.requireRecordedPlacementApproval(ctx, order);
+        ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
+        var input = planDecisionInput(ctx, plan, decisionBody, candidate, payload);
+        int qty = decisionBody.qty() == null ? candidate.path("qty").asInt() : decisionBody.qty();
+        String label = candidate.path("displayName").asText(null);
+        if (label == null || label.isBlank()) label = candidate.path("strategy").asText(null);
+        var result = promotions.promote(input, new io.liftandshift.strikebench.plan.PlanPromotionService.Order(
+                body.portfolioAccountId(), brokerTransactionInput(plan, candidate, qty, body), label));
+        var updated = planSvc.get(root.ownerId(ctx), plan.id());
+        ctx.status(201).json(new ApiResponses.PlanBrokerPlacement<>(updated,
+                planDecisions.latest(root.ownerId(ctx), plan.id()), result.transaction(),
+                result.artifacts().structureId(), result.artifacts().receiptId()));
+    }
+
+    /** Translates the frozen candidate's legs into exact tracked-book fills. Stock legs carry
+     *  deliverable shares as quantity (the book requires multiplier=1 for stock). */
+    private io.liftandshift.strikebench.paper.PortfolioAccountingService.TransactionInput brokerTransactionInput(
+            io.liftandshift.strikebench.plan.Plan.View plan, ObjectNode candidate, int qty,
+            PlanBrokerRequest body) {
+        if (body.externalRef() == null || body.externalRef().isBlank()) {
+            throw new IllegalArgumentException("a broker placement needs the broker's order or confirmation reference");
+        }
+        Map<Integer, BigDecimal> fills = new HashMap<>();
+        if (body.fills() != null) for (BrokerFill fill : body.fills()) {
+            if (fill == null || fill.legIndex() == null || fill.fillPrice() == null || fill.fillPrice().isBlank()) continue;
+            try { fills.put(fill.legIndex(), new BigDecimal(fill.fillPrice().trim())); }
+            catch (NumberFormatException e) {
+                throw new IllegalArgumentException("leg " + (fill.legIndex() + 1) + " has an invalid fill price");
+            }
+        }
+        List<io.liftandshift.strikebench.paper.PortfolioAccountingService.LegInput> legs = new ArrayList<>();
+        int index = 0;
+        for (JsonNode leg : candidate.withArray("legs")) {
+            BigDecimal fill = fills.get(index);
+            if (fill == null) {
+                throw new IllegalArgumentException("every leg needs its exact broker fill price (leg "
+                        + (index + 1) + " is missing one)");
+            }
+            String type = leg.path("type").asText();
+            boolean stock = "STOCK".equals(type);
+            int ratio = Math.max(1, leg.path("ratio").asInt(1));
+            int multiplier = Math.max(1, leg.path("multiplier").asInt(stock ? 1 : 100));
+            legs.add(new io.liftandshift.strikebench.paper.PortfolioAccountingService.LegInput(
+                    stock ? "STOCK" : "OPTION", leg.path("action").asText(), "OPEN", plan.symbol(),
+                    stock ? null : type,
+                    stock || !leg.hasNonNull("strike") ? null : new BigDecimal(leg.path("strike").asText()),
+                    stock || !leg.hasNonNull("expiration") ? null : LocalDate.parse(leg.path("expiration").asText()),
+                    stock ? Math.multiplyExact((long) ratio, Math.multiplyExact((long) multiplier, (long) qty))
+                            : Math.multiplyExact((long) ratio, (long) qty),
+                    stock ? 1 : multiplier, fill, null));
+            index++;
+        }
+        String occurredAt = body.occurredAt() == null || body.occurredAt().isBlank()
+                ? java.time.OffsetDateTime.ofInstant(clock.instant(), java.time.ZoneOffset.UTC).toString()
+                : body.occurredAt();
+        return new io.liftandshift.strikebench.paper.PortfolioAccountingService.TransactionInput(
+                occurredAt, "TRADE", null, body.feesCents(), null, "BROKER", body.externalRef(),
+                body.note(), legs, "EXECUTED");
     }
 
     private TradeOpenRequest planDecisionOrder(io.liftandshift.strikebench.plan.Plan.View plan,

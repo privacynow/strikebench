@@ -51,6 +51,15 @@ public final class PlanDecisionService {
         return new PreparedTradeDecision(id, (connection, trade) -> saveOn(connection, id, input, "TRADE", trade));
     }
 
+    /** The third decision outcome: the user placed this exact structure at their real broker.
+     *  The freeze is identical in shape to a trade decision but executes nothing here — the
+     *  enclosing transaction (PlanPromotionService) writes the tracked-book ledger row and the
+     *  position artifacts, so the decision and its real-lane consequences commit together. */
+    public PreparedTradeDecision prepareBroker(Input input) {
+        String id = Ids.newId("pdec");
+        return new PreparedTradeDecision(id, (connection, trade) -> saveOn(connection, id, input, "BROKER", null));
+    }
+
     public ObjectNode chooseCash(Input input) {
         String id = Ids.newId("pdec");
         db.tx(connection -> {
@@ -180,7 +189,14 @@ public final class PlanDecisionService {
         Number pMaxLoss = nestedNumber(preview.analytics(), "probabilityMap", "pMaxLoss");
         Number cvar = nestedNumber(preview.analytics(), "probabilityMap", "cvar95Cents");
         Long actualEntry = trade == null ? preview.entryNetPremiumCents() : trade.entryNetPremiumCents();
-        Integer qty = "TRADE".equals(action) ? (trade == null ? null : trade.qty()) : null;
+        Integer qty = switch (action) {
+            case "TRADE" -> trade == null ? null : trade.qty();
+            case "BROKER" -> input.requestedQty();
+            default -> null;
+        };
+        if ("BROKER".equals(action) && (qty == null || qty < 1)) {
+            throw new IllegalArgumentException("a broker placement requires the executed quantity");
+        }
         Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
                         "ensemble_id,account_id,action,qty," +
                         "proposed_net_cents,quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
@@ -226,7 +242,7 @@ public final class PlanDecisionService {
                     Ids.newId("plink"), input.plan().id(), id, role, trade.id(), now);
         }
         Db.execOn(connection, "UPDATE plans SET status=?,furthest_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
-                trade == null ? "DECIDED_CASH" : "POSITION_OPEN", now, input.plan().id());
+                "CASH".equals(action) ? "DECIDED_CASH" : "POSITION_OPEN", now, input.plan().id());
     }
 
     private static void persistLegs(Connection connection, String decisionId, List<Map<String, Object>> legs) throws SQLException {
