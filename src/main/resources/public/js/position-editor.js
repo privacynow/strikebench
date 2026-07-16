@@ -972,11 +972,11 @@
       resultHost.appendChild(el('div', { class: 'grid grid-4 position-analysis-stats' },
         response.entryNetPremiumCents == null ? null : UI.stat(response.entryNetPremiumCents >= 0 ? 'Credit' : 'Cost', fmtMoney(Math.abs(response.entryNetPremiumCents))),
         response.maxLossCents == null ? null : UI.stat(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(response.maxLossCents)),
-        response.maxProfitCents == null ? UI.stat('Theoretical max profit', localPayoffUnavailableReason(draft)
+        response.maxProfitCents == null ? UI.stat(UI.vocabulary('theoreticalMaxProfit'), localPayoffUnavailableReason(draft)
           ? (new Set(draft.legs.filter(function (leg) { return leg.instrumentType === 'OPTION'; }).map(function (leg) { return leg.expiration; })).size > 1
             ? 'Model-dependent' : 'Requires resulting position')
           : 'Unlimited in theory') : null,
-        response.maxProfitCents != null ? UI.stat('Theoretical max profit', fmtMoney(response.maxProfitCents)) : null,
+        response.maxProfitCents != null ? UI.stat(UI.vocabulary('theoreticalMaxProfit'), fmtMoney(response.maxProfitCents)) : null,
         canonicalPop == null ? null : UI.stat('Chance of profit', UI.fmtPct(canonicalPop))));
       var evidence = response.evidence;
       if (evidence) resultHost.appendChild(el('div', { class: 'position-coverage' },

@@ -12,7 +12,8 @@
       stripZeros = S.stripZeros,
       prettyStrategy = S.prettyStrategy, isYoungTrade = S.isYoungTrade,
       pressable = S.pressable, intentBadge = S.intentBadge,
-      riskMode = S.riskMode, prettyPricingMode = S.prettyPricingMode;
+      riskMode = S.riskMode, prettyPricingMode = S.prettyPricingMode,
+      planIntentDestination = S.planIntentDestination;
   var icon = UI.icon;
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
@@ -436,13 +437,13 @@
               onclick: function () {
                 var button = this;
                 var seed = { symbol: symbol, qty: 1,
-                  goal: embedded && embedded.plan && embedded.plan.intent || App.context.goal('DIRECTIONAL'), templateKey: null,
+                  goal: embedded && embedded.plan && embedded.plan.intent || App.context.goal(null), templateKey: null,
                   step: 4, legIdx: 0,
                   legs: [{ action: 'BUY', type: type, strike: String(k), expiration: select.value, ratio: 1 }], excluded: {} };
                 if (embedded && typeof embedded.onBuildLeg === 'function') embedded.onBuildLeg(seed);
                 else {
                   visibleCommand(button, function () {
-                    return startPlan({ symbol: symbol, intent: seed.goal }, 'STRATEGY').then(function (plan) {
+                    return startPlan({ symbol: symbol, intent: seed.goal }, planIntentDestination(seed.goal)).then(function (plan) {
                       if (!plan) return;
                       var planUi = PlanStore.ui(plan.id);
                       planUi.strategyView = 'builder';
@@ -565,18 +566,8 @@
             || (pick.horizons || [])[0];
           var top = h && h.candidates && h.candidates[0];
           var candidate = window.ViewPlan.candidateFromEvaluation(top);
-          var card = el('article', { class: 'card universe-scout-pick' },
-            el('div', { class: 'head' }, el('h3', {}, pick.symbol),
-              el('span', { class: 'badge ' + (THESIS_BADGE[pick.signals.thesis] || 'badge-dim') }, pick.signals.thesis)),
-            el('div', { class: 'chip-row' },
-              chip('Signal confidence', fmtPct(pick.signals.confidence)),
-              pick.signals.ivHvRatio !== null && pick.signals.ivHvRatio !== undefined
-                ? chip('IV / recent movement', fmtNum(pick.signals.ivHvRatio, 2) + '×') : null,
-              candidate ? chip('Leading expression', candidate.displayName) : null),
-            el('p', { class: 'muted' }, (pick.signals.rationale || []).slice(0, 2).join(' ')),
-            h && h.notes && h.notes.length ? alertBox('caution', h.notes[0], h.notes.slice(1)) : null,
-            candidate ? window.ViewPlan.economicAssessmentBlock(candidate) : null,
-            el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', onclick: async function () {
+          if (candidate) candidate = Object.assign({}, candidate, { symbol: pick.symbol });
+          var open = el('button', { type: 'button', class: 'btn', onclick: async function () {
               this.disabled = true; this.setAttribute('aria-busy', 'true');
               try {
                 var thesis = String(pick.signals.thesis || '').toLowerCase();
@@ -591,7 +582,22 @@
                 }
                 if (!opened) throw new Error('This Scout pick could not be opened in a Plan.');
               } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
-            } }, candidate ? 'Use this in a Plan' : 'Open ' + pick.symbol + ' in Strategy')));
+            } }, candidate ? 'Use this in a Plan' : 'Open ' + pick.symbol + ' in Strategy');
+          var context = el('div', { class: 'scout-signal-context' },
+            el('div', { class: 'chip-row' },
+              chip('Signal confidence', fmtPct(pick.signals.confidence)),
+              pick.signals.ivHvRatio !== null && pick.signals.ivHvRatio !== undefined
+                ? chip('IV / recent movement', fmtNum(pick.signals.ivHvRatio, 2) + '×') : null,
+              el('span', { class: 'badge ' + (THESIS_BADGE[pick.signals.thesis] || 'badge-dim') }, pick.signals.thesis)),
+            el('p', { class: 'muted' }, (pick.signals.rationale || []).slice(0, 2).join(' ')),
+            h && h.notes && h.notes.length ? alertBox('caution', h.notes[0], h.notes.slice(1)) : null);
+          var card = candidate
+            ? window.ViewPlan.ideaPresentation(candidate, { density: 'compact', rank: 1,
+                kicker: pick.symbol + ' · Leading expression', className: 'universe-scout-pick',
+                context: context, action: el('div', { class: 'btn-row' }, open) })
+            : el('article', { class: 'card universe-scout-pick' },
+                el('div', { class: 'head' }, el('h3', {}, pick.symbol)), context,
+                el('div', { class: 'btn-row' }, open));
           grid.appendChild(card);
         });
         results.appendChild(grid);
@@ -620,6 +626,9 @@
     }));
     var feedback = el('div', { class: 'symbol-proposed-feedback', 'aria-live': 'polite' });
     var detail = research.planEligibility || 'This market does not have the executable option inputs needed for a Plan.';
+    function needsDirectionalView() {
+      return goal.value === 'DIRECTIONAL' && !App.context.thesis(null);
+    }
     var action = el('button', { type: 'button', class: 'btn', id: 'symbol-find-proposed',
       disabled: research.planEligible ? null : 'disabled',
       'aria-describedby': research.planEligible ? null : 'symbol-proposed-unavailable', onclick: function () {
@@ -630,7 +639,8 @@
           var horizon = App.context.horizon(null);
           if (thesis) handoff.thesis = thesis;
           if (horizon) handoff.horizon = horizon;
-          var opened = await startPlan(handoff, 'STRATEGY', async function (plan) {
+          var chooseViewFirst = needsDirectionalView();
+          var opened = await startPlan(handoff, chooseViewFirst ? 'EVIDENCE' : 'STRATEGY', chooseViewFirst ? null : async function (plan) {
             var out = await PlanStore.runStrategy(plan, { allow0dte: false, maxLossCents: null, filters: null });
             var updated = out.plan || plan;
             var result = out.strategy && out.strategy.result;
@@ -647,7 +657,12 @@
           }
           return opened;
         }, 'Proposed trades could not be opened.');
-      } }, 'Find proposed trades for ' + symbol);
+      } });
+    function labelAction() {
+      action.textContent = needsDirectionalView() ? 'Choose a view for ' + symbol : 'Find proposed trades for ' + symbol;
+    }
+    goal.addEventListener('change', labelAction);
+    labelAction();
     return el('section', { class: 'card symbol-proposed-trades', id: 'symbol-proposed-trades' },
       el('div', { class: 'symbol-proposed-copy' },
         el('div', { class: 'eyebrow' }, 'READY TO COMPARE'),
@@ -1814,6 +1829,21 @@
         App.render();
       } catch (e) { UI.toast(e.message, 'error'); App.render(); }
     });
+    // Invalidate result artifacts at the context boundary even when the new context has not
+    // chosen a thesis yet. The authored protocol survives; figures from the old revision do not.
+    if (!publicMode && planUi && planUi.contextRev !== plan.context.rev) {
+      var priorEvidence = planUi.evidence || {};
+      planUi.contextRev = plan.context.rev;
+      planUi.evidence = {
+        mode: priorEvidence.mode || 'past',
+        protocolBySymbol: priorEvidence.protocolBySymbol || {},
+        params: priorEvidence.params || {},
+        questions: priorEvidence.questions || null,
+        scenarioForm: priorEvidence.scenarioForm || {},
+        scenarioTargets: priorEvidence.scenarioTargets || {},
+        assumptionsChanged: true
+      };
+    }
     if (!th.thesis) {
       wrap.appendChild(UI.emptyState('Choose the view you want to test',
         'Past evidence and possible futures become available after you choose a direction or range view.'));
@@ -1821,11 +1851,6 @@
     }
 
     // ---- Two connected evidence bases through the shared Outcomes component ----
-    if (!publicMode && planUi && planUi.contextRev !== plan.context.rev) {
-      var carriedMode = planUi.evidence && planUi.evidence.mode;
-      planUi.contextRev = plan.context.rev;
-      planUi.evidence = { mode: carriedMode || 'past', assumptionsChanged: true };
-    }
     var tvState = planUi.evidence = planUi.evidence || {};
     tvState.mode = tvState.mode || 'past';
     if (tvState.assumptionsChanged) {

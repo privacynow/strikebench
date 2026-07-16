@@ -423,6 +423,8 @@ test('Home discovery is governed, distinct by ticker, and carries an exact packa
     'Home shows one leading package per ticker, never repeated ticker cards: ' + JSON.stringify(symbols));
 
   const first = page.locator('#home-screened-ideas .home-idea-row').first();
+  assert.equal(await first.locator(':scope > .btn').count(), 1,
+    'a read-only discovery row has one destination action; editing stays in Plan Strategy');
   const symbol = await first.getAttribute('data-symbol');
   await first.getByRole('button', { name: /Use in a Plan|Study in a Plan/ }).click();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]', { timeout: 30000 });
@@ -467,6 +469,79 @@ test('Research reaches a fresh ranked field in one goal choice and one command',
   await page.waitForSelector('#home-context-line');
   assert.match(await page.textContent('#home-context-line'), /QQQ.*ranked trades ready in Strategy/i,
     'Home signs the warm one-click continuation instead of saying only “is at strategy”');
+});
+
+test('Trade a view requires an explicit thesis and context revisions preserve the evidence protocol', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'bearish');
+  await go('#/research/TSLA');
+  await page.waitForSelector('#symbol-proposed-trades');
+  await page.selectOption('#symbol-proposed-goal', 'DIRECTIONAL');
+  assert.equal((await page.locator('#symbol-find-proposed').textContent()).trim(), 'Choose a view for TSLA',
+    'a new symbol cannot inherit the active Plan’s directional thesis');
+  await page.click('#symbol-find-proposed');
+  await page.waitForFunction(() => /\/plan\/plan_[^/]+\/evidence$/.test(location.hash)
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  await page.waitForSelector('#tv-view');
+  const created = await page.evaluate(() => {
+    const plan = PlanStore.active();
+    return { id: plan.id, symbol: plan.symbol, intent: plan.intent, thesis: plan.context.thesis };
+  });
+  assert.deepEqual(created, { id: created.id, symbol: 'TSLA', intent: 'DIRECTIONAL', thesis: null },
+    'Trade a view records “not chosen” honestly instead of silently writing neutral');
+  assert.equal(await page.inputValue('#tv-view'), '', 'Evidence opens at the explicit view chooser');
+
+  const preserved = await page.evaluate(async planId => {
+    const ui = PlanStore.ui(planId);
+    ui.evidence = {
+      mode: 'past',
+      protocolBySymbol: { TSLA: { confidencePct: 91, minSample: 22 } },
+      params: { pullback_rebound: { threshold: -4 } },
+      scenarioForm: { shape: 'CHOP' },
+      results: { pullback_rebound: { stale: true } },
+      planEnsembleId: 'stale-ensemble'
+    };
+    const live = await PlanStore.get(planId, true);
+    await PlanStore.updateContext(live, { horizonDays: Number(live.context.horizonDays) + 1 });
+    await App.render();
+    const evidence = PlanStore.ui(planId).evidence;
+    return { protocol: evidence.protocolBySymbol.TSLA, params: evidence.params,
+      scenarioForm: evidence.scenarioForm, results: evidence.results,
+      ensemble: evidence.planEnsembleId, changed: evidence.assumptionsChanged };
+  }, created.id);
+  assert.deepEqual(preserved.protocol, { confidencePct: 91, minSample: 22 },
+    'a context revision preserves the user-authored research protocol');
+  assert.deepEqual(preserved.params, { pullback_rebound: { threshold: -4 } });
+  assert.deepEqual(preserved.scenarioForm, { shape: 'CHOP' });
+  assert.equal(preserved.results, undefined, 'only stale evidence results are cleared');
+  assert.equal(preserved.ensemble, undefined, 'the prior ensemble cannot masquerade as current');
+  assert.equal(preserved.changed, true);
+});
+
+test('Outcomes distinguishes a stale selection and reprices the same legs', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('SPY', 'strategy', 'DIRECTIONAL', 'bullish');
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-ranked-field .ranked-idea-hero', { timeout: 30000 });
+  await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    const candidate = latest.strategy.result.candidates.find(item => item.id);
+    let live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    live = await PlanStore.get(planId, true);
+    await PlanStore.updateContext(live, { horizonDays: Number(live.context.horizonDays) + 5 });
+  }, plan.id);
+  await go('#/plan/' + plan.id + '/outcomes');
+  await page.waitForSelector('#plan-outcomes-prerequisite');
+  assert.match(await page.textContent('#plan-outcomes-prerequisite'),
+    /Reprice the prior structure[\s\S]*assumptions changed[\s\S]*old results remain historical evidence/i,
+    'Outcomes names a stale prior package instead of pretending no structure was ever chosen');
+  assert.equal(await page.locator('#plan-outcomes .outcome-basis-state:has-text("Setup needed")').count(), 4,
+    'all four outcome lenses remain visible but unavailable until repricing');
+  await page.getByRole('button', { name: 'Reprice the prior structure', exact: true }).click();
+  await page.waitForSelector('.plan-tool[data-strategy-tool="yourTrade"][aria-selected="true"]');
+  assert.ok(await page.locator('#plan-strategy-body .position-leg').count() > 0,
+    'repricing carries the prior exact legs into the direct editor');
 });
 
 test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
@@ -763,6 +838,7 @@ test('Plan Evidence changes analysis history in place without changing its execu
 });
 
 test('Plan Strategy owns the ranked field, exact Builder, and chain without route handoffs', async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'strategy');
   await page.waitForSelector('#plan-strategy-body', { timeout: 15000 }).catch(async error => {
@@ -787,24 +863,48 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     'Strategy has no cross-section Trade handoff');
 
   await page.click('#plan-run-strategy');
-  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
+  await page.waitForTimeout(500);
+  const heroArrival = await page.evaluate(() => {
+    const hero = document.querySelector('#plan-ranked-field .ranked-idea-hero');
+    const action = hero.querySelector('.plan-candidate-actions .btn');
+    const sticky = document.querySelector('.topbar').getBoundingClientRect().bottom;
+    const heroBox = hero.getBoundingClientRect(), actionBox = action.getBoundingClientRect();
+    return { heroTop: heroBox.top, actionBottom: actionBox.bottom, sticky, viewport: innerHeight };
+  });
+  assert.ok(heroArrival.heroTop >= heroArrival.sticky - 2 && heroArrival.actionBottom <= heroArrival.viewport,
+    'the ranked answer and primary action arrive together inside one desktop viewport: ' + JSON.stringify(heroArrival));
   assert.match(await page.textContent('#plan-budget-receipt'), /\$[\d,.]+ = 1% of \$[\d,.]+ current buying power/,
     'the per-idea budget explains its live dollar basis on the face of the screen');
-  const initialRankedCount = await page.locator('#plan-ranked-cards > .candidate').count();
+  const initialRankedCount = await page.locator('#plan-ranked-field .ranked-idea:visible').count();
   const servedRankedCount = Number((await page.textContent('.plan-strategy-summary .badge')).match(/\d+/)?.[0] || 0);
-  assert.ok(initialRankedCount <= 5 && initialRankedCount <= servedRankedCount,
-    'Beginner starts with a diverse, bounded ranked field instead of a wall of cards');
+  assert.ok(initialRankedCount <= 3 && initialRankedCount <= servedRankedCount,
+    'Beginner starts with one full decision hero and no more than two compact alternatives');
   if (servedRankedCount > initialRankedCount) {
-    assert.ok(await page.locator('#show-all-ranked').isVisible(), 'the complete ranking remains one explicit action away');
-    await page.click('#show-all-ranked');
-    assert.equal(await page.locator('#plan-ranked-cards > .candidate').count(), servedRankedCount,
-      'Show all restores every ranked structure without changing its order');
+    assert.ok(await page.locator('.ranked-show-all').isVisible(), 'the complete ranking remains one explicit action away');
+    await page.click('.ranked-show-all');
+    assert.equal(await page.locator('#plan-ranked-field .ranked-idea:visible').count(), servedRankedCount,
+      'See all restores every ranked structure as compact comparisons without a card wall');
+    await page.click('.ranked-show-all');
+  }
+  assert.ok(await page.locator('#plan-ranked-field .ranked-runner-list .ranked-idea:visible').count() <= 2,
+    'the default comparison keeps attention on the hero and two closest alternatives');
+  assert.ok(await page.locator('#plan-ranked-field .ranked-idea-payoff svg.chart, #plan-ranked-field .ranked-time-spread-shape').count() === 1,
+    'the decision hero uses the evaluation’s real payoff points or an honest multi-expiry shape disclosure');
+  const firstHeroId = await page.locator('#plan-ranked-field .ranked-idea-hero').getAttribute('data-candidate-id');
+  const runner = page.locator('#plan-ranked-field .ranked-runner-list .ranked-idea:visible').first();
+  if (await runner.count()) {
+    await runner.getByRole('button', { name: /Review rank/ }).click();
+    await page.waitForFunction(previous => document.querySelector('#plan-ranked-field .ranked-idea-hero')?.dataset.candidateId !== previous,
+      firstHeroId);
+    assert.match(await page.textContent('.plan-proposed-heading'), /STRUCTURE UNDER REVIEW.*Compare this alternative/s,
+      'reviewing a runner promotes it into the full decision surface instead of expanding another card below');
   }
   const rankedText = await page.textContent('#plan-stage-strategy');
   assert.match(rankedText, /Cash \/ no trade/, 'the no-trade baseline remains in the ranked decision field');
-  assert.ok(await page.locator('#plan-strategy-results .candidate[data-economic-verdict]').count() >= 1,
+  assert.ok(await page.locator('#plan-strategy-results .ranked-idea[data-economic-verdict]').count() >= 1,
     'every proposed structure carries its economic placement');
-  const economics = await page.locator('#plan-strategy-results .candidate .economic-assessment').allTextContents();
+  const economics = await page.locator('#plan-strategy-results .ranked-idea-hero .economic-assessment').allTextContents();
   assert.ok(economics.length > 0 && economics.every(text => /Market-implied EV/.test(text) && /Realized-vol scenario EV/.test(text)),
     'both EV lanes remain co-equal on the Plan candidate cards');
   assert.ok(await page.locator('#plan-rejected-teaching').count(),
@@ -816,35 +916,59 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.fill('#plan-f-pop', '70');
   await page.locator('#plan-f-pop').blur();
   await page.waitForSelector('#plan-stage-strategy:has-text("Limits changed — rerun the field")');
-  assert.equal(await page.locator('#plan-strategy-results .candidate').count(), 0,
+  assert.equal(await page.locator('#plan-strategy-results .ranked-idea').count(), 0,
     'a changed request cannot leave the prior ranked field under new limits');
   assert.equal(await page.locator('#plan-strategy-filters .xp-head').getAttribute('aria-expanded'), 'true',
     'the open filter disclosure survives the same-route repaint');
   await page.fill('#plan-f-pop', '');
   await page.locator('#plan-f-pop').blur();
   await page.click('#plan-run-strategy');
-  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
-  const first = page.locator('#plan-strategy-results .candidate').first();
-  assert.match(await first.textContent(), /Theoretical|Chance of any profit/);
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
+  const first = page.locator('#plan-strategy-results .ranked-idea-hero');
+  assert.match(await first.textContent(), /Theoretical max loss|Chance of any profit/);
+  assert.equal(await first.locator('[data-vocabulary="theoreticalMaxProfit"]').count(), 1,
+    'best-case profit uses the one registry-backed explanation instead of unexplained model jargon');
+  assert.doesNotMatch(await first.locator('.ranked-idea-facts').textContent(), /model-dependent|theoretical ceiling/i,
+    'the primary recommendation facts use plain, decision-relevant language');
+  const uncoveredTechnicalLabels = await first.locator('.ranked-idea-facts').evaluate(root =>
+    Array.from(root.querySelectorAll('.chip-label')).filter(label =>
+      /max loss|best possible profit|max profit|chance of any profit|market-implied ev|realized-vol scenario ev/i
+        .test(label.textContent || '')
+      && !label.querySelector('.term[data-term], .info-trigger[data-term]'))
+      .map(label => label.textContent.trim()));
+  assert.deepEqual(uncoveredTechnicalLabels, [],
+    'new recommendation labels must be backed by both-level registry help: ' + uncoveredTechnicalLabels.join(', '));
   assert.match(await first.textContent(),
-    /WHAT THIS POSITION ACTUALLY EXPRESSES[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact/i,
+    /Why this ranks first[\s\S]*Data coverage for this analysis[\s\S]*Portfolio impact/i,
     'Beginner proposals retain the same behavior, coverage, and Practice-impact assessment as an exact trade');
   assert.match(await first.textContent(), /How you would manage this trade/,
     'Beginner retains the plain-language management capability from the decision analysis');
-  await first.locator('button').filter({ hasText: 'Select this structure' }).click();
-  await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
-  assert.match(await page.textContent('#plan-strategy-results .inline-action-feedback'),
-    /selected.*carries into Outcomes/is,
-    'selection consequence is confirmed beside the chosen structure, not only in a corner toast');
-  assert.ok(await first.evaluate(node => node.classList.contains('plan-selected-candidate')),
-    'the chosen candidate is highlighted in place');
-  await first.scrollIntoViewIfNeeded();
+  await first.getByRole('button', { name: 'Select and continue to Outcomes', exact: true }).click();
+  await page.waitForFunction(() => location.hash.endsWith('/outcomes'));
+  await page.waitForSelector('#plan-outcomes', { timeout: 15000 });
+  const outcomeArrival = await page.evaluate(() => ({
+    workspace: !!document.getElementById('plan-outcomes'),
+    prerequisite: !!document.getElementById('plan-outcomes-prerequisite'),
+    routeError: document.getElementById('route-error')?.textContent || '',
+    text: (document.getElementById('app')?.innerText || '').slice(0, 1200)
+  }));
+  assert.ok(outcomeArrival.workspace && !outcomeArrival.prerequisite && !outcomeArrival.routeError,
+    'selection has an unmistakable consequence: the exact package advances directly to Outcomes: '
+      + JSON.stringify(outcomeArrival));
+  await go('#/plan/' + plan.id + '/strategy');
+  await page.waitForSelector('#plan-ranked-field .ranked-idea-hero.selected');
+  assert.match(await page.textContent('#plan-ranked-field .ranked-idea-hero'), /SELECTED STRUCTURE[\s\S]*Continue to Outcomes/i,
+    'returning to Strategy promotes the chosen structure above every alternative with its next action adjacent');
+  assert.equal(await page.locator('#plan-stage-strategy button:has-text("Continue to Outcomes")').count(), 1,
+    'Strategy exposes one next action instead of repeating it below the decision field');
+  await page.locator('#plan-ranked-field .ranked-idea-hero.selected').evaluate(node =>
+    node.scrollIntoView({ block: 'start' }));
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p3-strategy-compare.png'), fullPage: false });
 
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
-  await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")', { timeout: 20000 });
+  await page.waitForSelector('#plan-strategy-results button:has-text("Continue to Outcomes")', { timeout: 20000 });
   assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + plan.id + '/strategy$'),
     'reload restores the Plan-owned Strategy stage');
 
@@ -908,7 +1032,11 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.waitForSelector('#plan-strategy-body');
   assert.match(await page.textContent('#plan-header'), new RegExp(scoutedSymbol),
     'the pick opens as a linked sibling rather than changing the origin Plan symbol');
-  assert.ok(await page.locator('#plan-strategy-results button:has-text("Selected for this Plan")').count()
+  assert.equal(await page.locator('.plan-selected-structure.ranked-idea-hero').count(), 1,
+    'a linked Scout pick uses the same selected decision hero as a ranked Plan pick');
+  assert.equal(await page.locator('#plan-stage-strategy button:has-text("Continue to Outcomes")').count(), 1,
+    'the linked selection has one adjacent next action and no duplicate stage footer');
+  assert.ok(await page.locator('#plan-strategy-results button:has-text("Continue to Outcomes")').count()
       || await page.locator('#plan-run-strategy').count(),
     'the sibling Plan owns Strategy rather than a cross-underlying handoff');
   await page.setViewportSize({ width: 390, height: 844 });
@@ -996,31 +1124,30 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   const expertRows = page.locator('#plan-strategy-results table tbody tr.clickable');
   assert.ok(await expertRows.count() >= 1, 'Expert ranked field has auditable rows');
   await expertRows.first().click();
-  await page.waitForSelector('#plan-candidate-detail .candidate-evaluation-receipt');
-  const expertDetail = await page.textContent('#plan-candidate-detail');
+  await page.waitForSelector('#plan-ranked-field .ranked-idea-hero .candidate-evaluation-receipt');
+  const expertDetail = await page.textContent('#plan-ranked-field .ranked-idea-hero');
   assert.match(expertDetail, /Data coverage for this analysis/,
     'Expert retains one detailed per-input coverage receipt behind the ranking');
   assert.match(expertDetail, /How the Decision score was built/, 'Expert retains the score construction');
   assert.match(expertDetail, /Mechanical management plan/, 'Expert retains the management receipt');
-  await page.locator('#plan-candidate-detail').scrollIntoViewIfNeeded();
+  await page.locator('#plan-ranked-field .ranked-idea-hero').scrollIntoViewIfNeeded();
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p14-strategy-audit-expert.png'), fullPage: false });
   const plansBeforeExpertSelect = await page.evaluate(async () => {
     const payload = await API.getFresh('/api/plans');
     return Array.isArray(payload) ? payload.length : (payload.plans || []).length;
   });
-  await expertRows.first().locator('button').filter({ hasText: /^Select$/ }).click();
-  await page.waitForSelector('#plan-strategy-results button:has-text("Selected")');
-  assert.match(await page.textContent('#plan-candidate-detail .inline-action-feedback'), /selected.*Outcomes/is,
-    'Expert selection reports its consequence beside the selected package');
+  await expertRows.first().locator('button').filter({ hasText: /Select \+ continue|Continue/ }).click();
+  await page.waitForFunction(() => location.hash.endsWith('/outcomes')
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
   const plansAfterExpertSelect = await page.evaluate(async () => {
     const payload = await API.getFresh('/api/plans');
     return Array.isArray(payload) ? payload.length : (payload.plans || []).length;
   });
   assert.equal(plansAfterExpertSelect, plansBeforeExpertSelect,
     'selecting an Expert ranked row updates this Plan and never creates a duplicate Plan');
-  assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + incomePlan.id + '/strategy$'),
-    'the ranked-row action remains inside the current Plan');
+  assert.match(await page.evaluate(() => location.hash), new RegExp('/plan/' + incomePlan.id + '/outcomes$'),
+    'the ranked-row action advances inside the current Plan instead of leaving selection below the fold');
 });
 
 test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract terminal', async () => {
@@ -1231,7 +1358,7 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await page.locator('.plan-rail button').filter({ hasText: 'Strategy' }).click();
   await page.waitForSelector('#plan-run-strategy');
   await page.click('#plan-run-strategy');
-  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
   await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     const candidate = latest.strategy.result.candidates.find(item => {
@@ -1243,7 +1370,7 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     await PlanStore.selectCandidate(live, candidate.id);
     await App.render();
   }, plan.id);
-  await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")');
+  await page.waitForSelector('#plan-strategy-results button:has-text("Continue to Outcomes")');
 
   await page.locator('.plan-rail button').filter({ hasText: 'Outcomes' }).click();
   await page.waitForSelector('#plan-outcomes');
@@ -1783,7 +1910,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'strategy');
   await page.click('#plan-run-strategy');
-  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
   const selectedQty = await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     const candidate = latest.strategy.result.candidates.find(item => {
@@ -2253,6 +2380,10 @@ test('Practice option lifecycle reviews assignment before atomically preserving 
   assert.match(beginnerReview, /Before.*After/s);
   assert.match(beginnerReview, /Selected contract.*260 PUT/s);
   assert.match(beginnerReview, /100 shares acquired at the strike/);
+  assert.match(beginnerReview, /Option result realized.*Realized on position to date/s,
+    'Beginner sees the actual money result without opening an accounting disclosure');
+  assert.doesNotMatch(beginnerReview, /\bASSIGNMENT\b/,
+    'the lifecycle workbench translates the internal event enum everywhere it is visible');
   assert.match(beginnerReview, /SETTLEMENT BASIS.*active lane mark/s);
   assert.match(beginnerReview, /See exact option accounting and reserve changes/,
     'Beginner keeps the exact accounting through progressive disclosure');
@@ -2399,7 +2530,22 @@ test('financial formatters and mixed packages fail closed instead of rendering N
   assert.equal(contextContract.templateIntent, 'INCOME', 'server catalog supplies the structure intent');
   assert.equal(contextContract.ticketIntent, 'INCOME', 'Browse all infers intent from the chosen structure');
   assert.equal(await page.evaluate(() => UI.maxProfitLabel('DIAGONAL_CALL', 'time', null, true)),
-    'model-dependent', 'a multi-expiration null ceiling is never presented as infinity');
+    'No single dollar ceiling', 'a multi-expiration package names the missing scalar without model jargon or fake infinity');
+  const tieContract = await page.evaluate(() => {
+    const candidate = (score, verdict) => ({ evaluation: { decisionScore: score,
+      assessment: { economics: { verdict } } } });
+    return {
+      threshold: ViewPlan.nearTieScorePoints,
+      inside: ViewPlan.candidatesNearTie(candidate(70, 'MIXED'), candidate(68, 'MIXED')),
+      outside: ViewPlan.candidatesNearTie(candidate(70, 'MIXED'), candidate(67.9, 'MIXED')),
+      differentVerdict: ViewPlan.candidatesNearTie(candidate(70, 'MIXED'), candidate(69, 'FAVORABLE')),
+      explanation: Learn.INFO.ranktie.short
+    };
+  });
+  assert.deepEqual(tieContract, { threshold: 2, inside: true, outside: false,
+    differentVerdict: false, explanation: tieContract.explanation });
+  assert.match(tieContract.explanation, /share an economic verdict.*2 points/i,
+    'the near-tie threshold is principled, disclosed, and executable');
   assert.equal(await page.evaluate(() => UI.maxProfitLabel('LONG_CALL', 'single_long', null, true)),
     'no fixed ceiling', 'a genuinely unbounded structure keeps its theoretical truth');
 });
@@ -3411,7 +3557,9 @@ test('universe Scout starts distinct Plans from the current Research market', as
   assert.ok(await page.locator('#universe-scout-results [data-economic-verdict]').count() >= 1,
     'universe Scout uses the same economic classification as single-symbol ranking');
   const first = page.locator('#universe-scout-results .universe-scout-pick').first();
-  const symbol = (await first.locator('h3').textContent()).trim();
+  assert.equal(await first.locator(':scope > .btn-row .btn').count(), 1,
+    'a Scout recommendation has exactly one workflow CTA into Plan Strategy');
+  const symbol = await first.getAttribute('data-symbol');
   await first.getByRole('button', { name: /Use this in a Plan|Open .* in Strategy/ }).click();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   assert.match(await page.evaluate(() => location.hash), /\/strategy$/,
@@ -3993,6 +4141,7 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.deepEqual(vocabulary, {
     assignmentCapital: 'Assignment capital', brokerReserve: 'Broker reserve',
     economicExposure: 'Economic exposure', theoreticalMaxLoss: 'Theoretical max loss',
+    theoreticalMaxProfit: 'Theoretical max profit',
     scenarioLoss: 'Scenario loss', hypothetical: 'Hypothetical', practice: 'Practice',
     recordedAtBroker: 'Recorded at broker',
     campaignEconomicBasis: 'Campaign-adjusted economic basis', trackedTaxBasis: 'Tracked tax basis'
@@ -4453,7 +4602,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await page.locator('.plan-tool[data-strategy-tool="compare"]').click();
   await page.waitForSelector('#plan-run-strategy');
   await page.click('#plan-run-strategy');
-  await page.waitForSelector('#plan-strategy-results .candidate', { timeout: 30000 });
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
   await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     const candidate = latest.strategy.result.candidates.find(item => item.id && (() => {
@@ -4828,7 +4977,14 @@ test('interaction contract: clickable surfaces are keyboard-operable, errors are
 });
 
 test('destination navigation starts at the top while Research owns its explicit Back restoration', async () => {
-  await openPlan('AAPL');
+  const plan = await openPlan('AAPL', 'strategy');
+  await page.evaluate(() => window.scrollTo(0, Math.min(700, document.documentElement.scrollHeight - innerHeight)));
+  assert.ok(await page.evaluate(() => window.scrollY > 100), 'the Plan stage is genuinely scrolled');
+  await page.evaluate(planId => App.navigate('#/plan/' + planId + '/evidence'), plan.id);
+  await page.waitForFunction(() => location.hash.endsWith('/evidence')
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  assert.ok(await page.evaluate(() => window.scrollY <= 1),
+    'moving between Plan stages orients at the destination instead of inheriting a stale offset');
   await openResearchTab('overview');
   await page.waitForSelector('#history-card .chart-wrap');
   await page.evaluate(() => window.scrollTo(0, Math.min(700, document.documentElement.scrollHeight - innerHeight)));

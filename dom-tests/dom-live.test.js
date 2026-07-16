@@ -81,7 +81,7 @@ async function runPlanField() {
   }
   await page.waitForFunction(() => {
     const body = document.getElementById('plan-strategy-body');
-    return !!body && (!!body.querySelector('#plan-strategy-results .candidate')
+    return !!body && (!!body.querySelector('#plan-strategy-results .ranked-idea-hero')
       || /No structure passed this screen|No candidate passed/.test(body.textContent || ''));
   }, null, { timeout: 60000 });
   return true;
@@ -89,7 +89,7 @@ async function runPlanField() {
 
 async function runAndSelectListedCandidate(plan) {
   if (!(await runPlanField())) return false;
-  if (!(await page.locator('#plan-strategy-results .candidate').count())) return false;
+  if (!(await page.locator('#plan-strategy-results .ranked-idea-hero').count())) return false;
   const selected = await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
     const candidates = latest && latest.strategy && latest.strategy.result && latest.strategy.result.candidates || [];
@@ -105,7 +105,7 @@ async function runAndSelectListedCandidate(plan) {
     await App.render();
     return true;
   }, plan.id);
-  if (selected) await page.waitForSelector('#plan-strategy-results button:has-text("Selected for this Plan")',
+  if (selected) await page.waitForSelector('#plan-strategy-results button:has-text("Continue to Outcomes")',
     { timeout: 30000 });
   return selected;
 }

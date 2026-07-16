@@ -65,6 +65,7 @@ final class TradeController {
     private final TradeService trades;
     private final PositionsService positions;
     private final EvaluationService evaluations;
+    private final ExactAssessment exactAssessment;
     private final SnapshotService snapshots;
     private final io.liftandshift.strikebench.auth.AuthService auth;
     private final Function<Context, Account> currentAccount;
@@ -83,7 +84,8 @@ final class TradeController {
                     Function<Context, String> ownerId,
                     Function<Context, String> activeWorld,
                     Function<Context, AnalysisContext> analysisContext,
-                    Consumer<Context> requireAdmin) {
+                    Consumer<Context> requireAdmin,
+                    ExactAssessment exactAssessment) {
         this.cfg = cfg;
         this.clock = clock;
         this.db = db;
@@ -94,6 +96,7 @@ final class TradeController {
         this.trades = trades;
         this.positions = positions;
         this.evaluations = evaluations;
+        this.exactAssessment = exactAssessment == null ? evaluations::assessExact : exactAssessment;
         this.snapshots = snapshots;
         this.auth = auth;
         this.currentAccount = currentAccount;
@@ -102,6 +105,16 @@ final class TradeController {
         this.analysisContext = analysisContext;
         this.requireAdmin = requireAdmin;
         new java.security.SecureRandom().nextBytes(acknowledgmentSecret);
+    }
+
+    @FunctionalInterface
+    interface ExactAssessment {
+        io.liftandshift.strikebench.eval.StrategyEvaluation assess(
+                String symbol, Candidate candidate, long buyingPowerCents,
+                AnalysisContext analysisContext, String worldId,
+                boolean mechanicallyEligible, List<String> mechanicalFailures,
+                long roundTripFeesCents,
+                io.liftandshift.strikebench.eval.PortfolioExposureContext portfolioExposure);
     }
 
     void register(JavalinConfig config) {
@@ -253,7 +266,7 @@ final class TradeController {
         ApiResponses.EvaluationReceipt evaluation;
         long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
         try {
-            evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
+            evaluation = ApiResponses.EvaluationReceipt.of(exactAssessment.assess(
                     request.symbol(), exact, preview.buyingPowerBeforeCents(),
                     analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
                     preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),

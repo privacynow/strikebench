@@ -11,8 +11,10 @@
 
   function workspaceRoute(hash) {
     var path = String(hash || '#/').split('?')[0];
-    var plan = /^#\/plan\/([^/]+)/.exec(path);
-    if (plan) return 'plan:' + plan[1];
+    var plan = /^#\/plan\/([^/]+)(?:\/([^/]+))?/.exec(path);
+    // A Plan stage is a destination, not a local repaint. Preserve scroll while a stage
+    // updates its own controls, but orient the user when the six-step journey moves on.
+    if (plan) return 'plan:' + plan[1] + ':' + (plan[2] || 'understand');
     var trade = /^#\/portfolio\/trade\/([^/]+)/.exec(path);
     if (trade) return 'trade:' + trade[1];
     var book = /^#\/portfolio\/book(?:\/([^/]+))?/.exec(path);
@@ -35,7 +37,7 @@
         if (onPlan && active) return active;
         var key = (App.state.world || (App.config && App.config.world) || 'observed');
         var draft = (App.state.provisionalPlansByMarket || {})[key];
-        return draft || active || {};
+        return draft || {};
       },
       symbol: function (fallback) {
         var value = App.context.source().symbol;
@@ -62,6 +64,10 @@
         var next = Object.assign({}, App.state.provisionalPlansByMarket[key] || {});
         if (patch.symbol !== undefined) {
           var symbol = String(patch.symbol || '').trim().toUpperCase();
+          if (symbol && next.symbol && symbol !== next.symbol) {
+            if (patch.goal === undefined) next.intent = null;
+            if (patch.thesis === undefined) next.thesis = null;
+          }
           next.symbol = symbol || null;
         }
         if (patch.goal !== undefined) {

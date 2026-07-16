@@ -57,7 +57,7 @@
   }
 
   function planIntentDestination(intent) {
-    return intent == null ? 'EVIDENCE' : 'STRATEGY';
+    return String(intent || '').toUpperCase() === 'DIRECTIONAL' ? 'EVIDENCE' : 'STRATEGY';
   }
 
   function discoveryContext() {
@@ -106,17 +106,23 @@
     var horizon = prefill.horizon || App.context.horizon('month');
     var days = Product.Horizon.sessions(horizon);
     var risk = document.getElementById('risk-mode');
-    var intent = prefill.intent || App.context.goal('DIRECTIONAL');
+    var intent = owns('intent') ? prefill.intent : App.context.goal(null);
     var destination = stage || planIntentDestination(intent);
-    var explicitContext = owns('thesis') || owns('horizon') || owns('target');
-    var requestedThesis = owns('thesis') && String(prefill.thesis || '').trim()
-      ? String(prefill.thesis).trim().toLowerCase() : null;
+    var directional = String(intent || '').toUpperCase() === 'DIRECTIONAL';
+    var contextualThesis = directional ? App.context.thesis(null) : null;
+    var requestedThesis = owns('thesis')
+      ? (String(prefill.thesis || '').trim() ? String(prefill.thesis).trim().toLowerCase() : null)
+      : (contextualThesis ? String(contextualThesis).trim().toLowerCase() : null);
+    // A directional Plan without a chosen view is its own honest context. It must never
+    // resume a same-symbol Plan whose thesis came from an older visit.
+    var thesisDefinesIdentity = owns('thesis') || directional;
+    var explicitContext = thesisDefinesIdentity || owns('horizon') || owns('target');
     var requestedTarget = owns('target') && isFinite(parseFloat(prefill.target))
       ? Math.round(parseFloat(prefill.target) * 100) : null;
     function sameContext(plan) {
       var context = plan && plan.context || {};
       var thesis = String(context.thesis || '').trim().toLowerCase() || null;
-      return (!owns('thesis') || thesis === requestedThesis)
+      return (!thesisDefinesIdentity || thesis === requestedThesis)
         && (!owns('horizon') || Number(context.horizonDays || 0) === days)
         && (!owns('target') || Number(context.targetCents || 0) === Number(requestedTarget || 0));
     }
@@ -124,8 +130,8 @@
       var originContext = originPlan && originPlan.context || {};
       return PlanStore.create({
         symbol: symbol, intent: intent, originPlanId: originPlan ? originPlan.id : null,
-        thesis: owns('thesis') ? requestedThesis
-          : originPlan ? originContext.thesis : App.context.thesis('neutral'),
+        thesis: thesisDefinesIdentity ? requestedThesis
+          : originPlan ? originContext.thesis : App.context.thesis(null),
         horizonDays: owns('horizon') ? days
           : originPlan && originContext.horizonDays ? originContext.horizonDays : days,
         targetCents: owns('target') ? requestedTarget
@@ -248,7 +254,7 @@
       card.appendChild(el('div', { class: 'fact-grid welcome-proof-facts' },
         UI.fact(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(candidate.maxLossCents), 'f-danger'),
         UI.fact('Chance of any profit', fmtPct(candidate.pop)),
-        UI.fact('Theoretical max profit', UI.maxProfitLabel(
+        UI.fact(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(
           candidate.strategy, candidate.structureGroup, candidate.maxProfitCents, true, candidate.legs))));
       card.appendChild(el('div', { class: 'welcome-proof-action' },
         el('button', { class: 'btn btn-sm btn-secondary', onclick: function () {
@@ -494,16 +500,8 @@
       });
     }
 
-    function economics(candidate) {
-      return candidate.evaluation && candidate.evaluation.assessment
-        && candidate.evaluation.assessment.economics || {};
-    }
-
-    function ideaRow(candidate) {
-      var econ = economics(candidate);
+    function ideaRow(candidate, rank) {
       var verdict = window.ViewPlan.economicVerdict(candidate) || 'UNAVAILABLE';
-      var pop = candidate.evaluation && candidate.evaluation.risk
-        ? candidate.evaluation.risk.pop : candidate.pop;
       var open = el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
         var button = this;
         visibleCommand(button, async function () {
@@ -513,23 +511,12 @@
           return plan;
         }, 'This screened package could not be opened in a Plan.');
       } }, verdict === 'UNFAVORABLE' ? 'Study in a Plan' : 'Use in a Plan');
-      return el('article', { class: 'home-idea-row', 'data-symbol': candidate.symbol,
-        'data-economic-verdict': verdict },
-        el('div', { class: 'home-idea-identity' },
-          el('b', { class: 'home-idea-symbol' }, candidate.symbol),
-          el('span', {}, candidate.displayName || prettyStrategy(candidate.strategy)),
-          intentBadge(candidate.intent),
-          el('span', { class: 'badge ' + (verdict === 'FAVORABLE' ? 'badge-ok'
-            : verdict === 'UNFAVORABLE' ? 'badge-danger' : 'badge-caution') },
-            econ.label || UI.economicVerdictLabel(verdict))),
-        el('div', { class: 'home-idea-facts' },
-          chip(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(candidate.maxLossCents)),
-          chip('Chance of any profit', pop == null ? '\u2014' : fmtPct(pop)),
-          chip('Market EV after costs', econ.marketEvAfterCostsCents == null
-            ? 'Unavailable' : pnlSpan(econ.marketEvAfterCostsCents)),
-          chip('Realized-vol scenario EV', econ.realizedVolEvAfterCostsCents == null
-            ? 'Unavailable' : pnlSpan(econ.realizedVolEvAfterCostsCents))),
-        open);
+      var row = window.ViewPlan.ideaPresentation(candidate, { density: 'row', rank: rank,
+        kicker: candidate.symbol + ' · Screened idea', className: 'home-idea-row',
+        action: open });
+      row.dataset.symbol = candidate.symbol;
+      row.dataset.economicVerdict = verdict;
+      return row;
     }
 
     function paint() {
@@ -543,7 +530,7 @@
           el('span', { class: 'muted' }, 'Refresh checks one teaching screen; Scout checks the current universe only when you ask.')));
         return;
       }
-      ordered.forEach(function (candidate) { body.appendChild(ideaRow(candidate)); });
+      ordered.forEach(function (candidate, index) { body.appendChild(ideaRow(candidate, index + 1)); });
     }
 
     function saveScout(response) {

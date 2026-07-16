@@ -1391,7 +1391,7 @@
             : p.ok || p.maxLossCents > 0 ? el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))
             : el('span', { class: 'muted' }, '—'),
           beginnerWording ? 'The worst case at expiration, including every leg.' : null),
-        stat(beginnerWording ? 'Theoretical ceiling' : 'Theoretical max profit', el('span', {
+        stat(UI.vocabulary('theoreticalMaxProfit', beginnerWording ? 'Best possible profit' : null), el('span', {
           class: UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs) === 'model-dependent' ? 'muted' : 'gain'
         }, UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, beginnerWording, p.legs)),
           beginnerWording ? 'The best case at expiration.' : null),
@@ -1434,7 +1434,7 @@
           handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {
-        hostEl.appendChild(explain('Mixed expirations have no single at-expiry payoff line: the position\u2019s value depends on volatility after the near leg expires. Use the shared scenario distributions below to inspect that model-dependent range.'));
+        hostEl.appendChild(explain('Mixed expirations have no single at-expiry payoff line: a surviving option still has time value after the near leg expires. Use Possible futures to inspect how stock price and volatility shape that range.'));
       }
       // One lazy scenario component for every structure. It sits BESIDE the structural payoff
       // truth and uses this preview's exact package price; no parallel pricing implementation.

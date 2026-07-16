@@ -109,7 +109,7 @@
       candidateContractLines(c, title),
       el('div', { class: 'candidate-position-summary-facts' },
         UI.fact(UI.vocabulary('theoreticalMaxLoss'), c.maxLossCents == null ? '—' : fmtMoney(c.maxLossCents), 'f-danger'),
-        UI.fact('Theoretical max profit', UI.maxProfitLabel(c.strategy, c.structureGroup,
+        UI.fact(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(c.strategy, c.structureGroup,
           c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs), 'f-ok'),
         UI.fact('Breakeven', (c.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         UI.fact('Chance of any profit', candidatePop(c) == null ? '—' : fmtPct(candidatePop(c)))));
@@ -419,15 +419,18 @@
   function tradeIntent(value) {
     var intent = String(value || '').toUpperCase();
     return ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(intent) >= 0
-      ? intent : 'DIRECTIONAL';
+      ? intent : null;
   }
 
   async function openCandidateAsPlan(c, rawSymbol, options) {
     options = options || {};
     var symbol = String(rawSymbol || App.context.symbol('AAPL')).toUpperCase();
     var intent = tradeIntent(c && c.intent || App.context.goal());
+    if (!intent) throw new Error('Choose what this idea should accomplish before creating a Plan.');
     var horizon = options.horizon || App.context.horizon('month');
-    var thesis = options.thesis || App.context.thesis('neutral');
+    var evaluatedThesis = c && c.evaluation && c.evaluation.spec && c.evaluation.spec.thesis;
+    var thesis = Object.prototype.hasOwnProperty.call(options, 'thesis')
+      ? options.thesis : (evaluatedThesis || App.context.thesis(null));
     App.context.update({ symbol: symbol, goal: intent, horizon: horizon, thesis: thesis });
     var position = Object.assign({ symbol: symbol, strategy: c.strategy, qty: c.qty,
       legs: (c.legs || []).map(function (leg) { return {
@@ -441,7 +444,7 @@
       source: 'PLAN', fillNature: 'PROPOSED'
     }, options.position || {});
     return startPlan({ symbol: symbol, intent: intent, horizon: horizon, thesis: thesis },
-      options.destination || 'DECIDE', async function (plan) {
+      options.destination || 'STRATEGY', async function (plan) {
         var selected = await PlanStore.saveCustom(plan, position);
         var candidate = selected.strategy && selected.strategy.result && selected.strategy.result.candidate;
         if (!candidate || candidate.selected !== true) {
@@ -487,7 +490,7 @@
       intentNoteBlock(c),
       el('div', { class: 'fact-grid' },
         maxLossFact,
-        UI.fact('Theoretical ceiling', UI.maxProfitLabel(
+        UI.fact(UI.vocabulary('theoreticalMaxProfit', 'Best possible profit'), UI.maxProfitLabel(
           c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs), 'f-ok'),
         profitFact,
         assignmentFact),
@@ -533,7 +536,7 @@
         c.combinedMaxLossCents !== null && c.combinedMaxLossCents !== undefined
           ? chip(el('span', {}, UI.vocabulary('theoreticalMaxLoss'), ' with shares'),
             el('span', { class: 'loss' }, fmtMoney(c.combinedMaxLossCents))) : null,
-        chip('Theoretical max profit', UI.maxProfitLabel(
+        chip(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(
           c.strategy, c.structureGroup, c.maxProfitCents, false, c.legs)),
         chip(el('span', {}, 'POP', UI.info('pop')), fmtPct(candidatePop(c))),
         c.assignmentProb !== null && c.assignmentProb !== undefined
@@ -562,55 +565,172 @@
     return card;
   }
 
+  var NEAR_TIE_SCORE_POINTS = 2.0;
+
+  function candidateRankReason(c) {
+    var explanation = c && c.evaluation && c.evaluation.explanation || {};
+    return explanation.whySelected || c.whyConsidered || explanation.headline
+      || 'It ranks highest after the shared economic, risk, evidence, and cost checks.';
+  }
+
+  function candidatePayoffFigure(c, spot) {
+    var risk = c && c.evaluation && c.evaluation.risk || {};
+    var expirations = new Set((c.legs || []).filter(function (leg) {
+      return !leg.stock && String(leg.type || '').toUpperCase() !== 'STOCK' && leg.expiration;
+    }).map(function (leg) { return String(leg.expiration); }));
+    var points = Number(spot) > 0 ? (risk.scenarios || []).map(function (point) {
+      return { price: Number(spot) * (1 + Number(point.underlyingMovePct || 0)), profitCents: point.pnlCents };
+    }) : [];
+    var figure = el('figure', { class: 'ranked-idea-payoff' },
+      el('figcaption', {}, el('b', {}, expirations.size > 1 ? 'Why there is no single payoff line' : 'Expiration payoff')));
+    if (expirations.size > 1) {
+      figure.appendChild(el('div', { class: 'ranked-time-spread-shape' }, strategyShape(c.strategy)));
+      figure.appendChild(el('p', { class: 'muted' },
+        'One option expires while another remains alive. A single terminal line would be misleading; Possible futures values both expiries along each path.'));
+    } else if (points.length >= 2) {
+      figure.appendChild(UI.payoffChart(points, { spot: Number(spot), breakevens: c.breakevens || [] }));
+    } else {
+      figure.appendChild(UI.emptyState('Payoff curve unavailable',
+        'The ranking remains visible, but this package did not return enough defensible payoff points to draw a curve.'));
+    }
+    return figure;
+  }
+
+  function ideaPresentation(c, options) {
+    options = options || {};
+    var density = options.density || 'compact';
+    var beginner = Learn.currentLevel() === 'beginner';
+    var analysis = c && c.evaluation || {};
+    var economics = candidateEconomics(c) || {};
+    var verdict = economicVerdict(c) || 'UNAVAILABLE';
+    var rank = Number(options.rank || 1);
+    var article = el('article', {
+      class: 'ranked-idea ranked-idea-' + density + (density === 'hero' ? ' candidate' : '')
+        + (c.selected ? ' selected' : '')
+        + (options.className ? ' ' + options.className : ''),
+      'data-candidate-id': c.id || null,
+      'data-symbol': c.symbol || null,
+      'data-economic-verdict': verdict,
+      'aria-label': 'Rank ' + rank + ': ' + (c.displayName || c.strategy)
+    });
+    var verdictClass = verdict === 'FAVORABLE' ? 'badge-ok'
+      : verdict === 'UNFAVORABLE' ? 'badge-danger' : verdict === 'UNAVAILABLE' ? 'badge-dim' : 'badge-caution';
+    article.appendChild(el('header', { class: 'ranked-idea-head' },
+      el('div', {}, el('span', { class: 'eyebrow' }, options.kicker
+        || (c.selected ? 'SELECTED STRUCTURE' : 'RANK ' + rank)),
+        el('h2', {}, c.displayName || prettyStrategy(c.strategy)),
+        c.label ? el('p', { class: 'muted mono' }, c.label) : null),
+      el('div', { class: 'ranked-idea-badges' },
+        c.selected ? el('span', { class: 'badge badge-ok' }, 'SELECTED') : null,
+        intentBadge(c.intent), heldSharesBadge(c),
+        analysis.evidence && analysis.evidence.rollup ? evaluationLevelBadge(analysis.evidence.rollup) : null,
+        el('span', { class: 'badge ' + verdictClass }, economics.label || UI.economicVerdictLabel(verdict)))));
+
+    var facts = el('div', { class: 'ranked-idea-facts' },
+      chip(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(c.maxLossCents)),
+      chip(el('span', {}, 'Chance of any profit', UI.info('pop')),
+        candidatePop(c) == null ? '\u2014' : fmtPct(candidatePop(c))),
+      chip(el('span', {}, 'Market-implied EV', UI.info('ev')), economics.marketEvAfterCostsCents == null
+        ? 'Unavailable' : pnlSpan(economics.marketEvAfterCostsCents)),
+      chip(el('span', {}, 'Realized-vol scenario EV', UI.info('evhistvol')),
+        economics.realizedVolEvAfterCostsCents == null
+        ? 'Unavailable' : pnlSpan(economics.realizedVolEvAfterCostsCents)));
+    if (density === 'hero') {
+      facts.insertBefore(chip('Cost / credit', fmtMoney(c.entryNetPremiumCents, { plus: true })), facts.firstChild);
+      facts.insertBefore(chip(UI.vocabulary('theoreticalMaxProfit', beginner ? 'Best possible profit' : null),
+        UI.maxProfitLabel(c.strategy, c.structureGroup, c.maxProfitCents, beginner, c.legs)), facts.children[2]);
+    }
+
+    if (density === 'row' || density === 'compact') {
+      article.appendChild(el('p', { class: 'ranked-idea-summary' },
+        (analysis.explanation && (analysis.explanation.headline || analysis.explanation.plainLanguage))
+          || c.beginnerExplanation || candidateRankReason(c)));
+      article.appendChild(facts);
+      if (options.context) article.appendChild(options.context);
+      if (options.action) article.appendChild(options.action);
+      return article;
+    }
+
+    if (options.action) article.appendChild(options.action);
+
+    var left = el('div', { class: 'ranked-idea-case' });
+    var economic = economicAssessmentBlock(c, true);
+    if (economic) left.appendChild(economic);
+    left.appendChild(el('section', { class: 'ranked-why-first' },
+      el('h3', {}, c.selected ? 'Why this is your working structure' : 'Why this ranks first'),
+      el('p', {}, candidateRankReason(c))));
+    var guide = Learn.STRATEGY_GUIDE[c.strategy] || {};
+    left.appendChild(el('div', { class: 'ranked-win-risk' },
+      el('section', {}, el('h3', {}, 'How it can work'),
+        el('p', {}, guide.win || c.bestUpside || (analysis.explanation && analysis.explanation.bestCase) || '\u2014')),
+      el('section', {}, el('h3', {}, 'What can hurt'),
+        el('p', {}, c.biggestRisk || (analysis.explanation && analysis.explanation.biggestRisk) || guide.lose || '\u2014'),
+        el('p', { class: 'muted small' }, 'Reconsider if: ', c.wouldInvalidate
+          || (analysis.explanation && analysis.explanation.wouldInvalidate) || '\u2014'))));
+    left.appendChild(candidateContractLines(c, 'EXACT CONTRACTS'));
+
+    var right = el('aside', { class: 'ranked-idea-visual' }, candidatePayoffFigure(c, options.spot), facts);
+    if (window.Scenario) right.appendChild(Scenario.realisticOutcomes(options.symbol || c.symbol
+      || App.context.symbol(), c, { autoRun: !!c.selected }));
+    if (analysis.participation) right.appendChild(el('p', { class: 'participation-headline' },
+      participationSentence(analysis.participation)));
+    if (analysis.impliedStance && analysis.impliedStance.summary) {
+      right.appendChild(el('p', { class: 'muted' }, analysis.impliedStance.summary));
+    }
+    if (!beginner && analysis.stance) right.appendChild(el('div', { class: 'chip-row stance-vector' },
+      chip('Dollar delta', fmtMoney(analysis.stance.dollarDeltaCents, { plus: true })),
+      chip('Vega / vol point', fmtMoney(analysis.stance.vegaCentsPerVolPoint, { plus: true })),
+      chip('Theta / day', fmtMoney(analysis.stance.thetaCentsPerDay, { plus: true }))));
+
+    article.appendChild(el('div', { class: 'ranked-idea-grid' }, left, right));
+    if (c.warnings && c.warnings.length) article.appendChild(alertBox('warn', 'Before you decide', c.warnings));
+    var secondary = el('div', { class: 'ranked-idea-secondary candidate-evaluation-receipt' });
+    var management = managementReceipt(analysis.management, beginner, false, c.id || candidatePackageKey(c));
+    if (management) secondary.appendChild(management);
+    var coverage = dataCoverageReceipt(analysis.coverage, c.id || candidatePackageKey(c));
+    if (coverage) secondary.appendChild(coverage);
+    var impacts = analysis.assessment && analysis.assessment.portfolioImpacts;
+    if (impacts) secondary.appendChild(portfolioImpactReceipt(impacts, beginner));
+    if (!beginner && analysis.score && (analysis.score.components || []).length) {
+      secondary.appendChild(UI.expandable('How the Decision score was built', function () {
+        return table(['Factor', 'Score', 'Weight', 'Why'], analysis.score.components.map(function (component) {
+          return el('tr', {}, el('td', {}, component.name),
+            el('td', {}, Math.round(Number(component.value || 0) * 100) + '%'),
+            el('td', {}, Math.round(Number(component.weight || 0) * 100) + '%'),
+            el('td', { class: 'muted' }, component.note || '\u2014'));
+        }));
+      }, { stateKey: 'ranked-hero-score-' + (c.id || candidatePackageKey(c)) }));
+    }
+    if (secondary.hasChildNodes()) article.appendChild(secondary);
+    return article;
+  }
+
+  function rankingSeparation(candidates) {
+    if (!candidates || candidates.length < 2) {
+      return el('p', { class: 'ranked-separation muted' }, 'Only one structure cleared the current screen.');
+    }
+    var first = candidates[0], second = candidates[1];
+    var delta = Math.abs(Number(candidateDecisionScore(first) || 0) - Number(candidateDecisionScore(second) || 0));
+    var close = candidatesNearTie(first, second);
+    return el('p', { class: 'ranked-separation ' + (close ? 'close' : '') },
+      el('b', {}, close ? 'Close call. ' : 'Ranking separation. '),
+      close
+        ? '#1 leads #2 by only ' + fmtNum(delta, 1) + ' Decision-score points; compare their risks, not just the rank.'
+        : '#1 leads #2 by ' + fmtNum(delta, 1) + ' Decision-score points after economics, risk, evidence, and costs.',
+      UI.info('ranktie'));
+  }
+
+  function candidatesNearTie(first, second) {
+    if (!first || !second || economicVerdict(first) !== economicVerdict(second)) return false;
+    return Math.abs(Number(candidateDecisionScore(first) || 0)
+      - Number(candidateDecisionScore(second) || 0)) <= NEAR_TIE_SCORE_POINTS;
+  }
+
   function strategyMeta(name) {
     return ((App.strategyCatalog && App.strategyCatalog.catalog) || []).find(function (m) { return m.name === name; }) || null;
   }
 
-  /** Pro: side-by-side strategy comparison — sortable columns, expandable detail rows. */
-  /**
-   * Beginner candidate list: ranked cards with rank numbers. Long lists open with DIVERSE
-   * representatives (max 2 per structure shape, top 5 of the engine's order) plus
-   * 'Show all N ranked strategies' — diversity is presentation, the ranking is the truth.
-   */
-  function renderRankedCards(results, candidates, opts) {
-    opts = opts || {};
-    var host = el('div', { id: opts.id || 'ranked-cards' });
-    results.appendChild(host);
-    function rankBadge(i) {
-      return el('span', { class: 'badge badge-dim rank-badge', title: 'Rank in this list\u2019s ordering (best first)' }, '#' + (i + 1));
-    }
-    function paint(showAll) {
-      host.innerHTML = '';
-      var shown = [];
-      if (showAll || candidates.length <= 5) {
-        candidates.forEach(function (c, i) { shown.push({ c: c, rank: (c._servedRank || (i + 1)) - 1 }); });
-      } else {
-        var perGroup = {};
-        for (var i = 0; i < candidates.length && shown.length < 5; i++) {
-          var g = candidates[i].structureGroup || 'other';
-          var n = perGroup[g] || 0;
-          if (n >= 2) continue;
-          perGroup[g] = n + 1;
-          shown.push({ c: candidates[i], rank: (candidates[i]._servedRank || (i + 1)) - 1 });
-        }
-      }
-      shown.forEach(function (x) {
-        var card = opts.renderCard ? opts.renderCard(x.c) : candidateCard(x.c, true);
-        var head = card.querySelector('h3, .cand-head, .card-head') || card.firstChild;
-        if (head && head.insertBefore) head.insertBefore(rankBadge(x.rank), head.firstChild);
-        else card.insertBefore(rankBadge(x.rank), card.firstChild);
-        host.appendChild(card);
-      });
-      if (!showAll && shown.length < candidates.length) {
-        host.appendChild(el('div', { class: 'btn-row' }, el('button', {
-          class: 'btn btn-secondary', id: 'show-all-ranked',
-          onclick: function () { paint(true); }
-        }, 'Show all ' + candidates.length + ' ranked strategies')));
-      }
-    }
-    paint(candidates.length <= 5);
-  }
-
+  /** Expert side-by-side strategy comparison — sortable columns, with one shared hero above. */
   function comparisonTable(candidates, options) {
     options = options || {};
     var sortKey = 'rank', sortDir = 1;
@@ -630,7 +750,7 @@
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Theor. max loss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
-      { key: 'maxProfitCents', label: 'Theor. max profit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'model-dependent' ? el('span', { class: 'muted' }, 'model-dependent') : k === 'uncapped' ? el('span', { class: 'gain' }, '\u221E') : el('span', { class: 'gain' }, fmtMoney(c.maxProfitCents)); } },
+      { key: 'maxProfitCents', label: 'Best possible profit', infoKey: 'maxprofit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return el('span', { class: k === 'finite' || k === 'uncapped' ? 'gain' : 'muted' }, UI.maxProfitLabel(c.strategy, c.structureGroup, c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs)); } },
       { key: 'rr', label: 'R:R', get: rrValue, render: function (c) { var v = rrValue(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
       { key: 'pop', label: 'POP', get: function (c) { var v = candidatePop(c); return v === null || v === undefined ? -1 : v; }, render: function (c) { return el('span', {}, fmtPct(candidatePop(c))); } },
       { key: 'marketEv', label: 'Market EV', get: function (c) { var v = marketEvAfterCosts(c); return v === null || v === undefined ? -Infinity : v; }, render: function (c) { var v = marketEvAfterCosts(c); return v !== null && v !== undefined ? pnlSpan(v) : '—'; } },
@@ -639,7 +759,7 @@
       { key: 'assignmentProb', label: 'Assign%', get: function (c) { return c.assignmentProb === null || c.assignmentProb === undefined ? -1 : c.assignmentProb; }, render: function (c) { return el('span', {}, c.assignmentProb === null || c.assignmentProb === undefined ? '\u2014' : fmtPct(c.assignmentProb)); } },
       { key: 'annualizedYieldPct', label: 'Net premium yield/yr', get: function (c) { return c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? -1 : c.annualizedYieldPct; }, render: function (c) { return el('span', {}, c.annualizedYieldPct === null || c.annualizedYieldPct === undefined ? '\u2014' : fmtNum(c.annualizedYieldPct, 1) + '%'); } },
       { key: 'liquidityScore', label: 'Liq', get: function (c) { return c.liquidityScore; }, render: function (c) { return el('span', {}, fmtNum(c.liquidityScore, 2)); } },
-      { key: 'decisionScore', label: 'Decision score', get: candidateDecisionScore, render: function (c) { var score = candidateDecisionScore(c); return score === null || score === undefined ? '\u2014' : el('b', {}, fmtNum(score, 0)); } }
+      { key: 'decisionScore', label: 'Decision score', infoKey: 'decisionscore', get: candidateDecisionScore, render: function (c) { var score = candidateDecisionScore(c); return score === null || score === undefined ? '\u2014' : el('b', {}, fmtNum(score, 0)); } }
     ];
     var wrap = el('div', { class: 'card', id: 'compare-table' });
     function render() {
@@ -656,7 +776,8 @@
             if (sortKey === col.key) sortDir = -sortDir; else { sortKey = col.key; sortDir = -1; }
             render();
           }
-        }, col.label + (sortKey === col.key ? (sortDir < 0 ? ' \u2193' : ' \u2191') : '')));
+        }, col.label + (sortKey === col.key ? (sortDir < 0 ? ' \u2193' : ' \u2191') : '')),
+        col.infoKey ? UI.info(col.infoKey) : null);
       }).concat([el('th', {}, '')]));
       var body = el('tbody', {});
       sorted.forEach(function (c) {
@@ -1025,13 +1146,11 @@
     return meta ? meta.label : String(intent || '').replaceAll('_', ' ').toLowerCase();
   }
 
-  function planCandidateActions(planRef, candidate, ui, repaint) {
-    var actions = el('div', { class: 'plan-candidate-action-block' });
-    var buttons = el('div', { class: 'btn-row plan-candidate-actions' });
-    async function choose(adjust, button) {
-      button.disabled = true;
-      button.setAttribute('aria-busy', 'true');
-      try {
+  async function choosePlanCandidate(planRef, candidate, ui, repaint, adjust, button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      if (!candidate.selected) {
         var livePlan = await PlanStore.get(planRef.plan.id, true);
         var out = await PlanStore.selectCandidate(livePlan, candidate.id);
         planRef.plan = out.plan;
@@ -1046,32 +1165,43 @@
           title: (candidate.displayName || candidate.strategy) + ' selected',
           detail: adjust ? 'Opening the exact legs so you can change strikes, dates, or quantity.'
             : 'This exact package now carries into Outcomes. You can still change or clear it here.' };
-        if (adjust) {
-          ui.buildState = ui.buildState || {};
-          Builder.adoptTicket({
-            world: App.state.world, symbol: planRef.plan.symbol, candidate: candidate,
-            qty: candidate.qty || 1, intent: planRef.plan.intent,
-            horizon: planHorizonName(planRef.plan),
-            thesis: planRef.plan.context && planRef.plan.context.thesis
-          }, ui.buildState, {
-            goal: planRef.plan.intent, horizon: planHorizonName(planRef.plan),
-            thesis: planRef.plan.context && planRef.plan.context.thesis
-          });
-          ui.strategyView = 'builder';
-        }
-        await repaint();
-        var selected = document.querySelector('[data-candidate-id="' + CSS.escape(candidate.id) + '"]')
-          || document.querySelector('.plan-selected-candidate');
-        if (selected) selected.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      } catch (e) {
-        button.disabled = false;
-        button.removeAttribute('aria-busy');
-        UI.setActionFeedback(actions, 'danger', 'Could not select this structure', e.message || String(e));
       }
+      if (adjust) {
+        ui.buildState = ui.buildState || {};
+        Builder.adoptTicket({
+          world: App.state.world, symbol: planRef.plan.symbol, candidate: candidate,
+          qty: candidate.qty || 1, intent: planRef.plan.intent,
+          horizon: planHorizonName(planRef.plan),
+          thesis: planRef.plan.context && planRef.plan.context.thesis
+        }, ui.buildState, {
+          goal: planRef.plan.intent, horizon: planHorizonName(planRef.plan),
+          thesis: planRef.plan.context && planRef.plan.context.thesis
+        });
+        ui.strategyView = 'builder';
+        await repaint();
+        var builder = document.getElementById('plan-strategy-panel-builder');
+        if (builder) builder.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        return;
+      }
+      await PlanStore.focus(planRef.plan, 'OUTCOMES');
+    } catch (e) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      throw e;
     }
-    buttons.appendChild(el('button', { type: 'button', class: 'btn', disabled: candidate.selected ? '' : null,
+  }
+
+  function planCandidateActions(planRef, candidate, ui, repaint) {
+    var actions = el('div', { class: 'plan-candidate-action-block' });
+    var buttons = el('div', { class: 'btn-row plan-candidate-actions' });
+    function choose(adjust, button) {
+      choosePlanCandidate(planRef, candidate, ui, repaint, adjust, button).catch(function (e) {
+        UI.setActionFeedback(actions, 'danger', 'Could not select this structure', e.message || String(e));
+      });
+    }
+    buttons.appendChild(el('button', { type: 'button', class: 'btn',
       onclick: function () { choose(false, this); } },
-      candidate.selected ? 'Selected for this Plan' : 'Select this structure'));
+      candidate.selected ? 'Continue to Outcomes' : 'Select and continue to Outcomes'));
     buttons.appendChild(el('button', { type: 'button', class: 'btn btn-secondary',
       onclick: function () { choose(true, this); } }, 'Adjust exact contracts'));
     actions.appendChild(buttons);
@@ -1114,7 +1244,7 @@
     } }, 'Clear selection');
   }
 
-  function planStrategyFilterPanel(ui, onShapeChange) {
+  function planStrategyFilterPanel(ui, onShapeChange, planId) {
     var filters = ui.strategyFilters = ui.strategyFilters || {};
     function numField(key, id, beginnerLabel, expertLabel, infoKey, attrs) {
       var input = el('input', Object.assign({ type: 'number', id: id, placeholder: 'any', value: filters[key] || '' }, attrs || {}));
@@ -1136,7 +1266,7 @@
         el('p', { class: 'muted small' }, Learn.currentLevel() === 'beginner'
           ? 'The same five limits stay available. Refused structures remain listed with the exact reason.'
           : 'Blank means no extra limit; the Plan risk budget still applies.'));
-    }, { open: 'desktop', stateKey: 'plan-strategy-fit-limits' });
+    }, { open: 'desktop', stateKey: 'plan-strategy-fit-limits-' + String(planId || 'draft') });
     node.id = 'plan-strategy-filters';
     return node;
   }
@@ -1388,73 +1518,94 @@
         'The refused list below keeps the reasons visible. Change a limit only if it still matches your Plan.'));
       return;
     }
-    if (Learn.currentLevel() === 'expert') {
-      var tableCard = comparisonTable(candidates, {
-        withUse: false,
-        actionLabel: function (c) { return c.selected ? 'Selected' : 'Select'; },
-        actionDisabled: function (c) { return !!c.selected; },
-        onAction: function (c, button) {
-          button.disabled = true;
-          PlanStore.get(planRef.plan.id, true).then(function (live) {
-            return PlanStore.selectCandidate(live, c.id);
-          }).then(function (out) {
-            planRef.plan = out.plan;
-            candidates.forEach(function (x) { x.selected = x.id === c.id; });
-            planRef.selected = c;
-            ui.selectedCandidate = c;
-            ui.strategyFocusCandidate = c.id;
-            ui.strategyAction = { kind: 'candidate', candidateId: c.id,
-              title: (c.displayName || c.strategy) + ' selected',
-              detail: 'This exact package now carries into Outcomes. You can still change or clear it here.' };
-            return repaint();
-          }).catch(function (e) {
-            button.disabled = false;
-            UI.setActionFeedback(button.closest('.card') || host, 'danger', 'Could not select this structure', e.message || String(e));
-          });
-        },
-        onRow: function (c) {
-          var detail = document.getElementById('plan-candidate-detail');
-          if (!detail) return;
-          detail.innerHTML = '';
-          detail.appendChild(candidateCard(c, false, planRef.plan.symbol));
-          detail.appendChild(planCandidateActions(planRef, c, ui, repaint));
-          detail.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        }
-      });
-      host.appendChild(tableCard);
-      var expertDetail = el('div', { id: 'plan-candidate-detail' });
-      host.appendChild(expertDetail);
-      if (ui.strategyFocusCandidate) {
-        var focusedExpert = candidates.find(function (c) { return c.id === ui.strategyFocusCandidate; });
-        if (focusedExpert) {
-          expertDetail.appendChild(candidateCard(focusedExpert, false, planRef.plan.symbol));
-          expertDetail.appendChild(planCandidateActions(planRef, focusedExpert, ui, repaint));
-          expertDetail.classList.add('plan-return-focus');
-          setTimeout(function () { if (expertDetail.isConnected) expertDetail.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 80);
-        }
-        delete ui.strategyFocusCandidate;
-      }
-      return;
-    }
-    host.appendChild(el('div', { class: 'plan-proposed-heading' },
-      el('div', {}, el('span', { class: 'eyebrow' }, 'TOP PROPOSED TRADE'), el('h3', {}, 'Best fit under this Plan’s current limits')),
-      el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
     candidates.forEach(function (c, index) { c._servedRank = index + 1; });
-    renderRankedCards(host, candidates, { id: 'plan-ranked-cards', renderCard: function (c) {
-      var card = candidateCard(c, false, planRef.plan.symbol);
-      card.dataset.candidateId = c.id;
-      if (c.selected) card.classList.add('plan-selected-candidate');
-      card.appendChild(planCandidateActions(planRef, c, ui, repaint));
-      return card;
-    } });
-    if (ui.strategyFocusCandidate) {
-      var focused = host.querySelector('[data-candidate-id="' + CSS.escape(ui.strategyFocusCandidate) + '"]');
-      if (focused) {
-        focused.classList.add('plan-return-focus');
-        setTimeout(function () { if (focused.isConnected) focused.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 80);
+    var selectedId = planRef.selected && planRef.selected.id;
+    candidates.forEach(function (candidate) { candidate.selected = !!selectedId && candidate.id === selectedId; });
+    var field = el('section', { class: 'plan-ranked-field', id: 'plan-ranked-field' });
+    host.appendChild(field);
+
+    function review(candidate) {
+      ui.strategyFocusCandidate = candidate.id;
+      paintField();
+      var hero = field.querySelector('.ranked-idea-hero');
+      if (hero) {
+        hero.classList.add('plan-return-focus');
+        hero.setAttribute('tabindex', '-1');
+        hero.focus({ preventScroll: true });
+        hero.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
-      delete ui.strategyFocusCandidate;
     }
+
+    function compactAlternative(candidate, rank, extra) {
+      var button = el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+        onclick: function () { review(candidate); } }, 'Review rank ' + rank);
+      var node = ideaPresentation(candidate, { density: 'compact', rank: rank,
+        action: el('div', { class: 'ranked-runner-action' }, button) });
+      if (extra) node.hidden = true;
+      return node;
+    }
+
+    function paintField() {
+      field.replaceChildren();
+      var selected = selectedId && candidates.find(function (c) { return c.id === selectedId; });
+      var focused = ui.strategyFocusCandidate
+        && candidates.find(function (c) { return c.id === ui.strategyFocusCandidate; });
+      var heroCandidate = selected || focused || candidates[0];
+      var heroRank = candidates.indexOf(heroCandidate) + 1;
+      var reviewingAlternative = !selected && heroRank > 1;
+      field.appendChild(el('div', { class: 'plan-proposed-heading' },
+        el('div', {}, el('span', { class: 'eyebrow' }, selected ? 'YOUR WORKING STRUCTURE'
+          : reviewingAlternative ? 'STRUCTURE UNDER REVIEW' : 'TOP PROPOSED TRADE'),
+          el('h3', {}, selected ? 'Selected package, ready to test'
+            : reviewingAlternative ? 'Compare this alternative with the top-ranked fit'
+              : 'The strongest fit under this Plan’s current assumptions')),
+        el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
+      field.appendChild(rankingSeparation(candidates));
+      field.appendChild(ideaPresentation(heroCandidate, { density: 'hero', rank: heroRank,
+        spot: planRef.result && planRef.result.spot,
+        action: planCandidateActions(planRef, heroCandidate, ui, repaint) }));
+
+      var alternatives = candidates.filter(function (candidate) { return candidate.id !== heroCandidate.id; });
+      if (Learn.currentLevel() === 'expert') {
+        field.appendChild(el('div', { class: 'plan-other-ranked-title' },
+          el('h3', {}, 'Full ranked field'), el('p', { class: 'muted' }, 'Sort any column; review a row in the decision hero above.')));
+        field.appendChild(comparisonTable(candidates, {
+          withUse: false,
+          actionLabel: function (c) { return c.selected ? 'Continue' : 'Select + continue'; },
+          actionDisabled: function () { return false; },
+          onAction: function (c, button) {
+            choosePlanCandidate(planRef, c, ui, repaint, false, button).catch(function (e) {
+              UI.setActionFeedback(field, 'danger', 'Could not select this structure', e.message || String(e));
+            });
+          },
+          onRow: review
+        }));
+        return;
+      }
+
+      if (!alternatives.length) return;
+      field.appendChild(el('div', { class: 'plan-other-ranked-title' },
+        el('h3', {}, selected ? 'Compare another structure' : 'Two other structures worth comparing'),
+        el('p', { class: 'muted' }, 'These stay compact until you ask to review one.')));
+      var list = el('div', { class: 'ranked-runner-list' });
+      alternatives.forEach(function (candidate, index) {
+        list.appendChild(compactAlternative(candidate, candidates.indexOf(candidate) + 1, index >= 2));
+      });
+      field.appendChild(list);
+      if (alternatives.length > 2) {
+        var expanded = false;
+        field.appendChild(el('button', { type: 'button', class: 'btn btn-secondary ranked-show-all',
+          'aria-expanded': 'false', onclick: function () {
+            expanded = !expanded;
+            list.querySelectorAll('.ranked-idea[hidden]').forEach(function (node) { node.hidden = !expanded; });
+            if (!expanded) Array.from(list.children).slice(2).forEach(function (node) { node.hidden = true; });
+            this.setAttribute('aria-expanded', String(expanded));
+            this.textContent = expanded ? 'Show only the closest alternatives' : 'See all ' + candidates.length + ' ranked structures';
+          } }, 'See all ' + candidates.length + ' ranked structures'));
+      }
+    }
+
+    paintField();
   }
 
   async function planStrategyStage(root, initialPlan, stage) {
@@ -1812,7 +1963,7 @@
           planRef.result = null;
           ui.strategyDraftDirty = true;
           paint(true).catch(function (e) { UI.toast(e.message, 'error'); });
-        }),
+        }, planRef.plan.id),
         el('label', { class: 'check-row', for: 'plan-strategy-0dte' }, allow0, ' Include same-day expirations (0DTE)'),
         el('div', { class: 'btn-row' }, el('button', { type: 'button', class: 'btn', id: 'plan-run-strategy',
           onclick: async function () {
@@ -1823,6 +1974,13 @@
               planRef.result = out.strategy && out.strategy.result;
               ui.strategyDraftDirty = false;
               await paint(true);
+              var arrival = document.querySelector('#plan-ranked-field .ranked-idea-hero');
+              if (arrival) {
+                arrival.setAttribute('tabindex', '-1');
+                arrival.focus({ preventScroll: true });
+                arrival.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                arrival.classList.add('arrival-highlight');
+              }
             } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
           } }, planRef.result ? 'Refresh proposed trades' : beginner ? 'Find proposed trades' : 'Run ranked field')));
       if (ui.strategyAction && ui.strategyAction.kind === 'clear') {
@@ -1832,20 +1990,20 @@
       var selectedInField = planRef.result && planRef.selected
         && (planRef.result.candidates || []).some(function (candidate) { return candidate.id === planRef.selected.id; });
       if (planRef.selected && !selectedInField) {
-      var selectedCard = el('div', { class: 'card plan-selected-structure' },
-          UI.cardHeader('Selected structure', el('span', { class: 'badge badge-ok' }, 'PLAN OWNED')),
-          el('p', { class: 'muted' }, 'This exact package came from the Builder or a linked Scout pick. Run Compare to place it beside the full field.'));
-        selectedCard.appendChild(candidateCard(planRef.selected, false, planRef.plan.symbol));
-        selectedCard.appendChild(el('div', { class: 'btn-row' },
-          planCandidateActions(planRef, planRef.selected, ui, repaint), clearPlanStructureButton(planRef, ui, repaint)));
-        body.appendChild(selectedCard);
+        planRef.selected.selected = true;
+        body.appendChild(ideaPresentation(planRef.selected, {
+          density: 'hero', rank: 1, symbol: planRef.plan.symbol,
+          className: 'plan-selected-structure',
+          action: el('div', { class: 'plan-selection-command' },
+            planCandidateActions(planRef, planRef.selected, ui, repaint),
+            clearPlanStructureButton(planRef, ui, repaint))
+        }));
       }
       if (!planRef.result) {
         body.appendChild(UI.emptyState(ui.strategyDraftDirty ? 'Limits changed — rerun the field' : 'No comparison has run yet',
           ui.strategyDraftDirty
             ? 'The prior result is still in Plan history, but it is hidden here because it did not use the limits now on screen.'
             : 'Run the complete field once. The Plan saves the exact ranked result so a reload cannot change what you saw.'));
-        if (planRef.selected) appendPlanStrategyNext(body, planRef, paint);
         return;
       }
       body.appendChild(el('div', { class: 'card plan-strategy-summary' },
@@ -1864,16 +2022,8 @@
       if (planRef.result.rejected && planRef.result.rejected.length) {
         body.appendChild(planRejectedTeaching(planRef.result.rejected, ui, repaint));
       }
-      if (planRef.selected || (planRef.result.candidates || []).some(function (c) { return c.selected; })) {
-        appendPlanStrategyNext(body, planRef, paint);
-      }
     }
     await paint(false);
-  }
-
-  function appendPlanStrategyNext(host, planRef) {
-    appendPlanStageNext(host, planRef.plan, 'Structure chosen',
-      'Test this exact package across separate outcome bases.', 'OUTCOMES', 'Continue to Outcomes');
   }
 
   function planOutcomeBasisCard(run) {
@@ -2546,7 +2696,7 @@
       var decisionMath = el('div', { class: 'grid grid-4 plan-decision-math' },
         stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true })),
         stat(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))),
-        stat('Theoretical max profit', UI.maxProfitLabel(selected.strategy, selected.structureGroup,
+        stat(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(selected.strategy, selected.structureGroup,
           p.maxProfitCents, Learn.currentLevel() === 'beginner', p.legs)),
         stat('Chance of any profit', fmtPct(p.popEntry)),
         stat('Market EV after costs', economics && economics.marketEvAfterCostsCents != null ? pnlSpan(economics.marketEvAfterCostsCents) : '—'),
@@ -3081,6 +3231,9 @@
     marketEvAfterCosts: marketEvAfterCosts,
     economicAssessmentBlock: economicAssessmentBlock,
     decisionMetricsReceipt: decisionMetricsReceipt,
+    ideaPresentation: ideaPresentation,
+    candidatesNearTie: candidatesNearTie,
+    nearTieScorePoints: NEAR_TIE_SCORE_POINTS,
     openCandidateAsPlan: openCandidateAsPlan,
     candidateFromEvaluation: candidateFromEvaluation
   });

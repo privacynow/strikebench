@@ -29,6 +29,10 @@
       short: 'The structural loss boundary across the full payoff curve, including extreme terminal prices.',
       beginner: 'This is the mathematical boundary, even when reaching it would require an extreme move. Realistic modeled paths are shown separately as scenario loss.',
       expert: 'Terminal payoff infimum for the exact package and quantity. Undefined-risk structures have no finite value; do not substitute a stress percentile.' },
+    theoreticalMaxProfit: { label: 'Theoretical max profit', infoKey: 'maxprofit',
+      short: 'A fixed dollar ceiling exists only when the exact package has one payoff date and a finite best case.',
+      beginner: 'For a calendar or diagonal, one option expires while another still has time value. The best result depends on the stock price and option volatility at that first expiry, so StrikeBench does not invent one dollar ceiling.',
+      expert: 'Single-expiry structures report the terminal payoff supremum. Multi-expiry structures with a surviving leg report no fixed scalar because front-expiry spot, IV surface, skew, and remaining tenor determine continuation value.' },
     scenarioLoss: { label: 'Scenario loss', infoKey: 'scenarioloss',
       short: 'Loss on a named modeled or historical scenario; it never replaces the theoretical boundary.',
       beginner: 'This answers what the position loses in a particular calm, up, down, choppy, or tail path. The scenario and its evidence stay attached to the number.',
@@ -224,6 +228,16 @@
     short: 'Scout is the capability formerly labeled Scan.',
     beginner: 'Universe Scout finds tickers. Scout inside a Plan compares similar setups, better fits, and offsets without replacing your chosen Plan.',
     expert: 'Universe-level discovery and Plan-relative relationship searches share the existing recommendation evaluation path; Scout does not create a second scorer.'
+  };
+  INFO.ranktie = {
+    short: 'Two ideas are called a close call only when they share an economic verdict and differ by no more than 2 points on the 100-point Decision scale.',
+    beginner: 'A tiny score gap is not meaningful proof that one trade will work better. StrikeBench keeps both visible and asks you to compare the risks that matter to you.',
+    expert: 'Threshold: same EconomicAssessment verdict band and absolute Decision-score spread <= 2.0. The 2-point tolerance is smaller than one economic band (25 points) and avoids overstating rounded within-band differences.'
+  };
+  INFO.decisionscore = {
+    short: 'A 0–100 ordering aid that combines economics, risk, evidence, costs, and Plan fit; it is not a return forecast.',
+    beginner: 'Use this to understand why one package appears above another, then compare the actual worst case and trade-offs. A higher score never promises a profit.',
+    expert: 'Monotonic economic-verdict bands ordered internally by the risk-adjusted ScoreComposer result. Mechanical failures score zero; rounded values are ranking aids, not calibrated probabilities.'
   };
 
   Object.keys(VOCABULARY).forEach(function (key) {
