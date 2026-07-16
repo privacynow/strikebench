@@ -45,12 +45,12 @@
           section1256: stock ? null : leg.section1256 === true ? true : null
         };
       }),
-      packageNet: raw.packageNet == null ? '' : String(raw.packageNet),
-      fillNature: raw.fillNature || (options.allowRecord ? 'EXECUTED' : 'PROPOSED'),
-      feeMode: raw.feeMode || (options.allowRecord ? 'EXACT' : 'DEFAULT'),
+      packageNet: options.allowRecord ? '' : raw.packageNet == null ? '' : String(raw.packageNet),
+      fillNature: options.allowRecord ? 'EXECUTED' : raw.fillNature || 'PROPOSED',
+      feeMode: options.allowRecord ? 'EXACT' : raw.feeMode || 'DEFAULT',
       fees: raw.fees == null ? '' : String(raw.fees),
       occurredAt: raw.occurredAt == null ? '' : String(raw.occurredAt),
-      source: raw.source || 'MANUAL',
+      source: options.allowRecord && raw.externalRef ? 'BROKER' : 'MANUAL',
       externalRef: raw.externalRef || '',
       notes: raw.notes || '',
       terminal: raw.terminal || '',
@@ -143,29 +143,24 @@
   }
 
   function recordPayload(draft) {
-    if (draft.fillNature !== 'EXECUTED') {
-      throw new Error('RECORD accepts executed broker facts only. Change Price meaning to Executed fill, or use ANALYZE for a proposal.');
-    }
     if (!draft.occurredAt || !Number.isFinite(new Date(draft.occurredAt).getTime())) {
       throw new Error('RECORD requires the date and time the broker activity occurred.');
     }
     if (draft.legs.some(function (leg) { return !validLeg(leg, true); })) {
       throw new Error('RECORD requires every factual symbol, quantity, multiplier, contract, and positive fill price. Use ANALYZE when a fill is unknown.');
     }
-    if (draft.source === 'BROKER' && !draft.externalRef.trim()) {
-      throw new Error('Broker-sourced activity requires a stable order or statement reference.');
-    }
-    if (draft.feeMode !== 'EXACT' || draft.fees === '') {
+    if (draft.fees === '') {
       throw new Error('RECORD requires the exact total fees from the broker, including an explicit 0.00 when no fee was charged. Analyze may use the StrikeBench estimate.');
     }
     var fees = Number(draft.fees);
     if (!Number.isFinite(fees) || fees < 0) throw new Error('Exact recorded fees must be zero or more.');
-    var net = draft.packageNet === '' ? null : Number(draft.packageNet);
-    if (net !== null && !Number.isFinite(net)) throw new Error('Package net must be a number.');
+    var netCents = enteredPackageNetCents(draft);
+    if (netCents == null) throw new Error('Every recorded leg needs its exact fill price.');
+    var externalRef = draft.externalRef.trim();
     return { occurredAt: new Date(draft.occurredAt).toISOString(), eventType: 'TRADE', fillNature: 'EXECUTED',
-      cashAmountCents: net === null ? null : Math.round((net - fees) * 100),
-      feesCents: Math.round(fees * 100), taxCategory: null, source: draft.source,
-      externalRef: draft.externalRef.trim() || null, notes: draft.notes.trim() || null,
+      cashAmountCents: netCents - Math.round(fees * 100),
+      feesCents: Math.round(fees * 100), taxCategory: null, source: externalRef ? 'BROKER' : 'MANUAL',
+      externalRef: externalRef || null, notes: draft.notes.trim() || null,
       legs: draft.legs.map(function (leg) {
         return { instrumentType: leg.instrumentType, action: leg.action,
           positionEffect: leg.positionEffect, symbol: leg.symbol,
@@ -206,7 +201,7 @@
           symbol: ss, optionType: null, strike: '', expiration: '', quantity: Math.abs(sq), multiplier: 1,
           price: stock[3] || '', section1256: null };
       }
-      throw new Error('Line ' + (index + 1) + ' is not understood. Try "-1 MU 13Jul26 980P @20.00 CLOSE 1256" or "+100 MU @979.30 OPEN".');
+      throw new Error('Line ' + (index + 1) + ' is not understood. Try "-1 MU 13Jul26 980P @20.00 CLOSE" or "+100 MU @979.30 OPEN".');
     });
   }
 
@@ -372,6 +367,7 @@
     var market = null, chainCache = {}, chainData = {}, chainErrors = {}, loadToken = 0, commandBusy = false;
     var headerHost = null, editorHost = null, chainPickerHost = null, visualHost = null, visualIdentityHost = null;
     var visualStatusHost = null, chartHost = null, commandHost = null, resultHost = null;
+    var recordingDetailsHost = null;
     var modeButtons = {}, visualTimer = null, terminalTimer = null, identityTimer = null;
     var liveIdentity = null, liveIdentityFingerprint = null, identityToken = 0;
 
@@ -405,6 +401,12 @@
     }
 
     function remember(forceStale) {
+      if (options.allowRecord) {
+        draft.packageNet = '';
+        draft.fillNature = 'EXECUTED';
+        draft.feeMode = 'EXACT';
+        draft.source = draft.externalRef.trim() ? 'BROKER' : 'MANUAL';
+      }
       var currentFingerprint = draftFingerprint(draft);
       var matchesRenderedResult = lastAnalysis && lastAnalysisFingerprint === currentFingerprint
         || draft.selectedFingerprint && draft.selectedFingerprint === currentFingerprint;
@@ -420,6 +422,7 @@
       if (window.Workspace) Workspace.save();
       if (typeof options.onStateChange === 'function') options.onStateChange(draft);
       scheduleIdentity();
+      refreshRecordingDetails();
     }
 
     function showInputError(error) {
@@ -581,7 +584,8 @@
       section1256.onchange = function () { leg.section1256 = section1256.checked ? true : null; remember(); };
       var automatic1256 = App.config && Array.isArray(App.config.broadBasedIndexOptionSymbols)
         ? App.config.broadBasedIndexOptionSymbols.join(', ') : 'known broad-based index roots and listed series';
-      var section1256Field = options.allowRecord && leg.instrumentType === 'OPTION'
+      var section1256Field = options.allowRecord && Learn.currentLevel() === 'expert'
+        && leg.instrumentType === 'OPTION'
         ? el('label', { class: 'check-row position-1256-flag' }, section1256,
           el('span', {}, 'Other Section 1256 contract', el('small', {}, 'Automatic: ' + automatic1256
             + '. Check this only for another eligible contract confirmed by your broker.'))) : null;
@@ -985,6 +989,10 @@
         resultHost.innerHTML = '';
         resultHost.appendChild(UI.actionFeedback('ok', 'Recorded in ' + (options.accountName || 'tracked account'),
           'The factual activity is now part of the append-only tracked ledger.'));
+        if (out && Array.isArray(out.legs) && out.legs.some(function (leg) { return leg.section1256 === true; })) {
+          resultHost.appendChild(el('div', { class: 'chip-row position-record-tax-character' },
+            chip('Tax character', 'Automatic · Section 1256')));
+        }
         if (recordedOutcome) resultHost.appendChild(recordedOutcome);
         revealResult();
       }
@@ -1084,8 +1092,49 @@
       renderChainPicker(chainPickerHost);
     }
 
+    function refreshRecordingDetails() {
+      if (!recordingDetailsHost) return;
+      var netCents = enteredPackageNetCents(draft);
+      recordingDetailsHost.replaceChildren(
+        el('div', { class: 'chip-row' },
+          chip('Package net', netCents == null ? 'Needs every leg fill' : fmtMoney(netCents)),
+          chip('Record source', draft.externalRef.trim() ? 'Broker record' : 'Entered here'),
+          chip('Price meaning', 'Executed fills')),
+        el('p', { class: 'muted small' },
+          'Package cash is calculated from the exact leg fills above. Adding a broker reference stops the same fill being recorded twice.'));
+    }
+
     function renderPackageMeta(host) {
       host.innerHTML = '';
+      recordingDetailsHost = null;
+      if (options.allowRecord) {
+        draft.packageNet = '';
+        draft.fillNature = 'EXECUTED';
+        draft.feeMode = 'EXACT';
+        draft.source = draft.externalRef.trim() ? 'BROKER' : 'MANUAL';
+        var recordedAt = bind(el('input', { type: 'datetime-local', step: '1', value: draft.occurredAt }), draft, 'occurredAt');
+        var exactFees = bind(el('input', { type: 'number', min: '0', step: '0.01', value: draft.fees,
+          placeholder: '0.00' }), draft, 'fees');
+        var brokerRef = bind(el('input', { type: 'text', maxlength: '160', value: draft.externalRef,
+          placeholder: 'Optional order or statement reference' }), draft, 'externalRef');
+        var recordNotes = bind(el('textarea', { rows: '2', maxlength: '1000', value: draft.notes,
+          placeholder: 'Optional context' }), draft, 'notes');
+        var recordMeta = el('div', { class: 'form-grid position-package-meta position-record-meta' },
+          field('When it happened', recordedAt,
+            'The exact broker date and time. Past activity remains a fact even when current analysis uses fresh market evidence.'),
+          field('Total fees $', exactFees, 'Enter 0.00 when the broker charged no fee.'),
+          field('Broker reference', brokerRef, 'Optional. When present, it stops the same fill being recorded twice.'),
+          field('Notes', recordNotes));
+        host.appendChild(recordMeta);
+        if (Learn.currentLevel() === 'expert') {
+          recordingDetailsHost = el('div', { class: 'position-recording-details' });
+          host.appendChild(UI.expandable('Recording details', function () { return recordingDetailsHost; }, {
+            stateKey: 'position-recording-' + key
+          }));
+          refreshRecordingDetails();
+        }
+        return;
+      }
       var packageNet = bind(el('input', { type: 'number', step: '0.01', value: draft.packageNet,
         placeholder: '+ credit / - debit' }), draft, 'packageNet');
       var feeMode = el('select', {}, el('option', { value: 'DEFAULT', selected: draft.feeMode === 'DEFAULT' ? 'selected' : null }, 'Use StrikeBench estimate for Analyze'),
@@ -1106,14 +1155,6 @@
           'A proposed price is tested as an order. An executed price is treated as a fact, while blank legs still use labeled evidence.'),
           field(options.allowRecord ? 'Executed / analyzed at' : 'Entry / analysis date', analysisAt,
             'Past dates stay attached to the draft. Analyze is fresh-eyes until a retrospective replay is run.'));
-      }
-      if (options.allowRecord) {
-        var source = bind(el('select', {}, el('option', { value: 'MANUAL', selected: draft.source === 'MANUAL' ? 'selected' : null }, 'Entered manually'),
-          el('option', { value: 'BROKER', selected: draft.source === 'BROKER' ? 'selected' : null }, 'Copied from broker')), draft, 'source');
-        var ref = bind(el('input', { type: 'text', maxlength: '160', value: draft.externalRef,
-          placeholder: 'Order or statement reference' }), draft, 'externalRef');
-        meta.append(field('Record source', source),
-          field('Stable broker reference', ref, 'Required only for broker-sourced activity; it stops the same fill being recorded twice.'));
       }
       var notes = bind(el('textarea', { rows: '2', maxlength: '1000', value: draft.notes,
         placeholder: 'Optional context' }), draft, 'notes');

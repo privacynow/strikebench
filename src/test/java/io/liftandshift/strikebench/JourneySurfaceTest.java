@@ -463,8 +463,9 @@ class JourneySurfaceTest {
 
     @Test void trackedAccountTaxCopyPreservesTheReconciliationBoundary() throws Exception {
         String portfolio = source("js/views-portfolio.js");
-        assertThat(portfolio).contains("always tracks lots, basis, income, and realized gains",
-                        "add a reconciliation scenario — never a claim about tax owed",
+        assertThat(portfolio).contains("Tax scenario (optional)",
+                        "Learn.currentLevel() === 'expert' ? UI.expandable('Tax scenario (optional)'",
+                        "Records and tax summary", "Tax summary",
                         "Not tax advice. Recorded facts and a bounded user-rate scenario")
                 .doesNotContain("estimates current capital-gains and income tax");
     }
@@ -634,7 +635,7 @@ class JourneySurfaceTest {
                         "strategy: 'CUSTOM'", "analysisCurrent && lastAnalysis.identity",
                         "identified.summary",
                         "Blank never means zero", "StrikeBench will not merge them",
-                        "Broker-sourced activity requires a stable order or statement reference",
+                        "enteredPackageNetCents(draft)", "source: externalRef ? 'BROKER' : 'MANUAL'",
                         "exact total fees from the broker", "one underlying per position package",
                         "adjusted contract", "function refreshVisual()", "Partial payoff only",
                         "Last defensible curve kept on screen", "Record factual activity",
