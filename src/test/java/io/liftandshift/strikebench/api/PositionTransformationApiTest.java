@@ -116,6 +116,53 @@ class PositionTransformationApiTest {
     }
 
     @Test
+    void practiceVoidRequiresTheSignedPreviewAndLeavesAFrozenReceiptWhileLegacyRoutesStayAbsent() throws Exception {
+        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
+                .at("/expirations/2").asText();
+        JsonNode created = Json.parse(createAcknowledged(
+                creditPutSpread(expiration, 1, "POSITION_TRANSFORMATION_VOID_TEST").toString()).body());
+        String tradeId = created.at("/trade/id").asText();
+        JsonNode accountAfterOpen = Json.parse(get("/api/account").body()).get("account");
+
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", "VOID");
+        HttpResponse<String> previewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(previewResponse.statusCode()).withFailMessage(previewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(previewResponse.body());
+        assertThat(preview.at("/transformation/action").asText()).isEqualTo("VOID");
+        assertThat(preview.at("/transformation/afterIdentity/label").asText()).isEqualTo("Cash / no position");
+        assertThat(preview.at("/previewToken").asText()).contains(".");
+
+        request.put("previewToken", preview.get("previewToken").asText());
+        JsonNode applied = Json.parse(post("/api/position-transformations/apply", request.toString()).body());
+        String receiptId = applied.get("receiptId").asText();
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("DELETED");
+        assertThat(applied.get("actionRealizedPnlCents").asLong()).isZero();
+        assertThat(db.query("SELECT transformation_action,position_state,practice_trade_id FROM position_receipt WHERE id=?",
+                row -> row.str("transformation_action") + "|" + row.str("position_state") + "|"
+                        + row.str("practice_trade_id"), receiptId))
+                .containsExactly("VOID|CLOSED|" + tradeId);
+        assertThat(db.query("SELECT position_phase,COUNT(*) n FROM position_receipt_leg WHERE receipt_id=? "
+                        + "GROUP BY position_phase", row -> row.str("position_phase") + "|" + row.lng("n"), receiptId))
+                .containsExactly("BEFORE|2");
+        JsonNode accountAfterVoid = Json.parse(get("/api/account").body()).get("account");
+        assertThat(accountAfterVoid.get("cashCents").asLong())
+                .isLessThan(accountAfterOpen.get("cashCents").asLong());
+        assertThat(accountAfterVoid.get("reservedCents").asLong())
+                .isLessThan(accountAfterOpen.get("reservedCents").asLong());
+
+        assertThat(post("/api/trades/" + tradeId + "/unwind", "{\"confirm\":true}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/trades/" + tradeId + "/settle", "{\"confirm\":true}").statusCode()).isEqualTo(404);
+        assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(404);
+        assertThat(post("/api/plans/plan_missing/manage/unwind", "{\"expectedVersion\":1}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/plans/plan_missing/manage/settle", "{\"expectedVersion\":1}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/plans/plan_missing/manage/roll", "{\"expectedVersion\":1}").statusCode()).isEqualTo(404);
+        assertThat(post("/api/plans/plan_missing/manage/void", "{\"expectedVersion\":1}").statusCode()).isEqualTo(404);
+    }
+
+    @Test
     void earlyAssignmentUsesTheSignedTransformationPathAndKeepsTheHedge() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
                 .at("/expirations/2").asText();
@@ -752,6 +799,11 @@ class PositionTransformationApiTest {
         return http.send(HttpRequest.newBuilder(URI.create(base + path))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> delete(String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path)).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 }

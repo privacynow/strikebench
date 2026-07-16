@@ -64,6 +64,14 @@ async function createTrade(body) {
   return api('POST', '/api/trades', body);
 }
 
+async function transformPracticeTrade(tradeId, action) {
+  const request = { source: 'PRACTICE_TRADE', sourceId: tradeId, action };
+  const preview = await api('POST', '/api/position-transformations/preview', request);
+  return api('POST', '/api/position-transformations/apply', {
+    ...request, previewToken: preview.previewToken
+  });
+}
+
 function isoDaysFromNow(days) {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 }
@@ -118,7 +126,7 @@ before(async () => {
   });
   await createTrade(spread(1));
   const toClose = (await createTrade(spread(1))).trade.id;
-  await api('POST', `/api/trades/${toClose}/unwind`, { confirm: true });
+  await transformPracticeTrade(toClose, 'CLOSE');
 
   // A persisted Plan replay. Outcomes own historical tests; there is no standalone backtest lane.
   const replayPlan = await api('POST', '/api/plans', {

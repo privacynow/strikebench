@@ -100,8 +100,6 @@ final class PlanController {
                 planDecisionController::planDecisionLatest, planDecisionController::planDecisionPreview,
                 planDecisionController::planDecisionTrade, planDecisionController::planDecisionCash,
                 planDecisionController::planManageGet, planDecisionController::planManageRefresh,
-                planDecisionController::planManageUnwind, planDecisionController::planManageSettle,
-                planDecisionController::planManageRoll, planDecisionController::planManageVoid,
                 planDecisionController::planManageReview));
         config.routes.exception(PlanMarketMismatchException.class, (e, ctx) ->
                 ctx.status(409).json(new ApiResponses.PlanMarketMismatchBody(

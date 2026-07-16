@@ -800,23 +800,23 @@ class PlanApiIntegrationTest {
         JsonNode marked = json(post("/api/plans/" + tradePlanId + "/manage/refresh",
                 "{\"expectedVersion\":" + openVersion + "}"));
         assertThat(marked.at("/management/actions/0/kind").asText()).isEqualTo("MARK");
-        JsonNode closed = json(post("/api/plans/" + tradePlanId + "/manage/roll",
-                "{\"expectedVersion\":" + openVersion + ",\"confirm\":true}"));
-        assertThat(closed.at("/plan/status").asText()).isEqualTo("ACTIVE");
-        assertThat(closed.at("/plan/furthestStage").asText()).isEqualTo("STRATEGY");
+        JsonNode listedExpirations = json(get("/api/research/AAPL/expirations")).get("expirations");
+        String currentExpiration = candidate.at("/legs/0/expiration").asText();
+        String laterExpiration = java.util.stream.StreamSupport.stream(listedExpirations.spliterator(), false)
+                .map(JsonNode::asText).filter(value -> value.compareTo(currentExpiration) > 0)
+                .findFirst().orElseThrow();
+        ObjectNode replacement = replacementPackage(candidate, laterExpiration, "bullish");
+        JsonNode closed = applyTransformation(opened.at("/trade/id").asText(), tradePlanId,
+                openVersion, "ROLL", replacement);
+        assertThat(closed.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(closed.at("/plan/furthestStage").asText()).isEqualTo("MANAGE_REVIEW");
         assertThat(closed.at("/management/actions/0/kind").asText()).isEqualTo("ROLL");
         assertThat(closed.at("/management/links").toString()).contains("ENTRY").contains("ROLL");
         assertThat(closed.at("/management/reviews/0/category").asText()).isEqualTo("TRADE_DECISION");
         assertThat(closed.at("/management/reviews/0/benchmarkKind").asText()).isEqualTo("PLAN_POSITION");
-        var rollPackage = Json.MAPPER.createObjectNode();
-        rollPackage.put("expectedVersion", closed.at("/plan/version").asLong());
-        rollPackage.set("position", closed.get("rolledPosition"));
-        JsonNode savedRoll = json(post("/api/plans/" + tradePlanId + "/strategy/custom", rollPackage.toString()));
-        JsonNode secondDecision = json(post("/api/plans/" + tradePlanId + "/decision/cash",
-                "{\"expectedVersion\":" + savedRoll.at("/plan/version").asLong() + ",\"qty\":1," +
-                        "\"note\":\"Skipped the replacement after closing the first cycle\"}"));
-        assertThat(secondDecision.at("/plan/status").asText()).isEqualTo("DECIDED_CASH");
-        assertThat(secondDecision.at("/decision/action").asText()).isEqualTo("CASH");
+        assertThat(closed.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(closed.at("/trade/legs/0/expiration").asText()).isEqualTo(laterExpiration);
+        assertThat(closed.get("receiptId").asText()).isNotBlank();
 
         JsonNode cashPlan = json(post("/api/plans", """
                 {"clientRequestId":"decision-cash-plan","symbol":"QQQ","intent":"INCOME","title":"Cash decision plan",
@@ -1190,13 +1190,60 @@ class PlanApiIntegrationTest {
         for (JsonNode ack : preview.withArray("requiredAcks")) acks.add(ack.get("id").asText());
         JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
 
-        JsonNode voided = json(post("/api/plans/" + planId + "/manage/void",
-                "{\"expectedVersion\":" + opened.at("/plan/version").asLong() + ",\"confirm\":true}"));
+        JsonNode voided = applyTransformation(opened.at("/trade/id").asText(), planId,
+                opened.at("/plan/version").asLong(), "VOID", null);
         assertThat(voided.at("/plan/status").asText()).isEqualTo("CLOSED");
         assertThat(voided.at("/trade/status").asText()).isEqualTo("DELETED");
         assertThat(voided.at("/management/actions/0/kind").asText()).isEqualTo("VOID");
         assertThat(voided.at("/management/actions/0/note").asText()).contains("voided");
         assertThat(voided.at("/management/reviews")).isEmpty();
+    }
+
+    private static ObjectNode replacementPackage(JsonNode candidate, String expiration, String thesis) {
+        ObjectNode position = Json.MAPPER.createObjectNode();
+        position.put("symbol", "AAPL");
+        position.put("strategy", candidate.get("strategy").asText());
+        position.put("qty", 1);
+        position.put("intent", candidate.path("intent").asText("DIRECTIONAL"));
+        position.put("thesis", thesis);
+        position.put("horizon", "month");
+        position.put("riskMode", "conservative");
+        position.put("source", "POSITION_TRANSFORMATION_PLAN_TEST");
+        position.put("fillNature", "PROPOSED");
+        var legs = position.putArray("legs");
+        for (JsonNode source : candidate.withArray("legs")) {
+            ObjectNode leg = legs.addObject();
+            leg.put("action", source.get("action").asText());
+            leg.put("type", source.get("type").asText());
+            if (!"STOCK".equals(source.get("type").asText())) {
+                leg.put("strike", source.get("strike").asText());
+                leg.put("expiration", expiration);
+            }
+            leg.put("ratio", source.path("ratio").asInt(1));
+            leg.put("multiplier", source.path("multiplier").asInt(100));
+            leg.put("positionEffect", "OPEN");
+        }
+        return position;
+    }
+
+    private static JsonNode applyTransformation(String tradeId, String planId, long expectedVersion,
+                                                String action, ObjectNode after) throws Exception {
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("planId", planId);
+        request.put("expectedPlanVersion", expectedVersion);
+        request.put("action", action);
+        if (after != null) request.set("after", after);
+        JsonNode preview = json(post("/api/position-transformations/preview", request.toString()));
+        JsonNode required = preview.at("/after/requiredAcks");
+        if (after != null && required.isArray() && !required.isEmpty()) {
+            var acknowledgments = after.putArray("acknowledgedRisks");
+            required.forEach(value -> acknowledgments.add(value.get("id").asText()));
+            after.put("ackToken", preview.at("/after/ackToken").asText());
+        }
+        request.put("previewToken", preview.get("previewToken").asText());
+        return json(post("/api/position-transformations/apply", request.toString()));
     }
 
     private static HttpResponse<String> get(String path) throws Exception {

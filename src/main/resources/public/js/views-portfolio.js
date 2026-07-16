@@ -99,6 +99,33 @@
     });
   }
 
+  async function openVoidTransformation(trade, managedPlan, button) {
+    var request = practiceTransformationRequest(trade, managedPlan, 'VOID');
+    var preview = await visibleCommand(button, function () {
+      return API.post('/api/position-transformations/preview', request);
+    }, 'The practice entry could not be prepared for voiding.');
+    if (!preview) return;
+    var change = preview.transformation;
+    UI.confirmModal('Void this practice entry?', el('div', {},
+      el('div', { class: 'position-transformation-route', 'aria-label': 'Practice record before and after voiding' },
+        transformationState('Before', change.beforeIdentity, 'Open practice position'),
+        el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
+        transformationState('After', change.afterIdentity, 'Voided practice record')),
+      el('div', { class: 'position-transformation-facts' },
+        transformationFact('Broker reserve released', fmtMoney(change.beforeRisk && change.beforeRisk.reserveCents || 0)),
+        transformationFact('Recorded position result', 'Removed from Practice P/L')),
+      UI.alertBox('warn', 'Practice correction, not an exit', [
+        'Entry cash and fees are reversed instead of realizing a market close.',
+        'The frozen receipt and audit history remain visible. Real broker activity cannot be voided.'
+      ])), 'Void practice entry', async function () {
+        var applied = await API.post('/api/position-transformations/apply',
+          practiceTransformationRequest(trade, managedPlan, 'VOID', preview.previewToken));
+        if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
+        else await refreshTradeDetailNear(button, trade.id, 'Practice entry voided',
+          'Entry cash, fees, and reserve were reversed; the signed transformation receipt remains in history.');
+      }, true);
+  }
+
   function lifecycleActionLabel(action) {
     return ({ ASSIGNMENT: 'Assignment', EXERCISE: 'Exercise', EXPIRATION: 'Expiration' })[action] || action;
   }
@@ -2908,21 +2935,7 @@
       }, 'Roll…', el('span', { class: 'btn-sub' }, 'edit + review + apply together'));
       var voidButton = el('button', {
         class: 'btn btn-danger', id: 'delete-btn', onclick: function () {
-          UI.confirmModal('Void this trade?',
-            el('div', {},
-              el('p', {}, 'This voids the trade as if it never happened: entry cash and fees are reversed, and broker reserve is released.'),
-              UI.alertBox('warn', 'Practice-only affordance: real brokers have no undo — losses do not un-happen. Voiding a losing trade erases the lesson with it; prefer Unwind to practice honest exits.'),
-              explain('Everything stays visible in the ledger and audit log — nothing is hidden.')),
-            'Void trade', async function () {
-              if (managedPlan) {
-                var out = await PlanStore.manage(managedPlan, 'void', { confirm: true });
-                await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
-              } else {
-                await API.del('/api/trades/' + id + '?confirm=true');
-                await refreshTradeDetailNear(voidButton, id, 'Practice entry voided',
-                  'Entry cash, fees, and reserve were reversed; the audit history remains visible.');
-              }
-            }, true);
+          openVoidTransformation(t, managedPlan, this);
         }
       }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'));
       root.appendChild(el('div', { class: 'card position-action-card' },

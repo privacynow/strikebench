@@ -74,6 +74,7 @@ final class PositionTransformationController {
         Prepared prepared = prepare(ctx, request);
         verifyToken(ctx, request, prepared.preview());
         if (request.action() != PositionTransformation.Action.CLOSE
+                && request.action() != PositionTransformation.Action.VOID
                 && request.action() != PositionTransformation.Action.PARTIAL_CLOSE
                 && request.action() != PositionTransformation.Action.ROLL
                 && !adjustmentAction(request.action())
@@ -87,7 +88,20 @@ final class PositionTransformationController {
         TradeRecord resolvedTrade = null;
         long actionRealized;
         long realizedToDate;
-        if (request.action() == PositionTransformation.Action.CLOSE) {
+        if (request.action() == PositionTransformation.Action.VOID) {
+            TradeService.LifecycleHook planHook = prepared.plan() == null ? null
+                    : management.lifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(),
+                            "VOID", false, receiptId);
+            TradeService.LifecycleHook atomicArtifacts = (connection, voided, actionDelta, lifetimeTotal) -> {
+                recordPracticeArtifact(connection, ownerId, receiptId, prepared, voided.id(),
+                        PositionDomain.PositionState.CLOSED, 0L);
+                if (planHook != null) planHook.afterMutation(connection, voided, actionDelta, lifetimeTotal);
+            };
+            responseTrade = trades.delete(request.sourceId(), true, atomicArtifacts);
+            resolvedTrade = responseTrade;
+            actionRealized = 0L;
+            realizedToDate = 0L;
+        } else if (request.action() == PositionTransformation.Action.CLOSE) {
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.lifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(),
                             "CLOSE", false, receiptId);
@@ -327,16 +341,21 @@ final class PositionTransformationController {
                 after = new TradeService.PositionAssessment(after.position(), after.preview(), risk);
             }
         }
+        Long realizedClosing = null;
+        if (request.action() == PositionTransformation.Action.CLOSE) {
+            realizedClosing = unwind.realizedPnlToDateCents();
+        } else if (request.action() == PositionTransformation.Action.ROLL) {
+            realizedClosing = unwind.actionRealizedPnlCents();
+        } else if (adjustment != null) {
+            realizedClosing = adjustment.actionRealizedPnlCents();
+        } else if (lifecycle != null) {
+            realizedClosing = lifecycle.actionRealizedPnlCents();
+        } else if (partial != null) {
+            realizedClosing = partial.actionRealizedPnlCents();
+        }
         PositionTransformation.Preview preview = PositionTransformation.preview(new PositionTransformation.Request(
                 request.action(), before.position(), after == null ? null : after.position(),
-                before.risk(), after == null ? null : after.risk(),
-                request.action() == PositionTransformation.Action.CLOSE
-                        ? unwind.realizedPnlToDateCents()
-                        : request.action() == PositionTransformation.Action.ROLL
-                            ? unwind.actionRealizedPnlCents()
-                            : adjustment != null ? adjustment.actionRealizedPnlCents()
-                            : lifecycle != null ? lifecycle.actionRealizedPnlCents()
-                            : partial == null ? null : partial.actionRealizedPnlCents()));
+                before.risk(), after == null ? null : after.risk(), realizedClosing));
         return new Prepared(trade, plan, before, after, afterRequest, afterReview, projection, unwind,
                 partial, adjustment, lifecycle, preview);
     }

@@ -23,12 +23,12 @@ import java.util.Set;
  * existing evaluator; this class only compares structure identity, obligations, and evaluated risk.
  */
 public final class PositionTransformation {
-    public static final String MODEL_VERSION = "position-transform-1";
+    public static final String MODEL_VERSION = "position-transform-2";
 
     private PositionTransformation() {}
 
     public enum Action {
-        CLOSE, PARTIAL_CLOSE, LEG_CLOSE, ROLL, ADD_LEG, REMOVE_LEG,
+        CLOSE, VOID, PARTIAL_CLOSE, LEG_CLOSE, ROLL, ADD_LEG, REMOVE_LEG,
         ADD_STOCK, REMOVE_STOCK, ASSIGNMENT, EXERCISE, EXPIRATION
     }
 
@@ -44,7 +44,7 @@ public final class PositionTransformation {
                 || request.before().source() != request.after().source())) {
             throw new IllegalArgumentException("a transformation cannot switch symbol, execution lane, or package source");
         }
-        if (request.after() == null && !Set.of(Action.CLOSE, Action.EXPIRATION, Action.ASSIGNMENT, Action.EXERCISE)
+        if (request.after() == null && !Set.of(Action.CLOSE, Action.VOID, Action.EXPIRATION, Action.ASSIGNMENT, Action.EXERCISE)
                 .contains(request.action())) {
             throw new IllegalArgumentException(request.action() + " must describe the surviving position");
         }
@@ -218,6 +218,7 @@ public final class PositionTransformation {
         LegChanges changes = legChanges(before, after);
         switch (request.action()) {
             case CLOSE -> require(after == null, "CLOSE cannot leave a surviving position");
+            case VOID -> require(after == null, "VOID cannot leave a surviving position");
             case PARTIAL_CLOSE -> {
                 require(after != null, "PARTIAL_CLOSE requires a surviving position");
                 require(after.packageQuantity() < before.packageQuantity(),

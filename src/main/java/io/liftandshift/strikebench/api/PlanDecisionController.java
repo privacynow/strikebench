@@ -6,10 +6,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.model.Leg;
-import io.liftandshift.strikebench.model.OptionChain;
-import io.liftandshift.strikebench.model.OptionQuote;
-import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.plan.PlanDecisionService;
 import io.liftandshift.strikebench.plan.PlanManagementService;
@@ -24,7 +20,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /** Owns Plan rehearsals, frozen decisions, and linked-position management. */
@@ -59,7 +54,7 @@ final class PlanDecisionController {
     public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
                                       Long feesOverrideCents, List<String> acknowledgedRisks,
                                       String ackToken, String note) {}
-    public record PlanManageRequest(Long expectedVersion, Boolean confirm) {}
+    public record PlanManageRequest(Long expectedVersion) {}
 
     void planRehearsalsList(Context ctx) {
         ctx.json(planRehearsals.list(root.ownerId(ctx), ctx.pathParam("id")));
@@ -236,41 +231,6 @@ final class PlanDecisionController {
                 planManagement.latest(root.ownerId(ctx), plan.id())));
     }
 
-    void planManageUnwind(Context ctx) { planManageClose(ctx, "CLOSE", false); }
-    void planManageSettle(Context ctx) { planManageClose(ctx, "SETTLE", false); }
-    void planManageRoll(Context ctx) { planManageClose(ctx, "ROLL", true); }
-
-    private void planManageClose(Context ctx, String kind, boolean roll) {
-        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanManageRequest.class));
-        if (!Boolean.TRUE.equals(body.confirm())) throw new IllegalArgumentException("confirm=true is required");
-        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
-        root.requireActivePlanMarket(ctx, plan);
-        PlanController.requirePlanVersion(plan, body.expectedVersion());
-        String tradeId = requirePlanActiveTrade(ctx, plan.id());
-        var hook = planManagement.lifecycleHook(root.ownerId(ctx), plan.id(), body.expectedVersion(), kind, roll);
-        TradeService.CloseResult result = "SETTLE".equals(kind)
-                ? trades.settle(tradeId, true, hook) : trades.unwind(tradeId, true, hook);
-        tradeController.resolveRecommendation(tradeId, "SETTLE".equals(kind) ? "SETTLED" : "CLOSED",
-                TradeController.decisionPnl(result.trade(), result.realizedPnlCents()));
-        ctx.json(new ApiResponses.PlanClosedTrade<>(planSvc.get(root.ownerId(ctx), plan.id()),
-                TradeView.of(result.trade()), result.realizedPnlCents(),
-                planManagement.latest(root.ownerId(ctx), plan.id()),
-                roll ? rolledPosition(result.trade(), PlanController.worldParam(root.activeWorld(ctx))) : null));
-    }
-
-    void planManageVoid(Context ctx) {
-        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanManageRequest.class));
-        if (!Boolean.TRUE.equals(body.confirm())) throw new IllegalArgumentException("confirm=true is required");
-        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
-        root.requireActivePlanMarket(ctx, plan);
-        PlanController.requirePlanVersion(plan, body.expectedVersion());
-        String tradeId = requirePlanActiveTrade(ctx, plan.id());
-        var hook = planManagement.lifecycleHook(root.ownerId(ctx), plan.id(), body.expectedVersion(), "VOID", false);
-        TradeRecord deleted = trades.delete(tradeId, true, hook);
-        ctx.json(new ApiResponses.PlanTrade<>(planSvc.get(root.ownerId(ctx), plan.id()),
-                TradeView.of(deleted), planManagement.latest(root.ownerId(ctx), plan.id())));
-    }
-
     void planManageReview(Context ctx) {
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanManageRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
@@ -354,39 +314,4 @@ final class PlanDecisionController {
         return tradeId;
     }
 
-    private Map<String, Object> rolledPosition(TradeRecord trade, String world) {
-        List<LocalDate> listed = market.expirations(trade.symbol(), world).stream().sorted().toList();
-        List<Map<String, Object>> legs = new ArrayList<>();
-        for (Leg leg : trade.legs()) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("action", leg.action().name());
-            row.put("type", leg.isStock() ? "STOCK" : leg.type().name());
-            row.put("ratio", leg.ratio());
-            row.put("multiplier", leg.multiplier());
-            row.put("positionEffect", "OPEN");
-            if (!leg.isStock()) {
-                LocalDate target = leg.expiration().plusDays(28);
-                LocalDate next = listed.stream().filter(date -> !date.isBefore(target)).findFirst()
-                        .orElseGet(() -> listed.stream().filter(date -> date.isAfter(leg.expiration()))
-                                .reduce((a, b) -> b).orElseThrow(() -> new IllegalStateException(
-                                        "No later listed expiration is available for this roll.")));
-                OptionChain chain = market.chain(trade.symbol(), next, world)
-                        .orElseThrow(() -> new IllegalStateException("The later expiration has no option book."));
-                List<OptionQuote> side = leg.type() == io.liftandshift.strikebench.model.OptionType.CALL
-                        ? chain.calls() : chain.puts();
-                BigDecimal strike = side.stream().map(OptionQuote::strike)
-                        .min(java.util.Comparator.comparing(value -> value.subtract(leg.strike()).abs()))
-                        .orElseThrow(() -> new IllegalStateException("The later expiration has no "
-                                + leg.type().name().toLowerCase(Locale.ROOT) + " strikes."));
-                row.put("strike", strike.toPlainString());
-                row.put("expiration", next.toString());
-            }
-            legs.add(row);
-        }
-        if (trade.intent() == null || trade.intent().isBlank()) {
-            throw new IllegalStateException("The current trade record has no strategy intent.");
-        }
-        return Map.of("symbol", trade.symbol(), "strategy", trade.strategy(), "qty", trade.qty(), "legs", legs,
-                "intent", trade.intent(), "source", "PLAN", "fillNature", "PROPOSED");
-    }
 }

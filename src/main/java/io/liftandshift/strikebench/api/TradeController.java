@@ -111,9 +111,6 @@ final class TradeController {
                 this::list,
                 this::detail,
                 this::refresh,
-                this::unwind,
-                this::settle,
-                this::delete,
                 this::snapshot,
                 this::auditPage,
                 this::listPositions,
@@ -131,7 +128,6 @@ final class TradeController {
                                String excludedTradeId) {
         long buyingPowerCents() { return Math.subtractExact(cashCents, reservedCents); }
     }
-    private record ConfirmRequest(Boolean confirm) {}
     private record StockOrderRequest(String symbol, Long shares) {}
     private record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
 
@@ -180,35 +176,6 @@ final class TradeController {
     private void refresh(Context ctx) {
         ensureOwnedTrade(ctx, ctx.pathParam("id"));
         ctx.json(trades.refresh(ctx.pathParam("id")));
-    }
-
-    private void unwind(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        ConfirmRequest request = ApiRequest.bodyOrNull(ctx, ConfirmRequest.class);
-        TradeService.CloseResult result = trades.unwind(ctx.pathParam("id"),
-                request != null && Boolean.TRUE.equals(request.confirm()));
-        long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
-        resolveRecommendation(ctx.pathParam("id"), "CLOSED", decisionPnl);
-        ctx.json(new ApiResponses.ClosedTrade<>(TradeView.of(result.trade()),
-                result.realizedPnlCents(), decisionPnl));
-    }
-
-    private void settle(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        ConfirmRequest request = ApiRequest.bodyOrNull(ctx, ConfirmRequest.class);
-        TradeService.CloseResult result = trades.settle(ctx.pathParam("id"),
-                request != null && Boolean.TRUE.equals(request.confirm()));
-        long decisionPnl = decisionPnl(result.trade(), result.realizedPnlCents());
-        resolveRecommendation(ctx.pathParam("id"), "SETTLED", decisionPnl);
-        ctx.json(new ApiResponses.ClosedTrade<>(TradeView.of(result.trade()),
-                result.realizedPnlCents(), decisionPnl));
-    }
-
-    private void delete(Context ctx) {
-        ensureOwnedTrade(ctx, ctx.pathParam("id"));
-        TradeRecord trade = trades.delete(ctx.pathParam("id"),
-                "true".equalsIgnoreCase(ctx.queryParam("confirm")));
-        ctx.json(new ApiResponses.Trade<>(TradeView.of(trade)));
     }
 
     private void snapshot(Context ctx) {
