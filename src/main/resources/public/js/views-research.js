@@ -1434,8 +1434,15 @@
           return;
         }
         try {
+          // The button promises strategies, so the strategy band must DELIVER them on arrival:
+          // the handoff carries the fan's identity and an auto-run intent, and the origin-hash
+          // guard keeps a slow advance from yanking a user who already moved on (anti-steal).
+          var handoffUi = PlanStore.ui(plan.id);
+          handoffUi.strategyAutoRun = { from: 'evidence',
+            ensemble: (ownedState.whatifResults && ownedState.whatifResults[symbol] || {}).ensemble || null };
+          var origin = window.location.hash;
           var moved = await PlanStore.advance(plan, 'STRATEGY');
-          App.navigate(PlanStore.path(moved, 'STRATEGY'));
+          if (window.location.hash === origin) App.navigate(PlanStore.path(moved, 'STRATEGY'));
         } catch (e) { UI.toast(e.message, 'error'); }
       });
       var goalSelect = publicMode ? el('select', { id: 'whatif-plan-goal', 'aria-label': 'Plan goal' },
@@ -1552,7 +1559,6 @@
           ownedState.planEnsembleFingerprint = planRun.ensemble && planRun.ensemble.fingerprint;
         }
         if (seq !== previewSeq) return;
-        latest = p;
         out.innerHTML = '';
         if (isSamplingCheck && previous) {
           var oldT = previous.decisionMap.terminal, newT = p.decisionMap.terminal;
@@ -1562,36 +1568,54 @@
             ['The largest change across the central range was ' + scenarioPrice(move)
               + '. Treat the distribution, not any one sample path, as the result.']));
         }
-        out.appendChild(Scenario.decisionView(p, level));
-        out.appendChild(el('div', { class: 'scenario-chart-head' },
-          el('div', {}, el('h3', {}, 'How the range unfolds'),
-            el('p', { class: 'muted small' }, 'Shaded range and median by day; sample lines are illustrative paths, not forecasts to choose from.')),
-          planRun && planRun.ensemble ? UI.lineageChip(planRun.ensemble, 'born here') : null));
-        var chart = Scenario.fanChart(p, { onSelectSample: function (index) {
-          selectedSampleIndex = index;
-          var button = out.querySelector('#whatif-rehearse-selected');
-          if (button && button.refreshSelection) button.refreshSelection();
-          var note = out.querySelector('.rehearsal-selection-note');
-          if (button) button.disabled = index == null;
-          if (note) note.textContent = index == null
-            ? 'Choose a representative path below, or click one sample line in the chart.'
-            : 'Selected chart sample ' + (index + 1) + ' will replay exactly.';
-        } });
-        out.appendChild(chart);
-        out.appendChild(goalAction(p, spec));
-        var rehearsalActions = practiceAction(p, spec);
-        if (rehearsalActions) out.appendChild(rehearsalActions);
-        reroll.style.display = '';
+        var ensembleRef = planRun && planRun.ensemble || null;
+        // The run outlives this render: a band repaint or level flip must greet the user with
+        // the same analysis, not amnesia. The payload is pure JSON (chart rebuilds from it).
+        ownedState.whatifResults = ownedState.whatifResults || {};
+        ownedState.whatifResults[symbol] = { preview: p, ensemble: ensembleRef, spec: spec };
+        paintResult(p, ensembleRef, spec, false);
         if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
       } catch (e) {
         if (seq === previewSeq) { out.innerHTML = ''; out.appendChild(scenarioFailure(e)); }
       }
       finally { if (seq === previewSeq) { run.disabled = false; reroll.disabled = false; } }
     }
+
+    /** Paints one scenario analysis (decision facts, fan, actions) from its pure-JSON payload —
+     *  shared by a fresh run and by rehydration after a band repaint. */
+    function paintResult(p, ensembleRef, spec, restored) {
+      latest = p;
+      if (restored) out.appendChild(el('p', { class: 'muted small scenario-restored-note' },
+        'This Plan’s stored scenario run, restored. Analyze again to refresh it.'));
+      out.appendChild(Scenario.decisionView(p, level));
+      out.appendChild(el('div', { class: 'scenario-chart-head' },
+        el('div', {}, el('h3', {}, 'How the range unfolds'),
+          el('p', { class: 'muted small' }, 'Shaded range and median by day; sample lines are illustrative paths, not forecasts to choose from.')),
+        ensembleRef ? UI.lineageChip(ensembleRef, restored ? 'restored' : 'born here') : null));
+      var chart = Scenario.fanChart(p, { onSelectSample: function (index) {
+        selectedSampleIndex = index;
+        var button = out.querySelector('#whatif-rehearse-selected');
+        if (button && button.refreshSelection) button.refreshSelection();
+        var note = out.querySelector('.rehearsal-selection-note');
+        if (button) button.disabled = index == null;
+        if (note) note.textContent = index == null
+          ? 'Choose a representative path below, or click one sample line in the chart.'
+          : 'Selected chart sample ' + (index + 1) + ' will replay exactly.';
+      } });
+      out.appendChild(chart);
+      out.appendChild(goalAction(p, spec));
+      var rehearsalActions = practiceAction(p, spec);
+      if (rehearsalActions) out.appendChild(rehearsalActions);
+      reroll.style.display = '';
+    }
     run.addEventListener('click', function () { analyze(false); });
     reroll.addEventListener('click', function () { analyze(true); });
     card.appendChild(el('div', { class: 'btn-row' }, run, reroll));
     card.appendChild(out);
+    var storedRun = ownedState.whatifResults && ownedState.whatifResults[symbol];
+    if (storedRun && storedRun.preview) {
+      paintResult(storedRun.preview, storedRun.ensemble || null, storedRun.spec, true);
+    }
     return card;
   }
 

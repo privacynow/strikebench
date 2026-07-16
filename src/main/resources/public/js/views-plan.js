@@ -1628,6 +1628,16 @@
       body.appendChild(alertBox('warn', 'Could not restore the last strategy comparison', [e.message]));
     }
 
+    // An evidence handoff ("Find strategies for this view") arrives with intent: land on the
+    // ranked field, name the fan it carries, and RUN the field if it has not run — the button
+    // promised strategies, not another button. The ribbon lives as long as this stage
+    // instance (it must survive the auto-run's own repaint), not one render.
+    var handoff = ui.strategyAutoRun || null;
+    if (handoff) {
+      delete ui.strategyAutoRun;
+      ui.strategyView = 'compare';
+    }
+
     var beginner = Learn.currentLevel() === 'beginner';
     var modes = beginner ? [
       { key: 'compare', label: 'Proposed trades', icon: 'scope', note: 'Ranked for this Plan' },
@@ -1877,6 +1887,14 @@
         return;
       }
 
+      if (handoff) {
+        body.appendChild(el('div', { class: 'plan-arrival-ribbon', id: 'plan-strategy-arrival' },
+          el('b', {}, 'Your view carried into Strategy.'),
+          el('span', { class: 'muted' }, handoff.ensemble
+            ? ' Structures below are ranked against it, on the same stored futures you analyzed. '
+            : ' Structures below are ranked against it. '),
+          handoff.ensemble ? UI.lineageChip(handoff.ensemble, 'same fan as Evidence') : null));
+      }
       var filters = ui.strategyFilters;
       var allow0 = el('input', { type: 'checkbox', id: 'plan-strategy-0dte', checked: filters.allow0dte ? '' : null });
       allow0.addEventListener('change', function () {
@@ -1998,6 +2016,12 @@
       }
     }
     await paint(false);
+    // Deliver the evidence handoff: run the field through its own visible control so the
+    // user sees the same progress, result, and arrival focus as a manual run.
+    if (handoff && !planRef.result && !ui.strategyDraftDirty) {
+      var handoffRun = content.querySelector('#plan-run-strategy');
+      if (handoffRun && !handoffRun.disabled) handoffRun.click();
+    }
   }
 
   /** The stored fan a saved outcome run repriced on — ApiResponses.EnsembleRef shape or null. */
@@ -2345,7 +2369,10 @@
     function renderModel(host) {
       var saved = ui.outcomeRuns.PARAMETRIC;
       var compared = ui.outcomeComparisons.PARAMETRIC;
-      var evidenceUi = PlanStore.ui(planRef.plan.id);
+      // The futures tool pins its fan at PlanStore.ui(id).evidence (the workbench surface);
+      // reading the top level silently dropped the pin and let every run fall back to the
+      // server-side "current ensemble" lookup instead of the exact fan on screen.
+      var evidenceUi = PlanStore.ui(planRef.plan.id).evidence || {};
       var status = el('div', { class: 'plan-outcome-action-status', 'aria-live': 'polite' });
       var fanRef = outcomeFanRef(saved) || (evidenceUi.planEnsembleFingerprint
         ? { id: evidenceUi.planEnsembleId, fingerprint: evidenceUi.planEnsembleFingerprint, basis: 'PARAMETRIC' } : null);
@@ -2701,7 +2728,9 @@
           Object.assign({}, selected, { qty: state.qty, entryNetPremiumCents: p.entryNetPremiumCents }),
           { autoRun: true }) : null;
       var required = result.requiredAcks || [];
-      state.acks = {};
+      // Acknowledgments survive level flips and re-renders (Program ONE §2.2 band 5); they
+      // reset only when the package itself changes (the selectedPackageKey guard above).
+      state.acks = state.acks || {};
       var trade = el('button', { type: 'button', class: 'btn', id: 'plan-place-trade', disabled: 'disabled' }, 'Open practice position');
       var broker = null, brokerHost = null;
       if ((planRef.plan.marketKind || initialPlan.marketKind) !== 'SIMULATED') {
@@ -2726,7 +2755,9 @@
       }
       if (required.length) primary.appendChild(el('div', { class: 'card card-slim ack-gate' },
         UI.cardHeader('Acknowledge material risks'), required.map(function (ack) {
-          var box = el('input', { type: 'checkbox', id: 'plan-' + ack.id, onchange: function () { state.acks[ack.id] = box.checked; refresh(); } });
+          var box = el('input', { type: 'checkbox', id: 'plan-' + ack.id,
+            checked: state.acks[ack.id] ? 'checked' : null,
+            onchange: function () { state.acks[ack.id] = box.checked; refresh(); } });
           return el('label', { class: 'ack-row', for: 'plan-' + ack.id }, box, el('span', {}, ack.label));
         })));
       trade.onclick = async function () {
@@ -3338,7 +3369,10 @@
       if (ctx.selectionState === 'STALE' || ctx.selectionState === 'CURRENT') return true;
       return stages.indexOf(ctx.plan.furthestStage || 'UNDERSTAND') >= stages.indexOf('OUTCOMES');
     }
-    var flow = Flow.render({ id: 'plan-flow', stateKey: 'plan:' + plan.id + ':flow', ctx: ctx, sections: [
+    var arrivalFocus = FLOW_BANDS_BY_STAGE[rawStage];
+    if (arrivalFocus === 'view' && rawStage === 'understand') arrivalFocus = null;
+    var flow = Flow.render({ id: 'plan-flow', stateKey: 'plan:' + plan.id + ':flow', ctx: ctx,
+      focus: arrivalFocus || null, sections: [
       { key: 'view', title: 'Your view', info: 'thesis',
         complete: function () { return viewDeclared(ctx.plan); },
         render: function (host, c, api) { declarationBand(host, c, api); },
@@ -3349,6 +3383,16 @@
         // Only ranking (the strategy band) hard-requires the declared view.
         ready: function () { return true; },
         complete: function () { return false; },
+        invitation: function () {
+          // The futures tool owns its state at PlanStore.ui(id).evidence (the workbench surface).
+          var evidenceUi = PlanStore.ui(ctx.plan.id).evidence || {};
+          var fingerprint = evidenceUi.planEnsembleFingerprint;
+          return fingerprint
+            ? el('span', {}, 'Evidence consulted — simulation ',
+                el('b', {}, '#' + String(fingerprint).slice(0, 6)),
+                el('span', { class: 'muted' }, ' and its analysis are kept here'))
+            : 'Optional — test your view against history and simulated futures before ranking.';
+        },
         render: function (host) {
           if (!viewDeclared(ctx.plan)) {
             host.appendChild(el('p', { class: 'muted flow-band-note' },
@@ -3362,6 +3406,9 @@
         ready: function () { return viewDeclared(ctx.plan); },
         lockedReason: function () { return 'Declare your view above — structures are ranked against it.'; },
         complete: function () { return structureReady(); },
+        invitation: function () {
+          return 'Rank the complete field against your view, or compose your own structure.';
+        },
         render: function (host) { planStrategyStage(host, ctx.plan, planStageByPath('strategy')); },
         conclusion: function () {
           // The conclusion carries the RESULT: the exact selected structure, visible on any
@@ -3381,11 +3428,17 @@
             + '(Monte Carlo), past analogs, and rule replay all run on your exact contracts.';
         },
         complete: function () { return false; },
+        invitation: function () {
+          return 'Test your selected structure: market odds, possible futures, and past analogs.';
+        },
         render: function (host) { planOutcomesStage(host, ctx.plan, planStageByPath('outcomes')); } },
       { key: 'commit', title: 'Commit',
         ready: function () { return structureReady(); },
         lockedReason: function () { return 'Unlocks after you select a structure above.'; },
         complete: function () { return decisionDone(); },
+        invitation: function () {
+          return 'Price the decision and commit — practice it, stay in cash, or record your broker placement.';
+        },
         render: function (host) { planDecideStage(host, ctx.plan, planStageByPath('decide')); },
         conclusion: function () {
           return ctx.plan.status === 'DECIDED_CASH' ? 'Decided: stayed in cash — review below'
@@ -3403,13 +3456,10 @@
         render: function (host) { planManageStage(host, ctx.plan, planStageByPath('manage-review')); } }
     ] });
     root.appendChild(flow.el);
-    var focusBand = FLOW_BANDS_BY_STAGE[rawStage];
-    if (focusBand && rawStage !== 'understand') {
-      // An explicit stage deep-link carries intent: arriving AT a concluded band reopens it
-      // (a reload must not greet a working screen with a one-line conclusion). Default
-      // arrivals still meet conclusions.
-      if (flow.posture(focusBand) === 'done') flow.reopen(focusBand);
-      else flow.scrollTo(focusBand);
+    if (arrivalFocus) {
+      // An explicit stage deep-link carries intent: the flow already opened the target as
+      // its attention focus (folding what attention left behind); bring it into view.
+      flow.scrollTo(arrivalFocus);
     }
     // Async posture refinement: a stale prior selection (context bump rolled progress back)
     // unlocks outcomes/commit so their reprice affordances are reachable. One fetch, no poll.

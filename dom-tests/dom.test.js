@@ -787,6 +787,12 @@ test('Plan flow orients both levels without hiding capabilities or stealing the 
     'the Plan header speaks in user decisions rather than revision counters');
   await assertNoInternalChrome('#app');
 
+  // Attention model: while the user works in evidence, strategy is a one-line invitation —
+  // its full toolset is one tap away, never a second open workbench stacked below.
+  assert.match(await page.textContent('[data-band="strategy"] .flow-band-invitation'),
+    /Rank the complete field|compose your own/i,
+    'the unfocused strategy band invites with what it holds');
+  await page.click('[data-band="strategy"] .flow-band-invitation');
   await page.waitForSelector('#plan-strategy-body');
   assert.equal(await page.locator('.plan-tool').count(), 5,
     'Compare, Build, Your trade, Chain, and Scout stay reachable from the Plan');

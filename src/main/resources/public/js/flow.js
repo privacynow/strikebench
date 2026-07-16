@@ -2,10 +2,13 @@
  * The Workspace flow: a document of bands, not a tab set (Program ONE §2.2).
  *
  * Each band declares how to tell whether it is COMPLETE (it has produced its output) and
- * READY (its inputs exist). The flow derives each band's posture from that alone:
+ * READY (its inputs exist). The flow derives each band's posture from that plus ATTENTION —
+ * one band is open by default (the deep-linked focus, else the first ready-but-incomplete):
  *   done   — collapsed to its CONCLUSION: the result it produced, never bare chrome;
  *            one tap re-opens the full band for revision.
- *   active — the first ready-but-incomplete band, rendered in full.
+ *   active — the open band, rendered in full.
+ *   ready  — inputs exist but attention is elsewhere: a one-line invitation naming what
+ *            the band holds (never a second open toolset stacked under the first).
  *   locked — not ready; rendered as its title plus the REASON it is locked and what
  *            unlocks it. Locked bands are visible and honest, never hidden.
  * No wholesale repaints: bands re-render individually via their returned handles.
@@ -17,9 +20,11 @@
 
   /**
    * sections: [{ key, title, info?, complete(ctx)->bool, ready?(ctx)->bool,
-   *   lockedReason?(ctx)->string, render(host, ctx, api), conclusion?(ctx)->Node|string }]
+   *   lockedReason?(ctx)->string, invitation?(ctx)->Node|string,
+   *   render(host, ctx, api), conclusion?(ctx)->Node|string }]
    * ctx: caller-owned context (plan, market, Rails surface).
-   * Returns { el, refresh(), refreshBand(key), scrollTo(key), posture(key) }.
+   * opts.focus: initial attention target (a deep-linked stage's band key).
+   * Returns { el, refresh(), refreshBand(key), scrollTo(key), reopen(key), fold(key), posture(key) }.
    */
   function render(opts) {
     var sections = opts.sections || [];
@@ -27,19 +32,41 @@
     var openOverrides = Rails.surface(opts.stateKey || 'flow:' + (opts.id || 'main'));
     var root = el('div', { class: 'flow', id: opts.id || null });
     var handles = {};
+    var focusKey = opts.focus || null;
+    // A deep-linked arrival is an attention move like any other: the target opens, bands
+    // left open by earlier attention fold back to their conclusions or invitations.
+    if (focusKey) {
+      sections.forEach(function (s) { if (s.key !== focusKey) delete openOverrides[s.key]; });
+      openOverrides[focusKey] = 'open';
+    }
+
+    function readyOf(section, index) {
+      var priorComplete = sections.slice(0, index).every(function (s) { return !!s.complete(ctx); });
+      return section.ready ? !!section.ready(ctx) : priorComplete;
+    }
+
+    function firstOpenIndex() {
+      for (var i = 0; i < sections.length; i++) {
+        if (!sections[i].complete(ctx) && readyOf(sections[i], i)) return i;
+      }
+      return -1;
+    }
 
     // Completing a band by acting INSIDE it never yanks its content away: a band that was
     // active this session stays open through its completion (posture 'revisit'), and the
-    // conclusion-collapse applies on the next visit — or immediately via the fold control.
-    // The override map lives on the Rails surface, so it survives route re-renders and level
-    // flips but not a fresh session.
+    // conclusion-collapse applies when attention moves on — or immediately via the fold
+    // control. The override map lives on the Rails surface, so it survives route re-renders
+    // and level flips but not a fresh session.
     function postureOf(section, index) {
-      var priorComplete = sections.slice(0, index).every(function (s) { return !!s.complete(ctx); });
-      var ready = section.ready ? !!section.ready(ctx) : priorComplete;
       if (section.complete(ctx)) {
         return openOverrides[section.key] === 'open' ? 'revisit' : 'done';
       }
-      return ready ? 'active' : 'locked';
+      if (!readyOf(section, index)) return 'locked';
+      if (section.key === focusKey || openOverrides[section.key] === 'open') return 'active';
+      // Only the attention target renders open. Without an explicit focus, that is the
+      // first ready-but-incomplete band; later ready bands are honest invitations — the
+      // wall of simultaneously open toolsets dies here.
+      return focusKey == null && index === firstOpenIndex() ? 'active' : 'ready';
     }
 
     function paintBand(section, index) {
@@ -60,7 +87,15 @@
         delete openOverrides[section.key];
         return;
       }
-      if (posture === 'active') openOverrides[section.key] = 'open';
+      if (posture === 'ready') {
+        var invitation = (section.invitation && section.invitation(ctx)) || 'Ready — open this step.';
+        band.appendChild(el('button', { type: 'button', class: 'flow-band-invitation',
+          'aria-expanded': 'false',
+          onclick: function () { api.reopen(section.key); } },
+          el('span', { class: 'flow-band-invitation-body' }, invitation),
+          el('span', { class: 'flow-band-open muted' }, 'Open')));
+        return;
+      }
       if (posture === 'done') {
         var conclusion = section.conclusion ? section.conclusion(ctx) : null;
         var bar = el('button', { type: 'button', class: 'flow-band-conclusion',
@@ -72,6 +107,7 @@
         return;
       }
       // active (or an explicitly revisited done band)
+      openOverrides[section.key] = 'open';
       if (posture === 'revisit') {
         band.appendChild(el('button', { type: 'button', class: 'flow-band-fold muted',
           onclick: function () { delete openOverrides[section.key]; paintBand(section, index); } },
@@ -95,16 +131,44 @@
       },
       scrollTo: function (key) {
         var target = root.querySelector('#band-' + key);
-        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (!target) return;
+        var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+        // Bands fill asynchronously, and content inflating ABOVE the target shoves it away
+        // from the viewport — the arrival must hold its alignment until layout settles.
+        // The user's own scroll always wins: any scroll intent cancels the hold.
+        if (!('ResizeObserver' in window)) return;
+        var cancelled = false;
+        function cancel() { cancelled = true; cleanup(); }
+        function cleanup() {
+          observer.disconnect();
+          ['wheel', 'touchstart', 'keydown'].forEach(function (kind) {
+            window.removeEventListener(kind, cancel);
+          });
+        }
+        var observer = new ResizeObserver(function () {
+          if (cancelled) return;
+          var top = target.getBoundingClientRect().top;
+          if (Math.abs(top) > 24) target.scrollIntoView({ behavior: 'auto', block: 'start' });
+        });
+        observer.observe(root);
+        ['wheel', 'touchstart', 'keydown'].forEach(function (kind) {
+          window.addEventListener(kind, cancel, { passive: true, once: true });
+        });
+        setTimeout(cleanup, 2500);
       },
-      /** Reopen a concluded band for revision and bring it into view. */
+      /** Move attention to a band: open it, fold the bands attention leaves behind, scroll.
+       *  Folding on attention-move is not a yank — the user is the one who moved on. */
       reopen: function (key) {
+        focusKey = key;
+        sections.forEach(function (s) { if (s.key !== key) delete openOverrides[s.key]; });
         openOverrides[key] = 'open';
-        api.refreshBand(key);
+        api.refresh();
         api.scrollTo(key);
       },
       /** Deliberately conclude a band (an explicit save-and-advance action). */
       fold: function (key) {
+        if (focusKey === key) focusKey = null;
         delete openOverrides[key];
         api.refreshBand(key);
       },
