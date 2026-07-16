@@ -2549,9 +2549,13 @@
             return;
           }
           try {
+            button.disabled = true;
+            var origin = window.location.hash;
             var moved = await PlanStore.advance(plan, 'STRATEGY');
-            App.navigate(PlanStore.path(moved, 'STRATEGY'));
-          } catch (e) { UI.toast(e.message, 'error'); }
+            // Never steal the route: a slow advance must not navigate a user who has
+            // already moved on. Only follow through if they are still where they clicked.
+            if (window.location.hash === origin) App.navigate(PlanStore.path(moved, 'STRATEGY'));
+          } catch (e) { UI.toast(e.message, 'error'); } finally { button.disabled = false; }
         } }, 'Use these ' + r.conditioned.sample + ' ' + occurrenceWord(r)
           + ' when testing a strategy \u2192')));
     }

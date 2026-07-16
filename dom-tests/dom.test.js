@@ -180,11 +180,20 @@ async function openResearchTab(key) {
     }
     return;
   }
-  const stagePath = key === 'view' ? 'evidence' : key === 'options' ? 'strategy' : 'understand';
-  const planId = await page.evaluate(() => App.state.activePlanId);
-  assert.ok(planId, 'an active Plan exists before navigating its bands');
-  await go('#/plan/' + planId + '/' + stagePath);
-  await page.waitForSelector('#plan-flow');
+  if (key === 'overview' || key === 'news') {
+    // Overview content (chart, events, news) lives on the PUBLIC research page now — the
+    // journey's open beginning — not inside the Plan flow.
+    const symbol = await page.evaluate(() => (PlanStore.active() || {}).symbol || App.context.symbol());
+    assert.ok(symbol, 'a symbol exists before opening its public research page');
+    await go('#/research/' + symbol);
+    await page.waitForSelector('#research-hero');
+  } else {
+    const stagePath = key === 'view' ? 'evidence' : 'strategy';
+    const planId = await page.evaluate(() => App.state.activePlanId);
+    assert.ok(planId, 'an active Plan exists before navigating its bands');
+    await go('#/plan/' + planId + '/' + stagePath);
+    await page.waitForSelector('#plan-flow');
+  }
   if (key === 'options') {
     await page.waitForSelector('.plan-tool-selector');
     await page.locator('.plan-tool').filter({ hasText: /Option prices|Chain/ }).click();
@@ -2046,7 +2055,6 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await go('#/plan/' + plan.id + '/decide');
   // A frozen decision collapses the commit band to its conclusion; reopening it is one tap.
-  await page.click('[data-band="commit"] .flow-band-conclusion');
   await page.waitForSelector('.plan-decision-facts');
   assert.match(await page.textContent('#plan-stage-decide'), /Decision frozen/);
   assert.match(await page.textContent('#plan-stage-decide'), /Market EV after costs/);
@@ -2814,7 +2822,7 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
     await page.waitForFunction(() => document.getElementById('app').getAttribute('data-route') === 'home');
     await page.evaluate(() => API.flushCache());
     await openPlan('AAPL');
-    await page.waitForSelector('#research-hero', { timeout: 4000 }); // shell paints before the fetch
+    await page.waitForSelector('#plan-flow', { timeout: 4000 }); // the flow shell paints before the gated fetch
     // Now leave immediately — with the old serialized render this hung until the fetch resolved.
     await page.evaluate(() => { window.location.hash = '#/portfolio'; });
     await page.waitForFunction(
@@ -3447,7 +3455,10 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   const handoff = await page.locator('#tv-test-analogs').count();
   if (handoff) {
     assert.match(await page.textContent('#tv-test-analogs'), /DEMO-data occurrences/); // fixture suite: never 'real'
+    const hashBeforeAnalogs = await page.evaluate(() => location.hash);
     await page.click('#tv-test-analogs');
+    await page.waitForFunction(prev => location.hash !== prev && location.hash.endsWith('/strategy'),
+      hashBeforeAnalogs, { timeout: 15000 });
     await page.waitForSelector('#plan-stage-strategy');
     const analogSelection = await page.evaluate(() =>
       PlanStore.ui(App.state.activePlanId).evidence.analogSelection);
