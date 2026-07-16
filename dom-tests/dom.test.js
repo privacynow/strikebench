@@ -1883,6 +1883,87 @@ test('Practice roll edits, reviews, and applies one atomic before-after transfor
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
+test('Practice partial close keeps survivor identity, exact history, and visible feedback at both levels', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const created = await page.evaluate(async () => {
+    const expiration = (await API.getFresh('/api/research/AAPL/expirations')).expirations[2];
+    const order = { symbol: 'AAPL', strategy: 'DEBIT_CALL_SPREAD', qty: 5,
+      thesis: 'bullish', horizon: 'month', riskMode: 'balanced', intent: 'DIRECTIONAL',
+      source: 'DOM_PARTIAL_CLOSE', fillNature: 'PROPOSED', legs: [
+        { action: 'BUY', type: 'CALL', strike: '255', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' },
+        { action: 'SELL', type: 'CALL', strike: '260', expiration: expiration,
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN' }
+      ] };
+    const preview = await API.post('/api/trades/preview', order);
+    if (preview.requiredAcks && preview.requiredAcks.length) {
+      order.acknowledgedRisks = preview.requiredAcks.map(item => item.id);
+      order.ackToken = preview.ackToken;
+    }
+    return (await API.post('/api/trades', order)).trade;
+  });
+
+  await go('#/portfolio/trade/' + created.id);
+  await page.waitForSelector('#partial-close-btn');
+  await page.click('#partial-close-btn');
+  await page.waitForSelector('.position-partial-workbench:not([hidden]) #partial-close-quantity');
+  assert.match(await page.textContent('.position-partial-workbench'), /Reduce this position without resetting its history/);
+  await page.fill('#partial-close-quantity', '2');
+  assert.equal((await page.textContent('#partial-close-summary')).trim(), 'Close 2 · 3 remain');
+  await page.click('#review-partial-close-btn');
+  await page.waitForSelector('#apply-partial-close-btn', { timeout: 30000 });
+  const beginnerReview = await page.textContent('.position-partial-result');
+  assert.match(beginnerReview, /Before.*After/s);
+  assert.match(beginnerReview, /Closing now.*2 of 5.*Still open.*3 packages/s);
+  assert.match(beginnerReview, /Realized by this close.*Realized on this position to date/s);
+  assert.match(beginnerReview, /original fills, opening-fee basis, and trade identity/i);
+  assert.doesNotMatch(beginnerReview, /protects the short/i,
+    'proportional size reduction must not be described as removing a hedge');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  const mobile = await page.evaluate(() => ({ width: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    buttons: Array.from(document.querySelectorAll('.position-partial-workbench button')).map(node => {
+      const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, text: node.textContent.trim() };
+    }) }));
+  assert.ok(mobile.scrollWidth <= mobile.width + 1,
+    'partial-close controls fit the mobile viewport: ' + JSON.stringify(mobile));
+  assert.ok(mobile.buttons.every(item => item.left >= -1 && item.right <= mobile.width + 1),
+    'partial-close commands stay fully visible: ' + JSON.stringify(mobile.buttons));
+  await page.locator('.position-partial-workbench').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.waitForTimeout(900); // keep real motion enabled; capture only after sticky/compositor motion settles
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-partial-close-beginner-mobile.png') });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  const applyResponse = page.waitForResponse(response => response.url().endsWith('/api/position-transformations/apply')
+    && response.request().method() === 'POST');
+  await page.click('#apply-partial-close-btn');
+  const applied = await (await applyResponse).json();
+  assert.equal(applied.trade.id, created.id, 'the survivor keeps the same trade identity');
+  assert.equal(applied.trade.qty, 3);
+  assert.equal(applied.trade.status, 'ACTIVE');
+  assert.equal(applied.transformation.action, 'PARTIAL_CLOSE');
+  await page.waitForFunction(id => location.hash === '#/portfolio/trade/' + id
+    && /x3/.test(document.querySelector('.quote-hero')?.textContent || ''), created.id, { timeout: 30000 });
+  assert.match(await page.textContent('#app'), /Remaining entry basis.*Realized from partial closes/s,
+    'the surviving position reconciles its residual basis and already-realized result in view');
+
+  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
+  await page.waitForSelector('#partial-close-btn');
+  await page.click('#partial-close-btn');
+  await page.fill('#partial-close-quantity', '1');
+  await page.click('#review-partial-close-btn');
+  await page.waitForSelector('#apply-partial-close-btn', { timeout: 30000 });
+  assert.match(await page.textContent('.position-partial-result'), /Broker reserve before.*Broker reserve after/s,
+    'Expert receives the same action with dense exact risk facts');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('.toast-message').waitFor({ state: 'detached', timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(__dirname, 'shots/trader-own-p5-partial-close-expert.png'), fullPage: true });
+  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+});
+
 test('financial formatters and mixed packages fail closed instead of rendering NaN', async () => {
   const safety = await page.evaluate(() => ({
     money: UI.fmtMoney(Number.NaN), compact: UI.fmtMoneyCompact(Infinity),

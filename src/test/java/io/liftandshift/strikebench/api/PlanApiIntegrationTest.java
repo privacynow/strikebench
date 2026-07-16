@@ -849,6 +849,97 @@ class PlanApiIntegrationTest {
         }
     }
 
+    @Test void planPartialCloseKeepsThePositionOpenAndRecordsOneAtomicManagementAction() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}
+                """).statusCode()).isBetween(200, 299);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"plan-partial-close","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Partial close lifecycle","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        JsonNode field = json(post("/api/plans/" + planId + "/strategy/run", "{}"));
+        JsonNode candidate = null;
+        for (JsonNode item : field.at("/strategy/result/candidates")) {
+            java.util.Set<String> expirations = new java.util.HashSet<>();
+            for (JsonNode leg : item.withArray("legs")) if (!"STOCK".equals(leg.path("type").asText())) {
+                expirations.add(leg.path("expiration").asText());
+            }
+            if (expirations.size() == 1) { candidate = item; break; }
+        }
+        assertThat(candidate).isNotNull();
+        JsonNode selected = json(put("/api/plans/" + planId + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
+                        + field.at("/plan/version").asLong() + "}"));
+        long version = selected.at("/plan/version").asLong();
+        JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":3}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", version);
+        order.put("qty", 3);
+        order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
+        var acknowledgments = order.putArray("acknowledgedRisks");
+        preview.withArray("requiredAcks").forEach(ack -> acknowledgments.add(ack.get("id").asText()));
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+        String tradeId = opened.at("/trade/id").asText();
+        long openVersion = opened.at("/plan/version").asLong();
+
+        var partial = Json.MAPPER.createObjectNode();
+        partial.put("source", "PRACTICE_TRADE");
+        partial.put("sourceId", tradeId);
+        partial.put("planId", planId);
+        partial.put("expectedPlanVersion", openVersion);
+        partial.put("action", "PARTIAL_CLOSE");
+        partial.put("closeQuantity", 1);
+        JsonNode partialPreview = json(post("/api/position-transformations/preview", partial.toString()));
+        partial.put("previewToken", partialPreview.get("previewToken").asText());
+        JsonNode applied = json(post("/api/position-transformations/apply", partial.toString()));
+
+        assertThat(applied.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(applied.at("/trade/qty").asInt()).isEqualTo(2);
+        assertThat(applied.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(applied.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
+        assertThat(applied.at("/plan/furthestStage").asText()).isEqualTo("MANAGE_REVIEW");
+        assertThat(applied.at("/plan/version").asLong()).isEqualTo(openVersion + 1);
+        assertThat(applied.at("/management/actions/0/kind").asText()).isEqualTo("PARTIAL_CLOSE");
+        assertThat(applied.at("/management/links").toString()).contains("PARTIAL_CLOSE");
+        assertThat(applied.at("/management/reviews").isEmpty()).isTrue();
+        String receiptId = applied.get("receiptId").asText();
+        assertThat(inspectDb.query("SELECT plan_id || '|' || position_state || '|' || transformation_action v "
+                        + "FROM position_receipt WHERE id=?", row -> row.str("v"), receiptId))
+                .containsExactly(planId + "|PARTIALLY_CLOSED|PARTIAL_CLOSE");
+        assertThat(inspectDb.query("SELECT realized_cents FROM plan_management_action "
+                        + "WHERE plan_id=? AND receipt_id=?", row -> row.lng("realized_cents"), planId, receiptId))
+                .containsExactly(applied.get("actionRealizedPnlCents").asLong());
+
+        long partialAction = applied.get("actionRealizedPnlCents").asLong();
+        var close = Json.MAPPER.createObjectNode();
+        close.put("source", "PRACTICE_TRADE");
+        close.put("sourceId", tradeId);
+        close.put("planId", planId);
+        close.put("expectedPlanVersion", applied.at("/plan/version").asLong());
+        close.put("action", "CLOSE");
+        JsonNode closePreview = json(post("/api/position-transformations/preview", close.toString()));
+        long closeAction = closePreview.get("actionRealizedPnlCents").asLong();
+        long lifetimeRealized = closePreview.get("realizedPnlToDateCents").asLong();
+        assertThat(lifetimeRealized).isEqualTo(partialAction + closeAction);
+        close.put("previewToken", closePreview.get("previewToken").asText());
+        JsonNode closed = json(post("/api/position-transformations/apply", close.toString()));
+        String closeReceiptId = closed.get("receiptId").asText();
+
+        assertThat(closed.at("/plan/status").asText()).isEqualTo("CLOSED");
+        assertThat(inspectDb.query("SELECT realized_cents FROM plan_management_action "
+                        + "WHERE plan_id=? AND receipt_id=?", row -> row.lng("realized_cents"),
+                planId, closeReceiptId)).containsExactly(closeAction);
+        assertThat(inspectDb.query("SELECT realized_cents FROM plan_review WHERE plan_id=?",
+                row -> row.lng("realized_cents"), planId)).containsExactly(lifetimeRealized);
+        assertThat(inspectDb.query("SELECT SUM(realized_cents) n FROM plan_management_action "
+                        + "WHERE plan_id=? AND kind IN ('PARTIAL_CLOSE','CLOSE')", row -> row.lng("n"), planId))
+                .containsExactly(lifetimeRealized);
+    }
+
     @Test void voidingAPlanTradeIsRecordedAsVoidRatherThanAnOrdinaryClose() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"decision-void-plan","symbol":"AAPL","intent":"DIRECTIONAL",

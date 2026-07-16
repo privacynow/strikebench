@@ -164,8 +164,6 @@ public final class PositionTransformation {
         List<String> out = new ArrayList<>();
         for (PositionPackage.Leg hedge : before.legs()) {
             if (!buy(hedge) || stock(hedge)) continue;
-            long removedHedgeUnits = Math.max(0, Math.subtractExact(units(hedge), contractUnits(after, hedge)));
-            if (removedHedgeUnits == 0) continue;
             PositionPackage.Leg exposed = before.legs().stream().filter(shortLeg -> sell(shortLeg)
                             && shortLeg.optionType().equalsIgnoreCase(hedge.optionType())
                             && shortLeg.expiration().equals(hedge.expiration())
@@ -174,7 +172,12 @@ public final class PositionTransformation {
                             && contractUnits(after, shortLeg) > 0)
                     .findFirst().orElse(null);
             if (exposed == null) continue;
-            long dollarsPerPoint = Math.min(removedHedgeUnits, contractUnits(after, exposed));
+            long uncoveredBefore = Math.max(0,
+                    Math.subtractExact(contractUnits(before, exposed), contractUnits(before, hedge)));
+            long uncoveredAfter = Math.max(0,
+                    Math.subtractExact(contractUnits(after, exposed), contractUnits(after, hedge)));
+            long dollarsPerPoint = Math.max(0, Math.subtractExact(uncoveredAfter, uncoveredBefore));
+            if (dollarsPerPoint == 0) continue;
             String direction = put(hedge) ? "below " + hedge.strike().stripTrailingZeros().toPlainString()
                     : "above " + hedge.strike().stripTrailingZeros().toPlainString();
             out.add("This " + contract(hedge) + " protects the short " + contract(exposed)

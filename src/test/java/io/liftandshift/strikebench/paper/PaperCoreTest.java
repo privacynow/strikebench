@@ -303,7 +303,8 @@ class PaperCoreTest {
         Account before = accounts.get(account.id());
         long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
 
-        assertThatThrownBy(() -> trades.unwind(opened.id(), true, (connection, trade, realized) -> {
+        assertThatThrownBy(() -> trades.unwind(opened.id(), true,
+                (connection, trade, actionRealized, realizedToDate) -> {
             throw new java.sql.SQLException("owner lifecycle snapshot failed");
         })).hasMessageContaining("owner lifecycle snapshot failed");
 
@@ -314,6 +315,106 @@ class PaperCoreTest {
         assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
         assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst()).isEqualTo(ledgerBefore);
         assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void owningLifecycleHookRollsBackTheEntirePartialClose() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 5));
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+        TradeService.PartialCloseAssessment preview = trades.previewPartialClose(opened.id(), 2);
+
+        assertThatThrownBy(() -> trades.partialClose(opened.id(), 2, true,
+                (connection, survivor, actionRealized, realizedToDate) -> {
+                    throw new java.sql.SQLException("partial-close receipt failed");
+                }, preview.closingCashCents(), preview.closingFeesCents(),
+                new TradeService.ExpectedPositionState(opened.qty(), opened.entryNetPremiumCents(),
+                        opened.feesOpenCents(), opened.maxLossCents(), opened.maxProfitCents(),
+                        opened.sharesLocked(), 0, preview.current().risk().reserveCents())))
+                .hasMessageContaining("partial-close receipt failed");
+
+        TradeRecord afterTrade = trades.get(opened.id());
+        Account after = accounts.get(account.id());
+        assertThat(afterTrade.status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(afterTrade.qty()).isEqualTo(5);
+        assertThat(afterTrade.entryNetPremiumCents()).isEqualTo(opened.entryNetPremiumCents());
+        assertThat(afterTrade.realizedPnlCents()).isNull();
+        assertThat(after.cashCents()).isEqualTo(before.cashCents());
+        assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst())
+                .isEqualTo(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void packageAllocationPreservesEverySignedCentAcrossRepeatedPartialCloses() {
+        long positiveFirst = TradeService.allocatedPrefix(10, 3, 1);
+        long positiveSecond = TradeService.allocatedPrefix(
+                TradeService.remainingAllocation(10, 3, 1), 2, 1);
+        long positiveLast = TradeService.remainingAllocation(
+                TradeService.remainingAllocation(10, 3, 1), 2, 1);
+        assertThat(positiveFirst + positiveSecond + positiveLast).isEqualTo(10);
+        assertThat(List.of(positiveFirst, positiveSecond, positiveLast)).containsExactly(4L, 3L, 3L);
+
+        long negativeFirst = TradeService.allocatedPrefix(-10, 3, 1);
+        long negativeSecond = TradeService.allocatedPrefix(
+                TradeService.remainingAllocation(-10, 3, 1), 2, 1);
+        long negativeLast = TradeService.remainingAllocation(
+                TradeService.remainingAllocation(-10, 3, 1), 2, 1);
+        assertThat(negativeFirst + negativeSecond + negativeLast).isEqualTo(-10);
+        assertThat(List.of(negativeFirst, negativeSecond, negativeLast)).containsExactly(-4L, -3L, -3L);
+    }
+
+    @Test
+    void partialCloseRechecksTheSignedPositionBasisUnderTheTradeLock() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 3));
+        TradeService.PartialCloseAssessment preview = trades.previewPartialClose(opened.id(), 1);
+        TradeService.ExpectedPositionState expected = new TradeService.ExpectedPositionState(
+                opened.qty(), opened.entryNetPremiumCents(), opened.feesOpenCents(), opened.maxLossCents(),
+                opened.maxProfitCents(), opened.sharesLocked(), 0, preview.current().risk().reserveCents());
+        db.exec("UPDATE trades SET entry_net_premium_cents=entry_net_premium_cents+1 WHERE id=?", opened.id());
+
+        assertThatThrownBy(() -> trades.partialClose(opened.id(), 1, true, null,
+                preview.closingCashCents(), preview.closingFeesCents(), expected))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("position changed");
+        assertThat(trades.get(opened.id()).qty()).isEqualTo(3);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=? AND type='PREMIUM_CLOSE'",
+                row -> row.lng("n"), opened.id())).containsExactly(0L);
+    }
+
+    @Test
+    void laterRollKeepsTheEarlierPartialRealizationAndReportsTheCurrentActionSeparately() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 3));
+        TradeService.PartialCloseAssessment partialPreview = trades.previewPartialClose(opened.id(), 1);
+        TradeService.PartialCloseResult partial = trades.partialClose(opened.id(), 1, true, null,
+                partialPreview.closingCashCents(), partialPreview.closingFeesCents(),
+                new TradeService.ExpectedPositionState(opened.qty(), opened.entryNetPremiumCents(),
+                        opened.feesOpenCents(), opened.maxLossCents(), opened.maxProfitCents(),
+                        opened.sharesLocked(), 0, partialPreview.current().risk().reserveCents()));
+        TradeService.UnwindAssessment close = trades.previewUnwind(opened.id());
+        TradeService.OpenRequest replacement = openRequest(account.id(), "AAPL", "CREDIT_PUT_SPREAD", 2,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradePreview replacementPreview = trades.preview(replacement);
+
+        TradeService.RollResult rolled = trades.roll(opened.id(), replacement, true, null,
+                close.closingCashCents(), close.closingFeesCents(),
+                new TradeService.ExpectedOpen(replacementPreview.entryNetPremiumCents(),
+                        replacementPreview.feesOpenCents(), replacementPreview.reserveCents(),
+                        replacementPreview.maxLossCents(), replacementPreview.maxProfitCents()));
+
+        assertThat(rolled.actionRealizedClosingCents()).isEqualTo(close.actionRealizedPnlCents());
+        assertThat(rolled.realizedClosingCents())
+                .isEqualTo(partial.actionRealizedPnlCents() + close.actionRealizedPnlCents());
+        assertThat(rolled.closedTrade().realizedPnlCents()).isEqualTo(rolled.realizedClosingCents());
+        assertThat(rolled.replacementTrade().status()).isEqualTo(TradeRecord.ACTIVE);
     }
 
     @Test
@@ -333,7 +434,7 @@ class PaperCoreTest {
         long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
 
         assertThatThrownBy(() -> trades.roll(opened.id(), replacement, true,
-                (connection, closed, after, realized) -> {
+                (connection, closed, after, actionRealized, realizedToDate) -> {
                     throw new java.sql.SQLException("roll receipt failed");
                 }, close.closingCashCents(), close.closingFeesCents(),
                 new TradeService.ExpectedOpen(afterPreview.entryNetPremiumCents(),
@@ -490,6 +591,24 @@ class PaperCoreTest {
         assertThat(closed.trade().feesCloseCents()).isEqualTo(130L); // current default, not an invented copy
         assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
+    }
+
+    @Test
+    void brokerRecordCannotEnterThePracticePartialCloseMoneyPath() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest real = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 3,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, 519_00L, 600L, "IMPORT");
+        TradeRecord external = trades.createExternal(real);
+        Account before = accounts.get(acct.id());
+
+        assertThatThrownBy(() -> trades.previewPartialClose(external.id(), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tracked book").hasMessageContaining("Practice");
+        assertThat(trades.get(external.id()).qty()).isEqualTo(3);
+        assertThat(accounts.get(acct.id())).isEqualTo(before);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
+                row -> row.lng("n"), external.id())).containsExactly(0L);
     }
 
     // ==================== GOLDEN REGRESSION PORTFOLIO (the release gate) ====================

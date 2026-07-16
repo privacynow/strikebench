@@ -67,8 +67,8 @@ public final class PlanManagementService {
         if (!Set.of("CLOSE", "SETTLE", "ROLL", "VOID").contains(normalized)) {
             throw new IllegalArgumentException("management kind must be CLOSE, SETTLE, ROLL, or VOID");
         }
-        return (connection, trade, realized) -> saveLifecycleOn(connection, userId, planId,
-                expectedVersion, normalized, prepareRoll, receiptId, trade, realized);
+        return (connection, trade, actionRealized, realizedToDate) -> saveLifecycleOn(connection, userId, planId,
+                expectedVersion, normalized, prepareRoll, receiptId, trade, actionRealized, realizedToDate);
     }
 
     public TradeService.RollHook rollLifecycleHook(String userId, String planId, long expectedVersion,
@@ -76,8 +76,17 @@ public final class PlanManagementService {
         if (receiptId == null || receiptId.isBlank()) {
             throw new IllegalArgumentException("a Plan roll requires its transformation receipt");
         }
-        return (connection, closed, replacement, realized) -> saveRollOn(connection, userId, planId,
-                expectedVersion, receiptId, closed, replacement, realized);
+        return (connection, closed, replacement, actionRealized, realizedToDate) -> saveRollOn(connection,
+                userId, planId, expectedVersion, receiptId, closed, replacement, actionRealized, realizedToDate);
+    }
+
+    public TradeService.LifecycleHook partialCloseLifecycleHook(String userId, String planId,
+                                                                long expectedVersion, String receiptId) {
+        if (receiptId == null || receiptId.isBlank()) {
+            throw new IllegalArgumentException("a Plan partial close requires its transformation receipt");
+        }
+        return (connection, survivor, actionRealized, realizedToDate) -> savePartialCloseOn(connection, userId, planId,
+                expectedVersion, receiptId, survivor, actionRealized);
     }
 
     public ObjectNode recordCashReview(String userId, String planId, long expectedVersion, CashReview review) {
@@ -154,7 +163,8 @@ public final class PlanManagementService {
 
     private void saveLifecycleOn(Connection c, String userId, String planId, long expectedVersion,
                                  String kind, boolean prepareRoll, String receiptId,
-                                 TradeRecord trade, Long realized) throws SQLException {
+                                 TradeRecord trade, Long actionRealized,
+                                 Long realizedToDate) throws SQLException {
         PlanRow plan = requireOwned(c, planId, userId, true);
         if (plan.version() != expectedVersion) throw new IllegalStateException("This Plan changed before the management action completed.");
         requireLinked(c, planId, trade.id());
@@ -167,14 +177,14 @@ public final class PlanManagementService {
         };
         Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
                         "realized_cents,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", Ids.newId("pmgt"), planId,
-                decisionId, trade.id(), receiptId, actionKind, now, realized,
+                decisionId, trade.id(), receiptId, actionKind, now, actionRealized,
                 "VOID".equals(kind) ? "Practice trade voided and cash entries reversed" :
                         prepareRoll ? "Position closed; exact package prepared for a roll in this Plan" :
                                 "SETTLE".equals(kind) ? "Position settled after expiration" : "Position unwound at executable closing sides", now);
         String linkRole = prepareRoll ? "ROLL" : "CLOSE";
         Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) VALUES(?,?,?,?,?,?)",
                 Ids.newId("plink"), planId, decisionId, linkRole, trade.id(), now);
-        if (!"VOID".equals(kind) && realized != null && decisionId != null) {
+        if (!"VOID".equals(kind) && realizedToDate != null && decisionId != null) {
             List<DecisionReview> frozen = Db.queryOn(c,
                     "SELECT review_horizon_days,pop FROM plan_decision WHERE id=?",
                     r -> new DecisionReview(r.intv("review_horizon_days"), r.dblOrNull("pop")), decisionId);
@@ -183,7 +193,7 @@ public final class PlanManagementService {
                 Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
                                 "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                         Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
-                        "PLAN_POSITION", realized, decision.pop(), realized > 0 ? 1 : 0, now,
+                        "PLAN_POSITION", realizedToDate, decision.pop(), realizedToDate > 0 ? 1 : 0, now,
                         prepareRoll ? "Realized result for this completed roll cycle; the Plan continues"
                                 : "Realized result for the Plan position; market provenance remains on the Plan and trade",
                         now);
@@ -195,7 +205,7 @@ public final class PlanManagementService {
 
     private void saveRollOn(Connection c, String userId, String planId, long expectedVersion,
                             String receiptId, TradeRecord closed, TradeRecord replacement,
-                            long realized) throws SQLException {
+                            long actionRealized, long realizedToDate) throws SQLException {
         PlanRow plan = requireOwned(c, planId, userId, true);
         if (plan.version() != expectedVersion) {
             throw new IllegalStateException("This Plan changed before the roll completed.");
@@ -208,7 +218,7 @@ public final class PlanManagementService {
         String decisionId = latestDecisionId(c, planId);
         Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
                         "realized_cents,note,created_at) VALUES(?,?,?,?,?,'ROLL',?,?,?,?)",
-                Ids.newId("pmgt"), planId, decisionId, closed.id(), receiptId, at, realized,
+                Ids.newId("pmgt"), planId, decisionId, closed.id(), receiptId, at, actionRealized,
                 "Closed the prior package and opened the reviewed replacement atomically; the closing loss or gain remains realized",
                 at);
         Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) " +
@@ -223,10 +233,38 @@ public final class PlanManagementService {
                 Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
                                 "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                         Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
-                        "PLAN_POSITION", realized, decision.pop(), realized > 0 ? 1 : 0, at,
+                        "PLAN_POSITION", realizedToDate, decision.pop(), realizedToDate > 0 ? 1 : 0, at,
                         "Realized result of the closed roll leg; the reviewed replacement remains open", at);
             }
         }
+        Db.execOn(c, "UPDATE plans SET status='POSITION_OPEN',furthest_stage='MANAGE_REVIEW'," +
+                        "version=version+1,updated_at=? WHERE id=?", at, planId);
+    }
+
+    private void savePartialCloseOn(Connection c, String userId, String planId, long expectedVersion,
+                                    String receiptId, TradeRecord survivor, long actionRealized)
+            throws SQLException {
+        PlanRow plan = requireOwned(c, planId, userId, true);
+        if (plan.version() != expectedVersion) {
+            throw new IllegalStateException("This Plan changed before the partial close completed.");
+        }
+        if (!"POSITION_OPEN".equals(plan.status())) {
+            throw new IllegalStateException("Only a Plan with an open position can be partially closed.");
+        }
+        requireLinked(c, planId, survivor.id());
+        if (!TradeRecord.ACTIVE.equals(survivor.status()) || survivor.qty() <= 0) {
+            throw new IllegalStateException("The partial close did not leave an active position.");
+        }
+        OffsetDateTime at = now();
+        String decisionId = latestDecisionId(c, planId);
+        Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
+                        "realized_cents,note,created_at) VALUES(?,?,?,?,?,'PARTIAL_CLOSE',?,?,?,?)",
+                Ids.newId("pmgt"), planId, decisionId, survivor.id(), receiptId, at, actionRealized,
+                "Closed part of the exact package; the surviving quantity keeps its original entry basis",
+                at);
+        Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) " +
+                        "VALUES(?,?,?,'PARTIAL_CLOSE',?,?)",
+                Ids.newId("plink"), planId, decisionId, survivor.id(), at);
         Db.execOn(c, "UPDATE plans SET status='POSITION_OPEN',furthest_stage='MANAGE_REVIEW'," +
                         "version=version+1,updated_at=? WHERE id=?", at, planId);
     }
