@@ -883,34 +883,6 @@
           id: 'plan-archive', onclick: function () { confirmArchivePlan(plan, true); } }, icon('archive', 15), ' Archive')));
   }
 
-  function planRail(plan, active, provisional) {
-    var status = plan.status || 'DRAFT';
-    var manageReady = ['DECIDED_CASH', 'POSITION_OPEN', 'CLOSED'].indexOf(status) >= 0;
-    var furthestIndex = PLAN_STAGES.findIndex(function (stage) {
-      return stage.key === (plan.furthestStage || 'UNDERSTAND');
-    });
-    var structureReady = furthestIndex >= PLAN_STAGES.findIndex(function (stage) { return stage.key === 'OUTCOMES'; });
-    return el('nav', { class: 'plan-rail', 'aria-label': 'Plan journey' },
-      el('ol', {}, PLAN_STAGES.map(function (stage) {
-        var selected = stage.key === active.key;
-        var structureLocked = (stage.key === 'OUTCOMES' || stage.key === 'DECIDE') && !structureReady;
-        var manageLocked = stage.key === 'MANAGE_REVIEW' && !manageReady;
-        var locked = provisional ? stage.key !== 'UNDERSTAND' : structureLocked || manageLocked;
-        var lockedReason = structureLocked ? 'Unlocks after you select a structure in Strategy.'
-          : manageLocked ? 'Unlocks after a decision or rehearsal.' : '';
-        return el('li', { class: (selected ? 'active ' : '') + (locked ? 'locked' : 'ready') },
-          el('button', { type: 'button', disabled: locked ? 'disabled' : null,
-            'aria-current': selected ? 'step' : null,
-            title: locked ? lockedReason : null,
-            'aria-label': stage.label + '. ' + (locked ? lockedReason : stage.question),
-            onclick: async function () {
-              if (selected || provisional) return;
-              App.navigate(PlanStore.path(plan, stage.key));
-            } },
-            el('span', { class: 'plan-stage-number' }, stage.n),
-            el('span', { class: 'plan-stage-label' }, stage.label)));
-      })));
-  }
 
   function planContextEditor(plan) {
     var c = plan.context || {};
@@ -1069,20 +1041,6 @@
     return card;
   }
 
-  function transitionalPlanStage(root, plan, stage) {
-    var routes = {
-      UNDERSTAND: { title: 'Understand ' + plan.symbol, body: 'Review the market picture before choosing a structure.', route: PlanStore.path(plan, 'UNDERSTAND'), action: 'Open market picture' },
-      EVIDENCE: { title: 'Test the view', body: 'Study past analogs and possible futures without requiring a structure.', route: PlanStore.path(plan, 'EVIDENCE'), action: 'Open evidence' },
-      MANAGE_REVIEW: { title: 'Manage & Review', body: 'Compare what happened with the expectation frozen at the decision.', route: '#/portfolio', action: 'Open Portfolio' }
-    };
-    var copy = routes[stage.key];
-    root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path },
-      el('div', { class: 'plan-stage-heading' }, el('div', { class: 'eyebrow' }, stage.question), el('h2', {}, copy.title),
-        el('p', { class: 'muted' }, copy.body)),
-      el('div', { class: 'card plan-stage-transition' },
-        el('p', {}, 'Carried forward: ', el('b', {}, plan.title)),
-        el('button', { type: 'button', class: 'btn', onclick: function () { App.navigate(copy.route); } }, copy.action))));
-  }
 
   function planOwnedStage(root, plan, stage) {
     var copy = {
@@ -2933,6 +2891,147 @@
     planManagementTimeline(content, data.management);
   }
 
+  /* ===== Program ONE band 1: declare the view =====
+   * The first move of the journey. The view is USER-DECLARED, never imposed: nothing below
+   * this band ranks, simulates, or prices anything until direction and horizon exist. The
+   * old hidden "Edit view & limits" editor and its listbox become visible chips here; the
+   * frozen-plan linked-revision path is preserved through the same PlanStore semantics.
+   */
+  var THESIS_CHOICES = [
+    { value: 'bullish', label: 'Up', sub: 'I expect it to rise' },
+    { value: 'bearish', label: 'Down', sub: 'I expect it to fall' },
+    { value: 'neutral', label: 'Sideways', sub: 'I expect a range' },
+    { value: 'volatile', label: 'Big move, either way', sub: 'I expect a shake-up' }
+  ];
+  function thesisLabel(value) {
+    var match = THESIS_CHOICES.find(function (t) { return t.value === value; });
+    return match ? match.label : 'Not declared';
+  }
+  function viewDeclared(plan) {
+    return !!(plan.intent && plan.context && plan.context.thesis && plan.context.horizonDays);
+  }
+  function viewConclusion(plan) {
+    var c = plan.context || {};
+    return el('span', { class: 'view-conclusion' },
+      el('b', {}, plan.symbol), ' · ', thesisLabel(c.thesis),
+      ' over ', String(c.horizonDays), ' sessions · ', planIntentLabel(plan.intent),
+      c.targetCents ? el('span', { class: 'muted' }, ' · target ' + fmtMoney(c.targetCents)) : null);
+  }
+
+  function declarationBand(host, ctx, api) {
+    var plan = ctx.plan;
+    var c = plan.context || {};
+    if (plan.assumptionsEditable === false) {
+      // A frozen decision means the declared view is history; revisions branch, never rewrite.
+      var editor = planContextEditor(plan);
+      editor.hidden = false;
+      host.appendChild(editor);
+      return;
+    }
+    var draft = Rails.surface('plan:' + plan.id + ':declaration',
+      { thesis: c.thesis || null, horizonDays: c.horizonDays || null, intent: plan.intent || null,
+        targetCents: c.targetCents || null, riskMode: c.riskMode || 'conservative' });
+    host.appendChild(el('p', { class: 'muted' },
+      'Say what you believe before anything ranks or simulates. Every later band tests this — '
+      + 'and tells you when your positions stop expressing it.'));
+    host.appendChild(UI.symbolContext({ symbol: plan.symbol, mode: 'locked', compact: true }));
+
+    if (!draft.intent) {
+      var intents = el('div', { class: 'choice-grid plan-intent-grid' });
+      (Learn.INTENTS || []).forEach(function (meta) {
+        intents.appendChild(el('button', { type: 'button', class: 'choice-card', onclick: async function () {
+          try {
+            var live = await PlanStore.get(plan.id, true);
+            ctx.plan = await PlanStore.claimIntent(live, meta.key);
+            draft.intent = meta.key;
+            api.refreshBand('view');
+          } catch (e) { UI.toast(e.message, 'error'); }
+        } }, el('b', {}, meta.label), el('span', {}, meta.story || meta.blurb)));
+      });
+      host.appendChild(UI.field('What should this Plan do?', intents, { className: 'declaration-goal' }));
+      return; // direction/horizon follow once the goal exists — one decision at a time.
+    }
+
+    var thesisControl = UI.chipSet({
+      label: 'Your view on ' + plan.symbol, info: 'thesis',
+      options: THESIS_CHOICES, value: draft.thesis,
+      onChange: function (v) { draft.thesis = v; },
+      consequence: function (v) {
+        return v
+          ? 'Proposals, evidence, and simulations will all be judged against "' + thesisLabel(v).toLowerCase()
+            + '" over your horizon.'
+          : 'Declare a direction — nothing ranks against an unstated view.';
+      }
+    });
+    var horizonControl = UI.segmented({
+      label: 'Over the next', info: 'horizon',
+      options: [
+        { value: 10, label: '2 weeks', detail: '10 sessions' },
+        { value: 21, label: '1 month', detail: '21 sessions' },
+        { value: 63, label: '3 months', detail: '63 sessions' },
+        { value: 0, label: 'Custom' }],
+      value: [10, 21, 63].indexOf(draft.horizonDays) >= 0 ? draft.horizonDays : (draft.horizonDays ? 0 : 21),
+      onChange: function (v) {
+        if (v === 0) { customHorizon.hidden = false; customHorizon.querySelector('input').focus(); }
+        else { customHorizon.hidden = true; draft.horizonDays = v; }
+      },
+      consequence: function (v) {
+        var days = v === 0 ? draft.horizonDays : v;
+        return days ? 'Studies and expirations will focus on roughly ' + days + ' trading sessions out.' : '';
+      }
+    });
+    var customInput = el('input', { type: 'number', min: '1', max: '730',
+      value: draft.horizonDays || '', oninput: function () { draft.horizonDays = Number(this.value) || null; } });
+    var customHorizon = el('div', { class: 'field', hidden: [10, 21, 63].indexOf(draft.horizonDays) >= 0 || !draft.horizonDays ? '' : null },
+      el('label', {}, 'Trading sessions'), customInput);
+    var target = el('input', { type: 'number', min: '0.01', step: '0.01',
+      value: draft.targetCents ? (draft.targetCents / 100).toFixed(2) : '',
+      oninput: function () { draft.targetCents = this.value ? Math.round(Number(this.value) * 100) : null; } });
+    var risk = UI.chipSet({
+      label: 'Risk budget', info: 'riskbudget',
+      options: [
+        { value: 'conservative', label: 'Cautious' },
+        { value: 'balanced', label: 'Standard' },
+        { value: 'aggressive', label: 'High' }],
+      value: draft.riskMode,
+      onChange: function (v) { draft.riskMode = v; }
+    });
+    var save = el('button', { type: 'button', class: 'btn', id: 'plan-declare-view', onclick: async function () {
+      if (!draft.thesis) { UI.toast('Declare a direction first — up, down, sideways, or big move.', 'error'); return; }
+      if (!draft.horizonDays) { UI.toast('Pick a horizon — how long does this view get to play out?', 'error'); return; }
+      save.disabled = true;
+      try {
+        var updated = await PlanStore.updateContext(plan, {
+          thesis: draft.thesis, horizonDays: draft.horizonDays,
+          targetCents: draft.targetCents, riskMode: draft.riskMode,
+          clear: draft.targetCents ? [] : ['targetCents']
+        });
+        App.context.update({ symbol: updated.symbol, goal: updated.intent,
+          thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
+        ctx.plan = updated;
+        api.refreshBand('view');
+        api.scrollTo('evidence');
+      } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
+    } }, viewDeclared(plan) ? 'Update the view' : 'Declare the view');
+    host.appendChild(el('div', { class: 'declaration-grid' },
+      thesisControl, horizonControl, customHorizon,
+      UI.field('Price you care about (optional)', target), risk));
+    host.appendChild(el('div', { class: 'btn-row' }, save));
+    if (viewDeclared(plan)) {
+      host.appendChild(el('p', { class: 'muted small' },
+        'Changing the view marks evidence, proposed trades, and outcome runs from the old view stale — '
+        + 'your study setup is kept.'));
+    }
+  }
+
+  /* ===== Program ONE: the Workspace flow =====
+   * One document of bands replaces the stage rail: declare → evidence → structure →
+   * outcomes on it → commit → live. Bands lock with visible reasons, collapse to their
+   * conclusions when done, and never hide a capability.
+   */
+  var FLOW_BANDS_BY_STAGE = { understand: 'view', evidence: 'evidence', strategy: 'strategy',
+    outcomes: 'outcomes', decide: 'commit', 'manage-review': 'live' };
+
   async function planWorkspace(root, params) {
     var id = params[0] || '';
     var rawStage = (params[1] || 'understand').split('?')[0];
@@ -2944,28 +3043,65 @@
     App.state.activePlanId = plan.id;
     if (window.Workspace) Workspace.save();
     PlanStore.renderBar();
-    var stage = planStageByPath(rawStage);
     root.appendChild(planHeader(plan, false));
-    root.appendChild(planRail(plan, stage, false));
-    root.appendChild(planContextEditor(plan));
-    if (stage.key === 'UNDERSTAND' || stage.key === 'EVIDENCE') {
-      var owned = planOwnedStage(root, plan, stage);
-      await research(owned, ['__plan', plan.symbol, stage.path], { plan: plan, stage: stage.path });
-      if (stage.key === 'UNDERSTAND') appendPlanStageNext(owned, plan, 'Test the view',
-        'Use conditional history and possible futures before choosing a structure.',
-        'EVIDENCE', 'Continue to Evidence');
-      else appendPlanStageNext(owned, plan, 'Choose how to express the view',
-        'Compare structures, shape exact contracts, inspect the chain, or Scout related Plans.',
-        'STRATEGY', 'Continue to Strategy');
-    } else if (stage.key === 'STRATEGY') {
-      await planStrategyStage(root, plan, stage);
-    } else if (stage.key === 'OUTCOMES') {
-      await planOutcomesStage(root, plan, stage);
-    } else if (stage.key === 'DECIDE') {
-      await planDecideStage(root, plan, stage);
-    } else if (stage.key === 'MANAGE_REVIEW') {
-      await planManageStage(root, plan, stage);
-    } else transitionalPlanStage(root, plan, stage);
+
+    var ctx = { plan: plan };
+    function decisionDone() {
+      return ['DECIDED_CASH', 'POSITION_OPEN', 'CLOSED'].indexOf(ctx.plan.status || 'DRAFT') >= 0;
+    }
+    function structureReady() {
+      var stages = PLAN_STAGES.map(function (s) { return s.key; });
+      return stages.indexOf(ctx.plan.furthestStage || 'UNDERSTAND') >= stages.indexOf('OUTCOMES');
+    }
+    var flow = Flow.render({ id: 'plan-flow', stateKey: 'plan:' + plan.id + ':flow', ctx: ctx, sections: [
+      { key: 'view', title: 'Your view', info: 'thesis',
+        complete: function () { return viewDeclared(ctx.plan); },
+        render: function (host, c, api) { declarationBand(host, c, api); },
+        conclusion: function () { return viewConclusion(ctx.plan); } },
+      { key: 'evidence', title: 'Does the evidence agree?',
+        // Ready before declaration on purpose: exploring history and simulated futures is HOW
+        // a view forms — the futures tool here can adopt a tried view into the band above.
+        // Only ranking (the strategy band) hard-requires the declared view.
+        ready: function () { return true; },
+        complete: function () { return false; },
+        render: function (host) {
+          if (!viewDeclared(ctx.plan)) {
+            host.appendChild(el('p', { class: 'muted flow-band-note' },
+              'No view declared yet — explore what history and simulated futures say, then adopt '
+              + 'the view you believe. Nothing ranks until a view is declared above.'));
+          }
+          var owned = planOwnedStage(host, ctx.plan, planStageByPath('evidence'));
+          research(owned, ['__plan', ctx.plan.symbol, 'evidence'], { plan: ctx.plan, stage: 'evidence' });
+        } },
+      { key: 'strategy', title: 'How to express it',
+        ready: function () { return viewDeclared(ctx.plan); },
+        lockedReason: function () { return 'Declare your view above — structures are ranked against it.'; },
+        complete: function () { return structureReady(); },
+        render: function (host) { planStrategyStage(host, ctx.plan, planStageByPath('strategy')); },
+        conclusion: function () { return 'Structure selected — open to compare or change it'; } },
+      { key: 'outcomes', title: 'Outcomes on your structure',
+        ready: function () { return structureReady(); },
+        lockedReason: function () { return 'Unlocks after you select a structure above.'; },
+        complete: function () { return false; },
+        render: function (host) { planOutcomesStage(host, ctx.plan, planStageByPath('outcomes')); } },
+      { key: 'commit', title: 'Commit',
+        ready: function () { return structureReady(); },
+        lockedReason: function () { return 'Unlocks after you select a structure above.'; },
+        complete: function () { return decisionDone(); },
+        render: function (host) { planDecideStage(host, ctx.plan, planStageByPath('decide')); },
+        conclusion: function () {
+          return ctx.plan.status === 'DECIDED_CASH' ? 'Decided: stayed in cash — review below'
+            : 'Decision frozen — the position is live below';
+        } },
+      { key: 'live', title: 'Live: manage & review',
+        ready: function () { return decisionDone(); },
+        lockedReason: function () { return 'Appears once you commit — trade it or deliberately stay in cash.'; },
+        complete: function () { return false; },
+        render: function (host) { planManageStage(host, ctx.plan, planStageByPath('manage-review')); } }
+    ] });
+    root.appendChild(flow.el);
+    var focusBand = FLOW_BANDS_BY_STAGE[rawStage];
+    if (focusBand && rawStage !== 'understand') flow.scrollTo(focusBand);
   }
 
   async function renderPlanLibrary(host, options) {

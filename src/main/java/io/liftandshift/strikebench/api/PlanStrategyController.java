@@ -114,6 +114,12 @@ final class PlanStrategyController {
     private static RecommendationEngine.Request planStrategyRequest(
             io.liftandshift.strikebench.plan.Plan.View plan, PlanStrategyRunRequest controls) {
         var c = plan.context();
+        // The view is user-declared, never imposed: ranking against an unstated view would
+        // silently substitute one. Refuse loudly; the Workspace keeps this band locked anyway.
+        if (c.thesis() == null || c.thesis().isBlank()) {
+            throw new IllegalArgumentException(
+                    "Declare the Plan's view (direction and horizon) before ranking the field.");
+        }
         RecommendationEngine.Holdings holdings = c.holdingsShares() == null && c.costBasisCents() == null
                 && c.targetCents() == null ? null
                 : new RecommendationEngine.Holdings(c.holdingsShares() == null ? null

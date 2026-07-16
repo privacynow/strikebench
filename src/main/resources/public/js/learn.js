@@ -86,6 +86,15 @@
    * short = the one-liner every bubble opens with; beginner/expert = the expanded detail.
    */
   var INFO = {
+    thesis: { short: 'Your declared view — the product judges everything against it, and never invents one for you.',
+      beginner: 'Up, down, sideways, or a big move either way: what you believe this stock does over your horizon. Proposals are ranked for it, evidence tests it, and later StrikeBench warns you when your positions stop expressing it. If you have no view yet, that is fine — explore the evidence first; nothing ranks until you declare.',
+      expert: 'The context revision’s thesis field. It conditions DecisionPolicy ranking, seeds scenario drift defaults, anchors the coherence check (declared view vs the book’s stance vector), and is frozen into every decision receipt at its revision. Null is a legal state: ranking is refused, never defaulted.' },
+    horizon: { short: 'How long the view gets to play out — studies and expirations focus around it.',
+      beginner: 'The number of trading sessions you give this idea. Shorter horizons favor nearer expirations and tighter evidence windows; longer horizons widen both.',
+      expert: 'Context horizonDays. It is THE study hold-forward horizon (one truth across evidence and strategy), filters candidate expirations, and scales scenario path length. Revisions version it; receipts pin it.' },
+    riskbudget: { short: 'How much of your account one idea may put at risk — sizing derives from this, not from income wishes.',
+      beginner: 'Cautious, Standard, or High sets the ceiling for what this Plan may lose if everything goes wrong. Quantity suggestions come from this budget.',
+      expert: 'riskMode drives RiskBudgetPolicy’s per-trade risk-capital ceiling (percent of NLV by mode). Over-budget structures stay visible for learning and require an explicit acknowledgment at commit; placement never silently resizes.' },
     simulationLineage: { short: 'One simulation per Plan: every band quotes this same stored run, named by this fingerprint.',
       beginner: 'When you declared your view, StrikeBench generated one set of possible futures for it. Every later step — evidence, outcomes on your exact trade, review — re-uses that same stored set, so numbers agree everywhere. The # code names that one simulation.',
       expert: 'The plan-context ensemble is generated once, persisted, and fingerprint-pinned (SHA-256 over spec + path bytes). Evidence fans, structure repricing, comparisons, and rehearsals all consume the identical stored path matrix; the chip exposes EnsembleRef{id, fingerprint, basis}. A context revision that invalidates inputs mints a NEW ensemble and fingerprint — never a silent regeneration.' },
