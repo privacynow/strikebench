@@ -1067,9 +1067,10 @@
       context.horizonDays ? context.horizonDays + ' trading sessions' : null, planMarketLabel(plan)].filter(Boolean).join(' · ');
     root.appendChild(el('section', { class: 'plan-stage-frame', id: 'plan-stage-' + stage.path,
       'aria-labelledby': headingId },
+      // Inside a flow band the band title owns the headline — the stage frame contributes
+      // only its one-line purpose and the carried context, never a second stacked heading.
       el('div', { class: 'plan-stage-heading' },
-        el('div', { class: 'eyebrow' }, stage.question),
-        el('h2', { id: headingId, tabindex: '-1' }, copy.title),
+        el('h2', { id: headingId, tabindex: '-1', class: 'sr-only' }, copy.title),
         el('p', { class: 'muted' }, copy.body),
         el('div', { class: 'plan-stage-carry', 'aria-label': 'Context carried into this stage' },
           el('span', { class: 'plan-stage-carry-label' }, 'Carried into this step'),
