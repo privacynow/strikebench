@@ -317,6 +317,41 @@ class PaperCoreTest {
     }
 
     @Test
+    void owningRollHookRollsBackBothCloseAndReplacementOpen() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        TradeService.OpenRequest replacement = openRequest(account.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradeService.UnwindAssessment close = trades.previewUnwind(opened.id());
+        TradePreview afterPreview = trades.preview(replacement);
+        Account before = accounts.get(account.id());
+        long tradesBefore = db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst();
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.roll(opened.id(), replacement, true,
+                (connection, closed, after, realized) -> {
+                    throw new java.sql.SQLException("roll receipt failed");
+                }, close.closingCashCents(), close.closingFeesCents(),
+                new TradeService.ExpectedOpen(afterPreview.entryNetPremiumCents(),
+                        afterPreview.feesOpenCents(), afterPreview.reserveCents(),
+                        afterPreview.maxLossCents(), afterPreview.maxProfitCents())))
+                .hasMessageContaining("roll receipt failed");
+
+        assertThat(trades.get(opened.id()).status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst())
+                .isEqualTo(tradesBefore);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst())
+                .isEqualTo(ledgerBefore);
+        assertThat(accounts.get(account.id()).cashCents()).isEqualTo(before.cashCents());
+        assertThat(accounts.get(account.id()).reservedCents()).isEqualTo(before.reservedCents());
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
     void heldSharePopNowKeepsTheEntrySpotAsItsShareBasis() {
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);
@@ -1229,6 +1264,30 @@ class PaperCoreTest {
         trades.unwind(t.id(), true);
         assertThat(positions.freeShares(acct.id(), "AAPL")).isEqualTo(100);
         assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void rollPreviewReusesCashReserveAndSharesReleasedByTheClosingPackage() {
+        Account account = accounts.getOrCreateDefault();
+        positions.buy(account.id(), "AAPL", 100);
+        TradeService.OpenRequest replacement = coveredCallOnHeldShares(account.id());
+        TradeRecord current = trades.create(replacement);
+
+        TradePreview ordinarySecondOrder = trades.preview(replacement);
+        assertThat(ordinarySecondOrder.ok()).isFalse();
+        assertThat(ordinarySecondOrder.blockReasons()).anyMatch(reason -> reason.contains("free shares"));
+
+        TradeService.UnwindAssessment close = trades.previewUnwind(current.id());
+        Account before = accounts.get(account.id());
+        long projectedCash = before.cashCents() + close.closingCashCents() - close.closingFeesCents();
+        long projectedReserve = before.reservedCents() - close.current().risk().reserveCents();
+        TradePreview projectedReplacement = trades.preview(replacement, projectedCash, projectedReserve,
+                current.sharesLocked());
+
+        assertThat(projectedReplacement.ok()).as(String.join("; ", projectedReplacement.blockReasons())).isTrue();
+        assertThat(projectedReplacement.cashBeforeCents()).isEqualTo(projectedCash);
+        assertThat(projectedReplacement.reservedBeforeCents()).isEqualTo(projectedReserve);
+        assertThat(projectedReplacement.buyingPowerBeforeCents()).isEqualTo(projectedCash - projectedReserve);
     }
 
     @Test

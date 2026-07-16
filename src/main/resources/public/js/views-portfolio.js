@@ -80,6 +80,153 @@
     });
   }
 
+  function nextRollExpiration(current, expirations) {
+    if (!current) return '';
+    var date = new Date(current + 'T00:00:00Z');
+    date.setUTCDate(date.getUTCDate() + 28);
+    var target = date.toISOString().slice(0, 10);
+    return expirations.find(function (value) { return value >= target; })
+      || expirations.find(function (value) { return value > current; }) || current;
+  }
+
+  function rollDraftFromTrade(trade, expirations) {
+    var legs = (trade.legs || []).map(function (leg) {
+      var stock = String(leg.type).toUpperCase() === 'STOCK';
+      return { instrumentType: stock ? 'STOCK' : 'OPTION', action: leg.action,
+        positionEffect: 'OPEN', symbol: trade.symbol,
+        optionType: stock ? null : leg.type, strike: stock ? '' : String(leg.strike),
+        expiration: stock ? '' : nextRollExpiration(leg.expiration, expirations),
+        quantity: Number(leg.ratio || 1) * Number(trade.qty || 1),
+        multiplier: stock ? 1 : Number(leg.multiplier || 100), price: '', section1256: null };
+    });
+    return { symbol: trade.symbol, legs: legs, packageNet: '', fillNature: 'PROPOSED',
+      feeMode: 'DEFAULT', fees: '', chainExpiration: legs.find(function (leg) {
+        return leg.instrumentType === 'OPTION';
+      })?.expiration || '' };
+  }
+
+  function reviewedRollPayload(payload, trade) {
+    return Object.assign({}, payload, { thesis: trade.thesis, horizon: trade.horizon,
+      riskMode: trade.riskMode, intent: trade.intent, useHeldShares: trade.sharesLocked > 0,
+      source: 'POSITION_TRANSFORMATION', fillNature: 'PROPOSED' });
+  }
+
+  function renderRollReview(host, preview, afterPayload, trade, managedPlan, editor, stateKey) {
+    host.innerHTML = '';
+    var change = preview.transformation;
+    var afterReview = preview.after || {};
+    var after = afterReview.preview || {};
+    var required = afterReview.requiredAcks || [];
+    var guardrails = afterReview.guardrails || {};
+    var warnings = [].concat(change.warnings || [], guardrails.warnings || [], after.warnings || []);
+    host.appendChild(el('div', { class: 'position-roll-review' },
+      el('div', { class: 'position-transformation-route', 'aria-label': 'Position before and after rolling' },
+        transformationState('Before', change.beforeIdentity, 'Current position'),
+        el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
+        transformationState('After', change.afterIdentity, 'Replacement position')),
+      el('div', { class: 'position-transformation-facts' },
+        transformationFact('Closing cash flow', fmtMoney(preview.closingCashCents, { plus: true })),
+        transformationFact('Realized on closing leg', fmtMoney(change.realizedClosingCents, { plus: true }),
+          Number(change.realizedClosingCents) >= 0 ? 'gain' : 'loss'),
+        transformationFact(after.entryNetPremiumCents >= 0 ? 'Replacement credit' : 'Replacement cost',
+          fmtMoney(Math.abs(after.entryNetPremiumCents || 0))),
+        transformationFact('Total close + open fees', fmtMoney(Number(preview.closingFeesCents || 0)
+          + Number(after.feesOpenCents || 0))),
+        transformationFact('Theoretical max loss before', fmtMoney(change.beforeRisk.maxLossCents)),
+        transformationFact('Theoretical max loss after', fmtMoney(change.afterRisk.maxLossCents)),
+        transformationFact('Broker reserve before', fmtMoney(change.beforeRisk.reserveCents || 0)),
+        transformationFact('Broker reserve after', fmtMoney(change.afterRisk.reserveCents || 0))),
+      warnings.length ? alertBox('warn', 'Review what changes', Array.from(new Set(warnings))) : null,
+      required.length ? alertBox('caution', 'Material risks to acknowledge', required.map(function (item) {
+        return item.label;
+      })) : null,
+      change.applicable ? null : alertBox('danger', 'This replacement cannot be applied',
+        (change.afterRisk && change.afterRisk.blockReasons || guardrails.blockReasons || ['Review the replacement constraints above.'])),
+      el('p', { class: 'muted small position-transformation-note' },
+        'The old result stays realized. The replacement starts fresh at executable prices. Close, open, Plan link, ledger, and receipt commit together or nothing changes.'),
+      change.applicable ? el('button', { type: 'button', class: 'btn', id: 'apply-roll-btn', onclick: async function (event) {
+        var button = event.currentTarget;
+        var current = reviewedRollPayload(editor.readAnalysis(), trade);
+        if (JSON.stringify(current) !== JSON.stringify(afterPayload)) {
+          host.innerHTML = '';
+          host.appendChild(UI.actionFeedback('caution', 'Analyze the edited replacement again',
+            'The contracts changed after this receipt was created. No position was changed.'));
+          return;
+        }
+        var applyAfter = JSON.parse(JSON.stringify(afterPayload));
+        if (required.length) {
+          applyAfter.acknowledgedRisks = required.map(function (item) { return item.id; });
+          applyAfter.ackToken = afterReview.ackToken;
+        }
+        var request = practiceTransformationRequest(trade, managedPlan, 'ROLL', preview.previewToken);
+        request.after = applyAfter;
+        var applied = await visibleCommand(button, function () {
+          return API.post('/api/position-transformations/apply', request);
+        }, 'The reviewed roll could not be applied.');
+        if (!applied) {
+          host.appendChild(UI.actionFeedback('danger', 'The position was not changed',
+            'Review current prices and analyze the replacement again.'));
+          return;
+        }
+        if (App.state.positionDrafts) delete App.state.positionDrafts[stateKey];
+        UI.toast('Roll applied · prior result realized · replacement open', 'ok');
+        if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
+        else App.navigate('#/portfolio/trade/' + applied.trade.id);
+      } }, required.length ? 'Apply roll & acknowledge risks' : 'Apply reviewed roll') : null));
+  }
+
+  async function openRollTransformation(trade, managedPlan, button, host) {
+    host.hidden = false;
+    host.innerHTML = '';
+    host.appendChild(UI.spinner('Loading valid expirations…'));
+    var market = await visibleCommand(button, function () {
+      return API.getFresh('/api/research/' + encodeURIComponent(trade.symbol) + '/expirations');
+    }, 'The replacement expirations could not be loaded.');
+    if (!market) {
+      host.innerHTML = '';
+      host.appendChild(UI.actionFeedback('danger', 'Could not start the roll',
+        'Current expirations are unavailable in this market.'));
+      return;
+    }
+    if (managedPlan) managedPlan = await PlanStore.get(managedPlan.id, true);
+    var expirations = market.expirations || [];
+    var stateKey = 'practice-roll:' + trade.id;
+    var editorHost = el('div', { class: 'position-roll-editor' });
+    var reviewHost = el('div', { class: 'position-roll-result', 'aria-live': 'polite' });
+    host.innerHTML = '';
+    host.append(editorHost, reviewHost);
+    var reviewed = null;
+    var editor = PositionEditor.render(editorHost, {
+      stateKey: stateKey, lockedSymbol: trade.symbol, chain: true,
+      title: 'Build the replacement',
+      description: 'The current position stays open while you edit. Move expirations, strikes, ratios, or quantity; blank fills price at executable sides. Review shows both positions before one atomic Apply.',
+      analyzeLabel: 'Review this exact roll', initial: rollDraftFromTrade(trade, expirations),
+      onStateChange: function (draft) {
+        if (!reviewed) return;
+        try {
+          var current = reviewedRollPayload(PositionEditor.analysisPayload(draft), trade);
+          if (JSON.stringify(current) === JSON.stringify(reviewed.after)) return;
+        } catch (ignored) {
+          // An incomplete edit invalidates the reviewed receipt until it is analyzable again.
+        }
+        reviewed = null;
+        reviewHost.innerHTML = '';
+        reviewHost.appendChild(UI.actionFeedback('caution', 'Replacement changed',
+          'Analyze again before Apply. The current position remains untouched.'));
+      },
+      onAnalyze: async function (payload) {
+        var after = reviewedRollPayload(payload, trade);
+        var request = practiceTransformationRequest(trade, managedPlan, 'ROLL');
+        request.after = after;
+        var out = await API.post('/api/position-transformations/preview', request);
+        reviewed = { preview: out, after: after };
+        renderRollReview(reviewHost, out, after, trade, managedPlan, editor, stateKey);
+        return { preview: out.after.preview, evaluation: out.after.evaluation, identity: out.after.identity };
+      }
+    });
+    host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
   // ---- Shared position controls ----
 
   function stockOrderModal(side, symbol, maxShares) {
@@ -2026,6 +2173,7 @@
     }
 
     if (active) {
+      var rollHost = el('div', { class: 'position-roll-workbench', hidden: 'hidden' });
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Actions'),
         el('div', { class: 'btn-row', style: 'margin-top:0' },
@@ -2069,44 +2217,15 @@
             }
           }, 'Settle…', el('span', { class: 'btn-sub' }, 'after expiration')),
           el('button', {
-            class: 'btn btn-secondary', id: 'roll-btn', onclick: function () {
-              UI.confirmModal('Roll this position?',
-                el('div', {},
-                  el('p', {}, 'Rolling = two practice orders: close this position at market now, then reopen the same structure with every option leg moved ~1 month later. Both orders pay fees; the builder opens so you can adjust strikes before placing.'),
-                  explain('Management plans often say "roll at 21 DTE" — this is that action, honestly priced at current quotes.')),
-                'Close & rebuild',
-                async function () {
-                  if (managedPlan) {
-                    var out = await PlanStore.manage(managedPlan, 'roll', { confirm: true });
-                    var saved = await PlanStore.saveCustom(out.plan, out.rolledPosition);
-                    var planUi = PlanStore.ui(saved.plan.id);
-                    planUi.strategyView = 'builder';
-                    await PlanStore.focus(saved.plan, 'STRATEGY');
-                  } else {
-                    await API.post('/api/trades/' + id + '/unwind', { confirm: true });
-                    var rolled = (t.legs || []).map(function (l) {
-                      var leg = { action: l.action, type: l.stock ? 'STOCK' : l.type, strike: String(l.strike || ''), ratio: l.ratio || 1 };
-                      if (!l.stock && l.expiration) {
-                        var d2 = new Date(l.expiration); d2.setDate(d2.getDate() + 28);
-                        leg.expiration = d2.toISOString().slice(0, 10);
-                      }
-                      return leg;
-                    });
-                    var seed = { symbol: t.symbol, qty: t.qty, goal: t.intent || 'DIRECTIONAL', templateKey: null,
-                      step: 4, legIdx: 0, legs: rolled, excluded: {} };
-                    var plan = await startPlan({ symbol: t.symbol, intent: t.intent || 'DIRECTIONAL',
-                      horizon: 'month', thesis: 'neutral' }, 'STRATEGY');
-                    if (plan) {
-                      var planUi = PlanStore.ui(plan.id);
-                      planUi.strategyView = 'builder';
-                      planUi.buildState = planUi.buildState || {};
-                      planUi.buildState.builderForm = seed;
-                      App.render();
-                    }
-                  }
+            class: 'btn btn-secondary', id: 'roll-btn', onclick: function (event) {
+              openRollTransformation(t, managedPlan, event.currentTarget, rollHost)
+                .catch(function (error) {
+                  rollHost.hidden = false;
+                  rollHost.innerHTML = '';
+                  rollHost.appendChild(UI.actionFeedback('danger', 'Could not start the roll', error.message || String(error)));
                 });
             }
-          }, 'Roll…', el('span', { class: 'btn-sub' }, 'close + reopen ~1 month out')),
+          }, 'Roll…', el('span', { class: 'btn-sub' }, 'edit + review + apply together')),
           el('span', { class: 'spacer' }),
           el('button', {
             class: 'btn btn-danger', id: 'delete-btn', onclick: function () {
@@ -2126,7 +2245,8 @@
                   }
                 }, true);
             }
-          }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only')))));
+          }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'))),
+        rollHost));
     }
 
     if (d.marksHistory && d.marksHistory.length) {

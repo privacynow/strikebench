@@ -71,6 +71,15 @@ public final class PlanManagementService {
                 expectedVersion, normalized, prepareRoll, receiptId, trade, realized);
     }
 
+    public TradeService.RollHook rollLifecycleHook(String userId, String planId, long expectedVersion,
+                                                   String receiptId) {
+        if (receiptId == null || receiptId.isBlank()) {
+            throw new IllegalArgumentException("a Plan roll requires its transformation receipt");
+        }
+        return (connection, closed, replacement, realized) -> saveRollOn(connection, userId, planId,
+                expectedVersion, receiptId, closed, replacement, realized);
+    }
+
     public ObjectNode recordCashReview(String userId, String planId, long expectedVersion, CashReview review) {
         db.tx(c -> {
             PlanRow plan = requireOwned(c, planId, userId, true);
@@ -182,6 +191,44 @@ public final class PlanManagementService {
         }
         Db.execOn(c, "UPDATE plans SET status=?,furthest_stage=?,version=version+1,updated_at=? WHERE id=?",
                 prepareRoll ? "ACTIVE" : "CLOSED", prepareRoll ? "STRATEGY" : "MANAGE_REVIEW", now, planId);
+    }
+
+    private void saveRollOn(Connection c, String userId, String planId, long expectedVersion,
+                            String receiptId, TradeRecord closed, TradeRecord replacement,
+                            long realized) throws SQLException {
+        PlanRow plan = requireOwned(c, planId, userId, true);
+        if (plan.version() != expectedVersion) {
+            throw new IllegalStateException("This Plan changed before the roll completed.");
+        }
+        requireLinked(c, planId, closed.id());
+        if (!closed.accountId().equals(replacement.accountId()) || !TradeRecord.ACTIVE.equals(replacement.status())) {
+            throw new IllegalStateException("The roll replacement is not an active position in the same Practice account.");
+        }
+        OffsetDateTime at = now();
+        String decisionId = latestDecisionId(c, planId);
+        Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
+                        "realized_cents,note,created_at) VALUES(?,?,?,?,?,'ROLL',?,?,?,?)",
+                Ids.newId("pmgt"), planId, decisionId, closed.id(), receiptId, at, realized,
+                "Closed the prior package and opened the reviewed replacement atomically; the closing loss or gain remains realized",
+                at);
+        Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) " +
+                        "VALUES(?,?,?,'ROLL',?,?)",
+                Ids.newId("plink"), planId, decisionId, replacement.id(), at);
+        if (decisionId != null) {
+            List<DecisionReview> frozen = Db.queryOn(c,
+                    "SELECT review_horizon_days,pop FROM plan_decision WHERE id=?",
+                    r -> new DecisionReview(r.intv("review_horizon_days"), r.dblOrNull("pop")), decisionId);
+            if (!frozen.isEmpty()) {
+                DecisionReview decision = frozen.getFirst();
+                Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
+                                "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
+                        "PLAN_POSITION", realized, decision.pop(), realized > 0 ? 1 : 0, at,
+                        "Realized result of the closed roll leg; the reviewed replacement remains open", at);
+            }
+        }
+        Db.execOn(c, "UPDATE plans SET status='POSITION_OPEN',furthest_stage='MANAGE_REVIEW'," +
+                        "version=version+1,updated_at=? WHERE id=?", at, planId);
     }
 
     private static PlanRow requireOwned(Connection c, String planId, String userId, boolean lock) throws SQLException {
