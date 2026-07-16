@@ -126,6 +126,7 @@ async function assertNoInternalChrome(scope = '#app') {
     /\bContext r\d+\b/i,
     /\bEconomic verdict\s+(?:FAVORABLE|MIXED|UNFAVORABLE|UNAVAILABLE|MECHANICALLY_INELIGIBLE)\b/i,
     /\breceipt\s+[a-f0-9]{12,}\b/i,
+    /\b(?:ptx|plot|pcand|psr|tr|plan|ens)_[a-z0-9]{6,}\b/i,
     /\bAlt\+V\b/i,
     /\bidempotency\b/i
   ];
@@ -671,8 +672,8 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.waitForSelector('.plan-tool[data-strategy-tool="compare"][aria-selected="true"]');
   assert.match(await page.textContent('.plan-tool-selector'), /Proposed trades.*All strategies.*Your trade.*Option prices.*Scout/s,
     'Beginner gets plain, capability-oriented Strategy labels');
-  assert.ok(await page.locator('#plan-strategy-filters .xp-head:has-text("Only show proposed trades")').count(),
-    'Beginner keeps all five limits behind progressive disclosure');
+  assert.equal(await page.locator('#plan-strategy-filters .xp-head:has-text("Only show proposed trades")').getAttribute('aria-expanded'), 'true',
+    'the five fit limits use the available desktop width at both levels');
   assert.equal(await page.locator('#plan-stage-strategy a[href^="#/trade"], #plan-stage-strategy button:has-text("Open strategy tools")').count(), 0,
     'Strategy has no cross-section Trade handoff');
 
@@ -700,7 +701,9 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   assert.ok(await page.locator('#plan-rejected-teaching').count(),
     'mechanically refused and over-budget structures remain available as named teaching cases');
 
-  await page.locator('#plan-strategy-filters .xp-head').click();
+  if (await page.locator('#plan-strategy-filters .xp-head').getAttribute('aria-expanded') !== 'true') {
+    await page.locator('#plan-strategy-filters .xp-head').click();
+  }
   await page.fill('#plan-f-pop', '70');
   await page.locator('#plan-f-pop').blur();
   await page.waitForSelector('#plan-stage-strategy:has-text("Limits changed — rerun the field")');
@@ -1138,6 +1141,20 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await assertNamedControls('#plan-outcomes');
   await assertTabContracts('#plan-outcomes');
   assert.match(await page.textContent('.plan-outcome-position'), /Exact position being tested.*PLAN OWNED/s);
+  const selectedSummary = await page.evaluate(async id => (await API.getFresh('/api/plans/' + id + '/outcomes/latest')).selected, plan.id);
+  assert.ok((selectedSummary.breakevens || []).every(value => Number(value) > 0),
+    'a listed option package never renders a zero-dollar breakeven: ' + JSON.stringify(selectedSummary.breakevens));
+  assert.equal(await page.locator('.plan-outcome-position .candidate-contract-line').count(), selectedSummary.legs.length,
+    'the exact listed contracts are visible without opening another candidate card');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-outcome-position .realistic-strip-case').length === 4,
+    null, { timeout: 30000 });
+  let repaintScenarioCalls = 0;
+  await page.route('**/api/evaluate', async route => { repaintScenarioCalls++; await route.continue(); });
+  await page.evaluate(() => App.render());
+  await page.waitForSelector('.plan-outcome-position .realistic-strip-case');
+  await page.waitForTimeout(250);
+  await page.unroute('**/api/evaluate');
+  assert.equal(repaintScenarioCalls, 0, 'a repaint reuses the exact package scenario strip instead of rerunning paths');
   assert.equal(await page.locator('#plan-outcomes input[name="symbol"], #plan-outcomes select[name="strategy"]').count(), 0,
     'Outcomes does not recapture the Plan symbol or structure');
 
@@ -1732,9 +1749,9 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.waitForSelector('#app[data-ready="true"]');
   await page.waitForFunction(() => {
     const timeline = document.querySelector('.plan-management-timeline');
-    return timeline && /MARK/.test(timeline.textContent || '');
+    return timeline && /Marked/.test(timeline.textContent || '');
   }, null, { timeout: 15000 });
-  assert.match(await page.textContent('.plan-management-timeline'), /MARK/);
+  assert.match(await page.textContent('.plan-management-timeline'), /Marked/);
   await page.waitForTimeout(300); // real card-arrival motion, then inspect the settled frame
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p6-manage-desktop.png'), fullPage: true });
@@ -1758,7 +1775,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.waitForSelector('#greeks-card');
   assert.match(await page.textContent('#greeks-card'), /How this position reacts/,
     'Beginner receives a plain-language entry to the same position sensitivities');
-  await page.locator('#greeks-card .xp-head').click();
+  await page.locator('#greeks-card .xp-head:has-text("Exact sensitivities by leg")').click();
   assert.match(await page.textContent('#greeks-card'), /Net Δ.*Θ\/day/s,
     'Beginner can inspect exact aggregate Greeks');
   assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1,
@@ -1796,9 +1813,9 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     'the roll keeps a newly linked replacement open instead of reusing the closed trade');
   await page.waitForFunction(() => {
     const timeline = document.querySelector('.plan-management-timeline');
-    return timeline && /ROLL/.test(timeline.textContent || '') && document.querySelector('#unwind-btn');
+    return timeline && /Rolled/.test(timeline.textContent || '') && document.querySelector('#unwind-btn');
   }, null, { timeout: 30000 });
-  assert.match(await page.textContent('.plan-management-timeline'), /ROLL/,
+  assert.match(await page.textContent('.plan-management-timeline'), /Rolled/,
     'the Plan records one atomic roll and keeps the replacement under Manage & Review');
   await page.click('#unwind-btn');
   await page.waitForSelector('#close-transformation-preview');
@@ -2252,9 +2269,10 @@ test('financial formatters and mixed packages fail closed instead of rendering N
   assert.equal(safety.option.strike, '260', 'stock-first packages resolve their listed option contract');
 
   const contextContract = await page.evaluate(() => {
+    const activePlanGoalBefore = App.context.goal();
     App.context.update({ symbol: 'AAPL', goal: 'INCOME', horizon: 'month', thesis: 'neutral' });
-    App.context.update({ goal: 'ALL' });
-    const cleared = App.context.goal();
+    const cleared = App.context.update({ goal: 'ALL' }).intent;
+    const activePlanGoal = App.context.goal();
     const covered = Builder.TEMPLATES.find(t => t.family === 'COVERED_CALL');
     var owner = { builderForm: {
       symbol: 'AAPL', qty: 1, goal: 'BROWSE', templateKey: covered.key,
@@ -2263,9 +2281,12 @@ test('financial formatters and mixed packages fail closed instead of rendering N
       excluded: {}
     } };
     const ticket = Builder.prepareTicket(owner, { goal: 'BROWSE', thesis: 'neutral', horizon: 'month' });
-    return { cleared, templateIntent: covered.primaryIntent, ticketIntent: ticket.intent };
+    return { cleared, activePlanGoalBefore, activePlanGoal,
+      templateIntent: covered.primaryIntent, ticketIntent: ticket.intent };
   });
   assert.equal(contextContract.cleared, null, 'Everything clears a stale single-goal context');
+  assert.equal(contextContract.activePlanGoal, contextContract.activePlanGoalBefore,
+    'editing provisional discovery context never rewrites the Plan currently on screen');
   assert.equal(contextContract.templateIntent, 'INCOME', 'server catalog supplies the structure intent');
   assert.equal(contextContract.ticketIntent, 'INCOME', 'Browse all infers intent from the chosen structure');
   assert.equal(await page.evaluate(() => UI.maxProfitLabel('DIAGONAL_CALL', 'time', null, true)),
@@ -3349,8 +3370,8 @@ test('Beginner keeps exact book sensitivity through progressive disclosure', asy
   await page.waitForSelector('#portfolio-greeks');
   assert.match(await page.textContent('#portfolio-greeks'), /How your open positions react/);
   await page.locator('#portfolio-greeks .xp-head').click();
-  assert.match(await page.textContent('#portfolio-greeks'), /Book heat.*Theoretical max loss.*Book greeks.*Net Δ.*Vega\/pt/s,
-    'Beginner can inspect the same exact book heat and Greeks');
+  assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net Δ.*Vega\/pt.*Book heat.*Theoretical max loss/s,
+    'Beginner sees the primary sensitivities inline and can inspect the same exact book heat');
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#portfolio-greeks');
   assert.match(await page.textContent('#portfolio-greeks'), /Book greeks.*Net Δ/s,
@@ -3364,6 +3385,11 @@ test('share holdings remain a priced Plan input instead of an orphan portfolio a
   await page.evaluate(() => Learn.setLevel('beginner'));
   await go('#/portfolio/positions');
   await page.waitForSelector('#holdings-card');
+  const beforeShares = await page.evaluate(async () => {
+    const positions = (await API.get('/api/positions')).positions || [];
+    const row = positions.find(position => position.symbol === 'AAPL');
+    return row ? Number(row.shares) : 0;
+  });
   await page.click('#buy-shares-btn');
   await page.fill('#stock-symbol', 'AAPL');
   await page.fill('#stock-shares', '100');
@@ -3374,7 +3400,14 @@ test('share holdings remain a priced Plan input instead of an orphan portfolio a
   await page.click('#modal-confirm');
   await page.waitForSelector('#modal-root [role="dialog"]', { state: 'detached' });
   await page.waitForSelector('#holdings-card tbody tr:has-text("AAPL")', { timeout: 15000 });
-  assert.match(await page.textContent('#holdings-card tbody tr:has-text("AAPL")'), /AAPL[\s\S]*100/);
+  const afterShares = await page.evaluate(async () => {
+    const positions = (await API.getFresh('/api/positions')).positions || [];
+    const row = positions.find(position => position.symbol === 'AAPL');
+    return row ? Number(row.shares) : 0;
+  });
+  assert.equal(afterShares, beforeShares + 100, 'the confirmed order adds exactly 100 tracked shares');
+  assert.match(await page.textContent('#holdings-card tbody tr:has-text("AAPL")'),
+    new RegExp('AAPL[\\s\\S]*' + afterShares));
 
   const plan = await openPlan('AAPL', 'strategy', 'EXIT', 'neutral');
   await page.waitForSelector('#plan-intent-ladder', { timeout: 30000 });
@@ -3382,7 +3415,7 @@ test('share holdings remain a priced Plan input instead of an orphan portfolio a
     'held shares feed the goal-native covered-call ladder inside the Plan');
   const firstRung = page.locator('#plan-intent-ladder .ladder-row').first();
   await firstRung.locator('.xp-head').click();
-  assert.match(await firstRung.textContent(), /USES 100 HELD SHARES/i,
+  assert.match(await firstRung.textContent(), new RegExp('USES ' + afterShares + ' HELD SHARES', 'i'),
     'the proposed package names the collateral it consumes');
 
   await page.evaluate(async id => {
@@ -3443,6 +3476,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
 
   await page.getByRole('tab', { name: 'Overview', exact: true }).focus();
   await page.keyboard.press('ArrowRight');
+  await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   await page.waitForSelector('.book-record-card');
   assert.equal(await page.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true',
     'tracked-account tabs use the shared roving keyboard contract');
@@ -3514,6 +3548,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   'recording answers with refreshed profit and cash beside the exact trade editor');
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.waitForFunction(() => /2 shown/.test(document.querySelector('.book-journal')?.textContent || ''))
     .catch(async error => {
       throw new Error('Recorded stock did not reconcile into the journal: '
@@ -3522,6 +3557,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
         + '\n' + error.message);
     });
 
+  await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('INTEREST');
   await page.getByRole('spinbutton', { name: 'Amount $', exact: true }).fill('5');
   await page.getByRole('textbox', { name: 'Broker reference', exact: true }).fill('dom-interest-1');
@@ -3532,6 +3568,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   'cash activity reports its refreshed book consequence beside the command without repainting the page');
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.waitForFunction(() => /3 shown/.test(document.querySelector('.book-journal')?.textContent || ''))
     .catch(async error => {
       throw new Error('Interest did not reconcile into the journal: '
@@ -3590,9 +3627,11 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     /Old result realized; replacement open[\s\S]*Net premium before fees[\s\S]*−\$200\.00/,
     'the canonical workbench reports the linked premium and refreshed book consequence in place');
   await go('#/portfolio/book/activity');
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.locator('.book-journal .xp-head').filter({ hasText: /roll/i }).first().click();
   assert.match(await page.textContent('.book-roll-summary'), /Linked roll[\s\S]*Net premium before fees[\s\S]*−\$200\.00/i,
     'one roll control records the realized close, linked replacement, and premium carryover');
+  await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('ROLL');
   await page.waitForSelector('.position-roll-picker');
   assert.match(await page.textContent('.position-roll-picker'), /Choose the option to roll[\s\S]*QQQ.*510\.00 call/i,
@@ -3607,6 +3646,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   const mixedImport = 'transaction_ref,occurred_at,event_type,cash_effect_cents,fees_cents,tax_category,notes,leg_no,instrument,action,position_effect,symbol,option_type,strike,expiration,quantity,multiplier,price,section_1256\n'
     + 'dom-import-interest,' + importDate + ',INTEREST,250,0,ORDINARY_INTEREST,Valid imported income\n'
     + 'dom-import-bad,' + importDate + ',TRADE,,0,,,0,STOCK,BUY,OPEN,NVDA,,,,not-a-number,1,100,false\n';
+  await page.getByRole('tab', { name: 'Import history', exact: true }).click();
   await page.getByLabel('Portfolio activity CSV').setInputFiles({
     name: 'mixed-portfolio-history.csv', mimeType: 'text/csv', buffer: Buffer.from(mixedImport)
   });
@@ -3619,6 +3659,8 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.locator('.book-import-result button').filter({ hasText: 'Review quarantined rows' }).click();
   assert.match(await page.textContent('.book-import-rejects'), /Line 3[\s\S]*dom-import-bad[\s\S]*quantity must be an integer/,
     'the rejected row keeps its line, transaction reference, and reason');
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
+  await assertNoInternalChrome('#app');
   await captureSettled('p110-accounting-activity-desktop.png');
 
   const pastSnapshot = await page.evaluate(async id => API.post('/api/portfolio/accounts/' + id + '/valuations', {
@@ -3755,6 +3797,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('button', { name: 'Archive account', exact: true }).click();
   await page.waitForSelector('.book-account-status:has-text("ARCHIVED")');
   await go('#/portfolio/book/activity');
+  await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Record factual activity', exact: true }).isDisabled(), true,
     'archived tracked accounts are read-only in the UI as well as the service');
   assert.match(await page.textContent('.book-shared-position-editor'), /archived.*Restore it before recording/i,
@@ -3766,16 +3809,22 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await go('#/portfolio/book/activity');
+    await page.getByRole('tab', { name: 'History', exact: true }).click();
     const geometry = await page.evaluate(() => {
       const tabs = document.querySelector('.portfolio-book-tabs');
       const boxes = Array.from(tabs.querySelectorAll('[role="tab"]')).map(tab => tab.getBoundingClientRect());
+      const activityTabs = Array.from(document.querySelectorAll('.book-activity-tabs [role="tab"]'));
       return { body: document.documentElement.scrollWidth, viewport: innerWidth,
         clipped: boxes.some(box => box.left < 0 || box.right > innerWidth || box.width < 90),
-        rows: new Set(boxes.map(box => Math.round(box.top))).size };
+        rows: new Set(boxes.map(box => Math.round(box.top))).size,
+        activityWrapped: activityTabs.some(tab => getComputedStyle(tab).whiteSpace !== 'nowrap'
+          || tab.getBoundingClientRect().height > 36) };
     });
     assert.ok(geometry.body <= geometry.viewport, width + 'px tracked activity has no page overflow: ' + JSON.stringify(geometry));
     assert.equal(geometry.clipped, false, width + 'px account tabs remain fully visible');
     assert.ok(geometry.rows >= 3, width + 'px account navigation uses a readable grid instead of a clipped rail');
+    assert.equal(geometry.activityWrapped, false,
+      width + 'px Activity tabs keep complete labels on one visible line');
     if (width === 390) {
       await captureSettled('p110-accounting-activity-mobile.png');
     }
@@ -4421,9 +4470,9 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   await assertTabContracts('#app');
   assert.equal(await page.locator('#data-source-detail').count(), 0,
     'source setup stays compact until the user asks for one source detail');
-  await page.waitForSelector('#dc-sources .xp-head:has-text("feed details")');
-  await page.click('#dc-sources .xp-head:has-text("feed details")');
   await page.waitForSelector('#dc-sources .data-feed-row');
+  assert.equal(await page.locator('#dc-sources .xp-head:has-text("License and usage details")').count(), 1,
+    'feed identity and coverage stay visible while licensing remains secondary');
   const sources = await page.textContent('#dc-sources');
   const historySetup = await page.textContent('#dc-history-sync');
   assert.match(historySetup, /Yahoo Finance automation/);
@@ -4444,8 +4493,10 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   await page.waitForSelector('#data-source-detail:has-text("Permission & use")');
   assert.match(await page.textContent('#data-source-detail'), /Automated collection requires permission|authorized personal use/i,
     'full rights and setup guidance is reachable from the compact source choice');
-  assert.ok(await page.locator('#dc-sources .xp-head:has-text("feed details")').count(),
-    'secondary feed inventory is progressively disclosed instead of another card wall');
+  assert.ok(await page.locator('#dc-sources .data-feed-row').count(),
+    'feed identity, status, coverage, and setup remain visible instead of hiding the entire card');
+  assert.equal(await page.locator('#dc-sources .xp-head:has-text("License and usage details")').count(), 1,
+    'only licensing prose remains progressively disclosed');
   assert.equal(await page.locator('#data-sync-preview').isDisabled(), true, 'Demo build cannot start an observed provider sync');
   assert.equal(await page.locator('#data-sync-start').getAttribute('aria-describedby'), 'data-sync-start-reason');
   assert.match(await page.textContent('#data-sync-start-reason'), /Preview the selected source/,
@@ -4535,8 +4586,6 @@ test('non-admin Data access stays informative without dead app-wide mutation con
     'Administration is not advertised to a non-admin');
   assert.equal(await page.locator('#data-sync-preview, #data-csv-upload, #data-sync-schedule-save').count(), 0,
     'app-wide sync, import, and schedule controls are not rendered as dead actions');
-  await page.waitForSelector('#dc-sources .xp-head:has-text("feed details")');
-  await ensureExpanded(page.locator('#dc-sources .xp-head:has-text("feed details")'));
   await page.waitForSelector('#dc-sources .data-feed-row');
   assert.match(await page.textContent('#dc-sources'), /Other market-data feeds/,
     'distinct supporting feeds remain readable');
@@ -5046,6 +5095,7 @@ test('shared editor records exact broker facts in the tracked book without touch
     return created;
   });
   await go('#/portfolio/book/activity');
+  await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   await page.getByRole('combobox', { name: 'What happened?', exact: true }).selectOption('TRADE');
   await page.waitForSelector('.book-shared-position-editor .position-editor');
   const listed = await page.evaluate(async () => {
@@ -5147,9 +5197,10 @@ test('shared editor records exact broker facts in the tracked book without touch
     'the tracked transaction disclosure preserves both exact option legs');
   assert.match(tradeDetail, /ReferenceDOM-SHARED-EDITOR-001/i,
     'the tracked transaction disclosure preserves both exact option legs and the broker reference');
+  await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   await page.waitForSelector('.book-shared-position-editor .position-editor');
   await page.getByRole('button', { name: 'Record factual activity', exact: true }).click();
-  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("already recorded as")');
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("reference is already recorded")');
   const duplicateMessage = await page.textContent('.book-shared-position-editor .position-editor-result');
   assert.match(duplicateMessage, /Stable references identify the same broker fact/i,
     'a stable-reference retry is identified before the softer contract-similarity advisory');
@@ -5390,13 +5441,22 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   // allocation cards replace the expert table.
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForSelector('#portfolio-construct');
-  assert.equal(await page.locator('#portfolio-objective').count(), 0, 'advanced controls begin collapsed at Beginner');
-  await page.locator('#portfolio-construct .xp > .xp-head').first().click();
-  assert.equal(await page.locator('#portfolio-objective').count(), 1, 'Beginner can reach the same objective control');
+  assert.equal(await page.locator('#portfolio-objective').count(), 1,
+    'Beginner uses the available desktop width for the same construction controls');
   assert.ok((await page.locator('.portfolio-allocation-card').count()) >= 1, 'Beginner receives visual allocation cards');
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-construct-beginner.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => App.render());
+  await page.waitForSelector('#portfolio-construct');
+  assert.equal(await page.locator('#portfolio-objective').count(), 0,
+    'the same secondary controls begin collapsed on mobile');
+  await page.locator('#portfolio-construct .xp > .xp-head').first().click();
+  assert.equal(await page.locator('#portfolio-objective').count(), 1, 'mobile keeps every construction control reachable');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => App.render());
+  await page.waitForSelector('#portfolio-construct');
   let pendingPlanPosts = 0;
   const delayPlanCreate = async route => {
     if (route.request().method() === 'POST') {

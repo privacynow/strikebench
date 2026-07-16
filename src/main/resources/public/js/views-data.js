@@ -1761,9 +1761,9 @@
             scheduleStatus.textContent = saved.enabled ? 'Automatic daily maintenance is on.' : 'Automatic maintenance is off.';
           } catch (e) { scheduleStatus.textContent = e.message; scheduleToggle.checked = false; }
         } }, 'Save maintenance setting')), scheduleStatus);
-      syncCard.appendChild(level === 'expert' ? el('section', { class: 'data-acquire-section' },
-        el('h3', {}, 'Maintenance schedule'), scheduleBody)
-        : UI.expandable('Keep it current automatically', function () { return scheduleBody; }));
+      syncCard.appendChild(UI.expandable('Keep it current automatically', function () {
+        return el('section', { class: 'data-acquire-section' }, scheduleBody);
+      }, { open: 'desktop', stateKey: 'data-maintenance-schedule' }));
 
       var cursorRows = (doc.cursors || []).map(function (c) { return el('tr', {},
         el('td', {}, el('b', {}, c.symbol)), el('td', {}, c.source),
@@ -1776,9 +1776,9 @@
           : el('p', { class: 'muted' }, 'No sync cursors yet.'),
         doc.quarantine && doc.quarantine.total ? alertBox('caution', doc.quarantine.total
           + ' rejected row(s) are quarantined and are not used by analysis.') : null);
-      syncCard.appendChild(level === 'expert' ? el('section', { class: 'data-acquire-section' },
-        el('h3', {}, 'Cursors & rejected rows', UI.info('synccursor')), diagnostics)
-        : UI.expandable('Update history & rejected rows', function () { return diagnostics; }));
+      syncCard.appendChild(UI.expandable(el('span', {}, 'Update history & rejected rows ', UI.info('synccursor')), function () {
+        return el('section', { class: 'data-acquire-section' }, diagnostics);
+      }, { open: 'desktop', stateKey: 'data-sync-diagnostics' }));
     })();
 
     // --- Sources ---
@@ -1796,18 +1796,22 @@
       sourcesCard.appendChild(el('p', { class: 'muted small' },
         'Daily-price setup lives in the history workflow above. These distinct feeds supply current options, filings, headlines, rates, or licensed option history.'));
       var support = el('div', { class: 'data-feed-list' });
+      var licenses = el('div', { class: 'data-feed-license-list' });
       (data.feeds || []).forEach(function (s) {
         support.appendChild(el('div', { class: 'data-feed-row' + (s.enabled ? ' on' : '') },
           el('div', { class: 'data-feed-heading' },
             el('span', { class: 'badge ' + (s.enabled ? 'badge-ok' : 'badge-dim') }, s.enabled ? 'ON' : 'OFF'),
             el('b', {}, s.name),
             el('span', { class: 'muted small data-feed-covers' }, s.covers)),
-          el('div', { class: 'muted small' }, s.license),
           el('div', { class: 'small' }, s.hint)));
+        licenses.appendChild(el('div', { class: 'data-feed-license-row' },
+          el('b', {}, s.name), el('span', { class: 'muted small' }, s.license)));
       });
       if (!support.childElementCount) support.appendChild(el('p', { class: 'muted' }, 'No supporting feeds are registered.'));
-      sourcesCard.appendChild(UI.expandable('Review ' + (data.feeds || []).length + ' feed details', function () { return support; },
-        { stateKey: 'data-feed-details' }));
+      sourcesCard.appendChild(support);
+      if (licenses.childElementCount) sourcesCard.appendChild(UI.expandable('License and usage details', function () {
+        return licenses;
+      }, { stateKey: 'data-feed-license-details' }));
     })();
 
     // --- Provider health (the old status view, kept as detail) ---

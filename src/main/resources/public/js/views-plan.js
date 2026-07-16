@@ -31,7 +31,7 @@
         el('div', { class: 'fact-row' },
           el('span', {}, el('b', { class: 'loss' }, 'You lose when: '), g.lose)),
         el('p', {}, el('b', {}, 'Easy to miss: '), g.watch));
-    }, { open: !!open });
+    }, { open: !!open, stateKey: 'strategy-guide-' + strategy });
   }
 
   /** One-line human framing of the candidate against the user's goal, shown on every level. */
@@ -83,6 +83,83 @@
     return c && c.evaluation && c.evaluation.risk ? c.evaluation.risk.pop : null;
   }
 
+  function candidateContractLines(c, title) {
+    var legs = c && c.legs || [];
+    return el('section', { class: 'candidate-contract-lines', 'aria-label': title || 'Exact contracts' },
+      el('div', { class: 'candidate-contract-lines-head' },
+        el('span', { class: 'eyebrow' }, title || 'EXACT CONTRACTS'),
+        el('span', { class: 'muted small' }, (c.qty || 1) + ' lot' + ((c.qty || 1) === 1 ? '' : 's'))),
+      legs.length ? el('div', { class: 'candidate-contract-list' }, legs.map(function (leg) {
+        return el('div', { class: 'candidate-contract-line' },
+          el('span', { class: 'badge ' + (String(leg.action || '').toUpperCase() === 'BUY' ? 'badge-ok' : 'badge-caution') },
+            String(leg.action || 'LEG').toUpperCase()),
+          el('span', { class: 'mono' }, legLabel(leg)),
+          Number(leg.ratio || 1) > 1 ? el('span', { class: 'muted small' }, 'ratio ' + leg.ratio) : null);
+      })) : el('p', { class: 'muted small' }, 'No listed contracts are attached.'));
+  }
+
+  function candidatePositionSummary(c, title) {
+    return el('div', { class: 'candidate-position-summary' },
+      candidateContractLines(c, title),
+      el('div', { class: 'candidate-position-summary-facts' },
+        UI.fact(UI.vocabulary('theoreticalMaxLoss'), c.maxLossCents == null ? '—' : fmtMoney(c.maxLossCents), 'f-danger'),
+        UI.fact('Theoretical max profit', UI.maxProfitLabel(c.strategy, c.structureGroup,
+          c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs), 'f-ok'),
+        UI.fact('Breakeven', (c.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
+        UI.fact('Chance of any profit', candidatePop(c) == null ? '—' : fmtPct(candidatePop(c)))));
+  }
+
+  function candidateFullAnalysis(c) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var analysis = c && c.evaluation || {};
+    var block = el('div', { class: 'candidate-full-analysis' });
+    var economics = economicAssessmentBlock(c, true);
+    if (economics) block.appendChild(economics);
+    if (analysis.participation) block.appendChild(el('p', { class: 'participation-headline' },
+      participationSentence(analysis.participation)));
+    if (analysis.stance) block.appendChild(el('div', { class: 'chip-row stance-vector' },
+      chip('Dollar delta', fmtMoney(analysis.stance.dollarDeltaCents, { plus: true })),
+      chip('Δ delta / 1% move', fmtMoney(analysis.stance.gammaDollarDeltaCentsPerOnePercentMove, { plus: true })),
+      chip('Vega / vol point', fmtMoney(analysis.stance.vegaCentsPerVolPoint, { plus: true })),
+      chip('Theta / day', fmtMoney(analysis.stance.thetaCentsPerDay, { plus: true }))));
+    if (analysis.management && (analysis.management.rules || []).length) {
+      block.appendChild(el('section', { class: 'candidate-management-receipt' },
+        el('h4', {}, beginner ? 'How you would manage this trade' : 'Mechanical management plan'),
+        analysis.management.summary ? el('p', {}, analysis.management.summary) : null,
+        el('ul', { class: 'plan-rules' }, analysis.management.rules.map(function (rule) {
+          return el('li', {}, el('b', {}, managementRuleLabel(rule.kind) + ': '),
+            rule.trigger, ' → ', el('span', { class: 'plan-action' }, rule.action));
+        }))));
+    }
+    var coverage = analysis.coverage || {}, inputs = coverage.inputs || {};
+    if (Object.keys(inputs).length || (coverage.limitations || []).length) {
+      block.appendChild(el('section', { class: 'candidate-full-coverage' }, el('h4', {}, 'Data coverage'),
+        el('div', { class: 'evidence-grid' }, Object.keys(inputs).map(function (name) {
+          var input = inputs[name] || {};
+          return el('div', { class: 'evidence-row' }, el('span', { class: 'ev-dim' }, name),
+            evaluationLevelBadge(input.level), el('span', { class: 'muted small' }, input.detail || ''));
+        }).concat((coverage.limitations || []).map(function (limit) {
+          return el('p', { class: 'muted small coverage-limit' }, limit);
+        })))));
+    }
+    var score = analysis.score || {};
+    if (!beginner && (score.components || []).length) {
+      block.appendChild(el('section', {}, el('h4', {}, 'Decision score factors'),
+        table(['Factor', 'Score', 'Weight', 'Why'], score.components.map(function (component) {
+          return el('tr', {}, el('td', {}, component.name),
+            el('td', {}, Math.round(Number(component.value || 0) * 100) + '%'),
+            el('td', {}, Math.round(Number(component.weight || 0) * 100) + '%'),
+            el('td', { class: 'muted' }, component.note || '—'));
+        }))));
+    }
+    var explanation = analysis.explanation || {};
+    var notes = (explanation.assumptions || []).concat(explanation.failureModes || []);
+    if (notes.length) block.appendChild(el('section', {}, el('h4', {}, 'Assumptions and failure modes'),
+      el('ul', {}, notes.map(function (item) { return el('li', {}, item); }))));
+    if (c.warnings && c.warnings.length) block.appendChild(alertBox('warn', 'Before you decide', c.warnings));
+    return block;
+  }
+
   function economicRank(c) {
     var v = economicVerdict(c);
     return v === 'FAVORABLE' ? 3 : v === 'MIXED' ? 2 : v === 'UNAVAILABLE' ? 1 : 0;
@@ -98,7 +175,7 @@
     return economics && economics.realizedVolEvAfterCostsCents;
   }
 
-  function economicAssessmentBlock(c) {
+  function economicAssessmentBlock(c, flat) {
     var e = candidateEconomics(c);
     if (!e) return null;
     var v = economicVerdict(c);
@@ -120,9 +197,10 @@
                 fmtMoney(e.realizedVolEvAfterCostsCents, { plus: true })) : 'Unavailable'),
         chip('Estimated round-trip fees', fmtMoney(e.estimatedRoundTripFeesCents || 0))));
     if (e.reasons && e.reasons.length) {
-      block.appendChild(UI.expandable('Why this classification', function () {
-        return el('ul', { class: 'rationale' }, e.reasons.map(function (r) { return el('li', {}, r); }));
-      }));
+      var reasons = el('ul', { class: 'rationale' }, e.reasons.map(function (r) { return el('li', {}, r); }));
+      block.appendChild(flat ? el('div', { class: 'economic-reasons-flat' }, el('b', {}, 'Why this classification'), reasons)
+        : UI.expandable('Why this classification', function () { return reasons; },
+          { stateKey: 'candidate-economics-' + (c.id || candidatePackageKey(c)) }));
     }
     return block;
   }
@@ -138,7 +216,7 @@
     return el('span', { class: 'badge ' + cls }, label);
   }
 
-  function managementReceipt(management, beginner, open) {
+  function managementReceipt(management, beginner, open, stateKey) {
     if (!management || !(management.rules || []).length) return null;
     return UI.expandable(beginner ? 'How you would manage this trade' : 'Mechanical management plan', function () {
       return el('div', { class: 'candidate-management-receipt' },
@@ -147,7 +225,7 @@
           return el('li', {}, el('b', {}, managementRuleLabel(rule.kind) + ': '),
             rule.trigger, ' → ', el('span', { class: 'plan-action' }, rule.action));
         })));
-    }, { open: !!open });
+    }, { open: !!open, stateKey: stateKey ? 'candidate-management-' + stateKey : null });
   }
 
   function participationSentence(participation) {
@@ -168,7 +246,7 @@
       + ', ' + terminal + '.';
   }
 
-  function dataCoverageReceipt(coverage) {
+  function dataCoverageReceipt(coverage, stateKey) {
     coverage = coverage || {};
     var inputs = coverage.inputs || {};
     if (!Object.keys(inputs).length && !(coverage.limitations || []).length) return null;
@@ -181,7 +259,7 @@
       }).concat((coverage.limitations || []).map(function (limit) {
         return el('p', { class: 'muted small coverage-limit' }, limit);
       })));
-    });
+    }, { stateKey: stateKey ? 'candidate-coverage-' + stateKey : null });
   }
 
   function portfolioImpactReceipt(impacts, beginner) {
@@ -230,7 +308,7 @@
       (impacts.notes || []).map(function (note) { return el('p', { class: 'muted small' }, note); }));
   }
 
-  function decisionMetricsReceipt(analysis, beginner) {
+  function decisionMetricsReceipt(analysis, beginner, stateKey) {
     if (!analysis) return null;
     var participation = analysis.participation, stance = analysis.stance,
         implied = analysis.impliedStance, iv = analysis.ivContext,
@@ -260,7 +338,7 @@
       if (regimes.length) wrap.appendChild(el('p', { class: 'muted small' },
         regimes.map(function (point) { return fmtMoney(point.priceCents) + ': ' + point.meaning; }).join('  ')));
       if (capital.annualizationNote) wrap.appendChild(el('p', { class: 'muted small' }, capital.annualizationNote));
-      var beginnerCoverage = dataCoverageReceipt(coverage);
+      var beginnerCoverage = dataCoverageReceipt(coverage, stateKey);
       if (beginnerCoverage) wrap.appendChild(beginnerCoverage);
       var beginnerImpacts = analysis.assessment && analysis.assessment.portfolioImpacts;
       if (beginnerImpacts) wrap.appendChild(portfolioImpactReceipt(beginnerImpacts, true));
@@ -279,7 +357,7 @@
           return el('li', {}, fmtMoney(point.priceCents) + ' \u2014 ' + point.meaning);
         })) : el('p', { class: 'muted' }, 'No strike changes the participation regime.'));
     }));
-    var expertCoverage = dataCoverageReceipt(coverage);
+    var expertCoverage = dataCoverageReceipt(coverage, stateKey);
     if (expertCoverage) wrap.appendChild(expertCoverage);
     if (capital.annualizationNote) wrap.appendChild(el('p', { class: 'muted small' }, capital.annualizationNote));
     var impacts = analysis.assessment && analysis.assessment.portfolioImpacts;
@@ -290,16 +368,17 @@
   function candidateEvaluationReceipt(c, beginner) {
     var analysis = c && c.evaluation;
     if (!analysis) return null;
+    var stateKey = c.id || candidatePackageKey(c);
     var wrap = el('div', { class: 'candidate-evaluation-receipt' });
-    var metrics = decisionMetricsReceipt(analysis, beginner);
+    var metrics = decisionMetricsReceipt(analysis, beginner, stateKey);
     if (metrics) wrap.appendChild(metrics);
-    var management = managementReceipt(analysis.management, beginner, beginner && !!c.selected);
+    var management = managementReceipt(analysis.management, beginner, !!c.selected, stateKey);
     if (management) wrap.appendChild(management);
     if (beginner) {
       var beginnerFailures = analysis.explanation && analysis.explanation.failureModes || [];
       if (beginnerFailures.length) wrap.appendChild(UI.expandable('What could make this lose', function () {
         return el('ul', {}, beginnerFailures.map(function (failure) { return el('li', {}, failure); }));
-      }));
+      }, { stateKey: 'candidate-failure-modes-' + stateKey }));
       return wrap.hasChildNodes() ? wrap : null;
     }
     var score = analysis.score || {};
@@ -317,7 +396,7 @@
         + Math.round(Number(score.riskAdjustedScore || 0)) + ' inside the economic tier → Decision score '
         + Math.round(Number(candidateDecisionScore(c) || 0)) + '.'));
       return body;
-    }));
+    }, { stateKey: 'candidate-score-' + stateKey }));
     var explanation = analysis.explanation || {};
     if ((explanation.assumptions || []).length || (explanation.failureModes || []).length) {
       wrap.appendChild(UI.expandable('Assumptions and failure modes', function () {
@@ -326,7 +405,7 @@
             el('ul', {}, explanation.assumptions.map(function (item) { return el('li', {}, item); }))) : null,
           (explanation.failureModes || []).length ? el('div', {}, el('b', {}, 'Failure modes'),
             el('ul', {}, explanation.failureModes.map(function (item) { return el('li', {}, item); }))) : null);
-      }));
+      }, { stateKey: 'candidate-assumptions-' + stateKey }));
     }
     return wrap.hasChildNodes() ? wrap : null;
   }
@@ -413,12 +492,7 @@
     if (window.Scenario) card.appendChild(Scenario.realisticOutcomes(symbolForTicket || App.context.symbol(), c));
     var beginnerReceipt = candidateEvaluationReceipt(c, true);
     if (beginnerReceipt) card.appendChild(beginnerReceipt);
-    card.appendChild(UI.expandable('The exact contracts \u2014 ' + c.qty + ' lot' + (c.qty > 1 ? 's' : '') + ' (each line \u00d7' + c.qty + ')', function () {
-      return el('div', {},
-        el('div', { class: 'mono', style: 'margin-bottom:6px' }, c.label),
-        el('ul', {}, c.legs.map(function (l) { return el('li', {}, legLabel(l)); })),
-        el('p', {}, 'Prices shown are the executable ', UI.term('bid/ask', 'bid/ask'), ' sides — what a fill would actually cost right now.'));
-    }, { stateKey: 'candidate-contracts-' + (c.id || c.strategy || 'package') }));
+    card.appendChild(candidateContractLines(c, 'EXACT CONTRACTS'));
     if (c.warnings && c.warnings.length) card.appendChild(alertBox('warn', 'Before you decide', c.warnings));
     if (withUse) card.appendChild(candidateWorkflowActions(c, symbolForTicket, true));
     return card;
@@ -1041,13 +1115,12 @@
       numField('maxCost', 'plan-f-cost', 'Cash I pay up front (max $)', 'Cash outlay \u2264 $', 'filtercost', { min: '0', step: '50' })
     ];
     var grid = el('div', { class: 'form-grid grid-5 plan-filter-grid' }, fields);
-    var node = Learn.currentLevel() === 'beginner'
-      ? UI.expandable('Only show proposed trades that fit my limits', function () {
-          return el('div', {}, grid,
-            el('p', { class: 'muted small' }, 'The same five limits stay available. Refused structures remain listed with the exact reason.'));
-        })
-      : el('div', { class: 'plan-filter-expert' }, grid,
-          el('p', { class: 'muted small' }, 'Blank means no extra limit; the Plan risk budget still applies.'));
+    var node = UI.expandable('Only show proposed trades that fit my limits', function () {
+      return el('div', { class: 'plan-filter-expert' }, grid,
+        el('p', { class: 'muted small' }, Learn.currentLevel() === 'beginner'
+          ? 'The same five limits stay available. Refused structures remain listed with the exact reason.'
+          : 'Blank means no extra limit; the Plan risk budget still applies.'));
+    }, { open: 'desktop', stateKey: 'plan-strategy-fit-limits' });
     node.id = 'plan-strategy-filters';
     return node;
   }
@@ -1070,11 +1143,13 @@
     return el('div', { class: 'plan-budget-receipt', id: 'plan-budget-receipt' },
       el('div', {}, el('span', { class: 'eyebrow' }, acquire ? 'PURCHASE CAPITAL' : 'PER-IDEA BUDGET'),
         el('b', {}, line)),
-      el('p', { class: 'muted small' }, mode && mode.capped
-        ? 'Your declared risk capital caps this amount. The full catalog remains available for learning.'
-        : acquire
-          ? 'Cash-secured puts reserve strike × 100 shares. This is a purchase commitment, not a small option-risk allowance.'
-          : 'This controls sizing and screening, not the strategy catalog or the math.'));
+      UI.expandable('How this budget is used', function () {
+        return el('p', { class: 'muted small' }, mode && mode.capped
+          ? 'Your declared risk capital caps this amount. The full catalog remains available for learning.'
+          : acquire
+            ? 'Cash-secured puts reserve strike × 100 shares. This is a purchase commitment, not a small option-risk allowance.'
+            : 'This controls sizing and screening, not the strategy catalog or the math.');
+      }, { stateKey: 'plan-risk-budget-method' }));
   }
 
   function strategyShape(name) {
@@ -1121,7 +1196,7 @@
         return el('div', {}, other.map(function (item) {
           return alertBox('warn', item.displayName || item.strategy || 'Structure', (item.reasons || [item.reason]).filter(Boolean));
         }));
-      }));
+      }, { stateKey: 'plan-refused-structures' }));
     }
     return host;
   }
@@ -1234,7 +1309,8 @@
             i === reference ? el('span', { class: 'badge badge-dim' }, target ? 'CLOSEST TO YOUR TARGET' : 'MIDDLE RUNG') : null,
             ladderEconomicsBadge(c)),
           el('div', { class: 'chip-row' }, facts(c)), button,
-          UI.expandable('See exact contracts and risk', function () { return candidateCard(c, false, planRef.plan.symbol); })));
+          UI.expandable('See exact contracts and risk', function () { return candidateCard(c, false, planRef.plan.symbol); },
+            { stateKey: 'plan-ladder-contracts-' + candidatePackageKey(c) })));
       });
       wrap.appendChild(list);
       if (rungs.length > 3) {
@@ -1930,11 +2006,13 @@
       if (cash && !first.includes(cash)) first.push(cash);
       var shown = new Set(first.map(function (item) { return item.key; }));
       var remaining = items.filter(function (item) { return !shown.has(item.key); });
-      body = el('div', { class: 'plan-proposal-beginner' },
-        el('div', { class: 'plan-proposal-card-grid' }, first.map(itemCard)),
-        remaining.length ? UI.expandable('Show all ' + items.length + ' compared choices', function () {
-          return el('div', { class: 'plan-proposal-card-grid' }, remaining.map(itemCard));
-        }) : null);
+      var cardGrid = el('div', { class: 'plan-proposal-card-grid' }, first.map(itemCard));
+      var showAll = remaining.length ? el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
+        remaining.forEach(function (item) { cardGrid.appendChild(itemCard(item)); });
+        showAll.remove();
+      } }, 'Show all ' + items.length + ' compared choices') : null;
+      body = el('div', { class: 'plan-proposal-beginner' }, cardGrid,
+        showAll ? el('div', { class: 'btn-row plan-proposal-show-all' }, showAll) : null);
     } else {
       body = el('div', { class: 'tbl-wrap plan-proposal-table-wrap' },
         el('table', { class: 'tbl plan-proposal-table' },
@@ -1960,14 +2038,17 @@
         el('h3', {}, 'Which proposal handles this evidence best?'),
         el('p', { class: 'muted' }, comparison.interpretation || 'Every proposal used one exact path ensemble.')),
         comparison.ensembleFingerprint ? el('span', { class: 'badge badge-dim' }, 'STORED FUTURES VERIFIED') : null),
-      el('p', { class: 'muted small' }, 'The BOOK badge preserves the option-market economic assessment. The figures below answer a separate question: how each package behaved on this one shared evidence set.'),
       leader && leader.key === 'CASH' ? alertBox('caution', 'Cash leads on this outcome lens', [
         'Every valued proposal ranked below the zero-risk, zero-cost baseline after estimated costs. The trades remain available to study; this lens does not endorse them.'
       ]) : null,
       body,
-      el('p', { class: 'muted small' }, Learn.currentLevel() === 'beginner'
-        ? 'All rows used the same saved receipt, captured proposal entry, quantity and estimated costs. Higher ranks balance the expected result against the bad outcomes; cash stayed at $0.'
-        : comparison.fairness + ' Outcome rank is after-cost EV per dollar of modeled p5 downside; refusals sort last.'));
+      UI.expandable('How this comparison was kept fair', function () {
+        return el('div', {},
+          el('p', { class: 'muted small' }, 'The market-view badge preserves the option-market economic assessment. The figures above answer a separate question: how each package behaved on this one shared evidence set.'),
+          el('p', { class: 'muted small' }, Learn.currentLevel() === 'beginner'
+            ? 'All rows used the same saved receipt, captured proposal entry, quantity and estimated costs. Higher ranks balance the expected result against the bad outcomes; cash stayed at $0.'
+            : comparison.fairness + ' Outcome rank is after-cost EV per dollar of modeled p5 downside; refusals sort last.'));
+      }, { stateKey: 'plan-proposal-comparison-method' }));
   }
 
   async function planOutcomesStage(root, initialPlan, stage) {
@@ -2037,9 +2118,10 @@
       el('div', { class: 'chip-row' }, chip('Structure', selected.displayName || prettyStrategy(selected.strategy)),
         chip('Contracts', (selected.legs || []).length + ' legs · x' + (selected.qty || 1)),
         chip('Entry', fmtMoney(selected.entryNetPremiumCents, { plus: true }))),
-      UI.expandable('Show the exact contracts and structural risk', function () {
-        return candidateCard(selected, false, planRef.plan.symbol);
-      })));
+      candidatePositionSummary(selected, 'EXACT CONTRACTS BEING TESTED'),
+      window.Scenario ? Scenario.realisticOutcomes(planRef.plan.symbol, selected, { autoRun: true }) : null,
+      UI.expandable('Full analysis', function () { return candidateFullAnalysis(selected); },
+        { stateKey: 'plan-outcome-full-analysis' })));
 
     var comparison = el('section', { class: 'plan-outcome-comparison', id: 'plan-outcome-comparison' },
       el('div', { class: 'plan-section-head' }, el('div', {}, el('h3', {}, 'One position, separate lenses'),
@@ -2296,15 +2378,17 @@
       stat('Economic view', UI.economicVerdictLabel(decision.economicVerdict)),
       stat('Evidence', UI.evidenceBadge(decision.evidenceProvenance || 'MISSING', { compact: true })),
       stat('Buying power at decision', decision.buyingPowerCents == null ? '—' : fmtMoney(decision.buyingPowerCents))));
-    if (decision.legs && decision.legs.length) host.appendChild(UI.expandable('Frozen listed contracts', function () {
+    if (decision.legs && decision.legs.length) {
       function exactPrice(value) { return value == null ? '—' : '$' + String(value); }
-      return table(['Side', 'Contract', 'Bid', 'Ask', 'Fill'], decision.legs.map(function (leg) {
+      host.appendChild(el('section', { class: 'plan-frozen-contracts' },
+        el('h3', {}, 'Frozen listed contracts'),
+        table(['Side', 'Contract', 'Bid', 'Ask', 'Fill'], decision.legs.map(function (leg) {
         var strike = leg.strikePrice == null ? '' : ' ' + exactPrice(leg.strikePrice);
         return el('tr', {}, el('td', {}, leg.action), el('td', {}, leg.type + strike + (leg.expiration ? ' · ' + leg.expiration : '')),
           el('td', {}, exactPrice(leg.bidPrice)), el('td', {}, exactPrice(leg.askPrice)),
           el('td', {}, exactPrice(leg.fillPrice)));
-      }));
-    }));
+        }))));
+    }
     if (!insideManage) host.appendChild(el('div', { class: 'plan-next-action' },
       el('div', {}, el('b', {}, 'Decision frozen'), el('p', { class: 'muted' },
         'Manage & Review now compares what happens with what this decision expected.')),
@@ -2358,11 +2442,15 @@
       state.preview = null;
       state.acks = {};
     }
-    content.appendChild(el('div', { class: 'card plan-decision-position' },
+    var decisionTop = el('div', { class: 'plan-decision-top-grid' });
+    content.appendChild(decisionTop);
+    decisionTop.appendChild(el('div', { class: 'card plan-decision-position' },
       UI.cardHeader('Exact package under decision', el('span', { class: 'badge badge-ok' }, 'LOCKED TO PLAN')),
       el('div', { class: 'chip-row' }, chip('Structure', selected.displayName || prettyStrategy(selected.strategy)),
         chip('Contracts', (selected.legs || []).length + ' legs'), chip('Plan intent', planIntentLabel(initialPlan.intent))),
-      UI.expandable('Show the selected contracts and prior economics', function () { return candidateCard(selected, false, initialPlan.symbol); })));
+      candidatePositionSummary(selected, 'EXACT CONTRACTS UNDER DECISION'),
+      UI.expandable('Full analysis', function () { return candidateFullAnalysis(selected); },
+        { stateKey: 'plan-decision-full-analysis' })));
 
     var qty = el('input', { type: 'number', min: '1', max: '100', value: state.qty, id: 'plan-decision-qty' });
     var limit = el('input', { type: 'number', step: '0.01', id: 'plan-decision-price',
@@ -2385,7 +2473,7 @@
       return { qty: state.qty, proposedNetCents: state.proposedNetCents,
         feesOverrideCents: state.feesOverrideCents, note: state.note };
     }
-    content.appendChild(el('div', { class: 'card plan-decision-controls' }, UI.cardHeader('Price the decision now'),
+    decisionTop.appendChild(el('div', { class: 'card plan-decision-controls' }, UI.cardHeader('Price the decision now'),
       el('p', { class: 'muted' }, 'The server reprices the Plan’s contracts against the current book. A blank price freezes the executable package price shown by this review.'),
       el('div', { class: 'form-grid plan-decision-form' },
         el('div', { class: 'field' }, el('label', { for: 'plan-decision-qty' }, 'Quantity'), qty),
@@ -2400,31 +2488,35 @@
           state.preview = await PlanStore.previewDecision(live, request());
           state.proposedNetCents = state.preview.order.proposedNetCents;
           limit.value = (state.proposedNetCents / 100).toFixed(2);
-          paintPreview();
+          paintPreview(true);
         } catch (e) { review.innerHTML = ''; review.appendChild(alertBox('danger', 'Could not review this order', [e.message])); }
         finally { this.disabled = false; }
       } }, state.preview ? 'Refresh exact review' : 'Review exact order'))));
     content.appendChild(review);
 
-    function paintPreview() {
+    function paintPreview(revealResult) {
       var result = state.preview;
       if (!result) return;
       var p = result.preview, evaluation = result.evaluation || {};
       var economics = evaluation.assessment && evaluation.assessment.economics;
       review.innerHTML = '';
-      review.appendChild(economicAssessmentBlock({ evaluation: evaluation }));
+      var primary = el('div', { class: 'plan-decision-review-primary' });
+      var secondary = el('div', { class: 'plan-decision-review-secondary' });
+      review.appendChild(el('div', { class: 'plan-decision-review-grid' }, primary, secondary));
+      var economicBlock = economicAssessmentBlock({ evaluation: evaluation });
+      if (economicBlock) primary.appendChild(economicBlock);
       var decisionActionAnchor = el('div', { class: 'plan-decision-action-anchor' });
-      review.appendChild(decisionActionAnchor);
-      review.appendChild(decisionMetricsReceipt(evaluation, Learn.currentLevel() === 'beginner'));
-      review.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);
+      var metrics = decisionMetricsReceipt(evaluation, Learn.currentLevel() === 'beginner');
+      if (metrics) secondary.appendChild(metrics);
+      secondary.appendChild(verdictPanel(p, Learn.currentLevel() === 'beginner', true).node);
       var blocks = (p.blockReasons || []).concat(result.guardrails && result.guardrails.blockReasons || []);
       var warnings = (p.warnings || []).concat(result.guardrails && result.guardrails.warnings || []);
       if (blocks.length) {
-        review.appendChild(alertBox('danger', 'This package cannot be opened', blocks));
+        primary.appendChild(alertBox('danger', 'This package cannot be opened', blocks));
         var execution = p.analytics && p.analytics.executionQuality;
         var executableNet = execution && execution.executableNetCents;
         if (executableNet != null && blocks.some(function (reason) { return /more favorable than the executable market/i.test(reason); })) {
-          review.appendChild(el('div', { class: 'btn-row plan-stale-limit-recovery' },
+          primary.appendChild(el('div', { class: 'btn-row plan-stale-limit-recovery' },
             el('button', { type: 'button', class: 'btn btn-secondary', id: 'plan-use-executable', onclick: function () {
               state.proposedNetCents = executableNet;
               limit.value = (executableNet / 100).toFixed(2);
@@ -2433,8 +2525,8 @@
             } }, 'Use current executable ' + fmtMoney(executableNet, { plus: true }) + ' & review')));
         }
       }
-      if (warnings.length) review.appendChild(alertBox('caution', 'Review these conditions', warnings));
-      review.appendChild(el('div', { class: 'grid grid-4 plan-decision-math' },
+      if (warnings.length) primary.appendChild(alertBox('caution', 'Review these conditions', warnings));
+      var decisionMath = el('div', { class: 'grid grid-4 plan-decision-math' },
         stat('Cost / credit', fmtMoney(p.entryNetPremiumCents, { plus: true })),
         stat(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))),
         stat('Theoretical max profit', UI.maxProfitLabel(selected.strategy, selected.structureGroup,
@@ -2443,12 +2535,11 @@
         stat('Market EV after costs', economics && economics.marketEvAfterCostsCents != null ? pnlSpan(economics.marketEvAfterCostsCents) : '—'),
         stat('Realized-vol scenario EV', economics && economics.realizedVolEvAfterCostsCents != null ? pnlSpan(economics.realizedVolEvAfterCostsCents) : '—'),
         stat('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
-        stat('Opening fees', fmtMoney(p.feesOpenCents))));
-      if (window.Scenario && selected.legs && selected.legs.length) review.appendChild(UI.expandable(
-        'Realistic calm, up, down and choppy outcomes', function () {
-          return Scenario.realisticOutcomes(initialPlan.symbol,
-            Object.assign({}, selected, { qty: state.qty, entryNetPremiumCents: p.entryNetPremiumCents }));
-        }));
+        stat('Opening fees', fmtMoney(p.feesOpenCents)));
+      var scenarioSummary = window.Scenario && selected.legs && selected.legs.length
+        ? Scenario.realisticOutcomes(initialPlan.symbol,
+          Object.assign({}, selected, { qty: state.qty, entryNetPremiumCents: p.entryNetPremiumCents }),
+          { autoRun: true }) : null;
       var required = result.requiredAcks || [];
       state.acks = {};
       var trade = el('button', { type: 'button', class: 'btn', id: 'plan-place-trade', disabled: 'disabled' }, 'Open practice position');
@@ -2456,7 +2547,7 @@
         var complete = required.every(function (ack) { return state.acks[ack.id]; });
         trade.disabled = !p.ok || !complete;
       }
-      if (required.length) review.appendChild(el('div', { class: 'card card-slim ack-gate' },
+      if (required.length) primary.appendChild(el('div', { class: 'card card-slim ack-gate' },
         UI.cardHeader('Acknowledge material risks'), required.map(function (ack) {
           var box = el('input', { type: 'checkbox', id: 'plan-' + ack.id, onchange: function () { state.acks[ack.id] = box.checked; refresh(); } });
           return el('label', { class: 'ack-row', for: 'plan-' + ack.id }, box, el('span', {}, ack.label));
@@ -2484,11 +2575,18 @@
           } catch (e) { UI.toast(e.message, 'error'); }
         });
       } }, 'Stay in cash');
+      primary.appendChild(decisionActionAnchor);
       decisionActionAnchor.appendChild(el('div', { class: 'plan-decision-actions' },
         el('div', {}, el('b', {}, 'Make the decision'), el('p', { class: 'muted' },
           'Trade and cash both preserve this exact comparison for later review.')),
         el('div', { class: 'btn-row' }, trade, cash)));
+      if (scenarioSummary) primary.appendChild(scenarioSummary);
+      primary.appendChild(decisionMath);
       refresh();
+      if (revealResult) requestAnimationFrame(function () {
+        decisionActionAnchor.classList.add('arrival-highlight');
+        decisionActionAnchor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
     }
     if (state.preview) paintPreview();
   }

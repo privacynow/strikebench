@@ -612,7 +612,7 @@ class JourneySurfaceTest {
                 "Construct across ideas", "Enter the exact broker trade", "Your record",
                 "Possible futures", "Past evidence");
         assertThat(builder).contains(
-                "Every structure, with its payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
+                "Every strategy, shown by payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
                 "id: 'builder-add-leg'", "UI.vocabulary('theoreticalMaxLoss')", "Theoretical max profit");
         assertThat(plans).contains(
                 "/strategy/run", "/strategy/fit", "/strategy/custom", "/scout/run", "/outcomes/run",
