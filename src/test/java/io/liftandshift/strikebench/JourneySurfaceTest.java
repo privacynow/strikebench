@@ -538,7 +538,7 @@ class JourneySurfaceTest {
                 .doesNotContain("record SimLeg", "portfolioValue(", "BlackScholes.price(");
         assertThat(position).contains("List<Leg> legs", "MarketHours.tradingDaysBetween(");
         assertThat(valuation).contains("for (Leg leg : position.legs())", "BlackScholes.price(",
-                "settlementSpot", "Leg.SHARES_PER_CONTRACT");
+                "settlementSpot", "leg.multiplier()");
         assertThat(controller).contains("toPathPosition(ctx, position.legs())",
                         "new io.liftandshift.strikebench.sim.PathPosition(today, resolved)")
                 .doesNotContain("SimLeg", "toSimLegs");
@@ -603,12 +603,12 @@ class JourneySurfaceTest {
         String plans = source("js/plans.js");
 
         assertThat(views).contains(
-                "Scout this sector", "Proposed trades", "All strategies", "Option prices", "Scout",
+                "Scout this sector", "Proposed trades", "All strategies", "Your trade", "Option prices", "Scout",
                 "Ranked field", "Name your buy price", "Name your sale price", "Choose a protection floor",
                 "Your income picture", "One position, separate lenses", "Market odds", "Model futures",
                 "Past analogs", "Which proposal handles this evidence best?", "Rule replay",
                 "Previous Plan replays", "Price the decision now",
-                "Construct across ideas", "Record a trade from your broker", "Your record",
+                "Construct across ideas", "Enter the exact broker trade", "Your record",
                 "Possible futures", "Past evidence");
         assertThat(builder).contains(
                 "Every structure, with its payoff shape", "Fit to my limits", "Size this synthetic long by exposure",
@@ -617,6 +617,31 @@ class JourneySurfaceTest {
                 "/strategy/run", "/strategy/fit", "/strategy/custom", "/scout/run", "/outcomes/run",
                 "/outcomes/compare",
                 "/outcomes/backtest", "/decision/preview", "/rehearsals");
+    }
+
+    @Test void onePositionEditorOwnsHypotheticalAnalysisAndTrackedRecording() throws Exception {
+        String html = source("index.html");
+        String editor = source("js/position-editor.js");
+        String plan = source("js/views-plan.js");
+        String portfolio = source("js/views-portfolio.js");
+        String workspace = source("js/workspace.js");
+
+        assertThat(html).contains("/js/position-editor.js?v=@asset.version@")
+                .satisfies(value -> assertThat(value.indexOf("/js/position-editor.js"))
+                        .isLessThan(value.indexOf("/js/views-plan.js")));
+        assertThat(editor).contains("window.PositionEditor =", "function parseTerminal(",
+                        "function normalizedForAnalysis(", "function recordPayload(",
+                        "Blank never means zero", "Similarity is advisory, never idempotency",
+                        "Broker-sourced activity requires a stable order or statement reference",
+                        "exact total fees from the broker", "one underlying per position package",
+                        "adjusted contract", "Alt+V switches views", "Record factual activity")
+                .doesNotContain("API.post('/api/trades/external'");
+        assertThat(plan).contains("key: 'yourTrade'", "PositionEditor.render(body",
+                "Analyze and use in this Plan");
+        assertThat(portfolio).contains("PositionEditor.render(sharedTradeHost",
+                        "ensureSharedTradeEditor()", "recordPrimary: true")
+                .doesNotContain("id: 'record-real-card'", "id: 'ext-symbol'", "/api/trades/external");
+        assertThat(workspace).contains("'positionDrafts'");
     }
 
     @Test void traderOwnVocabularyAndDisclosureStateHaveOneOwner() throws Exception {

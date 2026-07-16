@@ -110,7 +110,7 @@
         strategy: candidate.strategy || evaluation.family || 'CUSTOM',
         qty: Math.max(1, Number(candidate.qty || 1) * Number(allocation.units || 1)), legs: candidate.legs,
         thesis: form.thesis, horizon: form.horizon, riskMode: form.riskMode,
-        intent: intent, source: 'PORTFOLIO_CONSTRUCT' });
+        intent: intent, source: 'PORTFOLIO_CONSTRUCT', fillNature: 'PROPOSED' });
       plan = saved.plan;
     }
     return PlanStore.focus(plan, 'STRATEGY');
@@ -389,7 +389,7 @@
       if (!Number.isFinite(feeAmount) || feeAmount < 0) throw new Error('Fees must be zero or more.');
       var explicit1256 = Boolean(position.section1256);
       var out = await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
-        occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: 'ROLL',
+        occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: 'ROLL', fillNature: 'EXECUTED',
         cashAmountCents: null, feesCents: Math.round(feeAmount * 100), taxCategory: null,
         source: source.value, externalRef: reference.value || null, notes: notes.value || null,
         legs: [
@@ -633,6 +633,66 @@
       legs.appendChild(portfolioLegEditor({}, true));
     } }, '+ Security leg');
     var guidance = el('div', { class: 'muted small book-event-guidance' });
+    var sharedTradeHost = el('div', { class: 'book-shared-position-editor', hidden: 'hidden' });
+    var sharedTradeEditor = null, eventMeta = null, notesField = null, saveRow = null, addLegRow = null;
+
+    function ensureSharedTradeEditor() {
+      if (sharedTradeEditor) return sharedTradeEditor;
+      sharedTradeEditor = PositionEditor.render(sharedTradeHost, {
+        stateKey: 'account:' + account.id + ':trade',
+        title: 'Enter the exact broker trade',
+        description: Learn.currentLevel() === 'beginner'
+          ? 'Build the position once. Analyze can explain it with blank fills; Record requires the facts that actually happened.'
+          : 'One package state drives permissive analysis and strict append-only recording. Similar contracts are advisory; only a stable broker reference is idempotent.',
+        allowRecord: true,
+        recordPrimary: true,
+        recordEffects: true,
+        recordDisabled: account.status === 'ARCHIVED',
+        recordDisabledReason: 'This tracked account is archived. Restore it before recording activity; Analyze remains available.',
+        accountName: account.name,
+        onAnalyze: function (payload) {
+          return API.post('/api/portfolio/accounts/' + account.id + '/analyze', payload);
+        },
+        onRecord: async function (payload) {
+          var out = await API.post('/api/portfolio/accounts/' + account.id + '/transactions', payload);
+          API.flushCache();
+          return out;
+        },
+        onRecorded: function (out) {
+          App.state.portfolioBookFocusTransaction = out && out.id || null;
+          return App.render();
+        },
+        recordedActionLabel: 'Refresh account activity',
+        findSimilar: async function (payload) {
+          if (payload.externalRef) {
+            var identity = await API.getFresh('/api/portfolio/accounts/' + account.id + '/transactions?source='
+              + encodeURIComponent(payload.source) + '&externalRef=' + encodeURIComponent(payload.externalRef));
+            if ((identity.transactions || []).length) {
+              throw new Error('That ' + String(payload.source).toLowerCase()
+                + ' reference is already recorded as ' + identity.transactions[0].id
+                + '. Stable references identify the same broker fact; contract similarity is a separate advisory.');
+            }
+          }
+          var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
+          return (summary.positions || []).filter(function (position) {
+            return (payload.legs || []).some(function (leg) {
+              if (leg.positionEffect !== 'OPEN' || position.symbol !== leg.symbol
+                  || position.instrumentType !== leg.instrumentType) return false;
+              if (leg.instrumentType === 'STOCK') return position.side === (leg.action === 'BUY' ? 'LONG' : 'SHORT');
+              return position.optionType === leg.optionType
+                && Number(position.strike) === Number(leg.strike)
+                && position.expiration === leg.expiration
+                && position.side === (leg.action === 'BUY' ? 'LONG' : 'SHORT');
+            });
+          }).map(function (position) { return Object.assign({ label: portfolioPositionLabel(position) }, position); });
+        },
+        onLinkSimilar: function (position) {
+          UI.toast('Opening the existing ' + portfolioPositionLabel(position), 'ok');
+          App.navigate('#/portfolio/book/overview');
+        }
+      });
+      return sharedTradeEditor;
+    }
 
     function addConversionLegs(kind) {
       var optionAction = kind === 'ASSIGNMENT' ? 'BUY' : 'SELL';
@@ -689,15 +749,27 @@
     function syncEvent() {
       legs.innerHTML = '';
       var isCash = cashEvents.indexOf(event.value) >= 0;
+      var isTrade = event.value === 'TRADE';
       cashField.hidden = !isCash;
-      feeField.hidden = isCash;
+      feeField.hidden = isCash || isTrade;
       taxField.hidden = event.value !== 'DIVIDEND';
       taxCategory.innerHTML = '';
       [['', 'Ordinary dividend'], ['QUALIFIED_DIVIDEND', 'Qualified dividend'],
         ['CAPITAL_GAIN_DISTRIBUTION', 'Capital-gain distribution']].forEach(function (row) {
         taxCategory.appendChild(el('option', { value: row[0] }, row[1]));
       });
-      legs.hidden = isCash; addLeg.hidden = isCash || ['ASSIGNMENT', 'EXERCISE', 'ROLL'].indexOf(event.value) >= 0;
+      legs.hidden = isCash || isTrade;
+      sharedTradeHost.hidden = !isTrade;
+      addLeg.hidden = isCash || isTrade || ['ASSIGNMENT', 'EXERCISE', 'ROLL'].indexOf(event.value) >= 0;
+      if (eventMeta) eventMeta.hidden = isTrade;
+      if (notesField) notesField.hidden = isTrade;
+      if (saveRow) saveRow.hidden = isTrade;
+      if (addLegRow) addLegRow.hidden = isCash || isTrade || ['ASSIGNMENT', 'EXERCISE', 'ROLL'].indexOf(event.value) >= 0;
+      if (isTrade) {
+        ensureSharedTradeEditor();
+        guidance.textContent = 'The shared editor keeps ANALYZE and RECORD separate: missing fills may be modeled for learning, but the tracked ledger accepts factual fills only.';
+        return;
+      }
       if (isCash) {
         guidance.textContent = event.value === 'ADJUSTMENT'
           ? 'Use a signed adjustment only when reconciling to a statement; keep the reason in Notes.'
@@ -720,7 +792,7 @@
           : 'One transaction may contain every stock and option leg in an exact package. Use Open/Close explicitly so basis cannot be inferred incorrectly.';
       }
     }
-    event.addEventListener('change', syncEvent); syncEvent();
+    event.addEventListener('change', syncEvent);
 
     var message = el('div', { class: 'small', 'aria-live': 'polite' });
     var save = el('button', { type: 'button', class: 'btn', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
@@ -737,6 +809,7 @@
           var legInputs = isCash ? [] : Array.from(legs.querySelectorAll('.book-leg-row')).map(function (row) { return row.read(); });
           await API.post('/api/portfolio/accounts/' + account.id + '/transactions', {
             occurredAt: portfolioInstant(occurred, 'Activity date and time'), eventType: event.value,
+            fillNature: isCash ? 'NOT_APPLICABLE' : 'EXECUTED',
             cashAmountCents: isCash ? Math.round(cashAmount * 100) : null,
             feesCents: Math.round(feeAmount * 100), taxCategory: taxCategory.value || null,
             source: source.value, externalRef: reference.value || null, notes: notes.value || null, legs: legInputs
@@ -746,18 +819,23 @@
         } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
         finally { save.disabled = account.status === 'ARCHIVED'; save.removeAttribute('aria-busy'); }
       } }, 'Record activity');
-    return el('section', { class: 'card book-record-card' },
+    eventMeta = el('div', { class: 'form-grid book-transaction-meta' }, UI.field('Date and time', occurred),
+      UI.field('Source', source), UI.field('Broker reference', reference,
+        { hint: 'Required for broker-sourced activity so a repeated fill cannot be recorded twice.' }), cashField, feeField, taxField);
+    notesField = UI.field('Notes', notes);
+    addLegRow = el('div', { class: 'btn-row' }, addLeg);
+    saveRow = el('div', { class: 'btn-row' }, save);
+    var section = el('section', { class: 'card book-record-card' },
       UI.cardHeader('Record activity', el('span', { class: 'badge badge-dim' }, 'APPEND-ONLY')),
       el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
         ? 'Copy what actually happened at your broker. StrikeBench keeps exact share and option lots, cash, fees, and basis; it never guesses whether a leg opened or closed.'
         : 'Post normalized cash or market activity to the owner-scoped accounting book. Corrections use offsetting entries; recorded history is not rewritten.'),
       el('p', { class: 'muted small' }, 'Enter market activity oldest to newest so every close can match the lots that existed at that time. CSV imports sort transaction groups and keep every multi-leg package atomic.'),
-      el('div', { class: 'form-grid book-transaction-meta' }, UI.field('What happened?', event), UI.field('Date and time', occurred),
-        UI.field('Source', source), UI.field('Broker reference', reference,
-          { hint: 'Required for broker-sourced activity so a repeated fill cannot be recorded twice.' }), cashField, feeField, taxField),
-      guidance, legs,
-      el('div', { class: 'btn-row' }, addLeg), UI.field('Notes', notes),
-      el('div', { class: 'btn-row' }, save), message);
+      el('div', { class: 'form-grid book-event-picker' }, UI.field('What happened?', event)),
+      eventMeta, guidance, sharedTradeHost, legs,
+      addLegRow, notesField, saveRow, message);
+    syncEvent();
+    return section;
   }
 
   function portfolioImportCard(account) {
@@ -823,7 +901,7 @@
       el('div', {}, el('b', {}, tx.eventType.replaceAll('_', ' ').toLowerCase()),
         el('span', { class: 'muted small' }, portfolioOccurredLabel(tx.occurredAt))),
       el('div', { class: cashClass }, fmtMoney(tx.cashEffectCents, { plus: true })));
-    return UI.expandable(summary, function () {
+    var row = UI.expandable(summary, function () {
       return el('div', { class: 'book-transaction-detail' },
         el('div', { class: 'chip-row' }, chip('Source', tx.source), chip('Fees', fmtMoney(tx.feesCents)),
           tx.taxCategory ? chip('Tax category', tx.taxCategory.replaceAll('_', ' ').toLowerCase()) : null,
@@ -842,6 +920,8 @@
             + ' matched lot' + (tx.roll.realizedMatchIds.length === 1 ? '' : 's') + '; replacement lot ' + tx.roll.replacementLotId + ' keeps its own exact basis.')) : null,
         el('div', { class: 'muted small' }, 'Transaction ' + tx.id + ' · recorded history is append-only.'));
     });
+    row.dataset.transactionId = tx.id;
+    return row;
   }
 
   async function renderPortfolioBookActivity(root, account) {
@@ -875,6 +955,17 @@
       journal.appendChild(loadRow);
     }
     root.appendChild(journal);
+    if (App.state.portfolioBookFocusTransaction) {
+      var focused = journal.querySelector('[data-transaction-id="'
+        + CSS.escape(App.state.portfolioBookFocusTransaction) + '"]');
+      delete App.state.portfolioBookFocusTransaction;
+      if (focused) {
+        focused.classList.add('plan-return-focus');
+        setTimeout(function () {
+          if (focused.isConnected) focused.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }, 80);
+      }
+    }
   }
 
   function portfolioValuationForm(account, performance) {
@@ -1665,145 +1756,6 @@
     fIntent.value = pf.intent || '';
     fSym.addEventListener('change', applyFilters);
     fIntent.addEventListener('change', applyFilters);
-    // The learning loop's import path: record a trade you ACTUALLY placed at your broker.
-    // Structured legs against live contracts — no free-form text, no paper-cash mutation.
-    var extCard = el('div', { class: 'card', id: 'record-real-card' });
-    extCard.appendChild(UI.expandable('Record a trade from your broker', (function () {
-      var box = el('div', {});
-      box.appendChild(el('div', { class: 'chip-row position-provenance-row' },
-        chip(UI.vocabulary('recordedAtBroker'), 'actual fills required')));
-      box.appendChild(explain('Enter the exact contracts and actual net fill from your broker. The tracked account records the facts; the isolated practice account is never changed.'));
-      function externalField(label, input, hint) {
-        return UI.field(label, input, { hint: hint });
-      }
-      var sym = el('input', { type: 'text', id: 'ext-symbol', list: 'universe-symbols', placeholder: 'AAPL' });
-      var qty = el('input', { type: 'number', id: 'ext-qty', min: '1', max: '100', value: '1' });
-      var net = el('input', { type: 'number', id: 'ext-net', step: '0.01', placeholder: '175.00' });
-      var fees = el('input', { type: 'number', id: 'ext-fees', step: '0.01', min: '0', placeholder: '2.00' });
-      box.appendChild(el('div', { class: 'form-grid external-trade-summary' },
-        externalField('Symbol', sym), externalField('Contracts', qty),
-        externalField('Actual package net $', net, 'Total dollars: + credit / \u2212 debit'),
-        externalField('Total fees $', fees, 'All opening commissions and fees')));
-      var legsBox = el('div', { id: 'ext-legs' });
-      var payoffHost = el('div', { class: 'external-payoff-host' });
-      function renderExternalPayoff() {
-        payoffHost.innerHTML = '';
-        var rows = Array.prototype.slice.call(legsBox.querySelectorAll('.ext-leg'));
-        var strikes = rows.map(function (row) { return Number(row.querySelector('.x-strike').value); })
-          .filter(function (value) { return Number.isFinite(value) && value > 0; });
-        var netValue = Number(net.value), contracts = Number(qty.value);
-        var feeValue = fees.value === '' ? 0 : Number(fees.value);
-        if (!strikes.length || net.value === '' || !Number.isFinite(netValue)
-            || !Number.isFinite(feeValue) || feeValue < 0
-            || !Number.isFinite(contracts) || contracts < 1) {
-          payoffHost.appendChild(UI.emptyState('Payoff preview waiting',
-            'Enter quantity, package net, and at least one strike. This remains hypothetical until you record factual broker fills.'));
-          return;
-        }
-        var lo = Math.max(0.01, Math.min.apply(null, strikes) * 0.65);
-        var hi = Math.max.apply(null, strikes) * 1.35;
-        var prices = [];
-        for (var i = 0; i <= 64; i++) prices.push(lo + (hi - lo) * i / 64);
-        strikes.forEach(function (strike) { prices.push(strike); });
-        prices = Array.from(new Set(prices.map(function (price) { return Number(price.toFixed(6)); })))
-          .sort(function (a, b) { return a - b; });
-        var points = prices.map(function (price) {
-          var pnl = Math.round((netValue - feeValue) * 100);
-          rows.forEach(function (row) {
-            var strike = Number(row.querySelector('.x-strike').value);
-            if (!Number.isFinite(strike)) return;
-            var type = row.querySelector('.x-type').value;
-            var intrinsic = type === 'CALL' ? Math.max(0, price - strike) : Math.max(0, strike - price);
-            var sign = row.querySelector('.x-act').value === 'BUY' ? 1 : -1;
-            pnl += Math.round(sign * intrinsic * 100 * contracts);
-          });
-          return { price: price, profitCents: pnl };
-        });
-        payoffHost.dataset.entryCashAfterFeesCents = String(Math.round((netValue - feeValue) * 100));
-        payoffHost.appendChild(el('div', { class: 'position-payoff-heading' },
-          el('span', { class: 'eyebrow' }, UI.vocabularyText('hypothetical').toUpperCase()),
-          el('h4', {}, 'Payoff at expiration')));
-        payoffHost.appendChild(el('div', { class: 'chip-row' },
-          chip('Entry cash after fees', fmtMoney(Math.round((netValue - feeValue) * 100), { plus: true }))));
-        payoffHost.appendChild(UI.payoffChart(points, { breakevens: [] }));
-        payoffHost.appendChild(el('p', { class: 'muted small' },
-          'Preview uses the package net, fees, and legs on screen. Recording still requires the factual broker fields below.'));
-      }
-      function queuePayoff() { window.requestAnimationFrame(renderExternalPayoff); }
-      function legRow() {
-        var action = el('select', { class: 'x-act' }, el('option', {}, 'SELL'), el('option', {}, 'BUY'));
-        var type = el('select', { class: 'x-type' }, el('option', {}, 'PUT'), el('option', {}, 'CALL'));
-        var strike = el('input', { class: 'x-strike', type: 'number', step: '0.5', placeholder: '250' });
-        var expiration = el('input', { class: 'x-exp', type: 'date' });
-        var fill = el('input', { class: 'x-fill', type: 'number', step: '0.01', placeholder: '3.10' });
-        [action, type, strike].forEach(function (input) { input.addEventListener('input', queuePayoff); });
-        return el('div', { class: 'ext-leg' },
-          externalField('Action', action), externalField('Type', type), externalField('Strike', strike),
-          externalField('Expiration', expiration), externalField('Your fill $/share', fill,
-            'Required when the contract has expired'),
-          el('button', { type: 'button', class: 'btn btn-sm btn-secondary ext-leg-remove',
-            'aria-label': 'Remove this leg', onclick: function (ev) {
-              ev.target.closest('.ext-leg').remove(); queuePayoff();
-            } }, '\u00d7'));
-      }
-      legsBox.appendChild(legRow());
-      var legEditor = el('div', {}, el('div', { class: 'plan-section-head external-legs-head' },
-        el('div', {}, el('h4', {}, 'Exact option legs'),
-          el('p', { class: 'muted small' }, 'Leg fills are per share; package net above is total dollars.')),
-        el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
-          onclick: function () { legsBox.appendChild(legRow()); queuePayoff(); } }, '+ Leg')),
-        legsBox);
-      box.appendChild(UI.positionWorkbench(legEditor, payoffHost));
-      [qty, net, fees].forEach(function (input) { input.addEventListener('input', queuePayoff); });
-      renderExternalPayoff();
-      var execDate = el('input', { type: 'date', id: 'ext-date' });
-      var brokerIn = el('input', { type: 'text', id: 'ext-broker', placeholder: 'E*TRADE' });
-      var refIn = el('input', { type: 'text', id: 'ext-ref', placeholder: 'Order number' });
-      var pastChk = el('input', { type: 'checkbox', id: 'ext-past' });
-      var msg = el('div', { class: 'muted small', id: 'ext-msg' });
-      var saveBtn = el('button', { class: 'btn btn-sm', id: 'ext-save', onclick: async function () {
-        saveBtn.disabled = true; msg.textContent = '';
-        try {
-          var legs = Array.prototype.map.call(legsBox.querySelectorAll('.ext-leg'), function (row) {
-            var fillV = row.querySelector('.x-fill').value;
-            var lg = { action: row.querySelector('.x-act').value, type: row.querySelector('.x-type').value,
-                       strike: row.querySelector('.x-strike').value, expiration: row.querySelector('.x-exp').value, ratio: 1 };
-            if (fillV !== '') lg.entryPrice = fillV;
-            return lg;
-          }).filter(function (l) { return l.strike && l.expiration; });
-          if (pastChk.checked && legs.some(function (l) { return !l.entryPrice; })) {
-            throw new Error('A past trade needs YOUR fill price on every leg — the live book is gone.');
-          }
-          if (!legs.length) throw new Error('Add at least one leg (strike + expiration).');
-          if (net.value === '') throw new Error('The actual net fill is required.');
-          var orderQty = positiveInteger(qty.value || '1', 'Quantity', 100);
-          var netValue = Number(net.value);
-          var feeValue = fees.value === '' ? null : Number(fees.value);
-          if (!Number.isFinite(netValue)) throw new Error('Enter a valid net fill.');
-          if (feeValue !== null && (!Number.isFinite(feeValue) || feeValue < 0)) throw new Error('Fees must be zero or more.');
-          var t = await API.post('/api/trades/external', {
-            symbol: (sym.value || '').toUpperCase(), strategy: 'CUSTOM', qty: orderQty,
-            legs: legs, proposedNetCents: Math.round(netValue * 100),
-            feesOverrideCents: feeValue === null ? null : Math.round(feeValue * 100),
-            executedAt: execDate.value || null, broker: brokerIn.value || null, orderRef: refIn.value || null,
-            historical: pastChk.checked, source: 'IMPORT' });
-          msg.textContent = 'Recorded ' + t.id + ' — it now appears below as Recorded at broker.';
-          API.flushCache();
-          await App.render();
-        } catch (e) { msg.textContent = 'Refused: ' + (e.message || e); }
-        saveBtn.disabled = false;
-      } }, 'Record trade');
-      box.appendChild(el('div', { class: 'form-grid external-trade-meta' },
-        externalField('Executed on', execDate), externalField('Broker (optional)', brokerIn),
-        externalField('Order number (optional)', refIn)));
-      box.appendChild(el('label', { class: 'check-row external-past-check' }, pastChk,
-        el('span', {}, 'Past trade — contracts may have expired; use my recorded fills instead of a live-book check.')));
-      box.appendChild(el('div', { class: 'btn-row' }, saveBtn));
-      box.appendChild(msg);
-      return box;
-    })(), { stateKey: 'portfolio-record-at-broker' }));
-    root.appendChild(extCard);
-
     var tradesCard = el('div', { class: 'card', id: 'trades-card' },
       UI.cardHeader('Practice trades', seg),
       explain('Click any row for the payoff chart, live marks, and close/settle actions.'),

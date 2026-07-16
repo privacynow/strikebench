@@ -181,14 +181,16 @@
     var days = Product.Horizon.sessions(horizon);
     var plan = await PlanStore.create({ symbol: symbol, intent: intent, thesis: thesis,
       horizonDays: days, riskMode: riskMode() });
-    var position = Object.assign({ symbol: symbol, strategy: c.strategy || 'CUSTOM', qty: c.qty || 1,
+    var position = Object.assign({ symbol: symbol, strategy: c.strategy, qty: c.qty,
       legs: (c.legs || []).map(function (leg) { return {
         action: leg.action, type: leg.stock ? 'STOCK' : leg.type,
         strike: leg.stock || leg.type === 'STOCK' ? null : String(leg.strike),
         expiration: leg.stock || leg.type === 'STOCK' ? null : leg.expiration,
-        ratio: leg.ratio || 1, entryPrice: leg.entryPrice == null ? null : String(leg.entryPrice)
+        ratio: leg.ratio, multiplier: leg.multiplier, positionEffect: leg.positionEffect,
+        entryPrice: leg.entryPrice == null ? null : String(leg.entryPrice)
       }; }), thesis: thesis, horizon: horizon, riskMode: riskMode(), intent: intent,
-      useHeldShares: !!c.usesHeldShares, recommendationId: c.recommendationId || null, source: 'PLAN'
+      useHeldShares: !!c.usesHeldShares, recommendationId: c.recommendationId || null,
+      source: 'PLAN', fillNature: 'PROPOSED'
     }, extra || {});
     var selected = await PlanStore.saveCustom(plan, position);
     await PlanStore.focus(selected.plan, 'DECIDE');
@@ -997,9 +999,10 @@
       button.disabled = true;
       try {
         var live = await PlanStore.get(planRef.plan.id, true);
-        var out = await PlanStore.saveCustom(live, { symbol: live.symbol, strategy: c.strategy, qty: c.qty || 1,
+        var out = await PlanStore.saveCustom(live, { symbol: live.symbol, strategy: c.strategy, qty: c.qty,
           legs: c.legs, thesis: live.context && live.context.thesis, horizon: planHorizonName(live),
-          riskMode: live.context && live.context.riskMode, intent: live.intent, source: 'INTENT_LADDER' });
+          riskMode: live.context && live.context.riskMode, intent: live.intent,
+          source: 'INTENT_LADDER', fillNature: 'PROPOSED' });
         planRef.plan = out.plan;
         planRef.selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
         ui.selectedCandidate = planRef.selected;
@@ -1246,11 +1249,13 @@
     var modes = beginner ? [
       { key: 'compare', label: 'Proposed trades', icon: 'scope', note: 'Ranked for this Plan' },
       { key: 'builder', label: 'All strategies', icon: 'pen', note: 'Visual payoff guide' },
+      { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Enter any exact package' },
       { key: 'chain', label: 'Option prices', icon: 'grid', note: 'Calls, puts and strikes' },
       { key: 'scout', label: 'Scout', icon: 'compass', note: 'Similar setups and offsets' }
     ] : [
       { key: 'compare', label: 'Ranked field', icon: 'scope', note: 'Economics · score · fit' },
       { key: 'builder', label: 'Builder', icon: 'pen', note: 'Exact contracts' },
+      { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Terminal or visual entry' },
       { key: 'chain', label: 'Chain', icon: 'grid', note: 'Inspect the book' },
       { key: 'scout', label: 'Scout', icon: 'compass', note: 'Similar setups · better fits · offsets' }
     ];
@@ -1262,11 +1267,16 @@
         class: 'plan-tool' + (ui.strategyView === mode.key ? ' active' : ''),
         'data-strategy-tool': mode.key,
         'aria-selected': ui.strategyView === mode.key ? 'true' : 'false',
-        onclick: function () { ui.strategyView = mode.key; paint().catch(function (e) { UI.toast(e.message, 'error'); }); }
+        onclick: function () {
+          ui.strategyView = mode.key;
+          if (window.Workspace) Workspace.save();
+          paint().catch(function (e) { UI.toast(e.message, 'error'); });
+        }
       }, icon(mode.icon), el('span', {}, el('b', {}, mode.label), el('small', {}, mode.note))));
     });
     UI.bindTabList(selector, function (button) {
       ui.strategyView = button.getAttribute('data-strategy-tool');
+      if (window.Workspace) Workspace.save();
       paint().then(function () { button.focus(); }).catch(function (e) { UI.toast(e.message, 'error'); });
     });
 
@@ -1279,6 +1289,36 @@
       selector.syncTabs();
       body.setAttribute('aria-labelledby', 'plan-tool-' + ui.strategyView);
       body.innerHTML = '';
+      if (ui.strategyView === 'yourTrade') {
+        PositionEditor.render(body, {
+          stateKey: 'plan:' + planRef.plan.id,
+          planId: planRef.plan.id,
+          lockedSymbol: planRef.plan.symbol,
+          title: beginner ? 'Enter the trade you are considering' : 'Enter an exact position package',
+          description: beginner
+            ? 'Start from the chain or type the legs yourself. Blank fills are allowed here: Analyze will say which values came from the market or a model.'
+            : 'Terminal and visual entry share one draft. Exact fills reprice the package; blank fills remain hypothetical and receive a coverage receipt.',
+          analyzeLabel: 'Analyze and use in this Plan',
+          initialSelection: planRef.selected,
+          onAnalyze: async function (position) {
+            var live = await PlanStore.get(planRef.plan.id, true);
+            planRef.plan = live;
+            position.thesis = live.context && live.context.thesis;
+            position.horizon = planHorizonName(live);
+            position.riskMode = live.context && live.context.riskMode;
+            position.intent = live.intent;
+            var out = await PlanStore.saveCustom(live, position);
+            planRef.plan = out.plan;
+            var analyzed = out.strategy && out.strategy.result && out.strategy.result.candidate;
+            if (analyzed && analyzed.selected === true) {
+              planRef.selected = analyzed;
+              ui.selectedCandidate = analyzed;
+            }
+            return out;
+          }
+        });
+        return;
+      }
       if (ui.strategyView === 'builder') {
         body.appendChild(el('div', { class: 'plan-tool-intro' },
           el('h3', {}, beginner ? 'Every strategy, shown by payoff shape' : 'Build the exact package'),
@@ -1305,14 +1345,18 @@
               symbol: planRef.plan.symbol, strategy: ticket.customFamily || 'CUSTOM', qty: ticket.qty,
               legs: ticket.legs, thesis: planRef.plan.context && planRef.plan.context.thesis,
               horizon: planHorizonName(planRef.plan), riskMode: planRef.plan.context && planRef.plan.context.riskMode,
-              intent: planRef.plan.intent, source: 'BUILDER'
+              intent: planRef.plan.intent, source: 'BUILDER', fillNature: 'PROPOSED'
             };
             PlanStore.get(planRef.plan.id, true).then(function (live) {
               planRef.plan = live;
               return PlanStore.saveCustom(live, position);
             }).then(function (out) {
               planRef.plan = out.plan;
-              planRef.selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
+              var selected = out.strategy && out.strategy.result && out.strategy.result.candidate;
+              if (!selected || selected.selected !== true) {
+                throw new Error((out.preview && out.preview.blockReasons || []).join(' ') || 'This package was analyzed but could not become the Plan structure.');
+              }
+              planRef.selected = selected;
               ui.strategyView = 'compare';
               UI.toast('Exact contracts saved to this Plan');
               return paint();

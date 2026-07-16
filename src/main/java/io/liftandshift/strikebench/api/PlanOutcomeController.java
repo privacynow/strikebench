@@ -346,11 +346,12 @@ final class PlanOutcomeController {
             legs.add(new io.liftandshift.strikebench.outcomes.OutcomeContract.Leg(
                     leg.path("action").asText(), type,
                     "STOCK".equalsIgnoreCase(type) ? BigDecimal.ZERO : new BigDecimal(leg.path("strike").asText()),
-                    leg.path("expiration").asText(null), null, Math.max(1, leg.path("ratio").asInt(1))));
+                    leg.path("expiration").asText(null), null, leg.path("ratio").asInt(),
+                    leg.path("multiplier").asInt()));
         }
         Long entryNet = candidate.hasNonNull("entryNetPremiumCents") ? candidate.path("entryNetPremiumCents").longValue() : null;
         return new io.liftandshift.strikebench.outcomes.OutcomeContract.Position(candidate.path("id").asText(), legs,
-                Math.max(1, candidate.path("qty").asInt(1)), entryNet == null ? null : -entryNet);
+                candidate.path("qty").asInt(), entryNet == null ? null : -entryNet);
     }
 
     private io.liftandshift.strikebench.outcomes.OutcomeContract.MarketContext planOutcomeContext(

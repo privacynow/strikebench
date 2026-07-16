@@ -113,6 +113,32 @@ class PayoffCurveTest {
     }
 
     @Test
+    void adjustedMultiplierScalesExactCashAndRisk() {
+        Leg standard = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP,
+                1, new BigDecimal("2.50"), 100);
+        Leg adjusted = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP,
+                1, new BigDecimal("2.50"), 10);
+
+        PayoffCurve standardCurve = PayoffCurve.of(List.of(standard), 1);
+        PayoffCurve adjustedCurve = PayoffCurve.of(List.of(adjusted), 1);
+
+        assertThat(standardCurve.entryNetPremiumCents()).isEqualTo(-25_000);
+        assertThat(adjustedCurve.entryNetPremiumCents()).isEqualTo(-2_500);
+        assertThat(adjustedCurve.maxLossCents()).isEqualTo(2_500);
+        assertThat(adjustedCurve.profitAtCents(new BigDecimal("110"))).isEqualTo(7_500);
+        assertThat(adjustedCurve.breakevens()).containsExactly(new BigDecimal("102.5000"));
+    }
+
+    @Test
+    void exactShareStockLegDoesNotBecomeAOneHundredShareLot() {
+        PayoffCurve curve = PayoffCurve.of(List.of(
+                Leg.stockShares(LegAction.BUY, 10, new BigDecimal("100"))), 1);
+
+        assertThat(curve.entryNetPremiumCents()).isEqualTo(-100_000);
+        assertThat(curve.profitAtCents(new BigDecimal("110"))).isEqualTo(10_000);
+    }
+
+    @Test
     void probProfitComplementarityAndBounds() {
         List<Leg> longCall = List.of(opt(LegAction.BUY, OptionType.CALL, "100", 1, "2.50"));
         List<Leg> shortCall = List.of(opt(LegAction.SELL, OptionType.CALL, "100", 1, "2.50"));

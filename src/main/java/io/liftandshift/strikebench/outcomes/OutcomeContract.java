@@ -27,10 +27,10 @@ public final class OutcomeContract {
 
     /** One cross-engine leg: expiration is listed-contract identity; expiryDay is path-relative. */
     public record Leg(String action, String type, BigDecimal strike, String expiration,
-                      Integer expiryDay, Integer ratio) {}
+                      Integer expiryDay, int ratio, int multiplier) {}
 
     /** Signed entryCostCents: debit paid is positive, credit received is negative. */
-    public record Position(String key, List<Leg> legs, Integer qty, Long entryCostCents) {}
+    public record Position(String key, List<Leg> legs, int qty, Long entryCostCents) {}
 
     /** A price threshold the path ensemble should answer directly (target, floor, strike, breakeven). */
     public record DecisionLevel(String key, BigDecimal price) {}

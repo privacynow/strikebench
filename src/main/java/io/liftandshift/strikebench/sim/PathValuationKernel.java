@@ -17,7 +17,7 @@ public final class PathValuationKernel {
         for (Leg leg : position.legs()) {
             double sign = leg.action() == LegAction.SELL ? -1 : 1;
             if (leg.isStock()) {
-                value += sign * leg.ratio() * Leg.SHARES_PER_CONTRACT * underlying;
+                value += sign * leg.ratio() * leg.multiplier() * underlying;
                 continue;
             }
             boolean call = leg.type() == OptionType.CALL;
@@ -35,7 +35,7 @@ public final class PathValuationKernel {
                 optionPrice = BlackScholes.price(call, underlying, leg.strike().doubleValue(),
                         time, annualRate, 0, Math.max(0.01, iv));
             }
-            value += sign * leg.ratio() * Leg.SHARES_PER_CONTRACT * optionPrice;
+            value += sign * leg.ratio() * leg.multiplier() * optionPrice;
         }
         return value;
     }

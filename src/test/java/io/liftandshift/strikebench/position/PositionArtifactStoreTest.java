@@ -38,7 +38,7 @@ class PositionArtifactStoreTest {
         var opening = books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-01-02T15:00:00Z", "TRADE", null, 0L, null, "BROKER", "shares-500", null,
                 List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "NVDA", null,
-                        null, null, 500L, 1, new BigDecimal("100.00")))));
+                        null, null, 500L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
         String lotId = books.lots("local", account.id(), false).getFirst().id();
         createPlan("plan-one", "NVDA");
         PositionArtifactStore store = new PositionArtifactStore(db);
@@ -92,7 +92,7 @@ class PositionArtifactStoreTest {
                         0L, null, "MANUAL", null, null,
                         List.of(new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "AAPL",
                                 "CALL", new BigDecimal("250"), LocalDate.parse("2026-08-21"),
-                                1L, 100, null)))))
+                                1L, 100, null, null)), "EXECUTED")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exact price");
         assertThat(db.query("SELECT COUNT(*) n FROM portfolio_transaction", r -> r.lng("n")).getFirst()).isZero();
@@ -105,7 +105,7 @@ class PositionArtifactStoreTest {
         var transaction = books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
                 "2026-07-01T15:00:00Z", "TRADE", null, 0L, null, "BROKER", "resolved-order", null,
                 List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "MU", null,
-                        null, null, 1L, 1, new BigDecimal("100.00")))));
+                        null, null, 1L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
                         + "external_ref,occurred_at,package_net_cents,fees_cents) VALUES(?,?,?,?,?,?,?,?)",
                 "pending-resolution", "local", "BROKER_CSV", "fingerprint-resolution", "resolved-order",

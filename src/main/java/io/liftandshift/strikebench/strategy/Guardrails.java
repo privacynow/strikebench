@@ -31,7 +31,7 @@ public final class Guardrails {
     /**
      * @param quotes current contract quotes aligned by index with legs (null entries for stock legs)
      * @param spot current underlying price, may be null when unknown
-     * @param lockedShareLots 100-share lots of HELD underlying shares the account will lock to this
+     * @param lockedShares exact HELD underlying shares the account will lock to this
      *                        trade (total across qty). Held shares cover short calls the way an
      *                        explicit stock leg would — they turn a "naked" call into a covered one.
      */
@@ -47,7 +47,7 @@ public final class Guardrails {
             boolean allowUndefinedRisk,
             boolean earningsSoon,
             boolean exDividendSoon,
-            long lockedShareLots
+            long lockedShares
     ) {
         /** Historical shape without held-share coverage. */
         public Proposal(StrategyFamily family, List<Leg> legs, int qty, List<OptionQuote> quotes,
@@ -118,17 +118,18 @@ public final class Guardrails {
         // Risk shape. Held shares locked to the trade act as call cover: evaluate the position
         // as if the locked lots were explicit long-stock legs (that is exactly what they are,
         // economically — the trade layer enforces the lock).
-        int lotsPerUnit = p.qty() > 0 ? (int) Math.min(Integer.MAX_VALUE, p.lockedShareLots() / p.qty()) : 0;
+        long sharesPerUnit = p.qty() > 0 ? p.lockedShares() / p.qty() : 0;
         List<Leg> riskLegs = p.legs();
-        if (lotsPerUnit > 0 && p.spot() != null) {
+        if (sharesPerUnit > 0 && p.spot() != null) {
             riskLegs = new ArrayList<>(p.legs());
-            riskLegs.add(Leg.stock(LegAction.BUY, lotsPerUnit, p.spot()));
+            riskLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(sharesPerUnit), p.spot()));
         }
         boolean mixedExpirations = p.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations) {
             long net = PayoffCurve.of(p.legs(), p.qty()).entryNetPremiumCents();
-            boolean shareCovered = lotsPerUnit > 0 && CoverageCheck.uncoveredShorts(p.legs(), lotsPerUnit).isEmpty();
+            boolean shareCovered = sharesPerUnit > 0
+                    && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
             if (net >= 0 && !p.allowUndefinedRisk() && !shareCovered) {
                 blocks.add("Multi-expiration credit positions can carry undefined risk after the near leg expires; blocked by default");
             }
@@ -137,7 +138,7 @@ public final class Guardrails {
             // calendars, inverted diagonals, net-short ratios that look like harmless "debits"
             // to a premium-sign test.
             if (!p.allowUndefinedRisk()) {
-                blocks.addAll(CoverageCheck.uncoveredShorts(p.legs(), lotsPerUnit));
+                blocks.addAll(CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit));
             }
             if (net < 0 && -net > p.buyingPowerCents()) {
                 blocks.add("Debit " + Money.fmt(-net) + " exceeds available buying power " + Money.fmt(p.buyingPowerCents()));
@@ -145,7 +146,8 @@ public final class Guardrails {
         } else {
             PayoffCurve optionCurve = PayoffCurve.of(p.legs(), p.qty());
             boolean shareCovered = optionCurve.maxLossUnbounded()
-                    && lotsPerUnit > 0 && CoverageCheck.uncoveredShorts(p.legs(), lotsPerUnit).isEmpty();
+                    && sharesPerUnit > 0
+                    && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
             PayoffCurve curve = shareCovered && riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty()) : optionCurve;
             if (curve.maxLossUnbounded() && !p.allowUndefinedRisk()) {
                 blocks.add("Undefined (unlimited) maximum loss — blocked. Add a protective wing to cap the risk.");
@@ -158,7 +160,7 @@ public final class Guardrails {
                 }
             }
             if (shareCovered) {
-                warnings.add("Short calls are covered by " + p.lockedShareLots() * 100
+                warnings.add("Short calls are covered by " + p.lockedShares()
                         + " held shares locked to this trade — upside above the strike is given up, and the shares keep their own downside");
             }
         }

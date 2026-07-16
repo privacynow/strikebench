@@ -19,8 +19,6 @@ import java.util.List;
  */
 public final class PayoffCurve {
 
-    private static final BigDecimal HUNDRED = BigDecimal.valueOf(Leg.SHARES_PER_CONTRACT);
-
     private final List<Leg> legs;
     private final int qty;
     private final List<BigDecimal> knots;        // sorted distinct strikes
@@ -89,7 +87,8 @@ public final class PayoffCurve {
         BigDecimal total = BigDecimal.ZERO;
         for (Leg leg : legs) {
             BigDecimal perShare = leg.profitPerShare(s);
-            total = total.add(perShare.multiply(HUNDRED).multiply(BigDecimal.valueOf((long) leg.ratio() * qty)));
+            total = total.add(perShare.multiply(BigDecimal.valueOf(leg.multiplier()))
+                    .multiply(BigDecimal.valueOf((long) leg.ratio() * qty)));
         }
         return entryAdjustCents == 0 ? total : total.add(BigDecimal.valueOf(entryAdjustCents, 2));
     }
@@ -102,7 +101,8 @@ public final class PayoffCurve {
     public long entryNetPremiumCents() {
         BigDecimal total = BigDecimal.ZERO;
         for (Leg leg : legs) {
-            BigDecimal cash = leg.entryPrice().multiply(HUNDRED).multiply(BigDecimal.valueOf((long) leg.ratio() * qty));
+            BigDecimal cash = leg.entryPrice().multiply(BigDecimal.valueOf(leg.multiplier()))
+                    .multiply(BigDecimal.valueOf((long) leg.ratio() * qty));
             total = leg.action() == LegAction.SELL ? total.add(cash) : total.subtract(cash);
         }
         return Money.toCents(total) + entryAdjustCents;
@@ -271,7 +271,7 @@ public final class PayoffCurve {
             }
             double edge = intrinsic - leg.entryPrice().doubleValue();
             double signed = leg.action() == LegAction.BUY ? edge : -edge;
-            total += signed * Leg.SHARES_PER_CONTRACT * leg.ratio() * qty;
+            total += signed * leg.multiplier() * leg.ratio() * qty;
         }
         return total;
     }

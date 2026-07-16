@@ -63,10 +63,10 @@ class PlanStrategyServiceTest {
                      "management":{"summary":"Take profits mechanically","rules":[{"kind":"profit","trigger":"50% captured","action":"close"}]},
                      "explanation":{"assumptions":["No dividend yield"],"failureModes":["Move beyond a short strike"]}},
                    "legs":[
-                     {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"entryPrice":"2.4007"},
-                     {"action":"BUY","type":"PUT","strike":"240","expiration":"2026-08-14","ratio":1,"entryPrice":"1.1"},
-                     {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-14","ratio":1,"entryPrice":"2.3"},
-                     {"action":"BUY","type":"CALL","strike":"270","expiration":"2026-08-14","ratio":1,"entryPrice":"1.05"}
+                     {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.4007","positionEffect":"OPEN"},
+                     {"action":"BUY","type":"PUT","strike":"240","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.1","positionEffect":"OPEN"},
+                     {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.3","positionEffect":"OPEN"},
+                     {"action":"BUY","type":"CALL","strike":"270","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.05","positionEffect":"OPEN"}
                    ]}]}
                 """);
 
@@ -85,6 +85,7 @@ class PlanStrategyServiceTest {
         assertThat(restored.result().at("/candidates/0/evaluation/management/rules/0/action").asText())
                 .isEqualTo("close");
         assertThat(restored.result().at("/candidates/0/legs/0/entryPrice").asText()).isEqualTo("2.4007");
+        assertThat(restored.result().at("/candidates/0/legs/0/positionEffect").asText()).isEqualTo("OPEN");
         assertThat(db.query("SELECT evidence_provenance FROM plan_candidate WHERE id=?",
                 r -> r.str("evidence_provenance"), candidateId)).containsExactly("DEMO_FIXTURE");
         assertThat(restored.result().at("/candidates/0/sourceKind").asText()).isEqualTo("RANKED");
@@ -124,13 +125,13 @@ class PlanStrategyServiceTest {
                    "realizedVolEvAfterCostsCents":1400,"estimatedRoundTripFeesCents":1040,
                    "observedEvidence":false,"reasons":["Costs matter"]},
                  "legs":[
-                   {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-28","ratio":1,"entryPrice":"12.25"},
-                   {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-28","ratio":1,"entryPrice":"8.00"}
+                   {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-28","ratio":1,"multiplier":100,"entryPrice":"12.25","positionEffect":"OPEN"},
+                   {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-28","ratio":1,"multiplier":100,"entryPrice":"8.00","positionEffect":"OPEN"}
                  ]}
                 """);
 
         PlanStrategyService.SavedRun saved = strategies.saveCustom(null, plan,
-                Json.parse("{\"source\":\"BUILDER\"}"), candidate, plan.version());
+                Json.parse("{\"source\":\"BUILDER\"}"), candidate, plan.version(), true);
 
         assertThat(saved.result().at("/candidate/selected").asBoolean()).isTrue();
         JsonNode selected = strategies.selectedCandidate(null, plan.id());
@@ -140,6 +141,21 @@ class PlanStrategyServiceTest {
         assertThat(selected.at("/economics/realizedVolEvAfterCostsCents").asLong()).isEqualTo(1400);
         assertThat(db.query("SELECT source_kind FROM plan_candidate WHERE selected=1", r -> r.str("source_kind")))
                 .containsExactly("CUSTOM");
+
+        Plan.View afterSelection = plans.get(null, plan.id());
+        long selectedVersion = afterSelection.version();
+        String selectedId = selected.get("id").asText();
+        ObjectNode constrained = candidate.deepCopy();
+        constrained.remove("id");
+        constrained.put("label", "Analyzed but mechanically constrained");
+        PlanStrategyService.SavedRun analyzed = strategies.saveCustom(null, afterSelection,
+                Json.parse("{\"source\":\"ANALYZE\"}"), constrained, selectedVersion, false);
+
+        assertThat(analyzed.result().at("/candidate/selected").asBoolean()).isFalse();
+        assertThat(plans.get(null, plan.id()).version()).isEqualTo(selectedVersion);
+        assertThat(strategies.selectedCandidate(null, plan.id()).get("id").asText()).isEqualTo(selectedId);
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate WHERE selected=1", r -> r.lng("n")))
+                .containsExactly(1L);
     }
 
     @Test void scoutResultRestoresAndCopiesAnExactPackageIntoALinkedSiblingPlan() {
@@ -166,8 +182,8 @@ class PlanStrategyServiceTest {
                      "realizedVolEvAfterCostsCents":400,"estimatedRoundTripFeesCents":520,
                      "observedEvidence":false,"reasons":["Compare costs"]},
                    "legs":[
-                     {"action":"BUY","type":"CALL","strike":"560","expiration":"2026-08-21","ratio":1,"entryPrice":"8.4"},
-                     {"action":"SELL","type":"CALL","strike":"570","expiration":"2026-08-21","ratio":1,"entryPrice":"5.0"}
+                     {"action":"BUY","type":"CALL","strike":"560","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"8.4","positionEffect":"OPEN"},
+                     {"action":"SELL","type":"CALL","strike":"570","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"5.0","positionEffect":"OPEN"}
                    ]}]}
                 """);
 

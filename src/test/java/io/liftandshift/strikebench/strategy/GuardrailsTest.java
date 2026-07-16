@@ -122,6 +122,37 @@ class GuardrailsTest {
     }
 
     @Test
+    void adjustedCallUsesExactDeliverableSharesForCoverage() {
+        Leg shortAdjusted = Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("105"), EXP, 1, new BigDecimal("2.00"), 10);
+
+        assertThat(CoverageCheck.callCoverSharesNeeded(List.of(shortAdjusted))).isEqualTo(10);
+        assertThat(CoverageCheck.uncoveredShortsWithHeldShares(List.of(shortAdjusted), 9)).isNotEmpty();
+        assertThat(CoverageCheck.uncoveredShortsWithHeldShares(List.of(shortAdjusted), 10)).isEmpty();
+        assertThat(CoverageCheck.uncoveredShorts(List.of(
+                Leg.stockShares(LegAction.BUY, 10, SPOT), shortAdjusted))).isEmpty();
+
+        Verdict covered = Guardrails.check(new Guardrails.Proposal(null, List.of(shortAdjusted), 1,
+                List.of(quote(OptionType.CALL, "105", "1.90", "2.10", 5000, 300, Freshness.FIXTURE)),
+                SPOT, Freshness.FIXTURE, TODAY, 10_000_000L, false, false, false, 10));
+        assertThat(covered.blocked()).isFalse();
+        assertThat(covered.warnings()).anySatisfy(warning -> assertThat(warning).contains("10 held shares"));
+    }
+
+    @Test
+    void optionCoverageRequiresTheSameDeliverableMultiplier() {
+        Leg shortAdjusted = Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("105"), EXP, 1, new BigDecimal("2.00"), 10);
+        Leg longAdjusted = Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), EXP, 1, new BigDecimal("3.00"), 10);
+        Leg longStandard = Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), EXP, 1, new BigDecimal("3.00"), 100);
+
+        assertThat(CoverageCheck.uncoveredShorts(List.of(shortAdjusted, longAdjusted))).isEmpty();
+        assertThat(CoverageCheck.uncoveredShorts(List.of(shortAdjusted, longStandard))).isNotEmpty();
+    }
+
+    @Test
     void expiredContractBlocked() {
         Leg past = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), TODAY.minusDays(7), 1, new BigDecimal("2.00"));
         Verdict v = Guardrails.check(proposal(StrategyFamily.LONG_CALL, List.of(past),

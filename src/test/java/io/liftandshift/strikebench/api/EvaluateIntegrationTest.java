@@ -162,8 +162,8 @@ class EvaluateIntegrationTest {
                          "jumpVol":0,"tailNu":6,"seed":77,"paths":40},
                  "levels":[{"key":"target","price":270},{"key":"floor","price":240}],
                  "position":{"key":"PUT_SPREAD","qty":1,"legs":[
-                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
-                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1,"multiplier":100},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1,"multiplier":100}]}}
                 """;
         HttpResponse<String> r = post("/api/evaluate", paths);
         assertThat(r.statusCode()).isEqualTo(200);
@@ -245,8 +245,8 @@ class EvaluateIntegrationTest {
                          "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
                          "jumpVol":0,"tailNu":6,"seed":77,"paths":40},
                  "position":{"key":"PUT_SPREAD","qty":1,"legs":[
-                   {"action":"SELL","type":"PUT","strike":255,"expiration":"not-a-date","ratio":1},
-                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"not-a-date","ratio":1,"multiplier":100},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1,"multiplier":100}]}}
                 """;
         HttpResponse<String> response = post("/api/evaluate", body);
         assertThat(response.statusCode()).isEqualTo(400);
@@ -268,7 +268,7 @@ class EvaluateIntegrationTest {
                 {"operation":"POSITION","basis":"RISK_NEUTRAL",
                  "context":{"symbol":"NVDA","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                  "position":{"key":"LONG_CALL","qty":1,"legs":[
-                   {"action":"BUY","type":"CALL","strike":210,"expiration":"2026-08-21","ratio":1}]}}
+                   {"action":"BUY","type":"CALL","strike":210,"expiration":"2026-08-21","ratio":1,"multiplier":100}]}}
                 """;
         HttpResponse<String> response = post("/api/evaluate", body);
         assertThat(response.statusCode()).isEqualTo(422);
@@ -285,8 +285,8 @@ class EvaluateIntegrationTest {
                          "driftAnnual":0,"volAnnual":0,"jumpsPerYear":8,"jumpMean":0,
                          "jumpVol":0.04,"tailNu":6,"seed":91,"paths":80},
                  "position":{"key":"PUT_SPREAD","qty":1,"legs":[
-                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
-                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1,"multiplier":100},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1,"multiplier":100}]}}
                 """;
         JsonNode result = Json.MAPPER.readTree(post("/api/evaluate", body).body()).get("result");
         double atm = result.at("/marketImplied/atmIv").asDouble();
@@ -305,8 +305,8 @@ class EvaluateIntegrationTest {
                 {"operation":"POSITION","basis":"RISK_NEUTRAL",
                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                  "position":{"key":"PUT_SPREAD","qty":1,"legs":[
-                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1},
-                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1}]}}
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1,"multiplier":100},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1,"multiplier":100}]}}
                 """;
         HttpResponse<String> response = post("/api/evaluate", body);
         assertThat(response.statusCode()).isEqualTo(200);
@@ -381,11 +381,15 @@ class EvaluateIntegrationTest {
         ticket.put("riskMode", "balanced");
         ticket.put("intent", candidate.get("intent").asText());
         ticket.put("source", "RECOMMENDATION");
+        ticket.put("fillNature", "PROPOSED");
 
         HttpResponse<String> previewResponse = post("/api/trades/preview", ticket.toString());
         assertThat(previewResponse.statusCode()).isEqualTo(200);
         JsonNode preview = Json.MAPPER.readTree(previewResponse.body()).get("preview");
 
+        assertThat(preview.get("popEntry"))
+                .as("candidate=%s preview=%s", candidate, preview)
+                .isNotNull();
         assertThat(preview.get("popEntry").asDouble())
                 .as("candidate=%s preview=%s", candidate, preview)
                 .isCloseTo(evaluation.at("/risk/pop").asDouble(), org.assertj.core.data.Offset.offset(1e-9));

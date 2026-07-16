@@ -23,13 +23,6 @@ public record RiskProfile(
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
     }
 
-    /** Pre-physical-lane shape. */
-    public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
-                       long tailLossCents, double tailMovePct, List<Scenario> scenarios) {
-        this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, null, null);
-    }
-
     /** One point on the payoff-vs-underlying grid. */
     public record Scenario(double underlyingMovePct, long pnlCents) {}
 }

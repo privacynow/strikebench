@@ -59,6 +59,7 @@ final class PortfolioController {
                 ctx -> ctx.json(books.setArchived(ownerId.apply(ctx), ctx.pathParam("id"), true)),
                 ctx -> ctx.json(books.setArchived(ownerId.apply(ctx), ctx.pathParam("id"), false)),
                 ctx -> ctx.json(books.summary(ownerId.apply(ctx), ctx.pathParam("id"))),
+                this::analyzePackage,
                 this::transactions,
                 this::createTransaction,
                 ctx -> ctx.json(new ApiResponses.Lots<>(books.lots(ownerId.apply(ctx),
@@ -98,9 +99,32 @@ final class PortfolioController {
     }
 
     private void transactions(Context ctx) {
-        ctx.json(new ApiResponses.Transactions<>(books.transactions(ownerId.apply(ctx),
-                ctx.pathParam("id"), ApiRequest.intParam(ctx, "page", 0),
-                Math.clamp(ApiRequest.intParam(ctx, "size", 50), 1, 500))));
+        String source = ctx.queryParam("source");
+        String externalRef = ctx.queryParam("externalRef");
+        if (source != null || externalRef != null) {
+            if (source == null || externalRef == null) {
+                throw new IllegalArgumentException("source and externalRef must be supplied together");
+            }
+            ctx.json(new ApiResponses.Transactions<>(books.transactionsByReference(ownerId.apply(ctx),
+                    ctx.pathParam("id"), source, externalRef)));
+            return;
+        }
+        ctx.json(new ApiResponses.Transactions<>(books.transactions(ownerId.apply(ctx), ctx.pathParam("id"),
+                ApiRequest.intParam(ctx, "page", 0), Math.clamp(ApiRequest.intParam(ctx, "size", 50), 1, 500))));
+    }
+
+    private void analyzePackage(Context ctx) {
+        String id = ctx.pathParam("id");
+        var account = books.account(ownerId.apply(ctx), id);
+        var summary = books.summary(ownerId.apply(ctx), id);
+        TradeOpenRequest body = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class));
+        TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(body, id);
+        var preview = trades.previewTracked(request, summary.bookCashCents());
+        ctx.json(new ApiResponses.TrackedPackageAnalysis(preview, id, account.name(),
+                summary.bookCashCents(), "OBSERVED",
+                "Read-only analysis uses observed market evidence and this tracked account's cash. "
+                        + "It never borrows the Practice account or a Demo/Simulated world."));
     }
 
     private void createTransaction(Context ctx) {

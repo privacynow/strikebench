@@ -171,6 +171,9 @@ public final class ApiResponses {
                                              T plan, U selected, OrderSummary order) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
+    public record TrackedPackageAnalysis(TradePreview preview, String accountId,
+                                         String accountName, long availableCashCents,
+                                         String marketLane, String note) {}
     public record PayoffPoint(String price, long profitCents) {}
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
                                            List<PayoffPoint> payoff) {}

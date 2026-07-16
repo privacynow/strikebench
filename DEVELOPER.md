@@ -140,6 +140,15 @@ Pure forward-outcome work must enter here. Historical replay is Plan-owned at
 Live simulated markets remain a market lane under `/api/sim/market/*`, not an alternate evaluation
 engine.
 
+**Compatibility boundary.** Pre-release StrikeBench contracts have no compatibility burden: retired
+HTTP routes, request fields, browser-storage shapes, and parallel internal records are deleted after
+their facts are migrated. That rule does not apply to formats owned by brokers or data providers.
+E*TRADE and other broker CSV/text/paste adapters are deliberately one-way and forgiving: they parse
+what they can into an editable draft or pending-import record, identify every uncertain or missing
+field, quarantine malformed rows, and never submit authoritative ledger activity until the user has
+completed and confirmed the required facts. Vendor aliases and format variation belong at that raw
+input boundary; they never become alternate StrikeBench ledger schemas.
+
 For `operation=PATHS`, the response owns both the path receipt and the facts derived from it. The UI
 may visualize sample lines, but decisions use the quantiles/probabilities in the response. A price fan
 without a position must answer a concrete level or strike question; with a working position, the same
@@ -247,7 +256,7 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 |---|---|---|
 | `PORT` | `7070` | HTTP port |
 | `BRAND_NAME` / `BRAND_TAGLINE` | `StrikeBench` / built-in | Header, title, hero |
-| `DB_URL` / `DB_USER` / `DB_PASSWORD` / `DB_PATH` | compose db / legacy SQLite path | Postgres connection; `DB_PATH` is one-time legacy import only |
+| `DB_URL` / `DB_USER` / `DB_PASSWORD` | compose db | PostgreSQL connection |
 | `FIXTURES_ONLY` | `false` | Demo data only, zero network |
 | `TRUSTED_PROXY` | `false` | Trust forwarded client IPs only when every request comes through the owned proxy |
 | `HTTP_TIMEOUT_MS` | `10000` | Provider timeout |

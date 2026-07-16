@@ -7,6 +7,9 @@ import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.OptionChain;
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.model.Candle;
@@ -142,6 +145,24 @@ class MarketDataEngineTest {
         assertThat(marks.underlyingMark("AAPL", "observed").orElseThrow())
                 .isEqualByComparingTo("100.00");
         assertThat(provider.calls).hasValue(1);
+    }
+
+    @Test
+    void standardChainQuotesNeverMasqueradeAsAdjustedContractMarks() {
+        CountingProvider provider = new CountingProvider(clock);
+        MarketDataService market = new MarketDataService(
+                List.<MarketDataProvider>of(provider), List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        MarketDataMarks marks = new MarketDataMarks(market, true);
+        LocalDate expiry = provider.expirations("AAPL").getFirst();
+        var quote = provider.chain("AAPL", expiry).orElseThrow().calls().getFirst();
+        Leg standard = Leg.option(LegAction.BUY, OptionType.CALL, quote.strike(), expiry,
+                1, java.math.BigDecimal.ZERO, 100);
+        Leg adjusted = Leg.option(LegAction.BUY, OptionType.CALL, quote.strike(), expiry,
+                1, java.math.BigDecimal.ZERO, 10);
+
+        assertThat(marks.legMark("AAPL", standard)).isPresent();
+        assertThat(marks.legMark("AAPL", adjusted)).isEmpty();
+        assertThat(marks.legMark("AAPL", adjusted, "demo")).isEmpty();
     }
 
     @Test

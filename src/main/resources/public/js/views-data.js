@@ -1268,7 +1268,7 @@
       if (!jobs.length) { jobsCard.appendChild(UI.emptyState('No jobs yet', 'Warm the engine or backfill history to create one.')); return; }
       var anyRunning = false;
       function jobName(kind) {
-        return ({ sync_underlying: 'Update daily history', backfill_underlying: 'Legacy history update',
+        return ({ sync_underlying: 'Update daily history',
           refresh_now: 'Refresh current quotes', warm_universe: 'Warm market cache',
           snapshot_now: 'Record option snapshot', import_options_csv: 'Import option history' })[kind] || kind;
       }

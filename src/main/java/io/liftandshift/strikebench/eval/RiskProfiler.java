@@ -84,8 +84,8 @@ public final class RiskProfiler {
         long entryAdjustment = c.entryNetPremiumCents() - markedEntry;
         List<Leg> combined = new ArrayList<>(optionPackage);
         if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
-            int lotsPerUnit = Math.max(1, c.sharesNeeded() / (Leg.SHARES_PER_CONTRACT * qty));
-            combined.add(Leg.stock(LegAction.BUY, lotsPerUnit, cents(ctx.underlyingCents())));
+            int sharesPerUnit = Math.max(1, c.sharesNeeded() / qty);
+            combined.add(Leg.stockShares(LegAction.BUY, sharesPerUnit, cents(ctx.underlyingCents())));
         }
         return new CurveInput(combined, entryAdjustment);
     }

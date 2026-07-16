@@ -25,7 +25,7 @@ public enum StrategyIntent {
     public String display() { return display; }
     public String blurb() { return blurb; }
 
-    /** Lenient parse for API input; null/unknown -> DIRECTIONAL (the historical default). */
+    /** Parse the optional intent field; an omitted intent means the current directional workflow. */
     public static StrategyIntent parse(String raw) {
         if (raw == null || raw.isBlank()) return DIRECTIONAL;
         try {

@@ -19,7 +19,7 @@ import java.util.Map;
 public final class DatasetService {
 
     public static final String OBSERVED = "observed";
-    private static final String ACTIVE_KEY = "active_dataset"; // legacy global key (pre-per-user)
+    private static final String ACTIVE_KEY_PREFIX = "active_dataset:";
     private static final int KEEP_SYNTHETIC = 25; // retention cap: oldest synthetic runs are pruned
 
     private final Db db;
@@ -45,23 +45,15 @@ public final class DatasetService {
 
     /**
      * PER-USER active dataset: one user exploring a synthetic future must never flip anyone
-     * else's read path (the old single global switch did exactly that). Stored per owner under
-     * 'active_dataset:<owner>'; the legacy global key is read once as a migration fallback.
+     * else's read path. Stored per owner under {@code active_dataset:<owner>}.
      */
     public String activeId(String userId) {
-        String k = ACTIVE_KEY + ":" + owner(userId);
+        String k = ACTIVE_KEY_PREFIX + owner(userId);
         String cached = activeCache.get(k);
         if (cached != null) return cached;
         var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), k);
         String a = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? null : rows.getFirst();
-        if (a == null && "local".equals(owner(userId))) {
-            // Legacy global value (pre-per-user) applies to the LOCAL user only — an authenticated
-            // user must never inherit someone else's pre-migration dataset selection.
-            var legacy = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), ACTIVE_KEY);
-            a = legacy.isEmpty() || legacy.getFirst() == null || legacy.getFirst().isBlank() ? OBSERVED : legacy.getFirst();
-        } else if (a == null) {
-            a = OBSERVED;
-        }
+        if (a == null) a = OBSERVED;
         // A dangling id (dataset pruned/deleted) silently means observed, never a ghost world.
         if (!OBSERVED.equals(a) && !exists(a)) a = OBSERVED;
         activeCache.put(k, a);
@@ -76,7 +68,7 @@ public final class DatasetService {
         if (!OBSERVED.equals(id) && !ownedBy(id, userId)) {
             throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such dataset: " + id); // absent OR someone else's — same answer
         }
-        String k = ACTIVE_KEY + ":" + owner(userId);
+        String k = ACTIVE_KEY_PREFIX + owner(userId);
         db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
                 k, id, clock.instant().toString());
         activeCache.put(k, id);

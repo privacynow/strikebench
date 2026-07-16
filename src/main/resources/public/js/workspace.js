@@ -15,7 +15,7 @@
   function setUserKey(userKey) {
     LS_KEY = 'strikebench.workspace.' + (userKey && String(userKey).trim() ? String(userKey).trim() : 'local');
   }
-  var FORM_KEYS = ['dataScenarioForm', 'dataSyncForm'];
+  var FORM_KEYS = ['dataScenarioForm', 'dataSyncForm', 'positionDrafts'];
 
   function canonicalRoute(hash) {
     return Product.Routes.canonical(hash);
@@ -37,8 +37,10 @@
       planPresentation: window.App && App.state.planUi
         ? Object.keys(App.state.planUi).reduce(function (out, id) {
             var e = App.state.planUi[id] && App.state.planUi[id].evidence;
-            if (e && e.mode) out[id] = { evidenceMode: e.mode,
-              contextRev: App.state.planUi[id].contextRev || null };
+            var planUi = App.state.planUi[id] || {};
+            if (e && e.mode || planUi.strategyView) out[id] = { evidenceMode: e && e.mode || null,
+              strategyView: planUi.strategyView || null,
+              contextRev: planUi.contextRev || null };
             return out;
           }, {}) : null,
       provisionalPlansByMarket: (window.App && App.state.provisionalPlansByMarket)
@@ -65,7 +67,8 @@
       var ui = App.state.planUi[id] = App.state.planUi[id] || {};
       ui.contextRev = s.planPresentation[id].contextRev || null;
       ui.evidence = ui.evidence || {};
-      ui.evidence.mode = s.planPresentation[id].evidenceMode || 'past';
+      if (s.planPresentation[id].evidenceMode) ui.evidence.mode = s.planPresentation[id].evidenceMode;
+      if (s.planPresentation[id].strategyView) ui.strategyView = s.planPresentation[id].strategyView;
     });
     Object.keys(s.forms || {}).forEach(function (k) {
       if (FORM_KEYS.indexOf(k) >= 0 && s.forms[k]) App.state[k] = s.forms[k];

@@ -440,12 +440,14 @@ final class OutcomeController {
         List<String> snaps = new ArrayList<>();
         for (int legIndex = 0; legIndex < position.legs().size(); legIndex++) {
             var leg = position.legs().get(legIndex);
+            int multiplier = leg.multiplier();
             if (leg.isStock()) {
                 var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
                 if (q == null || q.mark() == null) return null;
                 double sign = leg.action() == io.liftandshift.strikebench.model.LegAction.SELL ? -1 : 1;
-                entryPerUnit += sign * Math.max(1, leg.ratio()) * 100 * q.mark().doubleValue();
-                resolved.add(Leg.stock(leg.action(), Math.max(1, leg.ratio()), q.mark()));
+                entryPerUnit += sign * Math.max(1, leg.ratio()) * multiplier * q.mark().doubleValue();
+                resolved.add(new Leg(leg.action(), null, null, null,
+                        Math.max(1, leg.ratio()), q.mark(), multiplier));
                 continue;
             }
             String exactRaw = contractExpirations != null ? contractExpirations.get(legIndex) : null;
@@ -491,14 +493,14 @@ final class OutcomeController {
                         .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spotF).doubleValue())))
                         .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
             }
-            entryPerUnit += (buy ? 1 : -1) * Math.max(1, leg.ratio()) * 100 * px.doubleValue();
+            entryPerUnit += (buy ? 1 : -1) * Math.max(1, leg.ratio()) * multiplier * px.doubleValue();
             // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
             // trading-day horizon. Anything that moved is named in the snap note.
             double listedStrike = quote.strike().doubleValue();
             int listedDays = io.liftandshift.strikebench.market.MarketHours
                     .tradingDaysBetween(today, exp);
             resolved.add(Leg.option(leg.action(), leg.type(),
-                    quote.strike(), exp, Math.max(1, leg.ratio()), px));
+                    quote.strike(), exp, Math.max(1, leg.ratio()), px, multiplier));
             if (Math.abs(listedStrike - leg.strike().doubleValue()) > 1e-9
                     || Math.abs(listedDays - position.expiryDay(leg)) > 1) {
                 snaps.add(leg.type() + " " + trimNum(leg.strike().doubleValue())
@@ -598,11 +600,11 @@ final class OutcomeController {
                     throw new IllegalArgumentException("positions are required for COMPARE");
                 }
                 if (request.positions().size() > 30) throw new IllegalArgumentException("at most 30 positions");
-                int qty = request.positions().getFirst().qty() == null ? 1 : request.positions().getFirst().qty();
+                int qty = request.positions().getFirst().qty();
                 List<CompareStructure> structures = new ArrayList<>();
                 for (var position : request.positions()) {
                     requireOutcomePosition(position);
-                    int pq = position.qty() == null ? 1 : position.qty();
+                    int pq = position.qty();
                     if (pq != qty) throw new IllegalArgumentException("COMPARE positions must use the same quantity");
                     structures.add(new CompareStructure(position.key(), toPathPosition(ctx, position.legs()),
                             position.entryCostCents(), contractExpirations(position.legs())));
@@ -664,7 +666,7 @@ final class OutcomeController {
             throw new IllegalArgumentException("risk-neutral terminal odds support one expiration; use path evaluation for calendars and diagonals");
         }
         var underlying = requireOutcomeQuote(book.quote(), symbol);
-        int qty = position.qty() == null ? 1 : position.qty();
+        int qty = position.qty();
         io.liftandshift.strikebench.sim.PathPosition pathPosition = toPathPosition(ctx, position.legs());
         MarketEntry entry = marketEntry(symbol, pathPosition, qty,
                 worldParam(activeWorld.apply(ctx)), book, expirations);
@@ -736,7 +738,7 @@ final class OutcomeController {
         if (position == null || position.legs() == null || position.legs().isEmpty()) {
             throw new IllegalArgumentException("position with at least one leg is required");
         }
-        if (position.qty() != null && (position.qty() < 1 || position.qty() > 100)) {
+        if (position.qty() < 1 || position.qty() > 100) {
             throw new IllegalArgumentException("position quantity must be 1..100");
         }
         return position;
@@ -753,7 +755,12 @@ final class OutcomeController {
                 throw new IllegalArgumentException("each position leg needs action and type");
             }
             String type = leg.type().trim().toUpperCase(Locale.ROOT);
-            int ratio = leg.ratio() == null ? 1 : leg.ratio();
+            int ratio = leg.ratio();
+            int multiplier = leg.multiplier();
+            if (ratio < 1) throw new IllegalArgumentException("leg ratio must be >= 1");
+            if (multiplier < 1 || multiplier > 10_000) {
+                throw new IllegalArgumentException("leg multiplier must be 1..10,000");
+            }
             io.liftandshift.strikebench.model.LegAction action;
             try {
                 action = io.liftandshift.strikebench.model.LegAction.valueOf(
@@ -762,7 +769,7 @@ final class OutcomeController {
                 throw new IllegalArgumentException("leg action must be BUY or SELL");
             }
             if ("STOCK".equals(type)) {
-                out.add(Leg.stock(action, ratio, BigDecimal.ZERO));
+                out.add(new Leg(action, null, null, null, ratio, BigDecimal.ZERO, multiplier));
                 continue;
             }
             if (leg.strike() == null || leg.strike().signum() <= 0) {
@@ -781,7 +788,8 @@ final class OutcomeController {
                 expiration = io.liftandshift.strikebench.market.MarketHours
                         .tradingDateAfter(laneToday, leg.expiryDay());
             } else throw new IllegalArgumentException("option legs need expiration or a non-negative expiryDay");
-            out.add(Leg.option(action, optionType, leg.strike(), expiration, ratio, BigDecimal.ZERO));
+            out.add(Leg.option(action, optionType, leg.strike(), expiration, ratio,
+                    BigDecimal.ZERO, multiplier));
         }
         return new io.liftandshift.strikebench.sim.PathPosition(laneToday, out);
     }

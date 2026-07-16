@@ -93,9 +93,6 @@ public final class AppConfig {
     public String dbUser() { return get("DB_USER", "strikebench"); }
     public String dbPassword() { return get("DB_PASSWORD", "strikebench"); }
 
-    /** Legacy SQLite file path — used only by the one-time SQLite->Postgres migration tool. */
-    public String dbPath() { return get("DB_PATH", "data/strikebench.db"); }
-
     /** When true, only deterministic fixture data is served; no network calls are made. */
     public boolean fixturesOnly() { return getBool("FIXTURES_ONLY", false); }
 
@@ -150,7 +147,7 @@ public final class AppConfig {
     // OFF by default so strikebench.com never enables it implicitly; a self-hosting user opts in and
     // owns the source terms. Covers EQUITY/ETF/index OHLCV only — NOT options.
     public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", false); }
-    /** Automated Yahoo access is permission-gated separately from the legacy enable switch. */
+    /** Automated Yahoo access requires both connector enablement and explicit permission confirmation. */
     public boolean yahooAutomationPermissionConfirmed() {
         return getBool("YAHOO_AUTOMATION_PERMISSION_CONFIRMED", false);
     }

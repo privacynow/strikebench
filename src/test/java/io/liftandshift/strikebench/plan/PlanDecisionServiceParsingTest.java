@@ -12,14 +12,14 @@ class PlanDecisionServiceParsingTest {
         assertThat(PlanDecisionService.decisionPrice("12.3456"))
                 .isEqualByComparingTo(new BigDecimal("12.3456"));
         assertThat(PlanDecisionService.decisionDecimal("0.275")).isEqualTo(0.275);
-        assertThat(PlanDecisionService.decisionInteger("3", 1)).isEqualTo(3);
+        assertThat(PlanDecisionService.decisionInteger("3", "ratio")).isEqualTo(3);
         assertThat(PlanDecisionService.decisionPrice(null)).isNull();
 
         assertThatThrownBy(() -> PlanDecisionService.decisionPrice("not-a-price"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("invalid price");
         assertThatThrownBy(() -> PlanDecisionService.decisionDecimal("NaN"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("invalid decimal");
-        assertThatThrownBy(() -> PlanDecisionService.decisionInteger(0, 1))
+        assertThatThrownBy(() -> PlanDecisionService.decisionInteger(0, "ratio"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("invalid ratio");
     }
 }

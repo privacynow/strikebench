@@ -45,36 +45,6 @@ public record TradeRecord(
         String dataAge,
         String dataSource
 ) {
-    /** Pre-provenance shape. */
-    public TradeRecord(String id, String accountId, String symbol, String strategy, String status,
-                       int qty, List<Leg> legs, String thesis, String horizon, String riskMode,
-                       long entryUnderlyingCents, long entryNetPremiumCents, long maxLossCents,
-                       Long maxProfitCents, List<String> breakevens, Double popEntry,
-                       long feesOpenCents, long feesCloseCents, Long realizedPnlCents,
-                       String closeReason, String entrySnapshotJson, boolean isLive,
-                       String createdAt, String closedAt, String updatedAt, String intent,
-                       long sharesLocked, String origin) {
-        this(id, accountId, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
-                entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents, breakevens,
-                popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, null, closeReason,
-                entrySnapshotJson, isLive, createdAt, closedAt, updatedAt, intent, sharesLocked, origin,
-                null, null, null, null, null, null, null);
-    }
-
-    /** Pre-origin shape. */
-    public TradeRecord(String id, String accountId, String symbol, String strategy, String status,
-                       int qty, List<Leg> legs, String thesis, String horizon, String riskMode,
-                       long entryUnderlyingCents, long entryNetPremiumCents, long maxLossCents,
-                       Long maxProfitCents, List<String> breakevens, Double popEntry,
-                       long feesOpenCents, long feesCloseCents, Long realizedPnlCents,
-                       String closeReason, String entrySnapshotJson, boolean isLive,
-                       String createdAt, String closedAt, String updatedAt, String intent, long sharesLocked) {
-        this(id, accountId, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
-                entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents, breakevens,
-                popEntry, feesOpenCents, feesCloseCents, realizedPnlCents, closeReason,
-                entrySnapshotJson, isLive, createdAt, closedAt, updatedAt, intent, sharesLocked, "PAPER");
-    }
-
     public boolean external() { return "EXTERNAL".equals(origin); }
 
     public static final String ACTIVE = "ACTIVE";

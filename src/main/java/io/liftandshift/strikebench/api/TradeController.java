@@ -107,7 +107,6 @@ final class TradeController {
     void register(JavalinConfig config) {
         TradeRoutes.register(config, new TradeRoutes.Handlers(
                 this::preview,
-                this::recordExternal,
                 this::create,
                 this::list,
                 this::detail,
@@ -130,15 +129,6 @@ final class TradeController {
 
     private void preview(Context ctx) {
         ctx.json(previewPayload(ctx, ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class)));
-    }
-
-    private void recordExternal(Context ctx) {
-        Account account = currentAccount.apply(ctx);
-        TradeOpenRequest body = ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class);
-        TradeService.OpenRequest request = toOpenRequest(body, account);
-        TradeService.ExternalMeta metadata = new TradeService.ExternalMeta(
-                body.executedAt(), body.broker(), body.orderRef(), Boolean.TRUE.equals(body.historical()));
-        ctx.status(201).json(trades.createExternal(request, metadata));
     }
 
     private void create(Context ctx) {
@@ -394,6 +384,19 @@ final class TradeController {
     }
 
     TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, Account account) {
+        return toOpenRequest(body, account.id());
+    }
+
+    static TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, String accountId) {
+        return toOpenRequest(body, accountId, false);
+    }
+
+    static TradeService.OpenRequest toAnalysisOpenRequest(TradeOpenRequest body, String accountId) {
+        return toOpenRequest(body, accountId, true);
+    }
+
+    private static TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, String accountId,
+                                                          boolean analysisOnly) {
         if (body == null) throw new IllegalArgumentException("request body is required");
         if (body.symbol() == null || body.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
@@ -401,14 +404,38 @@ final class TradeController {
         if (body.legs() == null || body.legs().isEmpty()) {
             throw new IllegalArgumentException("legs are required");
         }
+        if (body.fillNature() == null || body.fillNature().isBlank()) {
+            throw new IllegalArgumentException("fillNature is required and must be PROPOSED or EXECUTED");
+        }
+        if (!"PROPOSED".equalsIgnoreCase(body.fillNature())
+                && !"EXECUTED".equalsIgnoreCase(body.fillNature())) {
+            throw new IllegalArgumentException("fillNature must be PROPOSED or EXECUTED");
+        }
+        if (body.strategy() == null || body.strategy().isBlank()) {
+            throw new IllegalArgumentException("strategy is required");
+        }
+        if (body.qty() == null || body.qty() < 1
+                || analysisOnly && body.qty() > 1_000_000
+                || !analysisOnly && body.qty() > 100) {
+            throw new IllegalArgumentException(analysisOnly
+                    ? "qty must be 1..1,000,000 for analysis"
+                    : "qty must be 1..100 for Practice placement");
+        }
+        if (body.source() == null || body.source().isBlank()) {
+            throw new IllegalArgumentException("source is required");
+        }
+        if (body.legs().stream().anyMatch(leg -> "CLOSE".equalsIgnoreCase(leg.positionEffect()))) {
+            throw new IllegalArgumentException("Closing legs change an existing tracked position. Use the tracked position transformation preview so the before-and-after structure, realized result, and surviving lots stay visible.");
+        }
         List<Leg> legs = body.legs().stream().map(LegView::toLeg).toList();
         if (body.intent() != null && !body.intent().isBlank()) StrategyIntent.parse(body.intent());
-        return new TradeService.OpenRequest(account.id(), body.symbol().trim().toUpperCase(Locale.ROOT),
-                body.strategy() == null ? "CUSTOM" : body.strategy().trim().toUpperCase(Locale.ROOT),
-                body.qty() == null ? 1 : body.qty(), legs, body.thesis(), body.horizon(),
+        return new TradeService.OpenRequest(accountId, body.symbol().trim().toUpperCase(Locale.ROOT),
+                body.strategy().trim().toUpperCase(Locale.ROOT),
+                body.qty(), legs, body.thesis(), body.horizon(),
                 body.riskMode(), body.intent(), body.useHeldShares(), body.proposedNetCents(),
                 body.feesOverrideCents(),
-                body.source() == null || body.source().isBlank() ? "TICKET" : body.source());
+                body.source(),
+                body.fillNature());
     }
 
     Long riskCapCents(Context ctx) {
@@ -453,7 +480,7 @@ final class TradeController {
                 quotes.add(null);
                 BigDecimal price = leg.entryPrice().signum() > 0
                         ? leg.entryPrice() : spot == null ? BigDecimal.ZERO : spot;
-                priced.add(new Leg(leg.action(), null, null, null, leg.ratio(), price));
+                priced.add(new Leg(leg.action(), null, null, null, leg.ratio(), price, leg.multiplier()));
                 continue;
             }
             OptionChain chain = market.chain(request.symbol(), leg.expiration(), accountWorld).orElse(null);
@@ -468,17 +495,19 @@ final class TradeController {
             BigDecimal mid = leg.entryPrice().signum() > 0 ? leg.entryPrice()
                     : quote != null && quote.mid() != null ? quote.mid() : BigDecimal.ZERO;
             priced.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(),
-                    leg.ratio(), mid));
+                    leg.ratio(), mid, leg.multiplier()));
         }
-        long lockedLots = 0;
+        long lockedShares = 0;
         String shareShortfall = null;
         if (request.heldShares()) {
-            int lotsPerUnit = Math.max(0,
-                    io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(priced));
-            long neededShares = Math.max((long) lotsPerUnit * 100 * request.qty(), 100L * request.qty());
+            long coverSharesPerUnit = Math.max(0,
+                    io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(priced));
+            long contextSharesPerUnit = Math.max(coverSharesPerUnit,
+                    io.liftandshift.strikebench.strategy.CoverageCheck.shareContextUnitsNeeded(priced));
+            long neededShares = Math.multiplyExact(contextSharesPerUnit, request.qty());
             long freeShares = positions.freeShares(account.id(), request.symbol());
             if (freeShares >= neededShares) {
-                lockedLots = (long) lotsPerUnit * request.qty();
+                lockedShares = Math.multiplyExact(coverSharesPerUnit, request.qty());
             } else {
                 shareShortfall = "Needs " + neededShares + " free shares of " + request.symbol()
                         + " but only " + Math.max(0, freeShares)
@@ -491,7 +520,7 @@ final class TradeController {
                 .orElseGet(() -> LocalDate.now(clock));
         Verdict verdict = Guardrails.check(new Guardrails.Proposal(family, priced, request.qty(),
                 quotes, spot, worst, laneToday, account.buyingPowerCents(), false,
-                earningsSoon, false, lockedLots));
+                earningsSoon, false, lockedShares));
         if (!integrityBlocks.isEmpty()) {
             List<String> blocks = new ArrayList<>(verdict.blockReasons());
             blocks.addAll(0, integrityBlocks);
@@ -522,7 +551,7 @@ final class TradeController {
             if (request.proposedNetCents() != null) {
                 long pricedNet = 0;
                 for (Leg leg : priced) {
-                    long shares = (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * request.qty();
+                    long shares = (long) leg.multiplier() * leg.ratio() * request.qty();
                     long cents = io.liftandshift.strikebench.util.Money.centsFromPrice(
                             leg.entryPrice(), shares);
                     pricedNet += leg.action() == io.liftandshift.strikebench.model.LegAction.SELL
@@ -573,18 +602,19 @@ final class TradeController {
                 Objects.toString(mark.get("type"), null),
                 Objects.toString(mark.get("strike"), null),
                 Objects.toString(mark.get("expiration"), null),
-                mark.get("ratio") instanceof Number number ? number.intValue() : 1,
-                Objects.toString(mark.get("fill"), null))).toList();
+                requiredPositiveInteger(mark, "ratio"),
+                Objects.toString(mark.get("fill"), null),
+                requiredPositiveInteger(mark, "multiplier"),
+                "OPEN")).toList();
         boolean liquid = preview.legs().stream().filter(mark -> !"STOCK".equals(mark.get("type")))
                 .allMatch(mark -> mark.get("bid") != null && mark.get("ask") != null);
         Long combinedMaxLoss = preview.analytics().get("combinedMaxLossCents") instanceof Number number
                 ? number.longValue() : null;
         Integer sharesNeeded = null;
         if (request.heldShares()) {
-            int lots = Math.max(1,
-                    io.liftandshift.strikebench.strategy.CoverageCheck.callCoverLotsNeeded(request.legs()));
-            sharesNeeded = Math.multiplyExact(
-                    Math.multiplyExact(lots, Leg.SHARES_PER_CONTRACT), request.qty());
+            long units = io.liftandshift.strikebench.strategy.CoverageCheck
+                    .shareContextUnitsNeeded(request.legs());
+            sharesNeeded = Math.toIntExact(Math.multiplyExact(units, request.qty()));
         }
         return new Candidate(request.strategy(), display, group, display, legs, request.qty(),
                 preview.entryNetPremiumCents(), preview.maxProfitCents(), preview.maxLossCents(),
@@ -673,18 +703,18 @@ final class TradeController {
         }
     }
 
-    private static List<ApiResponses.PayoffPoint> payoffPoints(TradeRecord trade) {
+    static List<ApiResponses.PayoffPoint> payoffPoints(TradeRecord trade) {
         boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations) return List.of();
         BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
         List<Leg> chartLegs = trade.legs();
-        int lotsPerUnit = trade.qty() > 0
-                ? (int) (trade.sharesLocked() / (100L * trade.qty())) : 0;
-        if (lotsPerUnit > 0) {
+        long heldShares = TradeService.heldShareContextSharesForDisplay(trade);
+        long sharesPerUnit = trade.qty() > 0 ? heldShares / trade.qty() : 0;
+        if (sharesPerUnit > 0 && sharesPerUnit * trade.qty() == heldShares) {
             chartLegs = new ArrayList<>(trade.legs());
-            chartLegs.add(Leg.stock(io.liftandshift.strikebench.model.LegAction.BUY,
-                    lotsPerUnit, spot));
+            chartLegs.add(Leg.stockShares(io.liftandshift.strikebench.model.LegAction.BUY,
+                    Math.toIntExact(sharesPerUnit), spot));
         }
         long tradedLegEntry = PayoffCurve.of(trade.legs(), trade.qty()).entryNetPremiumCents();
         long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
@@ -698,6 +728,14 @@ final class TradeController {
     private static Double percentage(long numerator, Long denominator) {
         return denominator != null && denominator > 0
                 ? Math.round(1000.0 * numerator / denominator) / 10.0 : null;
+    }
+
+    private static int requiredPositiveInteger(Map<String, Object> values, String key) {
+        Object raw = values.get(key);
+        if (!(raw instanceof Number number) || number.intValue() < 1) {
+            throw new IllegalStateException("Exact preview leg is missing a valid " + key + ".");
+        }
+        return number.intValue();
     }
 
     private static String worldParam(String world) {

@@ -917,7 +917,10 @@
         var nx = X(k);
         lineEl.setAttribute('x1', nx); lineEl.setAttribute('x2', nx);
         grip.setAttribute('cx', nx);
-        placeLabel(nx, k === cur ? h.label : h.label.replace(/[\d.]+$/, '') + k);
+        var nextLabel = k === cur ? h.label : h.label.replace(/[\d.]+$/, '') + k;
+        grip.setAttribute('aria-valuenow', String(k));
+        grip.setAttribute('aria-valuetext', nextLabel);
+        placeLabel(nx, nextLabel);
       }
       grip.addEventListener('pointerdown', function (ev) {
         ev.stopPropagation(); ev.preventDefault();
@@ -962,7 +965,6 @@
         var next = ev.key === 'ArrowLeft' ? inDomain[Math.max(0, idx - 1)] : inDomain[Math.min(inDomain.length - 1, idx + 1)];
         if (next !== undefined && next !== snapped) {
           snapped = next; moveTo(next);
-          grip.setAttribute('aria-valuenow', String(next));
         }
       });
     });
