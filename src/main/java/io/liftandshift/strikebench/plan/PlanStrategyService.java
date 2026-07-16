@@ -575,8 +575,23 @@ public final class PlanStrategyService {
 
     private static void persistIndexedNumbers(java.sql.Connection c, String table, String indexCol, String valueCol,
                                               String id, JsonNode values) throws java.sql.SQLException {
-        int i = 0; for (JsonNode value : values) Db.execOn(c, "INSERT INTO " + table +
-                        "(candidate_id," + indexCol + "," + valueCol + ") VALUES(?,?,?)", id, i++, value.decimalValue());
+        int i = 0;
+        for (JsonNode value : values) {
+            BigDecimal decimal;
+            if (value.isNumber()) {
+                decimal = value.decimalValue();
+            } else if (value.isTextual() && !value.asText().isBlank()) {
+                try {
+                    decimal = new BigDecimal(value.asText());
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("invalid decimal value in " + valueCol + ": " + value.asText(), e);
+                }
+            } else {
+                throw new IllegalArgumentException("invalid decimal value in " + valueCol);
+            }
+            Db.execOn(c, "INSERT INTO " + table + "(candidate_id," + indexCol + "," + valueCol +
+                    ") VALUES(?,?,?)", id, i++, decimal);
+        }
     }
 
     private static void persistWarnings(java.sql.Connection c, String id, JsonNode values)
