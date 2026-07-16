@@ -60,6 +60,27 @@
     return intent == null ? 'EVIDENCE' : 'STRATEGY';
   }
 
+  function discoveryContext() {
+    return {
+      world: App.state.world || 'observed',
+      scenario: (App.config && App.config.scenarioMode && App.config.activeDataset) || 'observed',
+      riskMode: 'conservative'
+    };
+  }
+
+  function screenedCandidateReady(candidate) {
+    return candidate && Number(candidate.maxLossCents) > 0
+      && candidate.maxProfitCents !== null && candidate.maxProfitCents !== undefined
+      && typeof candidate.pop === 'number';
+  }
+
+  function chooseScreenedCandidate(candidates) {
+    var ready = (candidates || []).filter(screenedCandidateReady);
+    return ready.find(function (candidate) { return window.ViewPlan.economicVerdict(candidate) === 'FAVORABLE'; })
+      || ready.find(function (candidate) { return window.ViewPlan.economicVerdict(candidate) === 'MIXED'; })
+      || ready[0] || (candidates || [])[0];
+  }
+
   function toastWhenRouteReady(hash, message) {
     var expected = String(hash || '').split('?')[0];
     var frames = 0;
@@ -117,7 +138,7 @@
       var exact = explicitContext ? matches.find(sameContext) : matches[0];
       if (exact && exact.assumptionsEditable !== false) {
         var existing = exact;
-        if (prepare) await prepare(existing);
+        if (prepare) existing = await prepare(existing) || existing;
         await PlanStore.focus(existing, destination);
         toastWhenRouteReady(PlanStore.path(existing, destination),
           'Plan opened — ' + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
@@ -128,7 +149,7 @@
       // revision instead of silently replacing its context or discarding the new handoff.
       var origin = exact || (explicitContext && matches.length ? matches[0] : null);
       var plan = await createPlan(origin);
-      if (prepare) await prepare(plan);
+      if (prepare) plan = await prepare(plan) || plan;
       await PlanStore.focus(plan, destination);
       toastWhenRouteReady(PlanStore.path(plan, destination),
         (origin ? 'Linked Plan created — ' : 'Plan created — ')
@@ -212,16 +233,6 @@
       if (App.state.world && App.state.world !== 'observed') return 'A screened simulated-market idea \u2014 generated, not observed.';
       return 'A screened idea from observed market inputs \u2014 generated this second.';
     }
-    function welcomeProofReady(c) {
-      return c && c.maxLossCents > 0 && c.maxProfitCents !== null
-        && c.maxProfitCents !== undefined && typeof c.pop === 'number';
-    }
-    function welcomeProofChoice(candidates) {
-      var ready = (candidates || []).filter(welcomeProofReady);
-      return ready.find(function (c) { return window.ViewPlan.economicVerdict(c) === 'FAVORABLE'; })
-        || ready.find(function (c) { return window.ViewPlan.economicVerdict(c) === 'MIXED'; })
-        || ready[0] || (candidates || [])[0];
-    }
     function welcomeProofCard(candidate) {
       var story = candidate.beginnerExplanation || candidate.whyConsidered;
       var card = el('div', { class: 'candidate welcome-proof-card',
@@ -277,15 +288,11 @@
       if (!App.alive(proofToken)) return; // navigated away while the lane was deciding
       var proofCaption = document.getElementById('welcome-proof-caption');
       if (proofCaption) proofCaption.textContent = welcomeProofCaption();
-      var proofCtx = {
-        world: App.state.world || 'observed',
-        scenario: (App.config && App.config.scenarioMode && App.config.activeDataset) || 'observed',
-        riskMode: 'conservative'
-      };
+      var proofCtx = discoveryContext();
       var cached = null;
       try {
         var raw = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null');
-        if (raw && welcomeProofReady(raw.candidate)
+        if (raw && screenedCandidateReady(raw.candidate)
             && raw.world === proofCtx.world && raw.scenario === proofCtx.scenario
             && raw.riskMode === proofCtx.riskMode && raw.asOf && (Date.now() - raw.asOf) < 24 * 3600 * 1000) {
           cached = raw.candidate;
@@ -303,7 +310,7 @@
           setTimeout(function () { reject(new Error('The current market check is still running.')); }, 6000);
         })]);
         if (r.candidates && r.candidates.length) {
-          var proofCandidate = welcomeProofChoice(r.candidates);
+          var proofCandidate = chooseScreenedCandidate(r.candidates);
           liveHost.innerHTML = '';
           liveHost.appendChild(welcomeProofCard(proofCandidate));
           frameWelcomeProof(proofCandidate);
@@ -337,7 +344,7 @@
       { level: 'beginner', title: 'Teach me', ic: 'sprout',
         blurb: 'Question-driven flows, plain language \u2014 every idea explains itself.',
         cta: 'Start as a beginner', go: '#/research',
-        toast: 'Step 1: pick a stock that interests you \u2014 the Next-up list on Home walks the rest.' },
+        toast: 'Step 1: pick a stock, then use Find proposed trades to carry it into the six-stage Plan.' },
       { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
         blurb: 'Dense tables, greeks, per-leg impact, inline filters.',
         cta: 'Research AAPL', go: '#/research/AAPL' }
@@ -375,6 +382,13 @@
     var how = section('HOW IT WORKS', 'Four steps, no account required', stepper);
     how.id = stepsAnchorId;
     root.appendChild(how);
+
+    root.appendChild(section('WHAT MOVED WHERE', 'Familiar tools, one Plan-centered journey',
+      el('dl', { class: 'moved-terms', id: 'moved-terms' }, (Learn.MOVED_TERMS || []).map(function (item) {
+        return el('div', { class: 'moved-term' },
+          el('dt', {}, item.current),
+          el('dd', {}, el('span', { class: 'muted' }, 'Formerly ' + item.former + '. '), item.detail));
+      }))));
 
     // ---- One slim footer row: the sector hook + the exit ----
     root.appendChild(el('div', { class: 'welcome-footer' },
@@ -424,6 +438,173 @@
   }
 
   function riskMode() { return document.getElementById('risk-mode').value; }
+
+  function homeDiscoveryContext() {
+    var context = discoveryContext();
+    var active = App.state.universe && App.state.universe.active || {};
+    context.universe = [active.sectorKey || '', (active.symbols || []).join(',')].join(':');
+    return context;
+  }
+
+  function homeCandidateRank(candidate) {
+    var verdict = window.ViewPlan.economicVerdict(candidate);
+    var band = verdict === 'FAVORABLE' ? 4 : verdict === 'MIXED' ? 3
+      : verdict === 'UNAVAILABLE' ? 2 : verdict === 'UNFAVORABLE' ? 1 : 0;
+    return band * 1000 + Number(candidate.evaluation && candidate.evaluation.decisionScore || 0);
+  }
+
+  function homeIdeasSection() {
+    var ideas = new Map();
+    var ctx = homeDiscoveryContext();
+    var body = el('div', { class: 'home-ideas-body' });
+    var feedback = el('div', { class: 'home-ideas-feedback', 'aria-live': 'polite' });
+    var refresh = el('button', { type: 'button', class: 'btn btn-sm btn-secondary' }, 'Refresh');
+    var scout = el('button', { type: 'button', class: 'btn btn-sm' }, 'Scout current market');
+    var section = el('section', { class: 'card home-screened-ideas', id: 'home-screened-ideas' },
+      UI.cardHeader(el('span', {}, 'Today\u2019s screened ideas', UI.info('proposedtrades')),
+        el('div', { class: 'btn-row home-ideas-actions' }, refresh, scout)),
+      el('p', { class: 'muted home-ideas-intro' },
+        'One ticker per row. Each package keeps its economic verdict and exact contracts; opening one carries that package into Strategy.'),
+      body, feedback);
+
+    function sameContext(value) {
+      return value && value.world === ctx.world && value.scenario === ctx.scenario
+        && (!value.universe || value.universe === ctx.universe);
+    }
+
+    function add(candidate, symbol) {
+      if (!candidate || !(candidate.legs || []).length || candidate.maxLossCents == null) return;
+      symbol = String(symbol || candidate.symbol || '').toUpperCase();
+      if (!symbol) return;
+      candidate = Object.assign({}, candidate, { symbol: symbol });
+      var prior = ideas.get(symbol);
+      if (!prior || homeCandidateRank(candidate) > homeCandidateRank(prior)) ideas.set(symbol, candidate);
+    }
+
+    function addTeaching(response) {
+      if (!response || !(response.candidates || []).length) return;
+      add(chooseScreenedCandidate(response.candidates), response.symbol || 'AAPL');
+    }
+
+    function addScout(response, horizon) {
+      (response && response.picks || []).forEach(function (pick) {
+        var result = (pick.horizons || []).find(function (item) { return item.horizon === horizon; })
+          || (pick.horizons || [])[0];
+        add(window.ViewPlan.candidateFromEvaluation(result && result.candidates && result.candidates[0]), pick.symbol);
+      });
+    }
+
+    function economics(candidate) {
+      return candidate.evaluation && candidate.evaluation.assessment
+        && candidate.evaluation.assessment.economics || {};
+    }
+
+    function ideaRow(candidate) {
+      var econ = economics(candidate);
+      var verdict = window.ViewPlan.economicVerdict(candidate) || 'UNAVAILABLE';
+      var pop = candidate.evaluation && candidate.evaluation.risk
+        ? candidate.evaluation.risk.pop : candidate.pop;
+      var open = el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
+        var button = this;
+        visibleCommand(button, async function () {
+          var plan = await window.ViewPlan.openCandidateAsPlan(candidate, candidate.symbol,
+            { destination: 'STRATEGY' });
+          if (!plan) throw new Error('This screened package could not be opened in a Plan.');
+          return plan;
+        }, 'This screened package could not be opened in a Plan.');
+      } }, verdict === 'UNFAVORABLE' ? 'Study in a Plan' : 'Use in a Plan');
+      return el('article', { class: 'home-idea-row', 'data-symbol': candidate.symbol,
+        'data-economic-verdict': verdict },
+        el('div', { class: 'home-idea-identity' },
+          el('b', { class: 'home-idea-symbol' }, candidate.symbol),
+          el('span', {}, candidate.displayName || prettyStrategy(candidate.strategy)),
+          intentBadge(candidate.intent),
+          el('span', { class: 'badge ' + (verdict === 'FAVORABLE' ? 'badge-ok'
+            : verdict === 'UNFAVORABLE' ? 'badge-danger' : 'badge-caution') },
+            econ.label || UI.economicVerdictLabel(verdict))),
+        el('div', { class: 'home-idea-facts' },
+          chip(UI.vocabulary('theoreticalMaxLoss'), fmtMoney(candidate.maxLossCents)),
+          chip('Chance of any profit', pop == null ? '\u2014' : fmtPct(pop)),
+          chip('Market EV after costs', econ.marketEvAfterCostsCents == null
+            ? 'Unavailable' : pnlSpan(econ.marketEvAfterCostsCents)),
+          chip('Realized-vol scenario EV', econ.realizedVolEvAfterCostsCents == null
+            ? 'Unavailable' : pnlSpan(econ.realizedVolEvAfterCostsCents))),
+        open);
+    }
+
+    function paint() {
+      body.replaceChildren();
+      var ordered = Array.from(ideas.values()).sort(function (a, b) {
+        return homeCandidateRank(b) - homeCandidateRank(a) || a.symbol.localeCompare(b.symbol);
+      }).slice(0, 4);
+      if (!ordered.length) {
+        body.appendChild(el('div', { class: 'home-ideas-empty' },
+          el('b', {}, 'No warm screen is stored for this market yet.'),
+          el('span', { class: 'muted' }, 'Refresh checks one teaching screen; Scout checks the current universe only when you ask.')));
+        return;
+      }
+      ordered.forEach(function (candidate) { body.appendChild(ideaRow(candidate)); });
+    }
+
+    function saveScout(response) {
+      try {
+        localStorage.setItem('strikebench.homeIdeas', JSON.stringify(Object.assign({
+          response: response, horizon: 'month', asOf: Date.now()
+        }, ctx)));
+      } catch (e) { /* private mode */ }
+    }
+
+    refresh.onclick = function () {
+      visibleCommand(refresh, async function () {
+        feedback.replaceChildren(UI.spinner('Refreshing one screened teaching example\u2026'));
+        var response = await API.getFresh('/api/welcome/teaching-example');
+        addTeaching(response); paint();
+        feedback.replaceChildren(UI.actionFeedback('ok', 'Screen refreshed',
+          'The current lane and economic verdict remain attached to the result.'));
+        return response;
+      }, 'The screened example could not refresh.').then(function (response) {
+        if (!response && feedback.isConnected) feedback.replaceChildren(UI.actionFeedback('danger',
+          'Screen refresh did not finish', 'The ideas already on screen were kept. Try again when the market feed is ready.'));
+      });
+    };
+    scout.onclick = function () {
+      visibleCommand(scout, async function () {
+        feedback.replaceChildren(UI.spinner('Scouting the current universe\u2026'));
+        var active = App.state.universe && App.state.universe.active;
+        var response = await API.post('/api/research/scout', {
+          universe: active && active.symbols || [], horizons: ['month'], maxPicks: 4,
+          riskMode: riskMode(), allow0dte: false, intents: ['DIRECTIONAL']
+        });
+        addScout(response, 'month'); saveScout(response); paint();
+        feedback.replaceChildren(UI.actionFeedback(response.picks && response.picks.length ? 'ok' : 'caution',
+          response.picks && response.picks.length ? 'Universe screen refreshed' : 'No ticker passed this screen',
+          response.picks && response.picks.length
+            ? 'Each ticker appears once; its leading package is ready to carry into Strategy.'
+            : (response.notes || []).join(' ') || 'Try another goal from Universe Scout in Research.'));
+        return response;
+      }, 'The universe screen could not finish.').then(function (response) {
+        if (!response && feedback.isConnected) feedback.replaceChildren(UI.actionFeedback('danger',
+          'Universe screen did not finish', 'The ideas already on screen were kept. Try again when the market feed is ready.'));
+      });
+    };
+
+    var fill = (async function () {
+      try {
+        var proof = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null');
+        if (sameContext(proof) && proof.asOf && Date.now() - proof.asOf < 30 * 60 * 1000) {
+          add(proof.candidate, proof.candidate && proof.candidate.symbol || 'AAPL');
+        }
+        var cachedScout = JSON.parse(localStorage.getItem('strikebench.homeIdeas') || 'null');
+        if (sameContext(cachedScout) && cachedScout.asOf && Date.now() - cachedScout.asOf < 30 * 60 * 1000) {
+          addScout(cachedScout.response, cachedScout.horizon || 'month');
+        }
+      } catch (e) { /* no prior discovery cache */ }
+      paint();
+      var warm = await API.prefetch('/api/welcome/teaching-example');
+      if (warm) { addTeaching(warm); paint(); }
+    })();
+    return { node: section, fill: fill };
+  }
 
   // ---------- 0. Home dashboard ----------
 
@@ -487,10 +668,18 @@
         ? activePlan.symbol + ' · ' + activeIdentity.full + ' is at '
           + String(activePlan.furthestStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
-    var heroCta = activePlan
-      ? el('button', { class: 'btn', onclick: function () { focusPlanFrom(this, activePlan); } },
-          'Continue ' + activePlan.symbol + (activeIdentity.duplicate ? ' · ' + activeIdentity.duplicate : '') + ' \u2192')
-      : el('button', { class: 'btn', onclick: function () { App.navigate('#/research'); } }, 'Start a Plan');
+    var discovery = homeIdeasSection();
+    var heroCtas = activePlan
+      ? [el('button', { class: 'btn', onclick: function () { focusPlanFrom(this, activePlan); } },
+          'Continue ' + activePlan.symbol + (activeIdentity.duplicate ? ' · ' + activeIdentity.duplicate : '') + ' \u2192')]
+      : [el('button', { class: 'btn', id: 'home-find-idea', onclick: function () {
+          var target = discovery.node.querySelector('.home-idea-row > .btn')
+            || discovery.node.querySelector('.home-ideas-actions .btn:last-child');
+          (target || discovery.node).scrollIntoView({ behavior: 'smooth', block: target ? 'center' : 'start' });
+          if (target) target.focus({ preventScroll: true });
+        } }, 'Find an idea'),
+        el('button', { class: 'btn btn-secondary', id: 'home-start-plan',
+          onclick: function () { App.navigate('#/research'); } }, 'Start a Plan')];
     // The hero owns THE single primary next action (review P5): the tour demoted to a
     // quiet entry at the bottom of the page — onboarding is not a permanent command.
     root.appendChild(heroBlock('dashboard', {
@@ -498,8 +687,31 @@
       title: el('h1', { class: 'home-hero-title' }, 'Your ', el('span', { class: 'grad' }, 'desk'), '.'),
       sub: heroSub,
       aside: statsAnchor,
-      ctas: [heroCta]
+      ctas: heroCtas
     }));
+    // Discovery is the first desk content after the hero. It is a governed front door
+    // into the existing ranking and Plan machinery, never a second recommendation engine.
+    root.appendChild(discovery.node);
+    if (Learn.currentLevel() === 'beginner') {
+      root.appendChild(el('section', { class: 'home-first-steps', id: 'home-first-steps',
+        'aria-label': 'Your first three steps' },
+        [['1', 'Choose one screened idea', 'The economic label and exact package travel with it.'],
+          ['2', 'Compare in Strategy', 'See alternatives, change contracts, or start from every strategy.'],
+          ['3', 'Test, decide, review', 'Market odds, possible futures, past analogs, and replay stay separate.']]
+          .map(function (step) {
+            return el('div', { class: 'home-first-step' }, el('span', { class: 'home-first-number' }, step[0]),
+              el('span', {}, el('b', {}, step[1]), el('small', {}, step[2])));
+          })));
+    }
+
+    var rankedStatusFill = activePlan ? PlanStore.latestStrategy(activePlan.id, false).then(function (latest) {
+      var candidates = latest && latest.strategy && latest.strategy.result
+        && latest.strategy.result.candidates || [];
+      if (candidates.length && heroSub.isConnected) {
+        heroSub.textContent = activePlan.symbol + ' · ' + activeIdentity.full
+          + ' has ranked trades ready in Strategy.';
+      }
+    }).catch(function () { /* the Plan stage remains the honest fallback */ }) : Promise.resolve();
 
     var accountFill = Promise.resolve(acct || accountPromise).then(function (account) {
       if (account) {
@@ -697,7 +909,7 @@
         'About StrikeBench \u00b7 take the tour')));
 
     // Wait for the fills so data-ready means READY (tests and users agree on that).
-    await Promise.all([accountFill, planLibraryFill, marketsFill, tradesFill]);
+    await Promise.all([accountFill, discovery.fill, rankedStatusFill, planLibraryFill, marketsFill, tradesFill]);
   }
 
   /** Under ~a day old — the window where the spread-cost note earns its keep. */

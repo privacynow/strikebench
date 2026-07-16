@@ -18,7 +18,7 @@
       beginner: 'This is what the broker may require to complete the stock purchase or delivery after assignment. A hedge can limit the eventual loss without eliminating this temporary funding need.',
       expert: 'Gross settlement funding before protective-leg proceeds or reserve release. Report separately from max loss, scenario loss, and broker reserve.' },
     brokerReserve: { label: 'Broker reserve', infoKey: 'brokerreserve',
-      short: 'Capital the account sets aside for an open obligation; it is not a loss forecast.',
+      short: 'Capital the account sets aside for an open obligation; it is not a loss forecast. Formerly labeled Reserved.',
       beginner: 'The account holds this amount so the position can meet its obligations. It reduces buying power while the trade is open and is released or reconciled when the position changes.',
       expert: 'Collateral encumbrance under the account model. Keep distinct from economic exposure and theoretical max loss, especially for credit structures.' },
     economicExposure: { label: 'Economic exposure', infoKey: 'economicexposure',
@@ -38,11 +38,11 @@
       beginner: 'You can edit, compare, and test this position without pretending it was placed.',
       expert: 'Execution lane NONE. Marks may be proposed or modeled and the coverage receipt must identify them.' },
     practice: { label: 'Practice', infoKey: 'practiceprovenance',
-      short: 'A fill in StrikeBench’s isolated learning account, never a broker transaction.',
+      short: 'A fill in StrikeBench’s isolated learning account, never a broker transaction. Formerly labeled Paper.',
       beginner: 'Practice trades use separate cash so you can rehearse decisions without changing a tracked real-money book.',
       expert: 'Execution lane PRACTICE. Never numerically netted with tracked-account cash, exposure, or performance.' },
     recordedAtBroker: { label: 'Recorded at broker', infoKey: 'brokerprovenance',
-      short: 'A factual external transaction entered from a broker record; StrikeBench did not place it.',
+      short: 'A factual external transaction entered from a broker record; StrikeBench did not place it. Formerly labeled EXTERNAL.',
       beginner: 'The fill belongs to a tracked account and must use the actual broker facts. Modeled prices cannot become its basis.',
       expert: 'Execution lane REAL with factual source, account, time, quantity, multiplier, and fill provenance.' },
     campaignEconomicBasis: { label: 'Campaign-adjusted economic basis', infoKey: 'campaignbasis',
@@ -54,6 +54,25 @@
       beginner: 'This follows the lots and adjustments recorded in the tracked account. It is separate from campaign economics and must be reconciled with broker tax forms.',
       expert: 'Authoritative tracked-lot basis for the common-case worksheet, including recorded wash adjustments where reviewed; never inferred from campaign allocation.' }
   });
+
+  var MOVED_TERMS = Object.freeze([
+    { former: 'Trade', current: 'Plans',
+      detail: 'Each ticker, goal, exact structure, outcome test, decision, and review now stays together.' },
+    { former: 'the four-step trade flow', current: 'six Plan stages',
+      detail: 'Understand, Evidence, Strategy, Outcomes, Decide, and Manage & Review make the handoffs explicit.' },
+    { former: 'Find ideas', current: 'Find an idea / Start a Plan',
+      detail: 'Screen first from Home or Research, then carry the result into the same Plan journey.' },
+    { former: 'Ideas', current: 'Proposed trades / Ranked field',
+      detail: 'Beginner and Expert see the same ranked packages with presentation suited to each level.' },
+    { former: 'Scan', current: 'Scout',
+      detail: 'Universe Scout finds tickers; in-Plan Scout finds similar setups, better fits, and offsets.' },
+    { former: 'Paper', current: 'Practice',
+      detail: 'The isolated learning account remains separate from tracked brokerage records.' },
+    { former: 'Reserved', current: 'Broker reserve',
+      detail: 'Capital held for obligations remains distinct from worst-case economic loss.' },
+    { former: 'EXTERNAL', current: 'Recorded at broker',
+      detail: 'The label names factual fills that StrikeBench did not execute.' }
+  ]);
 
   // ---- Glossary: tap-to-define for terms of art ----
 
@@ -189,6 +208,22 @@
     assignment: { short: 'For buy-at-discount or sell-at-target, assignment can be success; elsewhere it may create unwanted shares.',
       beginner: 'For covered calls and cash-secured puts this is often the GOAL (your shares sell / you buy at your price). For other trades it is the chance of ending up with a stock position.',
       expert: 'Expire-in-the-money probability from N(d2)/N(\u2212d2) at per-leg smile IV. Same-expiry short puts/calls are combined as exact disjoint tails; different expirations are conservatively summed and capped at 1.' }
+  };
+
+  INFO.plans = {
+    short: 'Plans are the home for the workflow formerly spread across Trade and its four-step flow.',
+    beginner: 'A Plan keeps one ticker and goal together through six stages: understand it, inspect evidence, choose a strategy, test outcomes, decide, then manage and review.',
+    expert: 'Canonical durable aggregate for context revisions, ranked and custom structures, separate outcome lenses, frozen decisions, and management receipts. Formerly the Trade surface.'
+  };
+  INFO.proposedtrades = {
+    short: 'Proposed trades are the ranked packages formerly shown as Ideas; Expert calls the complete comparison the Ranked field.',
+    beginner: 'Find an idea screens packages for your goal, account, costs, evidence, and economics. Opening one preserves the exact contracts and starts or reuses a Plan.',
+    expert: 'The server-owned candidate field ordered by Decision score within economic verdict bands. Formerly Ideas / Find ideas; it remains the same ranking spine.'
+  };
+  INFO.scout = {
+    short: 'Scout is the capability formerly labeled Scan.',
+    beginner: 'Universe Scout finds tickers. Scout inside a Plan compares similar setups, better fits, and offsets without replacing your chosen Plan.',
+    expert: 'Universe-level discovery and Plan-relative relationship searches share the existing recommendation evaluation path; Scout does not create a second scorer.'
   };
 
   Object.keys(VOCABULARY).forEach(function (key) {
@@ -504,6 +539,7 @@
     LEVELS: LEVELS,
     LEVEL_META: LEVEL_META,
     VOCABULARY: VOCABULARY,
+    MOVED_TERMS: MOVED_TERMS,
     INTENTS: INTENTS,
     GLOSSARY: GLOSSARY,
     STRATEGY_GUIDE: STRATEGY_GUIDE,
