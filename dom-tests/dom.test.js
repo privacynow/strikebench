@@ -6236,3 +6236,127 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   }, compositionPlanId);
   await page.setViewportSize({ width: 1280, height: 900 });
 });
+
+/*
+ * ===== Program ONE R0: the contracts-as-code gate =====
+ * Rails (one state owner, level-invariant keys, flip-without-loss), the control-language
+ * primitives (never a bare listbox; live consequence), Flow bands (locked-with-reason,
+ * conclusions not chrome), and the lineage chip. These are the rails every later band
+ * builds on — they are pinned here before any band exists.
+ */
+test('Program ONE R0: rails, choice controls, and flow bands honor their contracts', async () => {
+  await go('#/home');
+  const r = await page.evaluate(async () => {
+    const out = {};
+    try { Rails.surface('plan:1:expert-panel'); out.keyGuard = 'no-throw'; }
+    catch (e) { out.keyGuard = 'threw'; }
+
+    const owned = Rails.surface('r0:test');
+    owned.selection = 'condor';
+    owned.result = { ev: 123, acks: ['capital'] };
+    const before = Rails.snapshot();
+    Learn.setLevel('expert'); await App.render();
+    Learn.setLevel('beginner'); await App.render();
+    out.flipIdentical = Rails.snapshot() === before;
+
+    const host = document.createElement('div'); document.body.appendChild(host);
+    const changed = [];
+    const ctl = UI.segmented({
+      label: 'How selective?',
+      options: [
+        { value: 'loose', label: 'More examples', detail: '3%' },
+        { value: 'balanced', label: 'Balanced', detail: '5%' },
+        { value: 'strict', label: 'Only the strongest', detail: '8%' }],
+      value: 'balanced',
+      onChange: v => changed.push(v),
+      consequence: v => 'trigger threshold ' + ({ loose: '3', balanced: '5', strict: '8' })[v] + '%'
+    });
+    host.appendChild(ctl);
+    out.consequenceInitial = host.querySelector('.control-consequence').textContent;
+    host.querySelectorAll('.choice-option')[2].click();
+    out.consequenceAfter = host.querySelector('.control-consequence').textContent;
+    out.value = ctl.value();
+    out.changed = changed.slice();
+    out.noListbox = !host.querySelector('select');
+    out.radiogroup = !!host.querySelector('[role="radiogroup"]');
+
+    const fhost = document.createElement('div'); document.body.appendChild(fhost);
+    const ctx = { declared: false, tested: false };
+    const flow = Flow.render({ id: 'r0-flow', stateKey: 'flow:r0test', ctx, sections: [
+      { key: 'view', title: 'Your view', complete: c => c.declared,
+        render: h => h.appendChild(document.createTextNode('declare here')),
+        conclusion: () => 'View: up over 3 weeks' },
+      { key: 'test', title: 'Test it', complete: c => c.tested,
+        lockedReason: () => 'Declare your view first.',
+        render: h => h.appendChild(document.createTextNode('testing ui')) }
+    ] });
+    fhost.appendChild(flow.el);
+    out.posturesBefore = [flow.posture('view'), flow.posture('test')];
+    out.lockedReason = fhost.querySelector('[data-band="test"] .flow-band-locked').textContent;
+    out.lockedVisible = !!fhost.querySelector('[data-band="test"] .flow-band-title');
+    ctx.declared = true; flow.refresh();
+    out.posturesAfter = [flow.posture('view'), flow.posture('test')];
+    out.conclusion = fhost.querySelector('[data-band="view"] .flow-band-conclusion-body').textContent;
+    fhost.querySelector('[data-band="view"] .flow-band-conclusion').click();
+    out.revisitPosture = fhost.querySelector('[data-band="view"]').dataset.posture;
+
+    const chip = UI.lineageChip({ id: 'e1', fingerprint: 'abcdef1234', basis: 'PARAMETRIC' });
+    out.lineageNames = chip.textContent.indexOf('#abcdef') >= 0;
+    out.lineageExplained = !!chip.querySelector('.info-trigger, .term');
+
+    host.remove(); fhost.remove();
+    Rails.reset('r0:test'); Rails.reset('flow:r0test');
+    return out;
+  });
+  assert.equal(r.keyGuard, 'threw', 'Rails rejects level-bearing surface keys');
+  assert.equal(r.flipIdentical, true, 'owned surface state is byte-identical across a Beginner→Expert→Beginner flip');
+  assert.equal(r.consequenceInitial, 'trigger threshold 5%', 'a choice control states its consequence before anything runs');
+  assert.equal(r.consequenceAfter, 'trigger threshold 8%', 'the consequence line follows the selection live');
+  assert.deepEqual([r.value, r.changed], ['strict', ['strict']], 'choice controls round-trip their value');
+  assert.equal(r.noListbox, true, 'the control language never renders a bare listbox');
+  assert.equal(r.radiogroup, true, 'choice controls are accessible radiogroups');
+  assert.deepEqual(r.posturesBefore, ['active', 'locked'], 'the first incomplete band is active; successors lock');
+  assert.equal(r.lockedReason, 'Declare your view first.', 'locked bands state their reason');
+  assert.equal(r.lockedVisible, true, 'locked bands stay visible — never hidden');
+  assert.deepEqual(r.posturesAfter, ['done', 'active'], 'completing a band unlocks its successor');
+  assert.equal(r.conclusion, 'View: up over 3 weeks', 'done bands collapse to their conclusion, not bare chrome');
+  assert.equal(r.revisitPosture, 'active', 'a conclusion reopens for revision on demand');
+  assert.equal(r.lineageNames, true, 'the lineage chip names the stored ensemble fingerprint');
+  assert.equal(r.lineageExplained, true, 'the lineage chip carries registry-backed explanation');
+});
+
+/*
+ * The label audit, generalized (Program ONE §3): every VISIBLE technical label on the primary
+ * surfaces is registry-covered or deliberately allowlisted as plain language. The allowlist is
+ * a reviewed file — new labels cannot sneak in un-explained; seed with LABEL_ALLOWLIST_SEED=1.
+ */
+test('Program ONE R0: visible labels are registry-covered or reviewed plain language', async () => {
+  const allowPath = path.join(__dirname, 'label-allowlist.json');
+  const allow = new Set(JSON.parse(fs.readFileSync(allowPath, 'utf8')));
+  const routes = ['#/home', '#/research', '#/plans', '#/portfolio/positions', '#/data/overview'];
+  const uncovered = new Map();
+  for (const route of routes) {
+    await go(route);
+    const labels = await page.evaluate(() => {
+      // House label carriers, verified against ui.js markup: stat -> .label, fact -> .f-label,
+      // chip -> .chip-label, field -> label[for], plus the R0 choice controls and lens titles.
+      const sel = '.stat > .label, .fact > .f-label, .chip-label, .field > label, '
+        + '.field-label, .choice-option-label, .outcome-basis-title';
+      const covered = node => node.querySelector('.term[data-term], .info-trigger, [data-vocabulary]')
+        || node.closest('[data-vocabulary]');
+      return Array.from(document.querySelectorAll(sel))
+        .filter(n => n.offsetParent !== null && !covered(n))
+        .map(n => (n.textContent || '').trim().replace(/\s+/g, ' '))
+        .filter(t => t && t.length >= 3 && t.length <= 64);
+    });
+    labels.forEach(t => { if (!allow.has(t) && !uncovered.has(t)) uncovered.set(t, route); });
+  }
+  if (process.env.LABEL_ALLOWLIST_SEED === '1' && uncovered.size) {
+    fs.writeFileSync(allowPath,
+      JSON.stringify([...new Set([...allow, ...uncovered.keys()])].sort(), null, 2) + '\n');
+    return;
+  }
+  assert.deepEqual([...uncovered.keys()], [],
+    'labels lacking registry coverage or allowlist review: '
+      + [...uncovered].map(([t, route]) => `"${t}" (${route})`).join(', '));
+});

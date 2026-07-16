@@ -1526,7 +1526,112 @@
     return wrap;
   }
 
+  /*
+   * Control-language primitives (Program ONE §3). A parameter control is never a bare
+   * listbox: it is a purpose-built choice with a plain label, explanation coverage, and a
+   * LIVE CONSEQUENCE line that says what the current value means before anything runs.
+   * Level is a lens: Expert sees the same control with its underlying values revealed —
+   * never a different control, never a different outcome.
+   *
+   * cfg: { label, info?, options: [{ value, label, sub?, detail? }], value, onChange(value),
+   *       consequence?(value) -> string|Node|Promise, revealDetails? ('expert'|true|false),
+   *       multi?: false, name? }
+   * Returns a node with .value() and .set(value) so callers re-render nothing to read it.
+   */
+  function choiceControl(kind, cfg) {
+    var options = cfg.options || [];
+    if (!options.length) throw new Error('choiceControl needs options');
+    var current = cfg.value !== undefined ? cfg.value : options[0].value;
+    var beginner = window.Learn && Learn.currentLevel && Learn.currentLevel() === 'beginner';
+    var reveal = cfg.revealDetails === true || (cfg.revealDetails === 'expert' && !beginner);
+    var group = el('div', { class: 'choice-group choice-' + kind, role: 'radiogroup',
+      'aria-label': typeof cfg.label === 'string' ? cfg.label : (cfg.name || 'Choice') });
+    var consequenceHost = cfg.consequence ? el('div', { class: 'control-consequence muted', 'aria-live': 'polite' }) : null;
+    var consequenceToken = 0;
+
+    function paintConsequence() {
+      if (!consequenceHost) return;
+      var token = ++consequenceToken;
+      var result = cfg.consequence(current);
+      function apply(value) {
+        if (token !== consequenceToken) return;
+        consequenceHost.innerHTML = '';
+        append(consequenceHost, value);
+      }
+      if (result && typeof result.then === 'function') {
+        consequenceHost.classList.add('pending');
+        result.then(function (value) { consequenceHost.classList.remove('pending'); apply(value); },
+          function () { consequenceHost.classList.remove('pending'); });
+      } else {
+        apply(result);
+      }
+    }
+    function paintButtons() {
+      group.innerHTML = '';
+      options.forEach(function (option) {
+        var active = option.value === current;
+        group.appendChild(el('button', { type: 'button', role: 'radio',
+          class: 'choice-option' + (active ? ' active' : ''),
+          'aria-checked': active ? 'true' : 'false', tabindex: active ? '0' : '-1',
+          onclick: function () { select(option.value); },
+          onkeydown: function (e) {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            var index = options.findIndex(function (o) { return o.value === current; });
+            var next = options[(index + (e.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length];
+            select(next.value, true);
+          } },
+          el('span', { class: 'choice-option-label' }, option.label),
+          option.sub ? el('span', { class: 'choice-option-sub muted' }, option.sub) : null,
+          reveal && option.detail !== undefined
+            ? el('span', { class: 'choice-option-detail' }, String(option.detail)) : null));
+      });
+    }
+    function select(value, focus) {
+      if (value === current) return;
+      current = value;
+      paintButtons();
+      paintConsequence();
+      if (focus) {
+        var active = group.querySelector('.choice-option.active');
+        if (active) active.focus();
+      }
+      if (cfg.onChange) cfg.onChange(value);
+    }
+
+    var labelNode = cfg.label
+      ? el('div', { class: 'field-label' }, cfg.label, cfg.info ? UI.info(cfg.info) : null)
+      : null;
+    var wrap = el('div', { class: 'field choice-field' }, labelNode, group, consequenceHost);
+    paintButtons();
+    paintConsequence();
+    wrap.value = function () { return current; };
+    wrap.set = function (value) { select(value); };
+    return wrap;
+  }
+  function segmented(cfg) { return choiceControl('segmented', cfg); }
+  function chipSet(cfg) { return choiceControl('chips', cfg); }
+
+  /**
+   * Simulation lineage (Program ONE §2.3): one ensemble per plan-context. This chip names
+   * the exact stored simulation a surface is quoting, so the fan at the hypothesis and the
+   * outcomes on a structure are visibly the SAME simulation — never a second, unexplained one.
+   * ref: ApiResponses.EnsembleRef { id, fingerprint, basis }.
+   */
+  function lineageChip(ref, note) {
+    if (!ref || !ref.fingerprint) return null;
+    var shortPrint = String(ref.fingerprint).slice(0, 6);
+    return el('span', { class: 'chip lineage-chip',
+      title: 'Simulation ' + shortPrint + (ref.basis ? ' · ' + ref.basis : '')
+        + (note ? ' · ' + note : '') + ' — every band quotes this same stored simulation.' },
+      el('span', { class: 'chip-label' }, 'Simulation', UI.info('simulationLineage')),
+      el('b', {}, '#' + shortPrint, note ? el('span', { class: 'muted' }, ' · ' + note) : null));
+  }
+
   window.UI = {
+    segmented: segmented,
+    chipSet: chipSet,
+    lineageChip: lineageChip,
     info: info,
     sparkline: sparkline,
     symbolContext: symbolContext,
