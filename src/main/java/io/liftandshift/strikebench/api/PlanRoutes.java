@@ -41,10 +41,6 @@ public final class PlanRoutes {
             Handler chooseCashDecision,
             Handler manage,
             Handler refreshManagement,
-            Handler unwind,
-            Handler settle,
-            Handler roll,
-            Handler voidTrade,
             Handler review
     ) {}
 
@@ -86,10 +82,6 @@ public final class PlanRoutes {
         config.routes.post("/api/plans/{id}/decision/cash", h.chooseCashDecision());
         config.routes.get("/api/plans/{id}/manage", h.manage());
         config.routes.post("/api/plans/{id}/manage/refresh", h.refreshManagement());
-        config.routes.post("/api/plans/{id}/manage/unwind", h.unwind());
-        config.routes.post("/api/plans/{id}/manage/settle", h.settle());
-        config.routes.post("/api/plans/{id}/manage/roll", h.roll());
-        config.routes.post("/api/plans/{id}/manage/void", h.voidTrade());
         config.routes.post("/api/plans/{id}/manage/review", h.review());
     }
 }

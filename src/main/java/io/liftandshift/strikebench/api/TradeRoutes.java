@@ -11,9 +11,6 @@ public final class TradeRoutes {
             Handler list,
             Handler detail,
             Handler refresh,
-            Handler unwind,
-            Handler settle,
-            Handler delete,
             Handler snapshot,
             Handler audit,
             Handler listPositions,
@@ -30,9 +27,6 @@ public final class TradeRoutes {
         config.routes.get("/api/trades", h.list());
         config.routes.get("/api/trades/{id}", h.detail());
         config.routes.post("/api/trades/{id}/refresh", h.refresh());
-        config.routes.post("/api/trades/{id}/unwind", h.unwind());
-        config.routes.post("/api/trades/{id}/settle", h.settle());
-        config.routes.delete("/api/trades/{id}", h.delete());
         config.routes.post("/api/admin/snapshot", h.snapshot());
         config.routes.get("/api/audit", h.audit());
         config.routes.get("/api/positions", h.listPositions());

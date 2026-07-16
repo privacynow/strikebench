@@ -1930,7 +1930,7 @@ CREATE TABLE public.position_receipt (
     CONSTRAINT position_receipt_execution_lane_check CHECK ((execution_lane = ANY (ARRAY['NONE'::text, 'PRACTICE'::text, 'REAL'::text]))),
     CONSTRAINT position_receipt_kind_check CHECK ((kind = ANY (ARRAY['DECISION'::text, 'ADOPTION'::text, 'TRANSFORMATION'::text, 'RESOLUTION'::text]))),
     CONSTRAINT position_receipt_position_state_check CHECK ((position_state = ANY (ARRAY['PENDING'::text, 'OPEN'::text, 'PARTIALLY_CLOSED'::text, 'ASSIGNED'::text, 'EXERCISED'::text, 'EXPIRED'::text, 'CLOSED'::text]))),
-    CONSTRAINT position_receipt_transformation_action_check CHECK (((transformation_action IS NULL) OR (transformation_action = ANY (ARRAY['CLOSE'::text, 'PARTIAL_CLOSE'::text, 'LEG_CLOSE'::text, 'ROLL'::text, 'ADD_LEG'::text, 'REMOVE_LEG'::text, 'ADD_STOCK'::text, 'REMOVE_STOCK'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text])))),
+    CONSTRAINT position_receipt_transformation_action_check CHECK (((transformation_action IS NULL) OR (transformation_action = ANY (ARRAY['CLOSE'::text, 'VOID'::text, 'PARTIAL_CLOSE'::text, 'LEG_CLOSE'::text, 'ROLL'::text, 'ADD_LEG'::text, 'REMOVE_LEG'::text, 'ADD_STOCK'::text, 'REMOVE_STOCK'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text])))),
     CONSTRAINT position_receipt_transformation_identity_check CHECK ((((kind = 'TRANSFORMATION'::text) AND (transformation_action IS NOT NULL) AND (preview_fingerprint IS NOT NULL)) OR ((kind <> 'TRANSFORMATION'::text) AND (transformation_action IS NULL) AND (preview_fingerprint IS NULL))))
 );
 

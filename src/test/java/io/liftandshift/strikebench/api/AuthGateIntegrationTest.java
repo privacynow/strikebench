@@ -83,9 +83,9 @@ class AuthGateIntegrationTest {
         // above the per-trade ownership check).
         assertThat(get("/api/trades/tr_anything").statusCode()).isEqualTo(401);
         assertThat(get("/api/audit").statusCode()).isEqualTo(401);
-        HttpResponse<String> unwind = http.send(HttpRequest.newBuilder(URI.create(base + "/api/trades/tr_x/unwind"))
+        HttpResponse<String> unwind = http.send(HttpRequest.newBuilder(URI.create(base + "/api/position-transformations/preview"))
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString("{\"confirm\":true}")).build(),
+                .POST(HttpRequest.BodyPublishers.ofString("{}")).build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(unwind.statusCode()).isEqualTo(401);
     }

@@ -464,8 +464,7 @@ public final class ApiServer {
                 telemetry.recordError();
                 boolean changed = !jarChangedHint().isEmpty();
                 log.error("Request failed on {} {}{}", ctx.method(), ctx.path(),
-                        changed ? " because the running build changed; restart StrikeBench" : "");
-                log.debug("Request failure detail on " + ctx.method() + " " + ctx.path(), e);
+                        changed ? " because the running build changed; restart StrikeBench" : "", e);
                 String detail = changed
                         ? "StrikeBench changed while it was running. Restart it and try again."
                         : "The request failed unexpectedly. Retry it, then check Data health if the problem persists.";

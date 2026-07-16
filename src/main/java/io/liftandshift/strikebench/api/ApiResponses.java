@@ -84,16 +84,12 @@ public final class ApiResponses {
     public record PlanPlacedTrade<T, U, V, W>(T plan, U trade, V decision, W warnings) {}
     public record PlanManagement<T, U>(T plan, U management) {}
     public record PlanMark<T, U, V>(T plan, U mark, V management) {}
-    public record PlanTrade<T, U, V>(T plan, U trade, V management) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanWorkspace<T, U, V, W>(T plan, U decision, V management, W trade) {}
     public record PlanRows<T>(T plans, String market) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanOutcomesLatest<T, U, V, W, X>(T outcomes, U comparisons, V backtests, W selected,
                                                     String selectionState, X priorSelection) {}
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PlanClosedTrade<T, U, V, W>(T plan, U trade, long realizedPnlCents,
-                                               V management, W rolledPosition) {}
     public record Coverage<T, U>(T symbols, U summary) {}
     public record DataOverview<T, U, V, W>(T engine, U coverage, V jobs, boolean fixturesOnly,
                                            String marketLane, boolean marketOpen, W jobKinds,
@@ -243,7 +239,6 @@ public final class ApiResponses {
     public record PayoffPoint(String price, long profitCents) {}
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
                                            List<PayoffPoint> payoff) {}
-    public record ClosedTrade<T>(T trade, long realizedPnlCents, long decisionPnlCents) {}
     public record OptionLifecycleProjection(String action, int legIndex, String contract,
                                             String expiration, long settlementUnderlyingCents,
                                             String settlementPriceBasis,

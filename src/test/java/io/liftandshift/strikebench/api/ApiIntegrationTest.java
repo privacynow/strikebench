@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.Javalin;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.pricing.HistoricalVol;
@@ -291,13 +292,14 @@ class ApiIntegrationTest {
         JsonNode detail2 = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail2.get("marksHistory").size()).isEqualTo(1);
 
-        // Unwind without confirm -> 400; with confirm -> realized P/L and reserve released
-        assertThat(post("/api/trades/" + tradeId + "/unwind", "{}").statusCode()).isEqualTo(400);
-        HttpResponse<String> unwindRes = post("/api/trades/" + tradeId + "/unwind", "{\"confirm\":true}");
-        assertThat(unwindRes.statusCode()).isEqualTo(200);
-        JsonNode unwound = Json.parse(unwindRes.body());
+        // A mutation without a signed preview is rejected; the canonical close freezes its receipt.
+        assertThat(post("/api/position-transformations/apply",
+                "{\"source\":\"PRACTICE_TRADE\",\"sourceId\":\"" + tradeId
+                        + "\",\"action\":\"CLOSE\"}").statusCode()).isEqualTo(400);
+        JsonNode unwound = transform(tradeId, "CLOSE");
         assertThat(unwound.at("/trade/status").asText()).isEqualTo("CLOSED");
-        assertThat(unwound.get("realizedPnlCents").isNumber()).isTrue();
+        assertThat(unwound.get("realizedPnlToDateCents").isNumber()).isTrue();
+        assertThat(unwound.at("/transformation/action").asText()).isEqualTo("CLOSE");
 
         JsonNode finalAccount = Json.parse(get("/api/account").body());
         assertThat(finalAccount.at("/account/reservedCents").asLong()).isZero();
@@ -305,7 +307,7 @@ class ApiIntegrationTest {
 
     @Test
     @Order(8)
-    void deleteRequiresConfirmAndVoidsTrade() throws Exception {
+    void voidRequiresSignedPreviewAndKeepsTheCorrectionReceipt() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
@@ -313,15 +315,17 @@ class ApiIntegrationTest {
                            "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
-        assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(400); // no confirm
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(404);
+        JsonNode voided = transform(tradeId, "VOID");
+        assertThat(voided.at("/transformation/action").asText()).isEqualTo("VOID");
+        assertThat(voided.get("receiptId").asText()).isNotBlank();
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/trade/status").asText()).isEqualTo("DELETED");
     }
 
     @Test
     @Order(9)
-    void settleRequiresExplicitConfirmAndBadDatesAre400() throws Exception {
+    void lifecycleMutationRequiresSignedPreviewAndBadDatesAre400() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
@@ -329,12 +333,11 @@ class ApiIntegrationTest {
                            "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
-        // No/empty body or missing confirm flag must NOT settle (was auto-confirming)
-        assertThat(post("/api/trades/" + tradeId + "/settle", "").statusCode()).isEqualTo(400);
-        assertThat(post("/api/trades/" + tradeId + "/settle", "{}").statusCode()).isEqualTo(400);
-        // With confirm it advances to the domain check (legs not expired -> 422)
-        assertThat(post("/api/trades/" + tradeId + "/settle", "{\"confirm\":true}").statusCode()).isEqualTo(422);
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        assertThat(post("/api/trades/" + tradeId + "/settle", "{\"confirm\":true}").statusCode()).isEqualTo(404);
+        String lifecycle = "{\"source\":\"PRACTICE_TRADE\",\"sourceId\":\"" + tradeId
+                + "\",\"action\":\"EXPIRATION\",\"legIndex\":0}";
+        assertThat(post("/api/position-transformations/preview", lifecycle).statusCode()).isEqualTo(422);
+        transform(tradeId, "VOID");
 
         // Malformed dates are client errors, not 500s
         assertThat(get("/api/research/AAPL/chain?expiration=garbage").statusCode()).isEqualTo(400);
@@ -361,7 +364,7 @@ class ApiIntegrationTest {
         assertThat(detail.at("/current/greeks/deltaShares").asDouble()).isGreaterThan(0);
         assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
 
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        transform(tradeId, "VOID");
     }
 
     @Test
@@ -440,7 +443,7 @@ class ApiIntegrationTest {
         JsonNode trade = Json.parse(created.body()).get("trade");
         assertThat(trade.get("entryNetPremiumCents").asLong()).isNegative(); // debit
         assertThat(trade.path("maxProfitCents").isMissingNode()).isTrue();   // null = omitted (model-dependent)
-        assertThat(delete("/api/trades/" + trade.get("id").asText() + "?confirm=true").statusCode()).isEqualTo(200);
+        transform(trade.get("id").asText(), "VOID");
     }
 
     @Test
@@ -532,7 +535,7 @@ class ApiIntegrationTest {
         assertThat(Json.parse(get("/api/trades?symbol=AAPL&intent=INCOME&status=ACTIVE").body()).get("total").asLong()).isZero();
 
         // Void the call, sell the shares back — clean slate for later tests
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        transform(tradeId, "VOID");
         HttpResponse<String> sold = post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}");
         assertThat(sold.statusCode()).as(sold.body()).isEqualTo(200);
         assertThat(Json.parse(sold.body()).get("realizedPnlCents").isNumber()).isTrue();
@@ -1566,5 +1569,19 @@ class ApiIntegrationTest {
         assertThat(Json.parse(duplicate.body()).get("quarantine").toString()).contains("already recorded");
         assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/transactions?size=20").body())
                 .get("transactions")).hasSize(2);
+    }
+
+    private static JsonNode transform(String tradeId, String action) throws Exception {
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", action);
+        HttpResponse<String> previewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(previewResponse.statusCode()).withFailMessage(previewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(previewResponse.body());
+        request.put("previewToken", preview.get("previewToken").asText());
+        HttpResponse<String> applied = post("/api/position-transformations/apply", request.toString());
+        assertThat(applied.statusCode()).withFailMessage(applied.body()).isEqualTo(200);
+        return Json.parse(applied.body());
     }
 }
