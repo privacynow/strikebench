@@ -125,6 +125,17 @@ class StrategyCatalogTest {
                 call(2, "SELL", "105", NEAR, 1), call(3, "BUY", "110", NEAR, 1))).custom()).isTrue();
     }
 
+    @Test
+    void stockOnlyLifecycleSurvivorIsNamedAsSharesRatherThanStockAndOptions() {
+        var longShares = StrategyCatalog.identify(pkg(stock(0, "BUY", 100)));
+        var shortShares = StrategyCatalog.identify(pkg(stock(0, "SELL", 100)));
+
+        assertThat(longShares.label()).isEqualTo("Long shares");
+        assertThat(longShares.summary()).contains("owned shares");
+        assertThat(shortShares.label()).isEqualTo("Short shares");
+        assertThat(shortShares.summary()).contains("short shares");
+    }
+
     private static Shape family(String name, String family, PositionPackage.Leg... legs) {
         return new Shape(name, family, null, List.of(legs));
     }

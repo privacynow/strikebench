@@ -105,6 +105,22 @@ public final class PlanManagementService {
                 userId, planId, expectedVersion, receiptId, action, survivor, actionRealized);
     }
 
+    public TradeService.LifecycleHook optionLifecycleHook(String userId, String planId,
+                                                          long expectedVersion, String action,
+                                                          boolean positionSurvives,
+                                                          String receiptId) {
+        String normalized = action == null ? "" : action.trim().toUpperCase();
+        if (!Set.of("ASSIGNMENT", "EXERCISE", "EXPIRATION").contains(normalized)) {
+            throw new IllegalArgumentException("unsupported option lifecycle action: " + action);
+        }
+        if (receiptId == null || receiptId.isBlank()) {
+            throw new IllegalArgumentException("a Plan option lifecycle action requires its transformation receipt");
+        }
+        return (connection, changed, actionRealized, realizedToDate) -> saveOptionLifecycleOn(connection,
+                userId, planId, expectedVersion, receiptId, normalized, positionSurvives,
+                changed, actionRealized, realizedToDate);
+    }
+
     public ObjectNode recordCashReview(String userId, String planId, long expectedVersion, CashReview review) {
         db.tx(c -> {
             PlanRow plan = requireOwned(c, planId, userId, true);
@@ -142,6 +158,8 @@ public final class PlanManagementService {
             put(out, "activeTradeId", Db.queryOn(c, "SELECT l.trade_id FROM plan_link l JOIN trades t ON t.id=l.trade_id " +
                             "WHERE l.plan_id=? AND t.status='ACTIVE' ORDER BY l.created_at DESC LIMIT 1",
                     r -> r.str("trade_id"), planId).stream().findFirst().orElse(null));
+            ObjectNode currentPosition = latestPositionReceipt(c, planId);
+            if (currentPosition != null) out.set("currentPosition", currentPosition);
             ArrayNode links = out.putArray("links");
             Db.queryOn(c, "SELECT role,trade_id,sim_session_id,related_plan_id,created_at::text created_at " +
                             "FROM plan_link WHERE plan_id=? ORDER BY created_at", r -> {
@@ -175,6 +193,63 @@ public final class PlanManagementService {
                     }, planId).forEach(reviews::add);
             return out;
         });
+    }
+
+    /**
+     * The frozen transformation receipt is the current Plan package when an option lifecycle event
+     * leaves shares but no active option trade. It is a read model over artifacts written by the
+     * existing atomic mutation, not a second accounting path.
+     */
+    private static ObjectNode latestPositionReceipt(Connection c, String planId) throws SQLException {
+        List<ObjectNode> rows = Db.queryOn(c, "SELECT id,position_state,transformation_action,practice_trade_id," +
+                        "marks_as_of::text marks_as_of,evidence_level,created_at::text created_at " +
+                        "FROM position_receipt WHERE plan_id=? AND execution_lane='PRACTICE' " +
+                        "ORDER BY created_at DESC LIMIT 1", r -> {
+                    ObjectNode n = Json.MAPPER.createObjectNode();
+                    put(n, "receiptId", r.str("id"));
+                    put(n, "positionState", r.str("position_state"));
+                    put(n, "action", r.str("transformation_action"));
+                    put(n, "practiceTradeId", r.str("practice_trade_id"));
+                    put(n, "marksAsOf", r.str("marks_as_of"));
+                    put(n, "evidenceLevel", r.str("evidence_level"));
+                    put(n, "createdAt", r.str("created_at"));
+                    return n;
+                }, planId);
+        if (rows.isEmpty()) return null;
+        ObjectNode out = rows.getFirst();
+        String receiptId = out.get("receiptId").asText();
+        Db.queryOn(c, "SELECT value_text FROM position_receipt_metric " +
+                        "WHERE receipt_id=? AND metric_key='after_identity'", r -> r.str("value_text"), receiptId)
+                .stream().findFirst().ifPresent(value -> put(out, "identity", value));
+        ArrayNode legs = out.putArray("legs");
+        Db.queryOn(c, "SELECT leg_no,instrument_type,action,symbol,option_type,strike::text strike," +
+                        "expiration::text expiration,quantity,multiplier,mid::text mid,price_authority " +
+                        "FROM position_receipt_leg WHERE receipt_id=? AND position_phase='AFTER' ORDER BY leg_no", r -> {
+                    ObjectNode leg = Json.MAPPER.createObjectNode();
+                    put(leg, "legNo", r.intv("leg_no"));
+                    put(leg, "instrumentType", r.str("instrument_type"));
+                    put(leg, "action", r.str("action"));
+                    put(leg, "symbol", r.str("symbol"));
+                    put(leg, "optionType", r.str("option_type"));
+                    put(leg, "strike", r.str("strike"));
+                    put(leg, "expiration", r.str("expiration"));
+                    put(leg, "quantity", r.lng("quantity"));
+                    put(leg, "multiplier", r.intv("multiplier"));
+                    put(leg, "price", r.str("mid"));
+                    put(leg, "priceAuthority", r.str("price_authority"));
+                    return leg;
+                }, receiptId).forEach(legs::add);
+        String tradeId = out.path("practiceTradeId").asText(null);
+        if (tradeId != null) {
+            Db.queryOn(c, "SELECT p.shares,p.avg_cost_cents FROM trades t " +
+                            "JOIN positions p ON p.account_id=t.account_id AND p.symbol=t.symbol WHERE t.id=?",
+                    r -> new long[]{r.lng("shares"), r.lng("avg_cost_cents")}, tradeId)
+                    .stream().findFirst().ifPresent(holding -> {
+                        put(out, "holdingShares", holding[0]);
+                        put(out, "holdingAvgCostCents", holding[1]);
+                    });
+        }
+        return out;
     }
 
     private void saveLifecycleOn(Connection c, String userId, String planId, long expectedVersion,
@@ -311,6 +386,54 @@ public final class PlanManagementService {
                 Ids.newId("plink"), planId, decisionId, survivor.id(), at);
         Db.execOn(c, "UPDATE plans SET status='POSITION_OPEN',furthest_stage='MANAGE_REVIEW'," +
                         "version=version+1,updated_at=? WHERE id=?", at, planId);
+    }
+
+    private void saveOptionLifecycleOn(Connection c, String userId, String planId, long expectedVersion,
+                                       String receiptId, String action, boolean positionSurvives,
+                                       TradeRecord changed, long actionRealized, long realizedToDate)
+            throws SQLException {
+        PlanRow plan = requireOwned(c, planId, userId, true);
+        if (plan.version() != expectedVersion) {
+            throw new IllegalStateException("This Plan changed before the option lifecycle action completed.");
+        }
+        if (!"POSITION_OPEN".equals(plan.status())) {
+            throw new IllegalStateException("Only a Plan with an open position can record assignment, exercise, or expiration.");
+        }
+        requireLinked(c, planId, changed.id());
+        if (positionSurvives && !TradeRecord.ACTIVE.equals(changed.status())
+                && !Set.of("ASSIGNMENT", "EXERCISE").contains(action)) {
+            throw new IllegalStateException("The reviewed lifecycle action did not leave the expected position state.");
+        }
+        OffsetDateTime at = now();
+        String decisionId = latestDecisionId(c, planId);
+        String note = switch (action) {
+            case "ASSIGNMENT" -> "Assigned option converted at its contract strike; option P/L and physical share cash remain separate";
+            case "EXERCISE" -> "Exercised option converted at its contract strike; the resulting shares and surviving options remain visible";
+            default -> "Expired option was removed using the Plan market's lane clock and disclosed settlement basis";
+        };
+        Db.execOn(c, "INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,receipt_id,kind,action_at," +
+                        "realized_cents,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                Ids.newId("pmgt"), planId, decisionId, changed.id(), receiptId, action, at,
+                actionRealized, note, at);
+        Db.execOn(c, "INSERT INTO plan_link(id,plan_id,decision_id,role,trade_id,created_at) VALUES(?,?,?,?,?,?)",
+                Ids.newId("plink"), planId, decisionId, action, changed.id(), at);
+        if (!positionSurvives && decisionId != null) {
+            List<DecisionReview> frozen = Db.queryOn(c,
+                    "SELECT review_horizon_days,pop FROM plan_decision WHERE id=?",
+                    r -> new DecisionReview(r.intv("review_horizon_days"), r.dblOrNull("pop")), decisionId);
+            if (!frozen.isEmpty()) {
+                DecisionReview decision = frozen.getFirst();
+                Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
+                                "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
+                        "PLAN_POSITION", realizedToDate, decision.pop(), realizedToDate > 0 ? 1 : 0, at,
+                        "Realized option result after " + action.toLowerCase(java.util.Locale.ROOT)
+                                + "; any physical share cash remains a separate accounting fact",
+                        at);
+            }
+        }
+        Db.execOn(c, "UPDATE plans SET status=?,furthest_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
+                positionSurvives ? "POSITION_OPEN" : "CLOSED", at, planId);
     }
 
     private static PlanRow requireOwned(Connection c, String planId, String userId, boolean lock) throws SQLException {

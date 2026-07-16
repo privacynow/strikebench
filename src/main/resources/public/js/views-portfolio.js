@@ -80,6 +80,162 @@
     });
   }
 
+  function lifecycleActionLabel(action) {
+    return ({ ASSIGNMENT: 'Assignment', EXERCISE: 'Exercise', EXPIRATION: 'Expiration' })[action] || action;
+  }
+
+  function cashSettledIndexOption(symbol) {
+    var normalized = String(symbol || '').trim().toUpperCase().replace(/^_/, '');
+    var known = App.config && Array.isArray(App.config.broadBasedIndexOptionSymbols)
+      ? App.config.broadBasedIndexOptionSymbols : [];
+    return known.some(function (item) { return String(item).toUpperCase() === normalized; });
+  }
+
+  function lifecycleShareResult(lifecycle) {
+    var shares = Number(lifecycle.sharesDelta || 0);
+    if (shares > 0) return shares + ' shares acquired at the strike';
+    if (shares < 0) return Math.abs(shares) + ' shares delivered at the strike';
+    return 'No share delivery';
+  }
+
+  function lifecycleAccountingFacts(preview) {
+    var lifecycle = preview.lifecycle;
+    var stockCash = Number(lifecycle.stockCashCents || 0);
+    return el('div', { class: 'position-transformation-facts position-lifecycle-accounting' },
+      transformationFact('Option result realized', fmtMoney(preview.actionRealizedPnlCents, { plus: true }),
+        Number(preview.actionRealizedPnlCents) >= 0 ? 'gain' : 'loss'),
+      transformationFact('Realized on position to date', fmtMoney(preview.realizedPnlToDateCents, { plus: true }),
+        Number(preview.realizedPnlToDateCents) >= 0 ? 'gain' : 'loss'),
+      Number(lifecycle.optionSettlementCashCents || 0) !== 0
+        ? transformationFact('Option settlement cash', fmtMoney(lifecycle.optionSettlementCashCents, { plus: true })) : null,
+      transformationFact(stockCash < 0 ? 'Strike cash used' : stockCash > 0 ? 'Strike cash received' : 'Strike cash',
+        fmtMoney(Math.abs(stockCash))),
+      transformationFact('Practice cash after', fmtMoney(lifecycle.projectedCashAfterCents)),
+      transformationFact('Broker reserve before', fmtMoney(lifecycle.reserveBeforeCents)),
+      transformationFact('Broker reserve after', fmtMoney(lifecycle.reserveAfterCents)),
+      transformationFact('Selected-leg entry basis', fmtMoney(preview.allocatedEntryBasisCents, { plus: true })),
+      transformationFact('Selected opening fees', fmtMoney(preview.allocatedOpenFeesCents)));
+  }
+
+  function renderLifecycleReview(host, preview, trade, managedPlan, action, legIndex) {
+    host.innerHTML = '';
+    var lifecycle = preview.lifecycle;
+    var change = preview.transformation;
+    var primaryFacts = el('div', { class: 'position-transformation-facts' },
+      transformationFact('Event', lifecycleActionLabel(action)),
+      transformationFact('Selected contract', lifecycle.contract),
+      transformationFact('Underlying reference', fmtMoney(lifecycle.settlementUnderlyingCents)),
+      transformationFact('Share result', lifecycleShareResult(lifecycle)));
+    var accounting = lifecycleAccountingFacts(preview);
+    var review = el('div', { class: 'position-lifecycle-review', id: 'option-lifecycle-preview' },
+      UI.actionFeedback('ok', lifecycleActionLabel(action) + ' reviewed',
+        'Nothing has changed yet. Apply only after the contract, shares, and cash below match the event you are recording.'),
+      el('div', { class: 'position-transformation-route', 'aria-label': 'Position before and after option lifecycle event' },
+        transformationState('Before', change.beforeIdentity, 'Current position'),
+        el('span', { class: 'position-transformation-arrow', 'aria-hidden': 'true' }, '→'),
+        transformationState('After', change.afterIdentity, 'Cash / no remaining position')),
+      primaryFacts,
+      Learn.currentLevel() === 'expert' ? accounting
+        : UI.expandable('See exact option accounting and reserve changes', function () { return accounting; }),
+      el('div', { class: 'position-lifecycle-basis' },
+        el('span', { class: 'eyebrow' }, 'SETTLEMENT BASIS'),
+        el('strong', {}, lifecycle.settlementPriceBasis),
+        el('span', { class: 'muted small' }, 'Expiration ', lifecycle.expiration,
+          ' · option conversion and stock strike cash stay separate.')),
+      change.warnings && change.warnings.length
+        ? alertBox('warn', 'Risk identity after this event', change.warnings) : null,
+      preview.basisNotes && preview.basisNotes.length
+        ? alertBox('info', 'How basis is carried', preview.basisNotes) : null,
+      change.applicable ? el('button', { type: 'button', class: 'btn', id: 'apply-option-lifecycle-btn',
+        onclick: async function (event) {
+          var request = practiceTransformationRequest(trade, managedPlan, action, preview.previewToken);
+          request.legIndex = legIndex;
+          var applied = await visibleCommand(event.currentTarget, function () {
+            return API.post('/api/position-transformations/apply', request);
+          }, 'The reviewed option event could not be applied.');
+          if (!applied) return;
+          UI.toast(lifecycleActionLabel(action) + ' recorded · ' + lifecycleShareResult(lifecycle), 'ok');
+          if (managedPlan && applied.plan) await PlanStore.focus(applied.plan, 'MANAGE_REVIEW');
+          else await App.render();
+        }
+      }, 'Apply reviewed ' + lifecycleActionLabel(action).toLowerCase())
+        : alertBox('danger', 'This option event cannot be applied',
+          change.afterRisk && change.afterRisk.blockReasons || ['Review the resulting position and account constraints.']));
+    host.appendChild(review);
+    host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function openOptionLifecycleTransformation(trade, managedPlan, button, host) {
+    host.hidden = false;
+    host.innerHTML = '';
+    if (managedPlan) managedPlan = await PlanStore.get(managedPlan.id, true);
+    var optionLegs = (trade.legs || []).map(function (leg, index) { return { leg: leg, index: index }; })
+      .filter(function (row) { return String(row.leg.type).toUpperCase() !== 'STOCK'; });
+    var cashSettled = cashSettledIndexOption(trade.symbol);
+    var reviewHost = el('div', { class: 'position-lifecycle-result', 'aria-live': 'polite' });
+    var legGrid = el('div', { class: 'position-lifecycle-grid' });
+    function reviewEvent(event, row, action) {
+      var actionButton = event.currentTarget;
+      legGrid.querySelectorAll('.position-lifecycle-leg').forEach(function (node) {
+        node.classList.toggle('is-selected', node === actionButton.closest('.position-lifecycle-leg'));
+      });
+      legGrid.querySelectorAll('button').forEach(function (node) {
+        node.setAttribute('aria-pressed', node === actionButton ? 'true' : 'false');
+      });
+      reviewHost.innerHTML = '';
+      reviewHost.appendChild(UI.spinner('Rechecking the lane clock, contract, shares, and account…'));
+      var request = practiceTransformationRequest(trade, managedPlan, action);
+      request.legIndex = row.index;
+      var failure = null;
+      visibleCommand(actionButton, function () {
+        return API.post('/api/position-transformations/preview', request).catch(function (error) {
+          failure = error;
+          throw error;
+        });
+      }, 'This option event could not be reviewed.').then(function (preview) {
+        if (preview) {
+          renderLifecycleReview(reviewHost, preview, trade, managedPlan, action, row.index);
+          return;
+        }
+        reviewHost.innerHTML = '';
+        reviewHost.appendChild(UI.actionFeedback('danger', 'This event is not ready to record',
+          failure && failure.message ? failure.message : 'The lane clock or current account facts do not support this event.'));
+        reviewHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
+    optionLegs.forEach(function (row) {
+      var physicalAction = String(row.leg.action).toUpperCase() === 'SELL' ? 'ASSIGNMENT' : 'EXERCISE';
+      var card = el('article', { class: 'position-lifecycle-leg' },
+        el('div', { class: 'position-lifecycle-leg-copy' },
+          el('span', { class: 'eyebrow' }, 'LEG ' + (row.index + 1)),
+          el('strong', {}, legLabel(row.leg)),
+          el('span', { class: 'muted small' }, cashSettled
+            ? 'This broad-based index option settles in cash and never delivers shares.'
+            : physicalAction === 'ASSIGNMENT'
+              ? 'A short option may be assigned when it has intrinsic value.'
+              : 'A long option may be exercised when it has intrinsic value.')),
+        el('div', { class: 'position-lifecycle-actions' },
+          cashSettled ? null : el('button', { type: 'button', class: 'btn btn-secondary btn-sm', 'aria-pressed': 'false',
+            onclick: function (event) { reviewEvent(event, row, physicalAction); } },
+          'Review ' + lifecycleActionLabel(physicalAction).toLowerCase()),
+          el('button', { type: 'button', class: 'btn btn-secondary btn-sm', 'aria-pressed': 'false',
+            onclick: function (event) { reviewEvent(event, row, 'EXPIRATION'); } },
+          'Review expiration')));
+      legGrid.appendChild(card);
+    });
+    host.append(
+      el('div', { class: 'position-lifecycle-intro' },
+        el('span', { class: 'eyebrow' }, 'OPTION EVENT'),
+        el('h3', {}, 'Record what happened to one exact contract'),
+        el('p', { class: 'muted small' },
+          cashSettled
+            ? 'Choose the exact contract to review its cash settlement at expiration. StrikeBench uses this market’s clock and settlement evidence before anything changes.'
+            : 'Choose the contract and event. StrikeBench uses this market’s clock and price evidence, then shows the resulting shares, cash, reserve, and surviving risk before anything changes.')),
+      optionLegs.length ? legGrid : UI.emptyState('No option legs remain', 'This position has no option contract to assign, exercise, or expire.'),
+      reviewHost);
+    host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function renderPartialCloseReview(host, preview, trade, managedPlan, closeQuantity) {
     host.innerHTML = '';
     var change = preview.transformation;
@@ -2472,6 +2628,7 @@
       var rollHost = el('div', { class: 'position-roll-workbench', hidden: 'hidden' });
       var partialHost = el('div', { class: 'position-partial-workbench', hidden: 'hidden' });
       var adjustHost = el('div', { class: 'position-adjust-workbench', hidden: 'hidden' });
+      var lifecycleHost = el('div', { class: 'position-lifecycle-workbench', hidden: 'hidden' });
       root.appendChild(el('div', { class: 'card' },
         UI.cardHeader('Actions'),
         el('div', { class: 'btn-row', style: 'margin-top:0' },
@@ -2502,6 +2659,7 @@
             class: 'btn btn-secondary', id: 'partial-close-btn', onclick: function (event) {
               rollHost.hidden = true;
               adjustHost.hidden = true;
+              lifecycleHost.hidden = true;
               openPartialCloseTransformation(t, managedPlan, event.currentTarget, partialHost)
                 .catch(function (error) {
                   partialHost.hidden = false;
@@ -2515,6 +2673,7 @@
             class: 'btn btn-secondary', id: 'adjust-position-btn', onclick: async function (event) {
               partialHost.hidden = true;
               rollHost.hidden = true;
+              lifecycleHost.hidden = true;
               var button = event.currentTarget;
               button.disabled = true;
               try {
@@ -2530,25 +2689,29 @@
             }
           }, 'Adjust position…', el('span', { class: 'btn-sub' }, 'add or remove legs / shares')),
           el('button', {
-            class: 'btn btn-secondary', id: 'settle-btn', onclick: function () {
-              UI.confirmModal('Settle at expiration value?',
-                el('p', {}, 'Only possible after all legs expired. Cash settles at intrinsic value.'),
-                'Settle',
-                async function () {
-                  if (managedPlan) {
-                    var out = await PlanStore.manage(managedPlan, 'settle', { confirm: true });
-                    await PlanStore.focus(out.plan, 'MANAGE_REVIEW');
-                  } else {
-                    await API.post('/api/trades/' + id + '/settle', { confirm: true });
-                    App.render();
-                  }
-                });
+            class: 'btn btn-secondary', id: 'option-lifecycle-btn', onclick: async function (event) {
+              partialHost.hidden = true;
+              adjustHost.hidden = true;
+              rollHost.hidden = true;
+              var actionButton = event.currentTarget;
+              actionButton.disabled = true;
+              try {
+                await openOptionLifecycleTransformation(t, managedPlan, actionButton, lifecycleHost);
+              } catch (error) {
+                lifecycleHost.hidden = false;
+                lifecycleHost.innerHTML = '';
+                lifecycleHost.appendChild(UI.actionFeedback('danger', 'Could not open the option event review',
+                  error.message || String(error)));
+              } finally {
+                actionButton.disabled = false;
+              }
             }
-          }, 'Settle…', el('span', { class: 'btn-sub' }, 'after expiration')),
+          }, 'Option event…', el('span', { class: 'btn-sub' }, 'assignment / exercise / expiration')),
           el('button', {
             class: 'btn btn-secondary', id: 'roll-btn', onclick: function (event) {
               partialHost.hidden = true;
               adjustHost.hidden = true;
+              lifecycleHost.hidden = true;
               openRollTransformation(t, managedPlan, event.currentTarget, rollHost)
                 .catch(function (error) {
                   rollHost.hidden = false;
@@ -2579,6 +2742,7 @@
           }, 'Void…', el('span', { class: 'btn-sub' }, 'erase — practice only'))),
         partialHost,
         adjustHost,
+        lifecycleHost,
         rollHost));
     }
 

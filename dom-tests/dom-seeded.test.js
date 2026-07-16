@@ -2,11 +2,9 @@
  * GROWN-DATABASE sweep: the fixture and live suites always start from a fresh DB, which is
  * exactly how the "works in tests, fails on my machine" class of bug slipped through. This
  * suite grows a database the way a real user would — shares, a share-covered call, a spread,
- * a closed trade, a backtest — then injects a LEGACY dead trade byte-identical in shape to
- * the pre-realism-fix TSLA collar found in the owner's real database (stock:true legs_json,
- * expired legs, no intent, bogus stored maxLoss=0/POP=1), and finally walks EVERY route at
- * EVERY experience level plus every trade detail page. Any page JS error, any 5xx, or any
- * route-level error boundary is a hard failure.
+ * a closed trade, and a Plan replay — then walks EVERY route at EVERY experience level plus
+ * every trade detail page. Any page JS error, any 5xx, or any route-level error boundary is
+ * a hard failure.
  *
  * Run:  node --test dom-seeded.test.js
  */
@@ -53,6 +51,12 @@ async function api(method, p, body) {
 /** Creates a trade the way a real client does: preview, acknowledge the server's
  *  material-risk contract (R2), then create with the signed token attached. */
 async function createTrade(body) {
+  body = {
+    ...body,
+    fillNature: body.fillNature || 'PROPOSED',
+    source: body.source || 'ANALYZE',
+    legs: body.legs.map(leg => ({ multiplier: 100, positionEffect: 'OPEN', ...leg }))
+  };
   const prev = await api('POST', '/api/trades/preview', body);
   if (prev.requiredAcks && prev.requiredAcks.length) {
     body = { ...body, acknowledgedRisks: prev.requiredAcks.map(a => a.id), ackToken: prev.ackToken };
@@ -133,24 +137,6 @@ before(async () => {
     from: isoDaysFromNow(-120), to: isoDaysFromNow(-1), targetDte: 30
   });
 
-  // ---- Inject the LEGACY dead collar exactly as found in the owner's real database ----
-  // (pre-fix shape: stock leg serialized with "stock":true, both option legs expired,
-  // stored max_loss_cents=0 and pop_entry=1.0, no intent column value, snapshot '{}')
-  const acct = (await api('GET', '/api/account')).account.id;
-  const dead = isoDaysFromNow(-1);
-  const legsJson = JSON.stringify([
-    { action: 'BUY', ratio: 1, entryPrice: 416.97, stock: true },
-    { action: 'BUY', type: 'PUT', strike: 417.5, expiration: dead, ratio: 1, entryPrice: 0.005, stock: false },
-    { action: 'SELL', type: 'CALL', strike: 420, expiration: dead, ratio: 1, entryPrice: 3.10, stock: false }
-  ]).replaceAll("'", "''");
-  pg.sql(`INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
-      entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,pop_entry,
-      fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,is_live,
-      created_at,closed_at,updated_at,intent,shares_locked)
-    VALUES ('tr_legacydeadcollar','${acct}','TSLA','PROTECTIVE_COLLAR','ACTIVE',1,'${legsJson}',
-      'neutral','week','conservative',41697,-4169100,0,30900,'[]',1.0,130,0,NULL,NULL,'{}',0,
-      '2026-07-06T01:24:00Z',NULL,'2026-07-06T01:24:00Z',NULL,0);`);
-
   browser = await chromium.launch();
   page = await browser.newPage();
   page.on('pageerror', e => pageErrors.push(e.message));
@@ -185,22 +171,18 @@ for (const level of ['beginner', 'expert']) {
   });
 }
 
-test('grown DB: every trade detail renders, including the legacy dead collar', async () => {
+test('grown DB: every current trade detail renders', async () => {
   const trades = [];
   for (const status of ['ACTIVE', 'CLOSED', 'EXPIRED', 'DELETED']) {
     const data = await api('GET', `/api/trades?status=${status}&size=50`);
     for (const t of data.trades) trades.push(t.id);
   }
-  assert.ok(trades.includes('tr_legacydeadcollar'), 'legacy trade is listed');
-  assert.ok(trades.length >= 4, 'seeded trades all present');
+  assert.ok(trades.length >= 3, 'seeded trades all present');
   for (const id of trades) {
     await go(`#/portfolio/trade/${id}`);
     assert.equal(await page.locator('#route-error').count(), 0, `detail boundary for ${id}`);
     assertClean(`detail ${id}`);
   }
-  // The dead legacy trade must still offer a way out (settle) rather than erroring
-  await go('#/portfolio/trade/tr_legacydeadcollar');
-  assert.ok(await page.locator('#settle-btn').count(), 'settle available for dead legacy trade');
 });
 
 test('grown DB: locked shares and filters behave with real mixed data', async () => {

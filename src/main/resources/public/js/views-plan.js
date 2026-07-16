@@ -2414,6 +2414,38 @@
       }))));
   }
 
+  function receiptPositionCard(position) {
+    var legs = position && position.legs || [];
+    function fact(label, value, note) {
+      return el('div', { class: 'plan-current-position-fact' },
+        el('span', { class: 'eyebrow' }, label),
+        el('strong', {}, value),
+        note ? el('span', { class: 'muted small' }, note) : null);
+    }
+    return el('section', { class: 'card plan-current-receipt-position' },
+      UI.cardHeader('Current Plan position'),
+      el('div', { class: 'plan-current-position-summary' },
+        fact('Position now', position.identity || 'Open position', 'Latest frozen transformation receipt'),
+        position.holdingShares != null
+          ? fact('Account shares', String(position.holdingShares),
+            position.holdingAvgCostCents == null ? 'All Practice holdings in this symbol' : 'Account average basis ' + fmtMoney(position.holdingAvgCostCents))
+          : null,
+        fact('Last event', String(position.action || position.positionState || 'TRANSFORMATION').replaceAll('_', ' '),
+          UI.fmtDate(position.createdAt || position.marksAsOf))),
+      legs.length ? table(['Holding', 'Quantity', 'Basis / mark'], legs.map(function (leg) {
+        var holding = leg.instrumentType === 'STOCK' ? leg.symbol + ' shares'
+          : [leg.symbol, leg.expiration, leg.strike, leg.optionType].filter(Boolean).join(' ');
+        return el('tr', {},
+          el('td', {}, holding),
+          el('td', {}, String(leg.quantity)),
+          el('td', {}, leg.price == null ? 'Not reported' : fmtMoney(Math.round(Number(leg.price) * 100))));
+      })) : alertBox('info', 'No open position remains', ['The latest frozen transformation receipt has no surviving legs.']),
+      el('div', { class: 'btn-row' },
+        el('button', { type: 'button', class: 'btn btn-secondary', onclick: function () {
+          App.navigate('#/portfolio');
+        } }, 'Open Practice holdings')));
+  }
+
   function planCashReview(host, plan, decision, management) {
     var created = new Date(decision.createdAt || decision.quoteAsOf);
     var horizon = Number(decision.reviewHorizonDays || 30);
@@ -2496,6 +2528,17 @@
     if (decision.action === 'CASH') {
       planCashReview(content, plan, decision, data.management);
       planManagementTimeline(content, data.management, false);
+      return;
+    }
+    if (!data.trade && data.management && data.management.currentPosition
+        && (data.management.currentPosition.legs || []).length) {
+      content.appendChild(receiptPositionCard(data.management.currentPosition));
+      content.appendChild(el('section', { class: 'card card-slim plan-frozen-expectation' },
+        UI.cardHeader('Decision baseline preserved'),
+        el('p', { class: 'muted' },
+          'The option event changed the live position, while the original frozen decision remains available for review.')));
+      renderFrozenPlanDecision(content, plan, decision, true);
+      planManagementTimeline(content, data.management);
       return;
     }
     if (!data.trade) {

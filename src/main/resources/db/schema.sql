@@ -1144,8 +1144,8 @@ CREATE TABLE public.plan_link (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     decision_id text,
     CONSTRAINT plan_link_check CHECK (((((((trade_id IS NOT NULL))::integer + ((recommendation_id IS NOT NULL))::integer) + ((sim_session_id IS NOT NULL))::integer) + ((related_plan_id IS NOT NULL))::integer) = 1)),
-    CONSTRAINT plan_link_check1 CHECK ((((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'EXTERNAL'::text])) AND (trade_id IS NOT NULL)) OR ((role = 'RECOMMENDATION'::text) AND (recommendation_id IS NOT NULL)) OR ((role = 'REHEARSAL'::text) AND (sim_session_id IS NOT NULL)) OR ((role = ANY (ARRAY['PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])) AND (related_plan_id IS NOT NULL)))),
-    CONSTRAINT plan_link_role_check CHECK ((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'REHEARSAL'::text, 'EXTERNAL'::text, 'RECOMMENDATION'::text, 'PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])))
+    CONSTRAINT plan_link_check1 CHECK ((((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text, 'EXTERNAL'::text])) AND (trade_id IS NOT NULL)) OR ((role = 'RECOMMENDATION'::text) AND (recommendation_id IS NOT NULL)) OR ((role = 'REHEARSAL'::text) AND (sim_session_id IS NOT NULL)) OR ((role = ANY (ARRAY['PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])) AND (related_plan_id IS NOT NULL)))),
+    CONSTRAINT plan_link_role_check CHECK ((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text, 'REHEARSAL'::text, 'EXTERNAL'::text, 'RECOMMENDATION'::text, 'PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])))
 );
 
 
@@ -1171,7 +1171,7 @@ CREATE TABLE public.plan_management_action (
     mfe_cents bigint,
     note text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT plan_management_action_kind_check CHECK ((kind = ANY (ARRAY['MARK'::text, 'ROLL'::text, 'ADJUST'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'SETTLE'::text, 'VOID'::text, 'REHEARSAL_RESULT'::text])))
+    CONSTRAINT plan_management_action_kind_check CHECK ((kind = ANY (ARRAY['MARK'::text, 'ROLL'::text, 'ADJUST'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text, 'SETTLE'::text, 'VOID'::text, 'REHEARSAL_RESULT'::text])))
 );
 
 
