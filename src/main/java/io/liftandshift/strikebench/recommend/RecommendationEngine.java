@@ -572,6 +572,24 @@ public final class RecommendationEngine {
             unitMaxLoss = unitCurve.maxLossCents();
             unitMaxProfit = unitCurve.maxProfitUnbounded() ? null : unitCurve.maxProfitCents();
         }
+        // CAPITAL is not RISK. A cash-secured put or a buy-write covered call deploys capital you must
+        // HOLD — the strike cash you set aside to buy the shares, or the shares themselves — not a small
+        // slice you are willing to LOSE. Gating these by the per-idea RISK budget is the wrong lens and
+        // silently hid every one of them (a $500 name's cash-secured put needs ~$48k of collateral, far
+        // above a $5k risk cap), so "sell puts to buy at a discount" and "take profit on holdings" never
+        // appeared as income. Collateral-based structures are gated by BUYING POWER (what actually
+        // constrains them), like the ACQUIRE flow, and default to a single lot so one idea never quietly
+        // commits the whole account. Defined-risk structures (spreads, condors, butterflies) keep the
+        // risk budget, where max loss genuinely IS the capital at risk.
+        // Applies ONLY where deploying NEW capital is the point: INCOME (write a cash-secured put or a
+        // buy-write covered call to earn premium) and ACQUIRE (set cash aside to buy at a discount).
+        // EXIT and HEDGE operate on shares you ALREADY hold — a buy-write there is incoherent (you can't
+        // "exit" shares you don't own), so without held shares those stay risk-budget-gated and drop out.
+        // A DIRECTIONAL scan may also surface a cash-secured put (it fits a bullish view), but there it
+        // is a directional bet and must respect the per-idea risk budget, not the whole account.
+        boolean collateralBased = !onHeldShares
+                && (intent == StrategyIntent.INCOME || intent == StrategyIntent.ACQUIRE)
+                && (family.needsStock() || family == StrategyFamily.CASH_SECURED_PUT);
         int qty;
         if (onHeldShares) {
             if (unitMaxLoss > budget) return candidateFailure(probe,
@@ -580,6 +598,15 @@ public final class RecommendationEngine {
             int packagesAvailable = (int) (freeShares / displaySharesPerUnit);
             long byBudget = unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : packagesAvailable;
             qty = (int) Math.clamp(Math.min((long) packagesAvailable, byBudget), 1, MAX_QTY);
+        } else if (collateralBased) {
+            long unitCapital = Math.max(unitMaxLoss, Math.max(0, -unitEntryNet)); // collateral or share cost per lot
+            if (unitCapital > buyingPowerCents) return candidateFailure(probe,
+                    "One lot needs " + Money.fmt(unitCapital) + " of capital (collateral or shares), above the account's "
+                            + Money.fmt(buyingPowerCents) + " buying power");
+            long lotsByPower = unitCapital > 0 ? Math.max(1, buyingPowerCents / unitCapital) : 1;
+            int desiredLots = holdings != null && holdings.sharesOwned() != null && holdings.sharesOwned() > 0
+                    ? Math.max(1, holdings.sharesOwned() / 100) : 1;
+            qty = (int) Math.clamp(Math.min((long) desiredLots, lotsByPower), 1, MAX_QTY);
         } else {
             if (unitMaxLoss <= 0 || unitMaxLoss > budget) {
                 if (unitMaxLoss > budget) return candidateFailure(probe,
