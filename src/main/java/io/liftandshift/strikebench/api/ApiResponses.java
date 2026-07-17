@@ -144,14 +144,29 @@ public final class ApiResponses {
                                               String historyPriceBasis, U evidence,
                                               V expirations, boolean planEligible,
                                               String planEligibility, W benchmarks,
-                                              String freshness, String asOfDate) {}
+                                              String freshness, String asOfDate,
+                                              Regime regime) {}
+    /** The lane's trailing regime as one wire object; headline pre-composed server-side. */
+    public record Regime(String trend, Double trendReturnPct, Integer trendSessions,
+                         Double drawdownPct, Double varianceRiskPremium, Double ivRankPct,
+                         String headline, String basis) {
+        public static Regime of(io.liftandshift.strikebench.eval.RegimeSnapshot snapshot) {
+            if (snapshot == null) return null;
+            return new Regime(snapshot.trend() == null ? null : snapshot.trend().name(),
+                    snapshot.trendReturnPct(), snapshot.trendSessions(), snapshot.drawdownPct(),
+                    snapshot.varianceRiskPremium(), snapshot.ivRankPct(),
+                    snapshot.headline(), snapshot.basis());
+        }
+    }
     public record History<T, U>(String symbol, String range, T candles, String source,
                                 String freshness, String barBasis, String priceBasis,
                                 U evidence, Object coverage) {}
     public record Sparklines<T>(String range, T sparklines, int totalRequested, String world) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record SymbolItems<T>(String symbol, T items, String evidence, String note) {}
-    public record Opportunities<T, U>(T ranked, U notes, int scanned) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Opportunities<T, U>(T ranked, U notes, int scanned,
+                                      Object compensation, String compensationBasis) {}
     public record Optimization<T, U>(T optimization, int scanned, U scanNotes) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionBaseline(String key, Long evCents, Long maxLossCents,

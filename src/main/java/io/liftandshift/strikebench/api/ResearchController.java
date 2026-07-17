@@ -227,6 +227,20 @@ final class ResearchController {
             MarketLane planLane = MarketLane.of(world, cfg.fixturesOnly());
             var eligibility = planEligibility.evaluate(
                     symbol, planLane, current, option.expirations(), option.evidence());
+            boolean eventSoon = earnings.date() != null;
+            var volProfileForRegime = new io.liftandshift.strikebench.eval.VolatilityProfiler()
+                    .profile(option.atmIv(), realizedVol30, List.of(), volatilityHorizonDays);
+            var regime = ApiResponses.Regime.of(io.liftandshift.strikebench.eval.RegimeProfiler.profile(
+                    candles.candles(),
+                    new io.liftandshift.strikebench.eval.VolatilityProfile(
+                            volProfileForRegime.atmIv(), volatility.ivRankPct(), volatility.ivPercentilePct(),
+                            volProfileForRegime.realizedVol30(), volProfileForRegime.varianceRiskPremium(),
+                            volProfileForRegime.expectedMovePct(), volatility.historyDays(),
+                            volatility.source()),
+                    eventSoon,
+                    "demo".equals(world) ? "demo sessions (fabricated teaching data)"
+                            : world != null && !"observed".equals(world) ? "this simulated world's sessions"
+                            : "observed sessions"));
             ctx.json(new ApiResponses.ResearchDetail<>(symbol, current, current.mark(),
                     current.usesPreviousCloseFallback(), lane.name(), current.optionable(), option.atmIv(),
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
@@ -238,7 +252,7 @@ final class ResearchController {
                     demoHistory, candles.barBasis(), candles.priceBasis(), evidence,
                     option.expirations().stream().map(LocalDate::toString).toList(),
                     eligibility.eligible(), eligibility.detail(), benchmarkFuture.get(),
-                    current.markFreshness().name(), today.toString()));
+                    current.markFreshness().name(), today.toString(), regime));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);

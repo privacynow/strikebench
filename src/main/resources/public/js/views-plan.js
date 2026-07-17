@@ -3722,14 +3722,35 @@
     var compactWorking = compact ? working.filter(function (plan) {
       return !options.excludePlanId || plan.id !== options.excludePlanId;
     }) : working;
+    // The alert center drives the needs-attention ordering (spec 10.1): a plan carrying an
+    // alert is enriched in place — never duplicated as a second row saying the same thing —
+    // and outranks quiet plans by its worst severity, then recency.
+    var alertList = compact && options.alerts ? options.alerts : [];
+    var SEV_RANK = { URGENT: 3, ATTENTION: 2, INFO: 1 };
+    var alertsByPlan = {};
+    alertList.forEach(function (a) {
+      if (a.planId && compactWorking.some(function (p) { return p.id === a.planId; })) {
+        (alertsByPlan[a.planId] = alertsByPlan[a.planId] || []).push(a);
+      }
+    });
+    var looseAlerts = alertList.filter(function (a) {
+      return !(a.planId && alertsByPlan[a.planId]);
+    });
+    function planAlertRank(plan) {
+      var rows = alertsByPlan[plan.id] || [];
+      return rows.reduce(function (best, a) { return Math.max(best, SEV_RANK[a.severity] || 0); }, 0);
+    }
     var compactOrdered = compact ? compactWorking.slice().sort(function (a, b) {
+      var alertGap = planAlertRank(b) - planAlertRank(a);
+      if (alertGap) return alertGap;
       var aHere = PlanStore.marketKey(a) === currentKey ? 1 : 0;
       var bHere = PlanStore.marketKey(b) === currentKey ? 1 : 0;
       if (aHere !== bHere) return bHere - aHere;
       return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
     }) : [];
     var compactShown = compactOrdered.slice(0, 3);
-    if ((compact && !compactWorking.length) || (!compact && !working.length && !archived.length && !closedTabs.length)) {
+    if ((compact && !compactWorking.length && !looseAlerts.length)
+        || (!compact && !working.length && !archived.length && !closedTabs.length)) {
       if (options.removeWhenEmpty) { host.remove(); return; }
       host.appendChild(UI.emptyState('No working Plans yet',
         'Choose a stock in Research, then carry one Plan through evidence, strategy, outcomes, and a decision.',
@@ -3819,9 +3840,46 @@
     }
 
     if (compact) {
-      countLabel.textContent = compactOrdered.length + (options.excludePlanId ? ' other ' : ' working ')
+      countLabel.textContent = (alertList.length
+        ? alertList.length + (alertList.length === 1 ? ' attention item · ' : ' attention items · ') : '')
+        + compactOrdered.length + (options.excludePlanId ? ' other ' : ' working ')
         + (compactOrdered.length === 1 ? 'Plan' : 'Plans');
-      host.appendChild(el('div', { class: 'home-plan-compact-list' }, compactShown.map(function (plan) {
+      var alertBadgeClass = function (severity) {
+        return severity === 'URGENT' ? 'badge-danger' : severity === 'ATTENTION' ? 'badge-warn' : 'badge-dim';
+      };
+      var openAlert = function (alert) {
+        if (options.onAlertOpen) { options.onAlertOpen(alert); return; }
+        if (alert.deepLink) App.navigate(alert.deepLink);
+      };
+      var alertLine = function (alert, extraCount) {
+        return el('div', { class: 'home-alert-line' },
+          el('span', { class: 'badge ' + alertBadgeClass(alert.severity) },
+            String(alert.severityLabel || '').toUpperCase()),
+          el('button', { type: 'button', class: 'home-alert-headline', 'data-alert-id': alert.id,
+            onclick: function () { openAlert(alert); } }, alert.headline),
+          extraCount > 0 ? el('span', { class: 'muted small' },
+            '+' + extraCount + ' more on this position') : null);
+      };
+      // An alert with no Plan row of its own becomes its own attention row; alerts that map
+      // to a shown Plan enrich that row instead — never two rows saying the same thing.
+      var alertRow = function (alert) {
+        var laneLabel = alert.lane === 'TRACKED' ? 'Tracked account'
+          : alert.lane === 'SIMULATED' ? 'Simulated session'
+            : alert.lane === 'DEMO' ? 'Demo' : alert.lane ? 'Practice' : null;
+        var metaLine = [alert.symbol, alert.accountName, laneLabel].filter(Boolean).join(' · ');
+        return el('article', { class: 'home-plan-compact-row home-alert-row',
+          'data-alert-severity': String(alert.severity || '').toLowerCase(),
+          'data-alert-kind': alert.kind, 'data-alert-id': alert.id },
+          el('div', { class: 'home-plan-compact-main' },
+            alertLine(alert, 0),
+            metaLine ? el('div', { class: 'muted small home-plan-compact-meta' }, metaLine) : null,
+            el('p', { class: 'muted small home-alert-detail' }, alert.detail || '')),
+          el('div', { class: 'btn-row home-plan-compact-actions' },
+            el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+              onclick: function () { openAlert(alert); } },
+            alert.kind === 'ASSIGNMENT' ? 'Preview' : 'Open')));
+      };
+      var compactPlanRow = function (plan) {
         var sameMarket = PlanStore.marketKey(plan) === currentKey;
         var terminalSession = plan.marketKind === 'SIMULATED' && sessionById[plan.worldId]
           && sessionById[plan.worldId].status === 'FINISHED';
@@ -3832,11 +3890,17 @@
         if (plan.context && plan.context.thesis) meta.push('View ' + plan.context.thesis);
         else if (identity.duplicate === 'View not set') meta.push('View not set');
         if (plan.context && plan.context.targetCents) meta.push('Target ' + fmtMoney(plan.context.targetCents));
-        return el('article', { class: 'home-plan-compact-row', 'data-plan-id': plan.id },
+        var planAlerts = (alertsByPlan[plan.id] || []).slice().sort(function (a, b) {
+          return (SEV_RANK[b.severity] || 0) - (SEV_RANK[a.severity] || 0);
+        });
+        var rowAttrs = { class: 'home-plan-compact-row', 'data-plan-id': plan.id };
+        if (planAlerts.length) rowAttrs['data-alert-severity'] = String(planAlerts[0].severity).toLowerCase();
+        return el('article', rowAttrs,
           el('div', { class: 'home-plan-compact-main' },
             el('div', { class: 'home-plan-compact-title' },
               el('b', {}, plan.symbol), el('span', {}, identity.title)),
-            el('div', { class: 'muted small home-plan-compact-meta' }, meta.join(' · '))),
+            el('div', { class: 'muted small home-plan-compact-meta' }, meta.join(' · ')),
+            planAlerts.length ? alertLine(planAlerts[0], planAlerts.length - 1) : null),
           el('div', { class: 'home-plan-compact-state' },
             identity.duplicate && /^Plan /.test(identity.duplicate)
               ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
@@ -3859,9 +3923,25 @@
                 event.stopPropagation();
                 PlanStore.closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
               } }, '\u2715')));
-      })));
-      if (compactOrdered.length > compactShown.length) {
+      };
+      // Severity first, then recency: the alert center owns the needs-attention ordering.
+      var LOOSE_LIMIT = 8;
+      var shownLoose = looseAlerts.slice(0, LOOSE_LIMIT);
+      var entries = shownLoose.map(function (alert) {
+        return { rank: SEV_RANK[alert.severity] || 0, at: String(alert.at || ''), node: alertRow(alert) };
+      }).concat(compactShown.map(function (plan) {
+        var planAlerts = alertsByPlan[plan.id] || [];
+        var top = planAlerts.length ? planAlerts[0] : null;
+        return { rank: planAlertRank(plan), at: top ? String(top.at || '')
+          : String(plan.updatedAt || plan.createdAt || ''), node: compactPlanRow(plan) };
+      }));
+      entries.sort(function (a, b) { return (b.rank - a.rank) || b.at.localeCompare(a.at); });
+      host.appendChild(el('div', { class: 'home-plan-compact-list' },
+        entries.map(function (entry) { return entry.node; })));
+      var moreAlerts = looseAlerts.length - shownLoose.length;
+      if (compactOrdered.length > compactShown.length || moreAlerts > 0) {
         host.appendChild(el('p', { class: 'muted small home-plan-compact-note' },
+          moreAlerts > 0 ? moreAlerts + ' more attention item' + (moreAlerts === 1 ? '' : 's') + ' \u00b7 ' : '',
           (compactOrdered.length - compactShown.length) + ' more in ',
           el('a', { href: '#/home', onclick: function () { App.state.openPlanDrawer = true; } }, 'the Plan library'), '.'));
       }

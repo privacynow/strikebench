@@ -324,7 +324,8 @@ final class DiscoveryController {
                 req.horizon() != null ? req.horizon() : "month",
                 req.riskMode() != null ? req.riskMode() : "balanced",
                 acct.buyingPowerCents(), world != null ? null : ownerId, topN, world, rcScan.riskCapitalCents());
-        ctx.json(new ApiResponses.Opportunities<>(result.ranked(), result.notes(), result.scanned()));
+        ctx.json(new ApiResponses.Opportunities<>(result.ranked(), result.notes(), result.scanned(),
+                result.compensation(), result.compensationBasis()));
     }
 
     public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,

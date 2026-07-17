@@ -31,7 +31,7 @@
 
   var stagePaths = ['understand', 'evidence', 'strategy', 'outcomes', 'decide', 'manage-review'];
   var portfolioTabs = ['construct', 'positions', 'active', 'closed', 'activity', 'record', 'account'];
-  var bookTabs = ['overview', 'activity', 'performance', 'tax', 'settings'];
+  var bookTabs = ['overview', 'risk', 'activity', 'performance', 'tax', 'settings'];
   var dataTabs = ['overview', 'datasets', 'simulation', 'sources', 'admin'];
   var Routes = {
     valid: function (name, args) {

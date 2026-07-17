@@ -20,7 +20,14 @@ import java.util.concurrent.Semaphore;
 public final class OpportunityScanner {
     private static final int CONCURRENCY = 8;
 
-    public record ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned) {}
+    public record ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned,
+                             List<CompensationView.CompensationEntry> compensation, String compensationBasis) {
+        /** Pre-compensation-view constructor keeps existing callers' shape. */
+        public ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned) {
+            this(ranked, notes, scanned, List.of(), null);
+        }
+    }
+
 
     private final RecommendationEngine engine;
     private final EvaluationService evaluations;
@@ -85,8 +92,12 @@ public final class OpportunityScanner {
         best.sort(java.util.Comparator.comparingDouble(StrategyEvaluation::decisionScore).reversed());
         List<StrategyEvaluation> ranked = best.stream().limit(Math.max(1, topN)).toList();
         evaluations.persist(ranked, userId);
-        return new ScanResult(ranked, notes, normalized.size());
+        List<CompensationView.CompensationEntry> compensation =
+                CompensationView.compute(best, evaluations, worldId);
+        return new ScanResult(ranked, notes, normalized.size(), compensation, CompensationView.BASIS);
     }
+
+
 
     private static List<String> normalize(List<String> symbols) {
         List<String> normalized = new ArrayList<>();

@@ -34,8 +34,8 @@ public final class StrategyEvaluator {
         ManagementPlan plan = management.plan(c, spec);
         ScoreBreakdown sb = score.compose(c, cap, rsk, ev, ctx);
         EconomicAssessment economics = EconomicAssessment.assess(c, rsk, ev, sb, ctx);
-        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx);
         StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
+        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx, metrics.participation());
         FourOutputAssessment assessment = assessment(sb, economics, metrics.impliedStance(),
                 metrics.stance(), ctx.portfolioExposure(), ctx.declared());
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb,
@@ -64,8 +64,8 @@ public final class StrategyEvaluator {
                 rankedScore.components());
         EconomicAssessment economics = EconomicAssessment.assessExact(c, rsk, ev, ctx, exactGate,
                 List.copyOf(failures), roundTripFeesCents);
-        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx);
         StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
+        Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx, metrics.participation());
         FourOutputAssessment assessment = assessment(exactScore, economics, metrics.impliedStance(),
                 metrics.stance(), ctx.portfolioExposure(), ctx.declared());
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan,

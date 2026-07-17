@@ -12,6 +12,7 @@ public final class PortfolioRoutes {
             Handler updateRiskContext,
             Handler riskBudget,
             Handler greeks,
+            Handler bookRisk,
             Handler listAccounts,
             Handler createAccount,
             Handler getAccount,
@@ -47,6 +48,7 @@ public final class PortfolioRoutes {
         config.routes.put("/api/account/risk-context", h.updateRiskContext());
         config.routes.get("/api/risk-budget", h.riskBudget());
         config.routes.get("/api/portfolio/greeks", h.greeks());
+        config.routes.get("/api/portfolio/book-risk", h.bookRisk());
         config.routes.get("/api/portfolio/accounts", h.listAccounts());
         config.routes.post("/api/portfolio/accounts", h.createAccount());
         config.routes.get("/api/portfolio/accounts/{id}", h.getAccount());

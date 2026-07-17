@@ -315,4 +315,27 @@ class AutoRecommenderTest {
         return new AutoRecommender.ScoredCandidate(null, evaluation);
     }
 
+
+    @Test
+    void compensationViewRanksPremiumCollectorsBesideTheDecisionOrderWithNamedComponents() {
+        OpportunityScanner.ScanResult result = opportunityScanner.scan(
+                List.of("AAPL", "SPY"), "INCOME", "neutral", "month", "balanced",
+                BP, "local", 4, null, null);
+        assertThat(result.compensationBasis())
+                .contains("Premium per unit of realized risk")
+                .contains("never replaces");
+        assertThat(result.compensation()).isNotEmpty().allSatisfy(entry -> {
+            assertThat(entry.score()).isBetween(0.0, 100.0);
+            assertThat(entry.components()).extracting(CompensationView.CompensationComponent::name)
+                    .contains("Annualized premium yield", "Variance risk premium", "Gap risk",
+                            "Liquidity", "Capital efficiency");
+            entry.components().forEach(component ->
+                    assertThat(component.note()).as(component.name() + " explains itself").isNotBlank());
+        });
+        // Beside, not instead: the decision-ordered ranked list is untouched by the view.
+        assertThat(result.ranked()).isNotEmpty();
+        var yields = result.compensation().stream()
+                .map(CompensationView.CompensationEntry::score).toList();
+        assertThat(yields).isSortedAccordingTo(java.util.Comparator.reverseOrder());
+    }
 }
