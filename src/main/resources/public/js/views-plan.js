@@ -52,6 +52,13 @@
     return economics ? economics.verdict : null;
   }
 
+  // A1 (engine honesty): a candidate whose mechanical/economic gate FAILED ("cannot assess as a
+  // trade" — the AMD credit spread that only debits at executable prices) is not a viable trade.
+  // viable===false is the authoritative server signal (score.gatePassed()); missing/true = viable.
+  function candidateViable(c) {
+    return !(c && c.evaluation && c.evaluation.viable === false);
+  }
+
   function candidateCoherence(c) {
     return c && c.evaluation && c.evaluation.assessment
       ? c.evaluation.assessment.coherence : null;
@@ -1259,9 +1266,14 @@
         UI.setActionFeedback(actions, 'danger', 'Could not select this structure', e.message || String(e));
       });
     }
-    buttons.appendChild(el('button', { type: 'button', class: 'btn',
+    // A1: an unviable structure can still be STUDIED, but the action must not read as committing
+    // to a trade — it is a teaching path, framed as such (primary emphasis drops too).
+    var viable = candidateViable(candidate);
+    buttons.appendChild(el('button', { type: 'button', class: viable ? 'btn' : 'btn btn-secondary',
+      title: viable ? null : 'This structure is not tradeable at current prices — you can still study its shape and outcomes.',
       onclick: function () { choose(false, this); } },
-      candidate.selected ? 'Continue to Outcomes' : 'Select and continue to Outcomes'));
+      candidate.selected ? (viable ? 'Continue to Outcomes' : 'Study outcomes anyway')
+        : (viable ? 'Select and continue to Outcomes' : 'Study this structure anyway')));
     buttons.appendChild(el('button', { type: 'button', class: 'btn btn-secondary',
       onclick: function () { choose(true, this); } }, 'Adjust exact contracts'));
     actions.appendChild(buttons);
@@ -1622,15 +1634,36 @@
       var heroCandidate = selected || focused || candidates[0];
       var heroRank = candidates.indexOf(heroCandidate) + 1;
       var reviewingAlternative = !selected && heroRank > 1;
-      field.appendChild(el('div', { class: 'plan-proposed-heading' },
-        el('div', {}, el('span', { class: 'eyebrow' }, selected ? 'YOUR WORKING STRUCTURE'
-          : reviewingAlternative ? 'STRUCTURE UNDER REVIEW' : 'TOP PROPOSED TRADE'),
-          el('h3', {}, selected ? 'Selected package, ready to test'
-            : reviewingAlternative ? 'Compare this alternative with the top-ranked fit'
-              : 'The strongest fit under this Plan’s current assumptions')),
+      // A1: an unassessable non-trade is never "the strongest fit / ready to test". When the hero
+      // fails the gate, the field leads with an honest no-viable-trade state and the reasons; the
+      // structure stays visible below as a teaching example, not a recommendation.
+      var heroViable = candidateViable(heroCandidate);
+      var anyViable = candidates.some(candidateViable);
+      var heroEyebrow = !heroViable ? 'NO VIABLE TRADE'
+        : selected ? 'YOUR WORKING STRUCTURE'
+          : reviewingAlternative ? 'STRUCTURE UNDER REVIEW' : 'TOP PROPOSED TRADE';
+      var heroHeading = !heroViable
+        ? (anyViable ? 'The top structures are not tradeable as priced — assessable ones are ranked below'
+          : 'No structure earns a viable trade for this Plan at current prices')
+        : selected ? 'Selected package, ready to test'
+          : reviewingAlternative ? 'Compare this alternative with the top-ranked fit'
+            : 'The strongest fit under this Plan’s current assumptions';
+      field.appendChild(el('div', { class: 'plan-proposed-heading' + (heroViable ? '' : ' plan-no-viable-trade') },
+        el('div', {}, el('span', { class: 'eyebrow' }, heroEyebrow),
+          el('h3', {}, heroHeading)),
         el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
       field.appendChild(rankingSeparation(candidates));
+      if (!heroViable) {
+        var heroMech = heroCandidate.evaluation && heroCandidate.evaluation.assessment
+          && heroCandidate.evaluation.assessment.mechanics;
+        field.appendChild(alertBox('caution',
+          'Not a tradeable setup at current prices — shown as a teaching example, not a recommendation',
+          (heroMech && heroMech.reasons && heroMech.reasons.length) ? heroMech.reasons
+            : ['No structure that fits this Plan clears the mechanical and economic checks required to trade it. '
+              + 'Change the view, horizon, or limits — or study the shape below.']));
+      }
       field.appendChild(ideaPresentation(heroCandidate, { density: 'hero', rank: heroRank,
+        kicker: heroViable ? undefined : 'NOT A VIABLE TRADE',
         spot: planRef.result && planRef.result.spotCents != null ? planRef.result.spotCents / 100 : null,
         action: planCandidateActions(planRef, heroCandidate, ui, repaint) }));
       if (ui.strategyReturnFocus) {
@@ -2270,6 +2303,9 @@
       alertBox(ev != null && ev >= 0 ? 'ok' : 'caution',
         'Market-implied economics for the exact package', [
           'These are the option market’s risk-neutral odds at the captured executable entry, not a forecast.',
+          'Estimated by Monte-Carlo over the stored fan. The Strategy tab’s “Market-implied EV” is a '
+            + 'closed-form estimate of the same package — the two methods can differ slightly; that is '
+            + 'method variance, not a contradiction.',
           ev == null ? 'Expected value is unavailable.' : 'Expected value after estimated round-trip fees: ' + UI.fmtMoneyCompact(ev) + '.'
         ]),
       el('div', { class: 'grid grid-4' },
@@ -4326,6 +4362,7 @@
     candidatesNearTie: candidatesNearTie,
     nearTieScorePoints: NEAR_TIE_SCORE_POINTS,
     openCandidateAsPlan: openCandidateAsPlan,
-    candidateFromEvaluation: candidateFromEvaluation
+    candidateFromEvaluation: candidateFromEvaluation,
+    candidateViable: candidateViable
   });
 })();
