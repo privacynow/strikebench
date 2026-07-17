@@ -84,6 +84,7 @@ public final class ApiResponses {
     public record PlanPlacedTrade<T, U, V, W>(T plan, U trade, V decision, W warnings) {}
     public record PlanBrokerPlacement<T, U, V>(T plan, U decision, V transaction,
                                                String structureId, String receiptId) {}
+    public record PlanAdopted<T>(T plan, String structureId, String receiptId) {}
     public record PlanManagement<T, U>(T plan, U management) {}
     public record PlanMark<T, U, V>(T plan, U mark, V management) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)

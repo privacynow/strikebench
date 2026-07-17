@@ -47,6 +47,7 @@ final class PlanController {
     private final PlanStrategyController strategyController;
     private final PlanOutcomeController planOutcomeController;
     private final PlanDecisionController planDecisionController;
+    private final io.liftandshift.strikebench.plan.PlanAdoptionService planAdoptions;
 
     PlanController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
                    PositionsService positions,
@@ -56,6 +57,7 @@ final class PlanController {
                    PlanOutcomeService planOutcomes, PlanRehearsalService planRehearsals,
                    PlanDecisionService planDecisions, PlanManagementService planManagement,
                    io.liftandshift.strikebench.plan.PlanPromotionService planPromotions,
+                   io.liftandshift.strikebench.plan.PlanAdoptionService planAdoptions,
                    PathEnsembleService pathEnsembles, SimulationEngine simEngine,
                    DiscoveryController discoveryController, OutcomeController outcomeController,
                    TradeController tradeController,
@@ -79,13 +81,14 @@ final class PlanController {
         this.planOutcomeController = new PlanOutcomeController(this, cfg, market, backtester,
                 planSvc, planEvidence, planStrategy, planOutcomes, pathEnsembles, simEngine,
                 outcomeController);
+        this.planAdoptions = planAdoptions;
         this.planDecisionController = new PlanDecisionController(this, clock, db, market, trades,
                 planSvc, planRehearsals, planDecisions, planManagement, tradeController, planPromotions);
     }
 
     void register(JavalinConfig config) {
         PlanRoutes.register(config, new PlanRoutes.Handlers(
-                this::plansList, this::planCreate, planDecisionController::plansPortfolio, this::planGet,
+                this::plansList, this::planCreate, this::planAdopt, planDecisionController::plansPortfolio, this::planGet,
                 this::planContextPut, this::planIntentPut, this::planProgressPost, this::planOpenPut,
                 this::planArchive, this::planDelete, this::planEvidenceLatest,
                 this::planEvidenceStudy, strategyController::planStrategyLatest,
@@ -107,6 +110,19 @@ final class PlanController {
         config.routes.exception(PlanMarketMismatchException.class, (e, ctx) ->
                 ctx.status(409).json(new ApiResponses.PlanMarketMismatchBody(
                         "plan_market_mismatch", e.getMessage(), e.marketKind, e.targetWorld)));
+    }
+
+    /** Adopts an as-is tracked position into a mid-journey Plan (ADOPTION receipt over
+     *  existing lots); the live band is immediately real while the view stays undeclared. */
+    void planAdopt(Context ctx) {
+        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.PlanAdoptionService.Request.class));
+        var market = activePlanMarket(ctx);
+        var result = planAdoptions.adopt(ownerId(ctx), market,
+                market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED ? activeWorld(ctx) : null,
+                body);
+        ctx.status(201).json(new ApiResponses.PlanAdopted<>(result.plan(),
+                result.artifacts().structureId(), result.artifacts().receiptId()));
     }
 
     String ownerId(Context ctx) { return ownerResolver.apply(ctx); }

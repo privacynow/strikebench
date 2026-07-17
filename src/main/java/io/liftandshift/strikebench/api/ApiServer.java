@@ -314,10 +314,12 @@ public final class ApiServer {
         var positionArtifacts = new io.liftandshift.strikebench.position.PositionArtifactStore(db);
         var planPromotions = new io.liftandshift.strikebench.plan.PlanPromotionService(
                 db, planDecisions, portfolioBooks, positionArtifacts);
+        var planAdoptions = new io.liftandshift.strikebench.plan.PlanAdoptionService(
+                db, clock, planSvc, positionArtifacts);
         planController = new PlanController(cfg, clock, db, market,
                 positions, trades, backtester, auto, evaluations, planSvc, planEvidence,
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
-                planPromotions, pathEnsembles, simEngine, discoveryController, outcomeController,
+                planPromotions, planAdoptions, pathEnsembles, simEngine, discoveryController, outcomeController,
                 tradeController, this::currentAccount, this::ownerId, this::activeWorld, this::analysisCtx);
         PositionTransformationController positionTransformations = new PositionTransformationController(
                 clock, trades, tradeController, planController, planSvc, planManagement,

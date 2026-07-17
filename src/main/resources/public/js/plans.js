@@ -382,6 +382,14 @@
     return out;
   }
 
+  /** Adopts an as-is tracked position into a mid-journey Plan (ADOPTION receipt over the
+   *  existing lots). The Plan arrives with a live position and an undeclared view. */
+  async function adoptPosition(request) {
+    var out = await API.post('/api/plans/adopt', request || {});
+    if (out.plan) { replace(out.plan); rememberActive(out.plan); }
+    return out;
+  }
+
   function latestManagement(planId, force) {
     var path = '/api/plans/' + planId + '/manage';
     return force ? API.getFresh(path) : API.get(path);
@@ -604,6 +612,7 @@
     rehearsals: rehearsals, createRehearsal: createRehearsal,
     latestDecision: latestDecision, previewDecision: previewDecision,
     tradeDecision: tradeDecision, cashDecision: cashDecision, brokerDecision: brokerDecision,
+    adoptPosition: adoptPosition,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
     marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching, identity: identity,
     archive: archive, deleteDraft: deleteDraft,

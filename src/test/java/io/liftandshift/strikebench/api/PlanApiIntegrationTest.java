@@ -882,6 +882,61 @@ class PlanApiIntegrationTest {
         }
     }
 
+    @Test void adoptingATrackedPositionSpawnsAMidJourneyPlanWithAnAdoptionReceipt() throws Exception {
+        JsonNode account = json(post("/api/portfolio/accounts", """
+                {"name":"Adoption brokerage","accountType":"TAXABLE","broker":"Example","openingCashCents":9000000}
+                """));
+        String accountId = account.get("id").asText();
+        assertThat(post("/api/portfolio/accounts/" + accountId + "/transactions", """
+                {"occurredAt":"2026-07-10T15:00:00Z","eventType":"TRADE","source":"MANUAL","fillNature":"EXECUTED",
+                 "legs":[{"instrumentType":"STOCK","action":"BUY","positionEffect":"OPEN","symbol":"AAPL",
+                          "quantity":200,"multiplier":1,"price":"250.00"}]}
+                """).statusCode()).isEqualTo(201);
+        JsonNode lots = json(get("/api/portfolio/accounts/" + accountId + "/lots"));
+        JsonNode lot = lots.withArray("lots").get(0);
+        String lotId = lot.get("id").asText();
+
+        var request = Json.MAPPER.createObjectNode();
+        request.put("clientRequestId", "adopt-aapl-shares-1");
+        request.put("portfolioAccountId", accountId);
+        request.put("symbol", "AAPL");
+        request.put("label", "Adopted AAPL shares");
+        var allocations = request.putArray("allocations");
+        allocations.addObject().put("lotId", lotId);
+
+        JsonNode adopted = json(post("/api/plans/adopt", request.toString()));
+        assertThat(adopted.at("/plan/status").asText()).isEqualTo("ACTIVE");
+        assertThat(adopted.at("/plan/furthestStage").asText())
+                .as("the adopted Plan is mid-journey: managing is live while the view stays undeclared")
+                .isEqualTo("MANAGE_REVIEW");
+        assertThat(adopted.at("/plan/context/thesis").isMissingNode()
+                || adopted.at("/plan/context/thesis").isNull()).isTrue();
+        assertThat(adopted.get("structureId").asText()).isNotBlank();
+        assertThat(adopted.get("receiptId").asText()).isNotBlank();
+
+        String planId = adopted.at("/plan/id").asText();
+        JsonNode manage = json(get("/api/plans/" + planId + "/manage"));
+        JsonNode tracked = manage.at("/management/trackedStructure");
+        assertThat(tracked.path("receiptKind").asText()).isEqualTo("ADOPTION");
+        assertThat(tracked.path("authority").asText()).isEqualTo("USER_ALLOCATED");
+        assertThat(tracked.path("positionState").asText()).isEqualTo("OPEN");
+        assertThat(tracked.path("openQuantityRemaining").asLong()).isEqualTo(200L);
+
+        // The journey continues normally: declaring a view on the adopted position works.
+        JsonNode declared = json(put("/api/plans/" + planId + "/context",
+                "{\"expectedVersion\":" + adopted.at("/plan/version").asLong()
+                        + ",\"thesis\":\"bullish\",\"horizonDays\":30,\"riskMode\":\"conservative\"}"));
+        assertThat(declared.at("/context/thesis").asText()).isEqualTo("bullish");
+
+        // A lot the account does not own is refused before anything is created.
+        var bogus = Json.MAPPER.createObjectNode();
+        bogus.put("clientRequestId", "adopt-bogus-1");
+        bogus.put("portfolioAccountId", accountId);
+        bogus.put("symbol", "AAPL");
+        bogus.putArray("allocations").addObject().put("lotId", "lot_nope");
+        assertThat(post("/api/plans/adopt", bogus.toString()).statusCode()).isBetween(400, 499);
+    }
+
     @Test void brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically() throws Exception {
         JsonNode account = json(post("/api/portfolio/accounts", """
                 {"name":"Real brokerage","accountType":"TAXABLE","broker":"Example Broker","openingCashCents":5000000}

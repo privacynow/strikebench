@@ -1082,6 +1082,35 @@
     return UI.bindTabList(list, function (tab) { tab.click(); });
   }
 
+  /** Adopts an as-is book position into a Plan: the live band is real immediately; the
+   *  deliberate next step is declaring a view on it (decision moment: "now that I see it,
+   *  what do I believe about it?"). */
+  async function portfolioAdoptPosition(account, p, button) {
+    button.disabled = true; button.setAttribute('aria-busy', 'true');
+    try {
+      var data = await API.getFresh('/api/portfolio/accounts/' + account.id + '/lots');
+      var lots = (data.lots || []).filter(function (lot) {
+        if (lot.status !== 'OPEN' || !(lot.remainingQuantity > 0)) return false;
+        if (lot.symbol !== p.symbol || lot.instrumentType !== p.instrumentType || lot.side !== p.side) return false;
+        if (p.instrumentType !== 'OPTION') return true;
+        return lot.optionType === p.optionType && Number(lot.strike) === Number(p.strike)
+          && String(lot.expiration) === String(p.expiration);
+      });
+      if (!lots.length) throw new Error('No open lots remain for this position.');
+      var out = await PlanStore.adoptPosition({
+        clientRequestId: 'adopt-' + account.id + '-' + p.symbol + '-' + Date.now().toString(36),
+        portfolioAccountId: account.id, symbol: p.symbol,
+        label: portfolioPositionLabel(p),
+        allocations: lots.map(function (lot) { return { lotId: lot.id }; })
+      });
+      UI.toast(p.symbol + ' adopted into a Plan — declare your view on it');
+      await PlanStore.focus(out.plan, 'UNDERSTAND');
+    } catch (e) {
+      UI.toast(e.message, 'error');
+      button.disabled = false; button.removeAttribute('aria-busy');
+    }
+  }
+
   function portfolioPositionLabel(p) {
     return p.instrumentType === 'STOCK' ? p.symbol + ' shares'
       : p.symbol + ' ' + p.expiration + ' · ' + fmtNum(Number(p.strike), 2) + ' ' + p.optionType.toLowerCase();
@@ -1101,13 +1130,12 @@
       stat('Realized P/L', pnlSpan(summary.realizedPnlCents), 'Exact matched-lot gains and losses after recorded opening and closing fees.'),
       stat('Unrealized P/L', summary.unrealizedPnlCents == null ? el('span', { class: 'muted' }, 'Unavailable') : pnlSpan(summary.unrealizedPnlCents),
         'What closing the recorded open lots at executable sides would produce, before new close fees.'));
-    root.appendChild(stats);
     if (!summary.complete) root.appendChild(alertBox('caution', 'Current value is partial', [
       'Missing observed executable marks: ' + (summary.missingMarks || []).join(', ') + '. The book keeps basis and activity intact and does not turn missing prices into zero or use Demo, simulated, or modeled prices for an external account.'
     ]));
 
     var col = summary.collateral;
-    root.appendChild(el('section', { class: 'card card-slim book-capital' },
+    var capital = el('section', { class: 'card card-slim book-capital' },
       UI.cardHeader('Cash and obligations'),
       el('div', { class: 'chip-row' }, chip('Known cash blocked', fmtMoney(col.knownBlockedCashCents)),
         chip('Available cash', col.availableCashCents == null ? 'Not estimated' : fmtMoney(col.availableCashCents)),
@@ -1115,7 +1143,7 @@
         col.definedRiskPutContracts ? chip('Put spreads', String(col.definedRiskPutContracts)) : null,
         col.coveredCallContracts ? chip('Covered calls', String(col.coveredCallContracts)) : null,
         col.uncoveredShortCallShares ? el('span', { class: 'badge badge-danger' }, col.uncoveredShortCallShares + ' uncovered call shares') : null),
-      el('p', { class: 'muted small' }, (col.notes || []).join(' '))));
+      el('p', { class: 'muted small' }, (col.notes || []).join(' ')));
 
     var positions = summary.positions || [];
     var posCard = el('section', { class: 'card book-positions' }, UI.cardHeader('Open positions',
@@ -1137,9 +1165,13 @@
                 provenance: p.provenance, age: p.age
               }, { compact: true }))
             : el('div', { class: 'muted small' }, 'No executable closing price is available.'),
-          p.instrumentType === 'OPTION' ? el('div', { class: 'btn-row' },
-            el('button', { type: 'button', class: 'btn btn-secondary btn-sm', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
-              onclick: function () { portfolioRollPosition(account, p); } }, 'Roll position')) : null));
+          el('div', { class: 'btn-row' },
+            el('button', { type: 'button', class: 'btn btn-sm book-adopt-position',
+              title: 'Open this position as a Plan and decide its future deliberately',
+              onclick: function () { portfolioAdoptPosition(account, p, this); } }, 'Plan this position'),
+            p.instrumentType === 'OPTION' ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
+              disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+              onclick: function () { portfolioRollPosition(account, p); } }, 'Roll position') : null)));
       });
       posCard.appendChild(list);
     } else {
@@ -1150,10 +1182,13 @@
           el('td', {}, p.liquidationValueCents == null ? '—' : fmtMoney(p.liquidationValueCents)),
           el('td', {}, p.unrealizedPnlCents == null ? '—' : pnlSpan(p.unrealizedPnlCents)),
         el('td', {}, UI.evidenceBadge({ provenance: p.provenance, age: p.age }, { compact: true })),
-          el('td', {}, p.instrumentType === 'OPTION' ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
-            disabled: account.status === 'ARCHIVED' ? 'disabled' : null, onclick: function () { portfolioRollPosition(account, p); } }, 'Roll') : '—')); })));
+          el('td', {}, el('div', { class: 'btn-row' },
+            el('button', { type: 'button', class: 'btn btn-sm book-adopt-position',
+              title: 'Open this position as a Plan and decide its future deliberately',
+              onclick: function () { portfolioAdoptPosition(account, p, this); } }, 'Plan'),
+            p.instrumentType === 'OPTION' ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
+              disabled: account.status === 'ARCHIVED' ? 'disabled' : null, onclick: function () { portfolioRollPosition(account, p); } }, 'Roll') : null))); })));
     }
-    root.appendChild(posCard);
 
     var allocation = summary.allocation || { byAssetClass: [], bySector: [], byDirection: [], bySymbol: [] };
     function allocationRows(rows, basisLabel) {
@@ -1190,7 +1225,10 @@
     allocCard.appendChild(UI.expandable('How exposure is calculated', function () {
       return el('p', { class: 'muted small' }, 'Cash stays in capital allocation but is not market exposure. Security long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.');
     }, { stateKey: 'portfolio-allocation-method' }));
-    root.appendChild(allocCard);
+    // The aggregates (summary, cash, allocation) read beside their parts (positions) on wide desktops.
+    root.appendChild(el('div', { class: 'band-cols book-overview-cols' },
+      el('div', { class: 'band-col-controls' }, stats, capital, allocCard),
+      el('div', { class: 'band-col-results' }, posCard)));
   }
 
   function portfolioNowLocal() {
