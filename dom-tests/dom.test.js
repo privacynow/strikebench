@@ -3376,6 +3376,19 @@ test('financial formatters and mixed packages fail closed instead of rendering N
     host.remove();
     return out;
   });
+  // A1 (engine honesty): a gate-failed candidate (viable===false) is not a viable trade — the
+  // field must not dress it as "the strongest fit". Missing/true viability reads as viable.
+  const viability = await page.evaluate(() => ({
+    gateFailed: ViewPlan.candidateViable({ evaluation: { viable: false } }),
+    gatePassed: ViewPlan.candidateViable({ evaluation: { viable: true } }),
+    unknown: ViewPlan.candidateViable({ evaluation: {} }),
+    noEval: ViewPlan.candidateViable({})
+  }));
+  assert.equal(viability.gateFailed, false, 'a gate-failed structure is not a viable trade');
+  assert.equal(viability.gatePassed, true, 'a gate-passed structure is viable');
+  assert.equal(viability.unknown, true, 'absent viability is treated as viable (no false alarm)');
+  assert.equal(viability.noEval, true, 'a candidate without an evaluation is not flagged unviable');
+
   assert.equal(infoContract.hasInfoClass, true,
     'the label hosting an info trigger becomes the desktop hover target');
   assert.ok(infoContract.triggerWidth <= 2,

@@ -2537,6 +2537,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .plan-proposed-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
   margin: 4px 0 8px; padding: 0 2px; }
 .plan-proposed-heading h3, .plan-other-ranked-title { margin: 2px 0 0; }
+/* A1: a no-viable-trade heading must not read as a positive recommendation. */
+.plan-proposed-heading.plan-no-viable-trade .eyebrow { color: var(--risk-caution-text, #d89a3a); }
 .plan-other-ranked-title { padding-top: 8px; border-top: 1px solid var(--border); }
 .plan-intent-ladder .ladder-sentences { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr); align-content: start; align-items: center; height: 100%; }
