@@ -1361,23 +1361,20 @@
     if (!ownedState) throw new Error('Possible futures need an explicit workspace owner.');
     var publicMode = !plan;
     var card = el('div', { class: 'card', id: 'whatif-card' });
-    card.appendChild(UI.cardHeader('Possible futures — turn a view into a decision'));
-    card.appendChild(explain(level === 'beginner'
-      ? 'Choose a story and horizon, then ask a concrete price question. StrikeBench turns many model-generated futures into a likely range, odds of reaching your level, and — when you have a working trade — its profit and loss on those exact same futures. Past evidence remains a separate check using ' + historyBasis.plain + '.'
-      : 'The shared market view seeds this model terminal; its drift, volatility, jumps and IV path remain explicit scenario assumptions. The paired historical lens is a separate ' + historyBasis.expert + ', never a blended probability.'));
+    card.appendChild(UI.cardHeader(el('span', {}, 'Possible futures — turn a view into a decision',
+      UI.info('simulationLineage'))));
     var scenarioFormState = ownedState.scenarioForm = ownedState.scenarioForm || {};
     var f = Scenario.form(level, symbol, seedContext, scenarioFormState);
-    card.appendChild(f.el);
     var scenarioTargets = ownedState.scenarioTargets = ownedState.scenarioTargets || {};
     var target = el('input', { type: 'number', id: 'whatif-target', step: 'any', min: '0.01',
       value: scenarioTargets[symbol] || '', placeholder: 'Optional' });
     target.addEventListener('input', function () { scenarioTargets[symbol] = target.value; });
-    card.appendChild(el('div', { class: 'scenario-question' },
-      el('div', {}, el('label', { for: 'whatif-target' }, 'Price you care about'),
+    var targetRow = el('div', { class: 'scenario-question' },
+      el('div', {}, el('label', { for: 'whatif-target' }, 'Price you care about ($)'),
         el('p', { class: 'muted small' }, level === 'beginner'
           ? 'Optional — enter a buy price, sell target, hedge floor, strike, or any level you want the model to answer.'
           : 'Optional decision level. The result separates probability of ending beyond it from probability of touching it first.')),
-      target));
+      target);
     var out = el('div', { id: 'whatif-out' });
     var previewSeq = 0;
     var latest = null;
@@ -1424,7 +1421,7 @@
       action.addEventListener('click', async function () {
         if (publicMode) {
           await visibleCommand(action, function () {
-            ownedState.publicGoal = goalSelect.value;
+            ownedState.publicGoal = goalSelect.value();
             App.context.update({ symbol: symbol, goal: ownedState.publicGoal,
               thesis: seedContext.thesis || null, horizon: String(spec.horizonDays) + 'd' });
             return startPlan({ symbol: symbol, intent: ownedState.publicGoal,
@@ -1462,10 +1459,11 @@
           UI.toast(e.message, 'error');
         }
       });
-      var goalSelect = publicMode ? el('select', { id: 'whatif-plan-goal', 'aria-label': 'Plan goal' },
-        (Learn.INTENTS || []).map(function (meta) {
-          return el('option', { value: meta.key, selected: meta.key === goal ? 'selected' : null }, meta.label);
-        })) : null;
+      var goalSelect = publicMode ? UI.chipSet({ id: 'whatif-plan-goal', label: 'Plan goal',
+        options: (Learn.INTENTS || []).map(function (meta) {
+          return { value: meta.key, label: meta.label };
+        }),
+        value: goal }) : null;
       return el('div', { class: 'scenario-next' },
         el('div', {}, el('b', {}, 'Use the result'),
           el('p', { class: 'muted small' },
@@ -1633,8 +1631,11 @@
     }
     run.addEventListener('click', function () { analyze(false); });
     reroll.addEventListener('click', function () { analyze(true); });
-    card.appendChild(el('div', { class: 'btn-row' }, run, reroll));
-    card.appendChild(out);
+    // Two-column workspace (desktop): scenario assumptions own the left rail; the fan and
+    // its decision facts land beside them instead of a viewport below.
+    card.appendChild(el('div', { class: 'band-cols' },
+      el('div', { class: 'band-col-controls' }, f.el, targetRow, el('div', { class: 'btn-row' }, run, reroll)),
+      el('div', { class: 'band-col-results' }, out)));
     var storedRun = ownedState.whatifResults && ownedState.whatifResults[symbol];
     if (storedRun && storedRun.preview) {
       paintResult(storedRun.preview, storedRun.ensemble || null, storedRun.spec, true);
@@ -1834,71 +1835,84 @@
         + (publicMode ? 'Nothing is saved as a Plan until you choose to carry it forward.'
           : 'The analog windows remain reusable as a distinct path source in this Plan’s Outcomes stage.')));
 
-    var viewSel = el('select', { id: 'tv-view' },
-      el('option', { value: '', disabled: 'disabled' }, level === 'beginner' ? 'Choose your market view' : 'Select thesis'),
-      el('option', { value: 'bullish' }, level === 'beginner' ? 'I expect it to rise' : 'Bullish'),
-      el('option', { value: 'bearish' }, level === 'beginner' ? 'I expect it to fall' : 'Bearish'),
-      el('option', { value: 'neutral' }, level === 'beginner' ? 'I expect it to stay in a range' : 'Neutral / range'),
-      el('option', { value: 'volatile' }, level === 'beginner' ? 'I expect a large move either way' : 'Volatile / direction unknown'));
-    viewSel.value = th.thesis;
-    var setupSel = el('select', { id: 'tv-setup' },
-      el('option', { value: 'pullback_rebound' }, level === 'beginner' ? 'After a pullback, what followed?' : 'Pullback: rebound or continue lower?'),
-      el('option', { value: 'oversold_bounce' }, level === 'beginner' ? 'After a sharp down day, what followed?' : 'Sharp down day: bounce or follow-through?'),
-      el('option', { value: 'breakout_followthrough' }, level === 'beginner' ? 'After a new high, what followed?' : 'Breakout: continue or fade?'),
-      el('option', { value: 'momentum' }, level === 'beginner' ? 'After strong momentum, what followed?' : 'Momentum: persist or reverse?'),
-      el('option', { value: 'up_streak' }, level === 'beginner' ? 'After an up streak, what followed?' : 'Up streak: continue or reverse?'));
-    setupSel.value = th.setup;
-    var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '63' });
-    if (!assumptionsEditable) {
-      viewSel.disabled = true;
-      setupSel.disabled = true;
-      horIn.disabled = true;
-    }
-    var thesisRow = el('div', { class: 'form-grid' },
-      el('div', { class: 'field' }, el('label', { class: 'field-label', for: 'tv-view' }, 'Your market view'), viewSel),
-      el('div', { class: 'field' }, el('label', { class: 'field-label', for: 'tv-setup' }, 'Historical condition to examine'), setupSel),
-      el('div', { class: 'field' }, el('label', { class: 'field-label', for: 'tv-horizon' }, 'Over how many trading days?'), horIn));
-    wrap.appendChild(thesisRow);
-
-    if (!assumptionsEditable) {
-      wrap.appendChild(el('div', { class: 'alert alert-info plan-frozen-context' },
-        el('div', {}, el('b', {}, 'Decision inputs are frozen'),
-          el('p', {}, 'This view, historical condition and horizon belong to the recorded decision. Create a linked revision to test different assumptions without rewriting what happened.')),
-        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
-          var edit = document.getElementById('plan-edit-context');
-          if (edit) edit.click();
-        } }, 'Revise this Plan')));
-    }
-
     var outcomeWorkspace = null;
-    if (assumptionsEditable) viewSel.addEventListener('change', async function () {
-      th.thesis = viewSel.value;
-      if (publicMode) {
-        App.context.update({ thesis: th.thesis });
-        App.render();
-        return;
+    var beginnerLevel = level === 'beginner';
+    var viewWords = { bullish: 'Up', bearish: 'Down', neutral: 'Sideways', volatile: 'Big move, either way' };
+    var SETUP_OPTIONS = [
+      { value: 'pullback_rebound', label: 'After a pullback', sub: beginnerLevel ? 'what followed?' : 'rebound or continue?' },
+      { value: 'oversold_bounce', label: 'After a sharp down day', sub: beginnerLevel ? 'what followed?' : 'bounce or follow-through?' },
+      { value: 'breakout_followthrough', label: 'After a new high', sub: beginnerLevel ? 'what followed?' : 'continue or fade?' },
+      { value: 'momentum', label: 'After strong momentum', sub: beginnerLevel ? 'what followed?' : 'persist or reverse?' },
+      { value: 'up_streak', label: 'After an up streak', sub: beginnerLevel ? 'what followed?' : 'continue or reverse?' }
+    ];
+    function setupChips() {
+      return UI.chipSet({ id: 'tv-setup', label: 'Historical condition to examine',
+        options: SETUP_OPTIONS, value: th.setup,
+        onChange: function (value) { th.setup = value; if (outcomeWorkspace) outcomeWorkspace.refresh(); } });
+    }
+    if (!publicMode && th.thesis) {
+      // A declared Plan already owns its view and horizon — the evidence tools QUOTE them
+      // (one line), never re-ask. The declaration band is the one place to change them.
+      wrap.appendChild(el('div', { class: 'tv-context-line', id: 'tv-context' },
+        el('span', { class: 'muted' }, 'Testing your declared view: '),
+        el('b', {}, (viewWords[th.thesis] || th.thesis) + ' over ' + th.horizonDays + ' trading days'),
+        assumptionsEditable
+          ? el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'tv-change-view',
+              onclick: function () {
+                var edit = document.getElementById('plan-edit-context');
+                if (edit) edit.click();
+              } }, 'Change view')
+          : null));
+      if (assumptionsEditable) {
+        wrap.appendChild(setupChips());
+      } else {
+        wrap.appendChild(el('p', { class: 'muted tv-frozen-setup plan-frozen-context' }, 'Against: '
+          + (SETUP_OPTIONS.find(function (o) { return o.value === th.setup; }) || SETUP_OPTIONS[0]).label.toLowerCase()
+          + ' — these inputs belong to the recorded decision; a linked revision tests new assumptions without rewriting what happened. ',
+          el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+            var edit = document.getElementById('plan-edit-context');
+            if (edit) edit.click();
+          } }, 'Revise this Plan')));
       }
-      try {
-        plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
-        App.render();
-      } catch (e) { UI.toast(e.message, 'error'); App.render(); }
-    });
-    if (assumptionsEditable) setupSel.addEventListener('change', function () {
-      th.setup = setupSel.value;
-      if (outcomeWorkspace) outcomeWorkspace.refresh();
-    });
-    if (assumptionsEditable) horIn.addEventListener('change', async function () {
-      th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
-      if (publicMode) {
-        App.context.update({ horizon: String(th.horizonDays) + 'd' });
-        if (outcomeWorkspace) outcomeWorkspace.refresh();
-        return;
-      }
-      try {
-        plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
-        App.render();
-      } catch (e) { UI.toast(e.message, 'error'); App.render(); }
-    });
+    } else {
+      // No declared view yet (public research, or a Plan still forming one): explicit choosers.
+      var viewCtl = UI.chipSet({ id: 'tv-view',
+        label: beginnerLevel ? 'Your market view' : 'Thesis',
+        options: [
+          { value: 'bullish', label: 'Up', sub: beginnerLevel ? 'I expect it to rise' : null },
+          { value: 'bearish', label: 'Down', sub: beginnerLevel ? 'I expect it to fall' : null },
+          { value: 'neutral', label: 'Sideways', sub: beginnerLevel ? 'I expect a range' : null },
+          { value: 'volatile', label: 'Big move', sub: beginnerLevel ? 'either way' : null }],
+        value: th.thesis || '',
+        onChange: async function (value) {
+          th.thesis = value;
+          if (publicMode) {
+            App.context.update({ thesis: th.thesis });
+            App.render();
+            return;
+          }
+          try {
+            plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
+            App.render();
+          } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+        } });
+      var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '63' });
+      wrap.appendChild(el('div', { class: 'form-grid' }, viewCtl, setupChips(),
+        el('div', { class: 'field' },
+          el('label', { class: 'field-label', for: 'tv-horizon' }, 'Over how many trading days?'), horIn)));
+      if (assumptionsEditable) horIn.addEventListener('change', async function () {
+        th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
+        if (publicMode) {
+          App.context.update({ horizon: String(th.horizonDays) + 'd' });
+          if (outcomeWorkspace) outcomeWorkspace.refresh();
+          return;
+        }
+        try {
+          plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
+          App.render();
+        } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+      });
+    }
     // Invalidate result artifacts at the context boundary even when the new context has not
     // chosen a thesis yet. The authored protocol survives; figures from the old revision do not.
     if (!publicMode && planUi && planUi.contextRev !== plan.context.rev) {
@@ -1971,14 +1985,14 @@
       eventSpacing: thesis.horizonDays, minSample: 15, confidencePct: 95,
       bootstrapSamples: 800, multiplicity: 'CATALOG_BONFERRONI', splitHalf: true
     }, f.protocolBySymbol[symbol] || {});
-    var stage = el('div', { id: 'what-has-happened' });
+    // Desktop density: the four protocol controls pack a two-across grid (they were designed
+    // for ~450px each) instead of stacking full-width; results follow at full width.
     var qKey = thesis.setup || 'pullback_rebound';
     var picker = el('div', { id: 'study-question-picker' });
-    stage.appendChild(picker);
     var out = el('div', { id: 'study-results', class: 'tool-output' });
     var run = el('button', { class: 'btn', id: 'study-run', disabled: 'disabled' }, 'Check the past');
-    stage.appendChild(el('div', { class: 'btn-row' }, run));
-    stage.appendChild(out);
+    var stage = el('div', { id: 'what-has-happened' }, picker,
+      el('div', { class: 'btn-row' }, run), out);
 
     var paramInputs = {}, protocolInputs = {};
     function isoYearsAgo(years) {
@@ -2105,7 +2119,10 @@
           value: saved == null ? strictValue(q.key, pr, protocol.strictness) : saved,
           min: String(pr.min), max: String(pr.max), step: '1' });
         paramInputs[pr.key] = inp;
-        signalFields.push(UI.field((level === 'beginner' ? pr.label : pr.label + ' (' + pr.unit + ')'), inp));
+        // The unit is never optional: "Look-back window: 20" invites "20 what — days? weeks?".
+        // Day-denominated study params count TRADING days (the engine walks sessions).
+        var unitWord = pr.unit === 'days' ? 'trading days' : pr.unit;
+        signalFields.push(UI.field(pr.label + (unitWord ? ' (' + unitWord + ')' : ''), inp));
       });
 
       // ---- Trigger wording shared by the selectivity control and its expert reveal ----

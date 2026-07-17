@@ -495,7 +495,8 @@ test('Trade a view requires an explicit thesis and context revisions preserve th
   });
   assert.deepEqual(created, { id: created.id, symbol: 'TSLA', intent: 'DIRECTIONAL', thesis: null },
     'Trade a view records “not chosen” honestly instead of silently writing neutral');
-  assert.equal(await page.inputValue('#tv-view'), '', 'Evidence opens at the explicit view chooser');
+  assert.equal(await page.locator('#tv-view .choice-option.active').count(), 0,
+    'Evidence opens at the explicit view chooser with nothing preselected');
 
   const preserved = await page.evaluate(async planId => {
     const ui = PlanStore.ui(planId);
@@ -2080,8 +2081,9 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await go('#/plan/' + plan.id + '/evidence');
   await page.waitForSelector('#test-your-view');
-  assert.equal(await page.locator('#tv-view:disabled, #tv-setup:disabled, #tv-horizon:disabled').count(), 3,
-    'a frozen decision never presents mutable evidence assumptions');
+  await page.waitForSelector('#tv-context');
+  assert.equal(await page.locator('#tv-view, #tv-setup, #tv-horizon, #tv-change-view').count(), 0,
+    'a frozen decision never presents mutable view assumptions — the view is quoted, not asked');
   assert.match(await page.textContent('.plan-frozen-context'), /linked revision.*without rewriting/i);
 
   await go('#/plan/' + plan.id + '/manage-review');
@@ -2868,12 +2870,12 @@ test('Research entry and destination cards are purposeful, readable, and collisi
     'the historical-condition control is associated with its visible label');
   assert.equal(await page.getByLabel('Over how many trading days?').count(), 1,
     'the public Research horizon control is associated with its visible label');
-  assert.equal(await page.inputValue('#tv-view'), '',
+  assert.equal(await page.locator('#tv-view .choice-option.active').count(), 0,
     'read-only Research never displays an implicit bullish default');
   assert.match(await page.textContent('#test-your-view'), /Choose the view you want to test/);
   assert.equal(await page.locator('#research-outcomes').count(), 0,
     'statistical lenses do not run under an assumption the user has not selected');
-  await page.selectOption('#tv-view', 'bullish');
+  await page.click('#tv-view .choice-option[data-value="bullish"]');
   await page.waitForSelector('#research-outcomes');
   await page.fill('#tv-horizon', '20');
   await page.dispatchEvent('#tv-horizon', 'change');
@@ -3008,9 +3010,9 @@ test('scenario studio: beginner view → decision facts → same-receipt strateg
   await page.click('#level-switch button[data-level="beginner"]');
   await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'bearish', 'quarter');
   await openResearchTab('view');
-  await page.waitForSelector('#tv-view');
-  assert.equal(await page.inputValue('#tv-view'), 'bearish', 'Research consumes the canonical market view');
-  assert.equal(await page.inputValue('#tv-horizon'), '63', 'Research consumes the canonical horizon');
+  await page.waitForSelector('#tv-context');
+  assert.match(await page.textContent('#tv-context'), /Down over 63 trading days/,
+    'the declared view and horizon are quoted, never re-asked');
   await openFutures();
   // The thesis workbench: story cards with shape sketches, plain horizon/wildness chips.
   await page.waitForSelector('#whatif-card #sc-shapes .sc-card');
@@ -3086,7 +3088,7 @@ test('scenario studio expert: model menu incl. Heston, IV knobs, the math on dem
   await openPlan('AAPL');
   await openFutures();
   await page.waitForSelector('#whatif-card #sc-model');
-  const models = await page.$$eval('#sc-model option', os => os.map(o => o.value));
+  const models = await page.$$eval('#sc-model .choice-option', os => os.map(o => o.dataset.value));
   assert.ok(models.includes('HESTON') && models.includes('BLOCK_BOOTSTRAP') && models.includes('JUMP_DIFFUSION'), 'full model menu');
   assert.ok(await page.locator('#sc-iv').count(), 'IV start knob');
   assert.ok(await page.locator('#sc-seed').count(), 'seed knob');
@@ -3481,7 +3483,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   await page.waitForSelector('#whatif-card #sc-model');
   await assertNamedControls('#whatif-card');
   for (const model of ['GBM', 'STUDENT_T', 'JUMP_DIFFUSION', 'HESTON', 'BLOCK_BOOTSTRAP', 'BROWNIAN_BRIDGE']) {
-    await page.selectOption('#whatif-card #sc-model', model);
+    await page.click('#whatif-card #sc-model .choice-option[data-value="' + model + '"]');
     await page.click('#whatif-run');
     await page.waitForSelector('#whatif-out .scenario-decision', { timeout: 30000 });
   }
@@ -5295,7 +5297,7 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'the destination card records the explorer position before navigation; got ' + storedExplorerY);
   await openResearchTab('view');
   await page.waitForSelector('#tv-view');
-  await page.selectOption('#tv-view', 'bearish');
+  await page.click('#tv-view .choice-option[data-value="bearish"]');
   await page.waitForSelector('#research-outcomes');
   await openResearchTab('overview');
   await page.selectOption('#symbol-proposed-goal', 'DIRECTIONAL');
@@ -5312,7 +5314,8 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'the study names its Demo-history basis');
   assert.doesNotMatch(await page.textContent('#test-your-view'), /checks the REAL past/,
     'Demo research never promotes fabricated history to real');
-  assert.equal(await page.inputValue('#tv-view'), 'bearish',
+  await page.waitForSelector('#tv-context');
+  assert.match(await page.textContent('#tv-context'), /Down over/,
     'the Plan Evidence stage receives the exact view selected in public Research');
   for (let i = 0; i < 6 && await page.evaluate(() => location.hash !== '#/research'); i++) {
     await page.goBack();
