@@ -780,7 +780,17 @@ public final class RecommendationEngine {
                     + "Sized to keep worst case within your " + Money.fmt(budget) + " risk budget."
                 : family.display() + " serves “" + intent.display() + "”: " + intent.blurb() + " "
                     + (pop != null ? String.format("Modeled probability of profit ~%.0f%%. ", pop * 100) : "")
-                    + (maxLoss > 0 ? "Sized to keep new cash at risk within your " + Money.fmt(budget) + " budget." : "");
+                    // Collateral-based income (a cash-secured put or a buy-write covered call) deploys
+                    // CAPITAL you set aside, not a slice of the risk budget — say so, so its five-figure
+                    // "max loss" reads as the collateral it is, not a fee. Defined-risk ideas keep the
+                    // risk-budget framing, where max loss genuinely IS the capital at risk.
+                    + (collateralBased
+                        ? "Sized by your buying power — it sets aside " + Money.fmt(maxLoss) + " of capital"
+                            + (family == StrategyFamily.CASH_SECURED_PUT
+                                ? " (the cash to buy the shares at the strike if you are assigned)"
+                                : family.needsStock() ? " (the 100 shares the call is written against)" : "")
+                            + ", within your " + Money.fmt(buyingPowerCents) + " account — this is collateral you hold, not a fee you lose."
+                        : maxLoss > 0 ? "Sized to keep new cash at risk within your " + Money.fmt(budget) + " budget." : "");
         String beginner = beginnerText(family, entryNet);
         String intentNote = intentNote(intent, family, holdings, spot, qty, netOptionIncomeCents, minDte,
                 effectivePrice, assignProb, annualYieldPct, shortCallStrike, shortPutStrike, longPutStrike,
