@@ -184,9 +184,13 @@ class AutoRecommenderTest {
         }
         assertThat(without.notes()).anySatisfy(n -> assertThat(n).containsIgnoringCase("allow0dte"));
 
+        // A directional scan expresses a market VIEW: with a bullish override a same-day long call /
+        // debit spread builds, which is what this test checks. (Share-backed families like covered
+        // calls no longer pad a directional fan, so the view must actually produce a directional
+        // structure — the honest behavior.)
         AutoRecommender.AutoRequest spyOnly = new AutoRecommender.AutoRequest(
                 List.of("SPY"), List.of("0DTE"), 1, null, null, null, null,
-                "aggressive", true, List.of("DIRECTIONAL"), null, null);
+                "aggressive", true, List.of("DIRECTIONAL"), null, "bullish");
         AutoRecommender.AutoResult with = auto.run(spyOnly, BP);
         assertThat(with.picks()).hasSize(1);
         AutoRecommender.HorizonIdeas zeroDte = with.picks().getFirst().horizons().getFirst();

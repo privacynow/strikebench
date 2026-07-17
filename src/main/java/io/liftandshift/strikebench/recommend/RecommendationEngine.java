@@ -254,6 +254,13 @@ public final class RecommendationEngine {
             if (intent == StrategyIntent.DIRECTIONAL) {
                 // A directional bet IS a thesis, so the declared view hard-selects the structure side.
                 if (!family.fits(thesis)) continue;
+                // ...but a directional scan expresses a market VIEW with option structures. Share-backed
+                // and cash-secured families (covered calls, cash-secured puts, protective puts/collars)
+                // are about holdings, income, or protection — not a directional bet — and must never
+                // surface here even when they fit the view (a protective collar is not a directional
+                // idea; it was ranking as the top "directional" allocation). Pure-option view
+                // expressions — spreads, condors, butterflies, calendars, diagonals — stay.
+                if (family.needsStock() || family == StrategyFamily.CASH_SECURED_PUT) continue;
             } else {
                 // OBJECTIVE FLOWS (income / acquire / exit / hedge): pick families by PURPOSE. The
                 // market view is a RANKING TILT and a per-candidate teaching note here, NEVER a
