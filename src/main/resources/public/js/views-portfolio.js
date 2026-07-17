@@ -2328,7 +2328,7 @@
         : params[0] === 'record' ? 'record' : params[0] === 'construct' ? 'construct' : 'positions';
     var tab = params[0] === 'closed' ? 'closed' : 'active';
     var page = parseInt(params[1] || '0', 10);
-    root.appendChild(el('h1', {}, 'Portfolio'));
+    root.appendChild(el('h1', {}, 'Book'));
     root.appendChild(portfolioModeNav(trackedBook));
     var modePanel = el('section', { id: 'portfolio-mode-panel', role: 'tabpanel',
       'aria-labelledby': trackedBook ? 'portfolio-mode-tracked' : 'portfolio-mode-paper' });

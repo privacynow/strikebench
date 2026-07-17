@@ -363,7 +363,7 @@
       // all depend on the current universe.
       var tape = document.getElementById('tape');
       if (tape) {
-        var showTape = route === 'home' || route === 'research' || route === 'plans' || route === 'plan' || route === 'portfolio'
+        var showTape = route === 'home' || route === 'research' || route === 'plan' || route === 'portfolio'
           || (route === 'data' && App.state.world && App.state.world !== 'observed');
         tape.classList.toggle('tape-offroute', !showTape);
         var strip = document.getElementById('tape-strip');

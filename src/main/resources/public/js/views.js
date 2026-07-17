@@ -711,14 +711,28 @@
       }
     });
 
-    // Home is a compact lens on the canonical Plans library. The hero already owns the
-    // active Plan, so this lens shows only alternatives; management stays at #/plans.
+    // The Desk owns the plan journeys: a compact resume lens (the hero already owns the
+    // active Plan) plus the full library as an archive drawer — no separate route.
     var planLibrary = el('section', { class: 'card home-plan-library', id: 'home-plan-library' });
     root.appendChild(planLibrary);
     var planLibraryFill = window.ViewPlan.renderLibrary(planLibrary, {
       title: activePlan ? 'Other Plans' : 'Plans', removeWhenEmpty: true,
       compact: true, excludePlanId: activePlan && activePlan.id
     });
+    var drawerHost = el('section', { class: 'card home-plan-drawer', id: 'home-plan-drawer' });
+    var drawer = UI.expandable('Plan library — every market, archive included', function () {
+      var full = el('div', { id: 'plans-library' });
+      window.ViewPlan.renderLibrary(full, { full: true, title: 'Plans' });
+      return full;
+    }, { stateKey: 'home-plan-drawer' });
+    drawerHost.appendChild(drawer);
+    root.appendChild(drawerHost);
+    if (App.state.openPlanDrawer) {
+      delete App.state.openPlanDrawer;
+      var drawerHead = drawer.querySelector('.xp-head');
+      if (drawerHead && drawerHead.getAttribute('aria-expanded') !== 'true') drawerHead.click();
+      drawerHost.scrollIntoView({ block: 'start' });
+    }
 
     var colL = el('section', { class: 'home-col home-market-slot', 'aria-label': 'Market watch' });
     var colR = el('div', { class: 'home-col home-col-side' });

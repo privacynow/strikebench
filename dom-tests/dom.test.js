@@ -42,6 +42,17 @@ async function waitForServer(tries = 60) {
   throw new Error('server did not start');
 }
 
+
+/** The Plan library lives in the Desk's archive drawer now — open it and wait for content. */
+async function openPlanDrawer() {
+  await go('#/home');
+  await page.waitForSelector('#home-plan-drawer .xp-head');
+  if (await page.locator('#home-plan-drawer .xp-head[aria-expanded="true"]').count() === 0) {
+    await page.click('#home-plan-drawer .xp-head');
+  }
+  await page.waitForSelector('#plans-library');
+}
+
 /** Navigate to a hash route and wait for the view to finish rendering. */
 async function go(hash) {
   await page.evaluate(h => {
@@ -551,7 +562,7 @@ test('Outcomes distinguishes a stale selection and reprices the same legs', asyn
     'repricing carries the prior exact legs into the direct editor');
 });
 
-test('plan foundation promotes once, survives reload, versions assumptions, and closes only the chip', async () => {
+test('plan foundation promotes once, survives reload, versions assumptions, and closes only the tab', async () => {
   await go('#/research/AAPL');
   await page.waitForSelector('#symbol-proposed-trades');
   await page.waitForSelector('#research-hero .quote-hero');
@@ -579,8 +590,6 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'persisted plan renders without a route error: ' + (await page.locator('#app').textContent()));
   const planHash = await page.evaluate(() => location.hash);
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income.*Demo market/s);
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + planHash.split('/')[2] + '"]').count(), 1,
-    'the promoted durable plan appears exactly once even when other plans are open');
   assert.equal((await page.locator('#nav a.active').textContent()).trim(), 'Workspace',
     'the primary navigation names the Workspace while a journey is open');
   assert.match(await page.textContent('#lane-chip'), /DEMO/,
@@ -590,6 +599,17 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'creating a Plan is announced before the journey continues');
   assert.match(planHash, /\/strategy$/,
     'an explicit goal has one canonical destination: Strategy');
+  // The retired chip bar's "appears exactly once" contract now lives on the Desk: the hero
+  // owns the ACTIVE plan; the compact library never repeats it as a row.
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
+  await go('#/home');
+  await page.waitForSelector('.home-hero-ctas button');
+  assert.equal(await page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ }).count(), 1,
+    'the promoted durable plan is owned exactly once by the Desk hero even when other plans are open');
+  assert.equal(await page.evaluate(() => App.state.activePlanId), planHash.split('/')[2],
+    'the hero continuation references the promoted plan');
+  assert.equal(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + planHash.split('/')[2] + '"]').count(), 0,
+    'the hero-owned plan is never repeated as a compact desk row');
   await go(planHash.replace('/strategy', '/evidence'));
   await page.waitForSelector('#plan-flow');
   await page.waitForSelector('#plan-stage-evidence .plan-stage-carry');
@@ -695,11 +715,34 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   assert.match(await page.textContent('#study-results'), /Signal episodes/,
     'the exact normalized study result restores after reload');
 
+  // Closing moved from the chip strip to the Desk rows. Rows exclude the ACTIVE plan, so
+  // hand the desk to a second journey first, then put this one away from its own row.
   const closedPlanId = planHash.split('/')[2];
-  await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + closedPlanId + '"] .plan-chip-close').click();
-  await page.waitForFunction((id) => !document.querySelector('.plan-chip[data-plan-id="' + id + '"]'), closedPlanId);
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + closedPlanId + '"]').count(), 0,
-    'closing a chip removes only that durable plan from the open collection');
+  const helper = await page.evaluate(async () => {
+    const plan = await PlanStore.create({ symbol: 'SPY', intent: 'DIRECTIONAL', thesis: 'bullish',
+      horizonDays: 23, riskMode: 'conservative', title: 'SPY · Desk handoff' });
+    return { id: plan.id };
+  });
+  await go('#/home');
+  await page.waitForSelector('#home-plan-library .home-plan-compact-row[data-plan-id="' + closedPlanId + '"]');
+  await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + closedPlanId + '"] .home-plan-compact-close').click();
+  await page.waitForFunction((id) => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'), closedPlanId);
+  assert.equal(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + closedPlanId + '"]').count(), 0,
+    'closing a tab removes only that durable plan from the open collection');
+  assert.equal(await page.evaluate(() => location.hash), '#/home',
+    'closing a desk row never navigates away from the Desk');
+  await openPlanDrawer();
+  const closedTabsHead = page.locator('#plans-library .xp-head').filter({ hasText: 'Closed Plan tabs' });
+  await closedTabsHead.waitFor();
+  await ensureExpanded(closedTabsHead);
+  assert.equal(await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'AAPL · Earn income' }).count(), 1,
+    'the closed tab keeps its durable Plan reachable in the library');
+  // Leave a clean desk for later journeys: retire the handoff helper as an archived record.
+  await page.evaluate(async id => {
+    const plan = await PlanStore.get(id, true);
+    await API.post('/api/plans/' + id + '/archive', { expectedVersion: plan.version });
+    await PlanStore.refresh();
+  }, helper.id);
 });
 
 test('primary Plan navigation fails visibly and restores its command', async () => {
@@ -1698,14 +1741,20 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
     'the hero-owned active Plan is not repeated in the Home library');
   assert.equal(await page.locator('#home-plan-library button[aria-label^="Archive"], #home-plan-library button[aria-label^="Delete"]').count(), 0,
     'Home contains no destructive Plan-management commands');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 1);
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simTwo + '"]').count(), 1);
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.second + '"]').count(), 0,
-    'the Plan bar shows only the current execution market');
+  assert.equal(await page.locator('.home-hero-ctas button').filter({ hasText: /^Continue SPY/ }).count(), 1,
+    'the hero owns the active Plan of the current execution market');
+  const simOneRow = page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.simOne + '"]');
+  assert.equal(await simOneRow.count(), 1, 'the other current-market Plan keeps a direct desk row');
+  assert.match(await simOneRow.locator('.home-plan-compact-actions .btn').first().textContent(), /^Open$/,
+    'a current-market row opens without a market transition');
+  const secondRow = page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.second + '"]');
+  assert.equal(await secondRow.count(), 1, 'an open Plan from another market stays visible on the desk');
+  assert.match(await secondRow.locator('.home-plan-compact-actions .btn').first().textContent(), /Switch & open/,
+    'another market’s Plan is labeled as a whole-market transition instead of blending in');
   await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-desktop.png'), fullPage: true });
 
-  await go('#/plans');
+  await openPlanDrawer();
   await page.waitForSelector('#plans-library .home-plan-grid');
   const otherToggle = page.locator('#plans-library [data-plan-group="other-markets"] .home-plan-group-toggle');
   if (await otherToggle.count()) await otherToggle.click();
@@ -1722,31 +1771,57 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   await page.getByRole('button', { name: 'Switch & open Plan' }).click();
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.first, { timeout: 20000 });
   await page.waitForFunction(base => App.state.world === base && App.Market.world === base, ids.base);
-  await page.waitForSelector('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]', { timeout: 20000 });
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"]').count(), 1,
-    'opening a closed library Plan reopens its chip after the market commits');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.simOne + '"]').count(), 0,
-    'the old market collection is stashed rather than blended into the bar');
+  await go('#/home');
+  await page.waitForSelector('#home-plan-library .home-plan-compact-list');
+  await page.waitForFunction(id => PlanStore.all().some(plan => plan.id === id), ids.first, { timeout: 20000 });
+  // The reopened Plan returns to the desk after the market commits: as the hero continuation
+  // when it is the active plan, otherwise as its own direct compact row.
+  await page.waitForFunction(id =>
+    !!document.querySelector('#home-plan-library .home-plan-compact-row[data-plan-id="' + id + '"]')
+    || (App.state.activePlanId === id
+      && /^Continue QQQ/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || '')),
+  ids.first, { timeout: 20000 });
+  assert.equal(await page.evaluate(id => PlanStore.all().some(plan => plan.id === id), ids.simOne), false,
+    'the old market collection is stashed rather than blended into the current-market collection');
 
-  await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.first + '"] .plan-chip-close').click();
-  await page.waitForFunction(id => !document.querySelector('.plan-chip[data-plan-id="' + id + '"]'), ids.first);
-  await go('#/plans');
-  await page.waitForSelector('#plans-library .xp-head:has-text("Closed Plan tabs")');
-  await page.locator('#plans-library .xp-head:has-text("Closed Plan tabs")').click();
+  // Putting a tab away happens from its desk row; rows exclude the ACTIVE plan, so hand the
+  // desk to the other same-market journey first — from the canonical library, which lists
+  // every working Plan regardless of hero ownership.
+  await openPlanDrawer();
+  await page.locator('#plans-library [data-plan-id="' + ids.second + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
+  await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.second, { timeout: 20000 });
+  await go('#/home');
+  await page.waitForSelector('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.first + '"]');
+  await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.first + '"] .home-plan-compact-close').click();
+  await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'), ids.first);
+  await openPlanDrawer();
+  const closedTabsHead = page.locator('#plans-library .xp-head').filter({ hasText: 'Closed Plan tabs' });
+  await closedTabsHead.waitFor();
+  await ensureExpanded(closedTabsHead);
   assert.equal(await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'QQQ · Earn income' }).count(), 1,
-    'the chip × removes only the open-tab state; the durable Plan remains under closed tabs');
+    'the tab × removes only the open-tab state; the durable Plan remains under closed tabs');
 
   await page.locator('#plans-library [data-plan-id="' + ids.simOne + '"] .home-plan-actions .btn:not(.btn-secondary)').click();
   await page.waitForFunction(world => App.state.world === world && App.Market.world === world, ids.worldId,
     { timeout: 20000 });
   await page.waitForFunction(id => location.hash.includes('/plan/' + id + '/'), ids.simOne);
   await page.waitForSelector('#plan-flow');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
+  const simOneHash = await page.evaluate(() => location.hash);
+  await go('#/home');
+  await page.waitForSelector('.home-hero-ctas button');
+  assert.equal(await page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ }).count(), 1,
+    'returning to the simulated market restores its active Plan to the hero');
+  const restoredTwoRow = page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.simTwo + '"]');
+  await restoredTwoRow.waitFor();
+  assert.match(await restoredTwoRow.locator('.home-plan-compact-actions .btn').first().textContent(), /^Open$/,
     'returning to the simulated market restores its two-Plan open collection');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.locator('#plan-picker').isVisible(), true, 'mobile uses a dedicated Plan picker');
-  assert.equal(await page.locator('#plan-picker option').count(), 2, 'every current-market Plan is reachable');
+  await restoredTwoRow.waitFor({ state: 'visible' });
+  assert.equal(await restoredTwoRow.locator('.home-plan-compact-actions .btn').first().isVisible(), true,
+    'every current-market Plan keeps a usable desk row at the mobile viewport');
+  await go(simOneHash);
+  await page.waitForSelector('#plan-flow');
   const mobile = await page.evaluate(() => {
     const flow = document.querySelector('#plan-flow').getBoundingClientRect();
     return { overflow: document.documentElement.scrollWidth - innerWidth,
@@ -1763,15 +1838,19 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
     && band.titleLeft >= band.left - 1 && band.titleRight <= band.right + 1,
     'all six journey bands remain fully visible on mobile: ' + JSON.stringify(band)));
   await page.waitForTimeout(4200);
-  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-picker-mobile.png'), fullPage: true });
+  await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-flow-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.reload();
-  await page.waitForSelector('#plan-bar-root .plan-chip.active');
-  await page.waitForFunction(() => document.querySelectorAll('#plan-bar-root .plan-chip').length === 2,
-    null, { timeout: 20000 });
-  assert.equal(await page.locator('#plan-bar-root .plan-chip.active').getAttribute('data-plan-id'), ids.simOne,
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  await page.waitForFunction(id => window.App && App.state.activePlanId === id, ids.simOne, { timeout: 20000 });
+  await go('#/home');
+  await page.waitForSelector('.home-hero-ctas button');
+  assert.equal(await page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ }).count(), 1,
     'reload restores the active Plan for this market instead of a Plan from another lane');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
+  await page.waitForSelector('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.simTwo + '"]',
+    { timeout: 20000 });
+  assert.match(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.simTwo + '"]'
+    + ' .home-plan-compact-actions .btn').first().textContent(), /^Open$/,
     'the current market collection restores from the server after reload');
 
   // Leave no active-world capacity behind for later journeys. The plans are retained as
@@ -1805,14 +1884,16 @@ test('equivalent Plan retries collapse while materially different Plans survive 
     const base = App.baseWorldId();
     if (App.state.world !== base) await App.switchWorld(base);
     await PlanStore.load(true);
+    // The disposable tab is created FIRST: desk rows exclude the ACTIVE plan (the hero owns
+    // it), and this journey needs a closable non-active row later.
+    const disposable = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
+      horizonDays: 19, riskMode: 'conservative', title: 'SPY · Disposable tab' });
     const one = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
       horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const retry = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
       horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
     const variant = await PlanStore.create({ symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bearish',
       horizonDays: 30, targetCents: 27123, riskMode: 'conservative', title: 'AAPL · Retry-safe audit' });
-    const disposable = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
-      horizonDays: 19, riskMode: 'conservative', title: 'SPY · Disposable tab' });
     return { one: one.id, retry: retry.id, variant: variant.id, disposable: disposable.id };
   });
   assert.equal(ids.retry, ids.one, 'a new request id cannot mint an identical active Plan');
@@ -1825,23 +1906,25 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   assert.deepEqual(await page.evaluate(values => [values.one, values.variant].map(id =>
     PlanStore.allMarkets().some(plan => plan.id === id)), ids), [true, true],
     'both materially distinct Plans remain in the durable collection even when Home condenses them');
-  assert.ok(await page.locator('#plan-bar-root .plan-chip').count() <= 2,
-    'desktop bounds direct Plan tabs instead of clipping a grown collection');
-  assert.match((await page.locator('#plan-bar-root').textContent()), /View bullish|View bearish/,
+  assert.match(await page.locator('#home-plan-library').textContent(), /View bullish|View bearish/,
     'same-symbol Plans use their distinguishing assumption instead of an arbitrary ordinal');
-  assert.equal(await page.locator('#plan-bar-root .plan-more-link').count(), 1,
-    'the canonical Plan library remains one action away when tabs are condensed');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"]').count(), 1,
-    'the active Plan remains directly reachable when the desktop bar is condensed');
+  assert.equal(await page.locator('#home-plan-drawer .xp-head').count(), 1,
+    'the canonical Plan library remains one action away from the condensed desk');
+  assert.equal(await page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ }).count(), 1,
+    'the active Plan remains directly reachable from the hero when the desk condenses');
+  assert.equal(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.variant + '"]').count(), 0,
+    'the hero-owned active Plan is not repeated as a desk row');
+  assert.equal(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.disposable + '"]').count(), 1,
+    'a non-active working Plan keeps its own closable desk row');
 
-  await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + ids.disposable + '"] .plan-chip-close').click();
+  await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.disposable + '"] .home-plan-compact-close').click();
   assert.equal(await page.evaluate(() => location.hash), '#/home',
     'closing a Plan tab from Home does not navigate into another Plan');
   await page.waitForFunction(id => !document.querySelector('#home-plan-library [data-plan-id="' + id + '"]'),
     ids.disposable);
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.disposable + '"]').count(), 0,
     'a closed tab is not rendered in the compact working lens');
-  await go('#/plans');
+  await openPlanDrawer();
   await page.waitForSelector('#plans-library .xp-head:has-text("Closed Plan tabs")');
   await page.locator('#plans-library .xp-head:has-text("Closed Plan tabs")').click();
   await page.locator('.home-plan-closed-tabs .status-item').filter({ hasText: 'SPY · Disposable tab' })
@@ -1852,20 +1935,26 @@ test('equivalent Plan retries collapse while materially different Plans survive 
     'permanent draft deletion removes the Plan from the all-market library');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1);
-  assert.equal(await page.locator('#plan-picker option[value="' + ids.variant + '"]').count(), 1);
-  assert.match(await page.locator('#plan-picker').textContent(), /View bullish/);
-  assert.match(await page.locator('#plan-picker').textContent(), /View bearish/);
-  assert.doesNotMatch(await page.locator('#plan-picker').textContent(), /Plan \d+ of \d+/,
+  const survivorRow = page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.one + '"]');
+  await survivorRow.waitFor({ state: 'visible' });
+  assert.equal(await survivorRow.locator('.home-plan-compact-actions .btn').first().isVisible(), true,
+    'the surviving Plan keeps a usable desk row at the mobile viewport');
+  assert.match(await survivorRow.locator('.home-plan-compact-meta').textContent(), /View bullish/);
+  const heroContinue = page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ });
+  assert.equal(await heroContinue.count(), 1, 'the hero continuation stays reachable on mobile');
+  assert.match(await heroContinue.textContent(), /View bearish/,
+    'the hero names the distinguishing assumption of otherwise identical Plans');
+  assert.doesNotMatch(await page.locator('#home-plan-library').textContent(), /Plan \d+ of \d+/,
     'meaningful assumption labels replace arbitrary duplicate ordinals');
   await page.reload();
-  await page.waitForSelector('#plan-picker');
-  assert.equal(await page.locator('#plan-picker option[value="' + ids.one + '"]').count(), 1,
+  await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
+  await page.waitForSelector('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.one + '"]');
+  assert.equal(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.one + '"]').count(), 1,
     'the single retry-safe identity survives restart');
-  assert.equal(await page.locator('#plan-picker option[value="' + ids.variant + '"]').count(), 1,
+  assert.equal(await page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ }).count(), 1,
     'the materially different Plan survives restart');
 
-  await go('#/plans');
+  await openPlanDrawer();
   await page.locator('#plans-library [data-plan-id="' + ids.one + '"] button[aria-label^="Archive"]').click();
   await page.waitForSelector('[role="dialog"]');
   await page.getByRole('button', { name: 'Archive Plan' }).click();
@@ -1918,14 +2007,17 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   assert.ok((await compact.locator('.home-plan-compact-meta').allTextContents()).some(text =>
     /View (?:bullish|bearish|neutral)/.test(text)),
     'compact Plan rows expose the assumption that distinguishes otherwise similar Plans');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip').count(), 2,
-    'a large desktop collection renders two stable Plan tabs rather than a clipped strip');
-  assert.match(await page.locator('#plan-bar-root .plan-more-link').textContent(), /^\+\d+ more$/,
-    'the condensed Plan bar names how many Plans remain in the library');
+  assert.equal(await page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids[5] + '"]').count(), 0,
+    'the hero-owned active Plan is not one of the bounded desk rows');
+  const compactNote = page.locator('#home-plan-library .home-plan-compact-note');
+  assert.match(await compactNote.textContent(), /\d+ more in the Plan library/,
+    'the bounded desk names how many Plans remain in the Plan library');
   assert.match(await page.locator('#home-plan-library .plan-library-count').textContent(), /\d+ other Plans/);
   assert.equal(await page.locator('#home-plan-library [aria-label^="Archive"], #home-plan-library [aria-label^="Delete"]').count(), 0,
     'Plan lifecycle management is absent from the desk lens');
-  await page.locator('#home-plan-library').getByRole('link', { name: 'View all' }).click();
+  await compactNote.getByRole('link', { name: 'the Plan library' }).click();
+  await go('#/home'); // a same-hash visit is still a render; the note's request opens the drawer on this paint
+  await page.waitForSelector('#home-plan-drawer .xp-head[aria-expanded="true"]');
   await page.waitForSelector('#plans-library [data-plan-group="in-this-market"]');
   const group = page.locator('#plans-library [data-plan-group="in-this-market"]');
   for (const id of ids) assert.equal(await group.locator('[data-plan-id="' + id + '"]').count(), 1,
@@ -1951,10 +2043,8 @@ test('Home discards stale in-memory Plans after server-side lifecycle changes', 
     window.location.hash = '#/home';
   }, stale.id);
   await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
-  assert.equal(await page.locator('#plan-bar-root .plan-chip[data-plan-id="' + stale.id + '"]').count(), 0,
-    'the Plan bar reconciles to server truth instead of retaining a dead tab');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + stale.id + '"]').count(), 0,
-    'the Home library does not resurrect the stale Plan');
+    'the Home library reconciles to server truth instead of resurrecting the stale Plan');
   assert.doesNotMatch(await page.textContent('.home-hero'), /Continue TSLA/,
     'the primary continuation action is derived from the reconciled collection');
   assert.equal(await page.evaluate(id => PlanStore.all().some(item => item.id === id), stale.id), false,
@@ -2131,12 +2221,14 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     return /trade decision/i.test(text) && /plan position/i.test(text) && !document.querySelector('#unwind-btn');
   }, null, { timeout: 15000 });
 
-  await go('#/plans');
+  await openPlanDrawer();
   await page.waitForSelector('#plans-library .home-plan-tile');
-  assert.equal((await page.locator('#app h1').textContent()).trim(), 'Plans',
-    'Plans have one canonical product home instead of borrowing Portfolio');
-  assert.equal(await page.locator('#nav a[data-route~="plans"]').evaluate(node => node.classList.contains('active')), true,
-    'the Workspace item owns the plan-library destination');
+  assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'home',
+    'Plans have one canonical product home — the Desk drawer — instead of borrowing Portfolio');
+  assert.equal(await page.locator('#nav a[data-route~="home"]').evaluate(node => node.classList.contains('active')), true,
+    'the Desk item owns the plan-library destination');
+  assert.equal(await page.locator('#nav a[data-route~="plans"]').count(), 0,
+    'no navigation item claims a retired standalone Plans route');
   assert.match(await page.textContent('#plans-library'), /AAPL/);
   assert.match(await page.textContent('#plans-library'), /Review Plan/);
   const libraryCardText = await page.locator('#plans-library .home-plan-tile').first().innerText();
@@ -2145,7 +2237,7 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await go('#/portfolio');
   await page.waitForSelector('#pf-sec-positions.active');
-  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Portfolio');
+  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Book');
   assert.equal(await page.locator('#pf-sec-plans').count(), 0,
     'Portfolio owns money and positions without a second Plan library');
 });
@@ -2215,6 +2307,10 @@ test('the third decision outcome records a broker placement into the tracked boo
   await page.click('#plan-open-book');
   await page.waitForFunction(() => location.hash.startsWith('#/portfolio/book'));
   await page.waitForSelector('#app[data-ready="true"]');
+  // The Book's account sections fill asynchronously after the route shell is ready —
+  // wait for the tracked account to paint rather than sampling between fills.
+  await page.waitForFunction(() => /Real brokerage/.test(document.getElementById('app')?.textContent || ''),
+    null, { timeout: 15000 });
   assert.match(await page.textContent('#app'), /Real brokerage/,
     'the live strip hands off to the one accounting surface instead of duplicating it');
 });
@@ -4013,7 +4109,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await captureSettled('p110-accounting-overview-desktop.png');
 
   const rollOpen = await page.evaluate(async id => API.post('/api/portfolio/accounts/' + id + '/transactions', {
-    occurredAt: new Date(Date.now() - 250).toISOString(), eventType: 'TRADE', fillNature: 'EXECUTED', cashAmountCents: null,
+    occurredAt: new Date(Date.now() - 5000).toISOString(), eventType: 'TRADE', fillNature: 'EXECUTED', cashAmountCents: null,
     feesCents: 100, taxCategory: null, source: 'MANUAL', externalRef: 'dom-roll-open-1',
     notes: 'Position to exercise the linked roll control', legs: [{
       instrumentType: 'OPTION', action: 'BUY', positionEffect: 'OPEN', symbol: 'QQQ', optionType: 'CALL',
@@ -4039,7 +4135,15 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await replacementLeg.getByRole('spinbutton', { name: 'Exact fill $', exact: true }).fill('9');
   await rollEditor.getByRole('spinbutton', { name: 'Total fees $', exact: true }).fill('2');
   await rollEditor.getByRole('button', { name: 'Record exact roll', exact: true }).click();
-  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("ROLL RECORDED")');
+  await page.waitForSelector('.book-shared-position-editor .position-editor-result:has-text("ROLL RECORDED")', { timeout: 30000 })
+    .catch(async error => {
+      const diag = await page.evaluate(() => ({
+        result: (document.querySelector('.book-shared-position-editor .position-editor-result') || {}).textContent?.slice(0, 260),
+        toasts: (document.getElementById('toast-region') || {}).textContent?.slice(0, 200),
+        alerts: Array.from(document.querySelectorAll('.book-shared-position-editor .alert')).map(a => a.textContent.slice(0, 120))
+      }));
+      throw new Error('DIAG ' + JSON.stringify(diag) + ' :: ' + error.message);
+    });
   assert.match(await rollEditor.locator('.position-editor-result').innerText(),
     /Old result realized; replacement open[\s\S]*Net premium before fees[\s\S]*−\$200\.00/,
     'the canonical workbench reports the linked premium and refreshed book consequence in place');
@@ -6158,7 +6262,16 @@ test('simulated market: product creator, loud live band, world-routed research, 
 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
   await go('#/data/simulation');
-  await page.waitForSelector('.sim-session-row button:has-text("Finish")');
+  await page.waitForSelector('.sim-session-row button:has-text("Finish")', { timeout: 30000 }).catch(async error => {
+    const diag = await page.evaluate(() => ({
+      world: App.state.world,
+      rail: (document.getElementById('dc-sim-sessions') || {}).textContent?.slice(0, 200),
+      room: (document.getElementById('dc-sim-room') || {}).textContent?.slice(0, 200),
+      rows: document.querySelectorAll('.sim-session-row').length,
+      buttons: Array.from(document.querySelectorAll('.sim-session-row button')).map(b => b.textContent.trim()).slice(0, 8)
+    }));
+    throw new Error('DIAG ' + JSON.stringify(diag) + ' :: ' + error.message);
+  });
   assert.equal(await page.locator('.sim-session-row[role="link"], .sim-session-row a button, .sim-session-row button button').count(), 0,
     'a simulated-session card never nests controls inside a link-like wrapper');
   assert.ok(await page.locator('.sim-session-row article').count() === 0,
@@ -6180,7 +6293,16 @@ test('simulated market: product creator, loud live band, world-routed research, 
   await page.click('#world-exit');
   await page.waitForFunction((baseline) => App.state.world === baseline, baselineWorld, { timeout: 15000 });
   await go('#/data/simulation');
-  await page.waitForSelector('.sim-session-row button:has-text("Finish")');
+  await page.waitForSelector('.sim-session-row button:has-text("Finish")', { timeout: 30000 }).catch(async error => {
+    const diag = await page.evaluate(() => ({
+      world: App.state.world,
+      rail: (document.getElementById('dc-sim-sessions') || {}).textContent?.slice(0, 200),
+      room: (document.getElementById('dc-sim-room') || {}).textContent?.slice(0, 200),
+      rows: document.querySelectorAll('.sim-session-row').length,
+      buttons: Array.from(document.querySelectorAll('.sim-session-row button')).map(b => b.textContent.trim()).slice(0, 8)
+    }));
+    throw new Error('DIAG ' + JSON.stringify(diag) + ' :: ' + error.message);
+  });
   await page.click('.sim-session-row button:has-text("Finish")');
   await page.waitForSelector('#modal-confirm');
   await page.waitForSelector('#sim-report', { timeout: 15000 });
@@ -6494,7 +6616,7 @@ test('Program ONE R0: rails, choice controls, and flow bands honor their contrac
 test('Program ONE R0: visible labels are registry-covered or reviewed plain language', async () => {
   const allowPath = path.join(__dirname, 'label-allowlist.json');
   const allow = new Set(JSON.parse(fs.readFileSync(allowPath, 'utf8')));
-  const routes = ['#/home', '#/research', '#/plans', '#/portfolio/positions', '#/data/overview'];
+  const routes = ['#/home', '#/research', '#/portfolio/positions', '#/data/overview'];
   const uncovered = new Map();
   for (const route of routes) {
     await go(route);
