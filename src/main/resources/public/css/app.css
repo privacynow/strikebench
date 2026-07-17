@@ -2044,15 +2044,22 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 
 /* Explanation-system a11y (adversarial review): the box itself owns the 28px hit area.
    An out-of-box pseudo target could extend the page's scrollable width at a canvas edge. */
-.info-trigger {
-  position: relative; width: 28px; height: 28px; min-height: 28px; margin: -7px 0 -7px 4px;
-  border-color: transparent;
+/* Touch/no-hover pointers keep the small baseline 'i' (the .info-trigger rule above) as the tap
+   target. On a fine-pointer desktop the icon is REMOVED from the text flow entirely — nothing is
+   injected between a label and its value, so no baseline or spacing break — and the LABEL itself
+   becomes the hover target (UI.info binds .has-info to the label's host on desktop). */
+@media (hover: hover) and (pointer: fine) {
+  /* The icon leaves the visual flow (no baseline break) but stays keyboard- and
+     screen-reader-reachable — Tab focuses it and opens the same bubble. */
+  .info-trigger { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .info-trigger:focus-visible { position: static; width: 14px; height: 14px; margin-left: 4px;
+    clip: auto; clip-path: none; overflow: visible; border: 1px solid var(--accent); }
+  .has-info { cursor: help;
+    text-decoration: underline dotted color-mix(in srgb, var(--text-dim) 45%, transparent);
+    text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  .has-info:hover { text-decoration-color: var(--accent); }
 }
-.info-trigger::before {
-  content: ''; position: absolute; inset: 7px; border: 1px solid var(--border); border-radius: 50%;
-}
-.info-trigger:hover, .info-trigger:focus-visible { border-color: transparent; }
-.info-trigger:hover::before, .info-trigger:focus-visible::before { border-color: var(--accent); }
 .info-pop { max-height: 60vh; overflow-y: auto; }
 /* The non-interactive explainer icon must not mimic the clickable trigger */
 .explain-ico { opacity: .55; }

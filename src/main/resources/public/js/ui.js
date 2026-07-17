@@ -427,12 +427,17 @@
       if (infoUsed.indexOf(key) < 0) infoUsed.push(key);
       var t2 = el('button', { class: 'term', type: 'button', 'data-term': key,
         'aria-expanded': 'false' }, display || word);
+      // The word IS the hover target (no injected icon), so it already matches the desktop
+      // model — just make it snappy and hover-dismissable like the label path.
       var hoverTimer = null;
       t2.addEventListener('mouseenter', function () {
-        hoverTimer = setTimeout(function () { openInfo(t2, key); }, 550);
+        if (!hoverCapable()) return;
+        cancelInfoClose();
+        hoverTimer = setTimeout(function () { openInfo(t2, key, { hover: true }); }, 160);
       });
       t2.addEventListener('mouseleave', function () {
         if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+        if (infoPop && infoPop.__forTerm === key) scheduleInfoClose();
       });
       t2.addEventListener('click', function (e) {
         e.preventDefault(); e.stopPropagation(); openInfo(t2, key);
@@ -1170,12 +1175,31 @@
   }
   function maxProfitLabel(strategy, structureGroup, value, beginner, legs) {
     var kind = profitCeilingKind(strategy, structureGroup, value, legs);
-    if (kind === 'finite') return fmtMoney(value);
+    if (kind === 'finite') {
+      // A "best possible profit" that is not positive is not a profit — never launder a loss
+      // (or a break-even) as a gain under a "best possible profit" heading.
+      if (value <= 0) {
+        return beginner ? fmtMoney(value) + ' — this position cannot make money'
+          : fmtMoney(value) + ' (no profit possible)';
+      }
+      return fmtMoney(value);
+    }
     if (kind === 'model-dependent') {
       return beginner ? 'No single dollar ceiling'
         : 'No fixed front-expiry ceiling';
     }
     return beginner ? 'no fixed ceiling' : 'uncapped';
+  }
+
+  /**
+   * The fact/stat tone for a "best possible profit" cell. Green ('f-ok') only when genuine
+   * upside exists; a non-positive ceiling reads as loss/neutral, never green — the AMD
+   * bear-call-priced-as-a-debit made a −$175 "max profit" show up green and broke trust.
+   */
+  function maxProfitTone(strategy, structureGroup, value, legs) {
+    var kind = profitCeilingKind(strategy, structureGroup, value, legs);
+    if (kind === 'finite' && value <= 0) return 'f-danger';
+    return 'f-ok';
   }
 
   /**
@@ -1205,7 +1229,14 @@
   var infoUsed = window.__usedInfoTerms = window.__usedInfoTerms || [];
   var infoTrigger = null; // the trigger that owns the open bubble (focus returns to it on close)
   var infoSuppressFocusOpen = false; // Escape's return-focus must not immediately reopen
+  var infoCloseTimer = null; // grace timer for hover-opened bubbles (pointer can travel into it)
+  function hoverCapable() {
+    return !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+  }
+  function cancelInfoClose() { if (infoCloseTimer) { clearTimeout(infoCloseTimer); infoCloseTimer = null; } }
+  function scheduleInfoClose() { cancelInfoClose(); infoCloseTimer = setTimeout(function () { closeInfo(); }, 180); }
   function closeInfo(returnFocus) {
+    cancelInfoClose();
     if (infoPop) {
       if (infoPop._detachTriggerKey) infoPop._detachTriggerKey();
       infoPop.remove(); infoPop = null;
@@ -1230,8 +1261,13 @@
   // structural anchoring, no scroll listeners, no floating over unrelated numbers. Resize
   // still closes (the layout genuinely changed).
   function onInfoScroll() { closeInfo(); }
-  function openInfo(trigger, key) {
+  function openInfo(trigger, key, opts) {
     if (!trigger.isConnected) return; // a re-render replaced the trigger mid-hover
+    var anchorEl = (opts && opts.anchor && opts.anchor.isConnected) ? opts.anchor : trigger;
+    var hover = !!(opts && opts.hover);
+    // Re-opening the SAME term that is already showing (pointer re-entered the label) is a no-op
+    // beyond cancelling the pending close — never flicker the bubble.
+    if (infoPop && infoPop.__forTerm === key && infoPop.isConnected) { cancelInfoClose(); return; }
     closeInfo();
     var def = window.Learn && Learn.INFO && Learn.INFO[key];
     if (!def) return;
@@ -1241,6 +1277,7 @@
     // role=dialog, not tooltip: it CONTAINS an interactive control (the expand button), and the
     // trigger references it via aria-describedby so screen readers announce the content.
     infoPop = el('div', { class: 'info-pop', role: 'dialog', 'aria-label': def.short, id: 'info-pop' });
+    infoPop.__forTerm = key;
     trigger.setAttribute('aria-expanded', 'true');
     trigger.setAttribute('aria-describedby', 'info-pop');
     var body = el('div', { class: 'info-short' }, def.short);
@@ -1271,8 +1308,14 @@
       if (ev.key === 'Tab') { ev.preventDefault(); closeInfo(true); }
     });
     infoPop._detachTriggerKey = function () { trigger.removeEventListener('keydown', onTriggerKey); };
+    // A hover-opened bubble stays alive while the pointer is inside it, and dismisses on leave —
+    // the standard hover-card grace so the pointer can travel from label into the bubble.
+    if (hover) {
+      infoPop.addEventListener('mouseenter', cancelInfoClose);
+      infoPop.addEventListener('mouseleave', scheduleInfoClose);
+    }
     function place() {
-      var r = trigger.getBoundingClientRect();
+      var r = anchorEl.getBoundingClientRect();
       var w = infoPop.offsetWidth, h = infoPop.offsetHeight;
       var left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8) + window.scrollX;
       var top = r.bottom + 6 + window.scrollY;
@@ -1287,29 +1330,53 @@
       window.addEventListener('resize', onInfoScroll, true);
     }, 0);
   }
-  /** A visible, quiet info trigger for a registry term. Never pairs with a native title. */
+  /**
+   * The explanation affordance for a registry term. DESKTOP (fine pointer): the LABEL that
+   * hosts this trigger is the hover target — the explanation pops on hovering the label, and
+   * the injected 'i' is hidden by CSS so it can never break the label's baseline or spacing.
+   * TOUCH/keyboard: the visible baseline 'i' remains a tap/focus target. One deliberate carve-out
+   * from card navigation (stopPropagation) so the info tap never also opens the surrounding card.
+   */
   function info(termKey) {
     if (infoUsed.indexOf(termKey) < 0) infoUsed.push(termKey);
     var t = el('button', { class: 'info-trigger', type: 'button', 'data-term': termKey,
       'aria-expanded': 'false', 'aria-label': 'What does this mean?' }, 'i');
-    var hoverTimer = null;
-    t.addEventListener('mouseenter', function () {
-      hoverTimer = setTimeout(function () { openInfo(t, termKey); }, 550);
-    });
-    t.addEventListener('mouseleave', function () {
-      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
-      // the bubble persists so the pointer can travel into it; outside-click/Escape closes
-    });
     t.addEventListener('click', function (ev) {
-      // Info triggers sometimes live inside a destination card. Their one deliberate
-      // exception to card navigation must suppress both bubbling and the anchor default.
       ev.preventDefault(); ev.stopPropagation(); openInfo(t, termKey);
     });
     t.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t, termKey); });
     t.addEventListener('blur', function () { setTimeout(function () {
       if (infoPop && !infoPop.contains(document.activeElement) && document.activeElement !== t) closeInfo();
     }, 150); });
+    bindInfoHost(t, termKey);
     return t;
+  }
+
+  /**
+   * After the caller wires this trigger into its label, adopt the label (parent) as the
+   * desktop hover target: hovering anywhere on the label opens the explanation, anchored to
+   * the label. Deferred a microtask so the parent link exists (el() appends children
+   * synchronously). No-op on touch — the visible 'i' handles taps there.
+   */
+  function bindInfoHost(trigger, termKey) {
+    Promise.resolve().then(function () {
+      var host = trigger.parentNode;
+      if (!host || host.nodeType !== 1 || host.__infoHostBound) return;
+      host.__infoHostBound = true;
+      host.classList.add('has-info');
+      var openTimer = null;
+      host.addEventListener('mouseenter', function () {
+        if (!hoverCapable()) return;
+        cancelInfoClose();
+        openTimer = setTimeout(function () {
+          openInfo(trigger, termKey, { hover: true, anchor: host });
+        }, 160);
+      });
+      host.addEventListener('mouseleave', function () {
+        if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+        if (infoPop && infoPop.__forTerm === termKey) scheduleInfoClose();
+      });
+    });
   }
 
   /**
@@ -1658,6 +1725,7 @@
     icon: icon,
     profitCeilingKind: profitCeilingKind,
     maxProfitLabel: maxProfitLabel,
+    maxProfitTone: maxProfitTone,
     skeleton: skeleton,
     rangeChart: rangeChart,
     brandMark: brandMark,
