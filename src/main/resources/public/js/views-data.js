@@ -174,13 +174,16 @@
 
       async function refreshSim() {
         var box = document.getElementById('dc-sim-sessions');
-        if (!box) return;
+        var roomBox = document.getElementById('dc-sim-room');
+        if (!box || !roomBox) return;
         box.innerHTML = '';
+        roomBox.innerHTML = '';
         var sessions = [];
         try { sessions = (await API.getFresh('/api/sim/market')).sessions || []; }
         catch (e) { box.appendChild(alertBox('warn', 'Could not load sessions: ' + e.message)); return; }
         if (!sessions.length) {
           box.appendChild(el('div', { class: 'muted small' }, 'No simulated sessions yet \u2014 create one below.'));
+          roomBox.appendChild(el('div', { class: 'muted small' }, 'A session\u2019s control room opens here.'));
           return;
         }
         var live = sessions.filter(function (x) { return x.status !== 'FINISHED'; });
@@ -190,7 +193,7 @@
         var current = null;
         live.forEach(function (x) { if (x.id === App.state.world) current = x; });
         if (current) {
-          box.appendChild(controlRoom(current));
+          roomBox.appendChild(controlRoom(current));
           if (App.state.focusSimControlRoom === current.id) {
             delete App.state.focusSimControlRoom;
             window.requestAnimationFrame(function () { window.requestAnimationFrame(function () {
@@ -198,6 +201,8 @@
               if (room) room.scrollIntoView({ block: 'start' });
             }); });
           }
+        } else {
+          roomBox.appendChild(el('div', { class: 'muted small' }, 'Enter a session \u2014 its control room opens here.'));
         }
         live.forEach(function (sx) { if (!current || sx.id !== current.id) box.appendChild(sessionRow(sx, false)); });
         var creatorEl = document.getElementById('sim-creator');
@@ -639,8 +644,8 @@
         if (holder) holder.innerHTML = '';
         else {
           holder = el('div', { id: 'sim-report-holder', class: 'card-slim', style: 'margin:8px 0' });
-          var box = document.getElementById('dc-sim-sessions');
-          box.parentNode.insertBefore(holder, box.nextSibling);
+          var room = document.getElementById('dc-sim-room');
+          room.parentNode.insertBefore(holder, room.nextSibling);
         }
         holder.appendChild(el('b', {}, 'Session report \u2014 ' + (sx.name || sx.id)));
         API.getFresh('/api/sim/market/' + sx.id + '/report')
@@ -648,7 +653,10 @@
           .catch(function (e) { holder.appendChild(alertBox('warn', 'Report unavailable: ' + e.message)); });
       }
 
-      simCard.appendChild(el('div', { id: 'dc-sim-sessions' }));
+      // Selection beside consequence: session rows rail | the entered world's control room.
+      simCard.appendChild(el('div', { class: 'band-cols sim-session-cols' },
+        el('div', { class: 'band-col-controls' }, el('div', { id: 'dc-sim-sessions' })),
+        el('div', { class: 'band-col-results' }, el('div', { id: 'dc-sim-room' }))));
 
       // ---- The creator ----
       var creator = el('div', { id: 'sim-creator', style: 'margin-top:10px' });

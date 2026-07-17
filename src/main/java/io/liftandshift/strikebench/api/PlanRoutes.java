@@ -8,6 +8,7 @@ public final class PlanRoutes {
     public record Handlers(
             Handler list,
             Handler create,
+            Handler adopt,
             Handler portfolio,
             Handler get,
             Handler updateContext,
@@ -51,6 +52,7 @@ public final class PlanRoutes {
     public static void register(JavalinConfig config, Handlers h) {
         config.routes.get("/api/plans", h.list());
         config.routes.post("/api/plans", h.create());
+        config.routes.post("/api/plans/adopt", h.adopt());
         config.routes.get("/api/plans/portfolio", h.portfolio());
         config.routes.get("/api/plans/{id}", h.get());
         config.routes.put("/api/plans/{id}/context", h.updateContext());

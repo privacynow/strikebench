@@ -2488,7 +2488,8 @@
         options: [
           { value: 'single', label: 'One trade at a time' },
           { value: 'portfolio', label: 'A book of overlapping trades' }],
-        value: form.engine || 'single' });
+        value: form.engine || 'single',
+        onChange: function () { rememberForm(); } });
       var planSessions = planRef.plan.context.horizonDays || Product.Horizon.sessions('month');
       var defaultDte = Product.Horizon.expiryDays(Product.Horizon.keyForSessions(planSessions));
       var dte = el('input', { id: 'plan-replay-dte', type: 'number', min: '1', max: '365', value: form.targetDte || defaultDte });
@@ -2500,7 +2501,7 @@
         form.from=from.value; form.to=to.value; form.engine=engine.value(); form.targetDte=dte.value;
         form.qty=qty.value; form.entryEveryDays=every.value; form.startingCash=cash.value; form.slippagePct=slip.value;
       }
-      [from,to,engine,dte,qty,every,cash,slip].forEach(function (input) { input.addEventListener('change', function () {
+      [from,to,dte,qty,every,cash,slip].forEach(function (input) { input.addEventListener('change', function () {
         rememberForm();
       }); });
       var results = el('div', { id: 'plan-backtest-result' });
@@ -2550,7 +2551,9 @@
         [['Weekly',7],['Monthly',30],['Quarterly',90]].map(function (preset) {
           return el('button', { type: 'button', onclick: function () { setDte(preset[1], this); } }, preset[0]);
         }));
-      host.appendChild(el('div', { class: 'card' }, UI.cardHeader('Replay ' + (selected.displayName || prettyStrategy(selected.strategy))),
+      // Decision moment: "does this rule survive history?" — the rule's parameters sit in a
+      // rail BESIDE the equity/trade evidence they produce, not a viewport above it.
+      var paramsCard = el('div', { class: 'card' }, UI.cardHeader('Replay ' + (selected.displayName || prettyStrategy(selected.strategy))),
         el('p', { class: 'muted' }, 'Symbol and strategy come from this Plan. The replay builds the named rule repeatedly; it does not pretend today’s exact strikes existed in the past.'),
         el('div', { class: 'plan-backtest-preset-row' },
           el('div', {}, el('span', { class: 'muted small' }, 'Quick range'), rangePresets),
@@ -2578,9 +2581,11 @@
             latest=await PlanStore.latestOutcomes(planRef.plan.id,true); allBacktests=latest.backtests||[]; paintHistory();
           } catch(e){results.innerHTML='';results.appendChild(alertBox('danger','Replay failed',[e.message]));}
           finally{this.disabled=false;this.removeAttribute('aria-busy');}
-        } }, latestBacktest ? 'Run another replay' : 'Run historical replay'))));
-      host.appendChild(results);
-      host.appendChild(history); paintHistory();
+        } }, latestBacktest ? 'Run another replay' : 'Run historical replay')));
+      host.appendChild(el('div', { class: 'band-cols' },
+        el('div', { class: 'band-col-controls' }, paramsCard),
+        el('div', { class: 'band-col-results' }, results, history)));
+      paintHistory();
       if (latestBacktest && latestBacktest.backtestId) {
         API.get('/api/plans/' + planRef.plan.id + '/outcomes/backtests/' + latestBacktest.backtestId).then(function (report) {
           if (results.isConnected && !results.hasChildNodes()) renderPlanBacktestReport(results, report);
@@ -3090,6 +3095,21 @@
       return;
     }
     var decision = data.decision;
+    if (!decision && data.management && data.management.trackedStructure) {
+      // An ADOPTED position: the book position is real NOW; the deliberate next step is
+      // declaring a view on it so the journey can argue about keeping, changing, or closing it.
+      content.appendChild(trackedStructureCard(data.management.trackedStructure));
+      content.appendChild(el('div', { class: 'plan-next-action' },
+        el('div', {}, el('b', {}, 'Adopted as-is — what is your view on it now?'),
+          el('p', { class: 'muted' },
+            'Declare a view above and the evidence, ranking, and outcome lenses will argue about this exact position: keep it, reshape it, or close it.')),
+        el('button', { type: 'button', class: 'btn', onclick: function () {
+          var edit = document.getElementById('plan-edit-context');
+          if (edit) edit.click();
+        } }, 'Declare your view')));
+      planManagementTimeline(content, data.management);
+      return;
+    }
     if (!decision) {
       var rehearsalDoc = null;
       try { rehearsalDoc = await PlanStore.rehearsals(plan.id, true); } catch (e2) { /* management remains usable */ }
@@ -3724,14 +3744,23 @@
               ? el('span', { class: 'badge badge-info' }, identity.duplicate) : null,
             el('span', { class: 'badge ' + (sameMarket ? 'badge-info' : 'badge-dim') }, planMarketLabel(plan)),
             quote ? el('span', { class: 'home-plan-live' }, fmtNum(quote.last), ' ', UI.delta(quote.last, quote.prevClose)) : null),
-          el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
-            if (terminalSession) {
-              App.state.focusSimControlRoom = plan.worldId;
-              App.navigate('#/data/simulation');
-              return;
-            }
-            focusPlanFrom(this, plan, plan.furthestStage);
-          } }, terminalSession ? 'Review session' : sameMarket ? 'Open' : 'Switch & open'));
+          el('div', { class: 'btn-row home-plan-compact-actions' },
+            el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+              if (terminalSession) {
+                App.state.focusSimControlRoom = plan.worldId;
+                App.navigate('#/data/simulation');
+                return;
+              }
+              focusPlanFrom(this, plan, plan.furthestStage);
+            } }, terminalSession ? 'Review session' : sameMarket ? 'Open' : 'Switch & open'),
+            // The one chip-bar value the resume rows lacked: putting a journey away without
+            // archiving it (it stays one click away in the library).
+            el('button', { type: 'button', class: 'btn btn-sm btn-secondary home-plan-compact-close',
+              title: 'Put this Plan away — it stays in the library', 'aria-label': 'Close ' + plan.symbol + ' tab',
+              onclick: function (event) {
+                event.stopPropagation();
+                PlanStore.closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
+              } }, '\u2715')));
       })));
       if (compactOrdered.length > compactShown.length) {
         host.appendChild(el('p', { class: 'muted small home-plan-compact-note' },

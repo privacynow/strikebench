@@ -2152,10 +2152,6 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .study-description, .study-rerun-note { margin: 7px 0; }
 .page-evidence > .xp { flex: 1 1 100%; margin-top: 4px; }
 .evidence-detail-row { padding: 4px 2px; }
-.idea-market-card, .idea-goal-card { max-width: 1180px; min-width: 0; }
-.idea-market-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; min-width: 0; }
-.idea-market-controls > *, .idea-market-controls .field, .idea-market-controls .sector-rail-wrap { min-width: 0; max-width: 100%; }
-.idea-market-card #idea-source { margin-bottom: 10px; }
 .ideas-symbol-context .symbol-context-peers { grid-column: 1 / -1; display: flex; flex-wrap: nowrap;
   width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; padding-bottom: 5px; scrollbar-width: thin; }
 .ideas-symbol-context .symbol-context-peers .sym-chip { flex: none; }
@@ -3147,10 +3143,13 @@ html[data-motion="off"] .ghost-row { animation: none; }
 }
 
 /* ===== Vertical rescue: desktop reads ACROSS, not down ===== */
-/* In-band two-column workspaces: controls own a rail; results land beside them. */
-.band-cols { grid-template-columns: minmax(340px, 400px) minmax(0, 1fr); align-items: start; }
+/* In-band two-column workspaces: controls own a rail; results land beside them.
+   Qualified: the base rule must never out-cascade the <=1100px single-column stack. */
+@media (min-width: 1101px) {
+  .band-cols { grid-template-columns: minmax(340px, 400px) minmax(0, 1fr); align-items: start; }
+}
 .band-col-controls > * + * { margin-top: 12px; }
-#study-results:empty::before, #whatif-out:empty::before {
+#study-results:empty::before, #whatif-out:empty::before, #plan-backtest-result:empty::before {
   content: 'Results land here — set the controls and run.';
   display: block; padding: 18px 16px; color: var(--muted, var(--text-dim));
   border: 1px dashed var(--border); border-radius: 8px; font-size: .9em; }
@@ -3201,7 +3200,9 @@ html[data-motion="off"] .ghost-row { animation: none; }
 /* The workspace is a working document, not an article: give it the desktop it's on —
    authored for high-resolution screens, degrading gracefully. Reading routes keep prose width. */
 #app[data-route="plan"] { max-width: 2200px; }
-#whatif-card .band-cols { grid-template-columns: minmax(380px, 520px) minmax(0, 1fr); }
+@media (min-width: 1101px) {
+  #whatif-card .band-cols { grid-template-columns: minmax(380px, 520px) minmax(0, 1fr); }
+}
 /* Story cards two-across inside the scenario rail. */
 .band-col-controls #sc-shapes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
@@ -3290,4 +3291,52 @@ body:has(#app[data-route="plan"]) .plan-bar-inner { max-width: 2200px; }
   .ranked-idea-hero.plan-selected-structure > .alert { grid-column: 1 / -1; }
   .ranked-idea-hero.plan-selected-structure > .ranked-idea-grid { display: contents; }
   .ranked-idea-hero.plan-selected-structure > .ranked-idea-secondary { grid-column: 3; margin-top: 0; }
+
+  /* Research symbol overview: the decision moment reads ACROSS — "is this symbol worth
+     a plan, and what would I do about it?" Context (quote hero) lands beside action
+     (proposed trades); the action card earns the wider track. Below 1500px the row is
+     an unstyled div, so the two cards stack exactly as before. */
+  .research-decision-row { display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0 16px; margin-bottom: 16px; }
+  /* Children are grid tracks now (incl. alert fallbacks): the row owns the rhythm. */
+  .research-decision-row > * { margin: 0; min-width: 0; }
 }
+
+/* ===== Decision pairings: book-overview aside, simulation selection rail ===== */
+/* Portfolio book overview: the aggregates (summary stats, cash, allocation) form a rail
+   beside their parts (the positions table). The expert table earns the full row below
+   1500px, so this pair only forms on wide desktops — everything stacks below. */
+@media (min-width: 1500px) {
+  .book-overview-cols { grid-template-columns: minmax(400px, 460px) minmax(0, 1fr); }
+  /* Four stat tiles pack 2x2 inside the rail. */
+  .book-overview-cols .book-summary-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* The rail is ~430px: allocation reflows to its narrow shape (mirrors the 760px rules —
+     the wide three-track allocation row needs ~490px and would overflow the rail). */
+  .book-overview-cols .book-allocation-groups { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .book-overview-cols .book-allocation-group:last-child { grid-column: auto; }
+  .book-overview-cols .allocation-row { grid-template-columns: minmax(0, 1fr) 50px; }
+  .book-overview-cols .allocation-label { grid-column: 1 / -1; }
+  .book-overview-cols .book-allocation .allocation-row { grid-template-columns: minmax(0, 1fr) 48px; }
+  .book-overview-cols .book-allocation .book-exposure-money { grid-column: 1 / -1; justify-content: flex-start; text-align: left; }
+}
+@media (max-width: 1499px) { .book-overview-cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* Data -> Simulation: session rows are the selection rail; the entered world's control room
+   is the consequence canvas beside them. The generic 1100px stack must be restated because
+   these width tunings land after the generic band-cols fallback in the cascade. */
+.sim-session-cols { grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); }
+@media (max-width: 1100px) { .sim-session-cols { grid-template-columns: minmax(0, 1fr); } }
+/* Inside the rail a row's summary | actions pair can outgrow 360px: reflow to the same
+   stacked shape the 640px rules use. Only while the rail is actually a column. */
+@media (min-width: 1101px) {
+  .sim-session-cols .sim-session-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .sim-session-cols .sim-session-actions { justify-content: flex-start; }
+}
+
+/* Choice controls never overflow a narrow screen: options wrap to new rows. */
+.choice-group { flex-wrap: wrap; }
+
+/* Instruments in a results column scale to it — a fixed-width SVG never widens the page. */
+.band-col-results { min-width: 0; }
+.band-col-results svg { max-width: 100%; height: auto; }
+#plan-backtest-result svg { max-width: 100%; height: auto; }

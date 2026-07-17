@@ -1557,8 +1557,15 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     'historical replay discloses its lane-owned rate and constant-rate convention');
   await captureSettled('plan-p4-backtest-desktop.png');
   await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
-    'the replay model disclosure and report stay inside the mobile viewport');
+  const replayMobile = await page.evaluate(() => ({
+    fits: document.documentElement.scrollWidth <= innerWidth, vw: innerWidth,
+    offenders: Array.from(document.querySelectorAll('#app *')).map(node => {
+      const r = node.getBoundingClientRect();
+      return { id: node.id || '', cls: String(node.className).slice(0, 44), right: Math.round(r.right) };
+    }).filter(row => row.right > innerWidth + 1).slice(0, 6)
+  }));
+  assert.equal(replayMobile.fits, true,
+    'the replay model disclosure and report stay inside the mobile viewport: ' + JSON.stringify(replayMobile));
   assert.equal(await page.locator('.plan-replay-trades tbody tr').first().evaluate(row => getComputedStyle(row).display), 'grid',
     'mobile replay trades become readable labeled records rather than crushed table columns');
   assert.deepEqual(await page.locator('.plan-replay-trades tbody tr').first().locator('td').evaluateAll(cells =>
@@ -3997,7 +4004,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'stock basis includes the exact opening fee');
   assert.match(overview, /Cash in this book[\s\S]*\$99,004\.00/,
     'tracked cash includes the stock fill, fee, and interest without touching practice cash');
-  assert.match(overview, /Total value[\s\S]*Unavailable[\s\S]*Current value is partial/,
+  assert.match(overview, /Current value is partial[\s\S]*Total value[\s\S]*Unavailable/,
     'the fixture market cannot manufacture a current value for an external tracked account');
   assert.match(overview, /does not turn missing prices into zero or use Demo, simulated, or modeled prices/,
     'the lane boundary is explained where the missing mark affects the total');

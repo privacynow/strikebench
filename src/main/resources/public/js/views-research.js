@@ -135,9 +135,16 @@
     // symbol workspace. Understand owns quote/history/events/news; Strategy temporarily owns
     // the existing option-chain/action surface until the full strategy move in P3.
     var heroCard = el('div', { class: 'card', id: 'research-hero' }, UI.spinner('Loading ' + symbol + '…'));
-    if (section === 'understand') root.appendChild(heroCard);
     var actionsAnchor = el('div', { id: 'symbol-actions-anchor' });
-    if (!inPlan && section === 'understand') root.appendChild(actionsAnchor);
+    // Public overview decision moment: "is this symbol worth a plan, and what would I do
+    // about it?" — the quote/context hero pairs BESIDE the proposed-trades action on wide
+    // desktops (unstyled div below 1500px, so narrower screens stack exactly as before).
+    // Both children are replaceWith()-swapped in place, so the row keeps its columns.
+    if (!inPlan && section === 'understand') {
+      root.appendChild(el('div', { class: 'research-decision-row' }, heroCard, actionsAnchor));
+    } else if (section === 'understand') {
+      root.appendChild(heroCard);
+    }
     var researchP = API.get('/api/research/' + symbol);
     var researchPanels = {
       overview: el('section', { class: 'plan-understand-grid', id: 'plan-understand-content' }),
