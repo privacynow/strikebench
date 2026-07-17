@@ -33,6 +33,9 @@ public final class PlanRoutes {
             Handler runEnsemble,
             Handler runOutcome,
             Handler compareOutcomes,
+            Handler saveScenario,
+            Handler listScenarios,
+            Handler getScenario,
             Handler runBacktest,
             Handler getBacktest,
             Handler listRehearsals,
@@ -77,6 +80,9 @@ public final class PlanRoutes {
         config.routes.post("/api/plans/{id}/outcomes/ensemble", h.runEnsemble());
         config.routes.post("/api/plans/{id}/outcomes/run", h.runOutcome());
         config.routes.post("/api/plans/{id}/outcomes/compare", h.compareOutcomes());
+        config.routes.post("/api/plans/{id}/scenarios", h.saveScenario());
+        config.routes.get("/api/plans/{id}/scenarios", h.listScenarios());
+        config.routes.get("/api/plans/{id}/scenarios/{scenarioId}", h.getScenario());
         config.routes.post("/api/plans/{id}/outcomes/backtest", h.runBacktest());
         config.routes.get("/api/plans/{id}/outcomes/backtests/{backtestId}", h.getBacktest());
         config.routes.get("/api/plans/{id}/rehearsals", h.listRehearsals());

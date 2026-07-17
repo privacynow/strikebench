@@ -87,6 +87,47 @@ public final class ScoreComposer {
 
         comps.add(comp("Thesis confidence", 0.15, clamp01(c.confidence()), "engine confidence in the fit"));
 
+        // ---- OBJECTIVE LENS: the declared assignment preference reweights every
+        // assignment-bearing structure. ACCEPT declares indifference and adds no component;
+        // structures with no short legs have nothing to be assigned on and are never touched.
+        DeclaredObjective declared = ctx.declared();
+        String pref = declared == null ? null : declared.assignmentPreference();
+        if (pref != null && !"ACCEPT".equals(pref) && c.assignmentProb() != null) {
+            double p = clamp01(c.assignmentProb());
+            int pct = (int) Math.round(p * 100);
+            boolean acquires = acquiresShares(c);
+            double fit;
+            String note;
+            switch (pref) {
+                case "AVOID" -> {
+                    fit = 1.0 - p;
+                    note = "you declared: avoid assignment — this structure carries a " + pct
+                            + "% chance of being assigned";
+                }
+                case "SEEK" -> {
+                    fit = p;
+                    note = "you declared: seek assignment — a " + pct
+                            + "% chance of being assigned counts in this structure's favor";
+                }
+                case "PREFER_BELOW_BASIS" -> {
+                    fit = acquires ? p : 1.0 - p;
+                    note = acquires
+                            ? "you declared: welcome assignment that adds shares below your basis — "
+                                + pct + "% chance this one buys at its strike"
+                            : "you declared: welcome assignment only when it ADDS shares — this one would "
+                                + "sell yours (" + pct + "% chance), so higher odds score lower";
+                }
+                default -> { fit = 0.5; note = "unrecognized assignment preference — treated as neutral"; }
+            }
+            comps.add(comp("Assignment fit", 0.10, fit, note));
+        }
+        // Composite-objective lenses (registry-driven — see ObjectiveLenses): additional named
+        // components for declared composites like income-while-accumulating.
+        for (var lensComponent : ObjectiveLenses.apply(declared, c, ctx).components()) {
+            comps.add(comp(lensComponent.name(), lensComponent.weight(), lensComponent.value(),
+                    lensComponent.note()));
+        }
+
         double weighted = 0, weight = 0;
         for (var k : comps) { weighted += k.contribution(); weight += k.weight(); }
         double normalized = weight > 0 ? 100.0 * weighted / weight : 0.0;
@@ -102,6 +143,14 @@ public final class ScoreComposer {
         double riskAdjusted = gatePassed ? clamp(normalized * evidenceMult * tailMult * dteMult, 0, 100) : 0.0;
 
         return new ScoreBreakdown(gatePassed, gateFailures, round(normalized), round(riskAdjusted), comps);
+    }
+
+    /** Whether this structure's assignment would BUY shares (short puts) rather than sell held ones. */
+    private static boolean acquiresShares(Candidate c) {
+        if ("ACQUIRE".equalsIgnoreCase(c.intent())) return true;
+        if ("EXIT".equalsIgnoreCase(c.intent())) return false;
+        return c.legs() != null && c.legs().stream().anyMatch(l ->
+                "PUT".equalsIgnoreCase(l.type()) && "SELL".equalsIgnoreCase(l.action()));
     }
 
     private static ScoreBreakdown.Component comp(String name, double weight, double value, String note) {

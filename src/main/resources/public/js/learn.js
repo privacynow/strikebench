@@ -56,7 +56,47 @@
     trackedTaxBasis: { label: 'Tracked tax basis', infoKey: 'trackedtaxbasis',
       short: 'The lot basis used by the tracked accounting book, including applicable recorded adjustments.',
       beginner: 'This follows the lots and adjustments recorded in the tracked account. It is separate from campaign economics and must be reconciled with broker tax forms.',
-      expert: 'Authoritative tracked-lot basis for the common-case worksheet, including recorded wash adjustments where reviewed; never inferred from campaign allocation.' }
+      expert: 'Authoritative tracked-lot basis for the common-case worksheet, including recorded wash adjustments where reviewed; never inferred from campaign allocation.' },
+    campaignNetCredit: { label: 'Campaign net credit', infoKey: 'campaignnetcredit',
+      short: 'The signed sum of every option dollar this campaign has taken in or paid out, fees included.',
+      beginner: 'Premiums you collected count in, buybacks and option fees count out. It is exact recorded cash, not a projection.',
+      expert: 'Signed sum of campaign option cash: opening premiums, buybacks, and option-leg fees signed correctly. Stock cash, dividends, and interest are attributed separately.' },
+    realizedVsHeadline: { label: 'Realized vs headline yield', infoKey: 'realizedvsheadline',
+      short: 'One line, two honest rates on the SAME capital: the premium as quoted vs what the campaign actually kept.',
+      beginner: 'The headline is the rent the campaign collected. Realized subtracts buybacks and fees and adds dividends and tagged interest. Both divide by the same committed capital, so the gap is real, never a denominator trick.',
+      expert: 'Headline = gross premium collected ÷ peak committed capital; realized = campaign net P/L (buybacks, dividends, explicitly tagged interest) ÷ the identical peak committed capital over the identical window. Annualized only with the if-repeatable label; Expert adds the time-weighted-capital variant.' },
+    peakCommittedCapital: { label: 'Peak committed capital', infoKey: 'peakcommittedcapital',
+      short: 'The most outside money this campaign ever had at work at once — the honest yield denominator.',
+      beginner: 'Cash tied up in shares plus cash set aside to secure short puts, at its highest point. Yields quoted on anything smaller would flatter the result.',
+      expert: 'max over time of (short-put strike obligation − cumulative campaign cash). Both the headline and realized yields divide by this same figure.' },
+    accumulationLedger: { label: 'Accumulation ledger', infoKey: 'accumulationledger',
+      short: 'Every campaign event in order, with the running share count and running campaign-adjusted economic basis.',
+      beginner: 'Read it top to bottom to see how each premium, roll, assignment, and dividend moved what the position really costs you per share.',
+      expert: 'Chronological member events (recorded transactions plus pending package cash) with running shares, running net option cash, running campaign-adjusted economic basis, and running committed capital.' },
+    counterfactualBenchmark: { label: 'Counterfactual benchmark', infoKey: 'counterfactualbenchmark',
+      short: 'What the same money, moved on the same dates, would be worth in cash or in plain buy-and-hold.',
+      beginner: 'It answers "was the campaign worth the effort?" while the campaign is still running — not after the fact. Deltas are the campaign minus each alternative.',
+      expert: 'Cash lane compounds each external flow at a stated modeled 4% annual rate; buy-and-hold matches each flow into shares at that date’s eligible observed close with a stated dividend treatment. Unavailable is reported honestly, never fabricated.' },
+    churnCost: { label: 'Churn round-trip cost', infoKey: 'churncost',
+      short: 'What exiting and re-entering the same shares actually cost: the price gap times the shares, plus fees.',
+      beginner: 'Selling at one price and buying back higher is a real cost even though no line item says so. This adds those round trips up.',
+      expert: '(re-entry price − exit price) × paired shares + both legs’ fees, paired chronologically. The wash-sale consequence lands on the tracked tax basis, which is reported separately.' },
+    accountObjective: { label: 'Account objective', infoKey: 'accountobjective',
+      short: 'Your declaration of what this tracked account is FOR; every analysis on it is judged against the latest revision.',
+      beginner: 'Income, accumulating shares, hedging, a directional view, or preserving capital — once you declare it, StrikeBench checks every idea on this account against that purpose and says whether they match. Declaring again adds a new revision; what you said before stays on record.',
+      expert: 'An immutable revision series scoped to the tracked account. The latest revision feeds the analyze path as the DECLARED side of the coherence diagnostic and drives assignment-preference reweighting. Redeclaring writes revision N+1 prospectively; history is never rewritten and receipts keep the revision they quoted.' },
+    coherenceVerdict: { label: 'Coherence verdict', infoKey: 'coherenceverdict',
+      short: 'Whether an analyzed idea matches what this account is declared to be for: coherent, mixed, or incoherent.',
+      beginner: 'After you declare the account objective, every analysis answers a plain question: does this idea serve that purpose? Coherent means yes, mixed means partly, incoherent means it works against what you said the account is for. It is a judgment on the receipt, never a block.',
+      expert: 'assessment.coherence on the evaluation receipt: COHERENT / MIXED / INCOHERENT with direction and duration reasons, computed against the account’s latest objective revision and quoting its number. Advisory — it explains and reweights; it never gates an analysis.' },
+    assignmentFit: { label: 'Assignment fit', infoKey: 'assignmentfit',
+      short: 'How your declared assignment preference reweights an idea: assignment odds can count for or against a structure.',
+      beginner: 'Being made to buy or sell the shares (assignment) is welcome in some accounts and unwelcome in others. Declare which kind this account is, and ideas with high assignment odds are scored accordingly — Avoid counts them against, Seek counts them in favor.',
+      expert: 'Score component quoting the account’s declared objective revision. AVOID penalizes high assignment probability; ACCEPT applies no reweighting; PREFER_BELOW_BASIS favors assignment that adds shares below current basis; SEEK favors assignment likelihood (wheel-style operation).' },
+    targetExposure: { label: 'Target exposure', infoKey: 'targetexposure',
+      short: 'An optional declared dollar ceiling for how much of this account you intend to have at work.',
+      beginner: 'A statement of intent recorded with the objective, in dollars. It does not block or resize anything; it gives reviews a number to compare actual exposure against, and the revision history shows when you changed it.',
+      expert: 'Optional targetExposureCents (≥ 0) on the objective revision. Declarative context in this release: persisted with the revision series and quoted by surfaces; no gating or automatic sizing derives from it.' }
   });
 
   var MOVED_TERMS = Object.freeze([
@@ -116,6 +156,12 @@
     studyMultiplicity: { short: 'Whether the pass bar accounts for every question you could have asked.',
       beginner: 'If you check enough patterns, one will look good by luck. Protected mode raises the bar to cover every question in the catalog, so a pass means more. Exploratory takes each result at face value — fine for browsing, not for deciding.',
       expert: 'CATALOG_BONFERRONI divides alpha by the question-catalog size before the z screen (family-wise error control across the catalog); UNADJUSTED_EXPLORATORY screens at the raw alpha. The result banner reports the policy alongside the screen it applied.' },
+    waypointFill: { short: 'How your pinned levels were honored: exactly (the model’s own conditioned randomness) or by bending paths toward them (an approximation).',
+      beginner: 'When you pin “the price touches this level around this session,” StrikeBench must make the simulated futures pass through your pins. For smooth models it can do that exactly — the futures are still the model’s own randomness, just the ones that pass through your pins. For models with sudden jumps or fat tails there is no exact way, so each path is gently bent toward your pins instead. The label always tells you which one happened, because odds from bent paths are a guide, not a guarantee.',
+      expert: 'EXACT_CONDITIONAL: Gaussian models (GBM, Brownian bridge) are conditioned through the pins by bridge sampling — the pinned ensemble is a true draw from the conditional law. GUIDED_INTERPOLATION: Student-t, jump-diffusion, Heston, and block-bootstrap paths are deterministically warped through the pins; jump timing/fat-tail mass near pinned sessions is approximated, not resampled. The label derives from the spec server-side and is persisted with every fan and authored scenario — it can never drift from the paths it describes.' },
+    authoredScenario: { short: 'A path you drew on the fan — your pins plus the exact model settings, frozen with a receipt naming the fan it was authored on.',
+      beginner: 'Click the chart to pin where you believe the price goes; the futures re-run through your pins immediately. Saving names that belief and keeps it — loading it later re-applies the same pins so you can re-judge the same story as the market moves. If the Plan’s assumptions change, the saved scenario says so and offers to re-anchor instead of silently pretending nothing moved.',
+      expert: 'An authored scenario freezes the full sane spec (waypoints included), the waypoint-fill label, and a SHA-256 receipt chained to the base fan’s fingerprint — the same lineage family as every other stored simulation. Saving requires the base fan to belong to the current context revision; loading a stale-revision scenario surfaces the drift and re-anchors by re-running the pins on the current fan (out-of-horizon pins are dropped visibly, never silently).' },
     simulationLineage: { short: 'One simulation per Plan: every band quotes this same stored run, named by this fingerprint.',
       beginner: 'When you declared your view, StrikeBench generated one set of possible futures for it. Every later step — evidence, outcomes on your exact trade, review — re-uses that same stored set, so numbers agree everywhere. The # code names that one simulation.',
       expert: 'The plan-context ensemble is generated once, persisted, and fingerprint-pinned (SHA-256 over spec + path bytes). Evidence fans, structure repricing, comparisons, and rehearsals all consume the identical stored path matrix; the chip exposes EnsembleRef{id, fingerprint, basis}. A context revision that invalidates inputs mints a NEW ensemble and fingerprint — never a silent regeneration.' },
@@ -271,6 +317,12 @@
     short: 'A 0–100 ordering aid that combines economics, risk, evidence, costs, and Plan fit; it is not a return forecast.',
     beginner: 'Use this to understand why one package appears above another, then compare the actual worst case and trade-offs. A higher score never promises a profit.',
     expert: 'Monotonic economic-verdict bands ordered internally by the risk-adjusted ScoreComposer result. Mechanical failures score zero; rounded values are ranking aids, not calibrated probabilities.'
+  };
+
+  INFO.objectivedirection = {
+    short: 'The market view this account expresses — optional, and only meaningful for directional or hedging objectives.',
+    beginner: 'If this account exists to bet on a direction, or to protect against one, say which. Ideas are then checked against that view. Income and accumulation accounts can skip this entirely.',
+    expert: 'Optional revision field: BULLISH | BEARISH | NEUTRAL | NON_DIRECTIONAL. Maps to the coherence engine’s thesis side; NON_DIRECTIONAL declares that no direction should ever count for or against an idea, which differs from leaving it undeclared.'
   };
 
   Object.keys(VOCABULARY).forEach(function (key) {

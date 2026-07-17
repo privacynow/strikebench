@@ -18,6 +18,7 @@ public final class Plan {
             Long holdingsShares,
             Long costBasisCents,
             Long priceAssumptionCents,
+            String assignmentPreference,
             String inputHash,
             String engineVersion,
             String createdAt
@@ -55,7 +56,8 @@ public final class Plan {
             String riskMode,
             Long holdingsShares,
             Long costBasisCents,
-            Long priceAssumptionCents
+            Long priceAssumptionCents,
+            String assignmentPreference
     ) {}
 
     /** Mutable context creates a new immutable revision; omitted values retain the prior value. */
@@ -68,6 +70,7 @@ public final class Plan {
             Long holdingsShares,
             Long costBasisCents,
             Long priceAssumptionCents,
+            String assignmentPreference,
             java.util.Set<String> clear
     ) {}
 

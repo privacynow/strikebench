@@ -82,6 +82,7 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanManagementService planManagement;
     private io.liftandshift.strikebench.paper.PortfolioAccountingService portfolioBooks;
     private io.liftandshift.strikebench.paper.PortfolioExportService portfolioExports;
+    private io.liftandshift.strikebench.paper.CampaignService campaigns;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -216,6 +217,7 @@ public final class ApiServer {
         server.db = db;
         server.portfolioBooks = new io.liftandshift.strikebench.paper.PortfolioAccountingService(db, clock, marksSource);
         server.portfolioExports = new io.liftandshift.strikebench.paper.PortfolioExportService(server.portfolioBooks);
+        server.campaigns = new io.liftandshift.strikebench.paper.CampaignService(db, clock);
         server.simSessions.attachDb(db);
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
         var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
@@ -298,7 +300,10 @@ public final class ApiServer {
     public Javalin start(int port) {
         accounts.getOrCreateDefault();
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
-                portfolioExports, positions, trades, evaluations, this::ownerId, this::currentAccount);
+                portfolioExports, positions, trades, evaluations,
+                new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock),
+                this::ownerId, this::currentAccount);
+        CampaignController campaignController = new CampaignController(campaigns, this::ownerId);
         tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin,
@@ -441,6 +446,9 @@ public final class ApiServer {
 
             portfolioController.register(c);
 
+            // Campaigns: the Book's interpretation layer over recorded activity.
+            campaignController.register(c);
+
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.
 
@@ -461,6 +469,13 @@ public final class ApiServer {
             c.routes.exception(java.time.format.DateTimeParseException.class, (e, ctx) ->
                     ctx.status(400).json(new ApiResponses.ErrorBody(
                             "bad_request", "Invalid date: " + e.getParsedString())));
+            // Domain records validate in their constructors; when Jackson trips one during body
+            // binding, surface the record's own units-bearing reason, never a generic shrug.
+            c.routes.exception(com.fasterxml.jackson.databind.exc.ValueInstantiationException.class, (e, ctx) ->
+                    ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
+                            e.getCause() instanceof IllegalArgumentException reason && reason.getMessage() != null
+                                    ? reason.getMessage()
+                                    : "Malformed request body (expected JSON matching this endpoint's schema)")));
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->
                     ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
                             "Malformed request body (expected JSON matching this endpoint's schema)")));

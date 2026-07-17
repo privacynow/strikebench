@@ -51,6 +51,48 @@
     return economics ? economics.verdict : null;
   }
 
+  function candidateCoherence(c) {
+    return c && c.evaluation && c.evaluation.assessment
+      ? c.evaluation.assessment.coherence : null;
+  }
+
+  // Scan-level pill: only speak up when the structure disagrees with the declared view.
+  // A coherent fit is the expected state and must not add noise to every card.
+  function coherenceBadge(c) {
+    var coherence = candidateCoherence(c);
+    var v = coherence && coherence.verdict;
+    if (v !== 'INCOHERENT' && v !== 'MIXED') return null;
+    return el('span', {
+      class: 'badge ' + (v === 'INCOHERENT' ? 'badge-danger' : 'badge-caution'),
+      title: (coherence.reasons || []).join(' ')
+    }, v === 'INCOHERENT' ? 'AGAINST YOUR VIEW' : 'PARTLY OFF-VIEW');
+  }
+
+  function coherenceBlock(c) {
+    var coherence = candidateCoherence(c);
+    var v = coherence && coherence.verdict;
+    if (!v || v === 'UNDECLARED' || v === 'UNAVAILABLE') return null;
+    var beginner = Learn.currentLevel() === 'beginner';
+    var headline = v === 'COHERENT'
+      ? (beginner ? 'Yes — it expresses the view you declared.' : 'Coherent with your declared view.')
+      : v === 'MIXED'
+        ? (beginner ? 'Partly — some of it works for your view, some against it.' : 'Mixed fit with your declared view.')
+        : (beginner ? 'No — it works against the view you declared.' : 'Incoherent with your declared view.');
+    var details = [coherence.directionAssessment, coherence.durationAssessment]
+      .filter(function (line) { return line; });
+    return el('section', {
+      class: 'coherence-note coherence-' + v.toLowerCase(),
+      'data-coherence-verdict': v
+    },
+      el('h4', {}, beginner ? 'Does this match your view?' : 'View coherence'),
+      el('p', { class: 'coherence-headline' }, headline),
+      details.length ? el('ul', { class: 'coherence-reasons' }, details.map(function (line) {
+        return el('li', {}, line);
+      })) : null,
+      (coherence.reasons || []).length && !beginner
+        ? el('p', { class: 'muted small' }, coherence.reasons.join(' ')) : null);
+  }
+
   function planActionLabel(value) {
     return ({ ENTRY: 'Opened', MARK: 'Marked', ADJUST: 'Adjusted', ROLL: 'Rolled',
       PARTIAL_CLOSE: 'Partially closed', CLOSE: 'Closed', SETTLE: 'Settled', VOID: 'Voided',
@@ -121,6 +163,8 @@
     var block = el('div', { class: 'candidate-full-analysis' });
     var economics = economicAssessmentBlock(c, true);
     if (economics) block.appendChild(economics);
+    var coherenceNote = coherenceBlock(c);
+    if (coherenceNote) block.appendChild(coherenceNote);
     if (analysis.participation) block.appendChild(el('p', { class: 'participation-headline' },
       participationSentence(analysis.participation)));
     if (analysis.stance) block.appendChild(el('div', { class: 'chip-row stance-vector' },
@@ -485,6 +529,7 @@
         el('h3', {}, c.displayName),
         intentBadge(c.intent),
         heldSharesBadge(c),
+        coherenceBadge(c),
         badge(c.freshness)),
       g.story ? el('div', { class: 'muted', style: 'margin:2px 0 4px' }, g.story) : null,
       intentNoteBlock(c),
@@ -503,6 +548,8 @@
           : null));
     var econ = economicAssessmentBlock(c);
     if (econ) card.insertBefore(econ, card.querySelector('.fact-grid'));
+    var coherenceNote = coherenceBlock(c);
+    if (coherenceNote) card.insertBefore(coherenceNote, econ || card.querySelector('.fact-grid'));
     var gb = guideBlock(c.strategy);
     // Beginner's first disclosure must explain the structure itself. The economic verdict
     // remains prominent above the facts, while its deeper scoring rationale follows the
@@ -525,6 +572,7 @@
         el('h3', {}, c.displayName),
         intentBadge(c.intent),
         heldSharesBadge(c),
+        coherenceBadge(c),
         badge(c.freshness),
         candidateDecisionScore(c) !== null && candidateDecisionScore(c) !== undefined
           ? UI.scoreBar(candidateDecisionScore(c), 'Decision score — the shared economic, risk and evidence ranking') : null),
@@ -622,7 +670,7 @@
         c.label ? el('p', { class: 'muted mono' }, c.label) : null),
       el('div', { class: 'ranked-idea-badges' },
         c.selected ? el('span', { class: 'badge badge-ok' }, 'SELECTED') : null,
-        intentBadge(c.intent), heldSharesBadge(c),
+        intentBadge(c.intent), heldSharesBadge(c), coherenceBadge(c),
         analysis.evidence && analysis.evidence.rollup ? evaluationLevelBadge(analysis.evidence.rollup) : null,
         el('span', { class: 'badge ' + verdictClass }, economics.label || UI.economicVerdictLabel(verdict)))));
 
@@ -656,6 +704,8 @@
     var left = el('div', { class: 'ranked-idea-case' });
     var economic = economicAssessmentBlock(c, true);
     if (economic) left.appendChild(economic);
+    var coherenceNote = coherenceBlock(c);
+    if (coherenceNote) left.appendChild(coherenceNote);
     left.appendChild(el('section', { class: 'ranked-why-first' },
       el('h3', {}, c.selected ? 'Why this is your working structure' : 'Why this ranks first'),
       el('p', {}, candidateRankReason(c))));
@@ -1464,6 +1514,12 @@
   function planIncomeBoard(planRef, result, account, positions) {
     var symbol = planRef.plan.symbol;
     var holding = (positions || []).find(function (p) { return p.symbol === symbol; });
+    // The Plan may DECLARE holdings the practice account does not carry (tracked elsewhere).
+    // One screen must not answer "do I have shares?" two different ways: name the source.
+    var declaredShares = planRef.plan.context && planRef.plan.context.holdingsShares;
+    var sharesChip = holding ? holding.freeShares + ' ' + symbol
+      : declaredShares ? declaredShares + ' ' + symbol + ' \u00b7 declared on this Plan'
+      : 'none';
     var candidates = result && result.candidates || [];
     var best = candidates.filter(function (c) { return Number(c.entryNetPremiumCents) > 0; })
       .sort(function (a, b) { return Number(b.entryNetPremiumCents) - Number(a.entryNetPremiumCents); })[0];
@@ -1471,12 +1527,15 @@
       UI.cardHeader('Your income picture'),
       el('div', { class: 'chip-row' },
         chip('Free buying power', account ? fmtMoney(account.buyingPowerCents) : '\u2014'),
-        chip('Shares available', holding ? holding.freeShares + ' ' + symbol : 'none'),
+        chip('Shares available', sharesChip),
         best ? chip('Largest listed credit', fmtMoney(best.entryNetPremiumCents)) : null,
         best && best.annualizedYieldPct != null ? chip('Income pace', fmtNum(best.annualizedYieldPct, 1) + '%/yr') : null),
       el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
         ? 'Income uses cash or shares you already have to collect option premium. The payment is real; so is the obligation to buy or sell shares if assigned.'
-        : 'Yield uses opening premium after fees over the shares or full strike cash backing the obligation. Assignment odds are the trade-off, not automatically a failure.'));
+        : 'Yield uses opening premium after fees over the shares or full strike cash backing the obligation. Assignment odds are the trade-off, not automatically a failure.'),
+      !holding && declaredShares ? el('p', { class: 'muted small' },
+        'The ' + declaredShares + ' shares come from this Plan\'s declaration, not this practice account. '
+        + 'Structures marked "uses held shares" assume you hold them wherever you would place the trade.') : null);
   }
 
   function renderPlanCandidateField(host, planRef, ui, repaint) {
@@ -2437,7 +2496,19 @@
             } catch (e) { status.innerHTML = ''; status.appendChild(alertBox('danger', 'Could not compare the Plan proposals', [e.message])); }
           } }, compared ? 'Refresh proposal comparison' : (Learn.currentLevel() === 'beginner'
             ? 'Compare all proposed trades here' : 'Compare Plan proposals on this ensemble'))), status));
-      if (saved) host.appendChild(Scenario.pnlView(saved.result || saved, Learn.currentLevel()));
+      // The scenario canvas (R4.5): author a believed path onto the same stored fan the position
+      // lenses reprice; the studio re-runs it in place and keeps the Evidence pin in sync.
+      if (window.Scenario && Scenario.canvasStudio) host.appendChild(Scenario.canvasStudio({ planRef: planRef }));
+      if (saved) {
+        // A result computed on a pinned (authored) fan says so every time it is shown.
+        var savedFill = saved.waypointFill || (saved.ensembleRef && saved.ensembleRef.waypointFill) || 'NONE';
+        if (savedFill === 'GUIDED_INTERPOLATION') host.appendChild(alertBox('caution',
+          'Priced on an authored fan — guided interpolation',
+          ['The paths under this result were bent through authored waypoints; this model’s fat tails and jumps are approximated near the pins, not exact.']));
+        else if (savedFill === 'EXACT_CONDITIONAL') host.appendChild(el('p', { class: 'muted small' },
+          'Priced on an authored fan — exact conditional paths, the model’s own randomness pinned through the authored waypoints.'));
+        host.appendChild(Scenario.pnlView(saved.result || saved, Learn.currentLevel()));
+      }
       if (compared) host.appendChild(planProposalComparisonView(compared, planRef, ui));
     }
 
@@ -3234,8 +3305,12 @@
       return;
     }
     var draft = Rails.surface('plan:' + plan.id + ':declaration',
-      { thesis: c.thesis || null, horizonDays: c.horizonDays || null, intent: plan.intent || null,
-        targetCents: c.targetCents || null, riskMode: c.riskMode || 'conservative' });
+      // horizonDays defaults to the value the segmented control DISPLAYS as selected —
+      // a control that looks chosen while the draft holds null scolds the user for a
+      // choice they can see is already made.
+      { thesis: c.thesis || null, horizonDays: c.horizonDays || 21, intent: plan.intent || null,
+        targetCents: c.targetCents || null, riskMode: c.riskMode || 'conservative',
+        assignmentPreference: c.assignmentPreference || null });
     host.appendChild(el('p', { class: 'muted' },
       'Say what you believe before anything ranks or simulates. Every later band tests this — '
       + 'and tells you when your positions stop expressing it.'));
@@ -3303,6 +3378,28 @@
       value: draft.riskMode,
       onChange: function (v) { draft.riskMode = v; }
     });
+    // Assignment preference is part of the DECLARED view for goals where assignment is real:
+    // it feeds the DecisionPolicy's "Assignment fit" factor. Direction-only goals never ask.
+    var assignmentBearing = ['ACQUIRE', 'EXIT', 'INCOME'].indexOf(plan.intent) >= 0;
+    var assignment = assignmentBearing ? UI.chipSet({
+      id: 'plan-assignment-preference',
+      label: 'If assignment comes up',
+      options: [
+        { value: '', label: 'No preference' },
+        { value: 'AVOID', label: 'Avoid it' },
+        { value: 'ACCEPT', label: 'Fine either way' },
+        { value: 'PREFER_BELOW_BASIS', label: 'Welcome below my basis' },
+        { value: 'SEEK', label: 'Assignment is the point' }],
+      value: draft.assignmentPreference || '',
+      onChange: function (v) { draft.assignmentPreference = v || null; },
+      consequence: function (v) {
+        return v === 'AVOID' ? 'Structures with high odds of being assigned rank lower for you.'
+          : v === 'ACCEPT' ? 'Assignment odds never reweight the ranking.'
+          : v === 'PREFER_BELOW_BASIS' ? 'Being assigned shares below your basis counts in a structure\'s favor; having shares called away counts against it.'
+          : v === 'SEEK' ? 'Higher odds of being assigned count in a structure\'s favor (the wheel).'
+          : 'Optional. Declare it and every proposed structure gains an "Assignment fit" ranking factor.';
+      }
+    }) : null;
     var save = el('button', { type: 'button', class: 'btn', id: 'plan-declare-view', onclick: async function () {
       if (!draft.thesis && !directionOptional(plan)) {
         UI.toast('Declare a direction first — up, down, sideways, or big move.', 'error'); return;
@@ -3313,7 +3410,9 @@
         var updated = await PlanStore.updateContext(plan, {
           thesis: draft.thesis, horizonDays: draft.horizonDays,
           targetCents: draft.targetCents, riskMode: draft.riskMode,
+          assignmentPreference: draft.assignmentPreference,
           clear: (draft.targetCents ? [] : ['targetCents']).concat(draft.thesis ? [] : ['thesis'])
+            .concat(draft.assignmentPreference ? [] : ['assignmentPreference'])
         });
         App.context.update({ symbol: updated.symbol, goal: updated.intent,
           thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
@@ -3327,7 +3426,7 @@
     } }, viewDeclared(plan) ? 'Update the view' : 'Declare the view');
     host.appendChild(el('div', { class: 'declaration-grid' },
       thesisControl, horizonControl, customHorizon,
-      UI.field('Price you care about (optional)', target), risk));
+      UI.field('Price you care about (optional)', target), risk, assignment));
 
     // Goal and structure remain changeable until a decision freezes them — the affordances
     // the old context editor carried live here now, with the same confirmation semantics.

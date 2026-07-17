@@ -37,6 +37,14 @@ public final class PathEnsembleService {
         public Ensemble {
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
         }
+
+        /**
+         * Standing decision 9's label, derived from the spec so it can never drift out of sync
+         * with the fan: NONE without authored waypoints; EXACT_CONDITIONAL only for Gaussian
+         * models; GUIDED_INTERPOLATION for everything else. Every downstream surface that shows
+         * a pinned fan must carry this.
+         */
+        public PathGenerator.WaypointFill waypointFill() { return PathGenerator.waypointFill(spec); }
     }
 
     private final MarketDataService market;

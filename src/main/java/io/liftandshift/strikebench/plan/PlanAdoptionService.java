@@ -62,7 +62,7 @@ public final class PlanAdoptionService {
 
         Plan.View plan = plans.create(userId, marketKind, worldId, null, new Plan.CreateRequest(
                 request.clientRequestId(), request.symbol(), null, null,
-                trim(request.label()), null, null, null, null, null, null, null));
+                trim(request.label()), null, null, null, null, null, null, null, null));
         try {
             List<PositionArtifactStore.Allocation> storeAllocations = new ArrayList<>(lots.size());
             for (int i = 0; i < lots.size(); i++) {

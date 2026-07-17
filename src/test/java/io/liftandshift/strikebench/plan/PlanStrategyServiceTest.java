@@ -33,7 +33,7 @@ class PlanStrategyServiceTest {
     @Test void exactCandidateRoundTripsThroughNormalizedRows() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-service-1", "AAPL", "INCOME", null, null,
-                        "neutral", 30, null, "conservative", null, null, null));
+                        "neutral", 30, null, "conservative", null, null, null, null));
         ObjectNode result = (ObjectNode) Json.parse("""
                 {"symbol":"AAPL","thesis":"neutral","horizon":"month","riskMode":"conservative",
                  "intent":"INCOME","riskBudgetCents":100000,"ranking":"decision",
@@ -119,7 +119,7 @@ class PlanStrategyServiceTest {
     @Test void customBuilderPackagePersistsAndRestoresAsTheSelectedStructure() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-custom-1", "AAPL", "DIRECTIONAL", null, null,
-                        "bullish", 45, null, "balanced", null, null, null));
+                        "bullish", 45, null, "balanced", null, null, null, null));
         ObjectNode candidate = (ObjectNode) Json.parse("""
                 {"strategy":"CUSTOM","displayName":"Custom position","structureGroup":"custom",
                  "label":"BUY 250C / SELL 265C","qty":2,"entryNetPremiumCents":-85000,
@@ -179,7 +179,7 @@ class PlanStrategyServiceTest {
     @Test void obsoleteOrPartialEvaluationPayloadsAreRejectedInsteadOfAdapted() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-current-receipt", "AAPL", "DIRECTIONAL", null, null,
-                        "bullish", 30, null, "balanced", null, null, null));
+                        "bullish", 30, null, "balanced", null, null, null, null));
         ObjectNode oldFullEvaluation = (ObjectNode) Json.parse("""
                 {"strategy":"CUSTOM","evaluation":{"id":"eval_old","available":true,"decisionScore":50,"viable":true}}
                 """);
@@ -200,7 +200,7 @@ class PlanStrategyServiceTest {
     @Test void scoutResultRestoresAndCopiesAnExactPackageIntoALinkedSiblingPlan() {
         Plan.View origin = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-scout-origin", "AAPL", "DIRECTIONAL", null, null,
-                        "bullish", 30, null, "conservative", null, null, null));
+                        "bullish", 30, null, "conservative", null, null, null, null));
         ObjectNode result = (ObjectNode) Json.parse("""
                 {"symbol":"AAPL","scope":"PEERS","thesis":"bullish","horizon":"month",
                  "riskMode":"conservative","intent":"DIRECTIONAL","riskBudgetCents":100000,
@@ -241,7 +241,7 @@ class PlanStrategyServiceTest {
 
         Plan.View child = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-scout-child", "SPY", "DIRECTIONAL", origin.id(), null,
-                        "bullish", 30, null, "conservative", null, null, null));
+                        "bullish", 30, null, "conservative", null, null, null, null));
         plans.linkRelated(null, origin.id(), child.id(), "PEER");
         strategies.copyScoutSelection(null, origin.id(), candidateId, child);
 

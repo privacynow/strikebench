@@ -23,7 +23,8 @@ public record EvalContext(
         long feePerOrderCents,    // flat fee, charged once on entry and once on close
         double riskFreeRate,      // annualized r used by the shared risk-neutral approximation
         DataEvidence rateEvidence,
-        PortfolioExposureContext portfolioExposure
+        PortfolioExposureContext portfolioExposure,
+        DeclaredObjective declared    // what the user SAID this is for; null = undeclared
 ) {
     public EvalContext {
         if (asOfDate == null) throw new IllegalArgumentException("evaluation date is required");
@@ -31,4 +32,14 @@ public record EvalContext(
         rateEvidence = rateEvidence == null ? DataEvidence.missing("rate input") : rateEvidence;
     }
 
+    /** Undeclared-context constructor: existing callers keep their shape. */
+    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
+                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
+                       long buyingPowerCents, boolean marketOpen, long feePerContractCents,
+                       long feePerOrderCents, double riskFreeRate, DataEvidence rateEvidence,
+                       PortfolioExposureContext portfolioExposure) {
+        this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
+                buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
+                rateEvidence, portfolioExposure, null);
+    }
 }

@@ -4,6 +4,7 @@ import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.paper.Account;
+import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.PortfolioCsvImport;
@@ -28,17 +29,20 @@ final class PortfolioController {
     private final PositionsService positions;
     private final TradeService trades;
     private final io.liftandshift.strikebench.eval.EvaluationService evaluations;
+    private final AccountObjectiveService objectives;
     private final Function<Context, String> ownerId;
     private final Function<Context, Account> currentAccount;
 
     PortfolioController(Db db, Clock clock, PortfolioAccountingService books,
                         PortfolioExportService exports, PositionsService positions,
                         TradeService trades, io.liftandshift.strikebench.eval.EvaluationService evaluations,
+                        AccountObjectiveService objectives,
                         Function<Context, String> ownerId,
                         Function<Context, Account> currentAccount) {
         this.db = db;
         this.clock = clock;
         this.books = books;
+        this.objectives = objectives;
         this.exports = exports;
         this.positions = positions;
         this.trades = trades;
@@ -62,6 +66,8 @@ final class PortfolioController {
                 ctx -> ctx.json(books.setArchived(ownerId.apply(ctx), ctx.pathParam("id"), true)),
                 ctx -> ctx.json(books.setArchived(ownerId.apply(ctx), ctx.pathParam("id"), false)),
                 ctx -> ctx.json(books.summary(ownerId.apply(ctx), ctx.pathParam("id"))),
+                this::getObjective,
+                this::declareObjective,
                 this::analyzePackage,
                 this::transactions,
                 this::createTransaction,
@@ -87,6 +93,24 @@ final class PortfolioController {
                 ApiRequest.bodyOrNull(ctx, AccountRiskContext.class));
         AccountRiskContext.save(db, ownerId.apply(ctx), risk);
         ctx.json(risk);
+    }
+
+    /** What this account is FOR — the declared side of the coherence diagnostic (§3.7). */
+    public record ObjectiveDeclaration(String objective, String direction, Long targetExposureCents,
+                                       String assignmentPreference) {}
+
+    private void getObjective(Context ctx) {
+        String owner = ownerId.apply(ctx);
+        String accountId = ctx.pathParam("id");
+        ctx.json(new ApiResponses.AccountObjective(
+                objectives.latest(owner, accountId), objectives.history(owner, accountId)));
+    }
+
+    private void declareObjective(Context ctx) {
+        var input = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, ObjectiveDeclaration.class));
+        ctx.status(201).json(objectives.declare(ownerId.apply(ctx), ctx.pathParam("id"),
+                input.objective(), input.direction(), input.targetExposureCents(),
+                input.assignmentPreference()));
     }
 
     private void createAccount(Context ctx) {
@@ -132,7 +156,8 @@ final class PortfolioController {
                 current.complete(), current.basis());
         var evaluation = evaluations.assessExact(request.symbol(), candidate, summary.bookCashCents(),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null,
-                preview.ok(), preview.blockReasons(), Math.multiplyExact(preview.feesOpenCents(), 2L), exposure);
+                preview.ok(), preview.blockReasons(), Math.multiplyExact(preview.feesOpenCents(), 2L), exposure,
+                declaredAccountObjective(ownerId.apply(ctx), id));
         String analysisLane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
         ctx.json(new ApiResponses.TrackedPackageAnalysis(preview,
                 ApiResponses.EvaluationReceipt.of(evaluation),
@@ -142,6 +167,19 @@ final class PortfolioController {
                 "Read-only analysis uses " + analysisLane.toLowerCase(java.util.Locale.ROOT)
                         + " evidence and this tracked account's cash. It never changes tracked lots, tax basis,"
                         + " or the Practice account."));
+    }
+
+    /**
+     * The account's declared objective as the exact assessment's DECLARED side. Direction maps to
+     * a thesis the coherence engine understands; NON_DIRECTIONAL declares no direction at all.
+     */
+    private io.liftandshift.strikebench.eval.DeclaredObjective declaredAccountObjective(String owner, String accountId) {
+        AccountObjectiveService.Revision revision = objectives.latest(owner, accountId);
+        if (revision == null) return null;
+        String thesis = revision.direction() == null || "NON_DIRECTIONAL".equals(revision.direction())
+                ? null : revision.direction();
+        return new io.liftandshift.strikebench.eval.DeclaredObjective(revision.objective(), thesis, null,
+                revision.assignmentPreference(), "this account's declared objective (revision " + revision.revisionNo() + ")");
     }
 
     private static String analysisLane(io.liftandshift.strikebench.eval.EvidenceLevel pricing) {

@@ -17,6 +17,47 @@ public final class PathGenerator {
     private static final long EVENT_STREAM = 0x5041544845564E54L;
     private static final long OHLC_STREAM = 0x4F484C4342524944L;
 
+    /**
+     * The model-honesty contract for authored waypoints (standing decision 9): Gaussian models
+     * (GBM, BROWNIAN_BRIDGE) honor pins with piecewise Brownian-bridge EXACT conditional sampling;
+     * every other model gets the author's pins as GUIDED interpolation — the model's own
+     * unconditional path plus a smooth multiplicative correction, which is NOT the conditional
+     * law of that model. Every surface that renders a pinned fan must carry this label.
+     */
+    public enum WaypointFill { NONE, EXACT_CONDITIONAL, GUIDED_INTERPOLATION }
+
+    /** A generated fan plus the honesty label for how its waypoints (if any) were filled. */
+    public record Generated(double[][] paths, WaypointFill waypointFill) {
+        public Generated {
+            if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths generated");
+            if (waypointFill == null) throw new IllegalArgumentException("waypointFill label is required");
+        }
+    }
+
+    /** How this spec's waypoints will be (or were) filled — derivable, so labels can never drift. */
+    public static WaypointFill waypointFill(ScenarioSpec spec) {
+        ScenarioSpec s = spec == null ? null : spec.sane();
+        if (s == null) return WaypointFill.NONE;
+        return waypointFill(s.model(), !s.waypoints().isEmpty());
+    }
+
+    /**
+     * The SAME single mapping for callers that only know the stored model name and whether pins
+     * exist (e.g. restored outcome rows) — never re-implement this classification elsewhere.
+     */
+    public static WaypointFill waypointFill(ScenarioSpec.PathModel model, boolean pinned) {
+        if (!pinned || model == null) return WaypointFill.NONE;
+        return switch (model) {
+            case GBM, BROWNIAN_BRIDGE -> WaypointFill.EXACT_CONDITIONAL;
+            case STUDENT_T, JUMP_DIFFUSION, HESTON, BLOCK_BOOTSTRAP -> WaypointFill.GUIDED_INTERPOLATION;
+        };
+    }
+
+    /** {@link #generate} plus the waypoint-fill label the canvas and its receipts must carry. */
+    public Generated generateLabeled(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
+        return new Generated(generate(spec, s0, historicalLogReturns), waypointFill(spec));
+    }
+
     /** Paths as prices: result[pathIndex][0..totalSteps], result[*][0] == s0. */
     public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
         ScenarioSpec s = spec.sane();
@@ -40,6 +81,7 @@ public final class PathGenerator {
                 ? Math.max(1, Math.round(steps * 0.2f)) : -1;
         double eventSize = Math.max(0.05, sigmaT);
 
+        double[] logPath = new double[steps + 1];
         for (int p = 0; p < s.paths(); p++) {
             RandomStreams.Cursor rng = RandomStreams.cursor(s.seed(),
                     NOISE_STREAM + s.model().ordinal(), p);
@@ -50,12 +92,67 @@ public final class PathGenerator {
             double eventShock = eventStep > 0 ? (eventRng.uniform() < 0.5 ? -eventSize : eventSize) : 0;
             for (int i = 0; i <= steps; i++) {
                 double shock = eventStep > 0 && i >= eventStep ? eventShock : 0;
-                out[p][i] = s0 * Math.exp(guide[i] + noise[i] + shock);
+                logPath[i] = guide[i] + noise[i] + shock;
+            }
+            applyWaypoints(logPath, s, steps);
+            for (int i = 0; i <= steps; i++) {
+                out[p][i] = s0 * Math.exp(logPath[i]);
                 if (out[p][i] <= 0 || !Double.isFinite(out[p][i])) out[p][i] = s0 * 1e-4;
             }
             out[p][0] = s0;
         }
         return out;
+    }
+
+    // ---- Authored waypoints (the scenario canvas's pins) ----
+
+    /**
+     * Pins the log path to its waypoints with a piecewise linear-in-time correction — a
+     * multiplicative correction in price space.
+     *
+     * <p>Why this is EXACT conditional sampling for Gaussian models: the unconditional log path is
+     * X_t = m(t) + σW_t with deterministic m (guide + compensators). Conditioning a Gaussian
+     * process on pin values is a pure mean shift, and the conditioned path can be built from the
+     * unconditional one as X_t + Σ segment-bridges: within pins (a,b) with targets (x_a, x_b),
+     * X^c_t = X_t + ((b−t)(x_a−X_a) + (t−a)(x_b−X_b))/(b−a) — the classical bridge construction
+     * extended to multiple interior pins (segments are conditionally independent by the Markov
+     * property). Beyond the last pin the offset is carried flat: the tail diffuses freely from the
+     * pinned value, which IS the conditional law. For the BROWNIAN_BRIDGE model the endpoint is
+     * already pinned to its guide; that pin is preserved (a waypoint on the final day overrides it).
+     *
+     * <p>For non-Gaussian models the identical arithmetic is applied to a non-Gaussian path, which
+     * is honest guidance, not conditioning — callers label it {@link WaypointFill#GUIDED_INTERPOLATION}.
+     */
+    private static void applyWaypoints(double[] logPath, ScenarioSpec s, int steps) {
+        java.util.List<ScenarioSpec.Waypoint> pins = s.waypoints();
+        if (pins.isEmpty()) return;
+        int spd = Math.max(1, s.stepsPerDay());
+        int n = pins.size();
+        int[] pinStep = new int[n + 1];
+        double[] target = new double[n + 1];
+        for (int j = 0; j < n; j++) {
+            pinStep[j] = Math.min(steps, pins.get(j).dayIndex() * spd);
+            target[j] = Math.log(pins.get(j).priceRatio());
+        }
+        // The bridge model arrives endpoint-pinned to its guide; keep that terminal pin unless
+        // the author placed a waypoint on the final day (the author's pin wins).
+        if (s.model() == ScenarioSpec.PathModel.BROWNIAN_BRIDGE && pinStep[n - 1] < steps) {
+            pinStep[n] = steps;
+            target[n] = logPath[steps];
+            n++;
+        }
+        int prevStep = 0;
+        double prevAlpha = 0;
+        for (int j = 0; j < n; j++) {
+            double alpha = target[j] - logPath[pinStep[j]];
+            int span = pinStep[j] - prevStep;
+            for (int i = prevStep + 1; i <= pinStep[j]; i++) {
+                logPath[i] += prevAlpha + (alpha - prevAlpha) * (i - prevStep) / span;
+            }
+            prevStep = pinStep[j];
+            prevAlpha = alpha;
+        }
+        for (int i = prevStep + 1; i <= steps; i++) logPath[i] += prevAlpha; // free tail, translated
     }
 
     /** Removes one step's noise increment (continuity preserved) — the shock replaces it. */

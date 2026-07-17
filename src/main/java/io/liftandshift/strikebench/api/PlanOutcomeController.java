@@ -33,13 +33,15 @@ final class PlanOutcomeController {
     private final PathEnsembleService pathEnsembles;
     private final SimulationEngine simEngine;
     private final OutcomeController outcomeController;
+    private final io.liftandshift.strikebench.plan.AuthoredScenarioService authoredScenarios;
 
     PlanOutcomeController(PlanController root, AppConfig cfg,
                           MarketDataService market, Backtester backtester,
                           PlanService planSvc, PlanEvidenceService planEvidence,
                           PlanStrategyService planStrategy, PlanOutcomeService planOutcomes,
                           PathEnsembleService pathEnsembles, SimulationEngine simEngine,
-                          OutcomeController outcomeController) {
+                          OutcomeController outcomeController,
+                          io.liftandshift.strikebench.plan.AuthoredScenarioService authoredScenarios) {
         this.root = root;
         this.cfg = cfg;
         this.market = market;
@@ -51,6 +53,7 @@ final class PlanOutcomeController {
         this.pathEnsembles = pathEnsembles;
         this.simEngine = simEngine;
         this.outcomeController = outcomeController;
+        this.authoredScenarios = authoredScenarios;
     }
 
     public record PlanEnsembleRequest(Long expectedVersion,
@@ -100,8 +103,10 @@ final class PlanOutcomeController {
         preview.put("planEnsembleId", stored.id());
         preview.put("planEnsembleFingerprint", stored.fingerprint());
         if (preview.path("receipt") instanceof ObjectNode receipt) receipt.put("fingerprint", stored.fingerprint());
+        decorateScenarioCanvas(preview, run.ensemble());
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
-                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis()), preview));
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
+                        run.ensemble().waypointFill().name()), preview));
     }
 
     /** Repaint the stored fan for the Plan's current view — same wire shape as a fresh run. */
@@ -121,8 +126,10 @@ final class PlanOutcomeController {
                 stored, planOutcomes.levelOdds(stored.id()), marketVol, rate));
         preview.put("planEnsembleId", stored.id());
         preview.put("planEnsembleFingerprint", stored.fingerprint());
+        decorateScenarioCanvas(preview, stored.ensemble());
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
-                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis()), preview));
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
+                        stored.ensemble().waypointFill().name()), preview));
     }
 
     void planOutcomeRun(Context ctx) {
@@ -164,7 +171,8 @@ final class PlanOutcomeController {
         var saved = planOutcomes.savePathOutcome(root.ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), stored, result, input, interpretation);
         ctx.json(new ApiResponses.PlanOutcomeWithEnsemble<>(plan, saved,
-                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis())));
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
+                        stored.ensemble().waypointFill().name())));
     }
 
     /** Compare the Plan's current proposals on one exact stored path artifact. */
@@ -291,12 +299,94 @@ final class PlanOutcomeController {
         var saved = planOutcomes.saveComparison(root.ownerId(ctx), plan, body.expectedVersion(), stored, ranked,
                 Json.MAPPER.valueToTree(body), interpretation, fairness);
         ctx.json(new ApiResponses.PlanComparison<>(plan, saved,
-                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis())));
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
+                        stored.ensemble().waypointFill().name())));
     }
 
     private record PlanComparisonMeta(ObjectNode candidate,
                                       io.liftandshift.strikebench.outcomes.OutcomeContract.Position position,
                                       int qty, long roundTripFees) {}
+
+    // ---- Authored scenarios (the scenario canvas's save/list/load surface) ----
+
+    public record PlanScenarioSaveRequest(Long expectedVersion, String baseEnsembleId, String title,
+                                          io.liftandshift.strikebench.sim.ScenarioSpec over) {}
+
+    /** Freeze the authored path (waypoints + spec) over the stored fan it was drawn on. */
+    void planScenarioSave(Context ctx) {
+        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanScenarioSaveRequest.class));
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        root.requireActivePlanMarket(ctx, plan);
+        PlanController.requirePlanVersion(plan, body.expectedVersion());
+        if (body.over() == null || body.over().waypoints().isEmpty()) {
+            throw new IllegalArgumentException("An authored scenario needs at least one waypoint — "
+                    + "click the fan to pin “the price touches this level around this session” first.");
+        }
+        var spec = planScenarioSpec(plan, body.over());
+        String baseId = body.baseEnsembleId();
+        if (baseId == null || baseId.isBlank()) {
+            var latest = planOutcomes.latestEnsemble(root.ownerId(ctx), plan,
+                    io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC.name(),
+                    root.analysisCtx(ctx));
+            if (latest == null) {
+                throw new IllegalStateException("Run the possible-futures fan first — an authored "
+                        + "scenario freezes ON that stored fan, never on thin air.");
+            }
+            baseId = latest.id();
+        }
+        var saved = authoredScenarios.save(root.ownerId(ctx), plan, baseId, spec, body.title());
+        ctx.status(201).json(new ApiResponses.PlanScenario<>(plan, scenarioView(ctx, plan, saved)));
+    }
+
+    /** Every authored scenario this Plan owns; stale-context rows carry an explicit explanation. */
+    void planScenariosList(Context ctx) {
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        List<ObjectNode> views = new ArrayList<>();
+        for (var authored : authoredScenarios.listAll(root.ownerId(ctx), plan.id())) {
+            views.add(scenarioView(ctx, plan, authored));
+        }
+        ctx.json(new ApiResponses.PlanScenarios<>(plan, views));
+    }
+
+    /** One authored scenario with waypoints, fill label, and lineage to its base fan. */
+    void planScenarioGet(Context ctx) {
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        var found = authoredScenarios.load(root.ownerId(ctx), plan.id(), ctx.pathParam("scenarioId"));
+        ctx.json(new ApiResponses.PlanScenario<>(plan, scenarioView(ctx, plan, found)));
+    }
+
+    private ObjectNode scenarioView(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan,
+                                    io.liftandshift.strikebench.plan.AuthoredScenarioService.Authored authored) {
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        out.put("id", authored.id());
+        if (authored.title() != null) out.put("title", authored.title());
+        out.put("createdAt", authored.createdAt());
+        out.put("contextRev", authored.contextRev());
+        boolean current = authored.contextRev() == plan.context().rev();
+        out.put("currentContext", current);
+        if (!current) {
+            out.put("staleness", "The Plan assumptions changed after this scenario was authored"
+                    + " (horizon, view, or price context moved on). Loading re-applies its waypoints"
+                    + " to the current fan; run the scenario again to re-anchor it.");
+        }
+        out.put("waypointFill", authored.waypointFill());
+        out.put("fingerprint", authored.fingerprint());
+        out.put("baseEnsembleId", authored.baseEnsembleId());
+        String baseFingerprint = planOutcomes.ensembleFingerprint(root.ownerId(ctx), plan.id(),
+                authored.baseEnsembleId());
+        if (baseFingerprint != null) out.put("baseEnsembleFingerprint", baseFingerprint);
+        out.put("waypointCount", authored.spec().waypoints().size());
+        var pins = out.putArray("waypoints");
+        for (var w : authored.spec().waypoints()) {
+            ObjectNode pin = pins.addObject();
+            pin.put("dayIndex", w.dayIndex());
+            pin.put("priceRatio", w.priceRatio());
+            if (w.tolerance() != null) pin.put("tolerance", w.tolerance());
+        }
+        out.set("spec", Json.MAPPER.valueToTree(authored.spec()));
+        out.put("horizonDays", authored.spec().horizonDays());
+        return out;
+    }
 
     void planBacktestRun(Context ctx) {
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanBacktestRequest.class));
@@ -402,9 +492,43 @@ final class PlanOutcomeController {
                 ? io.liftandshift.strikebench.sim.ScenarioSpec.preset(
                     io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP, days, 0, 4242L, 500)
                 : raw;
+        // The canonical constructor carries authored waypoints through to generation and
+        // validates each pin against the Plan-owned horizon with a units-bearing message.
         return new io.liftandshift.strikebench.sim.ScenarioSpec(base.model(), base.shape(), days,
                 base.stepsPerDay(), base.driftAnnual(), base.volAnnual(), base.jumpsPerYear(),
-                base.jumpMean(), base.jumpVol(), base.tailNu(), base.heston(), base.seed(), base.paths()).sane();
+                base.jumpMean(), base.jumpVol(), base.tailNu(), base.heston(), base.seed(), base.paths(),
+                base.waypoints()).sane();
+    }
+
+    /**
+     * Scenario-canvas facts on every fan payload: the waypoint-fill honesty label (derived from
+     * the spec so it can never disagree with the paths) and the REAL NYSE session dates each
+     * trading-day step lands on — the studio shows "session 12 — Tue Aug 4", never a bare index.
+     */
+    private static void decorateScenarioCanvas(ObjectNode preview,
+            io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble ensemble) {
+        preview.put("waypointFill", ensemble.waypointFill().name());
+        var pins = preview.putArray("waypoints");
+        for (var w : ensemble.spec().waypoints()) {
+            ObjectNode pin = pins.addObject();
+            pin.put("dayIndex", w.dayIndex());
+            pin.put("priceRatio", w.priceRatio());
+            if (w.tolerance() != null) pin.put("tolerance", w.tolerance());
+        }
+        String asOf = preview.path("receipt").path("asOf").asText(null);
+        if (asOf == null) return;
+        try {
+            java.time.LocalDate anchor = java.time.LocalDate.ofInstant(java.time.Instant.parse(asOf),
+                    io.liftandshift.strikebench.market.MarketHours.EASTERN);
+            var sessions = preview.putArray("sessionDates");
+            for (java.time.LocalDate d : io.liftandshift.strikebench.sim.ScenarioSpec.sessionDates(
+                    anchor, ensemble.spec().horizonDays())) {
+                sessions.add(d.toString());
+            }
+            preview.put("anchorSessionDate", anchor.toString());
+        } catch (RuntimeException e) {
+            // An unparseable anchor timestamp only suppresses the date table; the fan stays usable.
+        }
     }
 
     private static io.liftandshift.strikebench.sim.IvSpec defaultPlanIv(

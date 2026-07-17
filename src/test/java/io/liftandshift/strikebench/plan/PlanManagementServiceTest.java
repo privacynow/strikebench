@@ -30,7 +30,7 @@ class PlanManagementServiceTest {
     @Test void archivedCashDecisionCannotRecordAnotherReview() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("cash-review-archive", "QQQ", "INCOME", null, null,
-                        "neutral", 30, null, "conservative", 0L, null, null));
+                        "neutral", 30, null, "conservative", 0L, null, null, null));
         db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,quote_as_of,economic_verdict," +
                         "evidence_provenance,model_version,review_horizon_days,decision_seq) " +
                         "VALUES('pdec_archived',?,1,'CASH',now(),'MIXED','DEMO','test',30,1)", plan.id());

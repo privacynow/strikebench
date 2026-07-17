@@ -2185,6 +2185,16 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
   border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
 .economic-baseline > div { display: flex; align-items: center; gap: 8px; }
 .economic-baseline p { margin: 0; color: var(--text-dim); }
+.coherence-note { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border);
+  border-left-width: 4px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.coherence-note h4 { margin: 0 0 4px; }
+.coherence-note .coherence-headline { margin: 0; font-weight: 600; }
+.coherence-note .coherence-reasons { margin: 6px 0 0; padding-left: 18px; }
+.coherence-note .coherence-reasons li { margin: 2px 0; }
+.coherence-coherent { border-left-color: var(--gain); }
+.coherence-mixed { border-left-color: var(--risk-caution-text, #d89a3a); }
+.coherence-incoherent { border-left-color: var(--loss);
+  background: color-mix(in srgb, var(--loss) 7%, var(--surface-2)); }
 .economic-table-favorable { border-color: color-mix(in srgb, var(--gain) 45%, var(--border)); color: var(--gain); }
 .economic-table-mixed { border-color: var(--risk-caution-text, #d89a3a); }
 .economic-table-unfavorable { border-color: color-mix(in srgb, var(--loss) 45%, var(--border)); color: var(--loss); }
@@ -2493,6 +2503,13 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .ranked-idea-compact .ranked-idea-summary, .ranked-idea-row .ranked-idea-summary { margin: 0; color: var(--text-dim); }
 .ranked-idea-compact .ranked-idea-facts, .ranked-idea-row .ranked-idea-facts {
   grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* Mid-widths (tablet, split-screen): two ~360px columns cram every sentence into three-word
+   lines and the case/visual columns collide. The hero reads top-to-bottom until real width. */
+@media (max-width: 980px) {
+  .ranked-idea-grid { grid-template-columns: minmax(0, 1fr); }
+  .ranked-idea-compact .ranked-idea-facts,
+  .ranked-idea-row .ranked-idea-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .ranked-runner-action { display: flex; justify-content: flex-end; }
 .ranked-show-all { justify-self: center; }
 .scout-signal-context { display: grid; gap: 7px; }
@@ -2797,6 +2814,18 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .book-position-row h3, .book-position-row p { margin: 0; }
 .book-position-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .book-position-facts .chip { min-width: 0; white-space: normal; }
+.book-campaigns .campaign-row { padding: 15px 0; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+.book-campaigns .campaign-row h3 { margin: 0; display: inline; }
+.campaign-row-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.campaign-headline .chip, .campaign-expert-facts .chip { min-width: 0; white-space: normal; }
+.campaign-receipt { margin: 0; }
+.campaign-member-row, .campaign-proposal-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 8px 0; border-top: 1px solid var(--border);
+}
+.campaign-member-row p, .campaign-proposal-row p { margin: 2px 0 0; }
+.campaign-ledger-row { padding: 8px 0; border-top: 1px solid var(--border); display: grid; gap: 6px; }
+.campaign-create-form { display: grid; gap: 10px; }
 .allocation-row {
   display: grid; grid-template-columns: minmax(150px, 230px) minmax(160px, 1fr) 58px;
   align-items: center; gap: 12px; margin-top: 12px;
@@ -3321,6 +3350,23 @@ body:has(#app[data-route="plan"]) .plan-bar-inner { max-width: 2200px; }
 }
 @media (max-width: 1499px) { .book-overview-cols { grid-template-columns: minmax(0, 1fr); } }
 
+/* Account objective (R4.4): the "what is this account for?" declaration card at the top of
+   the tracked-account rail. Same width as the rail; controls are the house choice language. */
+.book-objective .book-objective-invite { margin: 4px 0 10px; line-height: 1.5; }
+.book-objective .book-objective-headline { margin: 2px 0 4px; font-size: 1.04em; line-height: 1.45; }
+.book-objective .book-objective-provenance { margin: 0; }
+.book-objective .book-objective-judged { margin: 6px 0 2px; }
+.book-objective .btn-row { margin-top: 8px; }
+.book-objective-form { display: grid; gap: 12px; margin-top: 10px; }
+.book-objective-form .choice-field, .book-objective-form .field { margin: 0; }
+.book-objective-form .book-objective-what { margin: 0; }
+.book-objective-target input { max-width: 200px; }
+.book-objective-target > span.muted { display: block; margin-top: 4px; }
+.book-objective-history { margin-top: 6px; }
+.book-objective-history .book-objective-history-row { padding: 5px 0; border-top: 1px solid var(--border); }
+.book-objective-history .book-objective-history-row:first-child { border-top: 0; }
+.book-objective-history .tbl { font-size: .86em; }
+
 /* Data -> Simulation: session rows are the selection rail; the entered world's control room
    is the consequence canvas beside them. The generic 1100px stack must be restated because
    these width tunings land after the generic band-cols fallback in the cascade. */
@@ -3357,3 +3403,41 @@ body:has(#app[data-route="plan"]) .plan-bar-inner { max-width: 2200px; }
   .plan-ranked-field > .ranked-idea-hero > .ranked-idea-secondary { grid-column: 3; margin-top: 0;
     grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- Scenario canvas studio (plan outcomes band): author a believed path on the fan ---- */
+.plan-scenario-canvas .scenario-canvas-body { display: flex; flex-direction: column; gap: 14px; }
+.scenario-canvas-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 18px; align-items: start; }
+@media (max-width: 1100px) { .scenario-canvas-cols { grid-template-columns: minmax(0, 1fr); } }
+@media (min-width: 2000px) {
+  .scenario-canvas-cols { grid-template-columns: minmax(0, 1.6fr) minmax(340px, 420px); }
+}
+.scenario-canvas-main { min-width: 0; }
+.scenario-canvas-main svg { max-width: 100%; height: auto; }
+.fan-chart-authorable svg { cursor: crosshair; touch-action: none; }
+.fan-pin-hit { fill: transparent; pointer-events: all; }
+.fan-pin { cursor: grab; }
+.fan-pin:active { cursor: grabbing; }
+.fan-pin-dot { fill: var(--surface, #fff); stroke: var(--risk-warn, #b98a00); stroke-width: 2.4; }
+.fan-pin-label { font-size: 10px; fill: var(--text); paint-order: stroke;
+  stroke: var(--surface, #fff); stroke-width: 3px; stroke-linejoin: round; font-weight: 600; }
+.fan-pin-tolerance { stroke: var(--risk-warn, #b98a00); stroke-width: 1.2; opacity: .7;
+  stroke-dasharray: 2 2; }
+.canvas-fill-label .alert { margin: 0; }
+.canvas-fill-label .info-trigger { margin-left: 6px; }
+.scenario-canvas-rail { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.scenario-pin-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2, transparent); }
+.scenario-pin-desc { flex: 1; min-width: 0; }
+.scenario-pin-tol { display: inline-flex; align-items: center; gap: 4px; }
+.scenario-pin-tol input { width: 64px; }
+.scenario-pin-remove { flex: none; line-height: 1; }
+.scenario-canvas-save { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.scenario-canvas-lineage { overflow-wrap: anywhere; }
+.scenario-saved-head h4 { margin: 0 0 2px; }
+.authored-scenario-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px; }
+.authored-scenario-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.authored-scenario-card.stale { border-style: dashed; }
+.scenario-canvas-status:empty { display: none; }

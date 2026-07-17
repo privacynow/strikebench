@@ -408,4 +408,19 @@ class RecommendationEngineTest {
             assertThat(c.breakevens()).hasSize(2);                          // one below, one above
         }
     }
+
+    @Test
+    void heldSharesSurfaceTheCompositeIncomeStructures() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(100, 20_000L, null);
+        RecommendationEngine.Result result = engine.recommend(intentReq("INCOME", h, null), BP);
+        var families = result.candidates().stream().map(Candidate::strategy).toList();
+        assertThat(families).contains("COVERED_CALL");
+        assertThat(families)
+                .as("the folded-Phase-9 composites compete beside the covered call, never replacing it")
+                .contains("COVERED_STRANGLE", "COVERED_CALL_PUT_SPREAD", "COVERED_CALL_CALL_OVERLAY");
+        result.candidates().stream()
+                .filter(c -> c.strategy().startsWith("COVERED_"))
+                .forEach(c -> assertThat(c.usesHeldShares())
+                        .as(c.strategy() + " rides the held shares").isTrue());
+    }
 }

@@ -46,7 +46,7 @@ class PlanOutcomeServiceTest {
     @Test void currentOutcomeArtifactsCannotCrossPlanRevisionsOrAnalysisDatasets() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("outcome-scope-guard", "AAPL", "DIRECTIONAL", null, null,
-                        "bullish", 30, null, "conservative", null, null, null));
+                        "bullish", 30, null, "conservative", null, null, null, null));
         ScenarioSpec spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 1, 0.25, 4242L, 3);
         var baseline = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
                 new PathEnsembleService.Scope("AAPL", "demo", AnalysisContext.OBSERVED), 250, spec,
@@ -68,7 +68,7 @@ class PlanOutcomeServiceTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("different analysis dataset");
 
         Plan.View revised = plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(plan.version(),
-                null, 45, null, null, null, null, null, java.util.Set.of()));
+                null, 45, null, null, null, null, null, null, java.util.Set.of()));
         assertThat(revised.context().rev()).isEqualTo(plan.context().rev() + 1);
         assertThat(outcomes.loadEnsemble(null, plan.id(), stored.id()).state()).isEqualTo("STALE");
         assertThatThrownBy(() -> outcomes.loadCurrentEnsemble(null, revised, stored.id(), AnalysisContext.OBSERVED))
@@ -78,7 +78,7 @@ class PlanOutcomeServiceTest {
     @Test void exactMatrixIvPathAndPositionOutcomeRoundTripWithoutRegeneration() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("outcome-service-1", "AAPL", "DIRECTIONAL", null, null,
-                        "bullish", 3, null, "conservative", null, null, null));
+                        "bullish", 3, null, "conservative", null, null, null, null));
         ObjectNode candidate = (ObjectNode) Json.parse("""
                 {"strategy":"DEBIT_CALL_SPREAD","displayName":"Bull call spread","structureGroup":"DIRECTIONAL",
                  "label":"BUY 250C / SELL 260C","qty":1,"entryNetPremiumCents":-30000,

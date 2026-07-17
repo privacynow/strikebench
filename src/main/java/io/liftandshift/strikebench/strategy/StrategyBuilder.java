@@ -63,6 +63,9 @@ public final class StrategyBuilder {
                 case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL);
                 case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT);
                 case COVERED_CALL -> coveredCall(chain, spot, hints);
+                case COVERED_STRANGLE -> coveredStrangle(chain, spot, hints);
+                case COVERED_CALL_PUT_SPREAD -> coveredCallPutSpread(chain, spot, hints);
+                case COVERED_CALL_CALL_OVERLAY -> coveredCallCallOverlay(chain, spot, hints);
                 case CASH_SECURED_PUT -> cashSecuredPut(chain, hints);
                 case PROTECTIVE_COLLAR -> collar(chain, spot, hints);
                 case PROTECTIVE_PUT -> protectivePut(chain, spot, hints);
@@ -182,6 +185,88 @@ public final class StrategyBuilder {
         quotes.add(null); // stock leg has no option quote
         quotes.add(call);
         return new Built(legs, quotes, "BUY 100 shares / SELL " + strikeLabel(call) + " " + chain.expiration());
+    }
+
+    /** Covered call plus a cash-secured put: double premium and a standing repurchase bid below. */
+    private static Built coveredStrangle(OptionChain chain, BigDecimal spot, BuildHints hints) {
+        OptionQuote call = hints.targetPrice() != null
+                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
+                : byDelta(chain, OptionType.CALL, 0.30);
+        if (call == null) call = byDelta(chain, OptionType.CALL, 0.30);
+        OptionQuote put = byDelta(chain, OptionType.PUT, 0.25);
+        if (call == null || put == null) return null;
+        if (put.strike().compareTo(call.strike()) >= 0) return null; // degenerate — the strikes must bracket the price
+        String label = "SELL " + strikeLabel(call) + " / SELL " + strikeLabel(put) + " " + chain.expiration();
+        if (hints.sharesHeld()) {
+            List<OptionQuote> quotes = new ArrayList<>();
+            quotes.add(call);
+            quotes.add(put);
+            return new Built(List.of(leg(LegAction.SELL, call), leg(LegAction.SELL, put)), quotes,
+                    label + " around held shares");
+        }
+        List<Leg> legs = List.of(Leg.stock(LegAction.BUY, 1, spot), leg(LegAction.SELL, call), leg(LegAction.SELL, put));
+        List<OptionQuote> quotes = new ArrayList<>();
+        quotes.add(null); // stock leg has no option quote
+        quotes.add(call);
+        quotes.add(put);
+        return new Built(legs, quotes, "BUY 100 shares / " + label);
+    }
+
+    /** Covered call whose premium funds a debit put spread: a protected shelf below the shares. */
+    private static Built coveredCallPutSpread(OptionChain chain, BigDecimal spot, BuildHints hints) {
+        OptionQuote call = hints.targetPrice() != null
+                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
+                : byDelta(chain, OptionType.CALL, 0.30);
+        if (call == null) call = byDelta(chain, OptionType.CALL, 0.30);
+        OptionQuote floorPut = byDelta(chain, OptionType.PUT, 0.30);
+        OptionQuote fundingPut = floorPut == null ? null : stepAway(chain, OptionType.PUT, floorPut.strike(), -2);
+        if (call == null || floorPut == null || fundingPut == null) return null;
+        if (fundingPut.strike().compareTo(floorPut.strike()) >= 0
+                || floorPut.strike().compareTo(call.strike()) >= 0) return null;
+        String label = "SELL " + strikeLabel(call) + " / BUY " + strikeLabel(floorPut)
+                + " / SELL " + strikeLabel(fundingPut) + " " + chain.expiration();
+        if (hints.sharesHeld()) {
+            List<OptionQuote> quotes = new ArrayList<>();
+            quotes.add(call);
+            quotes.add(floorPut);
+            quotes.add(fundingPut);
+            return new Built(List.of(leg(LegAction.SELL, call), leg(LegAction.BUY, floorPut),
+                    leg(LegAction.SELL, fundingPut)), quotes, label + " around held shares");
+        }
+        List<Leg> legs = List.of(Leg.stock(LegAction.BUY, 1, spot), leg(LegAction.SELL, call),
+                leg(LegAction.BUY, floorPut), leg(LegAction.SELL, fundingPut));
+        List<OptionQuote> quotes = new ArrayList<>();
+        quotes.add(null);
+        quotes.add(call);
+        quotes.add(floorPut);
+        quotes.add(fundingPut);
+        return new Built(legs, quotes, "BUY 100 shares / " + label);
+    }
+
+    /** Covered call plus a farther long call: upside participation resumes above the overlay strike. */
+    private static Built coveredCallCallOverlay(OptionChain chain, BigDecimal spot, BuildHints hints) {
+        OptionQuote shortCall = hints.targetPrice() != null
+                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
+                : byDelta(chain, OptionType.CALL, 0.35);
+        if (shortCall == null) shortCall = byDelta(chain, OptionType.CALL, 0.35);
+        OptionQuote overlay = shortCall == null ? null : stepAway(chain, OptionType.CALL, shortCall.strike(), +2);
+        if (shortCall == null || overlay == null) return null;
+        if (overlay.strike().compareTo(shortCall.strike()) <= 0) return null;
+        String label = "SELL " + strikeLabel(shortCall) + " / BUY " + strikeLabel(overlay) + " " + chain.expiration();
+        if (hints.sharesHeld()) {
+            List<OptionQuote> quotes = new ArrayList<>();
+            quotes.add(shortCall);
+            quotes.add(overlay);
+            return new Built(List.of(leg(LegAction.SELL, shortCall), leg(LegAction.BUY, overlay)), quotes,
+                    label + " over held shares");
+        }
+        List<Leg> legs = List.of(Leg.stock(LegAction.BUY, 1, spot), leg(LegAction.SELL, shortCall),
+                leg(LegAction.BUY, overlay));
+        List<OptionQuote> quotes = new ArrayList<>();
+        quotes.add(null);
+        quotes.add(shortCall);
+        quotes.add(overlay);
+        return new Built(legs, quotes, "BUY 100 shares / " + label);
     }
 
     private static Built cashSecuredPut(OptionChain chain, BuildHints hints) {

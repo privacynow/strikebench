@@ -104,6 +104,33 @@ public final class StrategyCatalog {
                         && shares == units(longPut) && shares == units(shortCall)) {
                     return identity(StrategyFamily.PROTECTIVE_COLLAR);
                 }
+                PositionPackage.Leg shortPut = find(options, "SELL", "PUT");
+                if (shortPut != null && shortCall != null
+                        && shares == units(shortCall) && units(shortPut) == units(shortCall)
+                        && shortPut.strike().compareTo(shortCall.strike()) < 0) {
+                    return identity(StrategyFamily.COVERED_STRANGLE);
+                }
+                PositionPackage.Leg overlayCall = find(options, "BUY", "CALL");
+                if (overlayCall != null && shortCall != null
+                        && shares == units(shortCall) && units(overlayCall) == units(shortCall)
+                        && overlayCall.expiration().equals(shortCall.expiration())
+                        && overlayCall.strike().compareTo(shortCall.strike()) > 0) {
+                    return identity(StrategyFamily.COVERED_CALL_CALL_OVERLAY);
+                }
+            }
+            if (options.size() == 3) {
+                PositionPackage.Leg shortCall = find(options, "SELL", "CALL");
+                List<PositionPackage.Leg> puts = options.stream().filter(StrategyCatalog::put).toList();
+                if (shortCall != null && shares == units(shortCall) && puts.size() == 2
+                        && puts.getFirst().expiration().equals(puts.getLast().expiration())) {
+                    PositionPackage.Leg floorPut = find(puts, "BUY", "PUT");
+                    PositionPackage.Leg fundingPut = find(puts, "SELL", "PUT");
+                    if (floorPut != null && fundingPut != null
+                            && units(floorPut) == shares && units(fundingPut) == shares
+                            && floorPut.strike().compareTo(fundingPut.strike()) > 0) {
+                        return identity(StrategyFamily.COVERED_CALL_PUT_SPREAD);
+                    }
+                }
             }
         }
         if (!stocks.isEmpty()) return customIdentity("Custom stock-and-option position",
@@ -310,6 +337,15 @@ public final class StrategyCatalog {
         add(out, StrategyFamily.COVERED_CALL, "Shares & income",
                 "Own 100 shares and rent out their upside for premium at a chosen sale price.",
                 "2,26 34,8 62,8", true, true);
+        add(out, StrategyFamily.COVERED_STRANGLE, "Shares & income",
+                "A covered call plus a cash-secured put: double premium, and a standing bid to buy more shares below.",
+                "2,28 22,15 42,7 62,7", true, false);
+        add(out, StrategyFamily.COVERED_CALL_PUT_SPREAD, "Shares & income",
+                "A covered call whose premium helps buy a put spread: a protected shelf under the shares down to the lower put strike.",
+                "2,26 14,18 28,18 48,8 62,8", true, false);
+        add(out, StrategyFamily.COVERED_CALL_CALL_OVERLAY, "Shares & income",
+                "A covered call plus a farther long call: income now, and upside participation resumes above the overlay strike.",
+                "2,26 30,11 44,11 62,4", true, false);
         add(out, StrategyFamily.PROTECTIVE_PUT, "Shares & protection",
                 "Own shares plus a put that creates an insurance floor.",
                 "2,14 26,14 62,2", true, true);
@@ -351,6 +387,7 @@ public final class StrategyCatalog {
                 copy("LONG_CALL"), copy("DEBIT_CALL_SPREAD"), copy("CREDIT_PUT_SPREAD"), copy("CASH_SECURED_PUT"),
                 alias("COVERED_CALL", "BUY_WRITE", "Covered call (buy-write)", "Shares & income",
                         "Buy 100 shares and rent them out immediately - premium now, capped upside."),
+                copy("COVERED_STRANGLE"), copy("COVERED_CALL_PUT_SPREAD"), copy("COVERED_CALL_CALL_OVERLAY"),
                 custom("RISK_REVERSAL", "Risk reversal", "Bullish",
                         "Sell a put to help pay for a call - bullish exposure with a large downside reserve.",
                         "2,26 22,14 42,14 62,4", false),

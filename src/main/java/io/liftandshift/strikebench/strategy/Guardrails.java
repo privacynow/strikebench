@@ -145,10 +145,16 @@ public final class Guardrails {
             }
         } else {
             PayoffCurve optionCurve = PayoffCurve.of(p.legs(), p.qty());
+            // Held shares cover the call side. A cash-secured short put beside them (covered
+            // strangle) fails the pure share-coverage test yet the COMBINED position is bounded —
+            // the shares-plus-legs curve is the arbiter of defined risk, not string matching.
+            boolean coverageClean = sharesPerUnit > 0
+                    && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
+            PayoffCurve combined = riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty()) : optionCurve;
             boolean shareCovered = optionCurve.maxLossUnbounded()
                     && sharesPerUnit > 0
-                    && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
-            PayoffCurve curve = shareCovered && riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty()) : optionCurve;
+                    && (coverageClean || !combined.maxLossUnbounded());
+            PayoffCurve curve = shareCovered ? combined : optionCurve;
             if (curve.maxLossUnbounded() && !p.allowUndefinedRisk()) {
                 blocks.add("Undefined (unlimited) maximum loss — blocked. Add a protective wing to cap the risk.");
             } else if (!curve.maxLossUnbounded()) {

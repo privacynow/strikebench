@@ -652,6 +652,125 @@ class PlanApiIntegrationTest {
         assertJsonEquivalent(restored.get("preview"), ran.get("preview"));
     }
 
+    @Test void authoredWaypointsReachGenerationCarryTheirHonestyLabelAndFreezeAsScenarios() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"scenario-canvas-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Scenario canvas plan","thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        long version = plan.get("version").asLong();
+
+        // 1) Waypoints POSTed on the scenario spec reach generation; the response carries the label.
+        String gbmSpec = """
+                {"model":"GBM","shape":"CHOP","horizonDays":30,"stepsPerDay":1,
+                 "driftAnnual":0.0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,"jumpVol":0,
+                 "tailNu":6,"seed":7231,"paths":60,
+                 "waypoints":[{"dayIndex":5,"priceRatio":0.95},{"dayIndex":12,"priceRatio":1.06,"tolerance":0.02}]}
+                """;
+        JsonNode pinned = json(post("/api/plans/" + id + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + version + ",\"over\":" + gbmSpec + "}"));
+        assertThat(pinned.at("/ensemble/waypointFill").asText()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(pinned.at("/preview/waypointFill").asText()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(pinned.at("/preview/waypoints")).hasSize(2);
+        assertThat(pinned.at("/preview/waypoints/1/tolerance").asDouble()).isEqualTo(0.02);
+        assertThat(pinned.at("/preview/sessionDates")).hasSize(30);
+        assertThat(pinned.at("/preview/sessionDates/0").asText()).matches("\\d{4}-\\d{2}-\\d{2}");
+        String pinnedEnsembleId = pinned.at("/ensemble/id").asText();
+        String pinnedFingerprint = pinned.at("/ensemble/fingerprint").asText();
+        // The pins actually condition the paths: median at the pinned day sits at the pinned level.
+        double spot = pinned.at("/preview/spot").asDouble();
+        double medianAtPin = pinned.at("/preview/bands/12/p50").asDouble();
+        assertThat(medianAtPin / spot).isCloseTo(1.06, org.assertj.core.data.Offset.offset(0.002));
+
+        // 2) The label and pins survive storage: the repaint endpoint restores both.
+        JsonNode restored = json(get("/api/plans/" + id + "/outcomes/ensemble/latest"));
+        assertThat(restored.at("/ensemble/waypointFill").asText()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(restored.at("/preview/waypointFill").asText()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(restored.at("/preview/waypoints")).hasSize(2);
+
+        // 3) A fat-tailed model with pins is labeled as guided interpolation, never as exact.
+        JsonNode guided = json(post("/api/plans/" + id + "/outcomes/ensemble",
+                ("{\"expectedVersion\":" + version + ",\"over\":" + gbmSpec + "}")
+                        .replace("\"GBM\"", "\"STUDENT_T\"")));
+        assertThat(guided.at("/ensemble/waypointFill").asText()).isEqualTo("GUIDED_INTERPOLATION");
+        assertThat(guided.at("/preview/waypointFill").asText()).isEqualTo("GUIDED_INTERPOLATION");
+        String guidedEnsembleId = guided.at("/ensemble/id").asText();
+
+        // 4) A pin beyond the Plan horizon is refused with a units-bearing explanation.
+        HttpResponse<String> beyond = post("/api/plans/" + id + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + version + ",\"over\":"
+                        + gbmSpec.replace("\"dayIndex\":12", "\"dayIndex\":40") + "}");
+        assertThat(beyond.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(beyond.body()).get("detail").asText())
+                .contains("beyond the scenario horizon").contains("30 trading days");
+
+        // 5) Save the authored scenario over the exact base fan; the receipt carries lineage.
+        JsonNode savedScenario = json(post("/api/plans/" + id + "/scenarios",
+                "{\"expectedVersion\":" + version + ",\"title\":\"Dip, then squeeze\",\"baseEnsembleId\":\""
+                        + pinnedEnsembleId + "\",\"over\":" + gbmSpec + "}"));
+        String scenarioId = savedScenario.at("/scenario/id").asText();
+        assertThat(savedScenario.at("/scenario/title").asText()).isEqualTo("Dip, then squeeze");
+        assertThat(savedScenario.at("/scenario/waypointFill").asText()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(savedScenario.at("/scenario/waypointCount").asInt()).isEqualTo(2);
+        assertThat(savedScenario.at("/scenario/currentContext").asBoolean()).isTrue();
+        assertThat(savedScenario.at("/scenario/baseEnsembleFingerprint").asText()).isEqualTo(pinnedFingerprint);
+        assertThat(savedScenario.at("/scenario/fingerprint").asText()).hasSize(64);
+
+        // Saving without a single waypoint is refused: the canvas is for authored paths.
+        HttpResponse<String> unpinned = post("/api/plans/" + id + "/scenarios",
+                "{\"expectedVersion\":" + version + ",\"over\":"
+                        + gbmSpec.replaceAll("\"waypoints\":\\[[^]]*]", "\"waypoints\":[]") + "}");
+        assertThat(unpinned.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(unpinned.body()).get("detail").asText()).contains("waypoint");
+
+        // 6) List + load round-trip the frozen spec, pins, tolerance, and label over the API.
+        JsonNode listed = json(get("/api/plans/" + id + "/scenarios"));
+        assertThat(listed.get("scenarios")).hasSize(1);
+        assertThat(listed.at("/scenarios/0/id").asText()).isEqualTo(scenarioId);
+        JsonNode loaded = json(get("/api/plans/" + id + "/scenarios/" + scenarioId));
+        assertThat(loaded.at("/scenario/spec/model").asText()).isEqualTo("GBM");
+        assertThat(loaded.at("/scenario/spec/waypoints")).hasSize(2);
+        assertThat(loaded.at("/scenario/spec/waypoints/1/tolerance").asDouble()).isEqualTo(0.02);
+        assertThat(loaded.at("/scenario/waypoints/0/dayIndex").asInt()).isEqualTo(5);
+        assertThat(get("/api/plans/" + id + "/scenarios/auth_missing").statusCode()).isEqualTo(404);
+
+        // 7) A position priced on a pinned fan carries the label on the fresh run AND when the
+        //    saved result is restored later from /outcomes/latest.
+        JsonNode strategy = json(post("/api/plans/" + id + "/strategy/run", "{}"));
+        JsonNode candidate = strategy.at("/strategy/result/candidates/0");
+        JsonNode selected = json(put("/api/plans/" + id + "/strategy/select",
+                "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":" + version + "}"));
+        long selectedVersion = selected.at("/plan/version").asLong();
+        JsonNode modeled = json(post("/api/plans/" + id + "/outcomes/run",
+                "{\"expectedVersion\":" + selectedVersion + ",\"basis\":\"PARAMETRIC\",\"ensembleId\":\""
+                        + guidedEnsembleId + "\"}"));
+        assertThat(modeled.at("/ensemble/waypointFill").asText()).isEqualTo("GUIDED_INTERPOLATION");
+        JsonNode latestOutcomes = json(get("/api/plans/" + id + "/outcomes/latest"));
+        JsonNode restoredRun = null;
+        for (JsonNode run : latestOutcomes.get("outcomes")) {
+            if ("PARAMETRIC".equals(run.path("basis").asText())) restoredRun = run;
+        }
+        assertThat(restoredRun).isNotNull();
+        assertThat(restoredRun.path("waypointFill").asText()).isEqualTo("GUIDED_INTERPOLATION");
+
+        // 8) Context drift: saving against the old fan is refused with the reason, and the
+        //    already-authored scenario stays listed with an explicit staleness explanation.
+        JsonNode revised = json(put("/api/plans/" + id + "/context",
+                "{\"expectedVersion\":" + selectedVersion + ",\"horizonDays\":45}"));
+        long revisedVersion = revised.get("version").asLong();
+        HttpResponse<String> drifted = post("/api/plans/" + id + "/scenarios",
+                "{\"expectedVersion\":" + revisedVersion + ",\"baseEnsembleId\":\"" + pinnedEnsembleId
+                        + "\",\"over\":" + gbmSpec + "}");
+        assertThat(drifted.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(drifted.body()).get("detail").asText())
+                .contains("does not belong to the current Plan assumptions");
+        JsonNode listedAfterDrift = json(get("/api/plans/" + id + "/scenarios"));
+        assertThat(listedAfterDrift.get("scenarios")).hasSize(1);
+        assertThat(listedAfterDrift.at("/scenarios/0/currentContext").asBoolean()).isFalse();
+        assertThat(listedAfterDrift.at("/scenarios/0/staleness").asText())
+                .contains("assumptions changed").contains("re-anchor");
+    }
+
     @Test void exactPlanEnsembleCreatesAReplayableLinkedRehearsalAndReview() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"rehearsal-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Rehearsal plan",

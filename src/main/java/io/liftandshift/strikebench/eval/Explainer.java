@@ -43,6 +43,9 @@ public final class Explainer {
         if (evidence.rollup() == EvidenceLevel.DEMO_FIXTURE) {
             failureModes.add("These numbers are DEMO data — not tradeable prices.");
         }
+        // Composite-objective lens cautions (income honesty, NAV erosion, concentration) belong
+        // with the failure modes: they are ways this trade fights the objective it serves.
+        failureModes.addAll(ObjectiveLenses.apply(ctx.declared(), c, ctx).cautions());
 
         return new Explanation(
                 headline,

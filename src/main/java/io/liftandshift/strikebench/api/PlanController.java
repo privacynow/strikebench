@@ -80,7 +80,8 @@ final class PlanController {
                 auto, evaluations, planSvc, planStrategy, discoveryController, tradeController);
         this.planOutcomeController = new PlanOutcomeController(this, cfg, market, backtester,
                 planSvc, planEvidence, planStrategy, planOutcomes, pathEnsembles, simEngine,
-                outcomeController);
+                outcomeController,
+                new io.liftandshift.strikebench.plan.AuthoredScenarioService(db, clock));
         this.planAdoptions = planAdoptions;
         this.planDecisionController = new PlanDecisionController(this, clock, db, market, trades,
                 planSvc, planRehearsals, planDecisions, planManagement, tradeController, planPromotions);
@@ -99,7 +100,9 @@ final class PlanController {
                 strategyController::planScoutSpawn, planOutcomeController::planOutcomesLatest,
                 planOutcomeController::planEnsembleLatest,
                 planOutcomeController::planEnsembleRun, planOutcomeController::planOutcomeRun,
-                planOutcomeController::planOutcomeCompare, planOutcomeController::planBacktestRun,
+                planOutcomeController::planOutcomeCompare, planOutcomeController::planScenarioSave,
+                planOutcomeController::planScenariosList, planOutcomeController::planScenarioGet,
+                planOutcomeController::planBacktestRun,
                 planOutcomeController::planBacktestGet, planDecisionController::planRehearsalsList,
                 planDecisionController::planRehearsalCreate,
                 planDecisionController::planDecisionLatest, planDecisionController::planDecisionPreview,
@@ -254,7 +257,7 @@ final class PlanController {
                 request.clientRequestId(), request.symbol(), request.intent(), request.originPlanId(), request.title(),
                 request.thesis(), request.horizonDays(), request.targetCents(), request.riskMode(),
                 holding.freeShares(), request.costBasisCents() == null ? holding.avgCostCents() : request.costBasisCents(),
-                request.priceAssumptionCents());
+                request.priceAssumptionCents(), request.assignmentPreference());
     }
 
     private void planGet(Context ctx) {

@@ -950,6 +950,9 @@ public final class RecommendationEngine {
             case CALENDAR_CALL, CALENDAR_PUT -> "You sell a near-term option and buy a longer one at the same strike, hoping time decays the near one faster. " + cash;
             case DIAGONAL_CALL, DIAGONAL_PUT -> "Like a calendar but the strikes differ, adding a directional lean. " + cash;
             case COVERED_CALL -> "You own 100 shares and rent them out by selling a call; income now, upside capped. " + cash;
+            case COVERED_STRANGLE -> "A covered call plus a cash-secured put: you collect two premiums, cap the upside, and stand ready to buy 100 more shares at the put strike. " + cash;
+            case COVERED_CALL_PUT_SPREAD -> "You own shares, rent out the upside with a call, and use the premium to buy a put spread - a protected shelf that absorbs losses down to the lower put strike. " + cash;
+            case COVERED_CALL_CALL_OVERLAY -> "A covered call plus a farther long call: income now, and if the stock runs past the overlay strike your upside participation resumes. " + cash;
             case CASH_SECURED_PUT -> "You sell a put with the cash set aside to buy the shares if assigned — getting paid to bid below the market. " + cash;
             case PROTECTIVE_COLLAR -> "You own shares, buy a put as a floor, and sell a call to pay for it. " + cash;
             case PROTECTIVE_PUT -> "You own shares and buy a put as insurance: a guaranteed minimum sale price until expiration. " + cash;
