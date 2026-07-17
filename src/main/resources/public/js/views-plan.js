@@ -1059,7 +1059,9 @@
       MANAGE_REVIEW: { title: 'Manage & review',
         body: 'Act on the linked position without leaving this Plan, then compare the result with the expectation frozen at Decide.' }
     }[stage.key];
-    var content = el('div', { class: 'plan-stage-content', id: 'plan-stage-content' });
+    // band-flat: inside a flow band, interior cards flatten to hairline-separated groups —
+    // the band is the one elevation step (Program ONE visual identity).
+    var content = el('div', { class: 'plan-stage-content band-flat', id: 'plan-stage-content' });
     var headingId = 'plan-stage-title-' + stage.path;
     var context = plan.context || {};
     var carried = [plan.symbol, plan.intent ? planIntentLabel(plan.intent) : 'goal not chosen',
@@ -1069,11 +1071,13 @@
       'aria-labelledby': headingId },
       // Inside a flow band the band title owns the headline — the stage frame contributes
       // only its one-line purpose and the carried context, never a second stacked heading.
+      // One dek: purpose sentence + carried context on two quiet lines — the view band's
+      // conclusion and the plan header already own the loud statements of the same facts.
       el('div', { class: 'plan-stage-heading' },
         el('h2', { id: headingId, tabindex: '-1', class: 'sr-only' }, copy.title),
-        el('p', { class: 'muted' }, copy.body),
+        el('p', { class: 'muted plan-stage-dek' }, copy.body),
         el('div', { class: 'plan-stage-carry', 'aria-label': 'Context carried into this stage' },
-          el('span', { class: 'plan-stage-carry-label' }, 'Carried into this step'),
+          el('span', { class: 'plan-stage-carry-label sr-only' }, 'Carried into this step'),
           el('span', { class: 'plan-stage-carry-value' }, carried))),
       content));
     return content;
@@ -1589,8 +1593,8 @@
     ui.strategyFilters = ui.strategyFilters || {};
     ui.buildState = ui.buildState || {};
     var content = planOwnedStage(root, initialPlan, stage);
-    var selector = el('div', { class: 'plan-tool-selector', role: 'tablist',
-      'aria-label': 'Strategy tools' });
+    var selector = el('div', { class: 'plan-tool-selector', role: 'group',
+      'aria-label': 'Compose your own' });
     var body = el('div', { class: 'plan-strategy-body', id: 'plan-strategy-body' });
     var panels = {}, mountedPanels = {};
     content.appendChild(selector);
@@ -1639,14 +1643,15 @@
     }
 
     var beginner = Learn.currentLevel() === 'beginner';
+    // ONE spec §2.2 band 3: the ranked field IS the band's opening content — proposals need
+    // no tab. "Your trade" and Builder are its alternate composers; the chain and scout are
+    // pickers inside composition — none of them a sibling of the proposals.
     var modes = beginner ? [
-      { key: 'compare', label: 'Proposed trades', icon: 'scope', note: 'Ranked for this Plan' },
       { key: 'builder', label: 'All strategies', icon: 'pen', note: 'Choose a shape, then contracts' },
       { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Edit or paste an exact package' },
       { key: 'chain', label: 'Option prices', icon: 'grid', note: 'Calls, puts and strikes' },
       { key: 'scout', label: 'Scout', icon: 'compass', note: 'Similar setups and offsets' }
     ] : [
-      { key: 'compare', label: 'Ranked field', icon: 'scope', note: 'Economics · score · fit' },
       { key: 'builder', label: 'Builder', icon: 'pen', note: 'Strategy-first construction' },
       { key: 'yourTrade', label: 'Your trade', icon: 'pen', note: 'Direct package editing' },
       { key: 'chain', label: 'Chain', icon: 'grid', note: 'Inspect the book' },
@@ -1654,51 +1659,69 @@
     ];
     function panelFor(key) {
       if (panels[key]) return panels[key];
-      var panel = el('section', { id: 'plan-strategy-panel-' + key, role: 'tabpanel',
-        'aria-labelledby': 'plan-tool-' + key, class: 'plan-strategy-panel', hidden: 'hidden' });
+      var panel = el('section', { id: 'plan-strategy-panel-' + key, role: 'region',
+        'aria-labelledby': key === 'compare' ? null : 'plan-tool-' + key,
+        'aria-label': key === 'compare' ? 'Proposed trades' : null,
+        class: 'plan-strategy-panel', hidden: 'hidden' });
       panels[key] = panel;
       body.appendChild(panel);
       return panel;
     }
     function activatePanel(key) {
+      panelFor('compare').hidden = false; // the proposals are the band, never a tab
       modes.forEach(function (mode) { panelFor(mode.key).hidden = mode.key !== key; });
     }
     function repaint() { return paint(true); }
+    // The proposals host mounts first, then the composition row, then the composer panels —
+    // "Compose your own" sits UNDER the proposals it feeds, never above them.
+    panelFor('compare');
+    body.appendChild(selector);
+    selector.classList.add('plan-compose-row');
+    selector.id = 'plan-compose';
+    selector.appendChild(el('span', { class: 'plan-compose-label' },
+      el('b', {}, 'Compose your own'),
+      el('small', { class: 'muted' }, beginner
+        ? ' — yours enters the same ranked comparison'
+        : ' — composed packages rank against the field')));
+    // Composer chips are DISCLOSURE TOGGLES (aria-pressed + aria-expanded), not tabs: with
+    // the composition folded, no chip is "selected" — a tablist contract would be a lie.
     modes.forEach(function (mode) {
       panelFor(mode.key);
-      selector.appendChild(el('button', { type: 'button', role: 'tab',
+      selector.appendChild(el('button', { type: 'button',
         id: 'plan-tool-' + mode.key, 'aria-controls': 'plan-strategy-panel-' + mode.key,
         class: 'plan-tool' + (ui.strategyView === mode.key ? ' active' : ''),
         'data-strategy-tool': mode.key,
-        'aria-selected': ui.strategyView === mode.key ? 'true' : 'false',
+        'aria-pressed': ui.strategyView === mode.key ? 'true' : 'false',
+        'aria-expanded': ui.strategyView === mode.key ? 'true' : 'false',
         onclick: function () {
-          ui.strategyView = mode.key;
+          // A second tap folds the composer back to the proposals-only band.
+          ui.strategyView = ui.strategyView === mode.key ? 'compare' : mode.key;
           if (window.Workspace) Workspace.save();
           paint(false).catch(function (e) { UI.toast(e.message, 'error'); });
         }
       }, icon(mode.icon), el('span', {}, el('b', {}, mode.label), el('small', {}, mode.note))));
     });
-    UI.bindTabList(selector, function (button) {
-      ui.strategyView = button.getAttribute('data-strategy-tool');
-      if (window.Workspace) Workspace.save();
-      paint(false).then(function () { button.focus(); }).catch(function (e) { UI.toast(e.message, 'error'); });
-    });
 
     async function paint(refresh) {
-      selector.querySelectorAll('.plan-tool').forEach(function (button, index) {
-        var active = modes[index].key === ui.strategyView;
+      selector.querySelectorAll('.plan-tool').forEach(function (button) {
+        var active = button.getAttribute('data-strategy-tool') === ui.strategyView;
         button.classList.toggle('active', active);
-        button.setAttribute('aria-selected', String(active));
+        button.setAttribute('aria-pressed', String(active));
+        button.setAttribute('aria-expanded', String(active));
       });
-      selector.syncTabs();
       var mode = ui.strategyView;
       activatePanel(mode);
-      if (!refresh && mountedPanels[mode]) return;
-      var panel = panelFor(mode);
-      panel.innerHTML = '';
-      mountedPanels[mode] = true;
-      try { await renderMode(panel, mode); }
-      catch (error) { mountedPanels[mode] = false; throw error; }
+      // The proposals always paint; the open composer (if any) paints beside them.
+      var targets = mode === 'compare' ? ['compare'] : ['compare', mode];
+      for (var t = 0; t < targets.length; t++) {
+        var key = targets[t];
+        if (!refresh && mountedPanels[key]) continue;
+        var panel = panelFor(key);
+        panel.innerHTML = '';
+        mountedPanels[key] = true;
+        try { await renderMode(panel, key); }
+        catch (error) { mountedPanels[key] = false; throw error; }
+      }
     }
 
     async function renderMode(body, mode) {
@@ -1894,6 +1917,15 @@
             ? ' Structures below are ranked against it, on the same stored futures you analyzed. '
             : ' Structures below are ranked against it. '),
           handoff.ensemble ? UI.lineageChip(handoff.ensemble, 'same fan as Evidence') : null));
+        if (!planRef.result && !ui.strategyDraftDirty) {
+          // The auto-run is coming (mounted below): fixed-height ghosts state what is
+          // happening where the results will land — never a bare empty-state under a promise.
+          var ghostHost = el('div', { class: 'plan-ghost-results', id: 'plan-ghost-results' },
+            el('p', { class: 'muted small', 'aria-live': 'polite' },
+              'Ranking the complete field against your view…'));
+          for (var g = 0; g < 5; g++) ghostHost.appendChild(el('div', { class: 'ghost-row' }));
+          body.appendChild(ghostHost);
+        }
       }
       var filters = ui.strategyFilters;
       var allow0 = el('input', { type: 'checkbox', id: 'plan-strategy-0dte', checked: filters.allow0dte ? '' : null });
@@ -1992,10 +2024,14 @@
         }));
       }
       if (!planRef.result) {
-        body.appendChild(UI.emptyState(ui.strategyDraftDirty ? 'Limits changed — rerun the field' : 'No comparison has run yet',
-          ui.strategyDraftDirty
-            ? 'The prior result is still in Plan history, but it is hidden here because it did not use the limits now on screen.'
-            : 'Run the complete field once. The Plan saves the exact ranked result so a reload cannot change what you saw.'));
+        // Under a handoff the ghosts above already state what is running — a contradictory
+        // "nothing has run" card would make the promise look broken.
+        if (!handoff) {
+          body.appendChild(UI.emptyState(ui.strategyDraftDirty ? 'Limits changed — rerun the field' : 'No comparison has run yet',
+            ui.strategyDraftDirty
+              ? 'The prior result is still in Plan history, but it is hidden here because it did not use the limits now on screen.'
+              : 'Run the complete field once. The Plan saves the exact ranked result so a reload cannot change what you saw.'));
+        }
         return;
       }
       body.appendChild(el('div', { class: 'card plan-strategy-summary' },
@@ -3259,7 +3295,9 @@
         ctx.plan = updated;
         if (ctx.refreshHeader) ctx.refreshHeader();
         api.fold('view'); // declaring is an explicit save-and-advance: conclude the band
-        api.scrollTo('evidence');
+        // Attention moves to the evidence interrogation (the journey's next question);
+        // reopen both opens and scrolls — a bare scroll would land on a folded stub.
+        api.reopen('evidence');
       } catch (e) { UI.toast(e.message, 'error'); save.disabled = false; }
     } }, viewDeclared(plan) ? 'Update the view' : 'Declare the view');
     host.appendChild(el('div', { class: 'declaration-grid' },
@@ -3296,7 +3334,7 @@
     var changeStructure = el('button', { type: 'button', class: 'btn btn-secondary',
       id: 'plan-change-structure', onclick: function () {
         PlanStore.ui(plan.id).strategyView = 'builder';
-        api.scrollTo('strategy');
+        api.reopen('strategy');
       } }, 'Choose structure or option type');
     host.appendChild(el('p', { class: 'muted' }, 'Goal: ', el('b', {}, planIntentLabel(plan.intent)),
       '. You can change the goal and structure until you record a decision.'));
@@ -3332,12 +3370,30 @@
     PlanStore.renderBar();
 
     var ctx = { plan: plan };
-    var header = planHeader(plan, false, function () { flow.reopen('view'); });
+    // "Edit view & limits" is a toggle: it opens the view band, and a second press returns
+    // attention to the band the user was working in (never stranding a live position folded).
+    var editReturnBand = null;
+    function toggleViewEditor() {
+      var viewPosture = flow.posture('view');
+      if (viewPosture === 'active' || viewPosture === 'revisit') {
+        var back = editReturnBand;
+        editReturnBand = null;
+        if (back) { flow.reopen(back); return; }
+        flow.fold('view');
+        return;
+      }
+      editReturnBand = ['evidence', 'strategy', 'outcomes', 'commit', 'live'].find(function (key) {
+        var posture = flow.posture(key);
+        return posture === 'active' || posture === 'revisit';
+      }) || null;
+      flow.reopen('view');
+    }
+    var header = planHeader(plan, false, toggleViewEditor);
     root.appendChild(header);
     // Band actions that change the plan refresh the header facts in place — never a
     // route-level repaint for a field save.
     ctx.refreshHeader = function () {
-      var next = planHeader(ctx.plan, false, function () { flow.reopen('view'); });
+      var next = planHeader(ctx.plan, false, toggleViewEditor);
       header.replaceWith(next);
       header = next;
       paintPlanQuote();
@@ -3380,8 +3436,11 @@
       { key: 'evidence', title: 'Does the evidence agree?',
         // Ready before declaration on purpose: exploring history and simulated futures is HOW
         // a view forms — the futures tool here can adopt a tried view into the band above.
-        // Only ranking (the strategy band) hard-requires the declared view.
+        // Only ranking (the strategy band) hard-requires the declared view. Optional: it
+        // interrogates the journey rather than gating it, so it never holds default attention.
         ready: function () { return true; },
+        optional: true,
+        retainOnFold: true, // the fan canvas and study results survive folding by construction
         complete: function () { return false; },
         invitation: function () {
           // The futures tool owns its state at PlanStore.ui(id).evidence (the workbench surface).
@@ -3461,18 +3520,40 @@
       // its attention focus (folding what attention left behind); bring it into view.
       flow.scrollTo(arrivalFocus);
     }
+    // The in-place seam: navigating between stages of THIS plan updates the live document
+    // (app.js seam branch) — attention moves, bands repaint, nothing tears down. Any error
+    // there falls through to the full render, which remains the correctness owner.
+    App._flowSeam = { key: 'plan:' + plan.id, apply: async function (stage) {
+      ctx.plan = await PlanStore.get(plan.id, true);
+      if (ctx.refreshHeader) ctx.refreshHeader();
+      var band = FLOW_BANDS_BY_STAGE[stage];
+      if (band && stage !== 'understand') {
+        flow.setFocus(band);
+        flow.scrollTo(band);
+        refineSelectionPosture(band);
+      } else {
+        flow.setFocus(null);
+      }
+    } };
     // Async posture refinement: a stale prior selection (context bump rolled progress back)
     // unlocks outcomes/commit so their reprice affordances are reachable. One fetch, no poll.
     var _ft = App.navToken;
-    if (!decisionDone() && !structureReady()) {
+    function refineSelectionPosture(focusBand) {
+      if (decisionDone() || structureReady()) return;
       PlanStore.latestOutcomes(plan.id).then(function (latest) {
         if (!App.alive(_ft) || !latest || !latest.selectionState) return;
         if (latest.selectionState !== 'NONE' && ctx.selectionState !== latest.selectionState) {
           ctx.selectionState = latest.selectionState;
           flow.refreshBand('outcomes');
+          // A deep-link that arrived at a locked band regains its attention the moment the
+          // refinement unlocks it — the user asked for THIS band; honor it once it's real.
+          if (focusBand && flow.posture(focusBand) === 'ready') {
+            flow.reopen(focusBand);
+          }
         }
       }).catch(function () { /* posture stays conservative on fetch failure */ });
     }
+    refineSelectionPosture(arrivalFocus);
     // Conclusion enrichment: the concluded strategy band names the exact selected structure.
     if (structureReady() && flow.posture('strategy') === 'done') {
       PlanStore.latestStrategy(plan.id).then(function (latest) {

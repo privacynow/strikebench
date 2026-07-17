@@ -468,8 +468,8 @@ test('Research reaches a fresh ranked field in one goal choice and one command',
   });
   assert.equal(field.symbol, 'QQQ');
   assert.ok(field.candidates.length > 0, 'the destination already contains the ranked field');
-  assert.equal(await page.locator('.plan-tool[data-strategy-tool="compare"].active').count(), 1,
-    'the ranked comparison is the visible Strategy tool');
+  assert.ok(await page.locator('#plan-strategy-panel-compare:not([hidden])').count() === 1,
+    'the ranked comparison is the strategy band itself, not a tab to find');
 
   await go('#/home');
   await page.waitForSelector('#home-context-line');
@@ -545,7 +545,7 @@ test('Outcomes distinguishes a stale selection and reprices the same legs', asyn
   assert.equal(await page.locator('#plan-outcomes .outcome-basis-state:has-text("Setup needed")').count(), 4,
     'all four outcome lenses remain visible but unavailable until repricing');
   await page.getByRole('button', { name: 'Reprice the prior structure', exact: true }).click();
-  await page.waitForSelector('.plan-tool[data-strategy-tool="yourTrade"][aria-selected="true"]');
+  await page.waitForSelector('.plan-tool[data-strategy-tool="yourTrade"][aria-pressed="true"]');
   assert.ok(await page.locator('#plan-strategy-body .position-leg').count() > 0,
     'repricing carries the prior exact legs into the direct editor');
 });
@@ -589,7 +589,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'creating a Plan is announced before the journey continues');
   assert.match(planHash, /\/strategy$/,
     'an explicit goal has one canonical destination: Strategy');
-  await go(planHash.replace('/strategy', '/understand'));
+  await go(planHash.replace('/strategy', '/evidence'));
   await page.waitForSelector('#plan-flow');
   await page.waitForSelector('#plan-stage-evidence .plan-stage-carry');
   assert.match(await page.textContent('#plan-stage-evidence .plan-stage-carry'), /AAPL.*Earn income.*21 trading sessions.*Demo market/s,
@@ -619,7 +619,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.waitForFunction(() => /45 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
-  assert.equal(await page.evaluate(() => location.hash), planHash.replace('/strategy', '/understand'));
+  assert.equal(await page.evaluate(() => location.hash), planHash.replace('/strategy', '/evidence'));
   assert.match(await page.textContent('#plan-header'), /45 trading sessions/);
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income/s);
 
@@ -746,7 +746,8 @@ test('a pre-decision Plan can change goal and returns to Strategy without forkin
 
   await page.click('#plan-edit-context');
   await page.click('#plan-change-structure');
-  await page.waitForSelector('.plan-tool[aria-selected="true"]:has-text("All strategies")');
+  await page.waitForSelector('.plan-tool[aria-pressed="true"]:has-text("All strategies")');
+  await page.waitForSelector('#plan-strategy-panel-builder:not([hidden]) #builder-catalog .tpl', { timeout: 20000 });
   assert.match(await page.textContent('#plan-strategy-body'), /Every strategy, shown by payoff shape/i,
     'changing structure opens the full visual catalog instead of reloading the same ranked view');
 });
@@ -764,13 +765,11 @@ test('Plan flow orients both levels without hiding capabilities or stealing the 
     /select a structure/i, 'locked bands state what unlocks them');
   assert.match(await page.textContent('[data-band="live"] .flow-band-locked'),
     /once you commit/i, 'the live band explains when it appears');
-  await page.waitForSelector('#plan-stage-evidence');
-  assert.match(await page.textContent('.plan-stage-carry'), /TSLA.*Demo market/s,
-    'the evidence band names the context carried into it');
-
   const beforeViewOnlyNavigation = await page.evaluate(id => API.getFresh('/api/plans/' + id), plan.id);
   await go('#/plan/' + plan.id + '/evidence');
   await page.waitForSelector('#plan-stage-evidence');
+  assert.match(await page.textContent('.plan-stage-carry'), /TSLA.*Demo market/s,
+    'the evidence band names the context carried into it');
   const afterViewOnlyNavigation = await page.evaluate(id => API.getFresh('/api/plans/' + id), plan.id);
   assert.equal(afterViewOnlyNavigation.version, beforeViewOnlyNavigation.version,
     'viewing another band never competes with assumption or decision writes');
@@ -794,8 +793,11 @@ test('Plan flow orients both levels without hiding capabilities or stealing the 
     'the unfocused strategy band invites with what it holds');
   await page.click('[data-band="strategy"] .flow-band-invitation');
   await page.waitForSelector('#plan-strategy-body');
-  assert.equal(await page.locator('.plan-tool').count(), 5,
-    'Compare, Build, Your trade, Chain, and Scout stay reachable from the Plan');
+  await page.waitForSelector('#plan-strategy-panel-compare:not([hidden])');
+  assert.equal(await page.locator('#plan-strategy-panel-compare:not([hidden])').count(), 1,
+    'the ranked proposals are the band content itself');
+  assert.equal(await page.locator('.plan-tool').count(), 4,
+    'Build, Your trade, Chain, and Scout stay reachable as composers and pickers');
 
   await page.click('[data-band="view"] .flow-band-conclusion');
   await page.waitForSelector('[data-band="view"] #plan-declare-view');
@@ -868,18 +870,26 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     throw new Error('Strategy stage did not compose: ' + (await page.locator('#app').textContent())
       + '\n' + error.message);
   });
-  assert.equal(await page.locator('.plan-tool').count(), 5, 'one in-stage selector owns all Strategy tools');
+  // The proposals are the band's content; composers and pickers live in one compose row.
+  assert.equal(await page.locator('#plan-strategy-panel-compare:not([hidden])').count(), 1,
+    'the ranked comparison renders as the band content without a tab');
+  assert.equal(await page.locator('.plan-tool').count(), 4, 'one compose row owns the composers and pickers');
   await assertNamedControls('#plan-stage-strategy');
   await assertTabContracts('#plan-stage-strategy');
-  await page.locator('.plan-tool[aria-selected="true"]').focus();
-  await page.keyboard.press('ArrowRight');
-  await page.waitForSelector('.plan-tool[data-strategy-tool="builder"][aria-selected="true"]');
-  assert.equal(await page.locator('.plan-tool[data-strategy-tool="builder"]').getAttribute('tabindex'), '0',
-    'arrow keys activate and focus the next Strategy tool');
-  await page.keyboard.press('ArrowLeft');
-  await page.waitForSelector('.plan-tool[data-strategy-tool="compare"][aria-selected="true"]');
-  assert.match(await page.textContent('.plan-tool-selector'), /Proposed trades.*All strategies.*Your trade.*Option prices.*Scout/s,
-    'Beginner gets plain, capability-oriented Strategy labels');
+  // Composer chips are disclosure toggles: press opens beside the proposals, press again folds.
+  await page.locator('.plan-tool[data-strategy-tool="builder"]').click();
+  await page.waitForSelector('.plan-tool[data-strategy-tool="builder"][aria-pressed="true"]');
+  await page.waitForSelector('#plan-strategy-panel-builder:not([hidden])');
+  await page.locator('.plan-tool[data-strategy-tool="yourTrade"]').click();
+  await page.waitForSelector('.plan-tool[data-strategy-tool="yourTrade"][aria-pressed="true"]');
+  assert.equal(await page.locator('.plan-tool[data-strategy-tool="builder"][aria-pressed="true"]').count(), 0,
+    'one composer opens at a time');
+  assert.match(await page.textContent('.plan-tool-selector'), /Compose your own.*All strategies.*Your trade.*Option prices.*Scout/s,
+    'Beginner gets plain, capability-oriented composer labels');
+  await page.locator('.plan-tool[data-strategy-tool="yourTrade"]').click();
+  await page.waitForSelector('#plan-strategy-panel-yourTrade[hidden]', { state: 'attached' });
+  assert.equal(await page.locator('.plan-tool[aria-pressed="true"]').count(), 0,
+    'a second press folds composition back to the proposals');
   assert.equal(await page.locator('#plan-strategy-filters .xp-head:has-text("Only show proposed trades")').getAttribute('aria-expanded'), 'true',
     'the five fit limits use the available desktop width at both levels');
   assert.equal(await page.locator('#plan-stage-strategy a[href^="#/trade"], #plan-stage-strategy button:has-text("Open strategy tools")').count(), 0,
@@ -1063,6 +1073,7 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   await page.waitForSelector('#plan-strategy-body');
   assert.match(await page.textContent('#plan-header'), new RegExp(scoutedSymbol),
     'the pick opens as a linked sibling rather than changing the origin Plan symbol');
+  await page.waitForSelector('.plan-selected-structure.ranked-idea-hero', { timeout: 15000 });
   assert.equal(await page.locator('.plan-selected-structure.ranked-idea-hero').count(), 1,
     'a linked Scout pick uses the same selected decision hero as a ranked Plan pick');
   assert.equal(await page.locator('#plan-stage-strategy button:has-text("Continue to Outcomes")').count(), 1,
@@ -1131,9 +1142,9 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p11-income-beginner.png'), fullPage: true });
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
-  await page.waitForSelector('#plan-stage-strategy');
-  assert.match(await page.textContent('.plan-tool-selector'), /Ranked field.*Builder.*Chain.*Scout/s,
-    'Expert receives dense professional tool labels');
+  await page.waitForSelector('#plan-compose');
+  assert.match(await page.textContent('.plan-tool-selector'), /Compose your own.*Builder.*Your trade.*Chain.*Scout/s,
+    'Expert receives dense professional composer labels');
   assert.equal(await page.locator('#plan-strategy-filters .plan-filter-grid input').count(), 5,
     'Expert sees the same five limits inline');
   await page.click('#plan-run-strategy');
@@ -1310,7 +1321,9 @@ test('Plan Builder retains synthetic exposure sizing at both experience levels',
 
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
   await page.waitForSelector('#plan-stage-strategy');
-  await page.locator('.plan-tool').filter({ hasText: 'Builder' }).click();
+  if (await page.locator('.plan-tool[data-strategy-tool="builder"]').getAttribute('aria-pressed') !== 'true') {
+    await page.locator('.plan-tool').filter({ hasText: 'Builder' }).click();
+  }
   await page.waitForSelector('#builder-template');
   if (await page.inputValue('#builder-template') !== 'SYNTHETIC_LONG') {
     await page.selectOption('#builder-template', 'SYNTHETIC_LONG');
@@ -1475,7 +1488,7 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   await page.click('#plan-outcomes-basis-model');
   await page.waitForSelector('.plan-proposal-comparison-result', { timeout: 20000 });
-  assert.match(await page.textContent('.plan-proposal-comparison-result .lineage-chip'), /Simulation\s*#[0-9a-f]{6}/i,
+  assert.match(await page.textContent('.plan-proposal-comparison-result .lineage-chip'), /Simulation.{0,3}#[0-9a-f]{6}/i,
     'the restored comparison names the exact stored fan it reprices — a durable receipt without an internal token');
 
   const reviewTrade = page.locator('.plan-proposal-comparison-result button').filter({ hasText: 'Review this trade' }).first();
@@ -2101,12 +2114,13 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.getByRole('button', { name: 'Close position' }).click();
   const closedPlan = await (await closeApplyResponse).json();
   assert.equal(closedPlan.plan.status, 'CLOSED');
+  // The stage fills asynchronously and a posture refresh may repaint it once more —
+  // wait for the settled review content rather than sampling between paints.
   await page.waitForFunction(() => {
     const stage = document.getElementById('plan-stage-manage-review');
-    return stage && /trade decision/i.test(stage.textContent || '') && !document.querySelector('#unwind-btn');
+    const text = stage ? stage.textContent || '' : '';
+    return /trade decision/i.test(text) && /plan position/i.test(text) && !document.querySelector('#unwind-btn');
   }, null, { timeout: 15000 });
-  assert.match(await page.textContent('#plan-stage-manage-review'), /trade decision/i);
-  assert.match(await page.textContent('#plan-stage-manage-review'), /plan position/i);
 
   await go('#/plans');
   await page.waitForSelector('#plans-library .home-plan-tile');
@@ -3853,9 +3867,16 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await go('#/portfolio/book/overview');
   assert.equal(await page.locator('#route-error').count(), 0, 'the canonical tracked-account route is reachable');
   await assertTabContracts('#app');
-  await page.getByRole('textbox', { name: 'Account name', exact: true }).fill('Tracked taxable test');
-  await page.getByRole('spinbutton', { name: 'Opening cash $', exact: true }).fill('100000');
-  await page.getByRole('button', { name: 'Create tracked account', exact: true }).click();
+  if (!(await page.locator('.portfolio-book-start').count())) {
+    // A tracked account already exists (the broker-promotion journey created one earlier);
+    // the Book then offers new accounts through settings instead of the first-run form.
+    await page.evaluate(() => { App.state.portfolioBookNew = true; });
+    await go('#/portfolio/book/settings');
+    await page.waitForSelector('.book-new-account');
+  }
+  await page.getByRole('textbox', { name: 'Account name', exact: true }).first().fill('Tracked taxable test');
+  await page.getByRole('spinbutton', { name: 'Opening cash $', exact: true }).first().fill('100000');
+  await page.getByRole('button', { name: 'Create tracked account', exact: true }).first().click();
   await page.waitForSelector('.portfolio-book-context:has-text("Tracked taxable test")');
   await page.waitForSelector('.book-summary-stats');
   assert.match(await page.textContent('#app'), /Cash in this book[\s\S]*\$100,000\.00/,
@@ -4435,11 +4456,11 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   await page.waitForFunction(expected => document.querySelectorAll('#plan-strategy-body .position-leg').length === expected,
     legCountBeforeAdd);
   await page.evaluate(() => { window.__mountedExactEditor = document.querySelector('#plan-strategy-panel-yourTrade .position-editor'); });
-  await page.getByRole('tab', { name: /All strategies/ }).click();
+  await page.locator('.plan-tool[data-strategy-tool="builder"]').click();
   await page.waitForSelector('#plan-strategy-panel-builder:not([hidden])');
   assert.equal(await page.locator('#plan-strategy-panel-yourTrade[hidden] .position-editor').count(), 1,
     'switching to Builder hides the exact-package workspace without destroying it');
-  await page.getByRole('tab', { name: /Your trade/ }).click();
+  await page.locator('.plan-tool[data-strategy-tool="yourTrade"]').click();
   await page.waitForSelector('#plan-strategy-panel-yourTrade:not([hidden]) .position-editor');
   assert.equal(await page.evaluate(() => window.__mountedExactEditor
     === document.querySelector('#plan-strategy-panel-yourTrade .position-editor')), true,
@@ -4475,7 +4496,7 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     'Phase 3 draft survives reload and tabs', 'reload restores the exact shared editor draft');
   assert.equal(await page.locator('#plan-strategy-body .position-leg .position-strike-select').first().inputValue(),
     strikeAfterKeyboardDrag, 'reload restores the chain-selected and handle-adjusted strike');
-  assert.equal(await page.locator('#plan-tool-yourTrade').getAttribute('aria-selected'), 'true',
+  assert.equal(await page.locator('#plan-tool-yourTrade').getAttribute('aria-pressed'), 'true',
     'reload returns to the editor rather than hiding the restored draft behind another Strategy tool');
   const listed = await page.evaluate(async () => {
     const research = await API.getFresh('/api/research/AAPL');
@@ -4715,7 +4736,6 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
   assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
   const plan = await openPlan('AAPL', 'strategy');
-  await page.locator('.plan-tool[data-strategy-tool="compare"]').click();
   await page.waitForSelector('#plan-run-strategy');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
@@ -5099,8 +5119,13 @@ test('destination navigation starts at the top while Research owns its explicit 
   await page.evaluate(planId => App.navigate('#/plan/' + planId + '/evidence'), plan.id);
   await page.waitForFunction(() => location.hash.endsWith('/evidence')
     && document.getElementById('app').getAttribute('data-ready') === 'true');
-  assert.ok(await page.evaluate(() => window.scrollY <= 1),
-    'moving between Plan stages orients at the destination instead of inheriting a stale offset');
+  await page.waitForFunction(() => {
+    const band = document.querySelector('[data-band="evidence"]');
+    if (!band) return false;
+    const top = band.getBoundingClientRect().top;
+    return top > -40 && top < innerHeight / 2;
+  }, null, { timeout: 10000 });
+  assert.ok(true, 'moving between Plan stages orients at the destination band, never a stale offset');
   await openResearchTab('overview');
   await page.waitForSelector('#history-card .chart-wrap');
   await page.evaluate(() => window.scrollTo(0, Math.min(700, document.documentElement.scrollHeight - innerHeight)));
@@ -6485,4 +6510,60 @@ test('Program ONE R0: visible labels are registry-covered or reviewed plain lang
   assert.deepEqual([...uncovered.keys()], [],
     'labels lacking registry coverage or allowlist review: '
       + [...uncovered].map(([t, route]) => `"${t}" (${route})`).join(', '));
+});
+
+test('Program ONE: the workspace flow is a dense attention document, not a wall', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  // A unique horizon guarantees a genuinely fresh plan — creation dedupes on matching context.
+  await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'bullish', '37d');
+  await page.waitForSelector('#plan-flow');
+  await page.waitForSelector('#plan-strategy-body', { timeout: 30000 }).catch(async error => {
+    const diag = await page.evaluate(() => ({
+      hash: location.hash, ready: document.getElementById('app').dataset.ready,
+      bands: Array.from(document.querySelectorAll('.flow-band')).map(b => b.dataset.band + ':' + b.dataset.posture),
+      strategyText: (document.querySelector('[data-band="strategy"]') || {}).textContent?.slice(0, 220)
+    }));
+    throw new Error('DIAG ' + JSON.stringify(diag) + ' :: ' + error.message);
+  }); // attention lands on the required next step
+  assert.equal(await page.locator('.flow-band[data-posture="active"]').count(), 1,
+    'exactly one band holds attention; the rest are conclusions, invitations, or locks');
+  const geometry = await page.evaluate(() => ({
+    doc: document.body.scrollHeight, viewport: innerWidth,
+    compact: Array.from(document.querySelectorAll('.flow-band:not([data-posture="active"])'))
+      .map(band => ({ band: band.dataset.band, h: band.offsetHeight })).filter(row => row.h >= 96)
+  }));
+  assert.ok(geometry.doc < 2600,
+    'a declared view with nothing run fits a readable document, was ' + geometry.doc + 'px');
+  assert.deepEqual(geometry.compact, [],
+    'every non-active band is a compact row (title + one line)');
+});
+
+test('Program ONE: the evidence fan survives attention moves without re-rendering', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  // A unique horizon guarantees a genuinely fresh plan — creation dedupes on matching context.
+  const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish', '41d');
+  await page.waitForSelector('#research-outcomes-basis-futures');
+  await page.click('#research-outcomes-basis-futures');
+  await page.waitForSelector('#whatif-run');
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-out svg', { timeout: 30000 });
+  await page.evaluate(() => { window.__fanCanvas = document.querySelector('#whatif-out svg'); });
+
+  // Attention moves to strategy IN PLACE: the workspace document survives the navigation.
+  await page.evaluate(() => { window.__flowNode = document.getElementById('plan-flow'); });
+  await go('#/plan/' + plan.id + '/strategy');
+  assert.equal(await page.evaluate(() => window.__flowNode === document.getElementById('plan-flow')), true,
+    'same-plan stage navigation is a position change inside one live document, never a teardown');
+  await page.waitForSelector('[data-band="evidence"].is-folded');
+  assert.equal(await page.evaluate(() => window.__fanCanvas.isConnected), true,
+    'the folded evidence band keeps its rendered fan mounted');
+
+  // Reopening is one tap and greets the user with the SAME canvas — zero re-render.
+  await page.click('[data-band="evidence"] .flow-band-invitation');
+  await page.waitForSelector('[data-band="evidence"]:not(.is-folded)');
+  assert.equal(await page.evaluate(() =>
+    window.__fanCanvas === document.querySelector('#whatif-out svg')), true,
+    'the same canvas node survives fold and reopen');
 });

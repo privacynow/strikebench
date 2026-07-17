@@ -37,7 +37,15 @@
     // left open by earlier attention fold back to their conclusions or invitations.
     if (focusKey) {
       sections.forEach(function (s) { if (s.key !== focusKey) delete openOverrides[s.key]; });
-      openOverrides[focusKey] = 'open';
+      var focusIndex = sections.findIndex(function (s) { return s.key === focusKey; });
+      var focusSection = focusIndex >= 0 ? sections[focusIndex] : null;
+      if (focusSection && !focusSection.complete(ctx) && !readyOf(focusSection, focusIndex)) {
+        // Arriving at a locked band must not strand the user with nothing open: the lock
+        // stays visible with its reason, and attention falls to the first actionable band.
+        focusKey = null;
+      } else {
+        openOverrides[focusKey] = 'open';
+      }
     }
 
     function readyOf(section, index) {
@@ -45,11 +53,17 @@
       return section.ready ? !!section.ready(ctx) : priorComplete;
     }
 
+    // Default attention: the first ready-but-incomplete band on the REQUIRED path. Optional
+    // bands (e.g. evidence interrogation) never hold attention by default — they never
+    // complete, so they would pin the journey forever; they open on deep-link or invitation.
     function firstOpenIndex() {
+      var optionalFallback = -1;
       for (var i = 0; i < sections.length; i++) {
-        if (!sections[i].complete(ctx) && readyOf(sections[i], i)) return i;
+        if (sections[i].complete(ctx) || !readyOf(sections[i], i)) continue;
+        if (!sections[i].optional) return i;
+        if (optionalFallback < 0) optionalFallback = i;
       }
-      return -1;
+      return optionalFallback;
     }
 
     // Completing a band by acting INSIDE it never yanks its content away: a band that was
@@ -72,8 +86,43 @@
     function paintBand(section, index) {
       var posture = postureOf(section, index);
       var band = handles[section.key].el;
+      var handle = handles[section.key];
+
+      // retainOnFold: the band's body stays mounted through fold/unfold — expensive
+      // instruments (the fan canvas) survive by construction instead of re-rendering.
+      // Folded = the aperture collapses (CSS) and the content goes inert; the invitation
+      // row paints in front of it exactly like a non-retained band's.
+      if (section.retainOnFold && handle.aperture) {
+        if (posture === 'active' || posture === 'revisit') {
+          band.dataset.posture = 'active';
+          band.classList.remove('is-folded');
+          handle.aperture.firstChild.inert = false;
+          if (handle.invitationRow) { handle.invitationRow.remove(); handle.invitationRow = null; }
+          openOverrides[section.key] = 'open';
+          return;
+        }
+        if (posture === 'ready') {
+          band.dataset.posture = 'ready';
+          band.classList.add('is-folded');
+          handle.aperture.firstChild.inert = true;
+          if (handle.invitationRow) handle.invitationRow.remove();
+          var retainedInvitation = (section.invitation && section.invitation(ctx)) || 'Ready — open this step.';
+          handle.invitationRow = el('button', { type: 'button', class: 'flow-band-invitation',
+            'aria-expanded': 'false',
+            onclick: function () { api.reopen(section.key); } },
+            el('span', { class: 'flow-band-invitation-body' }, retainedInvitation),
+            el('span', { class: 'flow-band-open muted' }, 'Open'));
+          band.insertBefore(handle.invitationRow, handle.aperture);
+          return;
+        }
+        // Any other posture (a real content change) falls through to the rebuild below.
+        handle.aperture = null;
+        handle.invitationRow = null;
+      }
+
       band.innerHTML = '';
       band.dataset.posture = posture === 'revisit' ? 'active' : posture;
+      band.classList.remove('is-folded');
       var head = el('div', { class: 'flow-band-head' },
         el('h2', { class: 'flow-band-title', id: 'band-' + section.key },
           section.title, section.info ? UI.info(section.info) : null));
@@ -114,7 +163,14 @@
           'Done revising — fold to the conclusion'));
       }
       var host = el('div', { class: 'flow-band-body' });
-      band.appendChild(host);
+      if (section.retainOnFold) {
+        host.classList.add('flow-aperture-inner');
+        var aperture = el('div', { class: 'flow-aperture' }, host);
+        handles[section.key].aperture = aperture;
+        band.appendChild(aperture);
+      } else {
+        band.appendChild(host);
+      }
       section.render(host, ctx, api);
     }
 
@@ -142,7 +198,7 @@
         function cancel() { cancelled = true; cleanup(); }
         function cleanup() {
           observer.disconnect();
-          ['wheel', 'touchstart', 'keydown'].forEach(function (kind) {
+          ['wheel', 'touchstart', 'keydown', 'pointerdown', 'focusin'].forEach(function (kind) {
             window.removeEventListener(kind, cancel);
           });
         }
@@ -152,18 +208,32 @@
           if (Math.abs(top) > 24) target.scrollIntoView({ behavior: 'auto', block: 'start' });
         });
         observer.observe(root);
-        ['wheel', 'touchstart', 'keydown'].forEach(function (kind) {
+        // Any interaction means attention has landed: scroll intent, a click (whose handler
+        // may own its own scroll, e.g. the editor's add-leg), or focus movement all win.
+        ['wheel', 'touchstart', 'keydown', 'pointerdown', 'focusin'].forEach(function (kind) {
           window.addEventListener(kind, cancel, { passive: true, once: true });
         });
         setTimeout(cleanup, 2500);
       },
-      /** Move attention to a band: open it, fold the bands attention leaves behind, scroll.
-       *  Folding on attention-move is not a yank — the user is the one who moved on. */
-      reopen: function (key) {
-        focusKey = key;
-        sections.forEach(function (s) { if (s.key !== key) delete openOverrides[s.key]; });
-        openOverrides[key] = 'open';
+      /** Move attention without scrolling: the new focus opens, overrides attention left
+       *  behind fold, postures repaint. Folding on attention-move is not a yank — the user
+       *  is the one who moved on. A locked target falls back to default attention. */
+      setFocus: function (key) {
+        focusKey = key || null;
+        if (focusKey) {
+          sections.forEach(function (s) { if (s.key !== focusKey) delete openOverrides[s.key]; });
+          var index = sections.findIndex(function (s) { return s.key === focusKey; });
+          if (index >= 0 && !sections[index].complete(ctx) && !readyOf(sections[index], index)) {
+            focusKey = null;
+          } else {
+            openOverrides[focusKey] = 'open';
+          }
+        }
         api.refresh();
+      },
+      /** Move attention to a band and bring it into view. */
+      reopen: function (key) {
+        api.setFocus(key);
         api.scrollTo(key);
       },
       /** Deliberately conclude a band (an explicit save-and-advance action). */

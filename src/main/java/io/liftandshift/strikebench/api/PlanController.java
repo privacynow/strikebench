@@ -94,6 +94,7 @@ final class PlanController {
                 strategyController::planStrategySelectionDelete,
                 strategyController::planScoutLatest, strategyController::planScoutRun,
                 strategyController::planScoutSpawn, planOutcomeController::planOutcomesLatest,
+                planOutcomeController::planEnsembleLatest,
                 planOutcomeController::planEnsembleRun, planOutcomeController::planOutcomeRun,
                 planOutcomeController::planOutcomeCompare, planOutcomeController::planBacktestRun,
                 planOutcomeController::planBacktestGet, planDecisionController::planRehearsalsList,
