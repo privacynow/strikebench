@@ -369,6 +369,13 @@
         + '<text x="' + (padL + 4) + '" y="' + labelY + '" font-size="10" fill="var(--risk-caution-solid,#b98a00)">'
         + levelName(lv.key) + ' ' + Number(lv.price).toFixed(2) + '</text>';
     }).join('');
+    // A pinned fan is never presented as plain Monte Carlo: outside the authoring canvas the
+    // stored waypoints still render as read-only markers (the honesty note follows the chart).
+    var readOnlyPins = !opts.author && (p.waypoints || []).length ? p.waypoints.map(function (w) {
+      return '<circle cx="' + x(w.dayIndex).toFixed(1) + '" cy="' + y(w.priceRatio * p.spot).toFixed(1)
+        + '" r="4" class="fan-pin-dot"><title>authored waypoint · $' + (w.priceRatio * p.spot).toFixed(2)
+        + ' · session ' + w.dayIndex + '</title></circle>';
+    }).join('') : '';
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="possible futures">'
       + gridY
       + '<path d="' + band + '" fill="var(--accent)" opacity="0.14"/>'
@@ -376,6 +383,8 @@
       + '<path d="' + median + '" fill="none" stroke="var(--accent)" stroke-width="2.2"/>'
       + spotLine
       + levelLines
+      + readOnlyPins
+      + (opts.author ? '<g class="fan-pins" data-canvas-pins="true"></g>' : '')
       + '<text x="' + padL + '" y="' + (H - 6) + '" font-size="10" fill="var(--text-dim)">today</text>'
       + '<text x="' + (W - padR) + '" y="' + (H - 6) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">+' + days + 'd</text>'
       + '</svg>';
@@ -427,6 +436,109 @@
           + '%), travelled ' + mn.toFixed(2) + ' \u2013 ' + mx.toFixed(2) + ' along the way. Click the chart background to clear.');
         wrap.appendChild(readout);
       });
+    })();
+    // The scenario canvas layer: click the fan to pin "the price touches this level around this
+    // session", drag a pin to adjust, double-click it to remove. Nothing navigates — the studio
+    // that owns opts.author re-runs the fan through the outcomes API and repaints in place.
+    if (opts.author) (function wireAuthor() {
+      var author = opts.author;
+      var svgEl = wrap.querySelector('svg');
+      var layer = svgEl.querySelector('.fan-pins');
+      wrap.classList.add('fan-chart-authorable');
+      wrap.firstChild.setAttribute('data-canvas-fan', 'true');
+      function pinPrice(pin) { return pin.priceRatio * p.spot; }
+      function paintPins() {
+        layer.innerHTML = (author.pins || []).map(function (pin) {
+          var px = x(pin.dayIndex), py = y(pinPrice(pin));
+          var tol = '';
+          if (pin.tolerance) {
+            var yHi = y((pin.priceRatio + pin.tolerance) * p.spot);
+            var yLo = y((pin.priceRatio - pin.tolerance) * p.spot);
+            tol = '<line x1="' + px.toFixed(1) + '" y1="' + yHi.toFixed(1) + '" x2="' + px.toFixed(1) + '" y2="' + yLo.toFixed(1) + '" class="fan-pin-tolerance"/>'
+              + '<line x1="' + (px - 4).toFixed(1) + '" y1="' + yHi.toFixed(1) + '" x2="' + (px + 4).toFixed(1) + '" y2="' + yHi.toFixed(1) + '" class="fan-pin-tolerance"/>'
+              + '<line x1="' + (px - 4).toFixed(1) + '" y1="' + yLo.toFixed(1) + '" x2="' + (px + 4).toFixed(1) + '" y2="' + yLo.toFixed(1) + '" class="fan-pin-tolerance"/>';
+          }
+          var labelY = py < 26 ? py + 18 : py - 9;
+          return '<g class="fan-pin" data-day="' + pin.dayIndex + '">' + tol
+            + '<circle cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1) + '" r="11" class="fan-pin-hit"/>'
+            + '<circle cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1) + '" r="4.5" class="fan-pin-dot"/>'
+            + '<text x="' + Math.min(W - 62, Math.max(padL + 46, px)).toFixed(1) + '" y="' + labelY.toFixed(1)
+            + '" text-anchor="middle" class="fan-pin-label">$' + pinPrice(pin).toFixed(2) + ' · session ' + pin.dayIndex + '</text>'
+            + '</g>';
+        }).join('');
+      }
+      function point(ev) {
+        var r = svgEl.getBoundingClientRect();
+        return { fx: (ev.clientX - r.left) / Math.max(1, r.width) * W,
+          fy: (ev.clientY - r.top) / Math.max(1, r.height) * H };
+      }
+      function dayAt(fx) { return Math.round((fx - padL) / Math.max(1, W - padL - padR) * Math.max(1, days)); }
+      function priceAt(fy) { return lo + (hi - lo) * (1 - (fy - padT) / Math.max(1, H - padT - padB)); }
+      var suppressClickUntil = 0;
+      svgEl.addEventListener('click', function (ev) {
+        if (Date.now() < suppressClickUntil) return;
+        if (ev.target.closest && (ev.target.closest('.fan-pin') || ev.target.closest('g.fan-sample'))) return;
+        var pt = point(ev);
+        if (pt.fx < padL - 4 || pt.fx > W - padR + 4 || pt.fy < padT || pt.fy > H - padB) return;
+        var day = Math.max(1, Math.min(Math.max(1, days), dayAt(pt.fx)));
+        var ratio = priceAt(pt.fy) / p.spot;
+        if (!(ratio > 0) || !isFinite(ratio)) return;
+        ratio = Math.round(ratio * 10000) / 10000;
+        var existing = (author.pins || []).find(function (other) { return other.dayIndex === day; });
+        if (existing) existing.priceRatio = ratio;
+        else {
+          author.pins.push({ dayIndex: day, priceRatio: ratio, tolerance: null });
+          author.pins.sort(function (a, b) { return a.dayIndex - b.dayIndex; });
+        }
+        paintPins();
+        author.onChange(author.pins, existing ? 'move' : 'add');
+      });
+      svgEl.addEventListener('dblclick', function (ev) {
+        var g = ev.target.closest && ev.target.closest('.fan-pin');
+        if (!g) return;
+        ev.preventDefault();
+        var day = parseInt(g.getAttribute('data-day'), 10);
+        var index = (author.pins || []).findIndex(function (other) { return other.dayIndex === day; });
+        if (index < 0) return;
+        author.pins.splice(index, 1);
+        paintPins();
+        author.onChange(author.pins, 'remove');
+      });
+      var drag = null;
+      svgEl.addEventListener('pointerdown', function (ev) {
+        var g = ev.target.closest && ev.target.closest('.fan-pin');
+        if (!g) return;
+        var day = parseInt(g.getAttribute('data-day'), 10);
+        var pin = (author.pins || []).find(function (other) { return other.dayIndex === day; });
+        if (!pin) return;
+        drag = { pin: pin, moved: false };
+        try { svgEl.setPointerCapture(ev.pointerId); } catch (e) { /* older engines */ }
+        ev.preventDefault();
+      });
+      svgEl.addEventListener('pointermove', function (ev) {
+        if (!drag) return;
+        var pt = point(ev);
+        var ratio = Math.max(0.01, priceAt(pt.fy) / p.spot);
+        var day = Math.max(1, Math.min(Math.max(1, days), dayAt(pt.fx)));
+        var taken = (author.pins || []).some(function (other) { return other !== drag.pin && other.dayIndex === day; });
+        drag.pin.priceRatio = Math.round(ratio * 10000) / 10000;
+        if (!taken) drag.pin.dayIndex = day;
+        drag.moved = true;
+        author.pins.sort(function (a, b) { return a.dayIndex - b.dayIndex; });
+        paintPins();
+      });
+      function endDrag() {
+        if (!drag) return;
+        var moved = drag.moved;
+        drag = null;
+        if (moved) {
+          suppressClickUntil = Date.now() + 250;
+          author.onChange(author.pins, 'move');
+        }
+      }
+      svgEl.addEventListener('pointerup', endDrag);
+      svgEl.addEventListener('pointercancel', endDrag);
+      paintPins();
     })();
     if ((p.samples || []).length) {
       sampleChooser = el('div', { class: 'fan-sample-chooser', role: 'group', 'aria-label': 'Inspect one sample future' },
@@ -640,6 +752,9 @@
     IRON_CONDOR: function (s, d) { return [L('SELL', 'PUT', grid(s * 0.95, s), d), L('BUY', 'PUT', grid(s * 0.90, s), d), L('SELL', 'CALL', grid(s * 1.05, s), d), L('BUY', 'CALL', grid(s * 1.10, s), d)]; },
     IRON_BUTTERFLY: function (s, d) { return [L('SELL', 'PUT', grid(s, s), d), L('BUY', 'PUT', grid(s * 0.94, s), d), L('SELL', 'CALL', grid(s, s), d), L('BUY', 'CALL', grid(s * 1.06, s), d)]; },
     COVERED_CALL: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.05, s), d)]; },
+    COVERED_STRANGLE: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.05, s), d), L('SELL', 'PUT', grid(s * 0.95, s), d)]; },
+    COVERED_CALL_PUT_SPREAD: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.05, s), d), L('BUY', 'PUT', grid(s * 0.95, s), d), L('SELL', 'PUT', grid(s * 0.88, s), d)]; },
+    COVERED_CALL_CALL_OVERLAY: function (s, d) { return [L('BUY', 'STOCK', 0, 0), L('SELL', 'CALL', grid(s * 1.04, s), d), L('BUY', 'CALL', grid(s * 1.10, s), d)]; },
     CALENDAR_CALL: function (s, d) { return [L('SELL', 'CALL', grid(s, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; },
     DIAGONAL_CALL: function (s, d) { return [L('SELL', 'CALL', grid(s * 1.04, s), Math.max(3, Math.round(d * 0.5))), L('BUY', 'CALL', grid(s, s), d + 21)]; },
     LONG_STRADDLE: function (s, d) { return [L('BUY', 'CALL', grid(s, s), d), L('BUY', 'PUT', grid(s, s), d)]; },
@@ -918,9 +1033,359 @@
     return wrap;
   }
 
+  /* ---------------------------------------------------------------------------------------------
+   * The scenario canvas studio (plan workspace · outcomes band). Program ONE R4.5:
+   * draw a believed path onto the Plan's stored fan — "the price touches $X around session N" —
+   * re-run the SAME simulation spine in place through the outcomes API, read the waypoint-fill
+   * honesty label, and freeze named authored scenarios with lineage to the exact base fan.
+   * Beginner/Expert is a lens, never a fork: the same canvas, plainer words at Beginner;
+   * tolerance editing and the fingerprint lineage line at Expert.
+   * ------------------------------------------------------------------------------------------- */
+  function canvasStudio(cfg) {
+    var planRef = cfg.planRef;
+    var beginner = Learn.currentLevel() === 'beginner';
+    var ui = PlanStore.ui(planRef.plan.id);
+    var state = ui.canvas = ui.canvas || {};
+    state.pins = state.pins || [];
+    var runSeq = 0, runTimer = null;
+    var railHost = null, savedHost = null;
+
+    var status = el('div', { class: 'plan-outcome-action-status scenario-canvas-status', 'aria-live': 'polite' });
+    var body = el('div', { class: 'scenario-canvas-body' });
+    var root = el('section', { class: 'card plan-scenario-canvas', id: 'plan-scenario-canvas' },
+      UI.cardHeader(el('span', {}, 'Draw your believed path', UI.info('authoredScenario')),
+        el('span', { class: 'badge badge-modeled' }, 'SCENARIO MODEL')),
+      el('p', { class: 'muted' }, beginner
+        ? 'Click the chart where you believe the price goes. Every pin means “the price touches this level around this session.” The futures re-run through your pins right here, and the label below says honestly how they were honored.'
+        : 'Pin price×session waypoints on the stored fan; the identical model, seed and calibration re-run conditioned on your pins. The fill label states whether pins are honored by exact conditioning or guided interpolation.'),
+      status, body);
+
+    function setStatus(node) { status.replaceChildren(); if (node) status.appendChild(node); }
+    function spot() { return state.preview ? state.preview.spot : 0; }
+    function horizon() {
+      var spec = state.preview && state.preview.receipt && state.preview.receipt.spec;
+      if (spec && spec.horizonDays) return spec.horizonDays;
+      return state.preview && state.preview.bands ? state.preview.bands.length - 1 : null;
+    }
+    function sessionLabel(day) {
+      var iso = state.preview && state.preview.sessionDates && state.preview.sessionDates[day - 1];
+      if (!iso) return 'session ' + day + (horizon() ? ' of ' + horizon() : '');
+      var parts = iso.split('-');
+      var d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+      var wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+      var mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
+      return 'session ' + day + ' — ' + wd + ' ' + mo + ' ' + d.getDate();
+    }
+    function adoptSpec(spec) {
+      if (!spec) return null;
+      return { model: spec.model, shape: spec.shape, horizonDays: spec.horizonDays,
+        stepsPerDay: spec.stepsPerDay, driftAnnual: spec.driftAnnual, volAnnual: spec.volAnnual,
+        jumpsPerYear: spec.jumpsPerYear, jumpMean: spec.jumpMean, jumpVol: spec.jumpVol,
+        tailNu: spec.tailNu, heston: spec.heston || null, seed: spec.seed, paths: spec.paths };
+    }
+    function specWithPins() {
+      var base = state.loadedSpec || adoptSpec(state.preview && state.preview.receipt && state.preview.receipt.spec);
+      if (!base) throw new Error('Run the possible-futures fan before authoring on it.');
+      var spec = adoptSpec(base);
+      spec.waypoints = state.pins.map(function (pin) {
+        return { dayIndex: pin.dayIndex, priceRatio: pin.priceRatio,
+          tolerance: pin.tolerance != null && pin.tolerance > 0 ? pin.tolerance : null };
+      });
+      return spec;
+    }
+    function adoptRun(out, restored) {
+      if (!out || !out.preview) return;
+      state.preview = out.preview;
+      state.ensembleRef = out.ensemble || null;
+      var pins = (out.preview.waypoints || []).map(function (w) {
+        return { dayIndex: w.dayIndex, priceRatio: w.priceRatio, tolerance: w.tolerance != null ? w.tolerance : null };
+      });
+      if (restored && pins.length && !state.pins.length) state.pins = pins;
+      // An unpinned fan is the natural authoring base; keep the first base once pins exist so
+      // the saved receipt names the fan the path was actually drawn on.
+      if (out.ensemble && (!pins.length || !state.baseEnsembleId)) {
+        state.baseEnsembleId = out.ensemble.id;
+        state.baseFingerprint = out.ensemble.fingerprint;
+      }
+    }
+    function syncEvidencePin(out, spec) {
+      // One simulation spine (Program ONE §2.3): the authored fan IS the Plan's current stored
+      // simulation, so Evidence and the position lenses quote it instead of a stale pin.
+      var evidence = PlanStore.ui(planRef.plan.id).evidence = PlanStore.ui(planRef.plan.id).evidence || {};
+      evidence.planEnsembleId = out.ensemble && out.ensemble.id;
+      evidence.planEnsembleFingerprint = out.ensemble && out.ensemble.fingerprint;
+      evidence.whatifResults = evidence.whatifResults || {};
+      evidence.whatifResults[planRef.plan.symbol] = { preview: out.preview, ensemble: out.ensemble || null, spec: spec };
+      if (window.Workspace && Workspace.save) Workspace.save();
+    }
+
+    function scheduleRun(delay) {
+      if (runTimer) clearTimeout(runTimer);
+      runTimer = setTimeout(function () { runTimer = null; rerun(); }, delay == null ? 350 : delay);
+    }
+    async function rerun() {
+      var seq = ++runSeq;
+      setStatus(UI.spinner(state.pins.length
+        ? 'Re-running the stored fan through your ' + state.pins.length + ' waypoint' + (state.pins.length === 1 ? '' : 's') + '…'
+        : 'Re-running the plain fan…'));
+      try {
+        var spec = specWithPins();
+        var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+        var out = await PlanStore.runEnsemble(live, { over: spec });
+        if (seq !== runSeq || !root.isConnected) return;
+        adoptRun(out, false);
+        syncEvidencePin(out, spec);
+        if (state.pendingNote) { setStatus(UI.alertBox('caution', state.pendingNote.title, state.pendingNote.items)); state.pendingNote = null; }
+        else setStatus(null);
+        paint();
+      } catch (e) {
+        if (seq !== runSeq) return;
+        var detail = (e && e.message) || 'Retry the run, then check Data if market inputs remain unavailable.';
+        var box = UI.alertBox('danger', 'Could not re-run the fan with these waypoints', [detail]);
+        var hz = horizon();
+        if (hz && /beyond the scenario horizon/.test(detail)) {
+          var kept = state.pins.filter(function (pin) { return pin.dayIndex <= hz; });
+          box.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+            state.pins = kept; paint(); scheduleRun(0);
+          } }, 'Keep the ' + kept.length + ' waypoint' + (kept.length === 1 ? '' : 's') + ' inside the ' + hz + '-session horizon and re-run'));
+        }
+        setStatus(box);
+      }
+    }
+
+    async function runFirstFan(button) {
+      if (button) button.disabled = true;
+      setStatus(UI.spinner('Generating this Plan’s possible futures…'));
+      try {
+        var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+        var out = await PlanStore.runEnsemble(live, {});
+        adoptRun(out, false);
+        syncEvidencePin(out, out.preview && out.preview.receipt && out.preview.receipt.spec);
+        setStatus(null);
+        paint();
+      } catch (e) {
+        if (button) button.disabled = false;
+        setStatus(UI.alertBox('danger', 'Could not generate the fan', [(e && e.message) || 'Check the market data lane, then retry.']));
+      }
+    }
+
+    async function loadSaved() {
+      var out = await API.getFresh('/api/plans/' + planRef.plan.id + '/scenarios');
+      state.saved = out.scenarios || [];
+    }
+
+    async function saveAuthored(button) {
+      if (!state.pins.length) return;
+      button.disabled = true; button.setAttribute('aria-busy', 'true');
+      try {
+        var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+        var out = await API.post('/api/plans/' + live.id + '/scenarios', {
+          expectedVersion: live.version, title: state.title || null,
+          baseEnsembleId: state.baseEnsembleId || null, over: specWithPins() });
+        UI.toast('Scenario saved' + (out.scenario && out.scenario.title ? ': ' + out.scenario.title : ''), 'info');
+        await loadSaved();
+        paintSaved();
+      } catch (e) {
+        setStatus(UI.alertBox('danger', 'Could not save this scenario',
+          [(e && e.message) || 'Re-run the fan, then save again.']));
+      } finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+    }
+
+    function applyScenario(saved) {
+      var hz = horizon();
+      var pins = (saved.waypoints || []).map(function (w) {
+        return { dayIndex: w.dayIndex, priceRatio: w.priceRatio, tolerance: w.tolerance != null ? w.tolerance : null };
+      });
+      var kept = hz ? pins.filter(function (pin) { return pin.dayIndex <= hz; }) : pins;
+      if (!kept.length) {
+        setStatus(UI.alertBox('caution', 'No waypoint fits the current horizon',
+          [(saved.staleness ? saved.staleness + ' ' : '') + 'All ' + pins.length + ' waypoints sit beyond the current '
+            + hz + '-session horizon. Extend the Plan horizon, or author new pins here.']));
+        return;
+      }
+      state.loadedSpec = adoptSpec(saved.spec);
+      state.pins = kept;
+      var notes = [];
+      if (saved.staleness) notes.push(saved.staleness);
+      if (kept.length < pins.length) {
+        notes.push((pins.length - kept.length) + ' of ' + pins.length + ' waypoints sat beyond the current '
+          + hz + '-session horizon and were left off.');
+      }
+      if (notes.length) state.pendingNote = { title: 'Re-anchored to the current fan', items: notes };
+      paint();
+      scheduleRun(0);
+    }
+
+    function fillBanner(fill) {
+      var host = el('div', { class: 'canvas-fill-label', 'data-fill': fill });
+      if (fill === 'EXACT_CONDITIONAL') {
+        var okBox = UI.alertBox('ok', 'Exact conditional paths — ' + (beginner
+          ? 'these futures are the model’s own randomness, guaranteed to pass through your waypoints. Nothing was bent to fake it.'
+          : 'the model’s own randomness, pinned through your waypoints (Gaussian conditioning, not resampling).'));
+        okBox.appendChild(UI.info('waypointFill'));
+        host.appendChild(okBox);
+      } else if (fill === 'GUIDED_INTERPOLATION') {
+        var cautionBox = UI.alertBox('caution', 'Guided interpolation — ' + (beginner
+          ? 'to pass through your waypoints, each path was bent toward them. This model’s sudden jumps and fat tails are approximated near the pins — treat these odds as a guide, not exact.'
+          : 'paths are bent through your waypoints; this model’s fat tails/jumps are approximated near the pins, not exact. Odds near pinned sessions inherit that approximation.'));
+        cautionBox.appendChild(UI.info('waypointFill'));
+        host.appendChild(cautionBox);
+      } else {
+        host.appendChild(el('p', { class: 'muted small' },
+          (beginner ? 'No waypoints yet — this is the plain fan. ' : 'Plain Monte Carlo — no authored waypoints. ')
+          + 'Click the chart to pin “the price touches this level around this session.”',
+          UI.info('waypointFill')));
+      }
+      return host;
+    }
+
+    function removePin(pin) {
+      var index = state.pins.indexOf(pin);
+      if (index < 0) return;
+      state.pins.splice(index, 1);
+      paint();
+      scheduleRun();
+    }
+
+    function paintRail() {
+      if (!railHost) return;
+      railHost.replaceChildren();
+      railHost.appendChild(el('div', { class: 'field-label' }, 'Your waypoints (' + state.pins.length + ')'));
+      if (!state.pins.length) {
+        railHost.appendChild(el('p', { class: 'muted small' }, 'None yet — click the chart to place the first one.'));
+      }
+      state.pins.forEach(function (pin) {
+        var price = pin.priceRatio * spot();
+        var pct = (pin.priceRatio - 1) * 100;
+        var tolControl = null;
+        if (!beginner) {
+          var tolId = 'plan-canvas-tol-' + pin.dayIndex;
+          var tol = el('input', { type: 'number', id: tolId, min: '0', max: '50', step: '0.5',
+            value: pin.tolerance != null ? String(Math.round(pin.tolerance * 1000) / 10) : '',
+            'aria-label': 'Acceptance band around the ' + sessionLabel(pin.dayIndex) + ' level, as ± percent of today’s price' });
+          tol.addEventListener('change', function () {
+            var v = parseFloat(tol.value);
+            pin.tolerance = isFinite(v) && v > 0 ? v / 100 : null;
+            paint();
+            scheduleRun();
+          });
+          tolControl = el('span', { class: 'scenario-pin-tol' }, tol, el('span', { class: 'muted small' }, '±%'));
+        }
+        railHost.appendChild(el('div', { class: 'scenario-pin-row', 'data-pin-day': String(pin.dayIndex) },
+          el('div', { class: 'scenario-pin-desc' },
+            el('b', {}, '$' + price.toFixed(2)),
+            el('span', { class: 'muted small' }, ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% vs today) · '
+              + sessionLabel(pin.dayIndex))),
+          tolControl,
+          el('button', { type: 'button', class: 'btn btn-sm btn-ghost scenario-pin-remove',
+            'aria-label': 'Remove the waypoint at ' + sessionLabel(pin.dayIndex),
+            onclick: function () { removePin(pin); } }, '×')));
+      });
+      var nameId = 'plan-canvas-scenario-name';
+      var name = el('input', { type: 'text', id: nameId, value: state.title || '', maxlength: '120',
+        placeholder: beginner ? 'e.g. Dips early, back by expiry' : 'Scenario name' });
+      name.addEventListener('input', function () { state.title = name.value; });
+      var save = el('button', { type: 'button', class: 'btn', id: 'plan-canvas-save',
+        disabled: state.pins.length ? null : 'disabled',
+        title: state.pins.length ? null : 'Place at least one waypoint first.',
+        onclick: function () { saveAuthored(this); } }, 'Save this scenario');
+      railHost.appendChild(el('div', { class: 'field scenario-canvas-save' },
+        el('label', { for: nameId }, 'Name this scenario'), name, save));
+      if (!beginner && state.baseFingerprint) {
+        railHost.appendChild(el('p', { class: 'muted small scenario-canvas-lineage' },
+          'Authored on stored fan #' + String(state.baseFingerprint).slice(0, 6)
+          + (state.ensembleRef && state.ensembleRef.fingerprint
+            ? ' · now viewing #' + String(state.ensembleRef.fingerprint).slice(0, 6) : '')
+          + ' — the receipt of the exact simulation your pins condition.'));
+      }
+    }
+
+    function paintSaved() {
+      if (!savedHost) return;
+      savedHost.replaceChildren();
+      var rows = state.saved || [];
+      savedHost.appendChild(el('div', { class: 'scenario-saved-head' },
+        el('h4', {}, 'Saved scenarios'),
+        el('p', { class: 'muted small' }, beginner
+          ? 'Each card is a path you drew, kept with how honestly it was honored. Loading one re-applies its pins to the chart above.'
+          : 'Frozen authored specs (pins + model + seed) with lineage to their base fan. Loading re-applies the pins here.')));
+      if (!rows.length) {
+        savedHost.appendChild(el('p', { class: 'muted small' }, 'None saved yet.'));
+        return;
+      }
+      var grid = el('div', { class: 'authored-scenario-grid' });
+      rows.forEach(function (saved) {
+        var stale = saved.currentContext === false;
+        var fillName = saved.waypointFill === 'EXACT_CONDITIONAL' ? 'Exact conditional'
+          : saved.waypointFill === 'GUIDED_INTERPOLATION' ? 'Guided interpolation' : 'No pins';
+        grid.appendChild(el('article', { class: 'authored-scenario-card' + (stale ? ' stale' : ''),
+          'data-fill': saved.waypointFill, 'data-waypoints': String(saved.waypointCount || 0) },
+          el('b', {}, saved.title || 'Authored scenario'),
+          el('div', { class: 'chip-row' },
+            el('span', { class: 'badge ' + (saved.waypointFill === 'GUIDED_INTERPOLATION' ? 'badge-warn' : 'badge-ok') }, fillName),
+            el('span', { class: 'muted small' }, (saved.waypointCount || 0) + ' waypoint'
+              + (saved.waypointCount === 1 ? '' : 's') + ' · saved ' + UI.fmtDate(saved.createdAt))),
+          stale ? el('p', { class: 'muted small scenario-stale-note' },
+            saved.staleness || 'Authored under earlier Plan assumptions.') : null,
+          el('div', { class: 'btn-row' },
+            el('button', { type: 'button', class: 'btn btn-sm' + (stale ? ' btn-secondary' : ''),
+              onclick: function () { applyScenario(saved); } },
+              stale ? 'Re-anchor to the current fan' : 'Load onto the fan'))));
+      });
+      savedHost.appendChild(grid);
+    }
+
+    function paint() {
+      body.replaceChildren();
+      if (!state.preview) {
+        body.appendChild(UI.emptyState('No stored fan to draw on yet',
+          'The canvas authors ON this Plan’s possible-futures fan; the same stored simulation then feeds every outcome lens.',
+          'Run the possible futures', function () { runFirstFan(this); }));
+        return;
+      }
+      var fill = state.preview.waypointFill || 'NONE';
+      root.setAttribute('data-waypoint-fill', fill);
+      body.appendChild(fillBanner(fill));
+      var main = el('div', { class: 'scenario-canvas-main' });
+      main.appendChild(fanChart(state.preview, {
+        noNotes: true,
+        author: {
+          pins: state.pins,
+          sessionDates: state.preview.sessionDates || [],
+          onChange: function () { paintRail(); scheduleRun(); }
+        }
+      }));
+      main.appendChild(el('p', { class: 'muted small' }, beginner
+        ? 'Click where you believe the price goes; drag a pin to adjust; double-click a pin (or use × in the list) to remove it. The chart re-runs right here — no page change.'
+        : 'Click to pin, drag to adjust, double-click to remove. Same model, seed, and calibration — re-run conditioned on your pins, in place.'));
+      railHost = el('div', { class: 'scenario-canvas-rail' });
+      paintRail();
+      body.appendChild(el('div', { class: 'scenario-canvas-cols' }, main, railHost));
+      savedHost = el('div', { class: 'authored-scenario-saved' });
+      paintSaved();
+      body.appendChild(savedHost);
+    }
+
+    (async function init() {
+      body.appendChild(UI.spinner('Opening the scenario canvas…'));
+      if (!state.preview) {
+        try {
+          var restored = await API.getFresh('/api/plans/' + planRef.plan.id + '/outcomes/ensemble/latest');
+          adoptRun(restored, true);
+        } catch (e) { /* no stored fan yet is the normal first-visit state */ }
+      }
+      try { await loadSaved(); } catch (e) { state.saved = state.saved || []; }
+      if (!root.isConnected && !body.isConnected) { /* detached before load — still paint for reattach */ }
+      paint();
+    })();
+
+    return root;
+  }
+
   window.Scenario = {
     SHAPES: SHAPES, CATALOG: CATALOG,
     form: form, fanChart: fanChart, decisionView: decisionView, pnlView: pnlView,
+    canvasStudio: canvasStudio,
     workingLegs: workingLegs, workingPosition: workingPosition,
     realisticOutcomes: realisticOutcomes, sketch: sketch, applyCatalog: applyCatalog
   };

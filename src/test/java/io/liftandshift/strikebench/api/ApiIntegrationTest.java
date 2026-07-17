@@ -1584,4 +1584,112 @@ class ApiIntegrationTest {
         assertThat(applied.statusCode()).withFailMessage(applied.body()).isEqualTo(200);
         return Json.parse(applied.body());
     }
+
+    @Test
+    @Order(44)
+    void accountObjectiveIsAnImmutableRevisionSeriesAppliedProspectively() throws Exception {
+        String id = Json.parse(post("/api/portfolio/accounts", """
+                {"name":"Objective book","accountType":"TAXABLE","lotMethod":"FIFO"}
+                """).body()).get("id").asText();
+
+        JsonNode blank = Json.parse(get("/api/portfolio/accounts/" + id + "/objective").body());
+        assertThat(blank.hasNonNull("latest")).isFalse();
+        assertThat(blank.withArray("history").size()).isZero();
+
+        HttpResponse<String> first = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"income","assignmentPreference":"prefer_below_basis"}
+                """);
+        assertThat(first.statusCode()).as(first.body()).isEqualTo(201);
+        assertThat(Json.parse(first.body()).get("revisionNo").asInt()).isEqualTo(1);
+
+        HttpResponse<String> second = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"DIRECTIONAL","direction":"BULLISH","targetExposureCents":2500000}
+                """);
+        assertThat(second.statusCode()).as(second.body()).isEqualTo(201);
+        JsonNode revised = Json.parse(second.body());
+        assertThat(revised.get("revisionNo").asInt()).isEqualTo(2);
+        assertThat(revised.get("assignmentPreference").asText()).isEqualTo("ACCEPT");
+
+        JsonNode series = Json.parse(get("/api/portfolio/accounts/" + id + "/objective").body());
+        assertThat(series.at("/latest/objective").asText()).isEqualTo("DIRECTIONAL");
+        assertThat(series.at("/latest/direction").asText()).isEqualTo("BULLISH");
+        assertThat(series.withArray("history").size()).isEqualTo(2);
+        assertThat(series.at("/history/0/objective").asText())
+                .as("history is oldest-first and revision 1 is never rewritten")
+                .isEqualTo("INCOME");
+
+        HttpResponse<String> junk = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"GET_RICH_QUICK"}
+                """);
+        assertThat(junk.statusCode()).isEqualTo(400);
+        assertThat(junk.body()).contains("objective must be one of");
+
+        assertThat(post("/api/portfolio/accounts/acct_nope/objective", """
+                {"objective":"INCOME"}
+                """).statusCode()).isEqualTo(404);
+        assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/objective").body())
+                .withArray("history").size()).as("rejected declarations leave no revision behind").isEqualTo(2);
+    }
+
+    @Test
+    @Order(45)
+    void campaignsProposeTheirRollChainAndAssembleOnlyConfirmedMembers() throws Exception {
+        String id = Json.parse(post("/api/portfolio/accounts", """
+                {"name":"Campaign book","accountType":"TAXABLE","lotMethod":"FIFO","openingCashCents":10000000}
+                """).body()).get("id").asText();
+        String tx1 = Json.parse(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-05-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"MANUAL","legs":[
+                  {"instrumentType":"OPTION","action":"SELL","positionEffect":"OPEN","symbol":"MU","optionType":"PUT",
+                   "strike":95,"expiration":"2026-06-19","quantity":1,"multiplier":100,"price":2.50}]}
+                """).body()).get("id").asText();
+        String tx2 = Json.parse(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-06-01","eventType":"ROLL","fillNature":"EXECUTED","feesCents":0,"source":"MANUAL","legs":[
+                  {"instrumentType":"OPTION","action":"BUY","positionEffect":"CLOSE","symbol":"MU","optionType":"PUT",
+                   "strike":95,"expiration":"2026-06-19","quantity":1,"multiplier":100,"price":1.00},
+                  {"instrumentType":"OPTION","action":"SELL","positionEffect":"OPEN","symbol":"MU","optionType":"PUT",
+                   "strike":95,"expiration":"2026-07-17","quantity":1,"multiplier":100,"price":3.00}]}
+                """).body()).get("id").asText();
+
+        HttpResponse<String> created = post("/api/campaigns", """
+                {"title":"MU accumulation","symbol":"MU"}
+                """);
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        String campaignId = Json.parse(created.body()).get("id").asText();
+
+        assertThat(post("/api/campaigns/" + campaignId + "/members", """
+                {"type":"TRANSACTION","id":"%s"}
+                """.formatted(tx1)).statusCode()).isEqualTo(201);
+
+        // The roll is PROPOSED through the lot/roll chain — never silently attached.
+        JsonNode proposals = Json.parse(get("/api/campaigns/" + campaignId + "/proposals").body());
+        assertThat(proposals.withArray("proposals").findValuesAsText("id")).contains(tx2);
+        JsonNode view = Json.parse(get("/api/campaigns/" + campaignId).body());
+        assertThat(view.withArray("members").size()).isEqualTo(1);
+
+        assertThat(post("/api/campaigns/" + campaignId + "/members", """
+                {"type":"TRANSACTION","id":"%s"}
+                """.formatted(tx2)).statusCode()).isEqualTo(201);
+        view = Json.parse(get("/api/campaigns/" + campaignId).body());
+        assertThat(view.get("netOptionCashCents").asLong()).isEqualTo(45_000L);
+        assertThat(view.at("/yield/peakCommittedCapitalCents").asLong()).isEqualTo(925_000L);
+        assertThat(view.at("/economicBasis/available").asBoolean()).isFalse();
+        assertThat(view.withArray("receipts").toString()).contains("never the accounting source");
+        assertThat(view.withArray("ledger").size()).isEqualTo(2);
+
+        // Vocabulary boundary at the API: interest requires the explicit campaign tag.
+        String interest = Json.parse(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-06-15","eventType":"INTEREST","cashAmountCents":500,
+                 "fillNature":"NOT_APPLICABLE","source":"MANUAL"}
+                """).body()).get("id").asText();
+        HttpResponse<String> untagged = post("/api/campaigns/" + campaignId + "/members", """
+                {"type":"TRANSACTION","id":"%s"}
+                """.formatted(interest));
+        assertThat(untagged.statusCode()).isEqualTo(400);
+        assertThat(untagged.body()).contains("never auto-assigned");
+
+        assertThat(delete("/api/campaigns/" + campaignId + "/members/TRANSACTION/" + tx2)
+                .statusCode()).isEqualTo(200);
+        assertThat(Json.parse(get("/api/campaigns").body()).withArray("campaigns")
+                .findValuesAsText("id")).contains(campaignId);
+    }
 }

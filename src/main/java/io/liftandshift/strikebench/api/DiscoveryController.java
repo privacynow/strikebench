@@ -105,6 +105,12 @@ final class DiscoveryController {
      * order on evaluation failure would make a data problem look like a product judgment.
      */
     Object decisionRanked(RecommendationEngine.Result result, Account acct, String world) {
+        return decisionRanked(result, acct, world, null);
+    }
+
+    /** Ranked with the plan's declared assignment preference woven into the DecisionPolicy lens. */
+    Object decisionRanked(RecommendationEngine.Result result, Account acct, String world,
+                          String assignmentPreference) {
         if (result.candidates() == null || result.candidates().isEmpty()) return result;
         try {
             // The decision score is computed from the SAME market that priced the candidates —
@@ -112,7 +118,7 @@ final class DiscoveryController {
             var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                     result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
-                    practiceExposure(acct, result.symbol()));
+                    practiceExposure(acct, result.symbol()), assignmentPreference);
             if (evals.size() != result.candidates().size()) {
                 throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
             }

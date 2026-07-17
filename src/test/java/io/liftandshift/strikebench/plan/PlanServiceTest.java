@@ -63,9 +63,9 @@ class PlanServiceTest {
     @Test
     void presentationAndRiskDefaultsDoNotDuplicateAnActivePlan() {
         Plan.CreateRequest initial = new Plan.CreateRequest("identity-1", "AAPL", "INCOME", null,
-                "First title", "neutral", 30, 25000L, "conservative", 100L, 20000L, null);
+                "First title", "neutral", 30, 25000L, "conservative", 100L, 20000L, null, null);
         Plan.CreateRequest sameInquiry = new Plan.CreateRequest("identity-2", "AAPL", "INCOME", null,
-                "Renamed in another entry point", "neutral", 30, 25000L, "aggressive", 100L, 20000L, null);
+                "Renamed in another entry point", "neutral", 30, 25000L, "aggressive", 100L, 20000L, null, null);
         Plan.View first = plans.create(null, Plan.MarketKind.DEMO, null, null, initial);
         Plan.View resumed = plans.create(null, Plan.MarketKind.DEMO, null, null, sameInquiry);
 
@@ -76,13 +76,13 @@ class PlanServiceTest {
 
         Plan.View differentTarget = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("identity-3", "AAPL", "INCOME", null, "First title", "neutral",
-                        30, 24000L, "conservative", 100L, 20000L, null));
+                        30, 24000L, "conservative", 100L, 20000L, null, null));
         assertThat(differentTarget.id()).isNotEqualTo(first.id());
 
         Plan.View closed = plans.setOpen(null, first.id(), new Plan.OpenRequest(first.version(), false));
         Plan.View reopened = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("identity-reopen", "AAPL", "INCOME", null, "Resume", "neutral",
-                        30, 25000L, "balanced", 100L, 20000L, null));
+                        30, 25000L, "balanced", 100L, 20000L, null, null));
         assertThat(closed.open()).isFalse();
         assertThat(reopened.id()).isEqualTo(first.id());
         assertThat(reopened.open()).isTrue();
@@ -91,7 +91,7 @@ class PlanServiceTest {
         db.exec("UPDATE plans SET status='DECIDED_CASH' WHERE id=?", first.id());
         Plan.View newCycle = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("identity-4", "AAPL", "INCOME", null, "Next cycle", "neutral",
-                        30, 25000L, "balanced", 100L, 20000L, null));
+                        30, 25000L, "balanced", 100L, 20000L, null, null));
         assertThat(newCycle.id()).isNotEqualTo(first.id());
     }
 
@@ -172,7 +172,7 @@ class PlanServiceTest {
         String oldHash = plan.context().inputHash();
 
         Plan.View changed = plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
-                plan.version(), "bearish", 45, null, null, null, null, null, java.util.Set.of("targetCents")));
+                plan.version(), "bearish", 45, null, null, null, null, null, null, java.util.Set.of("targetCents")));
 
         assertThat(changed.version()).isEqualTo(plan.version() + 1);
         assertThat(changed.context().rev()).isEqualTo(2);
@@ -200,7 +200,7 @@ class PlanServiceTest {
         assertThat(changedGoal.furthestStage()).isEqualTo(Plan.Stage.STRATEGY);
         assertThat(changedGoal.assumptionsEditable()).isTrue();
         assertThatThrownBy(() -> plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
-                plan.version(), "neutral", null, null, null, null, null, null, null)))
+                plan.version(), "neutral", null, null, null, null, null, null, null, null)))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("another tab");
         assertThatThrownBy(() -> plans.advanceProgress(null, plan.id(),
                 new Plan.ProgressRequest("MANAGE_REVIEW")))
@@ -214,7 +214,7 @@ class PlanServiceTest {
         db.exec("UPDATE plans SET status='DECIDED_CASH' WHERE id=?", plan.id());
 
         assertThatThrownBy(() -> plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
-                plan.version(), "bearish", 45, null, null, null, null, null, null)))
+                plan.version(), "bearish", 45, null, null, null, null, null, null, null)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("frozen decision")
                 .hasMessageContaining("linked plan");
@@ -295,7 +295,7 @@ class PlanServiceTest {
 
     private static Plan.CreateRequest create(String requestId, String symbol, String intent, int horizon) {
         return new Plan.CreateRequest(requestId, symbol, intent, null, null, "bullish", horizon,
-                25000L, "conservative", 0L, null, null);
+                25000L, "conservative", 0L, null, null, null);
     }
 
     private static void await(java.util.function.BooleanSupplier condition) {

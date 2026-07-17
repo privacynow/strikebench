@@ -26,10 +26,13 @@ public final class ApiResponses {
     public record Evaluations<T>(T evaluations) {}
     public record Sessions<T>(T sessions) {}
     public record Accounts<T>(T accounts) {}
+    public record AccountObjective(Object latest, Object history) {}
     public record Lots<T>(T lots) {}
     public record Realized<T>(T realized) {}
     public record Transactions<T>(T transactions) {}
     public record TransactionsWritten(int transactionsWritten) {}
+    public record Campaigns<T>(T campaigns) {}
+    public record Proposals<T>(T proposals) {}
     public record AuthorizeUrl(String authorizeUrl) {}
     public record Positions<T>(T positions) {}
     public record Orders<T>(T orders) {}
@@ -71,8 +74,16 @@ public final class ApiResponses {
     public record PlanSelection<T, U>(T selection, U plan) {}
     public record PlanScout<T, U>(T plan, U scout) {}
     public record ScoutSpawn<T, U>(T origin, U plan, String role) {}
-    public record EnsembleRef(String id, String fingerprint, String basis) {}
+    /** waypointFill is the scenario canvas's honesty label (NONE / EXACT_CONDITIONAL / GUIDED_INTERPOLATION). */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record EnsembleRef(String id, String fingerprint, String basis, String waypointFill) {
+        public EnsembleRef(String id, String fingerprint, String basis) {
+            this(id, fingerprint, basis, null);
+        }
+    }
     public record PlanEnsemble<T, U>(T plan, EnsembleRef ensemble, U preview) {}
+    public record PlanScenario<T, U>(T plan, U scenario) {}
+    public record PlanScenarios<T, U>(T plan, U scenarios) {}
     public record PlanOutcome<T, U>(T plan, U outcome) {}
     public record PlanOutcomeWithEnsemble<T, U>(T plan, U outcome, EnsembleRef ensemble) {}
     public record PlanComparison<T, U>(T plan, U comparison, EnsembleRef ensemble) {}

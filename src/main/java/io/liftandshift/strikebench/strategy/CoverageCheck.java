@@ -32,6 +32,11 @@ public final class CoverageCheck {
 
     /** Same structural check with exact external shares available to cover short calls. */
     public static List<String> uncoveredShortsWithHeldShares(List<Leg> legs, long heldCallCoverShares) {
+        return uncoveredShorts(legs, heldCallCoverShares, java.util.EnumSet.allOf(OptionType.class));
+    }
+
+    private static List<String> uncoveredShorts(List<Leg> legs, long heldCallCoverShares,
+                                                java.util.Set<OptionType> scope) {
         List<String> problems = new ArrayList<>();
 
         long stockShares = Math.max(0, heldCallCoverShares);
@@ -46,7 +51,7 @@ public final class CoverageCheck {
             }
         }
 
-        for (OptionType type : OptionType.values()) {
+        for (OptionType type : scope) {
             List<Unit> shorts = units(legs, type, LegAction.SELL);
             List<Unit> longs = units(legs, type, LegAction.BUY);
             long stockAvailable = type == OptionType.CALL ? stockShares : 0;
@@ -62,20 +67,28 @@ public final class CoverageCheck {
 
     /**
      * Smallest number of exact external shares needed per package unit to cover short calls.
-     * Returns -1 when shares cannot make the complete structure defined-risk.
+     * Judged on the CALL side only — a short put's loss is bounded by construction (its strike),
+     * so it can never be share-covered and must not veto the call-side answer (a covered strangle
+     * needs exactly its call cover; the put is a cash question, not a share question).
+     * Returns -1 when shares cannot make the call side defined-risk.
      */
     public static long callCoverSharesNeeded(List<Leg> legs) {
-        if (uncoveredShorts(legs).isEmpty()) return 0;
+        if (uncoveredCallShorts(legs, 0).isEmpty()) return 0;
         long upper = units(legs, OptionType.CALL, LegAction.SELL).stream()
                 .mapToLong(Unit::multiplier).sum();
-        if (upper == 0 || !uncoveredShortsWithHeldShares(legs, upper).isEmpty()) return -1;
+        if (upper == 0 || !uncoveredCallShorts(legs, upper).isEmpty()) return -1;
         long low = 0, high = upper;
         while (low < high) {
             long mid = low + (high - low) / 2;
-            if (uncoveredShortsWithHeldShares(legs, mid).isEmpty()) high = mid;
+            if (uncoveredCallShorts(legs, mid).isEmpty()) high = mid;
             else low = mid + 1;
         }
         return low;
+    }
+
+    /** The CALL-side subset of {@link #uncoveredShortsWithHeldShares} (stock-leg validity included). */
+    private static List<String> uncoveredCallShorts(List<Leg> legs, long heldCallCoverShares) {
+        return uncoveredShorts(legs, heldCallCoverShares, java.util.EnumSet.of(OptionType.CALL));
     }
 
     /**

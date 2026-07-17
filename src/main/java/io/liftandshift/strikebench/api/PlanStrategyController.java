@@ -82,7 +82,8 @@ final class PlanStrategyController {
         RecommendationEngine.Request request = planStrategyRequest(plan, controls);
         RecommendationEngine.Result recommended = discoveryController.resolveAndRecommend(ctx, request);
         JsonNode ranked = Json.MAPPER.valueToTree(
-                discoveryController.decisionRanked(recommended, root.currentAccount(ctx), root.activeWorld(ctx)));
+                discoveryController.decisionRanked(recommended, root.currentAccount(ctx), root.activeWorld(ctx),
+                        plan.context().assignmentPreference()));
         JsonNode input = Json.MAPPER.valueToTree(request);
         var saved = planStrategy.saveCompetition(root.ownerId(ctx), plan, input, ranked);
         ctx.json(new ApiResponses.PlanStrategy<>(planSvc.get(root.ownerId(ctx), plan.id()), saved));
@@ -105,7 +106,7 @@ final class PlanStrategyController {
         var request = planStrategyRequest(plan, controls);
         var ranked = Json.MAPPER.valueToTree(discoveryController.decisionRanked(
                 discoveryController.resolveAndRecommend(ctx, request),
-                root.currentAccount(ctx), root.activeWorld(ctx)));
+                root.currentAccount(ctx), root.activeWorld(ctx), plan.context().assignmentPreference()));
         JsonNode candidates = ranked.path("candidates");
         ctx.json(new ApiResponses.PlanStrategyFit<>(plan, ranked,
                 candidates.isArray() && !candidates.isEmpty() ? candidates.get(0) : null));
@@ -192,7 +193,9 @@ final class PlanStrategyController {
             evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
                     plan.symbol(), candidate, account.buyingPowerCents(),
                     root.analysisCtx(ctx), PlanController.worldParam(root.activeWorld(ctx)), preview.ok(),
-                    preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol())));
+                    preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol()),
+                    new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(), c.thesis(),
+                            c.horizonDays(), c.assignmentPreference(), "this Plan's declared view")));
         } catch (RuntimeException e) {
             log.debug("Plan custom-package assessment is unavailable", e);
             evaluation = ApiResponses.EvaluationReceipt.unavailable(
@@ -353,7 +356,7 @@ final class PlanStrategyController {
         var childRequest = new io.liftandshift.strikebench.plan.Plan.CreateRequest(request.clientRequestId(),
                 symbol, childIntent, origin.id(), null, candidate.path("scoutThesis").asText(origin.context().thesis()),
                 origin.context().horizonDays(), origin.context().targetCents(), origin.context().riskMode(),
-                null, null, origin.context().priceAssumptionCents());
+                null, null, origin.context().priceAssumptionCents(), origin.context().assignmentPreference());
         var child = planSvc.create(root.ownerId(ctx), origin.marketKind(), origin.worldId(), origin.accountId(), childRequest);
         planSvc.linkRelated(root.ownerId(ctx), origin.id(), child.id(), role);
         if (planStrategy.selectedCandidate(root.ownerId(ctx), child.id()) == null) {

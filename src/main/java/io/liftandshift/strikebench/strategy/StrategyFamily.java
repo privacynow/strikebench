@@ -57,6 +57,15 @@ public enum StrategyFamily {
     PROTECTIVE_PUT("Protective put", Set.of(Thesis.BULLISH, Thesis.NEUTRAL), true, false, true, false, 1,
             HEDGE, Set.of(HEDGE)),
 
+    // Composite share-backed structures (folded Phase 9). Defined risk in the bounded sense:
+    // worst case is fully quantified up front (shares plus a second assignment), never open-ended.
+    COVERED_STRANGLE("Covered strangle", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, true, false, 3,
+            INCOME, Set.of(INCOME, ACQUIRE)),
+    COVERED_CALL_PUT_SPREAD("Covered call with put-spread floor", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, true, false, 3,
+            INCOME, Set.of(INCOME, HEDGE)),
+    COVERED_CALL_CALL_OVERLAY("Covered call with long-call overlay", Set.of(Thesis.BULLISH, Thesis.NEUTRAL), true, false, true, false, 3,
+            INCOME, Set.of(INCOME, DIRECTIONAL)),
+
     // Undefined risk — blocked by default, never auto-recommended
     NAKED_CALL("Naked (uncovered) short call", Set.of(Thesis.BEARISH, Thesis.NEUTRAL), false, true, false, false, 99,
             INCOME, Set.of(INCOME)),
@@ -121,6 +130,7 @@ public enum StrategyFamily {
             case LONG_CALL, LONG_PUT -> "single_long";
             case LONG_STRADDLE, LONG_STRANGLE -> "long_volatility";
             case COVERED_CALL -> "covered_income";
+            case COVERED_STRANGLE, COVERED_CALL_PUT_SPREAD, COVERED_CALL_CALL_OVERLAY -> "covered_composite";
             case CASH_SECURED_PUT -> "acquisition_income";
             case PROTECTIVE_COLLAR, PROTECTIVE_PUT -> "stock_protection";
             case NAKED_CALL, NAKED_PUT -> "uncovered_directional";

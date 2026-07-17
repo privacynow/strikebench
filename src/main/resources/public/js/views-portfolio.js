@@ -1088,14 +1088,7 @@
   async function portfolioAdoptPosition(account, p, button) {
     button.disabled = true; button.setAttribute('aria-busy', 'true');
     try {
-      var data = await API.getFresh('/api/portfolio/accounts/' + account.id + '/lots');
-      var lots = (data.lots || []).filter(function (lot) {
-        if (lot.status !== 'OPEN' || !(lot.remainingQuantity > 0)) return false;
-        if (lot.symbol !== p.symbol || lot.instrumentType !== p.instrumentType || lot.side !== p.side) return false;
-        if (p.instrumentType !== 'OPTION') return true;
-        return lot.optionType === p.optionType && Number(lot.strike) === Number(p.strike)
-          && String(lot.expiration) === String(p.expiration);
-      });
+      var lots = await portfolioOpenLotsFor(account, p);
       if (!lots.length) throw new Error('No open lots remain for this position.');
       var out = await PlanStore.adoptPosition({
         clientRequestId: 'adopt-' + account.id + '-' + p.symbol + '-' + Date.now().toString(36),
@@ -1121,7 +1114,540 @@
     App.navigate('#/portfolio/book/activity');
   }
 
-  function renderPortfolioBookOverview(root, account, summary) {
+  async function portfolioOpenLotsFor(account, p) {
+    var data = await API.getFresh('/api/portfolio/accounts/' + account.id + '/lots');
+    return (data.lots || []).filter(function (lot) {
+      if (lot.status !== 'OPEN' || !(lot.remainingQuantity > 0)) return false;
+      if (lot.symbol !== p.symbol || lot.instrumentType !== p.instrumentType || lot.side !== p.side) return false;
+      if (p.instrumentType !== 'OPTION') return true;
+      return lot.optionType === p.optionType && Number(lot.strike) === Number(p.strike)
+        && String(lot.expiration) === String(p.expiration);
+    });
+  }
+
+  /** Starts a campaign seeded by this position's open lots. The seed transactions attach as
+   *  user-confirmed members; everything else stays a suggestion until confirmed. */
+  async function portfolioStartCampaign(account, p, button) {
+    button.disabled = true; button.setAttribute('aria-busy', 'true');
+    try {
+      var lots = await portfolioOpenLotsFor(account, p);
+      if (!lots.length) throw new Error('No open lots remain for this position.');
+      var campaign = await API.post('/api/campaigns', {
+        title: p.symbol + ' campaign', symbol: p.symbol,
+        seedLotIds: lots.map(function (lot) { return lot.id; })
+      });
+      App.state.portfolioCampaignFocus = campaign.id;
+      UI.toast('Campaign started from ' + p.symbol + ' — review its suggested linked activity');
+      await App.render();
+    } catch (e) {
+      UI.toast(e.message, 'error');
+      button.disabled = false; button.removeAttribute('aria-busy');
+    }
+  }
+
+  function campaignYieldPct(value) {
+    return value == null ? '—' : Number(value).toFixed(2) + '%';
+  }
+
+  async function campaignAttachMember(campaignId, proposal, button) {
+    button.disabled = true; button.setAttribute('aria-busy', 'true');
+    try {
+      var isInterest = proposal.type === 'TRANSACTION' && /^interest\b/.test(proposal.label || '');
+      await API.post('/api/campaigns/' + campaignId + '/members', {
+        type: proposal.type, id: proposal.id, explicitInterest: isInterest ? true : null
+      });
+      UI.toast(isInterest ? 'Interest tagged to this campaign' : 'Attached to campaign');
+      App.state.portfolioCampaignFocus = campaignId;
+      await App.render();
+    } catch (e) {
+      UI.toast(e.message, 'error');
+      button.disabled = false; button.removeAttribute('aria-busy');
+    }
+  }
+
+  async function campaignDetachMember(campaignId, member, button) {
+    button.disabled = true; button.setAttribute('aria-busy', 'true');
+    try {
+      await API.del('/api/campaigns/' + campaignId + '/members/' + member.type + '/'
+        + encodeURIComponent(member.id));
+      UI.toast('Removed from campaign — the recorded book is untouched');
+      App.state.portfolioCampaignFocus = campaignId;
+      await App.render();
+    } catch (e) {
+      UI.toast(e.message, 'error');
+      button.disabled = false; button.removeAttribute('aria-busy');
+    }
+  }
+
+  function campaignProposalsBlock(campaign) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var host = el('div', { class: 'campaign-proposals' });
+    var message = el('div', { class: 'small', 'aria-live': 'polite' });
+    var load = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: async function () {
+      load.disabled = true; load.setAttribute('aria-busy', 'true'); message.textContent = '';
+      try {
+        var data = await API.getFresh('/api/campaigns/' + campaign.id + '/proposals');
+        var proposals = data.proposals || [];
+        var list = el('div', { class: 'campaign-proposal-list' });
+        if (!proposals.length) {
+          list.appendChild(el('p', { class: 'muted small' },
+            'No linked activity found beyond what is already attached.'));
+        }
+        proposals.forEach(function (p) {
+          var attach = el('button', { type: 'button', class: 'btn btn-sm' }, 'Attach');
+          attach.addEventListener('click', function () { campaignAttachMember(campaign.id, p, attach); });
+          list.appendChild(el('div', { class: 'campaign-proposal-row' },
+            el('div', {}, el('b', {}, p.label),
+              el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'suggestion'),
+              el('p', { class: 'muted small' }, p.reason
+                + (p.cashEffectCents == null ? '' : ' · ' + fmtMoney(p.cashEffectCents)))),
+            attach));
+        });
+        var existing = host.querySelector('.campaign-proposal-list');
+        if (existing) existing.replaceWith(list); else host.appendChild(list);
+      } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+      finally { load.disabled = false; load.removeAttribute('aria-busy'); }
+    } }, 'Suggest linked activity');
+    host.appendChild(el('p', { class: 'muted small' }, beginner
+      ? 'StrikeBench follows your rolls, assignments, Plans, and same-symbol activity to suggest what belongs here. Nothing joins until you attach it.'
+      : 'Auto-link follows lot/roll chains and Plan lineage; suggestions are never members until confirmed.'));
+    host.appendChild(el('div', { class: 'btn-row' }, load));
+    host.appendChild(message);
+    if (App.state.portfolioCampaignFocus === campaign.id) {
+      App.state.portfolioCampaignFocus = null;
+      setTimeout(function () { load.click(); }, 0);
+    }
+    return host;
+  }
+
+  function campaignMembersBlock(campaign) {
+    var host = el('div', { class: 'campaign-members' });
+    (campaign.members || []).forEach(function (m) {
+      var remove = el('button', { type: 'button', class: 'btn btn-secondary btn-sm' }, 'Remove');
+      remove.addEventListener('click', function () { campaignDetachMember(campaign.id, m, remove); });
+      host.appendChild(el('div', { class: 'campaign-member-row' },
+        el('div', {}, el('b', {}, m.label),
+          m.explicitInterest ? el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'tagged interest') : null,
+          m.countsInMath ? null : el('span', { class: 'badge badge-dim', style: 'margin-left:6px' }, 'listed, never netted'),
+          el('p', { class: 'muted small' }, (m.detail || m.type.toLowerCase().replace(/_/g, ' '))
+            + (m.occurredAt ? ' · ' + portfolioOccurredLabel(m.occurredAt) : '')
+            + (m.cashEffectCents == null ? '' : ' · ' + fmtMoney(m.cashEffectCents)))),
+        remove));
+    });
+    if (!(campaign.members || []).length) {
+      host.appendChild(el('p', { class: 'muted small' }, 'No members yet — attach recorded activity below.'));
+    }
+    host.appendChild(campaignProposalsBlock(campaign));
+    return host;
+  }
+
+  function campaignLedgerBlock(campaign) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var ledger = campaign.ledger || [];
+    if (!ledger.length) return el('p', { class: 'muted small' }, 'No member events yet.');
+    if (beginner) {
+      var list = el('div', { class: 'campaign-ledger-list' });
+      ledger.forEach(function (row) {
+        list.appendChild(el('div', { class: 'campaign-ledger-row' },
+          el('div', {}, el('b', {}, row.label), el('span', { class: 'muted small' },
+            ' · ' + portfolioOccurredLabel(row.occurredAt))),
+          el('div', { class: 'chip-row' },
+            chip('Cash', fmtMoney(row.cashEffectCents)),
+            chip('Shares now', String(row.runningShares)),
+            row.runningBasisPerShareCents == null ? null
+              : chip('Each share really costs', fmtMoney(row.runningBasisPerShareCents)))));
+      });
+      return list;
+    }
+    return table(['When', 'Event', 'Cash', 'Δ shares', 'Shares', 'Net option cash', 'Basis / share', 'Committed'],
+      ledger.map(function (row) {
+        return el('tr', {}, el('td', {}, portfolioOccurredLabel(row.occurredAt)),
+          el('td', {}, el('b', {}, row.label)), el('td', {}, fmtMoney(row.cashEffectCents)),
+          el('td', {}, String(row.sharesDelta)), el('td', {}, String(row.runningShares)),
+          el('td', {}, fmtMoney(row.runningNetOptionCashCents)),
+          el('td', {}, row.runningBasisPerShareCents == null ? '—' : fmtMoney(row.runningBasisPerShareCents)),
+          el('td', {}, fmtMoney(row.runningCommittedCapitalCents)));
+      }));
+  }
+
+  function campaignRow(campaign) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var yieldView = campaign.yield || {};
+    var basis = campaign.economicBasis || {};
+    var counter = campaign.counterfactuals || {};
+    var statusToggle = el('button', { type: 'button', class: 'btn btn-secondary btn-sm' },
+      campaign.status === 'ACTIVE' ? 'Close campaign' : 'Reopen');
+    statusToggle.addEventListener('click', async function () {
+      statusToggle.disabled = true; statusToggle.setAttribute('aria-busy', 'true');
+      try {
+        await API.put('/api/campaigns/' + campaign.id, {
+          status: campaign.status === 'ACTIVE' ? 'CLOSED' : 'ACTIVE' });
+        await App.render();
+      } catch (e) { UI.toast(e.message, 'error'); statusToggle.disabled = false; statusToggle.removeAttribute('aria-busy'); }
+    });
+    var row = el('article', { class: 'campaign-row' },
+      el('div', { class: 'campaign-row-heading' },
+        el('div', {}, el('h3', {}, campaign.title),
+          el('span', { class: 'badge ' + (campaign.status === 'ACTIVE' ? 'badge-ok' : 'badge-dim'),
+            style: 'margin-left:8px' }, campaign.status.toLowerCase())),
+        statusToggle));
+    var headline = el('div', { class: 'chip-row campaign-headline' },
+      chip(UI.vocabulary('campaignEconomicBasis'), basis.available ? fmtMoney(basis.perShareCents)
+        : el('span', { class: 'muted' }, 'No shares held')),
+      chip(UI.vocabulary('realizedVsHeadline'), yieldView.available
+        ? el('span', {}, campaignYieldPct(yieldView.realizedPeriodPct) + ' vs '
+            + campaignYieldPct(yieldView.headlinePeriodPct) + ' headline')
+        : el('span', { class: 'muted' }, 'No committed capital yet')),
+      chip(el('span', {}, UI.vocabulary('counterfactualBenchmark', 'Vs cash')),
+        counter.cash && counter.cash.available && counter.cash.deltaCents != null
+          ? pnlSpan(counter.cash.deltaCents) : el('span', { class: 'muted' }, 'Unavailable')),
+      chip(el('span', {}, UI.vocabulary('counterfactualBenchmark', 'Vs buy & hold')),
+        counter.buyAndHold && counter.buyAndHold.available && counter.buyAndHold.deltaCents != null
+          ? pnlSpan(counter.buyAndHold.deltaCents) : el('span', { class: 'muted' }, 'Unavailable')));
+    row.appendChild(headline);
+    if (beginner) {
+      row.appendChild(el('p', { class: 'muted small' }, basis.available
+        ? el('span', {}, 'After every premium, buyback, dividend, and fee, each of the '
+            + basis.sharesHeld + ' shares this campaign holds has really cost ',
+            el('b', {}, fmtMoney(basis.perShareCents)),
+            '. Your broker’s tax number is tracked separately and can differ.')
+        : el('span', {}, 'This campaign holds no shares right now, so it has no per-share figure; '
+            + 'its option cash so far is ', el('b', {}, fmtMoney(campaign.netOptionCashCents)), '.')));
+      if (yieldView.available) {
+        row.appendChild(el('p', { class: 'muted small' },
+          'Annualized ' + campaignYieldPct(yieldView.realizedAnnualizedPct)
+          + ' realized vs ' + campaignYieldPct(yieldView.headlineAnnualizedPct)
+          + ' headline — only if this result repeats. Both rates divide by the same '
+          + 'peak committed capital of ' + fmtMoney(yieldView.peakCommittedCapitalCents) + '.'));
+      }
+    } else {
+      row.appendChild(el('div', { class: 'chip-row campaign-expert-facts' },
+        chip(UI.vocabulary('campaignNetCredit'), fmtMoney(campaign.netOptionCashCents)),
+        chip(UI.vocabulary('peakCommittedCapital'), fmtMoney(yieldView.peakCommittedCapitalCents || 0)),
+        yieldView.available && yieldView.realizedTimeWeightedPct != null
+          ? chip('Realized / time-weighted capital', campaignYieldPct(yieldView.realizedTimeWeightedPct)) : null,
+        yieldView.available
+          ? chip('Annualized if repeatable', campaignYieldPct(yieldView.realizedAnnualizedPct) + ' vs '
+              + campaignYieldPct(yieldView.headlineAnnualizedPct)) : null,
+        chip('Dividends attributed', fmtMoney(campaign.attributedDividendsCents)),
+        chip('Tagged interest', fmtMoney(campaign.explicitInterestCents)),
+        campaign.churn && campaign.churn.roundTrips.length
+          ? chip(UI.vocabulary('churnCost'), fmtMoney(campaign.churn.totalCostCents)) : null));
+      if ((campaign.accounts || []).length > 1) {
+        row.appendChild(el('div', { class: 'chip-row' }, campaign.accounts.map(function (a) {
+          return chip(a.name + ' · ' + (a.shareOfActivityBps / 100).toFixed(2) + '%', fmtMoney(a.netCashCents));
+        })));
+      }
+    }
+    (campaign.receipts || []).forEach(function (receipt) {
+      if (receipt.indexOf('tax figures withheld') >= 0 || receipt.indexOf('not members') >= 0) {
+        row.appendChild(el('p', { class: 'small campaign-receipt' },
+          el('span', { class: 'badge badge-warn', style: 'margin-right:6px' }, 'receipt'), receipt));
+      }
+    });
+    row.appendChild(UI.expandable(el('span', {}, UI.vocabulary('accumulationLedger'), ' · '
+        + (campaign.ledger || []).length + ' event' + ((campaign.ledger || []).length === 1 ? '' : 's')),
+      function () { return campaignLedgerBlock(campaign); },
+      { stateKey: 'campaign-ledger-' + campaign.id }));
+    row.appendChild(UI.expandable('Members & suggestions · ' + (campaign.members || []).length,
+      function () { return campaignMembersBlock(campaign); },
+      { stateKey: 'campaign-members-' + campaign.id,
+        open: App.state.portfolioCampaignFocus === campaign.id }));
+    return row;
+  }
+
+  function campaignCreateForm() {
+    var title = el('input', { type: 'text', maxlength: '120', placeholder: 'MU accumulation' });
+    var symbol = el('input', { type: 'text', maxlength: '20', placeholder: 'MU', list: 'universe-symbols' });
+    var message = el('div', { class: 'small', 'aria-live': 'polite' });
+    var create = el('button', { type: 'button', class: 'btn', onclick: async function () {
+      create.disabled = true; create.setAttribute('aria-busy', 'true'); message.textContent = '';
+      try {
+        var campaign = await API.post('/api/campaigns', {
+          title: title.value, symbol: symbol.value.trim() ? symbol.value.trim().toUpperCase() : null });
+        App.state.portfolioCampaignFocus = campaign.id;
+        UI.toast('Campaign created — attach its recorded activity');
+        await App.render();
+      } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+      finally { create.disabled = false; create.removeAttribute('aria-busy'); }
+    } }, 'Create campaign');
+    return el('div', { class: 'campaign-create-form' },
+      el('div', { class: 'form-grid' }, UI.field('Campaign name', title),
+        UI.field('Primary symbol (optional)', symbol,
+          { hint: 'Names the buy-and-hold counterfactual and same-symbol suggestions.' })),
+      el('div', { class: 'btn-row' }, create), message);
+  }
+
+  async function portfolioCampaignsCard() {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var card = el('section', { class: 'card book-campaigns' });
+    var list = [];
+    try {
+      var data = await API.getFresh('/api/campaigns');
+      list = data.campaigns || [];
+    } catch (e) {
+      card.appendChild(UI.cardHeader('Campaigns'));
+      card.appendChild(el('p', { class: 'muted' }, 'Campaigns are unavailable right now: '
+        + (e.message || e) + '. The recorded book above is unaffected.'));
+      return card;
+    }
+    card.appendChild(UI.cardHeader('Campaigns',
+      el('span', { class: 'badge badge-dim' }, list.length + ' campaign' + (list.length === 1 ? '' : 's'))));
+    card.appendChild(el('p', { class: 'muted small' }, beginner
+      ? el('span', {}, 'A campaign reads one whole story — premiums, rolls, assignment, dividends — '
+          + 'as a single position, so you can see what it really earns. It never changes your recorded lots or ',
+          UI.vocabulary('trackedTaxBasis'), '.')
+      : el('span', {}, 'Interpretation layer over recorded activity: typed members, ',
+          UI.vocabulary('campaignEconomicBasis'), ', ', UI.vocabulary('realizedVsHeadline'),
+          ' on identical denominators, and live ', UI.vocabulary('counterfactualBenchmark'),
+          ' deltas. Never the accounting source.')));
+    if (!list.length) {
+      card.appendChild(UI.emptyState('No campaigns yet', beginner
+        ? 'Use “Start a campaign from this position” on any open position, or create one here and attach its activity.'
+        : 'Seed one from a position row or create one here; auto-link proposes the roll chain and Plan lineage.'));
+    }
+    list.forEach(function (campaign) { card.appendChild(campaignRow(campaign)); });
+    card.appendChild(UI.expandable('Start a campaign', function () { return campaignCreateForm(); },
+      { stateKey: 'campaign-create' }));
+    return card;
+  }
+
+  // ---- Account objective (Program ONE R4.4): what is this account FOR? ----
+  // The declaration is an immutable revision series (backend AccountObjectiveService):
+  // declaring again writes revision N+1 and applies prospectively; history is never rewritten.
+
+  var OBJECTIVE_META = {
+    INCOME: { label: 'Income', sub: 'Collect premium', goal: 'collect premium',
+      consequence: 'Income — premium collection is the goal; short option cycles that keep collecting are coherent.' },
+    ACCUMULATE: { label: 'Accumulate', sub: 'Build the share position', goal: 'build the share position',
+      consequence: 'Accumulate — building the share position matters more than premium; entries that add shares cheaply count in favor.' },
+    HEDGE: { label: 'Hedge', sub: 'Protect other holdings', goal: 'protect other holdings',
+      consequence: 'Hedge — this account offsets risk held elsewhere; protection that pays when other holdings fall is coherent.' },
+    DIRECTIONAL: { label: 'Directional', sub: 'Express a market view', goal: 'express a market view',
+      consequence: 'Directional — this account expresses a market view; declare the direction below so every idea is checked against it.' },
+    CAPITAL_PRESERVATION: { label: 'Capital preservation', sub: 'Keep the money safe', goal: 'keep the money safe',
+      consequence: 'Capital preservation — keeping the money outranks growing it; defined-risk structures with small worst cases are coherent.' }
+  };
+  var OBJECTIVE_DIRECTION_META = {
+    BULLISH: { label: 'Bullish', sub: 'Prices rise', phrase: 'bullish view',
+      consequence: 'Bullish — ideas that profit when prices rise fit this account.' },
+    BEARISH: { label: 'Bearish', sub: 'Prices fall', phrase: 'bearish view',
+      consequence: 'Bearish — ideas that profit when prices fall fit this account.' },
+    NEUTRAL: { label: 'Neutral', sub: 'Prices go nowhere', phrase: 'neutral view',
+      consequence: 'Neutral — ideas that profit when prices go nowhere fit this account.' },
+    NON_DIRECTIONAL: { label: 'Non-directional', sub: 'No view, on purpose', phrase: 'deliberately non-directional',
+      consequence: 'Non-directional — you deliberately take no view; direction never counts for or against an idea.' }
+  };
+  var OBJECTIVE_ASSIGNMENT_META = {
+    AVOID: { label: 'Avoid', sub: 'Keep assignment away', phrase: 'assignment avoided',
+      consequence: 'Avoid — high assignment odds count against a structure.' },
+    ACCEPT: { label: 'Accept', sub: 'Take it as it comes', phrase: 'assignment accepted',
+      consequence: 'Accept — indifferent; assignment odds neither help nor hurt (no reweighting).' },
+    PREFER_BELOW_BASIS: { label: 'Prefer below basis', sub: 'Cheap shares welcome', phrase: 'assignment below basis welcome',
+      consequence: 'Prefer below basis — assignment that ADDS shares below your basis counts in favor.' },
+    SEEK: { label: 'Seek', sub: 'Assignment is the point', phrase: 'assignment sought (the wheel)',
+      consequence: 'Seek — assignment is the point (the wheel: get assigned the shares, then sell calls on them); high assignment odds count in favor.' }
+  };
+
+  /** Plain-language one-line summary of a revision — the declared card's headline. */
+  function objectiveSummary(revision) {
+    var meta = OBJECTIVE_META[revision.objective] || { label: revision.objective, goal: '' };
+    var line = meta.label + (meta.goal ? ' — ' + meta.goal : '');
+    var assignment = OBJECTIVE_ASSIGNMENT_META[revision.assignmentPreference];
+    if (assignment) line += '; ' + assignment.phrase;
+    var direction = OBJECTIVE_DIRECTION_META[revision.direction];
+    if (direction) line += ' · ' + direction.phrase;
+    if (revision.targetExposureCents != null) line += ' · target exposure ' + fmtMoney(revision.targetExposureCents);
+    return line;
+  }
+
+  function objectiveRawValues(revision) {
+    return revision.objective + (revision.direction ? ' · ' + revision.direction : '')
+      + ' · ' + revision.assignmentPreference;
+  }
+
+  /** Every revision, oldest first. Beginner reads a plain list; Expert reads the raw series. */
+  function objectiveHistoryBlock(history, beginner) {
+    if (beginner) {
+      return el('div', { class: 'book-objective-history', 'data-objective-history': '' },
+        history.map(function (r) {
+          return el('div', { class: 'book-objective-history-row', 'data-objective-history-row': String(r.revisionNo) },
+            el('b', {}, 'Revision ' + r.revisionNo),
+            el('span', { class: 'muted small' }, ' · ' + UI.fmtDate(r.createdAt) + ' · ' + objectiveSummary(r)));
+        }));
+    }
+    return el('div', { class: 'book-objective-history', 'data-objective-history': '' },
+      table(['Rev', 'Declared', 'Objective', 'Direction', 'Assignment', 'Target'],
+        history.map(function (r) {
+          return el('tr', { 'data-objective-history-row': String(r.revisionNo) },
+            el('td', {}, String(r.revisionNo)), el('td', {}, UI.fmtDate(r.createdAt)),
+            el('td', {}, r.objective), el('td', {}, r.direction || '—'),
+            el('td', {}, r.assignmentPreference),
+            el('td', {}, r.targetExposureCents == null ? '—' : fmtMoney(r.targetExposureCents)));
+        })));
+  }
+
+  function portfolioObjectiveForm(account, latest, onSaved, onCancel) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var message = el('div', { class: 'small', 'data-objective-error': '', 'aria-live': 'polite' });
+    var objectiveCtl = UI.segmented({
+      id: 'account-objective-choice', label: 'Objective', info: 'accountobjective',
+      options: Object.keys(OBJECTIVE_META).map(function (value) {
+        var meta = OBJECTIVE_META[value];
+        return { value: value, label: meta.label, sub: meta.sub, detail: value };
+      }),
+      value: latest ? latest.objective : 'INCOME', revealDetails: 'expert',
+      consequence: function (value) { return OBJECTIVE_META[value].consequence; },
+      onChange: syncDirection
+    });
+    var directionCtl = UI.chipSet({
+      id: 'account-objective-direction', label: 'Direction (optional)', info: 'objectivedirection',
+      options: [{ value: '', label: 'No declared direction', sub: 'Skip for now' }].concat(
+        Object.keys(OBJECTIVE_DIRECTION_META).map(function (value) {
+          var meta = OBJECTIVE_DIRECTION_META[value];
+          return { value: value, label: meta.label, sub: meta.sub, detail: value };
+        })),
+      value: latest && latest.direction ? latest.direction : '', revealDetails: 'expert',
+      consequence: function (value) {
+        return value ? OBJECTIVE_DIRECTION_META[value].consequence
+          : 'No declared direction — direction is checked only when you declare one.';
+      }
+    });
+    var assignmentCtl = UI.segmented({
+      id: 'account-objective-assignment', label: 'Assignment preference', info: 'assignmentfit',
+      options: Object.keys(OBJECTIVE_ASSIGNMENT_META).map(function (value) {
+        var meta = OBJECTIVE_ASSIGNMENT_META[value];
+        return { value: value, label: meta.label, sub: meta.sub, detail: value };
+      }),
+      value: latest ? latest.assignmentPreference : 'ACCEPT', revealDetails: 'expert',
+      consequence: function (value) { return OBJECTIVE_ASSIGNMENT_META[value].consequence; }
+    });
+    var target = el('input', { type: 'number', min: '0', step: '0.01', id: 'account-objective-target',
+      inputmode: 'decimal', placeholder: 'Optional',
+      value: latest && latest.targetExposureCents != null ? String(latest.targetExposureCents / 100) : '' });
+    var targetField = UI.field(['Target exposure $ (optional)', UI.info('targetexposure')], target,
+      { className: 'book-objective-target',
+        hint: 'A dollar statement of intent recorded with the declaration. It never blocks or resizes an analysis.' });
+    function syncDirection() {
+      var objective = objectiveCtl.value();
+      directionCtl.hidden = objective !== 'DIRECTIONAL' && objective !== 'HEDGE';
+    }
+    var save = el('button', { type: 'button', class: 'btn', id: 'account-objective-save',
+      onclick: async function () {
+        save.disabled = true; save.setAttribute('aria-busy', 'true');
+        message.textContent = ''; message.className = 'small';
+        try {
+          var payload = { objective: objectiveCtl.value(), assignmentPreference: assignmentCtl.value() };
+          var directional = payload.objective === 'DIRECTIONAL' || payload.objective === 'HEDGE';
+          if (directional && directionCtl.value()) payload.direction = directionCtl.value();
+          if (String(target.value).trim() !== '') {
+            var dollars = Number(target.value);
+            if (!Number.isFinite(dollars) || dollars < 0) {
+              throw new Error('Target exposure must be zero or a positive dollar amount.');
+            }
+            payload.targetExposureCents = Math.round(dollars * 100);
+          }
+          var revision = await API.post('/api/portfolio/accounts/' + account.id + '/objective', payload);
+          await onSaved(revision);
+        } catch (e) {
+          message.textContent = e.message || String(e);
+          message.className = 'small loss';
+          save.disabled = false; save.removeAttribute('aria-busy');
+        }
+      } }, latest ? 'Save as revision ' + (latest.revisionNo + 1) : 'Declare objective');
+    var cancel = el('button', { type: 'button', class: 'btn btn-secondary', id: 'account-objective-cancel',
+      onclick: onCancel }, 'Cancel');
+    syncDirection();
+    return el('div', { class: 'book-objective-form' },
+      beginner ? el('p', { class: 'muted small book-objective-what' },
+        'What does this change? Every analysis on this account gains a ', UI.vocabulary('coherenceVerdict'),
+        ' — does the idea match this purpose? — and an ', UI.vocabulary('assignmentFit'),
+        ' read. It explains and reweights; it never blocks or places anything.') : null,
+      objectiveCtl, directionCtl, assignmentCtl, targetField,
+      el('p', { class: 'muted small' }, latest
+        ? 'Saving writes revision ' + (latest.revisionNo + 1) + ' and applies from now on. Revision '
+          + latest.revisionNo + ' stays on record; receipts that quoted it keep quoting it.'
+        : 'Declarations are a revision series: changing your mind later writes revision 2 — what you said, and when, is never rewritten.'),
+      el('div', { class: 'btn-row' }, save, cancel), message);
+  }
+
+  async function renderObjectiveCardContent(card, account) {
+    card.replaceChildren();
+    var beginner = Learn.currentLevel() === 'beginner';
+    var archived = account.status === 'ARCHIVED';
+    var data;
+    try {
+      data = await API.getFresh('/api/portfolio/accounts/' + account.id + '/objective');
+    } catch (e) {
+      card.setAttribute('data-objective-state', 'unavailable');
+      card.append(UI.cardHeader(el('span', {}, 'What is this account for?', UI.info('accountobjective'))),
+        el('p', { class: 'muted small' }, 'The declared objective could not be loaded: '
+          + (e.message || e) + '. The rest of this book is unaffected.'));
+      return;
+    }
+    var latest = data.latest;
+    var history = data.history || [];
+    card.setAttribute('data-objective-state', latest ? 'declared' : 'undeclared');
+    card.setAttribute('data-objective-revision', latest ? String(latest.revisionNo) : '0');
+    var controlsHost = el('div', { class: 'book-objective-controls', 'data-objective-controls': '', hidden: 'hidden' });
+    var declareBtn = el('button', { type: 'button', class: latest ? 'btn btn-secondary btn-sm' : 'btn',
+      id: 'account-objective-declare', disabled: archived ? 'disabled' : null },
+      latest ? 'Change' : 'Declare this account’s objective');
+    declareBtn.addEventListener('click', function () {
+      controlsHost.replaceChildren(portfolioObjectiveForm(account, latest, async function (revision) {
+        await renderObjectiveCardContent(card, account);
+        card.prepend(UI.actionFeedback('ok', 'Objective declared — revision ' + revision.revisionNo,
+          'Analyses on this account are judged against this declaration from now on; earlier revisions stay on record.'));
+      }, function () {
+        controlsHost.hidden = true;
+        controlsHost.replaceChildren();
+        declareBtn.hidden = false;
+        declareBtn.focus();
+      }));
+      controlsHost.hidden = false;
+      declareBtn.hidden = true;
+    });
+    card.append(UI.cardHeader(el('span', {}, 'What is this account for?', UI.info('accountobjective')),
+      latest ? el('span', { class: 'badge badge-dim' }, 'revision ' + latest.revisionNo) : null));
+    if (!latest) {
+      card.append(el('p', { class: 'book-objective-invite' },
+        'StrikeBench judges every idea against what you say this account is FOR — declare it and every analysis here gains a ',
+        UI.vocabulary('coherenceVerdict'), ' and an ', UI.vocabulary('assignmentFit'), ' read.'));
+    } else {
+      card.append(
+        el('p', { class: 'book-objective-headline', 'data-objective-headline': '' },
+          el('b', {}, objectiveSummary(latest))),
+        el('p', { class: 'muted small book-objective-provenance' },
+          'Revision ' + latest.revisionNo + ' · declared ' + UI.fmtDate(latest.createdAt)
+          + (beginner ? '' : ' · ' + objectiveRawValues(latest))),
+        el('p', { class: 'muted small book-objective-judged' },
+          'Every analysis on this account is now judged against this ',
+          UI.vocabulary('accountObjective', 'objective'), '.'));
+    }
+    card.append(el('div', { class: 'btn-row' }, declareBtn));
+    if (archived) {
+      card.append(el('p', { class: 'muted small' },
+        'This tracked account is archived. Restore it in Settings before declaring a new objective; the record above stays readable.'));
+    }
+    card.append(controlsHost);
+    if (history.length) {
+      card.append(beginner
+        ? UI.expandable('History · ' + history.length + ' declaration' + (history.length === 1 ? '' : 's'),
+          function () { return objectiveHistoryBlock(history, true); },
+          { stateKey: 'account-objective-history-' + account.id })
+        : el('div', {},
+          el('div', { class: 'field-label' }, 'Revision series'),
+          objectiveHistoryBlock(history, false)));
+    }
+  }
+
+  async function portfolioObjectiveCard(account) {
+    var card = el('section', { class: 'card card-slim book-objective', id: 'account-objective-card' });
+    await renderObjectiveCardContent(card, account);
+    return card;
+  }
+
+  async function renderPortfolioBookOverview(root, account, summary) {
     var stats = el('div', { class: 'grid grid-4 book-summary-stats' },
       stat('Total value', summary.totalValueCents == null
         ? el('span', { class: 'muted' }, 'Unavailable') : fmtMoney(summary.totalValueCents),
@@ -1169,6 +1695,9 @@
             el('button', { type: 'button', class: 'btn btn-sm book-adopt-position',
               title: 'Open this position as a Plan and decide its future deliberately',
               onclick: function () { portfolioAdoptPosition(account, p, this); } }, 'Plan this position'),
+            el('button', { type: 'button', class: 'btn btn-secondary btn-sm book-start-campaign',
+              title: 'Group this position with its rolls, dividends, and linked activity',
+              onclick: function () { portfolioStartCampaign(account, p, this); } }, 'Start a campaign from this position'),
             p.instrumentType === 'OPTION' ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
               disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
               onclick: function () { portfolioRollPosition(account, p); } }, 'Roll position') : null)));
@@ -1186,6 +1715,9 @@
             el('button', { type: 'button', class: 'btn btn-sm book-adopt-position',
               title: 'Open this position as a Plan and decide its future deliberately',
               onclick: function () { portfolioAdoptPosition(account, p, this); } }, 'Plan'),
+            el('button', { type: 'button', class: 'btn btn-secondary btn-sm book-start-campaign',
+              title: 'Start a campaign from this position: group it with its rolls, dividends, and linked activity',
+              onclick: function () { portfolioStartCampaign(account, p, this); } }, 'Campaign'),
             p.instrumentType === 'OPTION' ? el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
               disabled: account.status === 'ARCHIVED' ? 'disabled' : null, onclick: function () { portfolioRollPosition(account, p); } }, 'Roll') : null))); })));
     }
@@ -1225,10 +1757,14 @@
     allocCard.appendChild(UI.expandable('How exposure is calculated', function () {
       return el('p', { class: 'muted small' }, 'Cash stays in capital allocation but is not market exposure. Security long and short are positive magnitudes; gross adds them and net subtracts short from long. Missing marks are excluded, never treated as zero.');
     }, { stateKey: 'portfolio-allocation-method' }));
-    // The aggregates (summary, cash, allocation) read beside their parts (positions) on wide desktops.
+    // The aggregates (summary, cash, allocation) read beside their parts (positions) on wide
+    // desktops; campaigns — the Book's center — read directly under the positions they interpret.
+    // The declared objective sits at the top of the account rail: what the account is FOR is the
+    // first fact an owner deciding what to do with it should meet — never buried in Settings.
+    var railCards = await Promise.all([portfolioObjectiveCard(account), portfolioCampaignsCard()]);
     root.appendChild(el('div', { class: 'band-cols book-overview-cols' },
-      el('div', { class: 'band-col-controls' }, stats, capital, allocCard),
-      el('div', { class: 'band-col-results' }, posCard)));
+      el('div', { class: 'band-col-controls' }, stats, railCards[0], capital, allocCard),
+      el('div', { class: 'band-col-results' }, posCard, railCards[1])));
   }
 
   function portfolioNowLocal() {
@@ -2306,7 +2842,7 @@
     try {
       if (section === 'overview') {
         var summary = await API.getFresh('/api/portfolio/accounts/' + account.id + '/summary');
-        renderPortfolioBookOverview(root, account, summary);
+        await renderPortfolioBookOverview(root, account, summary);
         return;
       }
       if (section === 'activity') return await renderPortfolioBookActivity(root, account);

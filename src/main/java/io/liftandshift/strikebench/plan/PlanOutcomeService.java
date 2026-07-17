@@ -132,6 +132,12 @@ public final class PlanOutcomeService {
                     h == null ? null : h.theta(), h == null ? null : h.xi(), h == null ? null : h.rho(),
                     h == null ? null : h.v0(), iv.driftPerYear(), iv.meanRevertSpeed(), iv.eventDay(),
                     iv.eventShockPct(), iv.minIv(), iv.maxIv());
+            // Authored waypoints are part of the spec identity: without these rows a reloaded
+            // pinned fan would repaint with no honesty label — a silent lie about how it was made.
+            for (ScenarioSpec.Waypoint w : spec.waypoints()) {
+                Db.execOn(c, "INSERT INTO plan_ensemble_waypoint(ensemble_id,day_index,price_ratio,tolerance) " +
+                        "VALUES(?,?,?,?)", ensembleId, w.dayIndex(), w.priceRatio(), w.tolerance());
+            }
             persistQuantiles(c, ensembleId, ensemble.paths());
             if (preview != null && preview.decisionMap() != null) {
                 for (SimulationEngine.LevelOdds level : preview.decisionMap().levels()) {
@@ -176,6 +182,13 @@ public final class PlanOutcomeService {
             ScenarioSpec spec = new ScenarioSpec(ScenarioSpec.PathModel.valueOf(r.model()),
                     ScenarioSpec.Shape.valueOf(r.shape()), r.horizon(), r.stepsPerDay(), r.drift(), r.vol(),
                     r.jumps(), r.jumpMean(), r.jumpVol(), r.tailNu(), h, r.seed(), r.paths());
+            // Re-attach the authored pins so the derived waypoint-fill honesty label survives storage.
+            List<ScenarioSpec.Waypoint> pins = Db.queryOn(c,
+                    "SELECT day_index,price_ratio,tolerance FROM plan_ensemble_waypoint " +
+                            "WHERE ensemble_id=? ORDER BY day_index",
+                    x -> new ScenarioSpec.Waypoint(x.intv("day_index"), x.dbl("price_ratio"),
+                            x.dblOrNull("tolerance")), r.id());
+            if (!pins.isEmpty()) spec = spec.withWaypoints(pins);
             IvSpec iv = new IvSpec(r.ivStart(), r.ivDrift(), r.ivMeanRevert(), r.ivLongRun(),
                     r.ivEventDay(), r.ivEventShock(), r.ivMin(), r.ivMax()).sane();
             double[] storedIv = decodeVector(inflate(r.ivPath()), r.nSteps() + 1);
@@ -189,6 +202,15 @@ public final class PlanOutcomeService {
             return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), r.contextRev(),
                     r.datasetId(), r.state(), ensemble, iv,
                     r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(), r.asOf());
+        });
+    }
+
+    /** The stored fan's fingerprint alone — lineage lookups must not inflate the whole matrix. */
+    public String ensembleFingerprint(String userId, String planId, String ensembleId) {
+        return db.with(c -> {
+            ownedPlanOn(c, planId, userId, false);
+            return Db.queryOn(c, "SELECT fingerprint FROM plan_ensemble WHERE id=? AND plan_id=?",
+                    r -> r.str("fingerprint"), ensembleId, planId).stream().findFirst().orElse(null);
         });
     }
 
@@ -453,6 +475,16 @@ public final class PlanOutcomeService {
         ObjectNode n = Json.MAPPER.createObjectNode();
         put(n, "id", r.id()); put(n, "basis", r.basis()); put(n, "candidateId", r.candidateId());
         put(n, "ensembleId", r.ensembleId()); put(n, "ensembleFingerprint", r.ensembleFingerprint());
+        // The scenario-canvas honesty label survives restoration: a result computed on a pinned
+        // fan must say so every time it is shown, not only on the run that created it.
+        if (r.ensembleId() != null) {
+            Db.queryOn(c, "SELECT pe.spec_model, EXISTS(SELECT 1 FROM plan_ensemble_waypoint w " +
+                            "WHERE w.ensemble_id=pe.id)::int pinned FROM plan_ensemble pe WHERE pe.id=?",
+                    x -> io.liftandshift.strikebench.sim.PathGenerator.waypointFill(
+                            ScenarioSpec.PathModel.valueOf(x.str("spec_model")), x.bool("pinned")).name(),
+                    r.ensembleId()).stream().findFirst()
+                    .ifPresent(fill -> n.put("waypointFill", fill));
+        }
         put(n, "interpretation", r.interpretation());
         put(n, "entryCostCents", r.entry()); put(n, "paths", r.paths()); put(n, "horizonDays", r.horizon());
         put(n, "p5Cents", r.p5()); put(n, "p25Cents", r.p25()); put(n, "p50Cents", r.p50());

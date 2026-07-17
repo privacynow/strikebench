@@ -41,7 +41,7 @@ class StrategyCatalogTest {
         for (StrategyFamily family : StrategyFamily.values()) families.add(family.name());
         families.add("CUSTOM");
 
-        assertThat(StrategyCatalog.templates()).hasSize(30).allSatisfy(template -> {
+        assertThat(StrategyCatalog.templates()).hasSize(33).allSatisfy(template -> {
             assertThat(keys.add(template.key())).as("unique template key " + template.key()).isTrue();
             assertThat(families).contains(template.family());
             assertThat(template.display()).isNotBlank();
@@ -55,7 +55,7 @@ class StrategyCatalogTest {
     @Test
     void surfaceEligibilityIsHonest() {
         assertThat(StrategyCatalog.families().stream().filter(StrategyCatalog.FamilyEntry::scenarioEnabled))
-                .hasSize(18)
+                .hasSize(21)
                 .allSatisfy(entry -> assertThat(entry.blockedByDefault()).isFalse());
         assertThat(StrategyCatalog.families().stream().filter(StrategyCatalog.FamilyEntry::backtestEnabled))
                 .hasSize(14)
@@ -72,6 +72,12 @@ class StrategyCatalogTest {
                 family("protective put", "PROTECTIVE_PUT", stock(0, "BUY", 100), put(1, "BUY", "95", NEAR, 1)),
                 family("protective collar", "PROTECTIVE_COLLAR", stock(0, "BUY", 100),
                         put(1, "BUY", "95", NEAR, 1), call(2, "SELL", "105", NEAR, 1)),
+                family("covered strangle", "COVERED_STRANGLE", stock(0, "BUY", 100),
+                        call(1, "SELL", "105", NEAR, 1), put(2, "SELL", "95", NEAR, 1)),
+                family("covered call with put-spread floor", "COVERED_CALL_PUT_SPREAD", stock(0, "BUY", 100),
+                        call(1, "SELL", "110", NEAR, 1), put(2, "BUY", "95", NEAR, 1), put(3, "SELL", "85", NEAR, 1)),
+                family("covered call with long-call overlay", "COVERED_CALL_CALL_OVERLAY", stock(0, "BUY", 100),
+                        call(1, "SELL", "105", NEAR, 1), call(2, "BUY", "115", NEAR, 1)),
                 family("long call", "LONG_CALL", call(0, "BUY", "100", NEAR, 1)),
                 family("long put", "LONG_PUT", put(0, "BUY", "100", NEAR, 1)),
                 family("naked call", "NAKED_CALL", call(0, "SELL", "100", NEAR, 1)),

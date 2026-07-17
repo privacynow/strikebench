@@ -1635,9 +1635,68 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     'a saved replay survives restart with a visible Plan-owned history and no legacy page');
 });
 
+test('the scenario canvas authors waypoints on the outcomes fan with an honest fill label', async () => {
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish');
+  // A selected structure unlocks the outcomes band's model lens; seed it the way the app does.
+  await page.evaluate(async planId => {
+    const strategy = await API.post('/api/plans/' + planId + '/strategy/run', {});
+    const candidate = strategy.strategy.result.candidates[0];
+    let live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    live = await PlanStore.get(planId, true);
+    await PlanStore.runEnsemble(live, { over: { model: 'GBM', shape: 'CHOP', horizonDays: 30,
+      stepsPerDay: 1, driftAnnual: 0, volAnnual: 0.25, jumpsPerYear: 0, jumpMean: 0, jumpVol: 0,
+      tailNu: 6, heston: null, seed: 6121, paths: 80 } });
+  }, plan.id);
+
+  let ensembleRuns = 0;
+  await page.route('**/api/plans/*/outcomes/ensemble', async route => { ensembleRuns++; await route.continue(); });
+  await go('#/plan/' + plan.id + '/outcomes');
+  await page.waitForSelector('#plan-outcomes');
+  await page.click('#plan-outcomes-basis-model');
+  await page.waitForSelector('#plan-scenario-canvas [data-canvas-fan] svg', { timeout: 20000 });
+  assert.equal(await page.getAttribute('#plan-scenario-canvas', 'data-waypoint-fill'), 'NONE',
+    'an unpinned fan is honestly labeled plain Monte Carlo');
+  assert.match(await page.textContent('#plan-scenario-canvas .canvas-fill-label'),
+    /Click the chart to pin/, 'the empty canvas teaches the pin gesture instead of standing as dead space');
+
+  // Place a waypoint with a synthesized click on the fan SVG (retry spots that hit a sample line).
+  const fan = page.locator('#plan-scenario-canvas [data-canvas-fan] svg');
+  await fan.scrollIntoViewIfNeeded();
+  const box = await fan.boundingBox();
+  for (const [fx, fy] of [[0.55, 0.32], [0.65, 0.42], [0.45, 0.26], [0.6, 0.5]]) {
+    await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+    if (await page.locator('#plan-scenario-canvas .fan-pin').count()) break;
+  }
+  assert.ok(await page.locator('#plan-scenario-canvas .fan-pin').count() >= 1,
+    'clicking the fan places a visible waypoint pin');
+  const runsBeforeRerun = ensembleRuns;
+  await page.waitForSelector('#plan-scenario-canvas[data-waypoint-fill="EXACT_CONDITIONAL"]', { timeout: 30000 });
+  assert.match(await page.textContent('#plan-scenario-canvas .canvas-fill-label'),
+    /Exact conditional paths/, 'the honesty label is a first-class visible element after the pinned re-run');
+  assert.ok(ensembleRuns > runsBeforeRerun,
+    'placing a waypoint re-ran the fan in place through the outcomes API');
+  assert.match(await page.textContent('#plan-scenario-canvas .scenario-pin-row'),
+    /\$\d+(\.\d{2})? \([+-]\d+\.\d% vs today\) · session \d+ — (Mon|Tue|Wed|Thu|Fri) [A-Z][a-z]{2} \d+/,
+    'every waypoint carries its units: dollars, percent vs today, and a dated trading session');
+  await page.unroute('**/api/plans/*/outcomes/ensemble');
+
+  // Save it as a named authored scenario; the chip carries the fill label and pin count.
+  await page.fill('#plan-canvas-scenario-name', 'Touches the level midway');
+  await page.click('#plan-canvas-save');
+  await page.waitForSelector('.authored-scenario-card[data-fill="EXACT_CONDITIONAL"]', { timeout: 15000 });
+  assert.match(await page.textContent('.authored-scenario-card'),
+    /Touches the level midway.*Exact conditional.*1 waypoint/s,
+    'the saved scenario card names the belief, its honesty label, and its waypoint count');
+  await assertNamedControls('#plan-scenario-canvas');
+});
+
 test('a selected Plan future becomes one exact managed rehearsal with a durable receipt', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('AAPL', 'evidence');
+  // A unique horizon guarantees a fresh plan: the scenario-canvas spec pins waypoints on the
+  // default-context AAPL plan, and creation dedupe would hand us its authored ensemble.
+  const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish', '38d');
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
   await page.click('#research-outcomes-basis-futures');
   await page.waitForSelector('#whatif-card');
@@ -4382,6 +4441,91 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.evaluate(() => Learn.setLevel('expert'));
 });
 
+test('TRADER/OWN R4.4: the Book account declares what it is FOR and keeps an immutable revision history', async () => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  if (await page.locator('#welcome-skip').count()) {
+    await page.click('#welcome-skip');
+    await page.waitForSelector('#app[data-ready="true"]');
+  }
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  // A dedicated account keeps this spec independent of every other tracked-book journey.
+  const created = await fetch(BASE + '/api/portfolio/accounts', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Objective spec account', accountType: 'TAXABLE',
+      lotMethod: 'FIFO', openingCashCents: 5000000 }) });
+  const accountBody = await created.text();
+  assert.ok(created.ok, 'tracked account for the objective spec: ' + accountBody);
+  const account = JSON.parse(accountBody);
+  await page.evaluate(id => {
+    localStorage.setItem('strikebench.portfolioBookAccount', id);
+    App.state.portfolioBookAccountId = id;
+  }, account.id);
+  await go('#/portfolio/book/overview');
+
+  // Never declared: an invitation with the consequence, not a form dump.
+  await page.waitForSelector('#account-objective-card[data-objective-state="undeclared"]');
+  assert.match(await page.textContent('#account-objective-card'),
+    /judges every idea against what you say this account is FOR/,
+    'the undeclared card explains why declaring matters before showing any control');
+  assert.equal(await page.locator('#account-objective-card [data-objective-controls]:not([hidden])').count(), 0,
+    'controls stay closed until the owner asks to declare');
+
+  // Declare INCOME + PREFER_BELOW_BASIS through the segmented controls (never a bare select).
+  await page.click('#account-objective-declare');
+  await page.waitForSelector('#account-objective-card [data-objective-controls]:not([hidden])');
+  assert.equal(await page.locator('#account-objective-card select').count(), 0,
+    'the objective controls are purpose-built choices, not bare listboxes');
+  await page.click('#account-objective-choice .choice-option[data-value="INCOME"]');
+  assert.match(await page.textContent('#account-objective-choice .control-consequence'),
+    /premium collection is the goal/, 'the objective states its consequence before anything saves');
+  assert.equal(await page.locator('#account-objective-direction').isVisible(), false,
+    'INCOME never demands a direction');
+  await page.click('#account-objective-choice .choice-option[data-value="DIRECTIONAL"]');
+  assert.equal(await page.locator('#account-objective-direction').isVisible(), true,
+    'DIRECTIONAL reveals the optional direction chips contextually');
+  await page.click('#account-objective-choice .choice-option[data-value="INCOME"]');
+  await page.click('#account-objective-assignment .choice-option[data-value="PREFER_BELOW_BASIS"]');
+  assert.match(await page.textContent('#account-objective-assignment .control-consequence'),
+    /below your basis counts in favor/, 'the assignment preference explains its reweighting');
+  await page.click('#account-objective-save');
+
+  // Declared: plain-language headline, quiet provenance, and the analyze-path consequence.
+  await page.waitForSelector('#account-objective-card[data-objective-state="declared"][data-objective-revision="1"]');
+  assert.match(await page.textContent('#account-objective-card [data-objective-headline]'),
+    /Income — collect premium; assignment below basis welcome/,
+    'the declared headline is plain language, never enum values');
+  assert.match(await page.textContent('#account-objective-card'), /Revision 1 · declared/,
+    'revision number and date read as quiet provenance');
+  assert.match(await page.textContent('#account-objective-card'),
+    /Every analysis on this account is now judged against this/,
+    'the card states that the analyze path now judges against this objective');
+
+  // A second declaration is revision 2, applied prospectively; history keeps both.
+  await page.click('#account-objective-declare');
+  await page.waitForSelector('#account-objective-card [data-objective-controls]:not([hidden])');
+  await page.click('#account-objective-choice .choice-option[data-value="ACCUMULATE"]');
+  await page.click('#account-objective-save');
+  await page.waitForSelector('#account-objective-card[data-objective-revision="2"]');
+  assert.match(await page.textContent('#account-objective-card [data-objective-headline]'),
+    /Accumulate — build the share position/);
+  await ensureExpanded(page.locator('#account-objective-card .xp-head').first());
+  assert.equal(await page.locator('#account-objective-card [data-objective-history-row]').count(), 2,
+    'history is a first-class record listing every revision');
+  const firstRevision = await page.textContent('#account-objective-card [data-objective-history-row="1"]');
+  assert.match(firstRevision, /Revision 1[\s\S]*Income/, 'revision 1 stays on record, oldest first');
+
+  // Expert is a lens, not a fork: the same card adds raw enums and the inline revision series.
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'expert'
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  await page.waitForSelector('#account-objective-card[data-objective-revision="2"]');
+  assert.match(await page.textContent('#account-objective-card'), /ACCUMULATE/,
+    'expert sees the raw enum values alongside the plain headline');
+  assert.equal(await page.locator('#account-objective-card [data-objective-history-row]').count(), 2,
+    'expert reads the same revision series inline as a compact table');
+  await captureSettled('book-account-objective.png');
+});
+
 test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disclosure state survive levels', async () => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.evaluate(() => Learn.setLevel('beginner'));
@@ -4394,7 +4538,12 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     theoreticalMaxProfit: 'Theoretical max profit',
     scenarioLoss: 'Scenario loss', hypothetical: 'Hypothetical', practice: 'Practice',
     recordedAtBroker: 'Recorded at broker',
-    campaignEconomicBasis: 'Campaign-adjusted economic basis', trackedTaxBasis: 'Tracked tax basis'
+    campaignEconomicBasis: 'Campaign-adjusted economic basis', trackedTaxBasis: 'Tracked tax basis',
+    campaignNetCredit: 'Campaign net credit', realizedVsHeadline: 'Realized vs headline yield',
+    peakCommittedCapital: 'Peak committed capital', accumulationLedger: 'Accumulation ledger',
+    counterfactualBenchmark: 'Counterfactual benchmark', churnCost: 'Churn round-trip cost',
+    accountObjective: 'Account objective', coherenceVerdict: 'Coherence verdict',
+    assignmentFit: 'Assignment fit', targetExposure: 'Target exposure'
   }, 'one registry owns every capital, provenance, and basis term');
   const vocabularyHelp = await page.evaluate(() => Object.entries(Learn.VOCABULARY).map(([key, item]) => ({
     key, hasInfo: !!Learn.INFO[item.infoKey], short: Learn.INFO[item.infoKey]?.short || '',
