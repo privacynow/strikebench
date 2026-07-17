@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,10 +15,10 @@ import java.util.List;
 public final class CompensationView {
     private CompensationView() {}
 
-    public static final String BASIS = "Premium per unit of realized risk: annualized yield, "
-            + "variance risk premium, gap frequency (sessions opening >2% from the prior close), "
-            + "liquidity, and capital efficiency. Earnings proximity is carried on each candidate's "
-            + "own warnings. This view sits beside the Decision score; it never replaces it.";
+    public static final String BASIS = "Premium per unit of realized risk: annualized premium yield 35%, "
+            + "variance risk premium 20%, gap frequency 15% (sessions opening >2% from the prior close), "
+            + "earnings proximity 10%, liquidity 10%, and capital efficiency 10%. Missing evidence is "
+            + "neutral, never silently favorable. This view sits beside the Decision score; it never replaces it.";
 
     public record CompensationEntry(String symbol, String strategy, String label, double score,
                                     List<CompensationComponent> components, String evaluationId) {}
@@ -28,6 +29,8 @@ public final class CompensationView {
                                                   EvaluationService evaluations, String worldId) {
         List<CompensationEntry> out = new ArrayList<>();
         java.util.Map<String, Double> gapCache = new java.util.HashMap<>();
+        java.util.Map<String, io.liftandshift.strikebench.market.EventService.EarningsProximity> eventCache =
+                new java.util.HashMap<>();
         for (StrategyEvaluation evaluation : evaluationsRanked) {
             var candidate = evaluation.candidate();
             if (candidate.entryNetPremiumCents() <= 0) continue; // premium collectors only, by design
@@ -48,7 +51,7 @@ public final class CompensationView {
             });
             List<CompensationComponent> components = new ArrayList<>();
             double yieldNorm = clamp01(yieldPct / 30.0);
-            components.add(new CompensationComponent("Annualized premium yield", 0.40, yieldNorm,
+            components.add(new CompensationComponent("Annualized premium yield", 0.35, yieldNorm,
                     String.format("%.1f%%/yr %s, IF repeatable", yieldPct, yieldBasis)));
             Double vrp = evaluation.volatility() == null ? null : evaluation.volatility().varianceRiskPremium();
             components.add(new CompensationComponent("Variance risk premium", 0.20,
@@ -60,7 +63,19 @@ public final class CompensationView {
                     gap == null ? 0.5 : clamp01(1.0 - gap * 8.0),
                     gap == null ? "gap history too thin — treated as neutral"
                             : String.format("%.0f%% of sessions opened >2%% from the prior close", gap * 100)));
-            components.add(new CompensationComponent("Liquidity", 0.15,
+            LocalDate packageEnd = latestExpiration(candidate);
+            String eventKey = symbol + "|" + packageEnd + "|" + worldId;
+            var event = eventCache.computeIfAbsent(eventKey,
+                    ignored -> evaluations.eventProximity(symbol, packageEnd, worldId));
+            double eventValue = !event.available() ? 0.5 : event.likelyBefore() ? 0.0 : 1.0;
+            String eventNote = event.note() + (!event.available()
+                    ? "; treated as neutral, not as no event"
+                    : event.likelyBefore()
+                        ? "; compensation score reduced for event-gap exposure"
+                        : "; no event-window penalty for this dated package");
+            components.add(new CompensationComponent("Earnings proximity", 0.10,
+                    eventValue, eventNote));
+            components.add(new CompensationComponent("Liquidity", 0.10,
                     clamp01(candidate.liquidityScore()), "tighter spreads keep the premium real"));
             Double roc = evaluation.capital() == null ? null : evaluation.capital().returnOnCapitalPct();
             components.add(new CompensationComponent("Capital efficiency", 0.10,
@@ -74,6 +89,18 @@ public final class CompensationView {
         }
         out.sort(java.util.Comparator.comparingDouble(CompensationEntry::score).reversed());
         return out;
+    }
+
+    private static LocalDate latestExpiration(Candidate candidate) {
+        LocalDate max = null;
+        for (LegView leg : candidate.legs() == null ? List.<LegView>of() : candidate.legs()) {
+            if (leg.expiration() == null) continue;
+            try {
+                LocalDate expiration = LocalDate.parse(leg.expiration());
+                if (max == null || expiration.isAfter(max)) max = expiration;
+            } catch (RuntimeException ignored) { /* invalid package date remains unavailable evidence */ }
+        }
+        return max;
     }
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }

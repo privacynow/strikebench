@@ -23,7 +23,7 @@ java -jar target/strikebench.jar
 # open http://localhost:7070
 ```
 
-First launch opens the welcome page. Pick your path:
+First launch opens the welcome page. Pick your presentation level:
 
 - **Teach me** — plain language everywhere, a tap-to-define glossary, question-driven flows,
   and a safety checklist before anything is placed.
@@ -31,46 +31,51 @@ First launch opens the welcome page. Pick your path:
   per-leg analytics, inline filters.
 
 You can switch levels any time with the Beginner / Expert control in the header, and the
-brand mark in the top-left always brings your working desk back. The tour remains linked from Home.
+brand mark in the top-left always brings your Desk back. Beginner and Expert use the same
+controls, decisions, math, and saved state; Expert reveals denser parameters and provenance.
 
 ## What you can do
 
-**Home** — your account at a glance, live market tiles for your chosen universe, sector pulse,
-and one-tap paths into everything else.
+**Desk** — see what needs attention, resume the one active Plan, inspect today's argued ideas,
+and open the bounded Plan-library drawer. Alerts for protocol breaches, expiries, event proximity,
+assignment/pin heuristics, and unresolved imports drive the order; the Desk does not duplicate the
+journeys that own those actions.
 
-**Research** — explore 13 sector universes as live quote tiles; tap any stock for an
-interactive candle chart (1M to MAX, crosshair readout), what's coming up (option expirations,
-earnings mentions, SEC filings), headlines, the full option chain with greeks, and
-"what you can do with this stock" — live per-goal suggestions computed from the active market lane.
+**Workspace** — explore 13 sector universes, search a stock, inspect its chart, events, news,
+filings, option chain, and regime context, then carry that question into one durable Plan. The Plan
+is a progressively revealed document: **Your view → Evidence → Strategy → Outcomes → Commitment →
+Live**. It requires an explicit direction, horizon, and risk posture before ranking; absent choices
+stay visibly absent instead of becoming a neutral view or a hidden one-month assumption. The
+argued-idea hero, runner-ups, exact Builder/custom package, Scout, and cash baseline all use the
+same server-owned catalog and decision policy. Unfavorable and over-budget ideas remain visible as
+named teaching cases.
 
-**Plans** — one continuous journey from a market question to review: Understand → Evidence →
-Strategy → Outcomes → Decide → Manage & Review. Start with one stock or let the universe Scout
-surface alternatives. The same Plan carries its market lane, goal, horizon, thesis, evidence,
-exact contracts, scenario receipt, and decision forward, so moving between Research, strategy
-selection, historical replay, futures, and a paper order does not ask for the same context again.
-Beginners and experts use the same catalog, controls, and math; the presentation changes, not
-the capability. Unfavorable and over-budget structures remain visible as teaching cases with
-the reason stated rather than disappearing.
+Evidence creates one fingerprinted fan for the declared hypothesis. Outcomes reprice the selected
+package on that same fan beside market-implied odds, historical analogs, and no-look-ahead replay.
+**Scenario Canvas** is the deep editor for that same artifact: author price waypoints and IV paths,
+apply an event template, choose symbol or position scope, compare structures, and save a provenance
+receipt. Exact conditional fills and guided non-Gaussian interpolation are labeled distinctly.
 
-**Portfolio → Practice desk** — review the isolated paper account: total value, buying power,
-share holdings, open and closed option positions, executable marks, greeks, management actions,
-and the append-only practice ledger.
+**Book** — use the isolated Practice book or maintain owner-scoped tracked taxable, IRA, and 401(k)
+records without changing practice cash. Construct multi-symbol allocations; record normalized
+stock and option transactions; manage exact FIFO/LIFO/HIFO lots; inspect P/L, performance, cash
+obligations, allocation, and reviewed-year tax facts; and export exact CSV or a six-sheet workbook.
+Generated Demo, simulated, or modeled prices never mark an external account, and an unavailable
+observed mark remains unavailable rather than zero.
 
-**Portfolio → Tracked accounts** — maintain a separate owner-scoped record of external taxable,
-IRA, or 401(k) activity without placing orders or changing practice cash. Record normalized
-stock and multi-leg option fills, short positions, fees, interest, dividends, deposits,
-withdrawals, assignment, exercise, and expiration. A chronological CSV commits each valid
-transaction group independently and quarantines rejected rows without writing a partial multi-leg
-package. Reconcile exact FIFO/LIFO/HIFO lots and realized basis; inspect executable-side P/L,
-known cash obligations, allocation, TWR, XIRR, maximum drawdown, an observed SPY comparison, and
-Modified Dietz reconciliation; and export exact CSV or a six-sheet Excel workbook. Tax surfaces
-keep the recorded accounting facts separate from an optional reviewed-year common-case worksheet
-using rates you supply; they do not calculate an authoritative return or amount owed. Generated
-Demo/simulated/model prices never mark an external account, and unavailable observed marks stay
-unavailable rather than zero.
+The Book also owns the full outside-position journey. Paste a supported broker statement or export,
+review parser inferences and a current observed re-mark, map source accounts, then confirm exact
+transactions or quarantine package-net facts in the pending queue. Resolve a package as provisional
+`USER_ALLOCATED` or attested `BROKER_REPORTED`, and batch-adopt confirmed lots into Plans with frozen
+ADOPTION receipts. Adopted positions receive separate fresh-eyes and campaign-to-date reviews.
+Campaigns preserve economic basis, realized-versus-headline yield, counterfactuals, churn,
+authored-versus-realized overlays, protocol adherence, and lessons. Book Risk aggregates lots into
+per-account and cross-account dollar Greeks, stressed assignment, expiry clusters, theme
+classification, contradictions, and coverage disclosures.
 
-**Data → Simulated market** — a practice market that *moves*, any day, at any speed. Pick a
-story (steady climb, sell-off then rebound, volatility event...), name your symbols, and
+**Data** — inspect source coverage, datasets, jobs, and administration, or run a simulated market
+that *moves*, any day, at any speed. Pick a story (steady climb, sell-off then rebound,
+volatility event...), name your symbols, and
 generated prices and option chains stream through every screen — on a virtual exchange clock
 that honors sessions, so time decay and expirations behave correctly, and playback speed never
 changes what happens, only how fast you watch it. It is a *model*, loudly labeled SIMULATED
@@ -78,6 +83,18 @@ everywhere (no dividends, no real order book), a dedicated simulation account ke
 practice account untouched, and the same seed plus the session's event log replays the
 identical market — reviews are reproducible. One click returns you to the prior base market
 (Observed or Demo) instantly.
+
+**Learn** — search the same vocabulary, explanations, and strategy guides used by the inline
+information controls. It links each concept back to the canonical Workspace or Book action.
+
+## One mounted app, from 2560 to mobile
+
+StrikeBench is a real SPA: the shell stays mounted, stage links move attention inside one live
+Workspace document, and ordinary updates preserve drafts, focus, scroll, expanded explanations,
+pending commands, and subscriptions. The layout is tested at 2560 CSS pixels on a fully expanded
+5K display, plus 2048, 1920, 1440, 1280, 1000, 390, 375, and 320. Wide screens use additional space
+for useful comparisons and related results; mobile sequences the same capabilities without hiding
+them or changing their calculations.
 
 ## Honest numbers, by design
 
@@ -131,3 +148,18 @@ market session. Daily bars are intentionally not re-downloaded every hour.
 
 Build instructions, architecture, test suites, configuration reference, and deployment live
 in [DEVELOPER.md](DEVELOPER.md).
+
+The current local verification entry points are:
+
+```bash
+docker compose up -d db
+mvn -q clean package
+cd dom-tests
+npm ci
+npx playwright install chromium
+npm run test:ci       # declarations, SPA, fixture, grown-state, responsive, auth, Book, Learn
+npm run test:live     # observed-provider journey; requires network/source availability
+```
+
+CI records one TAP report per browser suite and runs `node scripts/release-matrix.mjs`; the
+generated report is the source of exact test totals for that branch tip.

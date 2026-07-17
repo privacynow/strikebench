@@ -1,0 +1,2 @@
+Activity ID,Account,Activity Date,Symbol,Asset Type,Side,Open or Close,Option Type,Strike Price,Expiration,Quantity,Multiplier,Average Price,Net Amount,Fees,Leg
+RH-1,Individual 5566,2026-07-08,MSFT,Option,Buy,Open,Put,480,2026-08-07,1,100,1.25,-125.00,0,0

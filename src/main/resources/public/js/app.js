@@ -11,8 +11,25 @@
 
   /** Parses '#/plan/<id>(/<stage>)?' into {id, stage} — null for any other route. */
   function planStageOf(hash) {
-    var match = /^#\/plan\/([^/]+)(?:\/([^/]+))?/.exec(String(hash || '').split('?')[0]);
-    return match ? { id: match[1], stage: match[2] || 'understand' } : null;
+    var match = /^#\/plan\/([^/]+)(?:\/([^/]+))?$/.exec(String(hash || '').split('?')[0]);
+    if (!match) return null;
+    var args = match[2] ? [match[1], match[2]] : [match[1]];
+    return window.Product && Product.Routes.valid('plan', args)
+      ? { id: match[1], stage: match[2] || 'understand' } : null;
+  }
+
+  /** Public Research bands are positions inside one mounted market document. */
+  function researchBandOf(hash) {
+    var raw = String(hash || '');
+    var path = raw.split('?')[0];
+    var match = /^#\/research\/([^/]+)$/.exec(path);
+    if (!match) return null;
+    var query = raw.indexOf('?') >= 0 ? raw.slice(raw.indexOf('?') + 1) : '';
+    var requested = new URLSearchParams(query).get('view');
+    var view = requested || 'overview';
+    return { symbol: decodeURIComponent(match[1]).toUpperCase(),
+      band: ['overview', 'evidence', 'options'].indexOf(view) >= 0 ? view : null,
+      canonical: path };
   }
 
   function workspaceRoute(hash) {
@@ -29,6 +46,95 @@
     var research = /^#\/research(?:\/([^/]+))?/.exec(path);
     if (research) return 'research:' + (research[1] || 'index');
     return path.split('/').slice(0, 2).join('/');
+  }
+
+  /** Keep keyboard position through an in-place band/lens repaint. */
+  function mountedFocusBookmark(root) {
+    var active = document.activeElement;
+    if (!active || !root || !root.contains(active) || active === root) return null;
+    var mark = { id: active.id || null, start: active.selectionStart, end: active.selectionEnd };
+    if (!mark.id && active.matches && active.matches('.choice-option[data-value]')) {
+      var field = active.closest('.choice-field[id]');
+      if (field) { mark.fieldId = field.id; mark.value = active.getAttribute('data-value'); }
+    }
+    return mark.id || mark.fieldId ? mark : null;
+  }
+
+  function restoreMountedFocus(root, mark) {
+    if (!mark || !root) return;
+    var target = mark.id ? document.getElementById(mark.id) : null;
+    if (!target && mark.fieldId) {
+      var field = document.getElementById(mark.fieldId);
+      if (field) target = Array.from(field.querySelectorAll('.choice-option[data-value]')).find(function (node) {
+        return node.getAttribute('data-value') === mark.value;
+      });
+    }
+    if (!target || !root.contains(target) || typeof target.focus !== 'function') return;
+    target.focus({ preventScroll: true });
+    if (mark.start != null && typeof target.setSelectionRange === 'function') {
+      try { target.setSelectionRange(mark.start, mark.end == null ? mark.start : mark.end); }
+      catch (e) { /* number/date inputs do not support text selection */ }
+    }
+  }
+
+  /**
+   * A non-Flow destination still owns one durable route mount. Older views used App.render()
+   * for every local mutation, which tore that mount out of #app and lost keyboard position,
+   * drafts, disclosure state, scroll and route-owned pending UI. Capture only editable control
+   * values here; the view remains the owner of its presentation and rebuilds inside the SAME
+   * mount. Server-rendered facts are deliberately not copied back over the fresh presentation.
+   */
+  function destinationDraft(root) {
+    if (!root) return [];
+    var occurrences = {};
+    return Array.from(root.querySelectorAll('input,select,textarea,[contenteditable="true"]')).map(function (node) {
+      if (node.type === 'file') return null; // browsers intentionally forbid restoring file handles
+      var base = node.id ? 'id:' + node.id
+        : node.name ? 'name:' + node.name : 'tag:' + node.tagName.toLowerCase() + ':' + (node.type || '');
+      var occurrence = occurrences[base] || 0;
+      occurrences[base] = occurrence + 1;
+      return {
+        key: base, occurrence: occurrence, value: node.isContentEditable ? node.textContent : node.value,
+        checked: 'checked' in node ? node.checked : null
+      };
+    }).filter(Boolean);
+  }
+
+  function restoreDestinationDraft(root, draft) {
+    if (!root || !draft || !draft.length) return;
+    var occurrences = {};
+    Array.from(root.querySelectorAll('input,select,textarea,[contenteditable="true"]')).forEach(function (node) {
+      if (node.type === 'file') return;
+      var base = node.id ? 'id:' + node.id
+        : node.name ? 'name:' + node.name : 'tag:' + node.tagName.toLowerCase() + ':' + (node.type || '');
+      var occurrence = occurrences[base] || 0;
+      occurrences[base] = occurrence + 1;
+      var saved = draft.find(function (entry) { return entry.key === base && entry.occurrence === occurrence; });
+      if (!saved) return;
+      if (node.isContentEditable) node.textContent = saved.value;
+      else if (node.type !== 'submit' && node.type !== 'button') {
+        if (node.tagName !== 'SELECT' || Array.from(node.options).some(function (option) {
+          return option.value === saved.value;
+        })) node.value = saved.value;
+      }
+      if (saved.checked !== null && 'checked' in node) node.checked = saved.checked;
+    });
+  }
+
+  function waitForComponentIdle(root) {
+    if (!root || !root.querySelector('[aria-busy="true"]')) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var settled = false;
+      var observer = new MutationObserver(function () {
+        if (!root.isConnected || !root.querySelector('[aria-busy="true"]')) finish();
+      });
+      function finish() {
+        if (settled) return;
+        settled = true; observer.disconnect(); clearTimeout(timeout); resolve();
+      }
+      observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['aria-busy'] });
+      var timeout = setTimeout(finish, 30000);
+    });
   }
 
   var App = {
@@ -74,6 +180,8 @@
           if (symbol && next.symbol && symbol !== next.symbol) {
             if (patch.goal === undefined) next.intent = null;
             if (patch.thesis === undefined) next.thesis = null;
+            if (patch.horizon === undefined) { next.horizon = null; next.horizonDays = null; }
+            if (patch.targetCents === undefined) next.targetCents = null;
           }
           next.symbol = symbol || null;
         }
@@ -85,11 +193,16 @@
         if (patch.horizon !== undefined) {
           var horizon = String(patch.horizon || '').trim();
           next.horizon = horizon || null;
-          next.horizonDays = Product.Horizon.sessions(horizon, next.horizonDays);
+          next.horizonDays = horizon ? Product.Horizon.sessions(horizon, next.horizonDays) : null;
         }
         if (patch.thesis !== undefined) {
           var thesis = String(patch.thesis || '').trim().toLowerCase();
           next.thesis = thesis || null;
+        }
+        if (patch.targetCents !== undefined) {
+          var targetCents = Number(patch.targetCents);
+          next.targetCents = Number.isFinite(targetCents) && targetCents > 0
+            ? Math.round(targetCents) : null;
         }
         App.state.provisionalPlansByMarket[key] = next;
         return Object.assign({}, next);
@@ -125,8 +238,21 @@
       if (!preservePosition) window.scrollTo(0, 0);
       if (window.location.hash === hash) {
         App._scrollOnRender = !preservePosition;
-        App.render();
+        // A same-hash command is usually an attention/refetch request inside the mounted
+        // Workspace. Keep the live document (forms, focus, subscriptions and retained fan)
+        // instead of treating it as a page reload. Legacy destinations still fall back to
+        // the ordinary route renderer through this guarded helper.
+        App.refreshCurrentDestination(hash).catch(function (error) {
+          if (window.UI && UI.toast) UI.toast(error.message || 'This workspace could not refresh.', 'error');
+        });
       } else {
+        // The URL and readiness marker are one navigation commit. Hashchange is delivered on
+        // the next task, so leaving the outgoing document marked ready after changing the URL
+        // lets assistive tooling (and any route-aware consumer) mistake stale content for the
+        // destination. Drop readiness synchronously; the owning render restores it only after
+        // the new mounted destination has settled.
+        var appRoot = document.getElementById('app');
+        if (appRoot) appRoot.setAttribute('data-ready', 'false');
         window.location.hash = hash;
       }
     },
@@ -199,11 +325,215 @@
       return App.evaluateEnvelope(operation, basis, symbol, payload).then(function (response) { return response.result; });
     },
 
+    /** Repaint one component-owned host without replacing its route mount or neighboring UI. */
+    refreshComponent: async function (host, render, options) {
+      options = options || {};
+      if (!host || !host.isConnected || typeof render !== 'function') return false;
+      if (options.waitForIdle) await waitForComponentIdle(host);
+      if (!host.isConnected || (options.validate && !options.validate())) return false;
+      var appRoot = document.getElementById('app');
+      var focus = mountedFocusBookmark(host);
+      var preserveDraft = options.preserveDraft !== false;
+      var draft = preserveDraft ? destinationDraft(host) : [];
+      var scroll = { x: window.scrollX, y: window.scrollY };
+      if (options.pruneToken !== undefined) {
+        App._eventHandlers = (App._eventHandlers || []).filter(function (handler) {
+          return handler.token !== options.pruneToken;
+        });
+      }
+      if (options.manageReady !== false && appRoot) appRoot.setAttribute('data-ready', 'false');
+      host.replaceChildren();
+      try {
+        if (UI.beginExpandableRender) UI.beginExpandableRender();
+        await render(host);
+      } catch (error) {
+        if (host.isConnected && options.routeError) {
+          host.replaceChildren(renderRouteError(options.routeError, error));
+        } else throw error;
+      }
+      if (!host.isConnected || (options.validate && !options.validate())) return false;
+      if (preserveDraft) restoreDestinationDraft(host, draft);
+      restoreMountedFocus(host, focus);
+      window.scrollTo(scroll.x, scroll.y);
+      if (options.manageReady !== false && appRoot) appRoot.setAttribute('data-ready', 'true');
+      if (window.Workspace) Workspace.save();
+      return true;
+    },
+
+    /**
+     * Ask the current component to repaint inside its durable route mount. This is the SPA
+     * seam for Home, Book, Data and other non-Flow destinations: #app and .route-mount stay
+     * connected, while that destination's own view function refreshes its facts. A small DOM
+     * draft captures keystrokes that have not reached component state yet.
+     */
+    refreshDestination: async function (seam, options) {
+      seam = seam || App._destinationSeam;
+      options = options || {};
+      if (!seam || !seam.mount || !seam.mount.isConnected) return false;
+      if ((window.location.hash || '#/home') !== seam.hash || !App.alive(seam.token)) return false;
+      if (seam.refreshing) {
+        seam.queued = true;
+        return seam.refreshing;
+      }
+      seam.refreshing = (async function () {
+        do {
+          seam.queued = false;
+          var refreshed = await App.refreshComponent(seam.mount, function (host) {
+            return seam.view(host, seam.params.slice());
+          }, {
+            waitForIdle: options.waitForIdle, pruneToken: seam.token, routeError: seam.route,
+            validate: function () {
+              return (window.location.hash || '#/home') === seam.hash && App.alive(seam.token);
+            }
+          });
+          if (!refreshed) return false;
+        } while (seam.queued);
+        return true;
+      })();
+      try { return await seam.refreshing; }
+      finally { seam.refreshing = null; }
+    },
+
+    /** Recompute only the mounted destination's presentation when Beginner/Expert changes. */
+    refreshLens: async function () {
+      var root = document.getElementById('app');
+      var focus = mountedFocusBookmark(root);
+      var mounted = App._flowSeam && App._flowSeam.refreshLens ? App._flowSeam
+        : App._researchSeam && App._researchSeam.refreshLens ? App._researchSeam : null;
+      if (!mounted) return App.refreshDestination(null, { waitForIdle: true });
+      var token = App.navToken;
+      var renderGeneration = App._renderRequestGeneration;
+      var generation = App._mountedRefreshGeneration = (App._mountedRefreshGeneration || 0) + 1;
+      var refreshError = null;
+      root.setAttribute('data-ready', 'false');
+      try {
+        await mounted.refreshLens();
+      } catch (error) {
+        refreshError = error;
+      } finally {
+        var stillOwns = generation === App._mountedRefreshGeneration && App.alive(token)
+          && renderGeneration === App._renderRequestGeneration
+          && document.getElementById('app') === root
+          && (App._flowSeam === mounted || App._researchSeam === mounted);
+        if (stillOwns) {
+          root.setAttribute('data-ready', 'true');
+          restoreMountedFocus(root, focus);
+          if (window.Workspace) Workspace.save();
+        }
+      }
+      if (refreshError && stillOwns) throw refreshError;
+    },
+
+    /** Refresh the mounted destination after an in-place mutation; fall back for legacy views. */
+    refreshMounted: async function () {
+      var root = document.getElementById('app');
+      var focus = mountedFocusBookmark(root);
+      var mounted = App._flowSeam && App._flowSeam.reload ? App._flowSeam
+        : App._researchSeam && App._researchSeam.reload ? App._researchSeam : null;
+      if (!mounted) return App.refreshDestination();
+      var token = App.navToken;
+      var renderGeneration = App._renderRequestGeneration;
+      var generation = App._mountedRefreshGeneration = (App._mountedRefreshGeneration || 0) + 1;
+      var refreshError = null;
+      root.setAttribute('data-ready', 'false');
+      try {
+        await mounted.reload();
+      } catch (error) {
+        refreshError = error;
+      } finally {
+        var stillOwns = generation === App._mountedRefreshGeneration && App.alive(token)
+          && renderGeneration === App._renderRequestGeneration
+          && document.getElementById('app') === root
+          && (App._flowSeam === mounted || App._researchSeam === mounted);
+        if (stillOwns) {
+          root.setAttribute('data-ready', 'true');
+          restoreMountedFocus(root, focus);
+          if (window.Workspace) Workspace.save();
+        }
+      }
+      if (refreshError && stillOwns) throw refreshError;
+    },
+
+    /**
+     * Reconcile the destination currently on screen without assuming that a seam captured
+     * before an async mutation still owns the URL. Market/dataset/workspace commands can
+     * legitimately redirect to Home while they await the server; in that case hashchange
+     * owns the new destination and this function does nothing. A mounted Plan or Research
+     * document reloads in place; a genuinely different/legacy destination uses render().
+     */
+    refreshCurrentDestination: async function (expectedHash) {
+      var hash = window.location.hash || '#/home';
+      if (expectedHash && hash !== expectedHash) return false;
+      var root = document.getElementById('app');
+      var plan = planStageOf(hash);
+      var research = researchBandOf(hash);
+      var ownsPlan = !!(plan && App._flowSeam && App._flowSeam.key === 'plan:' + plan.id
+        && root && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow'));
+      var ownsResearch = !!(research && research.band && App._researchSeam
+        && App._researchSeam.key === 'research:' + research.symbol
+        && root && root.getAttribute('data-route') === 'research' && root.querySelector('#research-flow'));
+      var destination = App._destinationSeam;
+      var ownsDestination = !!(destination && destination.mount && destination.mount.isConnected
+        && destination.hash === hash && destination.token === App.navToken);
+      if (ownsPlan || ownsResearch) {
+        await App.refreshMounted();
+        return true;
+      }
+      if (ownsDestination) return App.refreshDestination(destination);
+      // Re-check after deriving ownership: a synchronous hash mutation belongs to its own
+      // hashchange render, not to the destination that requested this reconciliation.
+      if (expectedHash && (window.location.hash || '#/home') !== expectedHash) return false;
+      await App.render();
+      return false;
+    },
+
     /** Renders the current route into #app. Sets data-ready="true" when done (used by tests). */
     render: async function () {
-      // Serialize: a render kicked off mid-render (filter change -> blur -> render, then a tab
-      // click -> hashchange -> render) must wait, or both append into the same cleared root.
+      // Serialize DOM commits, but supersede the active producer immediately. Its route owns a
+      // generation-isolated mount, so any late continuation can only mutate detached DOM. This
+      // preserves ordering without making Back, another destination, or a level change wait for
+      // a provider request that may never answer.
       App._renderQueued = true;
+      App._renderRequestGeneration = (App._renderRequestGeneration || 0) + 1;
+      if (App._activeRender && App._activeRender.cancel) App._activeRender.cancel();
+      var nextHash = window.location.hash || '#/home';
+      var canonicalResearch = researchBandOf(nextHash);
+      var invalidResearchCanonicalized = false;
+      if (canonicalResearch && canonicalResearch.band == null) {
+        window.history.replaceState(null, '', canonicalResearch.canonical);
+        nextHash = canonicalResearch.canonical;
+        invalidResearchCanonicalized = true;
+      }
+      var root = document.getElementById('app');
+      // If an invalid query was typed while its canonical Research document is already
+      // mounted, correcting the address is the entire operation. Remounting the same Flow
+      // would throw away charts and form state merely because an unknown query value was
+      // rejected. A destination still loading takes the normal full-render path below.
+      if (invalidResearchCanonicalized && !App._rendering && App._lastRenderedHash === nextHash && root
+          && root.getAttribute('data-route') === 'research'
+          && root.getAttribute('data-ready') === 'true' && root.querySelector('#research-flow')
+          && App._researchSeam && App._researchSeam.key === 'research:' + canonicalResearch.symbol) {
+        App._renderQueued = false;
+        return;
+      }
+      var planFrom = planStageOf(App._lastRenderedRoute);
+      var planTo = planStageOf(nextHash);
+      var researchFrom = researchBandOf(App._lastRenderedHash);
+      var researchTo = researchBandOf(nextHash);
+      var mountedPositionMove = !!(root && (
+        (App._flowSeam && planFrom && planTo && planFrom.id === planTo.id
+          && planFrom.stage !== planTo.stage && App._flowSeam.key === 'plan:' + planTo.id
+          && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow'))
+        || (App._researchSeam && researchFrom && researchTo && researchFrom.band && researchTo.band
+          && researchFrom.symbol === researchTo.symbol && researchFrom.band !== researchTo.band
+          && App._researchSeam.key === 'research:' + researchTo.symbol
+          && root.getAttribute('data-route') === 'research' && root.querySelector('#research-flow'))));
+      // navToken is the mounted-document lifetime used by live subscriptions. A band move
+      // keeps it; a real destination/remount retires it and its route-owned GET group.
+      if (!mountedPositionMove) {
+        App.navToken += 1;
+        if (window.API && API.beginNavigation) API.beginNavigation();
+      }
       if (App._rendering) return;
       App._rendering = true;
       try {
@@ -222,6 +552,60 @@
       var parts = hash.replace(/^#\//, '').split('?')[0].split('/').filter(function (p) { return p.length; });
       var route = parts[0] || 'home';
       var params = parts.slice(1);
+      var token = App.navToken;
+      var renderGeneration = App._renderRequestGeneration;
+      var cancelRender;
+      var cancelled = new Promise(function (resolve) { cancelRender = resolve; });
+      var renderHandle = { token: token, cancel: cancelRender };
+      App._activeRender = renderHandle;
+      function settle(promise) {
+        return Promise.race([
+          Promise.resolve(promise).then(function (value) { return { value: value }; },
+            function (error) { return { error: error }; }),
+          cancelled.then(function () { return { cancelled: true }; })
+        ]);
+      }
+
+      // Validate before either mounted seam runs. Invalid Plan stages cannot be interpreted as
+      // the default band, and an invalid Research view is canonicalized visibly instead of
+      // rendering Overview beneath a URL the app does not understand.
+      if (!Product.Routes.valid(route, params)) {
+        window.history.replaceState(null, '', '#/home');
+        hash = '#/home'; route = 'home'; params = [];
+      } else {
+        var parsedResearch = researchBandOf(hash);
+        if (parsedResearch && parsedResearch.band == null) {
+          window.history.replaceState(null, '', parsedResearch.canonical);
+          hash = parsedResearch.canonical;
+        }
+      }
+
+      // Public Research has the same in-place seam as a durable Plan: Overview, Evidence,
+      // and Options are bands in one live document. Hashes remain deep-linkable and browser
+      // history remains truthful, while the mounted charts and form state stay connected.
+      var researchFrom = researchBandOf(App._lastRenderedHash);
+      var researchTo = researchBandOf(hash);
+      if (App._researchSeam && researchFrom && researchTo
+          && researchFrom.band && researchTo.band
+          && researchFrom.symbol === researchTo.symbol && researchFrom.band !== researchTo.band
+          && App._researchSeam.key === 'research:' + researchTo.symbol
+          && root.getAttribute('data-route') === 'research' && root.querySelector('#research-flow')) {
+        root.setAttribute('data-ready', 'false');
+        try {
+          var researchSettled = await settle(App._researchSeam.apply(researchTo.band, renderGeneration));
+          if (researchSettled.cancelled || !App.alive(token)) return;
+          if (researchSettled.error) throw researchSettled.error;
+          App._lastRenderedHash = hash;
+          var researchAnnouncer = document.getElementById('route-announcer');
+          if (researchAnnouncer) researchAnnouncer.textContent = researchTo.band + ' section';
+          root.setAttribute('data-ready', 'true');
+          if (window.Workspace) Workspace.save();
+          return;
+        } catch (researchSeamError) {
+          if (!App.alive(token)) return;
+          // The full destination render below remains the correctness fallback.
+        }
+      }
 
       // ---- The flow seam: moving between stages of ONE plan is a position change inside
       // the same live document, not a new screen. The mounted workspace registered a handle;
@@ -235,9 +619,12 @@
           && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow')) {
         root.setAttribute('data-ready', 'false');
         try {
-          await App._flowSeam.apply(seamTo.stage);
+          var seamSettled = await settle(App._flowSeam.apply(seamTo.stage, renderGeneration));
+          if (seamSettled.cancelled || !App.alive(token)) return;
+          if (seamSettled.error) throw seamSettled.error;
           var seamRouteKey = '#/' + [route].concat(params).join('/');
           App._lastRenderedRoute = seamRouteKey;
+          App._lastRenderedHash = hash;
           App._lastAnnouncedRoute = seamRouteKey;
           var announcer = document.getElementById('route-announcer');
           if (announcer) announcer.textContent = seamTo.stage.replace(/-/g, ' ');
@@ -246,6 +633,7 @@
           prefetchForRoute(route, params); // same idle warm-up the full render performs
           return;
         } catch (seamError) {
+          if (!App.alive(token)) return;
           // Fall through to the full render below — it rebuilds from scratch and is
           // always correct; the seam is an optimization, never a correctness owner.
         }
@@ -254,10 +642,11 @@
       // Every render is a new route generation. A slow view returns after painting its shell
       // and fills the rest from a detached block guarded by App.alive(token); a later
       // navigation bumps the token so that stale fill bails instead of painting the wrong screen.
-      var token = ++App.navToken;
       // Route-owned live refresh hooks must never survive into the next screen.
       App.refreshWorkflowContext = null;
       App._flowSeam = null;
+      App._researchSeam = null;
+      App._destinationSeam = null;
       // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
       // async, and anything watching data-ready (tests, tooling) must never catch the
       // outgoing screen still claiming to be ready for the new route.
@@ -306,34 +695,49 @@
       // second navigation supersedes the first. Navigation correctness wins over a 160ms
       // crossfade; the skeleton and card-arrival motion retain continuity without owning flow.
       swap();
+      // A generation-isolated mount makes supersession mechanically safe: the next route
+      // detaches this node, and a late async continuation can no longer append into #app.
+      // display:contents keeps the established route layout while giving lifecycle ownership
+      // to one concrete node.
+      var routeMount = UI.el('div', { class: 'route-mount', 'data-route-generation': String(token) });
       // The skeleton leaves the moment the view appends its first real element — views
       // render progressively, so first content usually lands within a frame or two.
       var mo = new MutationObserver(function (muts) {
         for (var i = 0; i < muts.length; i++) {
           for (var j = 0; j < muts[i].addedNodes.length; j++) {
-            if (muts[i].addedNodes[j] !== skeleton) {
-              if (skeleton.parentNode === root) root.removeChild(skeleton);
-              mo.disconnect();
-              return;
-            }
+            if (skeleton.parentNode === root) root.removeChild(skeleton);
+            mo.disconnect();
+            return;
           }
         }
       });
-      mo.observe(root, { childList: true });
+      mo.observe(routeMount, { childList: true });
+      root.appendChild(routeMount);
+      // Every destination, including the non-Flow surfaces, owns a durable route mount.
+      // Local commands and level changes call this component seam instead of App.render(),
+      // so ordinary work never replaces #app or the mounted destination node.
+      App._destinationSeam = {
+        key: renderRouteKey, hash: hash, route: route, params: params.slice(), token: token,
+        mount: routeMount, view: view, refreshing: null, queued: false
+      };
 
       try {
         if (UI.beginExpandableRender) UI.beginExpandableRender();
-        await view(root, params);
+        var viewSettled = await settle(view(routeMount, params));
+        if (viewSettled.cancelled || !App.alive(token)) return;
+        if (viewSettled.error) throw viewSettled.error;
       } catch (e) {
-        root.innerHTML = '';
-        root.appendChild(renderRouteError(route, e));
+        if (!App.alive(token)) return;
+        routeMount.replaceChildren(renderRouteError(route, e));
         checkServerHealth(); // a failing screen is the moment to look for a stale server
       } finally {
         mo.disconnect();
         if (skeleton.parentNode === root) root.removeChild(skeleton);
       }
+      if (!App.alive(token)) return;
       root.setAttribute('data-ready', 'true');
       root.setAttribute('data-route', route);
+      App._lastRenderedHash = hash;
       // Reset after the destination has replaced the old, potentially much taller DOM.
       // Resetting only before paint lets the browser clamp back to the inherited offset
       // while the new page is assembled (visible as headings hidden behind fixed chrome).
@@ -455,10 +859,11 @@
           App.navigate('#/research'); } }, 'Plan this symbol'),
         UI.el('a', { href: '#/data/datasets', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage'),
         UI.el('button', { class: 'btn btn-sm btn-secondary', id: 'scenario-exit', onclick: async function () {
+          var originHash = window.location.hash || '#/home';
           try {
             await API.put('/api/datasets/active', { id: 'observed' });
-            refreshScenarioBanner();
-            App.render();
+            await refreshScenarioBanner();
+            await App.refreshCurrentDestination(originHash);
           } catch (e) { UI.toast(e.message || 'Could not return to the market baseline', 'error'); }
         } }, 'Back to market baseline'));
       document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
@@ -830,6 +1235,9 @@
         syncTapeSector(u);
         refreshWorldBand();
         refreshScenarioBanner();      // dataset exclusivity is server-enforced; the banner must agree
+        // Capture the destination only after the market owners commit. PlanStore may route
+        // an old-market Plan to Home below; a late refresh must never reclaim that new URL.
+        var destinationHash = window.location.hash || '#/home';
         if (window.PlanStore) await PlanStore.marketChanged();
         var oldBar = document.getElementById('transition-error');
         if (oldBar) oldBar.remove();  // a successful reconciliation clears the failure state
@@ -848,7 +1256,7 @@
           return;
         }
         try {
-          return await App.render();  // same screen, new market under it — observed never stopped
+          return await App.refreshCurrentDestination(destinationHash);
         } catch (renderError) {
           // The market switch DID commit. Let the route error boundary explain a screen failure;
           // never tell the user they remain in the prior market after state/account/store moved.
@@ -943,37 +1351,149 @@
       b.addEventListener('click', function () {
         Learn.setLevel(b.getAttribute('data-level'));
         applyLevelSideEffects();
-        App.render(); // screens adapt structurally, not just visually
+        App.refreshLens().catch(function (error) {
+          if (UI.toast) UI.toast(error.message || 'The learning level could not refresh.', 'error');
+        }); // mounted Workspace/Research updates its lens without a root teardown
       });
     });
 
     var risk = document.getElementById('risk-mode');
+    var riskPicker = document.getElementById('header-risk-picker');
+    var riskPopover = document.getElementById('risk-mode-popover');
+    var riskOptions = [
+      { value: 'conservative', label: 'Cautious', sub: 'Budget loading' },
+      { value: 'balanced', label: 'Standard', sub: 'Budget loading' },
+      { value: 'aggressive', label: 'High', sub: 'Budget loading' }
+    ];
+    var riskBudgetByMode = {};
+    var syncingRiskChoice = false;
+    var riskChoice = UI.chipSet({
+      id: 'header-risk-choice',
+      label: 'Maximum risk for one new idea',
+      info: 'riskbudget',
+      options: riskOptions,
+      value: null,
+      revealDetails: 'expert',
+      consequence: function (value) {
+        if (!value) return 'Choose a posture before it can become a new Plan assumption.';
+        var mode = riskBudgetByMode[value];
+        if (!mode) return 'The server is calculating this posture’s current dollar limit.';
+        return UI.fmtMoneyCompact(mode.effectiveBudgetCents) + ' maximum risk per new idea'
+          + (mode.capped ? ' · capped by your declared risk capital' : '');
+      },
+      onChange: function (value) {
+        if (syncingRiskChoice) return;
+        risk.value = value;
+        risk.dispatchEvent(new Event('change', { bubbles: true }));
+        setRiskPopover(false);
+        risk.focus();
+      }
+    });
+    riskPopover.appendChild(riskChoice);
+
+    function validRisk(value) {
+      return riskOptions.some(function (option) { return option.value === value; });
+    }
+    function modeLabel(value) {
+      var option = riskOptions.find(function (candidate) { return candidate.value === value; });
+      return option ? option.label : 'Choose';
+    }
+    function paintRiskTrigger() {
+      var value = risk.value;
+      var mode = riskBudgetByMode[value];
+      risk.textContent = validRisk(value)
+        ? modeLabel(value) + (mode ? ' · ' + UI.fmtMoneyCompact(mode.effectiveBudgetCents) : '')
+        : 'Choose';
+    }
+    function paintRiskChoiceBudget() {
+      riskOptions.forEach(function (option) {
+        var mode = riskBudgetByMode[option.value];
+        var button = riskChoice.querySelector('.choice-option[data-value="' + option.value + '"]');
+        if (!button) return;
+        var label = button.querySelector('.choice-option-label');
+        var sub = button.querySelector('.choice-option-sub');
+        if (label) label.textContent = option.label;
+        if (sub) sub.textContent = mode ? UI.fmtMoneyCompact(mode.effectiveBudgetCents) + '/idea' : option.sub;
+        button.setAttribute('aria-label', mode
+          ? option.label + ' — ' + (mode.percent * 100) + '% of current buying power'
+            + (mode.capped ? ' — capped by declared risk capital' : '')
+          : option.label + ' — current dollar limit is loading');
+      });
+      var consequence = riskChoice.querySelector('.control-consequence');
+      var selected = riskBudgetByMode[risk.value];
+      if (consequence) consequence.textContent = !validRisk(risk.value)
+        ? 'Choose a posture before it can become a new Plan assumption.'
+        : selected
+          ? UI.fmtMoneyCompact(selected.effectiveBudgetCents) + ' maximum risk per new idea'
+            + (selected.capped ? ' · capped by your declared risk capital' : '')
+          : 'The server is calculating this posture’s current dollar limit.';
+      paintRiskTrigger();
+    }
+    function setRiskPopover(open) {
+      open = !!open;
+      riskPopover.hidden = !open;
+      risk.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        window.requestAnimationFrame(function () {
+          var selected = riskChoice.querySelector('.choice-option.active');
+          var first = riskChoice.querySelector('.choice-option');
+          (selected || first || risk).focus();
+        });
+      }
+    }
+    risk.addEventListener('click', function () {
+      setRiskPopover(risk.getAttribute('aria-expanded') !== 'true');
+    });
+    risk.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setRiskPopover(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        setRiskPopover(false);
+      }
+    });
+    riskPopover.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setRiskPopover(false);
+      risk.focus();
+    });
+    document.addEventListener('pointerdown', function (event) {
+      if (!riskPopover.hidden && !riskPicker.contains(event.target)) setRiskPopover(false);
+    });
+
     var storedRisk = null;
     try { storedRisk = window.localStorage.getItem('strikebench.riskMode'); } catch (e) { /* ignore */ }
     // RISK IS A BUDGET, not an experience level. Only the current public values are accepted.
-    if (storedRisk && Array.from(risk.options).some(function (option) { return option.value === storedRisk; })) {
+    var storedRiskIsValid = validRisk(storedRisk);
+    // The trigger label is presentation, not a declaration. A new Plan may carry the header
+    // posture only after the person actually chose it (now or in an earlier session).
+    App.state.headerRiskExplicit = storedRiskIsValid;
+    if (storedRiskIsValid) {
       risk.value = storedRisk;
+      syncingRiskChoice = true;
+      riskChoice.set(storedRisk);
+      syncingRiskChoice = false;
     }
+    paintRiskTrigger();
     // ONE SOURCE OF TRUTH (review P0): the SERVER computes every mode's dollar budget
     // (percent x buying power, capped by declared risk capital). The header only displays it —
     // no client percentage arithmetic anywhere. Refreshed via the GET cache: every mutation
     // flushes the cache, and every render calls this, so the label follows trades, resets,
     // stock buys and world switches.
     function labelRiskOptions(rb) {
-      var byMode = {};
-      (rb.modes || []).forEach(function (m) { byMode[m.mode] = m; });
-      risk.querySelectorAll('option').forEach(function (o) {
-        var m = byMode[o.value];
-        if (!m) return;
-        // Compact: consequence in the label, mechanics in the tooltip (review: no sentences in a select)
-        o.textContent = m.label + ' \u00b7 ' + UI.fmtMoneyCompact(m.effectiveBudgetCents) + '/idea';
-        o.title = (m.percent * 100) + '% of ' + UI.fmtMoneyCompact(rb.basisCents) + ' buying power'
-          + (m.capped ? ' \u2014 capped by your declared risk capital' : '');
+      riskBudgetByMode = {};
+      (rb.modes || []).forEach(function (mode) {
+        riskBudgetByMode[mode.mode] = mode;
+        var option = riskOptions.find(function (candidate) { return candidate.value === mode.mode; });
+        if (option && mode.label) option.label = mode.label;
       });
-      risk.title = 'Max capital one new idea may put at risk \u2014 '
+      paintRiskChoiceBudget();
+      risk.setAttribute('aria-label', 'Max capital one new idea may put at risk — '
         + 'computed by the server from your current buying power'
         + (rb.explicitCapCents ? ', capped by your declared risk capital of ' + UI.fmtMoneyCompact(rb.explicitCapCents) : '')
-        + '. Never changes the math: the same contract has the same odds in every mode.';
+        + '. Never changes the math: the same contract has the same odds in every posture.');
     }
     App.refreshRiskBudget = function () {
       return API.get('/api/risk-budget').then(function (rb) {
@@ -983,10 +1503,32 @@
       }).catch(function () { /* base labels stand; ticket falls back to server preview data */ });
     };
     risk.addEventListener('change', function () {
+      if (!validRisk(risk.value)) return;
+      App.state.headerRiskExplicit = true;
+      if (riskChoice.value() !== risk.value) {
+        syncingRiskChoice = true;
+        riskChoice.set(risk.value);
+        syncingRiskChoice = false;
+      }
+      paintRiskChoiceBudget();
       try { window.localStorage.setItem('strikebench.riskMode', risk.value); } catch (e) { /* ignore */ }
       // This is the default for NEW Plans. Existing Plans retain their normalized risk mode
       // until the user edits that Plan's assumptions, which then invalidates dependent stages.
-      App.render();
+      if (App._researchSeam && App._researchSeam.reload) {
+        App.refreshMounted().catch(function (error) {
+          if (UI.toast) UI.toast(error.message || 'The Research risk label could not refresh.', 'error');
+        });
+      } else if (App._flowSeam) {
+        // The picker itself is the complete update on an existing Plan: its stored risk mode
+        // is deliberately immutable here. Do not remount the live Workspace merely to save a
+        // default that applies only to the next Plan.
+        if (window.Workspace) Workspace.save();
+      } else {
+        // This picker is already the complete visible update. Other destinations read the
+        // new default when the user starts the next Plan; tearing down the current Book/Data/
+        // Home component here only destroyed drafts and focus without changing stored facts.
+        if (window.Workspace) Workspace.save();
+      }
     });
   }
 
@@ -1155,7 +1697,7 @@
       }).then(function () {
         return window.Workspace && Workspace.reconcile ? Workspace.reconcile() : false;
       }).then(function (workspaceChanged) {
-        if (workspaceChanged) return App.render();
+        if (workspaceChanged) return App.refreshCurrentDestination();
       }).catch(function () { /* offline — next visit retries */ })
         .then(function () {
           if (document.visibilityState !== 'visible') return;
@@ -1217,11 +1759,12 @@
     if (u.active && u.active.sectorKey) sel.value = u.active.sectorKey;
     sel.onchange = async function () {
       var old = u.active && u.active.sectorKey;
+      var originHash = window.location.hash || '#/home';
       sel.disabled = true;
       try {
         await API.put('/api/universe', { sector: sel.value });
         await refreshUniverse({ strict: true });
-        await App.render();
+        await App.refreshCurrentDestination(originHash);
       } catch (e) {
         if (old) sel.value = old;
         if (UI.toast) UI.toast('Could not change the market sector: ' + (e.message || 'try again'));
@@ -1625,10 +2168,26 @@
   }
   // Local command responses use the same typed path as SSE. The server also publishes the event
   // for other tabs; duplicate delivery is intentionally harmless and collapses in each view.
-  App.emitEvent = dispatchAppEvent;
+  // A local command is semantically the same event as its SSE echo: it must run the
+  // application-level reconciliation (dataset ownership, Plan refresh, alert count) before
+  // notifying mounted views. `acceptAppEvent` ends in dispatchAppEvent, so the later server
+  // echo remains an idempotent second hint instead of a different code path.
+  App.emitEvent = acceptAppEvent;
 
   function acceptAppEvent(type, data) {
-    if (type === 'dataset.selected') refreshScenarioBanner();
+    if (type === 'dataset.selected') {
+      var selectionSeq = App._datasetSelectionSeq = (App._datasetSelectionSeq || 0) + 1;
+      refreshScenarioBanner().then(function () {
+        if (selectionSeq !== App._datasetSelectionSeq) return;
+        API.invalidate(['/api/research', '/api/evaluate', '/api/plans']);
+        // Config (and therefore the Evidence owner key) is now authoritative. Rebuild only
+        // the mounted Workspace bands so an old-dataset fan/study cannot remain visible
+        // beside actions that would run in the newly selected dataset.
+        if (App._flowSeam || App._researchSeam) return App.refreshMounted();
+      }).catch(function (error) {
+        if (UI.toast) UI.toast(error.message || 'The selected dataset could not be reconciled.', 'error');
+      });
+    }
     if (type === 'provider.cooldown' && data) showCooldownChip(data);
     if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
     if (type === 'plan.updated' && window.PlanStore) {

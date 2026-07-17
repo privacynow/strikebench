@@ -1,8 +1,18 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.AnalysisContext;
+import io.liftandshift.strikebench.plan.AuthoredScenarioService;
+import io.liftandshift.strikebench.plan.Plan;
+import io.liftandshift.strikebench.plan.PlanOutcomeService;
+import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.position.CampaignMath;
+import io.liftandshift.strikebench.sim.IvSpec;
+import io.liftandshift.strikebench.sim.PathEnsembleService;
+import io.liftandshift.strikebench.sim.ScenarioCanvasSpec;
+import io.liftandshift.strikebench.sim.ScenarioSpec;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +22,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 
@@ -192,11 +203,24 @@ class CampaignServiceTest {
         var tx = books.record("local", account.id(), tx("2026-03-02", "TRADE", null, 0L, null, "MANUAL", null,
                 List.of(leg("STOCK", "BUY", "OPEN", "MU", null, null, null, 10, 1, "900"))));
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
-                + "external_ref,occurred_at,package_net_cents) VALUES ('pend-1','local','FIDELITY','fp-1',"
-                + "'ref-1','2026-03-09T15:00:00Z',-50_00)");
+                + "external_ref,occurred_at,package_net_cents,destination_portfolio_account_id,payload_fingerprint) "
+                + "VALUES ('pend-1','local','FIDELITY','fp-1','ref-1','2026-03-09T15:00:00Z',-50_00,?,"
+                + "'payload-pend-1')", account.id());
+        db.exec("INSERT INTO portfolio_import_pending_leg(pending_id,leg_no,instrument_type,action,position_effect,"
+                        + "symbol,quantity,multiplier) VALUES ('pend-1',0,'STOCK','BUY','OPEN','MU',5,1)");
+        db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
+                + "external_ref,occurred_at,package_net_cents,destination_portfolio_account_id,payload_fingerprint) "
+                + "VALUES ('pend-other','local','FIDELITY','fp-1','ref-other','2026-03-10T15:00:00Z',-70_00,?,"
+                + "'payload-pend-other')", account.id());
+        db.exec("INSERT INTO portfolio_import_pending_leg(pending_id,leg_no,instrument_type,action,position_effect,"
+                        + "symbol,quantity,multiplier) VALUES ('pend-other',0,'STOCK','BUY','OPEN','NVDA',5,1)");
 
         var campaign = campaigns.create("local", new CampaignService.CreateInput("MU build", "MU", null, null));
         campaigns.attach("local", campaign.id(), member("TRANSACTION", tx.id(), null));
+        var proposals = campaigns.propose("local", campaign.id(), null, null, null);
+        assertThat(proposals).filteredOn(p -> "PENDING_IMPORT".equals(p.type()))
+                .extracting(CampaignService.Proposal::id)
+                .containsExactly("pend-1");
         var view = campaigns.attach("local", campaign.id(), member("PENDING_IMPORT", "pend-1", null));
 
         assertThat(view.pendingCount()).isEqualTo(1);
@@ -239,6 +263,219 @@ class CampaignServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> campaigns.view("owner-b", campaignId))
                 .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void closedCampaignReviewKeepsExactScenarioLineagePricesProtocolOverrideAndOwnerScopedLesson() {
+        Clock canvasClock = Clock.fixed(Instant.parse("2026-06-01T14:00:00Z"), ZoneOffset.UTC);
+        PlanService plans = new PlanService(db, canvasClock);
+        PlanOutcomeService outcomes = new PlanOutcomeService(db, canvasClock);
+        AuthoredScenarioService authored = new AuthoredScenarioService(db, canvasClock);
+        Plan.View plan = plans.create("local", Plan.MarketKind.OBSERVED, null, null,
+                new Plan.CreateRequest("journey-e-plan", "MU", "INCOME", null, null,
+                        "bullish", 30, null, "conservative", null, null, null, null));
+        ScenarioSpec baseSpec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                30, 1, 0.04, 0.25, 0, 0, 0, 8, null, 81L, 2);
+        double[][] paths = new double[2][31];
+        for (int p = 0; p < paths.length; p++) for (int d = 0; d < paths[p].length; d++) {
+            paths[p][d] = 100 + d * (p == 0 ? .2 : -.1);
+        }
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, baseSpec, paths, null, "paths-review-test", LocalDate.parse("2026-06-01"));
+        var stored = outcomes.saveEnsemble("local", plan, ensemble, IvSpec.flat(.25),
+                ScenarioCanvasSpec.defaults(), .04, null, Json.parse("{\"review\":true}"));
+        ScenarioSpec authoredSpec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                30, 1, 0.04, 0.25, 0, 0, 0, 8, null, 82L, 100,
+                List.of(new ScenarioSpec.Waypoint(5, 1.08), new ScenarioSpec.Waypoint(20, 1.03)));
+        var saved = authored.save("local", plan, stored.id(), authoredSpec, "Dip then recover");
+
+        db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents," +
+                        "has_traded,created_at,updated_at) VALUES('acct-review','local','Practice','PAPER'," +
+                        "1000000,1000000,0,1,'2026-06-01T14:00:00Z','2026-06-12T14:00:00Z')");
+        insertPracticeTrade("ptr-review", "acct-review", "MU", "CLOSED", 3_000L,
+                "2026-06-01T14:00:00Z", "2026-06-12T14:00:00Z", 1, 0,
+                "[{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"95\","
+                        + "\"expiration\":\"2026-07-17\",\"ratio\":1,\"entryPrice\":\"1\",\"multiplier\":100}]");
+        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,qty,proposed_net_cents," +
+                        "quote_as_of,economic_verdict,evidence_provenance,model_version," +
+                        "review_horizon_days,decision_seq) VALUES('pdec-review',?,1,'TRADE',1,10000," +
+                        "'2026-06-01T14:00:00Z','FAVORABLE','OBSERVED','review-test',30,1)", plan.id());
+        db.exec("INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type,strike_price," +
+                        "expiration,ratio,multiplier,fill_price) VALUES('pdec-review',0,'SELL','PUT',95," +
+                        "'2026-07-17',1,100,1.00)");
+        db.exec("INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,kind,action_at," +
+                        "unrealized_cents,note) VALUES('pmgt-trigger',?,'pdec-review','ptr-review','MARK'," +
+                        "'2026-06-10T14:00:00Z',6000,'target crossed')", plan.id());
+        // A later mark proves the target line was allowed to pass; a mere refresh that remained
+        // beyond the line would not be enough to manufacture nonadherence.
+        db.exec("INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,kind,action_at," +
+                        "unrealized_cents,note) VALUES('pmgt-passed',?,'pdec-review','ptr-review','MARK'," +
+                        "'2026-06-11T14:00:00Z',4000,'target no longer crossed')", plan.id());
+        db.exec("INSERT INTO plan_management_action(id,plan_id,decision_id,trade_id,kind,action_at," +
+                        "realized_cents,note) VALUES('pmgt-close',?,'pdec-review','ptr-review','CLOSE'," +
+                        "'2026-06-12T14:00:00Z',3000,'closed whole package')", plan.id());
+        for (String row : List.of("2026-06-01,100.00", "2026-06-08,108.00", "2026-07-10,104.00")) {
+            String[] p = row.split(",");
+            db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,dataset_id,adjusted," +
+                            "quality_rank,bar_kind) VALUES('MU',?::date,?::numeric,'stooq',1,'observed',0,0,'CLOSE_ONLY')",
+                    p[0], p[1]);
+        }
+
+        CampaignService reviewCampaigns = new CampaignService(db,
+                Clock.fixed(Instant.parse("2026-07-13T16:00:00Z"), ZoneOffset.UTC));
+        var campaign = reviewCampaigns.create("local", new CampaignService.CreateInput(
+                "MU lesson", "MU", null, null));
+        reviewCampaigns.attach("local", campaign.id(), member("PLAN", plan.id(), null));
+        reviewCampaigns.attach("local", campaign.id(), member("PRACTICE_TRADE", "ptr-review", null));
+        var closed = reviewCampaigns.update("local", campaign.id(),
+                new CampaignService.UpdateInput(null, "CLOSED", "Take the mechanical target."));
+
+        assertThat(closed.closedAt()).isEqualTo("2026-07-13T16:00:00Z");
+        assertThat(closed.lessonNote()).isEqualTo("Take the mechanical target.");
+        assertThat(closed.review().finalReview()).isTrue();
+        var overlay = closed.review().authoredVsRealized();
+        assertThat(overlay.available()).isTrue();
+        assertThat(overlay.scenarioId()).isEqualTo(saved.id());
+        assertThat(overlay.scenarioFingerprint()).isEqualTo(saved.fingerprint());
+        assertThat(overlay.baseEnsembleId()).isEqualTo(stored.id());
+        assertThat(overlay.waypointFill()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(overlay.authored()).extracting(CampaignService.AuthoredPathPoint::tradingDay)
+                .containsExactly(0, 5, 20);
+        assertThat(overlay.realized()).hasSize(3);
+        assertThat(overlay.realizedSource()).isEqualTo("stooq");
+        assertThat(overlay.note()).contains("exact saved pins", "not a forecast");
+
+        var stochastic = authored.save("local", plan, stored.id(), baseSpec, "Plain stochastic fan");
+        db.exec("UPDATE authored_scenario SET created_at='2026-07-01T00:00:00Z' WHERE id=?", stochastic.id());
+        var noLine = reviewCampaigns.view("local", campaign.id()).review().authoredVsRealized();
+        assertThat(noLine.scenarioId()).isEqualTo(stochastic.id());
+        assertThat(noLine.available()).isFalse();
+        assertThat(noLine.authored()).hasSize(1);
+        assertThat(noLine.note()).contains("stochastic fan", "no single authored line");
+        db.exec("UPDATE authored_scenario SET created_at='2026-05-01T00:00:00Z' WHERE id=?", stochastic.id());
+
+        // A Canvas authored after the campaign closed is hindsight, not the campaign's saved
+        // expectation. The final review keeps the latest receipt that actually existed at close.
+        var postHoc = authored.save("local", plan, stored.id(), authoredSpec, "Hindsight line");
+        db.exec("UPDATE authored_scenario SET created_at='2026-07-14T00:00:00Z' WHERE id=?", postHoc.id());
+        var timeSafe = reviewCampaigns.view("local", campaign.id()).review().authoredVsRealized();
+        assertThat(timeSafe.scenarioId()).isEqualTo(saved.id());
+        assertThat(timeSafe.authoredAt()).isEqualTo("2026-06-01T14:00:00Z");
+        assertThat(timeSafe.note()).contains("Authored 2026-06-01T14:00:00Z");
+
+        var target = closed.review().protocolAdherence().stream()
+                .filter(p -> ProtocolEvaluator.TAKE_PROFIT.equals(p.rule())).findFirst().orElseThrow();
+        assertThat(target.executionLane()).isEqualTo("PRACTICE");
+        assertThat(target.triggerPnlCents()).isEqualTo(5_000L);
+        assertThat(target.status()).isEqualTo("OVERRIDDEN");
+        assertThat(target.overrideSignedCostCents()).isEqualTo(-3_000L);
+
+        // Refreshing another mark while the line remains crossed is observation, not an
+        // override. The eventual whole-package close therefore respects the frozen rule.
+        db.exec("UPDATE plan_management_action SET unrealized_cents=7000 WHERE id='pmgt-passed'");
+        var refreshed = reviewCampaigns.view("local", campaign.id()).review().protocolAdherence().stream()
+                .filter(p -> ProtocolEvaluator.TAKE_PROFIT.equals(p.rule())).findFirst().orElseThrow();
+        assertThat(refreshed.status()).isEqualTo("RESPECTED");
+        assertThat(refreshed.overrideSignedCostCents()).isNull();
+
+        // Once a later mark proves the line passed, a partial response is an override, but its
+        // realized slice is not commensurate with the full-package trigger mark. Cost is withheld.
+        db.exec("UPDATE plan_management_action SET unrealized_cents=4000 WHERE id='pmgt-passed'");
+        db.exec("UPDATE plan_management_action SET kind='PARTIAL_CLOSE' WHERE id='pmgt-close'");
+        var partial = reviewCampaigns.view("local", campaign.id()).review().protocolAdherence().stream()
+                .filter(p -> ProtocolEvaluator.TAKE_PROFIT.equals(p.rule())).findFirst().orElseThrow();
+        assertThat(partial.status()).isEqualTo("OVERRIDDEN");
+        assertThat(partial.overrideSignedCostCents()).isNull();
+        assertThat(partial.note()).contains("same whole-package quantity/basis");
+        db.exec("UPDATE plan_management_action SET kind='CLOSE' WHERE id='pmgt-close'");
+
+        assertThat(closed.review().protocolAdherence()).filteredOn(p ->
+                        ProtocolEvaluator.STOP_LOSS.equals(p.rule()))
+                .extracting(CampaignService.ProtocolAdherence::status).containsExactly("NOT_TRIGGERED");
+        assertThat(closed.review().executionLanes()).filteredOn(l -> "PRACTICE".equals(l.lane()))
+                .singleElement().satisfies(lane -> {
+                    assertThat(lane.finalResultAvailable()).isTrue();
+                    assertThat(lane.realizedPnlCents()).isEqualTo(3_000L);
+                });
+        assertThat(closed.review().executionLanes()).filteredOn(l -> "REAL".equals(l.lane()))
+                .singleElement().satisfies(lane -> assertThat(lane.realizedPnlCents()).isNull());
+
+        String frozenClose = closed.closedAt();
+        var edited = reviewCampaigns.update("local", campaign.id(),
+                new CampaignService.UpdateInput(null, null, "Wait for a second confirming mark."));
+        assertThat(edited.closedAt()).isEqualTo(frozenClose);
+        assertThat(edited.review().authoredVsRealized().scenarioFingerprint())
+                .isEqualTo(overlay.scenarioFingerprint());
+        assertThat(edited.lessonNote()).isEqualTo("Wait for a second confirming mark.");
+        assertThatThrownBy(() -> reviewCampaigns.update("owner-b", campaign.id(),
+                new CampaignService.UpdateInput(null, null, "rewrite another owner's lesson")))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void crossCampaignPatternsNeedTwoClosedObservedExamplesPerLaneAndNeverPoolRealWithPractice() {
+        db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents," +
+                "has_traded,created_at,updated_at) VALUES('acct-pattern','local','Practice','PAPER'," +
+                "1000000,1000000,0,1,'2026-05-01T14:00:00Z','2026-07-01T14:00:00Z')");
+        CampaignService reviewCampaigns = new CampaignService(db, CLOCK);
+        for (int i = 1; i <= 2; i++) {
+            String symbol = "CSP" + i;
+            insertPracticeTrade("ptr-csp-" + i, "acct-pattern", symbol, "CLOSED", 1_000L + i,
+                    "2026-05-01T14:00:00Z", "2026-06-30T14:00:00Z", 1, 0,
+                    "[{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"95\","
+                            + "\"expiration\":\"2026-06-19\",\"ratio\":1,\"entryPrice\":\"1\",\"multiplier\":100}]");
+            seedRise(symbol, "2026-05-01", "100", "2026-07-10", "112");
+            var c = reviewCampaigns.create("local", new CampaignService.CreateInput(
+                    symbol + " wait", symbol, null, null));
+            reviewCampaigns.attach("local", c.id(), member("PRACTICE_TRADE", "ptr-csp-" + i, null));
+            reviewCampaigns.update("local", c.id(), new CampaignService.UpdateInput(null, "CLOSED"));
+        }
+        for (int i = 1; i <= 2; i++) {
+            String symbol = "CC" + i;
+            insertPracticeTrade("ptr-cc-" + i, "acct-pattern", symbol, "CLOSED", 2_000L + i,
+                    "2026-05-01T14:00:00Z", "2026-06-30T14:00:00Z", 1, 100,
+                    "[{\"action\":\"BUY\",\"type\":null,\"strike\":null,\"expiration\":null,"
+                            + "\"ratio\":100,\"entryPrice\":\"100\",\"multiplier\":1},"
+                            + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"105\","
+                            + "\"expiration\":\"2026-06-19\",\"ratio\":1,\"entryPrice\":\"1\",\"multiplier\":100}]");
+            seedRise(symbol, "2026-05-01", "100", "2026-07-10", "118");
+            var c = reviewCampaigns.create("local", new CampaignService.CreateInput(
+                    symbol + " called away", symbol, null, null));
+            reviewCampaigns.attach("local", c.id(), member("PRACTICE_TRADE", "ptr-cc-" + i, null));
+            reviewCampaigns.update("local", c.id(), new CampaignService.UpdateInput(null, "CLOSED"));
+        }
+        var any = reviewCampaigns.list("local").getFirst();
+        assertThat(any.review().patterns()).filteredOn(p -> "PRACTICE".equals(p.executionLane()))
+                .filteredOn(p -> "IDENTIFIED".equals(p.status()))
+                .extracting(CampaignService.PatternFinding::key)
+                .containsExactlyInAnyOrder("CSP_REGRET", "COVERED_CALL_MELT_UP");
+        assertThat(any.review().patterns()).filteredOn(p -> "REAL".equals(p.executionLane()))
+                .allSatisfy(p -> {
+                    assertThat(p.status()).isEqualTo("UNAVAILABLE");
+                    assertThat(p.supportingCampaigns()).isZero();
+                });
+    }
+
+    private void insertPracticeTrade(String id, String accountId, String symbol, String status,
+                                     Long realized, String createdAt, String closedAt, int qty,
+                                     int sharesLocked, String legsJson) {
+        db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon," +
+                        "risk_mode,shares_locked,entry_underlying_cents,entry_net_premium_cents,max_loss_cents," +
+                        "breakevens_json,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason," +
+                        "entry_snapshot_json,is_live,created_at,closed_at,updated_at) " +
+                        "VALUES(?,?,?,'CASH_SECURED_PUT',?,?,?::jsonb,'review','month','conservative',?," +
+                        "10000,10000,10000,'[]'::jsonb,0,0,?,'review close','{}'::jsonb,0,?::timestamptz," +
+                        "?::timestamptz,?::timestamptz)",
+                id, accountId, symbol, status, qty, legsJson, sharesLocked, realized,
+                createdAt, closedAt, closedAt == null ? createdAt : closedAt);
+    }
+
+    private void seedRise(String symbol, String from, String fromPrice, String to, String toPrice) {
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed,dataset_id,adjusted,quality_rank," +
+                        "bar_kind) VALUES(?,?::date,?::numeric,'stooq',1,'observed',0,0,'CLOSE_ONLY')," +
+                        "(?,?::date,?::numeric,'stooq',1,'observed',0,0,'CLOSE_ONLY')",
+                symbol, from, fromPrice, symbol, to, toPrice);
     }
 
     private static CampaignService.MemberInput member(String type, String id, Boolean explicitInterest) {

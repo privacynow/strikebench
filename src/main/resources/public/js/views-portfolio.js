@@ -15,15 +15,57 @@
   var guideBlock = window.ViewPlan.guideBlock,
       planMarketLabel = window.ViewPlan.marketLabel;
 
-  async function refreshTradeDetailNear(node, tradeId, title, detail) {
+  async function refreshPortfolioDestination(expectedHash) {
+    var hash = window.location.hash || '';
+    if (expectedHash && hash !== expectedHash) return false;
+    if (!/^#\/portfolio(?:\/|$)/.test(hash)) return false;
+    return App.refreshCurrentDestination(hash);
+  }
+
+  /** The tracked Book owns one durable mode panel; account/section facts repaint inside it. */
+  async function refreshTrackedBook(expectedHash, options) {
+    options = options || {};
+    var hash = window.location.hash || '';
+    if (expectedHash && hash !== expectedHash) return false;
+    var match = /^#\/portfolio\/book(?:\/([^/?]+))?/.exec(hash);
+    var host = document.getElementById('portfolio-mode-panel');
+    if (!match) return false;
+    if (!host || !host.isConnected) return refreshPortfolioDestination();
+    var section = match[1] || 'overview';
+    return App.refreshComponent(host, function (owner) {
+      return portfolioBook(owner, [section]);
+    }, { routeError: 'portfolio', preserveDraft: options.preserveDraft !== false });
+  }
+
+  /** Campaign mutations update the one campaign rail, not the complete Book destination. */
+  async function refreshCampaignRail(expectedHash) {
+    if (expectedHash && (window.location.hash || '') !== expectedHash) return false;
+    var host = document.querySelector('.book-campaigns');
+    if (!host || !host.isConnected) return false;
+    host.setAttribute('aria-busy', 'true');
+    try {
+      var fresh = await portfolioCampaignsCard();
+      if (!host.isConnected) return false;
+      host.className = fresh.className;
+      host.replaceChildren.apply(host, Array.from(fresh.childNodes));
+      return true;
+    } finally {
+      if (host.isConnected) host.removeAttribute('aria-busy');
+    }
+  }
+
+  async function refreshTradeDetailNear(node, tradeId, title, detail, renderOptions) {
     var host = node && node.closest ? node.closest('.trade-detail-content') : null;
-    if (!host) { await App.render(); return; }
+    if (!host || !host.isConnected) return false;
     host.setAttribute('aria-busy', 'true');
     try {
       API.flushCache();
       var data = await API.getFresh('/api/trades/' + tradeId);
+      if (!host.isConnected) return false;
       host.replaceChildren();
-      await tradeDetail(host, [tradeId], { data: data, insideContent: true });
+      await tradeDetail(host, [tradeId], Object.assign({}, renderOptions || {}, {
+        data: data, insideContent: true
+      }));
       var feedback = UI.actionFeedback('ok', title, detail);
       host.prepend(feedback);
       feedback.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -728,6 +770,7 @@
   // ---- Shared position controls ----
 
   function stockOrderModal(side, symbol, maxShares) {
+    var ownerHash = window.location.hash || '';
     var symInput = el('input', { type: 'text', id: 'stock-symbol', value: symbol || '' });
     var qty = el('input', { type: 'number', id: 'stock-shares', min: '1',
       value: side === 'sell' && maxShares ? String(maxShares) : '100' });
@@ -751,7 +794,8 @@
           chip('Executable ' + (side === 'buy' ? 'ask' : 'bid') + ' / share', fmtMoney(p.pricePerShareCents)),
           side === 'sell' && p.estimatedRealizedPnlCents != null
             ? chip('Estimated realized P/L', pnlSpan(p.estimatedRealizedPnlCents)) : null,
-          side === 'buy' ? chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)) : null));
+          side === 'buy' ? chip(UI.vocabulary('buyingPower', 'Buying power after'),
+            fmtMoney(p.buyingPowerAfterCents)) : null));
         preview.appendChild(el('div', { class: 'muted small' },
           'Estimate only. Confirm rechecks the current executable quote and account immediately before the practice fill.'));
       } catch (e) {
@@ -785,7 +829,7 @@
         if (!check.ok) throw new Error((check.blockReasons || ['This order cannot be placed.']).join(' '));
         await API.post('/api/positions/' + side,
           { symbol: symInput.value.trim(), shares: shares });
-        App.render();
+        await refreshPortfolioDestination(ownerHash);
       });
     queuePreview();
   }
@@ -809,20 +853,37 @@
     var evaluation = allocation.eval || {};
     var candidate = evaluation.candidate || {};
     var symbol = String(evaluation.symbol || (evaluation.spec && evaluation.spec.symbol) || candidate.symbol || '').toUpperCase();
-    var intent = candidate.intent || form.goal || 'DIRECTIONAL';
-    var existing = await PlanStore.matching(symbol, intent);
-    var horizonDays = Product.Horizon.sessions(form.horizon);
-    var plan = await PlanStore.create({ originPlanId: existing.length ? existing[0].id : null,
-      symbol: symbol, intent: intent, thesis: form.thesis,
-      horizonDays: horizonDays, riskMode: form.riskMode });
-    if (candidate.legs && candidate.legs.length) {
-      var saved = await PlanStore.saveCustom(plan, { symbol: symbol,
-        strategy: candidate.strategy || evaluation.family || 'CUSTOM',
-        qty: Math.max(1, Number(candidate.qty || 1) * Number(allocation.units || 1)), legs: candidate.legs,
-        thesis: form.thesis, horizon: form.horizon, riskMode: form.riskMode,
-        intent: intent, source: 'PORTFOLIO_CONSTRUCT', fillNature: 'PROPOSED' });
-      plan = saved.plan;
+    var intent = String(candidate.intent || (evaluation.spec && evaluation.spec.intent) || form.goal || '').toUpperCase();
+    var declaredGoal = String(form && form.goal || '').toUpperCase();
+    var thesis = String(form && form.thesis || '').toLowerCase();
+    var horizon = String(form && form.horizon || '').toLowerCase();
+    var riskMode = String(form && form.riskMode || '').toLowerCase();
+    var objective = String(form && form.objective || '').toUpperCase();
+    var strategy = String(candidate.strategy || evaluation.family || '');
+    var candidateQty = Number(candidate.qty);
+    var allocationUnits = Number(allocation.units);
+    if (!symbol || ['DIRECTIONAL', 'INCOME', 'ACQUIRE', 'EXIT', 'HEDGE'].indexOf(declaredGoal) < 0
+        || !intent || intent !== declaredGoal
+        || ['bullish', 'bearish', 'neutral', 'volatile'].indexOf(thesis) < 0
+        || ['week', 'month', 'quarter'].indexOf(horizon) < 0
+        || ['conservative', 'balanced', 'aggressive'].indexOf(riskMode) < 0
+        || ['DECISION', 'MARKET_EV', 'HISTORY_EV'].indexOf(objective) < 0
+        || !strategy || !Array.isArray(candidate.legs) || !candidate.legs.length
+        || !Number.isInteger(candidateQty) || candidateQty < 1
+        || !Number.isInteger(allocationUnits) || allocationUnits < 1) {
+      throw new Error('This allocation no longer carries the exact construction declaration and package. Build the draft again.');
     }
+    var existing = await PlanStore.matching(symbol, intent);
+    var horizonDays = Product.Horizon.sessions(horizon);
+    if (!horizonDays) throw new Error('This allocation no longer carries an exact Plan horizon. Build the draft again.');
+    var plan = await PlanStore.create({ originPlanId: existing.length ? existing[0].id : null,
+      symbol: symbol, intent: intent, thesis: thesis,
+      horizonDays: horizonDays, riskMode: riskMode });
+    var saved = await PlanStore.saveCustom(plan, { symbol: symbol,
+      strategy: strategy, qty: candidateQty * allocationUnits, legs: candidate.legs,
+      thesis: thesis, horizon: horizon, riskMode: riskMode,
+      intent: intent, source: 'PORTFOLIO_CONSTRUCT', fillNature: 'PROPOSED' });
+    plan = saved.plan;
     return PlanStore.focus(plan, 'STRATEGY');
   }
 
@@ -841,6 +902,31 @@
           : 'Construction draft — every allocation still needs its own Plan review',
       result.diagnostic ? ['Mixed, adverse, or unavailable ideas may appear so you can inspect the least-bad set.']
         : ['This allocates research capital only. It does not place trades or reserve buying power.']));
+    var source = form && form.sourceContext;
+    if (source) {
+      var goalMeta = (Learn.INTENTS || []).find(function (meta) { return meta.key === form.goal; });
+      var viewLabel = ({ bullish: 'Up', bearish: 'Down', neutral: 'Stay near here',
+        volatile: 'Large move' })[form.thesis] || form.thesis;
+      var horizonLabel = ({ week: 'About 1 week', month: 'About 1 month',
+        quarter: 'About 3 months' })[form.horizon] || form.horizon;
+      var objectiveLabel = ({ DECISION: 'Decision score', MARKET_EV: 'Market EV after costs',
+        HISTORY_EV: 'History EV after costs' })[form.objective] || form.objective;
+      host.appendChild(el('div', { class: 'chip-row portfolio-construction-receipt',
+        id: 'portfolio-construction-receipt', 'aria-label': 'Construction declaration and source receipt' },
+      chip('Your decision', (goalMeta ? goalMeta.label : form.goal) + ' · ' + viewLabel
+        + ' · ' + horizonLabel + ' · ' + objectiveLabel),
+      Learn.currentLevel() === 'expert'
+        ? chip('Declaration keys', form.goal + ' / ' + form.thesis + ' / ' + form.horizon + ' / ' + form.objective)
+        : null,
+      chip('Source field', source.sourceLabel),
+      chip('Market', source.marketLabel),
+      chip('Practice account', source.accountName),
+      Learn.currentLevel() === 'expert'
+        ? chip('Source keys', source.marketLane + ' / ' + source.worldId + ' / ' + source.datasetId
+          + ' / ' + source.accountId) : null,
+      chip(UI.vocabulary('buyingPower', 'Buying power at build'), fmtMoney(source.buyingPowerCents)),
+      source.riskBudgetCents == null ? null : chip('Risk limit at build', fmtMoney(source.riskBudgetCents))));
+    }
     host.appendChild(el('div', { class: 'fact-grid portfolio-construct-summary', id: 'portfolio-summary' },
       UI.fact('Capital in draft', fmtMoney(result.capitalUsedCents)),
       UI.fact('Positions', String(allocations.length)),
@@ -899,66 +985,292 @@
 
   function portfolioConstruct(acct) {
     var state = App.state.portfolioConstruct = App.state.portfolioConstruct || {};
-    var form = {
-      budget: state.budget || Math.round(acct.buyingPowerCents / 100), scope: state.scope || 'universe',
-      goal: state.goal || '', thesis: state.thesis || 'neutral', horizon: state.horizon || 'month',
-      objective: state.objective || 'DECISION', maxPositions: state.maxPositions || 8,
-      maxSymbolPct: state.maxSymbolPct || 40, maxPerPosition: state.maxPerPosition || '', diagnostic: !!state.diagnostic,
-      riskMode: (document.getElementById('risk-mode') || {}).value || 'conservative'
-    };
-    function select(id, values, current) {
-      var node = el('select', { id: id }, values.map(function (value) {
-        return el('option', { value: value[0], selected: value[0] === current ? 'selected' : null }, value[1]);
-      })); return node;
+    state.explicit = state.explicit || {};
+    var componentGeneration = state.componentGeneration = Number(state.componentGeneration || 0) + 1;
+    function owned(name, fallback) {
+      return Object.prototype.hasOwnProperty.call(state, name) ? state[name] : fallback;
     }
+    function explicit(name) { return state.explicit[name] ? String(state[name] || '') : ''; }
+    var form = {
+      budget: owned('budget', Math.round(acct.buyingPowerCents / 100)),
+      scope: owned('scope', 'universe'),
+      goal: explicit('goal'), thesis: explicit('thesis'), horizon: explicit('horizon'),
+      objective: explicit('objective'), maxPositions: owned('maxPositions', 8),
+      maxSymbolPct: owned('maxSymbolPct', 40), maxPerPosition: owned('maxPerPosition', ''),
+      diagnostic: !!owned('diagnostic', false), riskMode: null
+    };
+    var working = App.context.symbol();
+    var riskControl = document.getElementById('risk-mode');
+    var output, readiness, run, card;
+
+    function explicitRisk() {
+      var value = App.state.headerRiskExplicit && riskControl ? String(riskControl.value || '').toLowerCase() : '';
+      return ['conservative', 'balanced', 'aggressive'].indexOf(value) >= 0 ? value : '';
+    }
+    function riskLabel(value) {
+      return ({ conservative: 'Cautious', balanced: 'Standard', aggressive: 'High' })[value] || 'Not chosen';
+    }
+    function constructionSourceContext(scopeValue) {
+      var market = App.outcomeContext(working);
+      var active = App.state.universe && App.state.universe.active || {};
+      var symbols = scopeValue === 'symbol' ? [working] : (active.symbols || []).slice();
+      symbols = Array.from(new Set(symbols.map(function (symbol) {
+        return String(symbol || '').trim().toUpperCase();
+      }).filter(Boolean))).sort();
+      var mode = ((App.state.riskBudget && App.state.riskBudget.modes) || []).find(function (candidate) {
+        return candidate.mode === explicitRisk();
+      });
+      var worldLabelNode = document.querySelector('#world-band .wb-label');
+      var marketLabel = market.marketLane === 'SCENARIO'
+        ? 'Scenario dataset “' + ((App.config && App.config.activeDatasetName) || 'Generated scenario') + '”'
+        : market.marketLane === 'DEMO' ? 'Built-in demo market'
+          : market.marketLane === 'SIMULATED'
+            ? (worldLabelNode && String(worldLabelNode.textContent || '').trim() || 'Active simulated market')
+            : 'Observed market';
+      return {
+        marketLane: market.marketLane, worldId: market.worldId, datasetId: market.datasetId,
+        marketLabel: marketLabel,
+        scope: scopeValue, universeKey: scopeValue === 'symbol' ? '' : String(active.sectorKey || ''),
+        symbols: symbols,
+        sourceLabel: scopeValue === 'symbol' ? (symbols[0] || 'Working stock unavailable')
+          : (String(active.label || active.sectorKey || 'Active universe') + ' · ' + symbols.length + ' symbols'),
+        accountId: String(acct.id || 'practice'), accountName: String(acct.name || 'Practice'),
+        accountUpdatedAt: String(acct.updatedAt || ''), buyingPowerCents: Number(acct.buyingPowerCents),
+        riskBudgetCents: mode && mode.effectiveBudgetCents != null ? Number(mode.effectiveBudgetCents) : null,
+        riskCapitalCapCents: App.state.riskBudget && App.state.riskBudget.explicitCapCents != null
+          ? Number(App.state.riskBudget.explicitCapCents) : null
+      };
+    }
+    function sourceFingerprint(scopeValue) {
+      var source = constructionSourceContext(scopeValue);
+      return JSON.stringify({ marketLane: source.marketLane, worldId: source.worldId,
+        datasetId: source.datasetId, scope: source.scope, universeKey: source.universeKey,
+        symbols: source.symbols, accountId: source.accountId, accountUpdatedAt: source.accountUpdatedAt,
+        buyingPowerCents: source.buyingPowerCents, riskBudgetCents: source.riskBudgetCents,
+        riskCapitalCapCents: source.riskCapitalCapCents });
+    }
+    function missingFacts() {
+      var missing = [];
+      if (!goal.value()) missing.push('goal');
+      if (!thesis.value()) missing.push('market view');
+      if (!horizon.value()) missing.push('horizon');
+      if (!objective.value()) missing.push('ranking objective');
+      if (!explicitRisk()) missing.push('risk posture');
+      return missing;
+    }
+    function paintReadiness() {
+      if (!readiness) return;
+      var missing = missingFacts();
+      var risk = explicitRisk();
+      readiness.replaceChildren(UI.actionFeedback(missing.length ? 'caution' : 'ok',
+        missing.length ? 'Missing facts: ' + missing.join(', ') : 'Declaration complete',
+        missing.length ? 'Build stays unavailable until these choices are yours.'
+          : 'Risk: ' + riskLabel(risk) + ' from the one header picker. The optimizer can now use this exact declaration.'));
+      if (!risk) {
+        readiness.appendChild(el('button', { type: 'button', class: 'btn btn-secondary btn-sm',
+          id: 'portfolio-choose-risk', onclick: function () {
+            if (!riskControl) return;
+            riskControl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            riskControl.focus();
+            riskControl.click();
+          } }, 'Choose risk in header'));
+      }
+      if (run) run.disabled = missing.length > 0;
+    }
+    function invalidateResult() {
+      state.requestGeneration = Number(state.requestGeneration || 0) + 1;
+      delete state.result;
+      delete state.resultForm;
+      if (output) output.replaceChildren();
+      if (run && run.isConnected) run.removeAttribute('aria-busy');
+      paintReadiness();
+    }
+    function rememberChoice(name, value) {
+      state[name] = value;
+      state.explicit[name] = true;
+      form[name] = value;
+      invalidateResult();
+    }
+    function consequence(label, descriptions) {
+      return function (value) {
+        return value ? descriptions[value] : 'Choose ' + label + '; StrikeBench will not infer it.';
+      };
+    }
+
     var budget = el('input', { id: 'portfolio-budget', type: 'number', min: '0', step: '1000', value: form.budget });
-    var scope = select('portfolio-scope', [['universe', 'Current universe'], ['symbol', 'Working stock only']], form.scope);
-    var goal = select('portfolio-goal', [['', 'Any goal']].concat((Learn.INTENTS || []).map(function (meta) { return [meta.key, meta.label]; })), form.goal);
-    var thesis = select('portfolio-thesis', [['neutral', 'Neutral'], ['bullish', 'Bullish'], ['bearish', 'Bearish'], ['volatile', 'Big move']], form.thesis);
-    var horizon = select('portfolio-horizon', [['week', 'About 1 week'], ['month', 'About 1 month'], ['quarter', 'About 3 months']], form.horizon);
-    var objective = select('portfolio-objective', [['DECISION', 'Best Decision score'], ['MARKET_EV', 'Best market EV after costs'], ['HISTORY_EV', 'Best history EV after costs']], form.objective);
+    var scope = UI.segmented({ id: 'portfolio-scope', label: 'Ideas from',
+      options: [
+        { value: 'universe', label: 'Active universe', sub: 'All symbols in this market' },
+        { value: 'symbol', label: 'Working stock', sub: working || 'Choose one in Workspace' }
+      ], value: form.scope,
+      consequence: function (value) { return value === 'symbol'
+        ? (working ? 'Only ' + working + ' will be scanned.' : 'No working stock is selected; choose one in Workspace first.')
+        : 'Scope is derived from the active market universe; this is not a goal or market-view assumption.'; },
+      onChange: function (value) { state.scope = form.scope = value; invalidateResult(); }
+    });
+    var goal = UI.chipSet({ id: 'portfolio-goal', label: 'Goal', info: 'plangoal',
+      options: (Learn.INTENTS || []).map(function (meta) {
+        return { value: meta.key, label: meta.label, sub: meta.blurb };
+      }), value: form.goal, revealDetails: 'expert',
+      consequence: consequence('a goal', (Learn.INTENTS || []).reduce(function (out, meta) {
+        out[meta.key] = meta.blurb; return out;
+      }, {})), onChange: function (value) { rememberChoice('goal', value); }
+    });
+    var thesis = UI.segmented({ id: 'portfolio-thesis', label: 'Market view', info: 'thesis',
+      options: [
+        { value: 'bullish', label: 'Up' }, { value: 'bearish', label: 'Down' },
+        { value: 'neutral', label: 'Stay near here' }, { value: 'volatile', label: 'Large move' }
+      ], value: form.thesis,
+      consequence: consequence('what you expect next', {
+        bullish: 'Rank structures for an upward move.', bearish: 'Rank structures for a downward move.',
+        neutral: 'Rank structures for price staying near its current area.',
+        volatile: 'Rank structures for a large move in either direction.'
+      }), onChange: function (value) { rememberChoice('thesis', value); }
+    });
+    var horizon = UI.segmented({ id: 'portfolio-horizon', label: 'Horizon', info: 'horizon',
+      options: [
+        { value: 'week', label: 'About 1 week', sub: '5 sessions' },
+        { value: 'month', label: 'About 1 month', sub: '21 sessions' },
+        { value: 'quarter', label: 'About 3 months', sub: '63 sessions' }
+      ], value: form.horizon,
+      consequence: consequence('a horizon', {
+        week: 'Evaluate the field over 5 trading sessions.',
+        month: 'Evaluate the field over 21 trading sessions.',
+        quarter: 'Evaluate the field over 63 trading sessions.'
+      }), onChange: function (value) { rememberChoice('horizon', value); }
+    });
+    var objective = UI.segmented({ id: 'portfolio-objective', label: 'Rank by', info: 'decisionscore',
+      options: [
+        { value: 'DECISION', label: 'Decision score', sub: 'Whole evidence field' },
+        { value: 'MARKET_EV', label: 'Market EV', sub: 'Implied-volatility lane' },
+        { value: 'HISTORY_EV', label: 'History EV', sub: 'Realized-volatility lane' }
+      ], value: form.objective,
+      consequence: consequence('how the optimizer should rank', {
+        DECISION: 'Rank by the shared Decision score after economic eligibility.',
+        MARKET_EV: 'Rank by after-cost expected value using market-implied volatility.',
+        HISTORY_EV: 'Rank by after-cost expected value using realized-volatility evidence.'
+      }), onChange: function (value) { rememberChoice('objective', value); }
+    });
     var maxPositions = el('input', { id: 'portfolio-max-positions', type: 'number', min: '1', max: '20', value: form.maxPositions });
     var maxSymbol = el('input', { id: 'portfolio-max-symbol-pct', type: 'number', min: '5', max: '100', step: '5', value: form.maxSymbolPct });
-    var maxPer = el('input', { id: 'portfolio-max-position', type: 'number', min: '0', step: '100', value: form.maxPerPosition, placeholder: '25% default' });
+    var maxPer = el('input', { id: 'portfolio-max-position', type: 'number', min: '0', step: '100', value: form.maxPerPosition, placeholder: '25% of this budget' });
     var diagnostic = el('input', { id: 'portfolio-diagnostics', type: 'checkbox', checked: form.diagnostic ? '' : null });
     function field(label, node) { return UI.field(label, node); }
-    var primary = el('div', { class: 'form-grid portfolio-construct-primary' }, field('Capital to allocate ($)', budget), field('Ideas from', scope), field('Goal', goal), field('Market view', thesis), field('Horizon', horizon));
+    var mechanics = el('div', { class: 'portfolio-construct-mechanics' },
+      field('Capital to allocate ($)', budget), scope,
+      el('p', { class: 'muted small portfolio-construct-derived' },
+        'Capital starts from this Practice account\'s current buying power. Scope starts from the active market universe. Both are named mechanics, not invented decision facts.'));
+    var declarations = el('div', { class: 'portfolio-construct-declarations' }, goal, thesis, horizon, objective);
     var advancedBody = el('div', { class: 'portfolio-construct-advanced' },
-      el('div', { class: 'form-grid' }, field('Rank by', objective), field('Maximum positions', maxPositions),
+      el('div', { class: 'form-grid' }, field('Maximum positions', maxPositions),
         field('Maximum per symbol (%)', maxSymbol), field('Maximum per position ($)', maxPer)),
       el('label', { class: 'check-row' }, diagnostic,
         Learn.currentLevel() === 'beginner' ? ' Show a diagnostic comparison when nothing earns a favorable verdict' : ' Diagnostic mode: include viable non-favorable ideas'));
-    var output = el('div', { class: 'portfolio-construct-output', id: 'portfolio-output' });
-    var run = el('button', { type: 'button', class: 'btn', id: 'portfolio-build', onclick: async function () {
-      form = { budget: Number(budget.value), scope: scope.value, goal: goal.value, thesis: thesis.value, horizon: horizon.value,
-        objective: objective.value, maxPositions: Number(maxPositions.value), maxSymbolPct: Number(maxSymbol.value),
-        maxPerPosition: maxPer.value, diagnostic: diagnostic.checked,
-        riskMode: (document.getElementById('risk-mode') || {}).value || 'conservative' };
-      Object.assign(state, form); run.disabled = true; output.innerHTML = ''; output.appendChild(UI.spinner('Scanning and constructing one coherent draft\u2026'));
-      var working = App.context.symbol();
-      var request = { totalCapitalCents: Math.round(form.budget * 100), intent: form.goal || null,
+    readiness = el('div', { class: 'portfolio-construct-readiness', id: 'portfolio-construct-readiness',
+      'aria-live': 'polite' });
+    output = el('div', { class: 'portfolio-construct-output', id: 'portfolio-output' });
+
+    [budget, maxPositions, maxSymbol, maxPer].forEach(function (input) {
+      input.addEventListener('input', function () {
+        var name = input === budget ? 'budget' : input === maxPositions ? 'maxPositions'
+          : input === maxSymbol ? 'maxSymbolPct' : 'maxPerPosition';
+        state[name] = form[name] = input.value;
+        invalidateResult();
+      });
+    });
+    diagnostic.addEventListener('change', function () {
+      state.diagnostic = form.diagnostic = diagnostic.checked;
+      invalidateResult();
+    });
+
+    run = el('button', { type: 'button', class: 'btn', id: 'portfolio-build', onclick: async function () {
+      var missing = missingFacts();
+      if (missing.length) { paintReadiness(); return; }
+      form = { budget: Number(budget.value), scope: scope.value(), goal: goal.value(), thesis: thesis.value(), horizon: horizon.value(),
+        objective: objective.value(), maxPositions: Number(maxPositions.value), maxSymbolPct: Number(maxSymbol.value),
+        maxPerPosition: maxPer.value, diagnostic: diagnostic.checked, riskMode: explicitRisk() };
+      var resultForm = Object.assign({}, form, { sourceContext: constructionSourceContext(form.scope) });
+      resultForm.sourceFingerprint = sourceFingerprint(form.scope);
+      var requestGeneration = state.requestGeneration = Number(state.requestGeneration || 0) + 1;
+      run.disabled = true;
+      run.setAttribute('aria-busy', 'true');
+      output.replaceChildren(UI.spinner('Scanning and constructing one coherent draft\u2026'));
+      var request = { totalCapitalCents: Math.round(form.budget * 100), intent: form.goal,
         thesis: form.thesis, horizon: form.horizon, riskMode: form.riskMode, objective: form.objective,
         maxPositions: form.maxPositions, maxSymbolPct: form.maxSymbolPct / 100,
         maxPerPositionCents: form.maxPerPosition ? Math.round(Number(form.maxPerPosition) * 100) : null,
         diagnostic: form.diagnostic };
       if (form.scope === 'symbol') {
-        if (!working) { output.innerHTML = ''; output.appendChild(alertBox('warn', 'Choose a working stock in Research first.')); run.disabled = false; return; }
+        if (!working) {
+          output.replaceChildren(alertBox('warn', 'Choose a working stock in Workspace first.'));
+          run.disabled = false;
+          run.removeAttribute('aria-busy');
+          return;
+        }
         request.universe = [working];
       }
-      try { state.result = await API.post('/api/optimize', request); renderPortfolioConstructionResult(output, state.result, form); }
-      catch (e) { output.innerHTML = ''; output.appendChild(alertBox('danger', 'Construction failed', [e.message])); }
-      finally { run.disabled = false; }
+      try {
+        var result = await API.post('/api/optimize', request);
+        if (state.requestGeneration !== requestGeneration || state.componentGeneration !== componentGeneration
+            || !output.isConnected) return;
+        state.result = result;
+        state.resultForm = resultForm;
+        renderPortfolioConstructionResult(output, result, resultForm);
+      } catch (e) {
+        if (state.requestGeneration !== requestGeneration || state.componentGeneration !== componentGeneration
+            || !output.isConnected) return;
+        output.replaceChildren(alertBox('danger', 'Construction failed', [e.message]));
+      } finally {
+        if (state.requestGeneration === requestGeneration && state.componentGeneration === componentGeneration
+            && run.isConnected) {
+          run.removeAttribute('aria-busy');
+          paintReadiness();
+        }
+      }
     } }, 'Build construction draft');
-    var card = el('section', { class: 'card portfolio-construct', id: 'portfolio-construct' },
+    card = el('section', { class: 'card portfolio-construct', id: 'portfolio-construct' },
       UI.cardHeader('Construct across ideas', el('span', { class: 'badge badge-dim' }, 'DRAFT ONLY')),
       el('p', { class: 'muted' }, Learn.currentLevel() === 'beginner'
         ? 'Ask how several ideas could fit together without placing anything. StrikeBench keeps cash as the baseline and opens each allocation through its own Plan.'
         : 'Allocate a research budget across economically eligible evaluations with explicit concentration, objective and evidence constraints. No trade or reserve is created.'),
-      primary,
+      mechanics, declarations, readiness,
       UI.expandable('More construction controls', function () { return advancedBody; },
         { open: 'desktop', stateKey: 'portfolio-construction-controls' }),
       el('div', { class: 'btn-row' }, run), output);
-    if (state.result) renderPortfolioConstructionResult(output, state.result, form);
+    if (riskControl) {
+      if (riskControl._portfolioConstructRiskListener) {
+        riskControl.removeEventListener('change', riskControl._portfolioConstructRiskListener);
+      }
+      riskControl._portfolioConstructRiskListener = function () {
+        if (!card.isConnected) {
+          state.requestGeneration = Number(state.requestGeneration || 0) + 1;
+          delete state.result;
+          delete state.resultForm;
+          riskControl.removeEventListener('change', riskControl._portfolioConstructRiskListener);
+          riskControl._portfolioConstructRiskListener = null;
+          return;
+        }
+        invalidateResult();
+      };
+      riskControl.addEventListener('change', riskControl._portfolioConstructRiskListener);
+    }
+    paintReadiness();
+    var savedForm = state.resultForm;
+    var resultIsCurrent = savedForm
+      && String(savedForm.goal || '') === goal.value()
+      && String(savedForm.thesis || '') === thesis.value()
+      && String(savedForm.horizon || '') === horizon.value()
+      && String(savedForm.objective || '') === objective.value()
+      && String(savedForm.riskMode || '') === explicitRisk()
+      && String(savedForm.scope || '') === scope.value()
+      && String(savedForm.budget) === String(budget.value)
+      && String(savedForm.maxPositions) === String(maxPositions.value)
+      && String(savedForm.maxSymbolPct) === String(maxSymbol.value)
+      && String(savedForm.maxPerPosition || '') === String(maxPer.value || '')
+      && !!savedForm.diagnostic === diagnostic.checked
+      && savedForm.sourceFingerprint === sourceFingerprint(scope.value());
+    if (!resultIsCurrent) { delete state.result; delete state.resultForm; }
+    if (state.result && state.resultForm) renderPortfolioConstructionResult(output, state.result, state.resultForm);
     return card;
   }
 
@@ -1007,17 +1319,18 @@
   function portfolioAccountForm(existing, onSaved) {
     existing = existing || {};
     var archived = existing.status === 'ARCHIVED';
+    var fieldPrefix = 'portfolio-account-' + (existing.id || 'new') + '-';
     function opt(value, label, selected) { return el('option', { value: value, selected: value === selected ? 'selected' : null }, label); }
-    var name = el('input', { type: 'text', maxlength: '100', value: existing.name || '', placeholder: 'e.g. Main taxable account' });
-    var type = el('select', {}, PORTFOLIO_ACCOUNT_TYPES.map(function (row) { return opt(row[0], row[1], existing.accountType || 'TAXABLE'); }));
-    var broker = el('input', { type: 'text', maxlength: '100', value: existing.broker || '', placeholder: 'Optional' });
-    var method = el('select', {}, [['FIFO', 'FIFO · oldest lots first'], ['LIFO', 'LIFO · newest lots first'], ['HIFO', 'HIFO · tax-aware basis/proceeds']]
+    var name = el('input', { id: fieldPrefix + 'name', type: 'text', maxlength: '100', value: existing.name || '', placeholder: 'e.g. Main taxable account' });
+    var type = el('select', { id: fieldPrefix + 'type' }, PORTFOLIO_ACCOUNT_TYPES.map(function (row) { return opt(row[0], row[1], existing.accountType || 'TAXABLE'); }));
+    var broker = el('input', { id: fieldPrefix + 'broker', type: 'text', maxlength: '100', value: existing.broker || '', placeholder: 'Optional' });
+    var method = el('select', { id: fieldPrefix + 'method' }, [['FIFO', 'FIFO · oldest lots first'], ['LIFO', 'LIFO · newest lots first'], ['HIFO', 'HIFO · tax-aware basis/proceeds']]
       .map(function (row) { return opt(row[0], row[1], existing.lotMethod || 'FIFO'); }));
-    var opening = el('input', { type: 'number', min: '0', step: '0.01', value: '', placeholder: 'Optional' });
-    var st = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.shortTermTaxRateBps == null ? '' : existing.shortTermTaxRateBps / 100 });
-    var lt = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.longTermTaxRateBps == null ? '' : existing.longTermTaxRateBps / 100 });
-    var ordinary = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.ordinaryTaxRateBps == null ? '' : existing.ordinaryTaxRateBps / 100 });
-    var state = el('input', { type: 'number', min: '0', max: '100', step: '0.1', value: existing.stateTaxRateBps == null ? '' : existing.stateTaxRateBps / 100 });
+    var opening = el('input', { id: fieldPrefix + 'opening', type: 'number', min: '0', step: '0.01', value: '', placeholder: 'Optional' });
+    var st = el('input', { id: fieldPrefix + 'short-rate', type: 'number', min: '0', max: '100', step: '0.1', value: existing.shortTermTaxRateBps == null ? '' : existing.shortTermTaxRateBps / 100 });
+    var lt = el('input', { id: fieldPrefix + 'long-rate', type: 'number', min: '0', max: '100', step: '0.1', value: existing.longTermTaxRateBps == null ? '' : existing.longTermTaxRateBps / 100 });
+    var ordinary = el('input', { id: fieldPrefix + 'ordinary-rate', type: 'number', min: '0', max: '100', step: '0.1', value: existing.ordinaryTaxRateBps == null ? '' : existing.ordinaryTaxRateBps / 100 });
+    var state = el('input', { id: fieldPrefix + 'state-rate', type: 'number', min: '0', max: '100', step: '0.1', value: existing.stateTaxRateBps == null ? '' : existing.stateTaxRateBps / 100 });
     if (existing.id) type.disabled = true;
     if (archived) [name, broker, method, st, lt, ordinary, state].forEach(function (control) { control.disabled = true; });
     var taxFields = el('div', { class: 'form-grid portfolio-tax-rate-fields' },
@@ -1033,7 +1346,7 @@
       return Math.round(n * 100);
     }
     var msg = el('div', { class: 'small', 'aria-live': 'polite' });
-    var save = el('button', { type: 'button', class: 'btn', disabled: archived ? 'disabled' : null, onclick: async function () {
+    var save = el('button', { id: fieldPrefix + 'save', type: 'button', class: 'btn', disabled: archived ? 'disabled' : null, onclick: async function () {
       save.disabled = true; save.setAttribute('aria-busy', 'true'); msg.textContent = '';
       try {
         var payload = { name: name.value, accountType: type.value, broker: existing.id ? broker.value : (broker.value || null),
@@ -1128,6 +1441,7 @@
   /** Starts a campaign seeded by this position's open lots. The seed transactions attach as
    *  user-confirmed members; everything else stays a suggestion until confirmed. */
   async function portfolioStartCampaign(account, p, button) {
+    var ownerHash = window.location.hash || '';
     button.disabled = true; button.setAttribute('aria-busy', 'true');
     try {
       var lots = await portfolioOpenLotsFor(account, p);
@@ -1138,7 +1452,7 @@
       });
       App.state.portfolioCampaignFocus = campaign.id;
       UI.toast('Campaign started from ' + p.symbol + ' — review its suggested linked activity');
-      await App.render();
+      await refreshCampaignRail(ownerHash);
     } catch (e) {
       UI.toast(e.message, 'error');
       button.disabled = false; button.removeAttribute('aria-busy');
@@ -1150,6 +1464,7 @@
   }
 
   async function campaignAttachMember(campaignId, proposal, button) {
+    var ownerHash = window.location.hash || '';
     button.disabled = true; button.setAttribute('aria-busy', 'true');
     try {
       var isInterest = proposal.type === 'TRANSACTION' && /^interest\b/.test(proposal.label || '');
@@ -1158,7 +1473,7 @@
       });
       UI.toast(isInterest ? 'Interest tagged to this campaign' : 'Attached to campaign');
       App.state.portfolioCampaignFocus = campaignId;
-      await App.render();
+      await refreshCampaignRail(ownerHash);
     } catch (e) {
       UI.toast(e.message, 'error');
       button.disabled = false; button.removeAttribute('aria-busy');
@@ -1166,13 +1481,14 @@
   }
 
   async function campaignDetachMember(campaignId, member, button) {
+    var ownerHash = window.location.hash || '';
     button.disabled = true; button.setAttribute('aria-busy', 'true');
     try {
       await API.del('/api/campaigns/' + campaignId + '/members/' + member.type + '/'
         + encodeURIComponent(member.id));
       UI.toast('Removed from campaign — the recorded book is untouched');
       App.state.portfolioCampaignFocus = campaignId;
-      await App.render();
+      await refreshCampaignRail(ownerHash);
     } catch (e) {
       UI.toast(e.message, 'error');
       button.disabled = false; button.removeAttribute('aria-busy');
@@ -1270,19 +1586,247 @@
       }));
   }
 
+  function campaignSvgNode(tag, attrs) {
+    var n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.keys(attrs || {}).forEach(function (key) { n.setAttribute(key, String(attrs[key])); });
+    return n;
+  }
+
+  function campaignOverlayChart(overlay) {
+    var host = el('div', { class: 'campaign-overlay' });
+    if (!overlay || !overlay.available) {
+      host.appendChild(UI.emptyState('Path comparison unavailable', overlay && overlay.note
+        ? overlay.note : 'No saved authored scenario and coherent realized series can be paired.'));
+      if (overlay && overlay.scenarioId) {
+        host.appendChild(el('p', { class: 'muted small campaign-review-provenance' },
+          'Saved scenario · ', overlay.scenarioTitle || 'Untitled path', ' · ', overlay.waypointFill || 'fill unavailable',
+          ' · ', overlay.marketLane || 'lane unavailable'));
+      }
+      return host;
+    }
+    var authored = overlay.authored || [], realized = overlay.realized || [];
+    var all = authored.concat(realized);
+    var maxDay = Math.max.apply(null, all.map(function (p) { return Number(p.tradingDay); }));
+    var prices = all.map(function (p) { return Number(p.priceCents); });
+    var lo = Math.min.apply(null, prices), hi = Math.max.apply(null, prices);
+    if (lo === hi) { lo -= 1; hi += 1; }
+    var pad = (hi - lo) * .08; lo -= pad; hi += pad;
+    var W = 760, H = 280, L = 70, R = 18, T = 18, B = 42;
+    function X(day) { return L + Number(day) / Math.max(1, maxDay) * (W - L - R); }
+    function Y(cents) { return T + (hi - Number(cents)) / (hi - lo) * (H - T - B); }
+    function path(points) {
+      return points.map(function (p, i) {
+        return (i ? 'L' : 'M') + X(p.tradingDay).toFixed(1) + ' ' + Y(p.priceCents).toFixed(1);
+      }).join(' ');
+    }
+    var svg = campaignSvgNode('svg', { viewBox: '0 0 ' + W + ' ' + H,
+      class: 'chart campaign-review-chart', role: 'img',
+      'aria-label': 'Authored scenario pins compared with realized observed closing prices.' });
+    [0, .25, .5, .75, 1].forEach(function (f) {
+      var value = lo + (hi - lo) * f, y = Y(value);
+      svg.appendChild(campaignSvgNode('line', { class: 'grid', x1: L, y1: y, x2: W - R, y2: y }));
+      var txt = campaignSvgNode('text', { x: L - 7, y: y + 4, 'text-anchor': 'end' });
+      txt.textContent = fmtMoney(Math.round(value)); svg.appendChild(txt);
+    });
+    var realizedPath = campaignSvgNode('path', { class: 'campaign-realized-line', d: path(realized) });
+    var authoredPath = campaignSvgNode('path', { class: 'campaign-authored-line', d: path(authored) });
+    svg.appendChild(realizedPath); svg.appendChild(authoredPath);
+    authored.forEach(function (p) {
+      svg.appendChild(campaignSvgNode('circle', { class: 'campaign-authored-pin',
+        cx: X(p.tradingDay), cy: Y(p.priceCents), r: 4 }));
+    });
+    [authored[0], authored[authored.length - 1]].forEach(function (p, i) {
+      var txt = campaignSvgNode('text', { x: X(p.tradingDay), y: H - B + 21,
+        'text-anchor': i ? 'end' : 'start' }); txt.textContent = p.date; svg.appendChild(txt);
+    });
+    host.appendChild(el('div', { class: 'campaign-chart-legend' },
+      el('span', { class: 'campaign-authored-key' }, 'Your saved pins'),
+      el('span', { class: 'campaign-realized-key' }, 'Observed closes · ' + overlay.realizedSource)));
+    host.appendChild(svg);
+    host.appendChild(el('p', { class: 'muted small campaign-review-provenance' }, overlay.note));
+    if (Learn.currentLevel() === 'expert') {
+      host.appendChild(el('p', { class: 'muted small campaign-receipt-line' },
+        'Scenario receipt ', overlay.scenarioFingerprint.slice(0, 12), '… · base fan ',
+        overlay.baseEnsembleFingerprint.slice(0, 12), '… · context revision ', String(overlay.contextRevision),
+        ' · anchor ', fmtMoney(overlay.anchorSpotCents), ' from ', overlay.anchorSource,
+        ' (', overlay.anchorFreshness, ')'));
+    }
+    return host;
+  }
+
+  function campaignProtocolLabel(rule) {
+    if (rule === 'TAKE_PROFIT') return 'Take-profit line';
+    if (rule === 'STOP_LOSS') return 'Loss line';
+    return 'Time / roll line';
+  }
+
+  function campaignProtocolStatus(status) {
+    if (status === 'RESPECTED' || status === 'NOT_TRIGGERED') return 'badge-ok';
+    if (status === 'OVERRIDDEN') return 'badge-warn';
+    return 'badge-dim';
+  }
+
+  function campaignProtocolBlock(review) {
+    var rows = review && review.protocolAdherence || [];
+    if (!rows.length) return UI.emptyState('Protocol review unavailable',
+      'No frozen trade decision from a confirmed campaign Plan has recorded management evidence.');
+    var host = el('div', { class: 'campaign-protocol-list' });
+    rows.forEach(function (p) {
+      var threshold = p.triggerPnlCents != null ? fmtMoney(p.triggerPnlCents)
+        : p.triggerDaysToExpiry != null ? p.triggerDaysToExpiry + ' days to expiry' : 'Unavailable';
+      var laneLabel = p.executionLane === 'REAL' ? 'Recorded at broker' : 'Practice';
+      var row = el('div', { class: 'campaign-protocol-row' },
+        el('div', { class: 'campaign-protocol-heading' },
+          el('b', {}, campaignProtocolLabel(p.rule)),
+          el('span', { class: 'badge badge-dim' }, laneLabel),
+          el('span', { class: 'badge ' + campaignProtocolStatus(p.status) },
+            p.status.toLowerCase().replace(/_/g, ' '))),
+        el('p', { class: 'small' }, p.ruleSummary),
+        el('div', { class: 'chip-row' },
+          chip('Frozen line', threshold),
+          p.observedPnlAtTriggerCents == null ? null : chip('P/L when fired', fmtMoney(p.observedPnlAtTriggerCents)),
+          p.responseKind ? chip('Recorded response', p.responseKind.toLowerCase().replace(/_/g, ' ')) : null,
+          p.overrideSignedCostCents == null ? null
+            : chip('Signed override cost', pnlSpan(p.overrideSignedCostCents))),
+        el('p', { class: 'muted small' }, p.note));
+      if (Learn.currentLevel() === 'expert' && p.triggeredAt) {
+        row.appendChild(el('p', { class: 'muted small campaign-receipt-line' },
+          'Triggered ', portfolioOccurredLabel(p.triggeredAt),
+          p.responseAt ? ' · response ' + portfolioOccurredLabel(p.responseAt) : '',
+          ' · frozen decision ', p.decisionId));
+      }
+      host.appendChild(row);
+    });
+    return host;
+  }
+
+  function campaignFinalAccountingBlock(campaign) {
+    var review = campaign.review || {}, yieldView = campaign.yield || {}, counter = campaign.counterfactuals || {};
+    var host = el('div', { class: 'campaign-final-accounting' });
+    host.appendChild(el('div', { class: 'chip-row' },
+      chip(UI.vocabulary('campaignNetCredit'), fmtMoney(campaign.netOptionCashCents)),
+      yieldView.available ? chip(UI.vocabulary('realizedVsHeadline'),
+        campaignYieldPct(yieldView.realizedPeriodPct) + ' vs ' + campaignYieldPct(yieldView.headlinePeriodPct)) : null,
+      counter.cash && counter.cash.available && counter.cash.deltaCents != null
+        ? chip('Final vs cash', pnlSpan(counter.cash.deltaCents)) : null,
+      counter.buyAndHold && counter.buyAndHold.available && counter.buyAndHold.deltaCents != null
+        ? chip('Final vs buy & hold', pnlSpan(counter.buyAndHold.deltaCents)) : null));
+    var lanes = el('div', { class: 'campaign-lane-results' });
+    (review.executionLanes || []).forEach(function (lane) {
+      lanes.appendChild(el('div', { class: 'campaign-lane-result' },
+        el('div', { class: 'campaign-protocol-heading' },
+          el('b', {}, lane.lane === 'REAL' ? UI.vocabulary('recordedAtBroker') : UI.vocabulary('practice')),
+          el('span', { class: 'badge badge-dim' }, lane.memberCount + ' member' + (lane.memberCount === 1 ? '' : 's'))),
+        lane.finalResultAvailable
+          ? el('div', { class: 'campaign-lane-pnl' }, pnlSpan(lane.realizedPnlCents))
+          : el('div', { class: 'muted campaign-lane-pnl' }, 'Final result unavailable'),
+        el('p', { class: 'muted small' }, lane.note)));
+    });
+    host.appendChild(lanes);
+    host.appendChild(el('p', { class: 'muted small campaign-no-net' },
+      'Recorded-at-broker and Practice results stay side by side. They are never numerically combined.'));
+    return host;
+  }
+
+  function campaignPatternsBlock(review) {
+    var host = el('div', { class: 'campaign-patterns' });
+    var patterns = review && review.patterns || [];
+    if (!patterns.length) return UI.emptyState('Pattern evidence unavailable',
+      'No closed campaigns can support a repeated pattern yet.');
+    patterns.forEach(function (p) {
+      var tone = p.status === 'IDENTIFIED' ? 'badge-warn' : 'badge-dim';
+      var row = el('div', { class: 'campaign-pattern-row' },
+        el('div', { class: 'campaign-protocol-heading' }, el('b', {}, p.label),
+          el('span', { class: 'badge badge-dim' }, p.executionLane === 'REAL' ? 'Recorded at broker' : 'Practice'),
+          el('span', { class: 'badge ' + tone }, p.status.toLowerCase())),
+        el('p', { class: 'muted small' }, p.note));
+      if (Learn.currentLevel() === 'expert' && (p.evidence || []).length) {
+        row.appendChild(el('div', { class: 'campaign-pattern-evidence' }, p.evidence.map(function (e) {
+          return el('div', { class: 'small' }, el('b', {}, e.title), ' · ', e.symbol, ' ',
+            Number(e.underlyingMovePct).toFixed(1), '% · ', e.windowStart, ' → ', e.windowEnd,
+            ' · ', e.observedSource, ' · ', e.finalResultCents == null ? 'result unavailable' : fmtMoney(e.finalResultCents));
+        })));
+      }
+      host.appendChild(row);
+    });
+    return host;
+  }
+
+  function campaignLessonBlock(campaign) {
+    App.state.campaignLessonDrafts = App.state.campaignLessonDrafts || {};
+    var hasDraft = Object.prototype.hasOwnProperty.call(App.state.campaignLessonDrafts, campaign.id);
+    var textarea = el('textarea', { rows: '4', maxlength: '4000',
+      placeholder: 'What will you do differently the next time this setup appears?' });
+    textarea.value = hasDraft ? App.state.campaignLessonDrafts[campaign.id] : (campaign.lessonNote || '');
+    var count = el('span', { class: 'muted small' }, textarea.value.length + ' / 4000');
+    var message = el('div', { class: 'small', role: 'status', 'aria-live': 'polite' });
+    textarea.addEventListener('input', function () {
+      App.state.campaignLessonDrafts[campaign.id] = textarea.value;
+      count.textContent = textarea.value.length + ' / 4000';
+    });
+    var save = el('button', { type: 'button', class: 'btn btn-sm' }, 'Save lesson');
+    save.addEventListener('click', async function () {
+      save.disabled = true; save.setAttribute('aria-busy', 'true'); message.textContent = '';
+      try {
+        var saved = await API.put('/api/campaigns/' + campaign.id, { lessonNote: textarea.value });
+        campaign.lessonNote = saved.lessonNote;
+        if (campaign.review) campaign.review.lessonNote = saved.lessonNote;
+        delete App.state.campaignLessonDrafts[campaign.id];
+        textarea.value = saved.lessonNote || ''; count.textContent = textarea.value.length + ' / 4000';
+        message.className = 'small gain'; message.textContent = 'Lesson saved. Review evidence and accounting were unchanged.';
+      } catch (e) {
+        message.className = 'small loss'; message.textContent = e.message || String(e);
+      } finally { save.disabled = false; save.removeAttribute('aria-busy'); }
+    });
+    return el('div', { class: 'campaign-lesson-editor' },
+      UI.field(UI.vocabulary('lessonNote'), textarea,
+        { hint: 'This is the only editable review field; it cannot change the close time, evidence, or result.' }),
+      el('div', { class: 'campaign-lesson-actions' }, count, save), message);
+  }
+
+  function campaignReviewBlock(campaign) {
+    var review = campaign.review || {};
+    var host = el('section', { class: 'campaign-review', 'data-campaign-review': campaign.id },
+      el('div', { class: 'campaign-review-intro' },
+        el('div', {}, el('h4', {}, UI.vocabulary('campaignReview')),
+          el('p', { class: 'muted small' }, review.finalReview
+            ? 'Closed ' + portfolioOccurredLabel(review.closedAt) + '. The evidence and accounting below are read-only.'
+            : 'Live preview while the campaign is open. Closing freezes the review window.')),
+        el('span', { class: 'badge ' + (review.finalReview ? 'badge-ok' : 'badge-dim') },
+          review.finalReview ? 'final review' : 'live preview')));
+    var grid = el('div', { class: 'campaign-review-grid' });
+    grid.appendChild(el('section', { class: 'campaign-review-pane campaign-review-overlay' },
+      el('h5', {}, UI.vocabulary('authoredVsRealized')), campaignOverlayChart(review.authoredVsRealized)));
+    grid.appendChild(el('section', { class: 'campaign-review-pane campaign-review-protocol' },
+      el('h5', {}, UI.vocabulary('protocolAdherence')), campaignProtocolBlock(review)));
+    grid.appendChild(el('section', { class: 'campaign-review-pane campaign-review-accounting' },
+      el('h5', {}, 'Final campaign accounting'), campaignFinalAccountingBlock(campaign)));
+    grid.appendChild(el('section', { class: 'campaign-review-pane campaign-review-patterns' },
+      el('h5', {}, UI.vocabulary('campaignPattern')), campaignPatternsBlock(review)));
+    grid.appendChild(el('section', { class: 'campaign-review-pane campaign-review-lesson' },
+      campaignLessonBlock(campaign)));
+    host.appendChild(grid);
+    (review.receipts || []).forEach(function (receipt) {
+      if (Learn.currentLevel() === 'expert') host.appendChild(el('p', { class: 'muted small campaign-receipt-line' }, receipt));
+    });
+    return host;
+  }
+
   function campaignRow(campaign) {
     var beginner = Learn.currentLevel() === 'beginner';
     var yieldView = campaign.yield || {};
     var basis = campaign.economicBasis || {};
     var counter = campaign.counterfactuals || {};
     var statusToggle = el('button', { type: 'button', class: 'btn btn-secondary btn-sm' },
-      campaign.status === 'ACTIVE' ? 'Close campaign' : 'Reopen');
+      campaign.status === 'ACTIVE' ? 'Close campaign & review' : 'Reopen');
     statusToggle.addEventListener('click', async function () {
+      var ownerHash = window.location.hash || '';
       statusToggle.disabled = true; statusToggle.setAttribute('aria-busy', 'true');
       try {
         await API.put('/api/campaigns/' + campaign.id, {
           status: campaign.status === 'ACTIVE' ? 'CLOSED' : 'ACTIVE' });
-        await App.render();
+        App.state.portfolioCampaignReviewFocus = campaign.status === 'ACTIVE' ? campaign.id : null;
+        await refreshCampaignRail(ownerHash);
       } catch (e) { UI.toast(e.message, 'error'); statusToggle.disabled = false; statusToggle.removeAttribute('aria-busy'); }
     });
     var row = el('article', { class: 'campaign-row' },
@@ -1345,6 +1889,11 @@
           el('span', { class: 'badge badge-warn', style: 'margin-right:6px' }, 'receipt'), receipt));
       }
     });
+    row.appendChild(UI.expandable(el('span', {}, UI.vocabulary('campaignReview'),
+      campaign.review && campaign.review.finalReview ? ' · final' : ' · preview'),
+      function () { return campaignReviewBlock(campaign); },
+      { stateKey: 'campaign-review-' + campaign.id,
+        open: campaign.status !== 'ACTIVE' || App.state.portfolioCampaignReviewFocus === campaign.id }));
     row.appendChild(UI.expandable(el('span', {}, UI.vocabulary('accumulationLedger'), ' · '
         + (campaign.ledger || []).length + ' event' + ((campaign.ledger || []).length === 1 ? '' : 's')),
       function () { return campaignLedgerBlock(campaign); },
@@ -1361,13 +1910,14 @@
     var symbol = el('input', { type: 'text', maxlength: '20', placeholder: 'MU', list: 'universe-symbols' });
     var message = el('div', { class: 'small', 'aria-live': 'polite' });
     var create = el('button', { type: 'button', class: 'btn', onclick: async function () {
+      var ownerHash = window.location.hash || '';
       create.disabled = true; create.setAttribute('aria-busy', 'true'); message.textContent = '';
       try {
         var campaign = await API.post('/api/campaigns', {
           title: title.value, symbol: symbol.value.trim() ? symbol.value.trim().toUpperCase() : null });
         App.state.portfolioCampaignFocus = campaign.id;
         UI.toast('Campaign created — attach its recorded activity');
-        await App.render();
+        await refreshCampaignRail(ownerHash);
       } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
       finally { create.disabled = false; create.removeAttribute('aria-busy'); }
     } }, 'Create campaign');
@@ -2269,15 +2819,447 @@
         } catch (e) { result.textContent = e.message || String(e); result.className = 'small loss'; }
         finally { upload.disabled = account.status === 'ARCHIVED'; upload.removeAttribute('aria-busy'); }
       } }, 'Import CSV');
+    var pendingQueue = portfolioPendingImportQueue(account);
+    var brokerFlow = portfolioBrokerImportFlow(account, pendingQueue);
     return el('section', { class: 'card card-slim book-import-card' },
-      UI.cardHeader('Import a broker history'),
+      UI.cardHeader('Import history'),
+      el('p', { class: 'muted small' }, 'Use the normalized StrikeBench CSV below, or preview a supported broker export in the same guarded import flow.'),
+      brokerFlow,
+      el('hr'),
+      el('h4', {}, 'Normalized StrikeBench CSV'),
       el('p', { class: 'muted small' }, 'Valid transaction groups are recorded; rows that need attention come back with a reason.'),
       el('div', { class: 'book-import-row' }, file, upload,
         el('a', { class: 'btn btn-secondary', href: '/api/portfolio/import-template.csv', download: 'StrikeBench-portfolio-import-template.csv' }, 'Download template')),
       UI.expandable('How imports stay safe', function () {
         return el('p', { class: 'muted small' }, 'Transactions are sorted chronologically. Every reference is atomic: all legs land together or every row in that package is quarantined with a reason. Other valid references still import, and stable references prevent duplicates. To add history older than activity already recorded here, use a new tracked account.');
       }, { stateKey: 'portfolio-import-safety' }),
-      result);
+      result,
+      el('hr'), pendingQueue);
+  }
+
+  function portfolioBrokerImportFlow(account, pendingQueue) {
+    // Raw statements and account labels live only in this mounted form closure. They never enter
+    // App.state, Workspace/localStorage, or the server-owned workspace blob.
+    var saved = { source: '', sourceAccount: '', text: '', preview: null };
+    var source = portfolioSelect([
+      ['', 'Choose broker format'], ['ETRADE', 'E*TRADE / Power E*TRADE'], ['VANGUARD', 'Vanguard'],
+      ['THINKORSWIM', 'ThinkOrSwim'], ['FIDELITY', 'Fidelity'], ['SCHWAB', 'Schwab'],
+      ['ROBINHOOD', 'Robinhood']
+    ], saved.source || '');
+    var sourceAccount = el('input', { type: 'password', maxlength: '200', value: saved.sourceAccount || '',
+      placeholder: 'Account label or last four', autocomplete: 'off' });
+    var text = el('textarea', { rows: '8', class: 'broker-import-text',
+      placeholder: 'Paste the structured CSV or tab-delimited export here. No PDF, LLM, or network parser is used.' }, saved.text || '');
+    var file = el('input', { type: 'file', accept: '.csv,.txt,text/csv,text/plain',
+      'aria-label': 'Broker statement CSV or text' });
+    var previewHost = el('div', { class: 'broker-import-preview', 'aria-live': 'polite' });
+    function invalidatePreview() {
+      if (!saved.preview) return;
+      saved.preview = null;
+      previewHost.replaceChildren(UI.actionFeedback('caution', 'Broker inputs changed',
+        'Preview the current text again before anything can be confirmed.'));
+    }
+    var previewButton = el('button', { type: 'button', class: 'btn btn-secondary',
+      disabled: account.status === 'ARCHIVED' ? 'disabled' : null, onclick: async function () {
+        if (!source.value) { previewHost.textContent = 'Choose the broker format first.'; previewHost.className = 'broker-import-preview loss'; return; }
+        if (!text.value.trim()) { previewHost.textContent = 'Paste or upload structured broker text first.'; previewHost.className = 'broker-import-preview loss'; return; }
+        previewButton.disabled = true; previewButton.setAttribute('aria-busy', 'true');
+        previewHost.className = 'broker-import-preview'; previewHost.textContent = 'Parsing without changing the Book…';
+        try {
+          saved.source = source.value; saved.sourceAccount = sourceAccount.value; saved.text = text.value;
+          saved.preview = await API.post('/api/portfolio/broker-imports/preview', {
+            parserVersion: 'broker-import-1', sourceSystem: saved.source,
+            sourceAccount: saved.sourceAccount || null, text: saved.text
+          });
+          renderBrokerImportPreview(account, saved, previewHost, pendingQueue);
+        } catch (e) { previewHost.textContent = e.message || String(e); previewHost.className = 'broker-import-preview loss'; }
+        finally { previewButton.disabled = account.status === 'ARCHIVED'; previewButton.removeAttribute('aria-busy'); }
+      } }, 'Preview broker facts');
+    file.addEventListener('change', async function () {
+      if (!file.files || !file.files[0]) return;
+      text.value = await file.files[0].text();
+      saved.text = text.value;
+      invalidatePreview();
+    });
+    source.addEventListener('change', function () { saved.source = source.value; invalidatePreview(); });
+    sourceAccount.addEventListener('input', function () { saved.sourceAccount = sourceAccount.value; invalidatePreview(); });
+    text.addEventListener('input', function () { saved.text = text.value; invalidatePreview(); });
+    if (saved.preview) setTimeout(function () {
+      if (previewHost.isConnected) renderBrokerImportPreview(account, saved, previewHost, pendingQueue);
+    }, 0);
+    return el('section', { class: 'broker-import-flow', id: 'broker-import-flow' },
+      UI.cardHeader('Broker statement preview', el('span', { class: 'badge badge-dim' }, 'NOTHING AUTO-SUBMITS')),
+      el('p', { class: 'muted small' }, 'Structured exports are parsed one way into highlighted facts. Every source account must map to an explicit destination Book; exact fills enter only those mapped Books after confirmation, while package-net-only spreads stay quarantined.'),
+      el('div', { class: 'form-grid broker-import-meta' }, UI.field('Broker export', source),
+        UI.field('Source account label / last four', sourceAccount,
+          { hint: 'Used only while this form is open to create an owner-secret account fingerprint. The raw value is not persisted in browser workspace state or Book records.' }),
+        UI.field('Upload CSV or text', file)),
+      UI.field('Broker text', text),
+      el('div', { class: 'btn-row' }, previewButton), previewHost);
+  }
+
+  function renderBrokerImportPreview(account, state, host, pendingQueue) {
+    var out = state.preview || {}, parsed = out.parsed || {}, groups = parsed.groups || [];
+    var marks = {};
+    (out.marks || []).forEach(function (group) { marks[group.groupKey] = group.legs || []; });
+    state.destinationMapping = state.destinationMapping || {};
+    var trackedAccounts = (App.state.portfolioAccounts || [account]).filter(function (row) {
+      return row.status === 'ACTIVE';
+    });
+    host.className = 'broker-import-preview'; host.replaceChildren();
+    host.appendChild(UI.actionFeedback(groups.length ? 'ok' : 'caution',
+      groups.length + ' package' + (groups.length === 1 ? '' : 's') + ' ready for explicit verification',
+      (parsed.quarantine || []).length + ' row' + ((parsed.quarantine || []).length === 1 ? '' : 's')
+        + ' quarantined. Preview is read-only.'));
+
+    var accountControls = {};
+    Array.from(new Set(groups.map(function (group) { return group.accountFingerprint; }))).forEach(function (fingerprint) {
+      var select = portfolioSelect([['', 'Choose destination Book']].concat(trackedAccounts.map(function (tracked) {
+        return [tracked.id, tracked.name + ' · ' + portfolioAccountTypeLabel(tracked.accountType)];
+      })), state.destinationMapping[fingerprint] || '');
+      select.addEventListener('change', function () { state.destinationMapping[fingerprint] = select.value; });
+      accountControls[fingerprint] = select;
+    });
+    if (Object.keys(accountControls).length) host.appendChild(el('section', { class: 'broker-account-mapping' },
+      el('h4', {}, 'Map every source account'),
+      el('p', { class: 'muted small' }, 'Each source-account fingerprint maps independently. Nothing defaults to the Book currently open.'),
+      Object.keys(accountControls).map(function (fingerprint) {
+        return UI.field(fingerprint, accountControls[fingerprint]);
+      })));
+
+    function input(value, attrs) {
+      return el('input', Object.assign({ value: value == null ? '' : value }, attrs || {}));
+    }
+    function editorFor(leg) {
+      var instrument = portfolioSelect([['STOCK', 'Stock'], ['OPTION', 'Option']], leg.instrumentType);
+      var action = portfolioSelect([['BUY', 'Buy'], ['SELL', 'Sell']], leg.action);
+      var effect = portfolioSelect([['OPEN', 'Open'], ['CLOSE', 'Close']], leg.positionEffect);
+      var optionType = portfolioSelect([['', 'Not applicable'], ['CALL', 'Call'], ['PUT', 'Put']], leg.optionType || '');
+      var controls = {
+        instrumentType: instrument, action: action, positionEffect: effect,
+        symbol: input(leg.symbol, { maxlength: '24' }), optionType: optionType,
+        strike: input(leg.strike, { type: 'number', step: '0.000001' }),
+        expiration: input(leg.expiration, { type: 'date' }),
+        quantity: input(leg.quantity, { type: 'number', min: '1', step: '1' }),
+        multiplier: input(leg.multiplier, { type: 'number', min: '1', step: '1' })
+      };
+      var inferred = (leg.checks || []).filter(function (check) {
+        return check.verify && check.field !== 'reportedPrice';
+      });
+      var acknowledgement = el('input', { type: 'checkbox' });
+      function optionVisibility() {
+        var stock = instrument.value === 'STOCK';
+        controls.optionType.disabled = stock; controls.strike.disabled = stock;
+        controls.expiration.disabled = stock;
+      }
+      instrument.addEventListener('change', optionVisibility); optionVisibility();
+      return { controls: controls, acknowledgement: acknowledgement, inferred: inferred,
+        node: el('div', { class: 'broker-import-editor-grid' },
+          UI.field('Instrument', instrument), UI.field('Action', action), UI.field('Open / close', effect),
+          UI.field('Symbol', controls.symbol), UI.field('Put / call', optionType), UI.field('Strike', controls.strike),
+          UI.field('Expiration', controls.expiration), UI.field('Quantity', controls.quantity),
+          UI.field('Multiplier', controls.multiplier),
+          inferred.length ? el('label', { class: 'broker-inference-ack' }, acknowledgement,
+            el('span', {}, 'I verified the highlighted inferred values')) : null) };
+    }
+    function verifiedLeg(leg, editor) {
+      var c = editor.controls, stock = c.instrumentType.value === 'STOCK';
+      return { legNo: leg.legNo, instrumentType: c.instrumentType.value, action: c.action.value,
+        positionEffect: c.positionEffect.value, symbol: c.symbol.value.trim().toUpperCase(),
+        optionType: stock ? null : c.optionType.value || null,
+        strike: stock || c.strike.value === '' ? null : Number(c.strike.value),
+        expiration: stock ? null : c.expiration.value || null,
+        quantity: Number(c.quantity.value), multiplier: stock ? 1 : Number(c.multiplier.value),
+        acknowledgeInferred: editor.inferred.length ? editor.acknowledgement.checked : false };
+    }
+
+    var choices = [];
+    groups.forEach(function (group) {
+      var choose = el('input', { type: 'checkbox', 'aria-label': 'Confirm broker package ' + group.externalRef });
+      var markByLeg = {};
+      (marks[group.groupKey] || []).forEach(function (mark) { markByLeg[mark.legNo] = mark; });
+      var editors = [];
+      var legs = el('div', { class: 'broker-import-legs' }, (group.legs || []).map(function (leg) {
+        var editor = editorFor(leg); editors.push({ leg: leg, editor: editor });
+        var verify = (leg.checks || []).filter(function (check) { return check.verify; });
+        var mark = markByLeg[leg.legNo] || {};
+        return el('div', { class: 'broker-import-leg' + (verify.length ? ' needs-verify' : '') },
+          el('div', { class: 'broker-import-leg-main' }, el('b', {}, portfolioLegLabel(leg)),
+            el('span', {}, leg.reportedPrice == null ? 'Broker fill missing' : 'Broker fill $' + Number(leg.reportedPrice).toFixed(4))),
+          verify.length ? el('div', { class: 'broker-import-verify' }, verify.map(function (check) {
+            return el('span', { class: check.field === 'reportedPrice' ? 'badge badge-dim' : 'badge badge-warn' },
+              (check.field === 'reportedPrice' ? 'PENDING ' : 'VERIFY ') + check.field + ': ' + check.value);
+          })) : null,
+          editor.node,
+          el('div', { class: 'broker-import-marks small' },
+            el('span', { class: 'caution' }, 'Pasted snapshot: '
+              + (leg.pastedMark == null ? 'unavailable' : '$' + Number(leg.pastedMark).toFixed(4))),
+            el('span', { class: mark.observedEligible ? 'gain' : 'caution' }, mark.observedEligible
+              ? 'Observed re-mark · bid ' + (mark.currentBid == null ? '—' : '$' + Number(mark.currentBid).toFixed(4))
+                + ' / ask ' + (mark.currentAsk == null ? '—' : '$' + Number(mark.currentAsk).toFixed(4))
+                + ' / mid ' + (mark.currentMid == null ? '—' : '$' + Number(mark.currentMid).toFixed(4))
+              : 'No eligible Observed current mark'),
+            el('span', { class: 'muted broker-evidence' }, [mark.provenance, mark.age, mark.source].filter(Boolean).join(' · ')),
+            mark.note ? el('span', { class: 'muted' }, mark.note) : null));
+      }));
+      choices.push({ input: choose, group: group, editors: editors });
+      host.appendChild(el('section', { class: 'broker-import-group' },
+        el('div', { class: 'broker-import-group-head' }, choose,
+          el('div', { class: 'broker-import-reference' }, el('b', {}, group.externalRef),
+            el('div', { class: 'muted small' }, group.broker + ' · ' + group.accountFingerprint
+              + ' · ' + portfolioOccurredLabel(group.occurredAt)),
+            el('div', { class: 'muted tiny broker-payload-fingerprint' }, group.payloadFingerprint)),
+          el('span', { class: group.kind === 'EXACT_FILLS' ? 'badge badge-ok' : 'badge badge-warn' },
+            group.kind === 'EXACT_FILLS' ? 'EXACT FILLS' : 'PACKAGE NET — PENDING'),
+          el('strong', {}, fmtMoney(group.packageNetCents, { plus: true }))), legs,
+        (group.warnings || []).length ? el('div', { class: 'small caution' }, group.warnings.join(' ')) : null));
+    });
+    if ((parsed.quarantine || []).length) host.appendChild(UI.expandable(
+      'Quarantined rows · ' + parsed.quarantine.length, function () {
+        return el('div', { class: 'book-import-rejects' }, parsed.quarantine.map(function (row) {
+          return el('div', { class: 'book-import-reject-row' }, el('b', {}, 'Line ' + row.line),
+            el('span', { class: 'muted' }, row.externalRef || 'No reference'), el('span', {}, row.reason));
+        }));
+      }, { stateKey: 'broker-import-quarantine-' + account.id }));
+    if (!groups.length) return;
+    var confirmMessage = el('div', { class: 'small', 'aria-live': 'polite' });
+    var confirm = el('button', { type: 'button', class: 'btn', onclick: async function () {
+      var selected = choices.filter(function (choice) { return choice.input.checked; });
+      if (!selected.length) { confirmMessage.textContent = 'Select each verified package you intend to import.'; confirmMessage.className = 'small loss'; return; }
+      var destinations = {};
+      for (var i = 0; i < selected.length; i++) {
+        var fingerprint = selected[i].group.accountFingerprint;
+        if (!accountControls[fingerprint] || !accountControls[fingerprint].value) {
+          confirmMessage.textContent = 'Map every selected source account to a destination Book.';
+          confirmMessage.className = 'small loss'; return;
+        }
+        destinations[fingerprint] = accountControls[fingerprint].value;
+      }
+      confirm.disabled = true; confirm.setAttribute('aria-busy', 'true'); confirmMessage.textContent = 'Confirming selected facts atomically…';
+      try {
+        var result = await API.post('/api/portfolio/broker-imports/confirm', {
+          parserVersion: parsed.parserVersion, previewFingerprint: parsed.previewFingerprint,
+          sourceSystem: state.source, sourceAccount: state.sourceAccount || null, text: state.text,
+          destinationAccountByFingerprint: destinations,
+          groups: selected.map(function (choice) { return { groupKey: choice.group.groupKey,
+            legs: choice.editors.map(function (row) { return verifiedLeg(row.leg, row.editor); }) }; })
+        });
+        API.flushCache();
+        confirmMessage.replaceChildren(UI.actionFeedback('ok', 'Broker facts confirmed',
+          result.exactTransactions + ' exact transaction' + (result.exactTransactions === 1 ? '' : 's')
+          + ' recorded; ' + result.pendingImports + ' package' + (result.pendingImports === 1 ? '' : 's')
+          + ' quarantined pending per-leg fills'
+          + (result.duplicates ? '; ' + result.duplicates + ' byte-equivalent replay'
+            + (result.duplicates === 1 ? '' : 's') + ' left unchanged' : '') + '.'));
+        if (pendingQueue.reload) pendingQueue.reload();
+        var wizard = await portfolioBatchAdoptionWizard(result.items || [], trackedAccounts);
+        if (wizard) confirmMessage.appendChild(wizard);
+      } catch (e) { confirmMessage.textContent = e.message || String(e); confirmMessage.className = 'small loss'; }
+      finally { confirm.disabled = false; confirm.removeAttribute('aria-busy'); }
+    } }, 'Confirm selected facts');
+    host.appendChild(el('div', { class: 'broker-import-confirm' },
+      el('p', { class: 'muted small' }, 'Confirmation records facts only. It never places an order or automatically creates a Plan.'),
+      el('div', { class: 'btn-row' }, confirm), confirmMessage));
+  }
+
+  async function portfolioBatchAdoptionWizard(items, knownAccounts) {
+    var candidates = items.filter(function (item) { return item.kind === 'EXACT_TRANSACTION' && (item.lots || []).length; });
+    if (!candidates.length) return null;
+    var allPlans = await PlanStore.library(true);
+    var accounts = knownAccounts || App.state.portfolioAccounts || [];
+    var rows = [];
+    candidates.forEach(function (item, index) {
+      var action = portfolioSelect([['', 'Choose: adopt, link, or skip'], ['ADOPT', 'Adopt into a new Plan'],
+        ['LINK', 'Link to an existing Plan'], ['SKIP', 'Skip this position']], '');
+      var matching = allPlans.filter(function (plan) {
+        return plan.symbol === item.symbol && plan.status === 'ACTIVE' && plan.marketKind === 'OBSERVED';
+      });
+      var plan = portfolioSelect([['', matching.length ? 'Choose existing Plan' : 'No matching active Plan']]
+        .concat(matching.map(function (p) { return [p.id, (PlanStore.identity(p, allPlans).full || p.title)]; })), '');
+      var planField = UI.field('Existing Plan', plan); planField.hidden = true;
+      action.addEventListener('change', function () { planField.hidden = action.value !== 'LINK'; });
+      var destination = accounts.find(function (row) { return row.id === item.portfolioAccountId; });
+      rows.push({ item: item, action: action, plan: plan, planField: planField,
+        destination: destination, index: index });
+    });
+    var result = el('div', { class: 'small', 'aria-live': 'polite' });
+    var submit = el('button', { type: 'button', class: 'btn btn-secondary', onclick: async function () {
+      if (rows.some(function (row) { return !row.action.value || row.action.value === 'LINK' && !row.plan.value; })) {
+        result.textContent = 'Choose adopt, link, or skip for every imported position; linked rows also need a Plan.';
+        result.className = 'small loss'; return;
+      }
+      if (rows.some(function (row) { return row.action.value !== 'SKIP'; })
+          && (App.state.world || (App.config && App.config.world)) !== 'observed') {
+        result.textContent = 'Real tracked positions can become Plans only in the Observed market. Switch to Observed, then confirm this batch.';
+        result.className = 'small loss'; return;
+      }
+      submit.disabled = true; submit.setAttribute('aria-busy', 'true');
+      try {
+        var response = await API.post('/api/plans/adopt-batch', { items: rows.map(function (row) {
+          return { action: row.action.value, clientRequestId: row.action.value === 'SKIP'
+            ? null : 'broker-adopt-' + row.item.id,
+            portfolioAccountId: row.action.value === 'SKIP' ? null : row.item.portfolioAccountId,
+            symbol: row.action.value === 'SKIP' ? null : row.item.symbol,
+            label: row.item.symbol + ' imported broker position',
+            allocations: row.action.value === 'SKIP' ? [] : row.item.lots.map(function (lot) {
+              return { lotId: lot.lotId, quantity: lot.quantity };
+            }), existingPlanId: row.action.value === 'LINK' ? row.plan.value : null };
+        }) });
+        await PlanStore.refresh();
+        result.replaceChildren(UI.actionFeedback('ok', 'Batch adoption committed', response.adopted
+          + ' new Plan' + (response.adopted === 1 ? '' : 's') + ', ' + response.linked + ' linked, '
+          + response.skipped + ' skipped'
+          + (response.replayed ? ', ' + response.replayed + ' unchanged replay' + (response.replayed === 1 ? '' : 's') : '')
+          + '. Every newly changed row and receipt committed together.'));
+        (response.items || []).filter(function (item) { return item.plan; }).forEach(function (item) {
+          result.appendChild(el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
+            onclick: function () { PlanStore.focus(item.plan, 'MANAGE_REVIEW'); } },
+          'Open ' + item.plan.symbol + ' Plan' + (item.replayed ? ' · unchanged' : '')));
+        });
+      } catch (e) { result.textContent = e.message || String(e); result.className = 'small loss'; }
+      finally { submit.disabled = false; submit.removeAttribute('aria-busy'); }
+    } }, 'Confirm batch adoption');
+    return el('section', { class: 'broker-batch-adoption' },
+      el('h4', {}, 'Choose what to manage as a Plan'),
+      el('p', { class: 'muted small' }, 'This is one statement-wide confirmation across every mapped Book. A failed row rolls back the complete batch. Real tracked positions stay in the Observed market.'),
+      rows.map(function (row) { return el('div', { class: 'broker-batch-row' },
+        el('b', {}, row.item.symbol + ' · ' + row.item.externalRef + ' · '
+          + (row.destination ? row.destination.name : row.item.portfolioAccountId)),
+        actionField(row.action), row.planField); }),
+      el('div', { class: 'btn-row' }, submit), result);
+  }
+
+  function actionField(control) { return el('label', { class: 'field' }, el('span', {}, 'Plan choice'), control); }
+
+  function portfolioPendingImportQueue(account) {
+    var host = el('section', { class: 'broker-pending-queue', id: 'broker-pending-queue', 'aria-live': 'polite' },
+      UI.cardHeader('Pending package resolutions', el('span', { class: 'badge badge-dim' }, 'PACKAGE CASH ONLY')),
+      el('p', { class: 'muted small' }, 'Loading unresolved broker packages…'));
+    host.reload = async function () {
+      try {
+        var accountQuery = '&portfolioAccountId=' + encodeURIComponent(account.id);
+        var pages = await Promise.all([
+          API.getFresh('/api/portfolio/broker-imports?status=OPEN&limit=100&offset=0' + accountQuery),
+          API.getFresh('/api/portfolio/broker-imports?status=REJECTED&limit=50&offset=0' + accountQuery)
+        ]);
+        var data = pages[0], rejected = pages[1];
+        var rows = data.imports || [];
+        host.replaceChildren(UI.cardHeader('Pending package resolutions',
+          el('span', { class: data.pendingCount ? 'badge badge-warn' : 'badge badge-ok' }, data.pendingCount + ' OPEN')));
+        if (!rows.length) host.appendChild(UI.emptyState('No package nets need resolution',
+          'A broker package without per-leg fills appears here without entering lots or tax basis.'));
+        else rows.forEach(function (pending) { host.appendChild(portfolioPendingImportCard(account, pending, host)); });
+        if (data.hasMore) host.appendChild(el('p', { class: 'small caution' },
+          'More open packages exist. Resolve this page or use the next queue page before relying on the visible count.'));
+        var rejectedRows = rejected.imports || [];
+        if (rejectedRows.length) host.appendChild(el('section', { class: 'broker-rejected-history' },
+          el('h4', {}, 'Rejected import history'),
+          el('p', { class: 'muted small' }, 'Rejected packages retain their immutable broker identity and may be reopened.'),
+          rejectedRows.map(function (pending) {
+            var reopen = el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: async function () {
+              reopen.disabled = true;
+              try {
+                await API.post('/api/portfolio/broker-imports/' + encodeURIComponent(pending.id) + '/commands',
+                  { action: 'REOPEN' });
+                API.flushCache(); await host.reload();
+              } catch (e) { UI.toast(e.message || 'Could not reopen the import', 'error'); reopen.disabled = false; }
+            } }, 'Reopen');
+            return el('div', { class: 'broker-rejected-row' },
+              el('div', {}, el('b', {}, pending.externalRef), el('div', { class: 'muted small' },
+                pending.broker + ' · ' + portfolioOccurredLabel(pending.occurredAt))),
+              el('span', { class: 'badge badge-dim' }, 'REJECTED'), reopen);
+          }), rejected.hasMore ? el('p', { class: 'muted small' },
+            'Showing the newest 50 rejected packages for this Book.') : null));
+      } catch (e) { host.appendChild(el('p', { class: 'loss small' }, e.message || String(e))); }
+    };
+    setTimeout(function () { if (host.isConnected) host.reload(); }, 0);
+    return host;
+  }
+
+  function portfolioPendingImportCard(account, pending, queue) {
+    var provisional = pending.status === 'PROVISIONAL';
+    var prices = (pending.legs || []).map(function (leg) {
+      var input = el('input', { type: 'number', min: '0', step: '0.000001',
+        value: leg.reportedPrice == null ? '' : leg.reportedPrice });
+      return { leg: leg, input: input };
+    });
+    var authority = portfolioSelect(provisional ? [['', 'Choose attestation source'],
+      ['BROKER_REPORTED', 'Broker statement / confirmation — attest']] : [['', 'Choose fill authority'],
+      ['BROKER_REPORTED', 'Broker confirmation — authoritative basis'],
+      ['USER_ALLOCATED', 'My allocation — quarantine only']], '');
+    function applyAuthorityLocks() {
+      prices.forEach(function (row) {
+        row.input.readOnly = authority.value === 'USER_ALLOCATED'
+          && row.leg.reportedPriceAuthority === 'BROKER_REPORTED';
+      });
+    }
+    authority.addEventListener('change', applyAuthorityLocks); applyAuthorityLocks();
+    var message = el('div', { class: 'small', 'aria-live': 'polite' });
+    var resolve = el('button', { type: 'button', class: 'btn', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+      onclick: async function () {
+        if (!authority.value) { message.textContent = 'Choose whether these prices came from the broker or are your allocation.'; message.className = 'small loss'; return; }
+        if (prices.some(function (row) { return row.input.value === '' || Number(row.input.value) < 0; })) {
+          message.textContent = 'Enter every exact per-leg fill. The package will be checked to the cent.'; message.className = 'small loss'; return;
+        }
+        resolve.disabled = true; resolve.setAttribute('aria-busy', 'true');
+        try {
+          var out = await API.post('/api/portfolio/broker-imports/' + encodeURIComponent(pending.id) + '/commands', {
+            action: 'RESOLVE', portfolioAccountId: account.id, authority: authority.value,
+            legs: prices.map(function (row) { return { legNo: row.leg.legNo, price: Number(row.input.value) }; })
+          });
+          API.flushCache();
+          await queue.reload();
+          var feedback = UI.actionFeedback('ok', provisional ? 'Broker fills attested' : 'Package resolution recorded · ' + out.taxTruth, out.note);
+          if (out.adoptionItem) {
+            var wizard = await portfolioBatchAdoptionWizard([out.adoptionItem], [account]);
+            if (wizard) feedback.appendChild(wizard);
+          }
+          queue.prepend(feedback);
+        } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
+        finally { resolve.disabled = account.status === 'ARCHIVED'; resolve.removeAttribute('aria-busy'); }
+      } }, provisional ? 'Attest with broker fills' : 'Record package resolution');
+    var reject = el('button', { type: 'button', class: 'btn btn-ghost', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+      onclick: function () {
+        UI.confirmModal('Reject this pending broker package?', el('div', {},
+          el('p', {}, 'Remove ', el('b', {}, pending.externalRef), ' from the active resolution queue?'),
+          el('p', { class: 'muted' }, 'Its broker identity and resolution history remain intact in Rejected history, where you can reopen it.')),
+        'Reject pending import', async function () {
+          reject.disabled = true;
+          try {
+            await API.post('/api/portfolio/broker-imports/' + encodeURIComponent(pending.id) + '/commands',
+              { action: 'REJECT' });
+            API.flushCache(); await queue.reload();
+          } catch (e) {
+            message.textContent = e.message || String(e); message.className = 'small loss'; reject.disabled = false;
+          }
+        }, true);
+      } }, 'Reject pending import');
+    var history = (pending.resolutionHistory || []).length ? el('div', { class: 'broker-resolution-history' },
+      el('h5', {}, 'Immutable resolution history'), (pending.resolutionHistory || []).map(function (event) {
+        return el('div', { class: 'broker-resolution-event' },
+          el('span', { class: event.taxBasisStatus === 'AUTHORITATIVE' ? 'badge badge-ok' : 'badge badge-warn' },
+            event.authority + ' · ' + event.taxBasisStatus),
+          el('span', { class: 'muted small' }, portfolioOccurredLabel(event.resolvedAt)),
+          el('span', { class: 'muted tiny broker-resolution-receipt' }, event.receiptId));
+      })) : null;
+    return el('article', { class: 'broker-pending-card' },
+      el('div', { class: 'broker-import-group-head' },
+        el('div', {}, el('b', {}, pending.externalRef), el('div', { class: 'muted small' },
+          pending.broker + ' · ' + pending.sourceAccountFingerprint + ' · ' + portfolioOccurredLabel(pending.occurredAt))),
+        el('span', { class: provisional ? 'badge badge-warn' : 'badge badge-dim' }, pending.status),
+        el('strong', {}, fmtMoney(pending.packageNetCents, { plus: true }))),
+      el('p', { class: provisional ? 'caution small' : 'muted small' }, provisional
+        ? 'This allocation is provisional history only. It created no tracked transaction, lot, wash-sale basis, or export row. Enter broker-reported fills to attest it.'
+        : 'Exact package cash is known, but incomplete per-leg fills keep the package outside the tracked ledger.'),
+      el('div', { class: 'broker-resolution-legs' }, prices.map(function (row) {
+        return el('div', { class: 'broker-resolution-leg' },
+          el('span', {}, portfolioLegLabel(row.leg)),
+          el('span', { class: row.leg.reportedPriceAuthority === 'BROKER_REPORTED' ? 'badge badge-ok' : 'badge badge-dim' },
+            row.leg.reportedPriceAuthority), UI.field('Per-leg fill', row.input));
+      })),
+      UI.field('Where did these per-leg prices come from?', authority,
+        { hint: 'Broker-reported fills create authoritative tracked basis. A user allocation creates only a provisional receipt and stays quarantined until attested.' }),
+      history, el('div', { class: 'btn-row' }, resolve, reject), message);
   }
 
   function portfolioTransactionRow(tx) {
@@ -2413,8 +3395,9 @@
       } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
       finally { current.disabled = false; current.removeAttribute('aria-busy'); }
     } }, 'Use current book value');
-    var save = el('button', { type: 'button', class: 'btn', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
+    var save = el('button', { id: 'book-valuation-save', type: 'button', class: 'btn', disabled: account.status === 'ARCHIVED' ? 'disabled' : null,
       onclick: async function () {
+        var ownerHash = window.location.hash || '';
         save.disabled = true; save.setAttribute('aria-busy', 'true'); message.textContent = '';
         try {
           var totalValue = Number(total.value), cashValue = cash.value === '' ? null : Number(cash.value),
@@ -2428,7 +3411,8 @@
             securitiesValueCents: securitiesValue == null ? null : Math.round(securitiesValue * 100),
             source: 'MANUAL', externalRef: reference.value || null, notes: notes.value || null
           });
-          UI.toast('Account-value reconciliation recorded', 'ok'); await App.render();
+          UI.toast('Account-value reconciliation recorded', 'ok');
+          await refreshTrackedBook(ownerHash, { preserveDraft: false });
         } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
         finally { save.disabled = account.status === 'ARCHIVED'; save.removeAttribute('aria-busy'); }
       } }, 'Record reconciliation');
@@ -2578,7 +3562,8 @@
       return result;
     }
     var message = el('div', { class: 'small', 'aria-live': 'polite' });
-    var save = el('button', { type: 'button', class: 'btn', onclick: async function () {
+    var save = el('button', { id: 'book-tax-reconciliation-save', type: 'button', class: 'btn', onclick: async function () {
+      var ownerHash = window.location.hash || '';
       save.disabled = true; save.setAttribute('aria-busy', 'true'); message.textContent = ''; message.className = 'small';
       try {
         var payload = { status: status.value, formReference: reference.value || null,
@@ -2592,15 +3577,17 @@
           capitalGainDistributionCents: cents(fields.capitalGainDistribution.input, fields.capitalGainDistribution.label),
           notes: notes.value || null };
         await API.put('/api/portfolio/accounts/' + account.id + '/tax/' + year + '/reconciliation', payload);
-        UI.toast('Broker-form reconciliation saved', 'ok'); await App.render();
+        UI.toast('Broker-form reconciliation saved', 'ok'); await refreshTrackedBook(ownerHash);
       } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
       finally { save.disabled = false; save.removeAttribute('aria-busy'); }
     } }, saved ? 'Update reconciliation' : 'Save reconciliation');
-    var clear = saved ? el('button', { type: 'button', class: 'btn btn-secondary', onclick: async function () {
+    var clear = saved ? el('button', { id: 'book-tax-reconciliation-clear', type: 'button', class: 'btn btn-secondary', onclick: async function () {
+      var ownerHash = window.location.hash || '';
       clear.disabled = save.disabled = true; clear.setAttribute('aria-busy', 'true'); message.textContent = ''; message.className = 'small';
       try {
         await API.del('/api/portfolio/accounts/' + account.id + '/tax/' + year + '/reconciliation');
-        UI.toast('Broker-form reconciliation cleared', 'ok'); await App.render();
+        UI.toast('Broker-form reconciliation cleared', 'ok');
+        await refreshTrackedBook(ownerHash, { preserveDraft: false });
       } catch (e) { message.textContent = e.message || String(e); message.className = 'small loss'; }
       finally { clear.disabled = save.disabled = false; clear.removeAttribute('aria-busy'); }
     } }, 'Clear reconciliation') : null;
@@ -2637,10 +3624,11 @@
   async function renderPortfolioBookTax(root, account) {
     var currentYear = new Date().getFullYear();
     var yearValue = App.state.portfolioTaxYear || currentYear;
-    var year = el('input', { type: 'number', min: '1970', max: '9999', step: '1', value: yearValue, 'aria-label': 'Tax year' });
+    var year = el('input', { id: 'portfolio-tax-year', type: 'number', min: '1970', max: '9999', step: '1',
+      value: yearValue, 'aria-label': 'Tax year' });
     year.addEventListener('change', function () {
       var parsed = Number(year.value); if (!Number.isInteger(parsed) || parsed < 1970 || parsed > 9999) return;
-      App.state.portfolioTaxYear = parsed; App.render();
+      App.state.portfolioTaxYear = parsed; refreshTrackedBook(null, { preserveDraft: false });
     });
     root.appendChild(el('div', { class: 'book-tax-heading' },
       el('div', {}, el('h2', {}, Learn.currentLevel() === 'beginner' ? 'Records and tax summary'
@@ -2659,11 +3647,13 @@
       if (!String(e.message || e).includes('year-end mark')) throw e;
       markError = e;
       var markMessage = el('div', { class: 'small', 'aria-live': 'polite' });
-      var markButton = el('button', { type: 'button', class: 'btn', onclick: async function () {
+      var markButton = el('button', { id: 'book-tax-mark', type: 'button', class: 'btn', onclick: async function () {
+        var ownerHash = window.location.hash || '';
         markButton.disabled = true; markButton.setAttribute('aria-busy', 'true'); markMessage.textContent = '';
         try {
           await API.post('/api/portfolio/accounts/' + account.id + '/tax/' + yearValue + '/mark-1256', {});
-          UI.toast('Observed year-end Section 1256 marks applied', 'ok'); await App.render();
+          UI.toast('Observed year-end Section 1256 marks applied', 'ok');
+          await refreshTrackedBook(ownerHash, { preserveDraft: false });
         } catch (markError) { markMessage.textContent = markError.message || String(markError); markMessage.className = 'small loss'; }
         finally { markButton.disabled = false; markButton.removeAttribute('aria-busy'); }
       } }, 'Apply observed year-end marks');
@@ -2767,25 +3757,28 @@
   }
 
   async function renderPortfolioBookSettings(root, account) {
+    var settingsOwnerHash = window.location.hash || '';
     if (App.state.portfolioBookNew) {
       root.appendChild(el('section', { class: 'card book-new-account' }, UI.cardHeader('Add another tracked account',
-        el('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
-          App.state.portfolioBookNew = false; App.render();
+        el('button', { id: 'portfolio-account-new-cancel', type: 'button', class: 'btn btn-secondary btn-sm', onclick: function () {
+          App.state.portfolioBookNew = false;
+          refreshTrackedBook(settingsOwnerHash, { preserveDraft: false });
         } }, 'Cancel')),
         portfolioAccountForm(null, async function () {
           App.state.portfolioBookNew = false; App.navigate('#/portfolio/book/overview');
         })));
     }
     root.appendChild(el('section', { class: 'card book-settings' }, UI.cardHeader('Account settings'),
-      portfolioAccountForm(account, async function () { await App.render(); })));
+      portfolioAccountForm(account, async function () { await refreshTrackedBook(settingsOwnerHash); })));
     var statusMessage = el('div', { class: 'small', 'aria-live': 'polite' });
-    var toggle = el('button', { type: 'button', class: account.status === 'ARCHIVED' ? 'btn' : 'btn btn-danger', onclick: async function () {
+    var toggle = el('button', { id: 'portfolio-account-status-toggle', type: 'button', class: account.status === 'ARCHIVED' ? 'btn' : 'btn btn-danger', onclick: async function () {
+      var ownerHash = window.location.hash || '';
       toggle.disabled = true; toggle.setAttribute('aria-busy', 'true'); statusMessage.textContent = '';
       try {
         if (account.status === 'ARCHIVED') await API.post('/api/portfolio/accounts/' + account.id + '/restore', {});
         else await API.del('/api/portfolio/accounts/' + account.id);
         UI.toast(account.status === 'ARCHIVED' ? 'Tracked account restored' : 'Tracked account archived', 'ok');
-        await App.render();
+        await refreshTrackedBook(ownerHash);
       } catch (e) { statusMessage.textContent = e.message || String(e); statusMessage.className = 'small loss'; }
       finally { toggle.disabled = false; toggle.removeAttribute('aria-busy'); }
     } }, account.status === 'ARCHIVED' ? 'Restore account' : 'Archive account');
@@ -2814,11 +3807,11 @@
     body.appendChild(el('div', { class: 'grid grid-4 book-risk-greek-stats' },
       stat(UI.vocabulary('betaWeightedDelta'), bookRiskUnitValue(greeks.betaWeightedDollarDeltaCents),
         beginner ? 'How many market-adjusted dollars this options book gains if its names rise 1-for-1 with a $1 move. Positive leans long, negative leans short.' : greeks.betaCoverage),
-      stat('Net dollar delta (unweighted)', bookRiskUnitValue(greeks.netDollarDeltaCents),
+      stat(UI.term('stancevector', 'Net dollar delta (unweighted)'), bookRiskUnitValue(greeks.netDollarDeltaCents),
         beginner ? 'The same lean before market-sensitivity weighting. Raw per-share delta is never summed across different stocks.' : 'Σ Δ × units × observed spot, unweighted. Raw share delta is not additive across names and is not shown.'),
-      stat('Vega', bookRiskUnitValue(greeks.vegaPerPointCents, '/ vol pt'),
+      stat(UI.vocabulary('vegaPerVolPoint', 'Vega'), bookRiskUnitValue(greeks.vegaPerPointCents, '/ vol pt'),
         beginner ? 'Dollars gained or lost if implied volatility moves one point across the book.' : 'Dollars per implied-volatility point at current observed marks.'),
-      stat('Gamma', bookRiskUnitValue(greeks.gammaPer1PctCents, '/ 1% move'),
+      stat(UI.vocabulary('gamma'), bookRiskUnitValue(greeks.gammaPer1PctCents, '/ 1% move'),
         beginner ? 'How many dollars the lean itself changes when the stocks move 1%. Big gamma means the book’s direction can flip fast.' : 'Dollar delta change for a 1% underlying move at current observed marks.')));
     body.appendChild(el('p', { class: (greeks.unmarkedOptionLots > 0 ? 'small loss' : 'muted small') + ' book-risk-coverage' },
       greeks.greekCoverage + ' ' + greeks.betaCoverage));
@@ -2842,7 +3835,8 @@
       el('h3', {}, UI.vocabulary('stressedAssignment')),
       el('p', { class: 'book-risk-stress-sentence' }, stress.sentence),
       el('div', { class: 'chip-row' },
-        chip('Obligation under −' + stress.shockPct + '%', fmtMoney(stress.obligationCents)),
+        chip(UI.vocabulary('stressedAssignment', 'Obligation under −' + stress.shockPct + '%'),
+          fmtMoney(stress.obligationCents)),
         chip('Short-put contracts obligated', String(stress.contracts) + ' contracts'),
         chip('Recorded cash', fmtMoney(stress.cashCents)),
         stress.unmarkedLots > 0 ? chip('Unstressable (no observed mark)', fmtMoney(stress.unmarkedObligationCents)) : null));
@@ -2991,17 +3985,17 @@
       UI.cardHeader(UI.vocabularyText('practice') + ' account — side by side',
         el('span', { class: 'badge badge-dim' }, 'never netted')));
     card.appendChild(el('div', { class: 'grid grid-4' },
-      stat('Dollar delta (net)', bookRiskUnitValue(practice.dollarDeltaNetCents),
+      stat(UI.term('stancevector', 'Dollar delta (net)'), bookRiskUnitValue(practice.dollarDeltaNetCents),
         'Practice marks in the practice lane; never combined with tracked accounts.'),
-      stat('Delta', practice.deltaShares === null || practice.deltaShares === undefined
+      stat(UI.vocabulary('netDelta', 'Delta'), practice.deltaShares === null || practice.deltaShares === undefined
         ? el('span', { class: 'muted' }, 'Unavailable')
         : el('span', {}, fmtNum(practice.deltaShares, 2), el('span', { class: 'muted small book-risk-unit' }, ' share-equiv')),
         'Share-equivalent delta of the practice book.'),
-      stat('Vega', practice.vegaPerPoint === null || practice.vegaPerPoint === undefined
+      stat(UI.vocabulary('vegaPerVolPoint', 'Vega'), practice.vegaPerPoint === null || practice.vegaPerPoint === undefined
         ? el('span', { class: 'muted' }, 'Unavailable')
         : el('span', {}, '$' + fmtNum(practice.vegaPerPoint, 2), el('span', { class: 'muted small book-risk-unit' }, ' / vol pt')),
         'Dollars per implied-volatility point.'),
-      stat('Theta', practice.thetaPerDay === null || practice.thetaPerDay === undefined
+      stat(UI.vocabulary('thetaPerDay', 'Theta'), practice.thetaPerDay === null || practice.thetaPerDay === undefined
         ? el('span', { class: 'muted' }, 'Unavailable')
         : el('span', {}, '$' + fmtNum(practice.thetaPerDay, 2), el('span', { class: 'muted small book-risk-unit' }, ' / day')),
         'Dollars collected or bled per day from time passing.')));
@@ -3038,6 +4032,7 @@
     var section = ['overview', 'risk', 'activity', 'performance', 'tax', 'settings'].includes(params[0]) ? params[0] : 'overview';
     var data = await API.getFresh('/api/portfolio/accounts');
     var accounts = data.accounts || [];
+    App.state.portfolioAccounts = accounts;
     if (!accounts.length) {
       root.appendChild(el('section', { class: 'card portfolio-book-start' }, UI.cardHeader('Set up a tracked account'),
         el('p', {}, 'Record brokerage, IRA, or 401(k) activity without changing the practice account.'),
@@ -3054,7 +4049,7 @@
     picker.addEventListener('change', function () {
       App.state.portfolioBookAccountId = picker.value;
       try { localStorage.setItem('strikebench.portfolioBookAccount', picker.value); } catch (e) { /* optional */ }
-      App.render();
+      refreshTrackedBook(null, { preserveDraft: false });
     });
     root.appendChild(el('div', { class: 'portfolio-book-context' },
       el('div', {}, el('div', { class: 'eyebrow' }, 'TRACKED ACCOUNT'), el('h2', {}, account.name),
@@ -3130,12 +4125,12 @@
         'Everything measured against the ' + fmtMoney(sum.startingCashCents) + ' you started with.'));
       statsRow.appendChild(stat('Cash', fmtMoney(sum.cashCents),
         fmtMoney(sum.reservedCents) + ' is held as broker reserve for open obligations.'));
-      statsRow.appendChild(stat('Buying power', fmtMoney(sum.buyingPowerCents),
+      statsRow.appendChild(stat(UI.vocabulary('buyingPower'), fmtMoney(sum.buyingPowerCents),
         'Cash minus broker reserve — what you can still put at risk.'));
     } catch (e) {
       statsRow.appendChild(stat('Cash', fmtMoney(acct.cashCents)));
       statsRow.appendChild(stat(UI.vocabulary('brokerReserve'), fmtMoney(acct.reservedCents)));
-      statsRow.appendChild(stat('Buying power', fmtMoney(acct.buyingPowerCents)));
+      statsRow.appendChild(stat(UI.vocabulary('buyingPower'), fmtMoney(acct.buyingPowerCents)));
       statsRow.appendChild(stat('Started with', fmtMoney(acct.startingCashCents)));
     }
     var paperTabs = el('div', { class: 'tabs portfolio-paper-tabs', role: 'tablist', 'aria-label': 'Practice account sections' },
@@ -3349,10 +4344,10 @@
           function greekChips() {
             return el('div', { class: 'chip-row', style: 'align-items:center' },
               el('b', { style: 'margin-right:4px' }, 'Book greeks', UI.info('bookGreeks')),
-              chip('Net delta', fmtNum(pg.deltaShares, 0) + ' sh'),
-              chip('Gamma', fmtNum(pg.gammaShares, 2) + ' sh/$'),
-              chip('Theta / day', pnlSpan(pg.thetaPerDay * 100)),
-              chip('Vega / vol pt', pnlSpan(pg.vegaPerPoint * 100)),
+              chip(UI.vocabulary('netDelta'), fmtNum(pg.deltaShares, 0) + ' sh'),
+              chip(UI.vocabulary('gamma'), fmtNum(pg.gammaShares, 2) + ' sh/$'),
+              chip(UI.vocabulary('thetaPerDay'), pnlSpan(pg.thetaPerDay * 100)),
+              chip(UI.vocabulary('vegaPerVolPoint'), pnlSpan(pg.vegaPerPoint * 100)),
               pg.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL'));
           }
           if (Learn.currentLevel() === 'expert') {
@@ -3429,7 +4424,7 @@
         UI.cardHeader('Shares you hold'),
         alertBox('warn', 'Could not load your share holdings', [e.message]),
         el('div', { class: 'btn-row' },
-          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { App.render(); } }, 'Retry'))));
+          el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { refreshPortfolioDestination(); } }, 'Retry'))));
     }
 
     // ONE trades card: segmented Active|Closed in the header, filters inside, then the
@@ -3499,7 +4494,6 @@
       },
         el('td', {}, el('b', {}, t.symbol)),
         el('td', {}, prettyStrategy(t.strategy),
-          t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn', style: 'margin-left:6px' }, UI.vocabulary('recordedAtBroker')) : null,
           t.intent && t.intent !== 'DIRECTIONAL' ? el('span', { style: 'margin-left:6px' }, intentBadge(t.intent)) : null),
         el('td', {}, 'x' + t.qty),
         el('td', {}, pnlSpan(t.entryNetPremiumCents)),
@@ -3574,7 +4568,6 @@
       el('div', { class: 'quote-hero' },
         el('span', { class: 'sym' }, t.symbol),
         el('span', { class: 'nm' }, prettyStrategy(t.strategy) + ' · x' + t.qty),
-        t.origin === 'EXTERNAL' ? el('span', { class: 'badge badge-warn' }, UI.vocabulary('recordedAtBroker')) : null,
         intentBadge(t.intent),
         el('span', { class: 'badge ' + (active ? 'badge-ok' : t.status === 'DELETED' ? 'badge-danger' : 'badge-dim') }, UI.positionStatusLabel(t.status)),
         el('span', { class: 'spacer' }),
@@ -3602,7 +4595,7 @@
           : chip(UI.vocabulary('theoreticalMaxLoss'), el('span', { class: 'loss' }, fmtMoney(t.maxLossCents))),
         chip(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(t.strategy, null, t.maxProfitCents,
           Learn.currentLevel() === 'beginner', t.legs)),
-        chip('Breakeven', (t.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
+        chip(UI.term('breakeven', 'Breakeven'), (t.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         chip('POP entry', fmtPct(t.popEntry)),
         d.current && d.current.popNow !== null && d.current.popNow !== undefined ? chip('POP now', fmtPct(d.current.popNow)) : null,
         combinedOutcome ? chip('Option package P/L', optionPnl === null || optionPnl === undefined ? '—' : pnlSpan(optionPnl)) : null,
@@ -3622,17 +4615,22 @@
     if (d.current && d.current.greeks) {
       var gk = d.current.greeks;
       var greekCard = el('div', { class: 'card', id: 'greeks-card' },
-        UI.cardHeader(Learn.currentLevel() === 'expert' ? 'Position greeks' : 'How this position reacts',
+        UI.cardHeader(el('span', {},
+          Learn.currentLevel() === 'expert' ? 'Position greeks' : 'How this position reacts',
+          UI.info('bookGreeks')),
           gk.complete ? null : el('span', { class: 'badge badge-caution' }, 'PARTIAL')));
       function positionGreekDetail() {
         var detail = el('div', { class: 'position-greek-detail' },
           el('div', { class: 'chip-row' },
-          chip(el('span', {}, 'Net delta', UI.info('bookGreeks')), fmtNum(gk.deltaShares, 0) + ' sh'),
-          chip('Gamma', fmtNum(gk.gammaShares, 2) + ' sh/$'),
-          chip('Theta / day', pnlSpan(gk.thetaPerDay * 100)),
-          chip('Vega / vol pt', pnlSpan(gk.vegaPerPoint * 100))));
+          chip(UI.vocabulary('netDelta'), fmtNum(gk.deltaShares, 0) + ' sh'),
+          chip(UI.vocabulary('gamma'), fmtNum(gk.gammaShares, 2) + ' sh/$'),
+          chip(UI.vocabulary('thetaPerDay'), pnlSpan(gk.thetaPerDay * 100)),
+          chip(UI.vocabulary('vegaPerVolPoint'), pnlSpan(gk.vegaPerPoint * 100))));
         if (d.current.legGreeks && d.current.legGreeks.length) {
-          detail.appendChild(table(['Leg', 'Bid', 'Ask', '\u0394', '\u0393', '\u0398', 'Vega', 'IV'],
+          detail.appendChild(table(['Leg', UI.term('bidask', 'Bid'), UI.term('bidask', 'Ask'),
+            UI.vocabulary('netDelta', '\u0394'), UI.vocabulary('gamma', '\u0393'),
+            UI.vocabulary('thetaPerDay', '\u0398'), UI.vocabulary('vegaPerVolPoint', 'Vega'),
+            UI.term('atmiv', 'IV')],
             d.current.legGreeks.map(function (lg) {
               return el('tr', {},
                 el('td', { class: 'mono' }, lg.leg),
@@ -3653,9 +4651,9 @@
         greekCard.appendChild(positionGreekDetail());
       } else {
         greekCard.appendChild(el('div', { class: 'chip-row position-greek-headline' },
-          chip(el('span', {}, 'Net delta', UI.info('bookGreeks')), fmtNum(gk.deltaShares, 0) + ' sh'),
-          chip('Theta / day', pnlSpan(gk.thetaPerDay * 100)),
-          chip('Vega / vol pt', pnlSpan(gk.vegaPerPoint * 100))));
+          chip(UI.vocabulary('netDelta'), fmtNum(gk.deltaShares, 0) + ' sh'),
+          chip(UI.vocabulary('thetaPerDay'), pnlSpan(gk.thetaPerDay * 100)),
+          chip(UI.vocabulary('vegaPerVolPoint'), pnlSpan(gk.vegaPerPoint * 100))));
         if (detailGuide) greekCard.appendChild(detailGuide);
         greekCard.appendChild(UI.expandable('Exact sensitivities by leg', positionGreekDetail,
           { stateKey: 'position-greek-detail-' + id }));
@@ -3681,11 +4679,15 @@
           var btn = ev.currentTarget;
           btn.disabled = true;
           try {
-            if (managedPlan) await PlanStore.manage(managedPlan, 'refresh', {});
-            else await API.post('/api/trades/' + id + '/refresh');
-            if (managedPlan) await App.render();
-            else await refreshTradeDetailNear(btn, id, 'Marks refreshed',
-              'Current executable marks, P/L, odds, and sensitivities are shown below.');
+            var managedResult = managedPlan
+              ? await PlanStore.manage(await PlanStore.get(managedPlan.id, true), 'refresh', {})
+              : null;
+            if (!managedResult) await API.post('/api/trades/' + id + '/refresh');
+            await refreshTradeDetailNear(btn, id, 'Marks refreshed',
+              'Current executable marks, P/L, odds, and sensitivities are shown below.', options);
+            if (managedResult && typeof options.onManagedRefresh === 'function') {
+              await options.onManagedRefresh(managedResult);
+            }
           } catch (e) {
             btn.disabled = false;
             var old = document.getElementById('refresh-error');

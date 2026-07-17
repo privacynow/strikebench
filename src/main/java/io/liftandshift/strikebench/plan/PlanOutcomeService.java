@@ -8,9 +8,12 @@ import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.sim.IvSpec;
 import io.liftandshift.strikebench.sim.PathEnsembleService;
 import io.liftandshift.strikebench.sim.ScenarioSpec;
+import io.liftandshift.strikebench.sim.ScenarioCanvasSpec;
 import io.liftandshift.strikebench.sim.SimulationEngine;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -19,6 +22,8 @@ import java.io.DataOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -27,7 +32,6 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
 
@@ -42,6 +46,7 @@ public final class PlanOutcomeService {
     public record StoredEnsemble(String id, String fingerprint, String basis,
                                  int contextRev, String datasetId, String state,
                                  PathEnsembleService.Ensemble ensemble, IvSpec iv,
+                                 ScenarioCanvasSpec canvas,
                                  double rateAnnual, double stepSeconds, String anchorSource,
                                  String anchorFreshness, String asOf) {}
 
@@ -63,6 +68,16 @@ public final class PlanOutcomeService {
                                   String ensembleFingerprint, String interpretation, String fairness,
                                   List<ComparisonItem> items, String createdAt) {}
 
+    /** Explicit public-workspace ownership for an exact Possible Futures fan. */
+    public record ResearchContext(String marketLane, String worldId, String datasetId) {}
+
+    /** Opaque, owner-scoped handle returned before a Plan exists. */
+    public record ResearchEnsembleReceipt(String id, String fingerprint, String basis,
+                                          String waypointFill, String expiresAt, JsonNode preview) {}
+
+    /** Exact artifact after its one transactional promotion into Plan ownership. */
+    public record PromotedResearchEnsemble(StoredEnsemble ensemble, JsonNode preview) {}
+
     private final Db db;
     private final Clock clock;
 
@@ -76,84 +91,188 @@ public final class PlanOutcomeService {
                                        PathEnsembleService.Ensemble ensemble,
                                        IvSpec rawIv, double rateAnnual,
                                        SimulationEngine.Preview preview, JsonNode input) {
-        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
-        IvSpec iv = (rawIv == null ? IvSpec.flat(ensemble.spec().volAnnual()) : rawIv).sane();
-        double[] ivPath = iv.path(ensemble.spec().totalSteps(), ensemble.spec().dt(),
-                ensemble.spec().stepsPerDay());
-        byte[] rawSpots = encodeMatrix(ensemble.paths());
-        byte[] rawIvBytes = encodeVector(ivPath);
-        byte[] spotBytes = deflate(rawSpots);
-        byte[] ivBytes = deflate(rawIvBytes);
-        String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
-        String fingerprint = fingerprint(ensemble, rawSpots, rawIvBytes, rateAnnual, inputHash);
-        String ensembleId = Ids.newId("pen");
-        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
-        ScenarioSpec spec = ensemble.spec().sane();
-        ScenarioSpec.Heston h = spec.heston();
-        String source = preview != null && preview.receipt() != null
-                ? preview.receipt().anchorSource() : "plan ensemble";
-        String freshness = preview != null && preview.receipt() != null
-                ? preview.receipt().anchorFreshness() : "MODELED";
-        String asOf = preview != null && preview.receipt() != null
-                ? preview.receipt().asOf() : now.toString();
-        String datasetId = ensemble.scope().analysis().synthetic()
-                ? ensemble.scope().analysis().datasetId() : null;
+        return saveEnsemble(userId, plan, ensemble, rawIv, null, rateAnnual, preview, input);
+    }
 
-        db.tx(c -> {
+    /** Persist the exact matrix plus the Canvas's typed per-day/surface/settlement receipt. */
+    public StoredEnsemble saveEnsemble(String userId, Plan.View plan,
+                                       PathEnsembleService.Ensemble ensemble,
+                                       IvSpec rawIv, ScenarioCanvasSpec rawCanvas, double rateAnnual,
+                                       SimulationEngine.Preview preview, JsonNode input) {
+        PreparedEnsemble prepared = prepareEnsemble(ensemble, rawIv, rawCanvas, rateAnnual, preview, input);
+        IvSpec iv = prepared.iv();
+        ScenarioCanvasSpec canvas = prepared.canvas();
+        String inputHash = prepared.inputHash();
+        String fingerprint = prepared.fingerprint();
+        String proposedEnsembleId = Ids.newId("pen");
+        ScenarioSpec spec = prepared.spec();
+        String source = prepared.source();
+        String freshness = prepared.freshness();
+        String asOf = prepared.asOf();
+        String datasetId = prepared.datasetId();
+
+        String ensembleId = db.tx(c -> {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.contextRev() != plan.context().rev()) {
                 throw new IllegalStateException("The Plan assumptions changed while the ensemble was running.");
             }
-            Db.execOn(c, "INSERT INTO ensemble_artifact(fingerprint,model_version,basis,n_paths,n_steps,codec," +
-                            "raw_bytes,spot_matrix,iv_path,rate_annual,step_seconds,source_content_hash,pinned) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT (fingerprint) DO NOTHING",
-                    fingerprint, ensemble.modelVersion(), ensemble.basis().name(), ensemble.paths().length,
-                    spec.totalSteps(), CODEC, (long) rawSpots.length + rawIvBytes.length,
-                    spotBytes, ivBytes, rateAnnual, 23_400.0 / Math.max(1, spec.stepsPerDay()), inputHash);
+            insertArtifact(c, ensemble, prepared, rateAnnual);
+            List<String> identical = Db.queryOn(c,
+                    "SELECT pe.id FROM plan_ensemble pe JOIN ensemble_artifact ea " +
+                            "ON ea.fingerprint=pe.fingerprint WHERE pe.plan_id=? AND pe.context_rev=? " +
+                            "AND pe.fingerprint=? AND ea.basis=? AND pe.dataset_id IS NOT DISTINCT FROM ? " +
+                            "AND pe.state='CURRENT' ORDER BY pe.created_at DESC LIMIT 1",
+                    r -> r.str("id"), plan.id(), plan.context().rev(), fingerprint,
+                    ensemble.basis().name(), datasetId);
+            if (!identical.isEmpty()) return identical.getFirst();
             Db.execOn(c, "UPDATE plan_ensemble pe SET state='STALE' FROM ensemble_artifact ea " +
                             "WHERE pe.fingerprint=ea.fingerprint AND pe.plan_id=? AND pe.context_rev=? " +
                             "AND ea.basis=? AND pe.dataset_id IS NOT DISTINCT FROM ? AND pe.state='CURRENT'",
                     plan.id(), plan.context().rev(), ensemble.basis().name(), datasetId);
-            Db.execOn(c, "INSERT INTO plan_ensemble(id,plan_id,context_rev,fingerprint,model_version," +
-                            "anchor_spot_cents,anchor_source,anchor_freshness,dataset_id,as_of,input_hash,state," +
-                            "spec_model,spec_shape,spec_horizon_days,spec_steps_per_day,spec_drift_annual,spec_vol_annual," +
-                            "spec_jumps_per_year,spec_jump_mean,spec_jump_vol,spec_tail_nu,spec_seed,spec_paths," +
-                            "iv_start,iv_longrun,iv_shape,heston_kappa,heston_theta,heston_xi,heston_rho,heston_v0," +
-                            "iv_drift_per_year,iv_mean_revert_speed,iv_event_day,iv_event_shock_pct,iv_min,iv_max) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ensembleId, plan.id(), plan.context().rev(), fingerprint, ensemble.modelVersion(),
-                    Math.round(ensemble.spot() * 100), source, freshness,
-                    datasetId,
-                    OffsetDateTime.parse(asOf), inputHash, "CURRENT", spec.model().name(), spec.shape().name(),
-                    spec.horizonDays(), spec.stepsPerDay(), spec.driftAnnual(), spec.volAnnual(),
-                    spec.jumpsPerYear(), spec.jumpMean(), spec.jumpVol(), spec.tailNu(), spec.seed(), spec.paths(),
-                    iv.startIv(), iv.longRunIv(), "EXPLICIT", h == null ? null : h.kappa(),
-                    h == null ? null : h.theta(), h == null ? null : h.xi(), h == null ? null : h.rho(),
-                    h == null ? null : h.v0(), iv.driftPerYear(), iv.meanRevertSpeed(), iv.eventDay(),
-                    iv.eventShockPct(), iv.minIv(), iv.maxIv());
-            // Authored waypoints are part of the spec identity: without these rows a reloaded
-            // pinned fan would repaint with no honesty label — a silent lie about how it was made.
-            for (ScenarioSpec.Waypoint w : spec.waypoints()) {
-                Db.execOn(c, "INSERT INTO plan_ensemble_waypoint(ensemble_id,day_index,price_ratio,tolerance) " +
-                        "VALUES(?,?,?,?)", ensembleId, w.dayIndex(), w.priceRatio(), w.tolerance());
-            }
-            persistQuantiles(c, ensembleId, ensemble.paths());
-            if (preview != null && preview.decisionMap() != null) {
-                for (SimulationEngine.LevelOdds level : preview.decisionMap().levels()) {
-                    Db.execOn(c, "INSERT INTO plan_level_odds(ensemble_id,level_key,price_cents,direction," +
-                                    "end_above_probability,end_below_probability,end_beyond_probability,touch_probability," +
-                                    "touch_ci_low,touch_ci_high,median_first_touch_day) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                            ensembleId, level.key(), Math.round(level.price() * 100), level.direction(),
-                            level.endAboveProbability(), level.endBelowProbability(), level.endBeyondProbability(),
-                            level.touchProbability(), level.touchCiLow(), level.touchCiHigh(), level.medianFirstTouchDay());
-                }
-            }
-            return null;
+            persistPlanEnsemble(c, proposedEnsembleId, plan, ensemble, prepared, preview);
+            return proposedEnsembleId;
         });
         return new StoredEnsemble(ensembleId, fingerprint, ensemble.basis().name(),
-                plan.context().rev(), datasetId, "CURRENT", ensemble, iv,
+                plan.context().rev(), datasetId, "CURRENT", ensemble, iv, canvas,
                 rateAnnual, 23_400.0 / Math.max(1, spec.stepsPerDay()), source, freshness, asOf);
+    }
+
+    /**
+     * Persist the exact public Possible Futures fan before a Plan exists. The dense matrix remains
+     * in the canonical ensemble_artifact store; this row is only an owner/lane-scoped promotion
+     * capability. Repeating the identical request reuses the live receipt.
+     */
+    public ResearchEnsembleReceipt saveResearchEnsemble(
+            String userId, ResearchContext context, PathEnsembleService.Ensemble ensemble,
+            IvSpec rawIv, ScenarioCanvasSpec rawCanvas, double rateAnnual,
+            SimulationEngine.Preview preview, JsonNode input) {
+        if (context == null) throw new IllegalArgumentException("research ensemble context is required");
+        if (ensemble == null) throw new IllegalArgumentException("research ensemble is required");
+        String worldId = canonicalWorld(context.worldId());
+        String datasetId = required(context.datasetId(), "datasetId");
+        String lane = required(context.marketLane(), "marketLane").toUpperCase(java.util.Locale.ROOT);
+        if (!java.util.Set.of("OBSERVED", "DEMO", "SIMULATED", "SCENARIO").contains(lane)) {
+            throw new IllegalArgumentException("marketLane is invalid");
+        }
+        if (!canonicalWorld(ensemble.scope().worldId()).equals(worldId)) {
+            throw new IllegalStateException("The path fan belongs to a different market world.");
+        }
+        if (!ensemble.scope().analysis().datasetId().equals(datasetId)) {
+            throw new IllegalStateException("The path fan belongs to a different analysis dataset.");
+        }
+        String owner = OwnerScope.id(userId);
+        ScenarioCanvasSpec receiptCanvas = rawCanvas == null
+                ? ScenarioCanvasSpec.defaults() : rawCanvas;
+        PreparedEnsemble prepared = prepareEnsemble(ensemble, rawIv, receiptCanvas, rateAnnual, preview, input);
+        ObjectNode previewJson = preview == null ? Json.MAPPER.createObjectNode()
+                : Json.MAPPER.valueToTree(preview);
+        if (previewJson.path("receipt") instanceof ObjectNode receipt) {
+            receipt.put("fingerprint", prepared.fingerprint());
+        }
+        String previewHash = semanticSha256(previewJson);
+        ObjectNode inputJson = requireObject(input, "outcome request");
+        String receiptId = Ids.newId("rer");
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        OffsetDateTime expires = now.plus(Duration.ofDays(30));
+        String marketKind = marketKindForContext(lane, worldId);
+
+        ReceiptIdentity identity = db.tx(c -> {
+            insertArtifact(c, ensemble, prepared, rateAnnual);
+            List<ReceiptIdentity> existing = Db.queryOn(c,
+                    "SELECT id,expires_at::text expires_at FROM research_ensemble_receipt " +
+                            "WHERE user_id=? AND fingerprint=? AND preview_hash=? AND symbol=? AND market_lane=? " +
+                            "AND world_id=? AND dataset_id=? AND state='AVAILABLE' AND expires_at>? " +
+                            "ORDER BY created_at DESC LIMIT 1",
+                    r -> new ReceiptIdentity(r.str("id"), r.str("expires_at")), owner,
+                    prepared.fingerprint(), previewHash, ensemble.scope().symbol(), lane, worldId, datasetId, now);
+            if (!existing.isEmpty()) return existing.getFirst();
+            Db.execOn(c, "INSERT INTO research_ensemble_receipt(id,user_id,fingerprint,symbol,market_kind," +
+                            "market_lane,world_id,dataset_id,model_version,anchor_spot_cents,anchor_date," +
+                            "anchor_source,anchor_freshness,as_of,input_hash,preview_hash,spec,iv,canvas,input,preview,state," +
+                            "expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb," +
+                            "?::jsonb,?::jsonb,?::jsonb,'AVAILABLE',?,?)",
+                    receiptId, owner, prepared.fingerprint(), ensemble.scope().symbol(), marketKind,
+                    lane, worldId, datasetId, ensemble.modelVersion(), Math.round(ensemble.spot() * 100),
+                    ensemble.anchorDate(), prepared.source(), prepared.freshness(),
+                    OffsetDateTime.parse(prepared.asOf()), prepared.inputHash(), previewHash,
+                    Json.canonical(prepared.spec()), Json.canonical(prepared.iv()),
+                    Json.canonical(prepared.canvas()), Json.canonical(inputJson), Json.canonical(previewJson),
+                    expires, now);
+            return new ReceiptIdentity(receiptId, expires.toString());
+        });
+        return new ResearchEnsembleReceipt(identity.id(), prepared.fingerprint(), ensemble.basis().name(),
+                ensemble.waypointFill().name(), identity.expiresAt(), previewJson);
+    }
+
+    /**
+     * Atomically turns one public receipt into the Plan's CURRENT ensemble. This method never owns
+     * a PathEnsembleService and therefore cannot regenerate: it validates, inflates, fingerprints,
+     * and links the already persisted matrix.
+     */
+    public PromotedResearchEnsemble promoteResearchEnsemble(
+            String userId, Plan.View plan, String receiptId, String expectedFingerprint,
+            ResearchContext activeContext) {
+        String owner = OwnerScope.id(userId);
+        String requiredReceipt = required(receiptId, "researchReceiptId");
+        String requiredFingerprint = required(expectedFingerprint, "expectedFingerprint");
+        if (activeContext == null) throw new IllegalArgumentException("active research context is required");
+
+        AdoptionResult adopted = db.tx(c -> {
+            PlanWriteGuard.requireMutable(c, plan.id(), userId);
+            CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
+            if (current.contextRev() != plan.context().rev()) {
+                throw new IllegalStateException("The Plan assumptions changed before the exact fan could be adopted.");
+            }
+            List<ResearchRow> rows = Db.queryOn(c,
+                    "SELECT rr.id,rr.fingerprint,rr.symbol,rr.market_kind,rr.market_lane,rr.world_id," +
+                            "rr.dataset_id,rr.model_version,rr.anchor_spot_cents,rr.anchor_date," +
+                            "rr.anchor_source,rr.anchor_freshness,rr.as_of::text as_of,rr.input_hash," +
+                            "rr.spec::text spec,rr.iv::text iv,rr.canvas::text canvas,rr.input::text input," +
+                            "rr.preview::text preview,rr.state,rr.adopted_plan_id,rr.adopted_ensemble_id," +
+                            "rr.expires_at,ea.basis,ea.n_paths,ea.n_steps,ea.codec,ea.spot_matrix,ea.iv_path," +
+                            "ea.rate_annual,ea.step_seconds,ea.source_content_hash " +
+                            "FROM research_ensemble_receipt rr JOIN ensemble_artifact ea " +
+                            "ON ea.fingerprint=rr.fingerprint WHERE rr.id=? AND rr.user_id=? FOR UPDATE OF rr",
+                    PlanOutcomeService::researchRow, requiredReceipt, owner);
+            if (rows.isEmpty()) throw new ResourceNotFoundException("no such Possible Futures receipt: " + requiredReceipt);
+            ResearchRow row = rows.getFirst();
+            if (!row.fingerprint().equals(requiredFingerprint)) {
+                throw new IllegalStateException("The Possible Futures fingerprint changed before adoption.");
+            }
+            validateResearchOwnership(plan, current, row, activeContext);
+            if ("ADOPTED".equals(row.state())) {
+                if (plan.id().equals(row.adoptedPlanId()) && row.adoptedEnsembleId() != null) {
+                    return new AdoptionResult(row.adoptedEnsembleId(), parseObject(row.preview(), "preview"));
+                }
+                throw new IllegalStateException("This Possible Futures receipt was already adopted by another Plan.");
+            }
+            if (!row.expiresAt().isAfter(OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC))) {
+                throw new IllegalStateException("This Possible Futures receipt expired. Analyze the scenario again to create a fresh exact fan.");
+            }
+
+            RehydratedResearch rehydrated = rehydrateResearch(row, activeContext, owner);
+            if (!row.sourceContentHash().equals(row.inputHash())) {
+                throw new IllegalStateException("The stored Possible Futures assumptions failed their immutable hash check.");
+            }
+            if (!rehydrated.prepared().fingerprint().equals(row.fingerprint())) {
+                throw new IllegalStateException("The stored Possible Futures path matrix failed its immutable fingerprint check.");
+            }
+            String ensembleId = Ids.newId("pen");
+            String planDatasetId = rehydrated.prepared().datasetId();
+            Db.execOn(c, "UPDATE plan_ensemble pe SET state='STALE' FROM ensemble_artifact ea " +
+                            "WHERE pe.fingerprint=ea.fingerprint AND pe.plan_id=? AND pe.context_rev=? " +
+                            "AND ea.basis=? AND pe.dataset_id IS NOT DISTINCT FROM ? AND pe.state='CURRENT'",
+                    plan.id(), plan.context().rev(), row.basis(), planDatasetId);
+            persistPlanEnsemble(c, ensembleId, plan, rehydrated.ensemble(),
+                    rehydrated.prepared(), rehydrated.preview());
+            Db.execOn(c, "UPDATE research_ensemble_receipt SET state='ADOPTED',adopted_plan_id=?," +
+                            "adopted_ensemble_id=? WHERE id=?",
+                    plan.id(), ensembleId, row.id());
+            return new AdoptionResult(ensembleId, Json.MAPPER.valueToTree(rehydrated.preview()));
+        });
+        StoredEnsemble stored = loadEnsemble(userId, plan.id(), adopted.ensembleId());
+        return new PromotedResearchEnsemble(stored, adopted.preview());
     }
 
     /** Rehydrate the stored matrix, IV path recipe, rate, model identity, and exact context. */
@@ -191,16 +310,28 @@ public final class PlanOutcomeService {
             if (!pins.isEmpty()) spec = spec.withWaypoints(pins);
             IvSpec iv = new IvSpec(r.ivStart(), r.ivDrift(), r.ivMeanRevert(), r.ivLongRun(),
                     r.ivEventDay(), r.ivEventShock(), r.ivMin(), r.ivMax()).sane();
+            ScenarioCanvasSpec canvas = loadCanvas(c, r.id(), spec.horizonDays());
+            java.time.LocalDate anchorDate = canvas == null ? null : Db.queryOn(c,
+                    "SELECT anchor_date FROM plan_ensemble_canvas WHERE ensemble_id=?",
+                    x -> x.date("anchor_date"), r.id()).stream().findFirst().orElse(null);
+            if (anchorDate == null) {
+                try {
+                    anchorDate = java.time.LocalDate.ofInstant(parseAsOf(r.asOf()),
+                            io.liftandshift.strikebench.market.MarketHours.EASTERN);
+                } catch (RuntimeException e) {
+                    anchorDate = java.time.LocalDate.of(1970, 1, 1);
+                }
+            }
             double[] storedIv = decodeVector(inflate(r.ivPath()), r.nSteps() + 1);
-            double[] derivedIv = iv.path(r.nSteps(), spec.dt(), spec.stepsPerDay());
+            double[] derivedIv = canvasIvPath(spec, iv, canvas, anchorDate);
             if (!Arrays.equals(storedIv, derivedIv)) {
                 throw new IllegalStateException("Stored IV trajectory no longer matches its normalized recipe");
             }
             var scope = new PathEnsembleService.Scope(r.symbol(), r.worldId(), r.analysis());
             var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(r.basis()),
-                    scope, r.anchorSpotCents() / 100.0, spec, paths, null, r.modelVersion());
+                    scope, r.anchorSpotCents() / 100.0, spec, paths, null, r.modelVersion(), anchorDate);
             return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), r.contextRev(),
-                    r.datasetId(), r.state(), ensemble, iv,
+                    r.datasetId(), r.state(), ensemble, iv, canvas,
                     r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(), r.asOf());
         });
     }
@@ -211,6 +342,17 @@ public final class PlanOutcomeService {
             ownedPlanOn(c, planId, userId, false);
             return Db.queryOn(c, "SELECT fingerprint FROM plan_ensemble WHERE id=? AND plan_id=?",
                     r -> r.str("fingerprint"), ensembleId, planId).stream().findFirst().orElse(null);
+        });
+    }
+
+    /** Lightweight typed Canvas receipt lookup; does not inflate the stored path matrix. */
+    public ScenarioCanvasSpec canvasSpec(String userId, String planId, String ensembleId, int horizonDays) {
+        return db.with(c -> {
+            ownedPlanOn(c, planId, userId, false);
+            if (Db.queryOn(c, "SELECT id FROM plan_ensemble WHERE id=? AND plan_id=?",
+                    r -> r.str("id"), ensembleId, planId).isEmpty()) return null;
+            try { return loadCanvas(c, ensembleId, horizonDays); }
+            catch (java.sql.SQLException e) { throw new io.liftandshift.strikebench.db.Db.DbException(e); }
         });
     }
 
@@ -591,6 +733,196 @@ public final class PlanOutcomeService {
         }
     }
 
+    private PreparedEnsemble prepareEnsemble(PathEnsembleService.Ensemble ensemble,
+                                             IvSpec rawIv, ScenarioCanvasSpec rawCanvas,
+                                             double rateAnnual, SimulationEngine.Preview preview,
+                                             JsonNode input) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        ScenarioSpec spec = ensemble.spec().sane();
+        IvSpec iv = (rawIv == null ? IvSpec.flat(spec.volAnnual()) : rawIv).sane();
+        ScenarioCanvasSpec canvas = rawCanvas == null ? null : rawCanvas.sane(spec.horizonDays());
+        double[] ivPath = canvasIvPath(spec, iv, canvas, ensemble.anchorDate());
+        byte[] rawSpots = encodeMatrix(ensemble.paths());
+        byte[] rawIvBytes = encodeVector(ivPath);
+        ObjectNode hashInput = Json.MAPPER.createObjectNode();
+        hashInput.set("request", requireObject(input, "outcome request"));
+        if (canvas != null) {
+            hashInput.set("canvas", Json.MAPPER.valueToTree(canvas));
+            hashInput.put("calendarAnchorDate", ensemble.anchorDate().toString());
+        }
+        String inputHash = semanticSha256(hashInput);
+        String fingerprint = fingerprint(ensemble, rawSpots, rawIvBytes, rateAnnual, inputHash);
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        String source = preview != null && preview.receipt() != null
+                ? preview.receipt().anchorSource() : "plan ensemble";
+        String freshness = preview != null && preview.receipt() != null
+                ? preview.receipt().anchorFreshness() : "MODELED";
+        String asOf = preview != null && preview.receipt() != null
+                ? preview.receipt().asOf() : now.toString();
+        String datasetId = ensemble.scope().analysis().synthetic()
+                ? ensemble.scope().analysis().datasetId() : null;
+        return new PreparedEnsemble(iv, canvas, spec, rawSpots, rawIvBytes,
+                deflate(rawSpots), deflate(rawIvBytes), inputHash, fingerprint, datasetId,
+                source, freshness, asOf);
+    }
+
+    private static void insertArtifact(java.sql.Connection c, PathEnsembleService.Ensemble ensemble,
+                                       PreparedEnsemble prepared, double rateAnnual)
+            throws java.sql.SQLException {
+        Db.execOn(c, "INSERT INTO ensemble_artifact(fingerprint,model_version,basis,n_paths,n_steps,codec," +
+                        "raw_bytes,spot_matrix,iv_path,rate_annual,step_seconds,source_content_hash,pinned) " +
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT (fingerprint) DO NOTHING",
+                prepared.fingerprint(), ensemble.modelVersion(), ensemble.basis().name(), ensemble.paths().length,
+                prepared.spec().totalSteps(), CODEC,
+                (long) prepared.rawSpots().length + prepared.rawIv().length,
+                prepared.spotBytes(), prepared.ivBytes(), rateAnnual,
+                23_400.0 / Math.max(1, prepared.spec().stepsPerDay()), prepared.inputHash());
+    }
+
+    /** One Plan persistence path for fresh and promoted ensembles alike. */
+    private static void persistPlanEnsemble(java.sql.Connection c, String ensembleId, Plan.View plan,
+                                            PathEnsembleService.Ensemble ensemble,
+                                            PreparedEnsemble prepared,
+                                            SimulationEngine.Preview preview)
+            throws java.sql.SQLException {
+        ScenarioSpec spec = prepared.spec();
+        ScenarioSpec.Heston h = spec.heston();
+        IvSpec iv = prepared.iv();
+        Db.execOn(c, "INSERT INTO plan_ensemble(id,plan_id,context_rev,fingerprint,model_version," +
+                        "anchor_spot_cents,anchor_source,anchor_freshness,dataset_id,as_of,input_hash,state," +
+                        "spec_model,spec_shape,spec_horizon_days,spec_steps_per_day,spec_drift_annual,spec_vol_annual," +
+                        "spec_jumps_per_year,spec_jump_mean,spec_jump_vol,spec_tail_nu,spec_seed,spec_paths," +
+                        "iv_start,iv_longrun,iv_shape,heston_kappa,heston_theta,heston_xi,heston_rho,heston_v0," +
+                        "iv_drift_per_year,iv_mean_revert_speed,iv_event_day,iv_event_shock_pct,iv_min,iv_max) " +
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ensembleId, plan.id(), plan.context().rev(), prepared.fingerprint(), ensemble.modelVersion(),
+                Math.round(ensemble.spot() * 100), prepared.source(), prepared.freshness(),
+                prepared.datasetId(), OffsetDateTime.parse(prepared.asOf()), prepared.inputHash(), "CURRENT",
+                spec.model().name(), spec.shape().name(), spec.horizonDays(), spec.stepsPerDay(),
+                spec.driftAnnual(), spec.volAnnual(), spec.jumpsPerYear(), spec.jumpMean(), spec.jumpVol(),
+                spec.tailNu(), spec.seed(), spec.paths(), iv.startIv(), iv.longRunIv(), "EXPLICIT",
+                h == null ? null : h.kappa(), h == null ? null : h.theta(), h == null ? null : h.xi(),
+                h == null ? null : h.rho(), h == null ? null : h.v0(), iv.driftPerYear(),
+                iv.meanRevertSpeed(), iv.eventDay(), iv.eventShockPct(), iv.minIv(), iv.maxIv());
+        // Authored waypoints are part of the spec identity: without these rows a reloaded pinned
+        // fan would repaint with no honesty label — a silent lie about how it was made.
+        for (ScenarioSpec.Waypoint w : spec.waypoints()) {
+            Db.execOn(c, "INSERT INTO plan_ensemble_waypoint(ensemble_id,day_index,price_ratio,tolerance) " +
+                    "VALUES(?,?,?,?)", ensembleId, w.dayIndex(), w.priceRatio(), w.tolerance());
+        }
+        if (prepared.canvas() != null) {
+            persistCanvas(c, ensembleId, ensemble.anchorDate(), prepared.canvas());
+        }
+        persistQuantiles(c, ensembleId, ensemble.paths());
+        if (preview != null && preview.decisionMap() != null && preview.decisionMap().levels() != null) {
+            for (SimulationEngine.LevelOdds level : preview.decisionMap().levels()) {
+                Db.execOn(c, "INSERT INTO plan_level_odds(ensemble_id,level_key,price_cents,direction," +
+                                "end_above_probability,end_below_probability,end_beyond_probability,touch_probability," +
+                                "touch_ci_low,touch_ci_high,median_first_touch_day) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        ensembleId, level.key(), Math.round(level.price() * 100), level.direction(),
+                        level.endAboveProbability(), level.endBelowProbability(), level.endBeyondProbability(),
+                        level.touchProbability(), level.touchCiLow(), level.touchCiHigh(), level.medianFirstTouchDay());
+            }
+        }
+    }
+
+    private static void validateResearchOwnership(Plan.View plan, CurrentPlan current,
+                                                   ResearchRow row, ResearchContext active) {
+        String activeWorld = canonicalWorld(active.worldId());
+        String activeDataset = required(active.datasetId(), "datasetId");
+        String activeLane = required(active.marketLane(), "marketLane").toUpperCase(java.util.Locale.ROOT);
+        if (!plan.symbol().equalsIgnoreCase(row.symbol()) || !current.symbol().equalsIgnoreCase(row.symbol())) {
+            throw new IllegalStateException("This Possible Futures receipt belongs to another symbol.");
+        }
+        if (!current.marketKind().equals(row.marketKind())) {
+            throw new IllegalStateException("This Possible Futures receipt belongs to another market.");
+        }
+        String planWorld = switch (Plan.MarketKind.valueOf(current.marketKind())) {
+            case OBSERVED -> "observed";
+            case DEMO -> "demo";
+            case SIMULATED -> canonicalWorld(current.worldId());
+        };
+        if (!row.worldId().equals(activeWorld) || !row.worldId().equals(planWorld)) {
+            throw new IllegalStateException("This Possible Futures receipt belongs to another market world.");
+        }
+        if (!row.marketLane().equals(activeLane)) {
+            throw new IllegalStateException("This Possible Futures receipt belongs to another market lane.");
+        }
+        if (!row.datasetId().equals(activeDataset)) {
+            throw new IllegalStateException("This Possible Futures receipt belongs to another analysis dataset.");
+        }
+        Integer horizon = plan.context().horizonDays();
+        ScenarioSpec spec = Json.read(row.spec(), ScenarioSpec.class).sane();
+        if (horizon != null && horizon != spec.horizonDays()) {
+            throw new IllegalStateException("This Possible Futures receipt belongs to a different Plan horizon.");
+        }
+    }
+
+    private RehydratedResearch rehydrateResearch(ResearchRow row, ResearchContext active, String owner) {
+        if (!CODEC.equals(row.codec())) throw new IllegalStateException("Unsupported ensemble codec " + row.codec());
+        ScenarioSpec spec = Json.read(row.spec(), ScenarioSpec.class).sane();
+        IvSpec iv = Json.read(row.iv(), IvSpec.class).sane();
+        ScenarioCanvasSpec canvas = Json.read(row.canvas(), ScenarioCanvasSpec.class).sane(spec.horizonDays());
+        ObjectNode input = parseObject(row.input(), "outcome request");
+        SimulationEngine.Preview preview = Json.read(row.preview(), SimulationEngine.Preview.class);
+        double[][] paths = decodeMatrix(inflate(row.spotMatrix()), row.nPaths(), row.nSteps() + 1);
+        var analysis = new io.liftandshift.strikebench.db.AnalysisContext(owner, row.datasetId());
+        String scopeWorld = "observed".equals(row.worldId()) ? null : row.worldId();
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(row.basis()),
+                new PathEnsembleService.Scope(row.symbol(), scopeWorld, analysis),
+                row.anchorSpotCents() / 100.0, spec, paths, null, row.modelVersion(), row.anchorDate());
+        // A helper service reconstructed only from receipt facts; no market/path generator is involved.
+        double[] rawIv = decodeVector(inflate(row.ivPath()), row.nSteps() + 1);
+        double[] derivedIv = canvasIvPath(spec, iv, canvas, row.anchorDate());
+        if (!Arrays.equals(rawIv, derivedIv)) {
+            throw new IllegalStateException("Stored IV trajectory no longer matches its normalized recipe");
+        }
+        PreparedEnsemble rebuilt = prepareEnsemble(ensemble, iv, canvas, row.rateAnnual(), preview, input);
+        return new RehydratedResearch(ensemble, preview, rebuilt);
+    }
+
+    private static ResearchRow researchRow(Db.Row r) {
+        return new ResearchRow(r.str("id"), r.str("fingerprint"), r.str("symbol"), r.str("market_kind"),
+                r.str("market_lane"), r.str("world_id"), r.str("dataset_id"), r.str("model_version"),
+                r.lng("anchor_spot_cents"), r.date("anchor_date"), r.str("anchor_source"),
+                r.str("anchor_freshness"), r.str("as_of"), r.str("input_hash"), r.str("spec"),
+                r.str("iv"), r.str("canvas"), r.str("input"), r.str("preview"), r.str("state"),
+                r.str("adopted_plan_id"), r.str("adopted_ensemble_id"), r.odt("expires_at"),
+                r.str("basis"), r.intv("n_paths"), r.intv("n_steps"), r.str("codec"),
+                r.bytes("spot_matrix"), r.bytes("iv_path"), r.dbl("rate_annual"),
+                r.dbl("step_seconds"), r.str("source_content_hash"));
+    }
+
+    private static ObjectNode requireObject(JsonNode node, String label) {
+        if (node == null || node.isNull()) return Json.MAPPER.createObjectNode();
+        if (!(node instanceof ObjectNode object)) throw new IllegalArgumentException(label + " must be an object");
+        return object;
+    }
+
+    private static ObjectNode parseObject(String raw, String label) {
+        return requireObject(Json.parse(raw), label);
+    }
+
+    private static String canonicalWorld(String world) {
+        return world == null || world.isBlank() || "observed".equalsIgnoreCase(world)
+                ? "observed" : world.trim();
+    }
+
+    private static String marketKindForContext(String lane, String world) {
+        if ("DEMO".equalsIgnoreCase(lane)) return Plan.MarketKind.DEMO.name();
+        if ("SIMULATED".equalsIgnoreCase(lane)) return Plan.MarketKind.SIMULATED.name();
+        // SCENARIO is the analysis dataset axis, not an execution market: its Plan remains
+        // owned by the observed/demo world underneath it.
+        if ("demo".equalsIgnoreCase(world)) return Plan.MarketKind.DEMO.name();
+        if ("observed".equalsIgnoreCase(world)) return Plan.MarketKind.OBSERVED.name();
+        return Plan.MarketKind.SIMULATED.name();
+    }
+
+    private static String required(String value, String label) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " is required");
+        return value.trim();
+    }
+
     private static void persistQuantiles(java.sql.Connection c, String ensembleId, double[][] paths)
             throws java.sql.SQLException {
         double[] terminal = new double[paths.length];
@@ -599,6 +931,91 @@ public final class PlanOutcomeService {
         for (double p : new double[]{0.05, 0.16, 0.50, 0.84, 0.95}) {
             Db.execOn(c, "INSERT INTO plan_ensemble_quantile(ensemble_id,probability,value_cents) VALUES(?,?,?)",
                     ensembleId, p, Math.round(quantile(terminal, p) * 100));
+        }
+    }
+
+    private static void persistCanvas(java.sql.Connection c, String ensembleId,
+                                      java.time.LocalDate anchorDate, ScenarioCanvasSpec canvas)
+            throws java.sql.SQLException {
+        ScenarioCanvasSpec.TemplateReceipt t = canvas.template();
+        Db.execOn(c, "INSERT INTO plan_ensemble_canvas(ensemble_id,model_version,anchor_date,calendar,dividend_yield_annual,"
+                        + "dividend_basis,skew_vol_per_log_moneyness,term_vol_per_sqrt_year,surface_dynamics,"
+                        + "settlement_policy,exercise_policy,template_kind,template_source,template_provenance,"
+                        + "template_input_as_of,template_window_from,template_window_to,template_observations,"
+                        + "template_observed,template_no_hindsight,template_leg_day_provenance,template_note,"
+                        + "template_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ensembleId, ScenarioCanvasSpec.MODEL_VERSION, anchorDate, canvas.calendar(), canvas.dividendYieldAnnual(),
+                canvas.dividendBasis(), canvas.skewVolPerLogMoneyness(), canvas.termVolPerSqrtYear(),
+                canvas.surfaceDynamics().name(), canvas.settlementPolicy().name(), canvas.exercisePolicy().name(),
+                t == null ? null : t.kind().name(), t == null ? null : t.source(),
+                t == null ? null : t.provenance(), t == null ? null : t.inputAsOf(),
+                t == null ? null : t.windowFrom(), t == null ? null : t.windowTo(),
+                t == null ? null : t.observations(), t == null ? null : t.observed(),
+                t == null ? null : t.noHindsight(), t == null ? null : t.legDayProvenance(),
+                t == null ? null : t.note(), t == null ? null : t.fingerprint());
+        for (ScenarioCanvasSpec.IvNode node : canvas.ivNodes()) {
+            Db.execOn(c, "INSERT INTO plan_ensemble_canvas_iv_node(ensemble_id,day_index,atm_iv) VALUES(?,?,?)",
+                    ensembleId, node.dayIndex(), node.atmIv());
+        }
+    }
+
+    private static ScenarioCanvasSpec loadCanvas(java.sql.Connection c, String ensembleId, int horizon)
+            throws java.sql.SQLException {
+        List<ScenarioCanvasSpec.IvNode> nodes = Db.queryOn(c,
+                "SELECT day_index,atm_iv FROM plan_ensemble_canvas_iv_node WHERE ensemble_id=? ORDER BY day_index",
+                n -> new ScenarioCanvasSpec.IvNode(n.intv("day_index"), n.dbl("atm_iv")), ensembleId);
+        List<ScenarioCanvasSpec> rows = Db.queryOn(c,
+                "SELECT calendar,dividend_yield_annual,dividend_basis,skew_vol_per_log_moneyness,"
+                        + "term_vol_per_sqrt_year,surface_dynamics,settlement_policy,exercise_policy,"
+                        + "template_kind,template_source,template_provenance,template_input_as_of,"
+                        + "template_window_from,template_window_to,template_observations,template_observed,"
+                        + "template_no_hindsight,template_leg_day_provenance,template_note,template_fingerprint "
+                        + "FROM plan_ensemble_canvas WHERE ensemble_id=?", r -> {
+                    String kind = r.str("template_kind");
+                    ScenarioCanvasSpec.TemplateReceipt template = kind == null ? null
+                            : new ScenarioCanvasSpec.TemplateReceipt(
+                                ScenarioCanvasSpec.TemplateKind.valueOf(kind), r.str("template_source"),
+                                r.str("template_provenance"), r.date("template_input_as_of"),
+                                r.date("template_window_from"), r.date("template_window_to"),
+                                r.intv("template_observations"), r.bool("template_observed"),
+                                r.bool("template_no_hindsight"), r.str("template_leg_day_provenance"),
+                                r.str("template_note"), r.str("template_fingerprint"));
+                    return new ScenarioCanvasSpec(r.str("calendar"), r.dblOrNull("dividend_yield_annual"),
+                            r.str("dividend_basis"), r.dbl("skew_vol_per_log_moneyness"),
+                            r.dbl("term_vol_per_sqrt_year"),
+                            ScenarioCanvasSpec.SurfaceDynamics.valueOf(r.str("surface_dynamics")),
+                            ScenarioCanvasSpec.SettlementPolicy.valueOf(r.str("settlement_policy")),
+                            ScenarioCanvasSpec.ExercisePolicy.valueOf(r.str("exercise_policy")), nodes, template)
+                            .sane(horizon);
+                }, ensembleId);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
+    private static double[] canvasIvPath(ScenarioSpec spec, IvSpec iv, ScenarioCanvasSpec canvas,
+                                         java.time.LocalDate anchorDate) {
+        double dt = spec.dt();
+        if (canvas != null) {
+            double[] stepYears = spec.calendarStepYears(anchorDate);
+            double elapsed = 0;
+            for (double step : stepYears) elapsed += step;
+            dt = elapsed / stepYears.length;
+        }
+        double[] legacy = iv.path(spec.totalSteps(), dt, spec.stepsPerDay());
+        if (canvas == null || canvas.ivNodes().isEmpty()) return legacy;
+        double[] out = new double[legacy.length];
+        int spd = Math.max(1, spec.stepsPerDay());
+        for (int i = 0; i < out.length; i++) {
+            out[i] = canvas.atmIv(i / spd, spec.horizonDays(), legacy[i]);
+        }
+        return out;
+    }
+
+    private static java.time.Instant parseAsOf(String raw) {
+        try { return java.time.Instant.parse(raw); }
+        catch (java.time.format.DateTimeParseException e) {
+            String iso = raw.replace(' ', 'T');
+            if (iso.matches(".*[+-]\\d{2}$")) iso += ":00";
+            return java.time.OffsetDateTime.parse(iso).toInstant();
         }
     }
 
@@ -667,7 +1084,9 @@ public final class PlanOutcomeService {
                                       double rate, String inputHash) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update((ensemble.basis().name() + '|' + ensemble.modelVersion() + '|' + ensemble.spec()
+            String specIdentity = Json.canonical(normalizeJsonNumbers(
+                    Json.MAPPER.valueToTree(ensemble.spec().sane())));
+            digest.update((ensemble.basis().name() + '|' + ensemble.modelVersion() + '|' + specIdentity
                     + '|' + Double.toHexString(rate) + '|' + inputHash).getBytes(StandardCharsets.UTF_8));
             digest.update(spots); digest.update(iv);
             return HexFormat.of().formatHex(digest.digest());
@@ -679,6 +1098,34 @@ public final class PlanOutcomeService {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(Json.canonical(node).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) { throw new IllegalStateException("Could not identify outcome inputs", e); }
+    }
+
+    /** JSONB may rewrite 0.0 as 0; identity treats equal numeric values as equal. */
+    private static String semanticSha256(JsonNode node) {
+        return sha256(normalizeJsonNumbers(node));
+    }
+
+    private static JsonNode normalizeJsonNumbers(JsonNode node) {
+        if (node == null || node.isNull()) return com.fasterxml.jackson.databind.node.NullNode.instance;
+        if (node.isNumber()) {
+            java.math.BigDecimal value = node.decimalValue().stripTrailingZeros();
+            if (value.signum() == 0) value = java.math.BigDecimal.ZERO;
+            return Json.MAPPER.getNodeFactory().numberNode(value);
+        }
+        if (node.isObject()) {
+            ObjectNode out = Json.MAPPER.createObjectNode();
+            java.util.ArrayList<String> names = new java.util.ArrayList<>();
+            node.fieldNames().forEachRemaining(names::add);
+            names.sort(String::compareTo);
+            for (String name : names) out.set(name, normalizeJsonNumbers(node.get(name)));
+            return out;
+        }
+        if (node.isArray()) {
+            ArrayNode out = Json.MAPPER.createArrayNode();
+            node.forEach(value -> out.add(normalizeJsonNumbers(value)));
+            return out;
+        }
+        return node.deepCopy();
     }
 
     private static void requireSelectedCandidate(java.sql.Connection c, String planId, int contextRev,
@@ -764,6 +1211,24 @@ public final class PlanOutcomeService {
     private static void put(ObjectNode n,String k,Boolean v){if(v!=null)n.put(k,v);}
 
     private record CurrentPlan(String symbol, String marketKind, String worldId, int contextRev, long version, String contextHash) {}
+    private record PreparedEnsemble(IvSpec iv, ScenarioCanvasSpec canvas, ScenarioSpec spec,
+                                    byte[] rawSpots, byte[] rawIv, byte[] spotBytes, byte[] ivBytes,
+                                    String inputHash, String fingerprint, String datasetId,
+                                    String source, String freshness, String asOf) {}
+    private record ReceiptIdentity(String id, String expiresAt) {}
+    private record AdoptionResult(String ensembleId, JsonNode preview) {}
+    private record RehydratedResearch(PathEnsembleService.Ensemble ensemble,
+                                      SimulationEngine.Preview preview,
+                                      PreparedEnsemble prepared) {}
+    private record ResearchRow(String id, String fingerprint, String symbol, String marketKind,
+                               String marketLane, String worldId, String datasetId, String modelVersion,
+                               long anchorSpotCents, LocalDate anchorDate, String anchorSource,
+                               String anchorFreshness, String asOf, String inputHash, String spec,
+                               String iv, String canvas, String input, String preview, String state,
+                               String adoptedPlanId, String adoptedEnsembleId, OffsetDateTime expiresAt,
+                               String basis, int nPaths, int nSteps, String codec, byte[] spotMatrix,
+                               byte[] ivPath, double rateAnnual, double stepSeconds,
+                               String sourceContentHash) {}
     private record MetricRow(String key, Double number, Long cents, String text) {}
     private record OutcomeRow(String id,String basis,String candidateId,String ensembleId,
                               String ensembleFingerprint,String interpretation,Long entry,

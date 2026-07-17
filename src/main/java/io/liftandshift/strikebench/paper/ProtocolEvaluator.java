@@ -36,12 +36,39 @@ public final class ProtocolEvaluator {
     /** One triggered rule. {@code rule} matches the planner's kinds; severity is the alert tier. */
     public record Trigger(String rule, String severity, String summary) {}
 
+    /**
+     * The frozen mechanical line quoted by a decision/review.  Keeping this shape here is
+     * deliberate: review code may describe the target, stop, and time line, but it may not
+     * recreate their arithmetic.  {@link #evaluate(Inputs)} consumes these same definitions.
+     */
+    public record Rule(String rule, Long triggerPnlCents, Integer triggerDaysToExpiry,
+                       String summary) {}
+
     public static final String TAKE_PROFIT = "TAKE_PROFIT";
     public static final String STOP_LOSS = "STOP_LOSS";
     public static final String ROLL = "ROLL";
     public static final String TIME_EXIT = "TIME_EXIT";
 
     private ProtocolEvaluator() {}
+
+    /** The exact target / stop / time rules for one signed package entry. */
+    public static List<Rule> rules(long entryNetPremiumCents) {
+        boolean credit = entryNetPremiumCents > 0;
+        long basis = Math.abs(entryNetPremiumCents);
+        long target = Math.round((credit ? CREDIT_TAKE_PROFIT_FRACTION
+                : DEBIT_TAKE_PROFIT_FRACTION) * basis);
+        long stop = -Math.round((credit ? CREDIT_STOP_MULTIPLE : DEBIT_STOP_FRACTION) * basis);
+        return List.of(
+                new Rule(TAKE_PROFIT, target, null, credit
+                        ? "the credit has decayed to ~50% — most of the edge is captured"
+                        : "the gain has reached ~50% of the debit paid"),
+                new Rule(STOP_LOSS, stop, null, credit
+                        ? "the loss has reached ~2x the credit collected"
+                        : "the loss has reached ~50% of the debit paid"),
+                new Rule(credit ? ROLL : TIME_EXIT, null, TIME_RULE_DAYS, credit
+                        ? "~21 days to expiry — decide: roll out or close"
+                        : "~21 days to expiry — exit before steep time decay if the thesis has not moved"));
+    }
 
     /**
      * Evaluates the mechanical rules; returns triggered rules ordered most-significant first
@@ -52,32 +79,22 @@ public final class ProtocolEvaluator {
         boolean credit = in.entryNetPremiumCents() > 0;
         long basis = Math.abs(in.entryNetPremiumCents());
         Long pnl = in.unrealizedCents();
+        List<Rule> rules = rules(in.entryNetPremiumCents());
+        Rule target = rules.get(0);
+        Rule stop = rules.get(1);
+        Rule time = rules.get(2);
         if (pnl != null && basis > 0) {
-            if (credit) {
-                if (pnl <= -Math.round(CREDIT_STOP_MULTIPLE * basis)) {
-                    out.add(new Trigger(STOP_LOSS, "URGENT",
-                            "the loss has reached ~2x the credit collected"));
-                } else if (pnl >= Math.round(CREDIT_TAKE_PROFIT_FRACTION * basis)) {
-                    out.add(new Trigger(TAKE_PROFIT, "ATTENTION",
-                            "the credit has decayed to ~50% — most of the edge is captured"));
-                }
-            } else {
-                if (pnl <= -Math.round(DEBIT_STOP_FRACTION * basis)) {
-                    out.add(new Trigger(STOP_LOSS, "URGENT",
-                            "the loss has reached ~50% of the debit paid"));
-                } else if (pnl >= Math.round(DEBIT_TAKE_PROFIT_FRACTION * basis)) {
-                    out.add(new Trigger(TAKE_PROFIT, "ATTENTION",
-                            "the gain has reached ~50% of the debit paid"));
-                }
+            if (pnl <= stop.triggerPnlCents()) {
+                out.add(new Trigger(STOP_LOSS, "URGENT", stop.summary()));
+            } else if (pnl >= target.triggerPnlCents()) {
+                out.add(new Trigger(TAKE_PROFIT, "ATTENTION", target.summary()));
             }
         }
         if (in.daysToNearestExpiry() != null && in.daysToNearestExpiry() >= 0
-                && in.daysToNearestExpiry() <= TIME_RULE_DAYS) {
-            out.add(credit
-                    ? new Trigger(ROLL, "INFO", "~" + in.daysToNearestExpiry()
-                            + " days to expiry — the protocol says decide: roll out or close")
-                    : new Trigger(TIME_EXIT, "INFO", "~" + in.daysToNearestExpiry()
-                            + " days to expiry — exit before the steep time decay if the thesis has not moved"));
+                && in.daysToNearestExpiry() <= time.triggerDaysToExpiry()) {
+            out.add(new Trigger(time.rule(), "INFO", "~" + in.daysToNearestExpiry()
+                    + (credit ? " days to expiry — the protocol says decide: roll out or close"
+                    : " days to expiry — exit before the steep time decay if the thesis has not moved")));
         }
         return out;
     }

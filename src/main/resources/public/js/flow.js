@@ -24,7 +24,7 @@
    *   render(host, ctx, api), conclusion?(ctx)->Node|string }]
    * ctx: caller-owned context (plan, market, Rails surface).
    * opts.focus: initial attention target (a deep-linked stage's band key).
-   * Returns { el, refresh(), refreshBand(key), scrollTo(key), reopen(key), fold(key), posture(key) }.
+   * Returns { el, ready, refresh(), refreshBand(key), scrollTo(key), reopen(key), fold(key), posture(key) }.
    */
   function render(opts) {
     var sections = opts.sections || [];
@@ -32,6 +32,7 @@
     var openOverrides = Rails.surface(opts.stateKey || 'flow:' + (opts.id || 'main'));
     var root = el('div', { class: 'flow', id: opts.id || null });
     var handles = {};
+    var pendingRenders = new Set();
     var focusKey = opts.focus || null;
     // A deep-linked arrival is an attention move like any other: the target opens, bands
     // left open by earlier attention fold back to their conclusions or invitations.
@@ -51,6 +52,14 @@
     function readyOf(section, index) {
       var priorComplete = sections.slice(0, index).every(function (s) { return !!s.complete(ctx); });
       return section.ready ? !!section.ready(ctx) : priorComplete;
+    }
+
+    // A band may own a stable route/anchor. The default opens locally; routed bands first
+    // move browser history, then the mounted destination seam applies the same attention
+    // change in place. This keeps deep links and Back/Forward without turning bands into pages.
+    function openBand(section) {
+      if (section.onOpen) return section.onOpen(api);
+      return api.reopen(section.key);
     }
 
     // Default attention: the first ready-but-incomplete band on the REQUIRED path. Optional
@@ -83,23 +92,44 @@
       return focusKey == null && index === firstOpenIndex() ? 'active' : 'ready';
     }
 
-    function paintBand(section, index) {
+    function trackRender(section, handle, host, value) {
+      if (!value || typeof value.then !== 'function') return Promise.resolve();
+      var generation = handle.generation;
+      var pending = Promise.resolve(value).catch(function (error) {
+        // A band owns its own async boundary. A superseded render may finish after a
+        // targeted refresh; it no longer owns visible UI and must not overwrite it.
+        if (handle.generation !== generation || !host.isConnected) return;
+        host.replaceChildren(UI.alertBox('danger', section.title + ' could not load', [
+          error && error.message ? error.message : 'The step did not finish.'
+        ]));
+        host.setAttribute('data-render-error', 'true');
+      }).finally(function () { pendingRenders.delete(pending); });
+      pendingRenders.add(pending);
+      return pending;
+    }
+
+    function paintBand(section, index, force) {
       var posture = postureOf(section, index);
       var band = handles[section.key].el;
       var handle = handles[section.key];
+      handle.generation += 1;
+      if (force) {
+        handle.aperture = null;
+        handle.invitationRow = null;
+      }
 
       // retainOnFold: the band's body stays mounted through fold/unfold — expensive
       // instruments (the fan canvas) survive by construction instead of re-rendering.
       // Folded = the aperture collapses (CSS) and the content goes inert; the invitation
       // row paints in front of it exactly like a non-retained band's.
-      if (section.retainOnFold && handle.aperture) {
+      if (!force && section.retainOnFold && handle.aperture) {
         if (posture === 'active' || posture === 'revisit') {
           band.dataset.posture = 'active';
           band.classList.remove('is-folded');
           handle.aperture.firstChild.inert = false;
           if (handle.invitationRow) { handle.invitationRow.remove(); handle.invitationRow = null; }
           openOverrides[section.key] = 'open';
-          return;
+          return Promise.resolve();
         }
         if (posture === 'ready') {
           band.dataset.posture = 'ready';
@@ -109,11 +139,11 @@
           var retainedInvitation = (section.invitation && section.invitation(ctx)) || 'Ready — open this step.';
           handle.invitationRow = el('button', { type: 'button', class: 'flow-band-invitation',
             'aria-expanded': 'false',
-            onclick: function () { api.reopen(section.key); } },
+            onclick: function () { openBand(section); } },
             el('span', { class: 'flow-band-invitation-body' }, retainedInvitation),
             el('span', { class: 'flow-band-open muted' }, 'Open'));
           band.insertBefore(handle.invitationRow, handle.aperture);
-          return;
+          return Promise.resolve();
         }
         // Any other posture (a real content change) falls through to the rebuild below.
         handle.aperture = null;
@@ -134,26 +164,29 @@
         band.appendChild(el('p', { class: 'flow-band-locked muted' }, reason));
         head.setAttribute('aria-disabled', 'true');
         delete openOverrides[section.key];
-        return;
+        return Promise.resolve();
       }
       if (posture === 'ready') {
         var invitation = (section.invitation && section.invitation(ctx)) || 'Ready — open this step.';
         band.appendChild(el('button', { type: 'button', class: 'flow-band-invitation',
           'aria-expanded': 'false',
-          onclick: function () { api.reopen(section.key); } },
+          onclick: function () { openBand(section); } },
           el('span', { class: 'flow-band-invitation-body' }, invitation),
           el('span', { class: 'flow-band-open muted' }, 'Open')));
-        return;
+        return Promise.resolve();
       }
       if (posture === 'done') {
         var conclusion = section.conclusion ? section.conclusion(ctx) : null;
         var bar = el('button', { type: 'button', class: 'flow-band-conclusion',
           'aria-expanded': 'false',
-          onclick: function () { openOverrides[section.key] = 'open'; paintBand(section, index); } },
+          onclick: function () {
+            if (section.onOpen) { openBand(section); return; }
+            openOverrides[section.key] = 'open'; paintBand(section, index);
+          } },
           el('span', { class: 'flow-band-conclusion-body' }, conclusion || (section.title + ' — complete')),
           el('span', { class: 'flow-band-revisit muted' }, 'Revisit'));
         band.appendChild(bar);
-        return;
+        return Promise.resolve();
       }
       // active (or an explicitly revisited done band)
       openOverrides[section.key] = 'open';
@@ -171,25 +204,47 @@
       } else {
         band.appendChild(host);
       }
-      section.render(host, ctx, api);
+      return trackRender(section, handle, host, section.render(host, ctx, api));
     }
 
     var api = {
       el: root,
-      refresh: function () { sections.forEach(paintBand); },
-      refreshBand: function (key) {
+      refresh: function (force) {
+        return Promise.all(sections.map(function (section, index) { return paintBand(section, index, force === true); }));
+      },
+      refreshBand: function (key, force) {
         var index = sections.findIndex(function (s) { return s.key === key; });
         if (index >= 0) {
-          paintBand(sections[index], index);
+          var paints = [paintBand(sections[index], index, force === true)];
           // A band's completion can unlock or re-lock its successors — repaint those postures.
-          sections.slice(index + 1).forEach(function (s, i) { paintBand(s, index + 1 + i); });
+          sections.slice(index + 1).forEach(function (s, i) {
+            paints.push(paintBand(s, index + 1 + i, force === true));
+          });
+          return Promise.all(paints);
         }
+        return Promise.resolve();
+      },
+      /** Enrich a completed band's visible conclusion in place. This is deliberately narrower
+       *  than refreshBand(): it preserves the focused conclusion button and every later band,
+       *  and refuses to paint after attention has reopened the band. */
+      refreshConclusion: function (key) {
+        var index = sections.findIndex(function (s) { return s.key === key; });
+        if (index < 0 || postureOf(sections[index], index) !== 'done') return false;
+        var body = handles[key].el.querySelector('.flow-band-conclusion-body');
+        if (!body) return false;
+        var conclusion = sections[index].conclusion ? sections[index].conclusion(ctx) : null;
+        body.replaceChildren(conclusion || (sections[index].title + ' — complete'));
+        return true;
       },
       scrollTo: function (key) {
         var target = root.querySelector('#band-' + key);
         if (!target) return;
         var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+        // A same-document SPA move is still a navigation event for keyboard and screen-reader
+        // users. Put attention on the band heading without triggering another scroll.
+        target.setAttribute('tabindex', '-1');
+        try { target.focus({ preventScroll: true }); } catch (focusError) { target.focus(); }
         // Bands fill asynchronously, and content inflating ABOVE the target shoves it away
         // from the viewport — the arrival must hold its alignment until layout settles.
         // The user's own scroll always wins: any scroll intent cancels the hold.
@@ -229,18 +284,17 @@
             openOverrides[focusKey] = 'open';
           }
         }
-        api.refresh();
+        return api.refresh();
       },
       /** Move attention to a band and bring it into view. */
       reopen: function (key) {
-        api.setFocus(key);
-        api.scrollTo(key);
+        return api.setFocus(key).then(function () { api.scrollTo(key); });
       },
       /** Deliberately conclude a band (an explicit save-and-advance action). */
       fold: function (key) {
         if (focusKey === key) focusKey = null;
         delete openOverrides[key];
-        api.refreshBand(key);
+        return api.refreshBand(key);
       },
       posture: function (key) {
         var index = sections.findIndex(function (s) { return s.key === key; });
@@ -249,10 +303,16 @@
     };
 
     sections.forEach(function (section) {
-      handles[section.key] = { el: el('section', { class: 'flow-band', 'data-band': section.key }) };
+      handles[section.key] = { el: el('section', { class: 'flow-band', 'data-band': section.key }), generation: 0 };
       root.appendChild(handles[section.key].el);
     });
-    api.refresh();
+    api.ready = api.refresh();
+    api.whenReady = function () {
+      return api.ready.then(function settle() {
+        if (!pendingRenders.size) return;
+        return Promise.all(Array.from(pendingRenders)).then(settle);
+      });
+    };
     return api;
   }
 

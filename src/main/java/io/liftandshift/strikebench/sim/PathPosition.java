@@ -15,7 +15,10 @@ public record PathPosition(LocalDate asOf, List<Leg> legs) {
         if (legs.size() > 8) throw new IllegalArgumentException("at most 8 legs");
         for (Leg leg : legs) {
             if (leg == null) throw new IllegalArgumentException("position legs cannot be null");
-            if (leg.ratio() > 10) throw new IllegalArgumentException("leg ratio must be 1..10");
+            // Exact tracked/practice packages may contain statement-sized share or contract
+            // quantities. Ratio does not multiply simulation work (legs do), so retain the real
+            // units and bound only pathological payloads.
+            if (leg.ratio() > 100_000) throw new IllegalArgumentException("leg ratio must be 1..100,000");
             if (!leg.isStock() && leg.expiration().isBefore(asOf)) {
                 throw new IllegalArgumentException("option expiration cannot precede the path valuation date");
             }

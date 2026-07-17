@@ -33,16 +33,16 @@ public final class AutoRecommender {
     private static final double MIN_SIGNAL_CONFIDENCE = 0.2;
 
     public record AutoRequest(
-            List<String> universe,          // optional; defaults to config AUTO_UNIVERSE
-            List<String> horizons,          // subset of 0DTE|week|month; default week+month (+0DTE if allowed)
+            List<String> universe,          // optional; derives from the active market scope
+            List<String> horizons,          // required subset of 0DTE|week|month|quarter
             Integer maxPicks,               // default 3
             Long targetProfitCents,         // optional profit goal for the whole position
             Long maxLossCents,              // optional absolute per-trade risk cap
-            Double maxRiskPctOfAccount,     // optional, else risk-mode default
+            Double maxRiskPctOfAccount,     // optional refinement within the required risk mode
             Double minConfidence,           // optional floor on signal confidence 0..1
             String riskMode,                // conservative|balanced|aggressive
             Boolean allow0dte,
-            List<String> intents,           // StrategyIntent names; default DIRECTIONAL
+            List<String> intents,           // required StrategyIntent names
             RecommendationEngine.Filters filters, // optional hard screens per candidate
             String thesisOverride           // optional Plan-owned thesis for focused single-view scans
     ) {}
@@ -99,6 +99,7 @@ public final class AutoRecommender {
 
     /** World-aware: a simulated session's scan reads and prices against THAT world. null = observed. */
     public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings, String worldId) {
+        DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         List<String> universe = req.universe() != null && !req.universe().isEmpty()
                 ? req.universe().stream().map(s -> s.trim().toUpperCase(Locale.ROOT)).filter(s -> !s.isBlank()).distinct().toList()
@@ -309,13 +310,16 @@ public final class AutoRecommender {
     }
 
     private static List<StrategyIntent> normalizeIntents(List<String> requested) {
-        if (requested == null || requested.isEmpty()) return List.of(StrategyIntent.DIRECTIONAL);
         List<StrategyIntent> out = new ArrayList<>();
         for (String raw : requested) {
+            if (raw == null || raw.isBlank()) {
+                throw new IllegalArgumentException("Universe Scout goal cannot be blank");
+            }
             StrategyIntent intent = StrategyIntent.parse(raw); // throws 400-mapped error on unknown
             if (!out.contains(intent)) out.add(intent);
         }
-        return out.isEmpty() ? List.of(StrategyIntent.DIRECTIONAL) : out;
+        if (out.isEmpty()) throw new IllegalArgumentException("Universe Scout requires an explicit goal");
+        return List.copyOf(out);
     }
 
     /** How interesting a symbol is to look at, 0..1: signal strength, vol edge, liquidity. */
@@ -345,8 +349,6 @@ public final class AutoRecommender {
     }
 
     private static List<String> normalizeHorizons(List<String> requested, boolean allow0dte) {
-        List<String> defaults = allow0dte ? List.of("0DTE", "week", "month") : List.of("week", "month");
-        if (requested == null || requested.isEmpty()) return defaults;
         List<String> out = new ArrayList<>();
         for (String h : requested) {
             String norm = h == null ? "" : h.trim();
@@ -355,9 +357,13 @@ public final class AutoRecommender {
             if ((norm.equals("0DTE") || norm.equals("week") || norm.equals("month") || norm.equals("quarter"))
                     && !out.contains(norm)) {
                 out.add(norm);
+            } else if (!norm.isBlank() && !out.contains(norm)) {
+                throw new IllegalArgumentException("Unknown Scout horizon '" + h
+                        + "' — choose 0DTE, week, month, or quarter");
             }
         }
-        return out.isEmpty() ? defaults : List.copyOf(out);
+        if (out.isEmpty()) throw new IllegalArgumentException("Universe Scout requires an explicit horizon");
+        return List.copyOf(out);
     }
 
     private static double round2(double v) {

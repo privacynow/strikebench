@@ -31,6 +31,8 @@ class EventServiceTest {
         // Fixture news may or may not include >=2 quarterly filings — BOTH outcomes must be honest:
         // either an unconfirmed forward-dated estimate with a disclosed basis, or no estimate at all.
         est.ifPresentOrElse(e -> {
+            var reports = events.quarterlyReportDates("AAPL");
+            assertThat(reports).hasSizeGreaterThanOrEqualTo(2).isSortedAccordingTo(java.util.Comparator.reverseOrder());
             assertThat(e.confirmed()).isFalse();
             assertThat(e.estimated()).isAfterOrEqualTo(LocalDate.of(2026, 7, 10));
             assertThat(e.basis()).contains("filing cadence");
@@ -42,6 +44,7 @@ class EventServiceTest {
     void unknownSymbolsNeverGuess() {
         EventService events = new EventService(market(), CLOCK);
         assertThat(events.nextEarnings("ZZZZZZ")).isEmpty();
+        assertThat(events.quarterlyReportDates("ZZZZZZ")).isEmpty();
         assertThat(events.earningsLikelyBefore("ZZZZZZ", LocalDate.of(2026, 8, 21))).isFalse();
     }
 }

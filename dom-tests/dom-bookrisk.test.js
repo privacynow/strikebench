@@ -230,15 +230,64 @@ test('beginner level keeps the same numbers with plainer framing and info covera
   assert.deepEqual(pageErrors, [], 'no page JS errors at beginner level');
 });
 
-test('the lane stays inside the viewport at narrow widths', async () => {
+test('the lane uses the exact wide and mobile release widths without losing its grouping', async () => {
   await setLevel('expert');
-  for (const width of [1100, 390]) {
-    await page.setViewportSize({ width, height: 900 });
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
     await go('#/portfolio/book/risk');
     await page.waitForSelector('.book-risk-account', { timeout: 15000 });
-    const overflow = await page.evaluate(() =>
-      document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    assert.ok(overflow <= 1, `no horizontal overflow at ${width}px (got ${overflow}px)`);
+    const geometry = await page.evaluate(() => {
+      const app = document.getElementById('app').getBoundingClientRect();
+      const account = document.querySelector('.book-risk-account').getBoundingClientRect();
+      const tabs = Array.from(document.querySelectorAll('.portfolio-book-tabs [role="tab"]'))
+        .map(tab => ({ label: tab.textContent.trim(), box: tab.getBoundingClientRect() }));
+      const lanes = document.querySelector('.book-risk-lanes');
+      const isClipped = element => {
+        for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+          if (/hidden|clip/.test(getComputedStyle(parent).overflowX)) return true;
+        }
+        return false;
+      };
+      return {
+        viewport: innerWidth, documentWidth: document.documentElement.scrollWidth,
+        appWidth: app.width, accountLeft: account.left, accountRight: account.right,
+        accountTop: account.top, tabRows: new Set(tabs.map(tab => Math.round(tab.box.top))).size,
+        tabGeometry: tabs.map(tab => ({ label: tab.label, left: tab.box.left, right: tab.box.right,
+          width: tab.box.width })),
+        tabsClipped: tabs.some(tab => tab.box.left < -.5 || tab.box.right > innerWidth + .5 || tab.box.width <= 0),
+        laneColumns: lanes ? getComputedStyle(lanes).gridTemplateColumns.split(' ').length : 0,
+        offenders: Array.from(document.querySelectorAll('body *')).filter(element => {
+          if (!element.offsetParent || isClipped(element)) return false;
+          const edge = element.getBoundingClientRect();
+          return edge.left < -1 || edge.right > innerWidth + 1;
+        }).slice(0, 16).map(element => {
+          const edge = element.getBoundingClientRect();
+          return `${element.id || element.className || element.tagName}@${Math.round(edge.left)}..${Math.round(edge.right)}`
+            + `(sw:${element.scrollWidth};text:${element.textContent.trim().slice(0, 90)}`
+            + `;parent:${element.parentElement && (element.parentElement.id || element.parentElement.className || element.parentElement.tagName)})`;
+        })
+      };
+    });
+    assert.ok(geometry.documentWidth <= geometry.viewport + 1,
+      `no horizontal overflow at ${viewport.width}px: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.accountLeft >= -.5 && geometry.accountRight <= geometry.viewport + .5,
+      `the first tracked risk consequence stays visible at ${viewport.width}px`);
+    assert.equal(geometry.tabsClipped, false,
+      `every tracked section remains reachable at ${viewport.width}px: ${JSON.stringify(geometry)}`);
+    if (viewport.width === 2560) {
+      assert.ok(geometry.appWidth >= 1700,
+        `the row-scanning Book canvas remains substantial at 2560px: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.accountTop < 640,
+        `the first account consequence starts inside the first desktop viewport: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.laneColumns, 2,
+        `cross-account and Practice risk stay side-by-side at 2560px: ${JSON.stringify(geometry)}`);
+    } else {
+      assert.equal(geometry.tabRows, 3,
+        `${viewport.width}px tracked navigation is the exact 2x3 grid: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.laneColumns, 1,
+        `${viewport.width}px risk lanes keep one readable mobile sequence: ${JSON.stringify(geometry)}`);
+    }
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
   assert.deepEqual(pageErrors, [], 'no page JS errors at narrow widths');

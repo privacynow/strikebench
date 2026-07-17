@@ -142,6 +142,28 @@ public record ScenarioSpec(
         return years / Math.max(1, days * Math.max(1, stepsPerDay));
     }
 
+    /**
+     * Calendar time carried by each simulated sub-step.  A Friday-close to Monday-close move gets
+     * three calendar days of variance while adjacent sessions get one; exchange holidays behave
+     * the same way.  Intraday sub-steps divide that session interval evenly.  This is the clock
+     * used by new path matrices and canvas valuation; {@link #dt()} remains only for replaying
+     * already-fingerprinted legacy artifacts.
+     */
+    public double[] calendarStepYears(LocalDate anchor) {
+        if (anchor == null) throw new IllegalArgumentException("anchor date is required");
+        int spd = Math.max(1, stepsPerDay);
+        int days = Math.clamp(horizonDays, 1, 756);
+        double[] out = new double[days * spd];
+        LocalDate prior = anchor;
+        int at = 0;
+        for (LocalDate session : sessionDates(anchor, days)) {
+            double sessionYears = Math.max(1, ChronoUnit.DAYS.between(prior, session)) / 365.0;
+            for (int i = 0; i < spd; i++) out[at++] = sessionYears / spd;
+            prior = session;
+        }
+        return out;
+    }
+
     // ---- Beginner presets (each card is one of these) ----
 
     public static ScenarioSpec preset(Shape shape, int horizonDays, double volAnnual, long seed, int paths) {

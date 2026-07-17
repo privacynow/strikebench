@@ -126,7 +126,7 @@ public final class ApiServer {
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
-        this.eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
+        this.eventCalendar = evaluations.eventCalendar();
         this.simSessions = new io.liftandshift.strikebench.market.sim.SimulationSessions(db, events);
         market.setWorldResolver(id -> simSessions.resolveForData(id));
         this.audit = audit;
@@ -210,7 +210,9 @@ public final class ApiServer {
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
         io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
-        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(market, db, clock)
+        var eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
+        io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(
+                market, db, clock, eventCalendar)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents()); // decision EV matches the REAL commission
         AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
                 engine, evaluations, cfg, clock);
@@ -226,6 +228,8 @@ public final class ApiServer {
         server.alertCenter = new io.liftandshift.strikebench.paper.AlertCenterService(db, clock,
                 trades, marksSource, server.eventCalendar::nextEarnings, server.events,
                 cfg.feePerContractCents());
+        audit.setAccountChangedHook(server.alertCenter::invalidateAccount);
+        server.portfolioBooks.setOwnerChangedHook(server.alertCenter::invalidateOwner);
         server.simSessions.attachDb(db);
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
         var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
@@ -310,8 +314,10 @@ public final class ApiServer {
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
         var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
                 db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades);
+        var trackedPackageAnalyses = new TrackedPackageAnalysisService(
+                portfolioBooks, trades, evaluations, accountObjectives);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
-                portfolioExports, positions, trades, evaluations,
+                portfolioExports, positions, trades, trackedPackageAnalyses,
                 accountObjectives, bookRisk,
                 this::ownerId, this::currentAccount);
         CampaignController campaignController = new CampaignController(campaigns, this::ownerId);
@@ -325,21 +331,28 @@ public final class ApiServer {
                 positions, trades, universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
-                marketVolatility, this::activeWorld, this::ownerId, this::analysisCtx,
+                marketVolatility, planOutcomes, this::activeWorld, this::ownerId, this::analysisCtx,
                 discoveryController::decisionCompetition);
         var positionArtifacts = new io.liftandshift.strikebench.position.PositionArtifactStore(db);
+        var brokerImports = new io.liftandshift.strikebench.paper.BrokerImportService(
+                db, clock, portfolioBooks, portfolioMarks, positionArtifacts, campaigns);
+        brokerImports.setOwnerChangedHook(alertCenter::invalidateOwner);
         var planPromotions = new io.liftandshift.strikebench.plan.PlanPromotionService(
                 db, planDecisions, portfolioBooks, positionArtifacts);
         var planAdoptions = new io.liftandshift.strikebench.plan.PlanAdoptionService(
-                db, clock, planSvc, positionArtifacts);
-        planController = new PlanController(cfg, clock, db, market,
+                db, clock, planSvc, positionArtifacts, portfolioMarks);
+        var planAdoptionReviews = new PlanAdoptionReviewService(db,
+                trackedPackageAnalyses::analyze, campaigns, accountObjectives);
+        planController = new PlanController(cfg, clock, db, market, eventCalendar,
                 positions, trades, backtester, auto, evaluations, planSvc, planEvidence,
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,
-                planPromotions, planAdoptions, pathEnsembles, simEngine, discoveryController, outcomeController,
+                planPromotions, planAdoptions, planAdoptionReviews,
+                pathEnsembles, simEngine, discoveryController, outcomeController,
                 tradeController, this::currentAccount, this::ownerId, this::activeWorld, this::analysisCtx);
         PositionTransformationController positionTransformations = new PositionTransformationController(
                 clock, trades, tradeController, planController, planSvc, planManagement,
                 positionArtifacts);
+        BrokerImportController brokerImportController = new BrokerImportController(brokerImports, this::ownerId);
         SparklineController sparklineController = new SparklineController(clock, market, universe,
                 evaluations, this::activeWorld, this::analysisCtx);
         dataJobs.setDataChangedHook(sparklineController::invalidate);
@@ -352,7 +365,7 @@ public final class ApiServer {
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::activeWorld, this::isAdmin, this::requireAdmin,
                 sparklineController::invalidate, outcomeController::generateDataset);
-        ResearchController researchController = new ResearchController(cfg, db, clock, market,
+        ResearchController researchController = new ResearchController(cfg, db, clock, market, eventCalendar,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 planController::planSymbolEligibility);
         ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);
@@ -456,6 +469,7 @@ public final class ApiServer {
             tradeController.register(c);
 
             portfolioController.register(c);
+            brokerImportController.register(c);
 
             // Campaigns: the Book's interpretation layer over recorded activity.
             campaignController.register(c);
@@ -636,6 +650,7 @@ public final class ApiServer {
         if (snapshotScheduler != null) snapshotScheduler.shutdownNow();
         if (portfolioValuationScheduler != null) portfolioValuationScheduler.shutdownNow();
         if (app != null) app.stop();
+        if (alertCenter != null) alertCenter.close();
         if (db != null) db.close();
     }
 

@@ -17,11 +17,17 @@ public final class RegimeProfiler {
 
     public static RegimeSnapshot profile(List<Candle> candles, VolatilityProfile vol,
                                          boolean eventSoon, String laneLabel) {
+        return profile(candles, vol, eventSoon, null, laneLabel);
+    }
+
+    /** Event-aware variant: null {@code eventSoon} means the calendar evidence is unavailable. */
+    public static RegimeSnapshot profile(List<Candle> candles, VolatilityProfile vol,
+                                         Boolean eventSoon, String eventBasis, String laneLabel) {
         Double vrp = vol == null ? null : vol.varianceRiskPremium();
         Double ivRank = vol == null ? null : vol.ivRankPct();
         if (candles == null || candles.size() < MIN_SESSIONS) {
             return new RegimeSnapshot(null, null, candles == null ? 0 : candles.size(), null,
-                    vrp, ivRank, eventSoon,
+                    vrp, ivRank, eventSoon, eventBasis,
                     "regime unknown — fewer than " + MIN_SESSIONS + " observed sessions in this lane");
         }
         int sessions = candles.size();
@@ -29,7 +35,7 @@ public final class RegimeProfiler {
         double last = candles.getLast().close().doubleValue();
         double high = candles.stream().mapToDouble(c -> c.close().doubleValue()).max().orElse(last);
         if (first <= 0 || last <= 0) {
-            return new RegimeSnapshot(null, null, sessions, null, vrp, ivRank, eventSoon,
+            return new RegimeSnapshot(null, null, sessions, null, vrp, ivRank, eventSoon, eventBasis,
                     "regime unknown — degenerate closes in this lane's history");
         }
         double totalReturnPct = (last / first - 1.0) * 100.0;
@@ -37,7 +43,8 @@ public final class RegimeProfiler {
         RegimeSnapshot.Trend trend = totalReturnPct > TREND_THRESHOLD_PCT ? RegimeSnapshot.Trend.UP
                 : totalReturnPct < -TREND_THRESHOLD_PCT ? RegimeSnapshot.Trend.DOWN
                 : RegimeSnapshot.Trend.SIDEWAYS;
-        return new RegimeSnapshot(trend, totalReturnPct, sessions, drawdownPct, vrp, ivRank, eventSoon,
+        return new RegimeSnapshot(trend, totalReturnPct, sessions, drawdownPct, vrp, ivRank,
+                eventSoon, eventBasis,
                 sessions + " observed sessions (" + laneLabel + "); trend threshold ±"
                         + (int) TREND_THRESHOLD_PCT + "%");
     }

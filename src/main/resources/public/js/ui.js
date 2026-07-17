@@ -427,7 +427,16 @@
       if (infoUsed.indexOf(key) < 0) infoUsed.push(key);
       var t2 = el('button', { class: 'term', type: 'button', 'data-term': key,
         'aria-expanded': 'false' }, display || word);
-      t2.addEventListener('click', function (e) { e.stopPropagation(); openInfo(t2, key); });
+      var hoverTimer = null;
+      t2.addEventListener('mouseenter', function () {
+        hoverTimer = setTimeout(function () { openInfo(t2, key); }, 550);
+      });
+      t2.addEventListener('mouseleave', function () {
+        if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+      });
+      t2.addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation(); openInfo(t2, key);
+      });
       t2.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t2, key); });
       return t2;
     }
@@ -437,7 +446,7 @@
     }
     var node = el('button', { class: 'term', type: 'button' }, display || word);
     node.addEventListener('click', function (e) {
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       showPopover(node, word, def);
     });
     return node;
@@ -1134,6 +1143,7 @@
     magnifier: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/>',
     archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/>',
     trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
     'chevron-right': '<path d="M9 5l7 7-7 7"/>'
   };
   function icon(name, size) {
@@ -1568,17 +1578,22 @@
     }
     function paintButtons() {
       group.innerHTML = '';
-      options.forEach(function (option) {
+      var hasActive = options.some(function (option) { return option.value === current; });
+      options.forEach(function (option, optionIndex) {
         var active = option.value === current;
         group.appendChild(el('button', { type: 'button', role: 'radio',
           class: 'choice-option' + (active ? ' active' : ''),
           'data-value': String(option.value),
-          'aria-checked': active ? 'true' : 'false', tabindex: active ? '0' : '-1',
-          onclick: function () { select(option.value); },
+          'aria-checked': active ? 'true' : 'false',
+          tabindex: active || (!hasActive && optionIndex === 0) ? '0' : '-1',
+          onclick: function () { select(option.value, true); },
           onkeydown: function (e) {
             if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
             e.preventDefault();
             var index = options.findIndex(function (o) { return o.value === current; });
+            // With an explicit blank value there is no selected radio yet. Navigation starts
+            // from the button that actually owns focus, not from the synthetic index -1.
+            if (index < 0) index = optionIndex;
             var next = options[(index + (e.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length];
             select(next.value, true);
           } },

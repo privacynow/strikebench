@@ -1,0 +1,3 @@
+Confirmation Number,Account,Transaction Date,Ticker,Asset Type,Side,Open or Close,Put or Call,Strike,Expiry,Contracts,Contract Multiplier,Execution Price,Net Cash,Fees,Leg
+VG-42,Roth IRA ending 1144,07/02/2026,MU,Options,Sell,Open,Put,98,08/07/2026,10,100,,2212.00,13.00,0
+VG-42,Roth IRA ending 1144,07/02/2026,MU,Options,Buy,Open,Put,95,08/07/2026,10,100,,2212.00,13.00,1

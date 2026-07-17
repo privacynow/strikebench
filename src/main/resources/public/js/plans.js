@@ -74,7 +74,13 @@
 
   async function load(force) {
     var requestedKey = currentMarketKey();
-    if (loadingByMarket[requestedKey]) return loadingByMarket[requestedKey];
+    if (loadingByMarket[requestedKey]) {
+      if (!force) return loadingByMarket[requestedKey];
+      // A forced reconciliation must be newer than the lifecycle mutation that requested
+      // it. Reusing an older in-flight read can briefly resurrect an archived Plan on Home.
+      try { await loadingByMarket[requestedKey]; } catch (e) { /* the forced read retries */ }
+      if (loadingByMarket[requestedKey]) return loadingByMarket[requestedKey];
+    }
     loadingByMarket[requestedKey] = (force ? API.getFresh('/api/plans') : API.get('/api/plans')).then(function (r) {
       var key = r && r.world ? String(r.world) : requestedKey;
       collections[key] = ((r && r.plans) || []).filter(function (p) {
@@ -88,7 +94,12 @@
   }
 
   async function library(force) {
-    if (libraryLoading) return libraryLoading;
+    if (libraryLoading) {
+      if (!force) return libraryLoading;
+      // Force means "after the in-flight read", never "reuse whichever request began first".
+      try { await libraryLoading; } catch (e) { /* the forced read retries */ }
+      if (libraryLoading) return libraryLoading;
+    }
     var path = '/api/plans?scope=all&openOnly=false';
     libraryLoading = (force ? API.getFresh(path) : API.get(path)).then(function (r) {
       libraryItems = (r && r.plans) || [];
@@ -122,7 +133,10 @@
 
   async function refresh() {
     await Promise.all([load(true), library(true)]);
-    if ((window.location.hash || '#/home').startsWith('#/home') && App.render) await App.render();
+    // Store reconciliation is data, not navigation. Mounted owners (the Home attention rail,
+    // an open Plan library drawer, etc.) update their own nodes from this typed local event.
+    // App.render() here used to tear down the entire desk on every plan.updated SSE hint.
+    if (window.App && App.emitEvent) App.emitEvent('plans.refreshed', { reason: 'store-refresh' });
     return items.slice();
   }
 
@@ -314,6 +328,17 @@
     return out;
   }
 
+  async function adoptResearchEnsemble(plan, receipt) {
+    receipt = receipt || {};
+    var out = await API.post('/api/plans/' + plan.id + '/outcomes/ensemble', {
+      expectedVersion: plan.version,
+      researchReceiptId: receipt.id || receipt.researchReceiptId,
+      expectedFingerprint: receipt.fingerprint || receipt.expectedFingerprint
+    });
+    if (out.plan) replace(out.plan);
+    return out;
+  }
+
   async function runOutcome(plan, request) {
     var out = await API.post('/api/plans/' + plan.id + '/outcomes/run',
       Object.assign({ expectedVersion: plan.version }, request || {}));
@@ -424,8 +449,8 @@
     if (wasActive && viewingThisPlan) {
       if (items.length) await focus(items[0]);
       else App.navigate('#/home');
-    } else if ((window.location.hash || '#/home').startsWith('#/home') && App.render) {
-      await App.render();
+    } else if (window.App && App.emitEvent) {
+      App.emitEvent('plans.refreshed', { reason: 'tab-closed', planId: plan.id });
     }
     return updated;
   }
@@ -553,6 +578,7 @@
     selectCandidate: selectCandidate, clearCandidate: clearCandidate, saveCustom: saveCustom,
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
+    adoptResearchEnsemble: adoptResearchEnsemble,
     runOutcome: runOutcome, compareOutcomes: compareOutcomes, runBacktest: runBacktest,
     rehearsals: rehearsals, createRehearsal: createRehearsal,
     latestDecision: latestDecision, previewDecision: previewDecision,

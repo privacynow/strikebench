@@ -229,6 +229,22 @@ class WaypointPathTest {
         assertThat(spec.calendarDt(LocalDate.of(2026, 7, 1))).isGreaterThan(spec.dt());
     }
 
+    @Test
+    void gaussianWaypointBridgeWeightsTheActualHolidayClock() {
+        // Wed Jul 1 -> Thu Jul 2 (1 day) -> Mon Jul 6 (4 days) -> Tue -> Wed.  Between a
+        // day-1 and day-4 pin, day 2 is 4/6 of the elapsed clock across the bridge, not 1/3.
+        double sigma = .30;
+        var spec = gbm(4, sigma, 443, 4_000, List.of(
+                new ScenarioSpec.Waypoint(1, 1.0), new ScenarioSpec.Waypoint(4, 1.0)));
+        double[] clock = spec.calendarStepYears(LocalDate.of(2026, 7, 1));
+        double[][] paths = gen.generate(spec, 100, null, clock);
+        double expected = sigma * Math.sqrt((4.0 / 365.0) * (2.0 / 365.0) / (6.0 / 365.0));
+
+        assertThat(logStdevAt(paths, 2)).isBetween(expected * .92, expected * 1.08);
+        assertThat(logStdevAt(paths, 1)).isLessThan(1e-12);
+        assertThat(logStdevAt(paths, 4)).isLessThan(1e-12);
+    }
+
     // ---- helpers ----
 
     private static double logStdevAt(double[][] paths, int step) {

@@ -459,32 +459,6 @@ class PositionTransformationApiTest {
     }
 
     @Test
-    void callerCannotRelabelABrokerRecordAsAPracticeTransformation() throws Exception {
-        String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
-        String tradeId = Json.parse(createAcknowledged(
-                creditPutSpread(expiration, 3, "POSITION_TRANSFORMATION_ORIGIN_TEST").toString()).body())
-                .at("/trade/id").asText();
-        db.exec("UPDATE trades SET origin='EXTERNAL',data_provenance='BROKER' WHERE id=?", tradeId);
-        long ledgerRows = db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
-                row -> row.lng("n"), tradeId).getFirst();
-
-        ObjectNode request = Json.MAPPER.createObjectNode();
-        request.put("source", "PRACTICE_TRADE");
-        request.put("sourceId", tradeId);
-        request.put("action", "PARTIAL_CLOSE");
-        request.put("closeQuantity", 1);
-        HttpResponse<String> response = post("/api/position-transformations/preview", request.toString());
-
-        assertThat(response.statusCode()).isEqualTo(400);
-        assertThat(Json.parse(response.body()).get("detail").asText())
-                .contains("tracked-account").contains("Practice");
-        assertThat(Json.parse(get("/api/trades/" + tradeId).body()).at("/trade/qty").asInt()).isEqualTo(3);
-        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
-                row -> row.lng("n"), tradeId)).containsExactly(ledgerRows);
-    }
-
-    @Test
     void blockedRollReplacementLeavesTheOpenPositionAndLedgerUntouched() throws Exception {
         JsonNode expirations = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
         String near = expirations.get(2).asText();

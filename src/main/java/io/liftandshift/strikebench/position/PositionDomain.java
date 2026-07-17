@@ -17,6 +17,9 @@ public final class PositionDomain {
     public enum PlanActionRole {
         ENTRY, ADJUST, ROLL, PARTIAL_CLOSE, CLOSE, ASSIGNMENT, EXERCISE, EXPIRATION
     }
-    public enum PackageSource { HYPOTHETICAL_DRAFT, PRACTICE_TRADE, TRACKED_STRUCTURE }
+    public enum PackageSource {
+        HYPOTHETICAL_DRAFT, PRACTICE_TRADE, PRACTICE_HOLDING,
+        TRACKED_STRUCTURE, TRACKED_HOLDING
+    }
     public enum PriceAuthority { OBSERVED, BROKER_REPORTED, USER_REPORTED, MODELED }
 }

@@ -108,6 +108,29 @@ class ArtifactRetentionServiceTest {
     }
 
     @Test
+    void unexpiredPublicFanReceiptProtectsItsArtifactEvenWhenRetentionIsShorterThanReceiptTtl() {
+        artifact("fp_public_receipt", false);
+        db.exec("INSERT INTO research_ensemble_receipt(id,user_id,fingerprint,symbol,market_kind,market_lane," +
+                        "world_id,dataset_id,model_version,anchor_spot_cents,anchor_date,anchor_source," +
+                        "anchor_freshness,as_of,input_hash,preview_hash,spec,iv,canvas,input,preview,state," +
+                        "expires_at,created_at) VALUES('rer_live','local','fp_public_receipt','AAPL','DEMO','DEMO'," +
+                        "'demo','observed','paths-1',10000,'2026-07-14','fixture','FIXTURE',?,?,?,'{}'::jsonb," +
+                        "'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'AVAILABLE',?,?)",
+                CLOCK.instant().toString(), "input-public", "preview-public", "2026-08-13T18:00:00Z", OLD);
+        var service = new ArtifactRetentionService(db, CLOCK,
+                new ArtifactRetentionService.Policy(true, 1, 1, 0, 24));
+
+        assertThat(service.runOnce().ensembleArtifacts()).isZero();
+        assertThat(ids("ensemble_artifact")).containsExactly("fp_public_receipt");
+        assertThat(ids("research_ensemble_receipt")).containsExactly("rer_live");
+
+        db.exec("UPDATE research_ensemble_receipt SET expires_at=? WHERE id='rer_live'", OLD);
+        assertThat(service.runOnce().ensembleArtifacts()).isEqualTo(1);
+        assertThat(ids("ensemble_artifact")).isEmpty();
+        assertThat(ids("research_ensemble_receipt")).isEmpty();
+    }
+
+    @Test
     void policyHasConservativeFloorsAndKeepsOrphansLongerThanPlanIntermediates() {
         var cfg = new AppConfig(Map.of(
                 "STALE_PLAN_ARTIFACT_RETENTION_DAYS", "45",

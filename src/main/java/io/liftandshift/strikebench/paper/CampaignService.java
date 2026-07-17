@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.position.CampaignMath;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -42,6 +43,8 @@ public final class CampaignService {
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     /** Stated cash-benchmark rate: the same disclosed 4% modeled teaching default as pricing. */
     public static final int CASH_BENCHMARK_RATE_BPS = 400;
+    /** Review pattern evidence requires a material observed rise, not one noisy uptick. */
+    public static final BigDecimal PARTICIPATION_PATTERN_MIN_RISE_PCT = new BigDecimal("5.0");
 
     private final Db db;
     private final Clock clock;
@@ -56,7 +59,10 @@ public final class CampaignService {
     public record CreateInput(String title, String symbol, String accountObjectiveRevisionId,
                               List<String> seedLotIds) {}
 
-    public record UpdateInput(String title, String status) {}
+    public record UpdateInput(String title, String status, String lessonNote) {
+        /** Existing callers that rename/close a campaign do not implicitly touch its lesson. */
+        public UpdateInput(String title, String status) { this(title, status, null); }
+    }
 
     public record MemberInput(String type, String id, Boolean explicitInterest) {}
 
@@ -94,13 +100,59 @@ public final class CampaignService {
     public record AccountSubtotal(String accountId, String name, String accountType, long netCashCents,
                                   long sharesDelta, int transactionCount, int shareOfActivityBps) {}
 
+    /** One authored pin on the exact saved Scenario Canvas receipt. */
+    public record AuthoredPathPoint(int tradingDay, String date, long priceCents) {}
+
+    /** One eligible realized close. Generated/demo/model bars can never populate this record. */
+    public record RealizedPathPoint(int tradingDay, String date, long priceCents) {}
+
+    public record AuthoredRealizedOverlay(boolean available, String planId, String planTitle,
+                                          String scenarioId, String scenarioTitle, String authoredAt,
+                                          int contextRevision,
+                                          String baseEnsembleId, String scenarioFingerprint,
+                                          String baseEnsembleFingerprint, String waypointFill,
+                                          String anchorDate, long anchorSpotCents,
+                                          String anchorSource, String anchorFreshness,
+                                          String marketLane, String realizedSource,
+                                          String realizedDataset, Boolean adjusted,
+                                          List<AuthoredPathPoint> authored,
+                                          List<RealizedPathPoint> realized, String note) {}
+
+    /** Review of one frozen mechanical rule from one Plan decision. */
+    public record ProtocolAdherence(String planId, String decisionId, String executionLane,
+                                    String rule, Long triggerPnlCents, Integer triggerDaysToExpiry,
+                                    String ruleSummary, String status, String triggeredAt,
+                                    Long observedPnlAtTriggerCents, String responseKind,
+                                    String responseAt, Long responseResultCents,
+                                    Long overrideSignedCostCents, String note) {}
+
+    /** Final facts remain separated by execution lane; there is intentionally no combined total. */
+    public record ExecutionLaneReview(String lane, int memberCount, int closedMemberCount,
+                                      boolean finalResultAvailable, Long realizedPnlCents,
+                                      String note) {}
+
+    public record PatternEvidence(String campaignId, String title, String symbol, String executionLane,
+                                  BigDecimal underlyingMovePct, String windowStart, String windowEnd,
+                                  String observedSource, Long finalResultCents) {}
+
+    public record PatternFinding(String key, String label, String executionLane, String status,
+                                 int supportingCampaigns, List<PatternEvidence> evidence, String note) {}
+
+    public record CampaignReview(boolean finalReview, String closedAt,
+                                 AuthoredRealizedOverlay authoredVsRealized,
+                                 List<ProtocolAdherence> protocolAdherence,
+                                 List<ExecutionLaneReview> executionLanes,
+                                 List<PatternFinding> patterns, String lessonNote,
+                                 List<String> receipts) {}
+
     public record CampaignView(String id, String title, String symbol, String status,
                                String accountObjectiveRevisionId, String createdAt, String updatedAt,
                                List<MemberView> members, long netOptionCashCents, BasisView economicBasis,
                                YieldView yield, CounterfactualView counterfactuals,
                                long attributedDividendsCents, long explicitInterestCents, ChurnView churn,
                                List<AccountSubtotal> accounts, long unassignedPendingCents,
-                               int pendingCount, List<String> receipts, List<LedgerEntry> ledger) {}
+                               int pendingCount, List<String> receipts, List<LedgerEntry> ledger,
+                               String lessonNote, String closedAt, CampaignReview review) {}
 
     /** An auto-link PROPOSAL: never a member until the user confirms it (honesty contract). */
     public record Proposal(String type, String id, String label, String reason, String occurredAt,
@@ -109,7 +161,8 @@ public final class CampaignService {
     // ---- Internal shapes ----
 
     private record CampaignRow(String id, String userId, String symbol, String title, String status,
-                               String objectiveRevisionId, String createdAt, String updatedAt) {}
+                               String objectiveRevisionId, String lessonNote, OffsetDateTime closedAt,
+                               String createdAt, String updatedAt) {}
 
     private record Leg(String instrumentType, String action, String positionEffect, String symbol,
                        String optionType, BigDecimal strike, LocalDate expiration, long quantity,
@@ -122,6 +175,9 @@ public final class CampaignService {
 
     private record PendingEvent(String id, OffsetDateTime occurredAt, long packageNetCents,
                                 String sourceSystem, String status, String attachedAt) {}
+
+    private record ObservedPoint(LocalDate date, long closeCents) {}
+    private record ObservedSeries(String source, boolean adjusted, List<ObservedPoint> points) {}
 
     // ---- CRUD ----
 
@@ -185,8 +241,13 @@ public final class CampaignService {
             String title = input.title() == null ? row.title() : text(input.title(), "campaign name", 120);
             String status = input.status() == null ? row.status()
                     : enumValue(input.status(), STATUSES, "campaign status");
-            Db.execOn(c, "UPDATE campaign SET title=?, status=?, updated_at=now() WHERE id=?",
-                    title, status, row.id());
+            String lesson = input.lessonNote() == null ? row.lessonNote()
+                    : optionalText(input.lessonNote(), "lesson note", 4_000);
+            OffsetDateTime changedAt = OffsetDateTime.ofInstant(clock.instant(), java.time.ZoneOffset.UTC);
+            OffsetDateTime closedAt = "ACTIVE".equals(status) ? null
+                    : row.closedAt() == null ? changedAt : row.closedAt();
+            Db.execOn(c, "UPDATE campaign SET title=?, status=?, lesson_note=?, closed_at=?, updated_at=? WHERE id=?",
+                    title, status, lesson, closedAt, changedAt, row.id());
             return assemble(c, requireCampaign(c, owner, campaignId));
         });
     }
@@ -223,7 +284,8 @@ public final class CampaignService {
                 }
                 case "PENDING_IMPORT" -> {
                     requireOwned(c, owner, "pending import", memberId,
-                            "SELECT id FROM portfolio_import_pending WHERE id=? AND user_id=?");
+                            "SELECT id FROM portfolio_import_pending WHERE id=? AND user_id=? "
+                                    + "AND status='PENDING'");
                     Db.execOn(c, "INSERT INTO campaign_pending_member(campaign_id,pending_id) VALUES (?,?) "
                             + "ON CONFLICT DO NOTHING", row.id(), memberId);
                 }
@@ -273,6 +335,54 @@ public final class CampaignService {
             Db.execOn(c, "UPDATE campaign SET updated_at=now() WHERE id=?", row.id());
             return assemble(c, requireCampaign(c, owner, campaignId));
         });
+    }
+
+    /**
+     * Replaces every typed pending-import membership with the canonical transaction produced by
+     * resolution. The caller owns the surrounding database transaction so the campaign can never
+     * observe both the package placeholder and its resolved ledger fact (or neither one).
+     */
+    public void resolvePendingMembershipOn(Connection c, String ownerId, String pendingId,
+                                           String transactionId) throws SQLException {
+        String owner = OwnerScope.id(ownerId);
+        requireOwned(c, owner, "pending import", pendingId,
+                "SELECT id FROM portfolio_import_pending WHERE id=? AND user_id=?");
+        requireOwned(c, owner, "tracked transaction", transactionId,
+                "SELECT t.id FROM portfolio_transaction t JOIN portfolio_account a "
+                        + "ON a.id=t.portfolio_account_id WHERE t.id=? AND a.user_id=?");
+        List<Object[]> attached = Db.queryOn(c,
+                "SELECT m.campaign_id,m.attached_at FROM campaign_pending_member m "
+                        + "JOIN campaign x ON x.id=m.campaign_id "
+                        + "WHERE m.pending_id=? AND x.user_id=? ORDER BY m.campaign_id",
+                r -> new Object[]{r.str("campaign_id"), r.odt("attached_at")}, pendingId, owner);
+        for (Object[] row : attached) {
+            String campaignId = (String) row[0];
+            Db.execOn(c, "INSERT INTO campaign_transaction_member"
+                            + "(campaign_id,transaction_id,explicit_interest,attached_at) VALUES (?,?,0,?) "
+                            + "ON CONFLICT DO NOTHING",
+                    campaignId, transactionId, row[1]);
+            Db.execOn(c, "DELETE FROM campaign_pending_member WHERE campaign_id=? AND pending_id=?",
+                    campaignId, pendingId);
+            Db.execOn(c, "UPDATE campaign SET updated_at=now() WHERE id=?", campaignId);
+        }
+    }
+
+    /** Removes a rejected package placeholder from campaign math in the caller-owned transaction. */
+    public void rejectPendingMembershipOn(Connection c, String ownerId, String pendingId)
+            throws SQLException {
+        String owner = OwnerScope.id(ownerId);
+        requireOwned(c, owner, "pending import", pendingId,
+                "SELECT id FROM portfolio_import_pending WHERE id=? AND user_id=?");
+        List<String> attached = Db.queryOn(c,
+                "SELECT m.campaign_id FROM campaign_pending_member m "
+                        + "JOIN campaign x ON x.id=m.campaign_id "
+                        + "WHERE m.pending_id=? AND x.user_id=? ORDER BY m.campaign_id",
+                r -> r.str("campaign_id"), pendingId, owner);
+        for (String campaignId : attached) {
+            Db.execOn(c, "DELETE FROM campaign_pending_member WHERE campaign_id=? AND pending_id=?",
+                    campaignId, pendingId);
+            Db.execOn(c, "UPDATE campaign SET updated_at=now() WHERE id=?", campaignId);
+        }
     }
 
     // ---- Auto-link proposals ----
@@ -411,8 +521,11 @@ public final class CampaignService {
                             r -> r.str("v"), cashArgs));
                     if (row.symbol() != null) {
                         pendings.addAll(Db.queryOn(c, "SELECT p.id v FROM portfolio_import_pending p "
-                                        + "WHERE p.user_id=? AND p.status='PENDING' AND p.occurred_at BETWEEN ? AND ?",
-                                r -> r.str("v"), owner, lo, hi));
+                                        + "WHERE p.user_id=? AND p.status IN ('PENDING','PROVISIONAL') "
+                                        + "AND p.occurred_at BETWEEN ? AND ? AND EXISTS (SELECT 1 "
+                                        + "FROM portfolio_import_pending_leg pil WHERE pil.pending_id=p.id "
+                                        + "AND pil.symbol=?)",
+                                r -> r.str("v"), owner, lo, hi, row.symbol()));
                     }
                 }
             }
@@ -477,7 +590,8 @@ public final class CampaignService {
             for (String pendingId : pendings) {
                 if (memberPending.contains(pendingId)) continue;
                 var pend = Db.queryOn(c, "SELECT id, source_system, occurred_at, package_net_cents "
-                                + "FROM portfolio_import_pending WHERE id=? AND user_id=?",
+                                + "FROM portfolio_import_pending WHERE id=? AND user_id=? "
+                                + "AND status IN ('PENDING','PROVISIONAL')",
                         r -> new Object[]{r.str("id"), r.str("source_system"), r.str("occurred_at"),
                                 r.lng("package_net_cents")}, pendingId, owner);
                 if (pend.isEmpty()) continue;
@@ -704,10 +818,441 @@ public final class CampaignService {
         receipts.add("A campaign is an interpretation layer, never the accounting source: it never "
                 + "rewrites the tracked tax basis, tax character, or account ledgers.");
 
+        CampaignReview review = campaignReview(c, row, txns, pending, yield, counterfactuals);
+
         return new CampaignView(row.id(), row.title(), row.symbol(), row.status(),
                 row.objectiveRevisionId(), row.createdAt(), row.updatedAt(), List.copyOf(members),
                 netOptionCash, basis, yield, counterfactuals, dividends, interest, churn,
-                accounts, unassignedPending, pending.size(), List.copyOf(receipts), List.copyOf(ledger));
+                accounts, unassignedPending, pending.size(), List.copyOf(receipts), List.copyOf(ledger),
+                row.lessonNote(), iso(row.closedAt()), review);
+    }
+
+    // ---- Journey E: close -> review -> lesson, on the canonical campaign read ----
+
+    private CampaignReview campaignReview(Connection c, CampaignRow row, List<TxnEvent> txns,
+                                          List<PendingEvent> pending, YieldView yield,
+                                          CounterfactualView counterfactuals) throws SQLException {
+        boolean finalReview = !"ACTIVE".equals(row.status()) && row.closedAt() != null;
+        List<String> reviewReceipts = new ArrayList<>();
+        reviewReceipts.add("Review facts are read from frozen Plan decisions, saved Scenario Canvas receipts, "
+                + "recorded marks/actions, and the campaign's accounting members. Saving a lesson cannot rewrite them.");
+        if (!finalReview) {
+            reviewReceipts.add("This campaign is still active. The review is a live preview; its final window "
+                    + "and final accounting freeze when the campaign closes.");
+        }
+        AuthoredRealizedOverlay overlay = authoredRealizedOverlay(c, row, finalReview);
+        List<ProtocolAdherence> adherence = protocolAdherence(c, row, finalReview);
+        List<ExecutionLaneReview> lanes = executionLaneReviews(c, row, txns, pending, yield);
+        List<PatternFinding> patterns = patternFindings(c, row);
+        return new CampaignReview(finalReview, iso(row.closedAt()), overlay, adherence, lanes,
+                patterns, row.lessonNote(), List.copyOf(reviewReceipts));
+    }
+
+    private AuthoredRealizedOverlay authoredRealizedOverlay(Connection c, CampaignRow row,
+                                                            boolean finalReview) throws SQLException {
+        record ScenarioHead(String planId, String planTitle, String symbol, String marketLane,
+                            String scenarioId, String scenarioTitle, OffsetDateTime authoredAt,
+                            int contextRev,
+                            String baseEnsembleId, String scenarioFingerprint,
+                            String baseFingerprint, String waypointFill, LocalDate anchorDate,
+                            long anchorSpotCents, String anchorSource, String anchorFreshness,
+                            int horizonDays) {}
+        OffsetDateTime authoredCutoff = finalReview ? row.closedAt()
+                : OffsetDateTime.ofInstant(clock.instant(), java.time.ZoneOffset.UTC);
+        List<ScenarioHead> heads = Db.queryOn(c,
+                "SELECT p.id plan_id,COALESCE(NULLIF(p.custom_title,''),p.symbol||' Plan') plan_title," +
+                        "p.symbol,p.market_kind,a.id scenario_id,a.title scenario_title,a.created_at authored_at," +
+                        "a.context_rev," +
+                        "a.base_ensemble_id,a.fingerprint scenario_fingerprint," +
+                        "pe.fingerprint base_fingerprint,a.waypoint_fill," +
+                        "COALESCE(pc.anchor_date,(pe.as_of AT TIME ZONE 'America/New_York')::date) anchor_date," +
+                        "pe.anchor_spot_cents,pe.anchor_source,pe.anchor_freshness,a.spec_horizon_days " +
+                        "FROM campaign_plan_member cm JOIN plans p ON p.id=cm.plan_id " +
+                        "JOIN authored_scenario a ON a.plan_id=p.id " +
+                        "JOIN plan_ensemble pe ON pe.id=a.base_ensemble_id AND pe.plan_id=a.plan_id " +
+                        "LEFT JOIN plan_ensemble_canvas pc ON pc.ensemble_id=pe.id " +
+                        "WHERE cm.campaign_id=? AND a.created_at<=? " +
+                        "ORDER BY a.created_at DESC,a.id DESC LIMIT 1",
+                r -> new ScenarioHead(r.str("plan_id"), r.str("plan_title"), r.str("symbol"),
+                        r.str("market_kind"), r.str("scenario_id"), r.str("scenario_title"),
+                        r.odt("authored_at"), r.intv("context_rev"), r.str("base_ensemble_id"),
+                        r.str("scenario_fingerprint"), r.str("base_fingerprint"),
+                        r.str("waypoint_fill"), r.date("anchor_date"), r.lng("anchor_spot_cents"),
+                        r.str("anchor_source"), r.str("anchor_freshness"),
+                        r.intv("spec_horizon_days")), row.id(), authoredCutoff);
+        if (heads.isEmpty()) {
+            return new AuthoredRealizedOverlay(false, null, null, null, null, null, 0,
+                    null, null, null, null, null, 0, null, null, null,
+                    null, null, null, List.of(), List.of(),
+                    "Unavailable — no confirmed Plan member in this campaign has an authored scenario saved "
+                            + (finalReview ? "on or before the campaign close. " : "as of this review. ")
+                            + "StrikeBench will not substitute a post-hoc or fresh simulation, or an unattached Plan.");
+        }
+        ScenarioHead head = heads.getFirst();
+        List<AuthoredPathPoint> authored = new ArrayList<>();
+        authored.add(new AuthoredPathPoint(0, head.anchorDate().toString(), head.anchorSpotCents()));
+        Db.queryOn(c, "SELECT day_index,price_ratio FROM authored_scenario_waypoint " +
+                        "WHERE scenario_id=? ORDER BY day_index",
+                r -> new Object[]{r.intv("day_index"), r.dbl("price_ratio")}, head.scenarioId())
+                .forEach(raw -> {
+                    int day = (Integer) raw[0];
+                    long cents = BigDecimal.valueOf((Double) raw[1])
+                            .multiply(BigDecimal.valueOf(head.anchorSpotCents()))
+                            .setScale(0, RoundingMode.HALF_EVEN).longValueExact();
+                    authored.add(new AuthoredPathPoint(day,
+                            MarketHours.tradingDateAfter(head.anchorDate(), day).toString(), cents));
+                });
+        LocalDate horizonEnd = MarketHours.tradingDateAfter(head.anchorDate(), head.horizonDays());
+        LocalDate cutoff = finalReview ? marketDate(row.closedAt())
+                : LocalDate.ofInstant(clock.instant(), MARKET_ZONE);
+        if (cutoff.isAfter(horizonEnd)) cutoff = horizonEnd;
+        if (cutoff.isBefore(head.anchorDate())) cutoff = head.anchorDate();
+        if (!"OBSERVED".equals(head.marketLane())) {
+            return new AuthoredRealizedOverlay(false, head.planId(), head.planTitle(), head.scenarioId(),
+                    head.scenarioTitle(), iso(head.authoredAt()), head.contextRev(), head.baseEnsembleId(),
+                    head.scenarioFingerprint(), head.baseFingerprint(), head.waypointFill(),
+                    head.anchorDate().toString(), head.anchorSpotCents(), head.anchorSource(),
+                    head.anchorFreshness(), head.marketLane(), null, null, null, List.copyOf(authored),
+                    List.of(), "Unavailable — this saved scenario belongs to the " + head.marketLane()
+                            + " market lane. A generated path is never relabeled as realized market history.");
+        }
+        ObservedSeries series = observedSeries(c, head.symbol(), head.anchorDate(), cutoff);
+        List<RealizedPathPoint> realized = series.points().stream()
+                .map(point -> new RealizedPathPoint(
+                        MarketHours.tradingDaysBetween(head.anchorDate(), point.date()),
+                        point.date().toString(), point.closeCents())).toList();
+        boolean hasAuthoredLine = authored.size() >= 2;
+        boolean available = hasAuthoredLine && realized.size() >= 2;
+        String note = available
+                ? "Authored " + iso(head.authoredAt()) + "; the line connects only the exact saved pins "
+                    + "(plus its anchor) and is not a forecast. "
+                    + "Realized closes are one coherent observed series. Fill between pins remains labeled "
+                    + head.waypointFill() + "."
+                : !hasAuthoredLine
+                    ? "Unavailable — the saved Canvas receipt is a stochastic fan with no authored waypoint, "
+                        + "so it has no single authored line to compare. Its fill label remains "
+                        + head.waypointFill() + "."
+                    : "Unavailable — fewer than two coherent eligible observed closes cover the saved scenario window. "
+                        + "No Demo, simulated, scenario, fixture, or modeled bars were substituted.";
+        return new AuthoredRealizedOverlay(available, head.planId(), head.planTitle(), head.scenarioId(),
+                head.scenarioTitle(), iso(head.authoredAt()), head.contextRev(), head.baseEnsembleId(),
+                head.scenarioFingerprint(),
+                head.baseFingerprint(), head.waypointFill(), head.anchorDate().toString(),
+                head.anchorSpotCents(), head.anchorSource(), head.anchorFreshness(), head.marketLane(),
+                series.source(), series.source() == null ? null : "observed", series.source() == null
+                ? null : series.adjusted(), List.copyOf(authored), realized, note);
+    }
+
+    private List<ProtocolAdherence> protocolAdherence(Connection c, CampaignRow row,
+                                                      boolean finalReview) throws SQLException {
+        record Decision(String planId, String id, String action, Integer qty, long entryCents,
+                        OffsetDateTime at, LocalDate nearestExpiry) {}
+        record Action(String kind, OffsetDateTime at, Long unrealizedCents, Long realizedCents,
+                      String tradeId, Integer tradeQty) {}
+        record Seen(String rule, int actionIndex, OffsetDateTime at, Long pnlCents) {}
+        List<Decision> decisions = Db.queryOn(c,
+                "SELECT d.plan_id,d.id,d.action,d.qty,d.proposed_net_cents,d.quote_as_of," +
+                        "(SELECT MIN(l.expiration) FROM plan_decision_leg l " +
+                        "WHERE l.decision_id=d.id AND l.expiration IS NOT NULL) nearest_expiry " +
+                        "FROM campaign_plan_member cm JOIN plan_decision d ON d.plan_id=cm.plan_id " +
+                        "WHERE cm.campaign_id=? AND d.action IN ('TRADE','BROKER') " +
+                        "AND d.proposed_net_cents IS NOT NULL ORDER BY d.quote_as_of,d.id",
+                r -> new Decision(r.str("plan_id"), r.str("id"), r.str("action"),
+                        integerOrNull(r, "qty"), r.lng("proposed_net_cents"), r.odt("quote_as_of"),
+                        r.date("nearest_expiry")),
+                row.id());
+        List<ProtocolAdherence> out = new ArrayList<>();
+        for (Decision decision : decisions) {
+            List<Action> actions = Db.queryOn(c, "SELECT a.kind,a.action_at,a.unrealized_cents,a.realized_cents," +
+                            "a.trade_id,t.qty trade_qty FROM plan_management_action a " +
+                            "LEFT JOIN trades t ON t.id=a.trade_id WHERE a.decision_id=? ORDER BY a.action_at,a.id",
+                    r -> new Action(r.str("kind"), r.odt("action_at"),
+                            r.lngOrNull("unrealized_cents"), r.lngOrNull("realized_cents"),
+                            r.str("trade_id"), integerOrNull(r, "trade_qty")), decision.id());
+            List<ProtocolEvaluator.Rule> rules = ProtocolEvaluator.rules(decision.entryCents());
+            Map<String, Seen> seen = new LinkedHashMap<>();
+            Integer entryDte = daysToExpiry(decision.at(), decision.nearestExpiry());
+            for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(
+                    new ProtocolEvaluator.Inputs(decision.entryCents(), 0L, entryDte))) {
+                seen.putIfAbsent(trigger.rule(), new Seen(trigger.rule(), -1, decision.at(), 0L));
+            }
+            boolean hasRecordedMark = false;
+            for (int i = 0; i < actions.size(); i++) {
+                Action action = actions.get(i);
+                if ("MARK".equals(action.kind())) hasRecordedMark = true;
+                Integer dte = daysToExpiry(action.at(), decision.nearestExpiry());
+                for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(
+                        new ProtocolEvaluator.Inputs(decision.entryCents(), action.unrealizedCents(), dte))) {
+                    seen.putIfAbsent(trigger.rule(), new Seen(trigger.rule(), i, action.at(),
+                            action.unrealizedCents()));
+                }
+            }
+            for (ProtocolEvaluator.Rule rule : rules) {
+                Seen trigger = seen.get(rule.rule());
+                String lane = "BROKER".equals(decision.action()) ? "REAL" : "PRACTICE";
+                if (trigger == null) {
+                    boolean knowable = rule.triggerDaysToExpiry() != null
+                            ? decision.nearestExpiry() != null : hasRecordedMark;
+                    out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane, rule.rule(),
+                            rule.triggerPnlCents(), rule.triggerDaysToExpiry(), rule.summary(),
+                            knowable ? "NOT_TRIGGERED" : "UNAVAILABLE", null, null, null, null,
+                            null, null, knowable
+                            ? "The frozen line was not crossed in the recorded evidence."
+                            : rule.triggerDaysToExpiry() != null
+                                ? "Unavailable — the frozen decision has no option expiry for this time rule."
+                                : "Unavailable — no recorded marks can establish whether this price rule fired."));
+                    continue;
+                }
+                int responseIndex = -1;
+                for (int i = trigger.actionIndex() + 1; i < actions.size(); i++) {
+                    if (isPositionResponse(actions.get(i).kind())) { responseIndex = i; break; }
+                }
+                Action response = responseIndex < 0 ? null : actions.get(responseIndex);
+                boolean triggerPassedBeforeResponse = false;
+                int limit = responseIndex < 0 ? actions.size() : responseIndex;
+                for (int i = trigger.actionIndex() + 1; i < limit; i++) {
+                    Action later = actions.get(i);
+                    if (!"MARK".equals(later.kind()) || later.unrealizedCents() == null
+                            || rule.triggerDaysToExpiry() != null) continue;
+                    Integer laterDte = daysToExpiry(later.at(), decision.nearestExpiry());
+                    boolean stillTriggered = ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(
+                                    decision.entryCents(), later.unrealizedCents(), laterDte)).stream()
+                            .anyMatch(t -> t.rule().equals(rule.rule()));
+                    if (!stillTriggered) { triggerPassedBeforeResponse = true; break; }
+                }
+                boolean allowed = response != null && responseHonors(rule.rule(), response.kind());
+                String status = response == null
+                        ? (finalReview ? "OVERRIDDEN" : "OPEN_AFTER_TRIGGER")
+                        : allowed && !triggerPassedBeforeResponse ? "RESPECTED" : "OVERRIDDEN";
+                boolean changedBeforeTrigger = false;
+                for (int i = 0; i <= trigger.actionIndex() && i < actions.size(); i++) {
+                    if (isPositionResponse(actions.get(i).kind())) { changedBeforeTrigger = true; break; }
+                }
+                Action triggerAction = trigger.actionIndex() < 0 ? null : actions.get(trigger.actionIndex());
+                boolean wholePackageComparable = response != null && triggerAction != null
+                        && Set.of("CLOSE", "SETTLE", "ROLL").contains(response.kind())
+                        && response.tradeId() != null && response.tradeId().equals(triggerAction.tradeId())
+                        && decision.qty() != null && response.tradeQty() != null
+                        && decision.qty().equals(response.tradeQty()) && !changedBeforeTrigger;
+                Long signedCost = "OVERRIDDEN".equals(status) && wholePackageComparable
+                        && response.realizedCents() != null && trigger.pnlCents() != null
+                        ? Math.subtractExact(response.realizedCents(), trigger.pnlCents()) : null;
+                String note = switch (status) {
+                    case "RESPECTED" -> "The next recorded position action answered the trigger; mark refreshes alone do not manufacture nonadherence.";
+                    case "OPEN_AFTER_TRIGGER" -> "The rule fired, but the campaign is still open and has no recorded response yet.";
+                    default -> signedCost == null
+                            ? "The record shows an override, but the trigger and response do not prove the same whole-package quantity/basis; signed cost is withheld."
+                            : "Signed override cost = recorded response result minus the P/L at the trigger mark; negative cost hurt, positive cost helped.";
+                };
+                out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane, rule.rule(),
+                        rule.triggerPnlCents(), rule.triggerDaysToExpiry(), rule.summary(), status,
+                        iso(trigger.at()), trigger.pnlCents(), response == null ? null : response.kind(),
+                        response == null ? null : iso(response.at()),
+                        response == null ? null : response.realizedCents(), signedCost, note));
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    private static Integer daysToExpiry(OffsetDateTime at, LocalDate expiry) {
+        if (at == null || expiry == null) return null;
+        long days = ChronoUnit.DAYS.between(marketDate(at), expiry);
+        return (int) Math.max(0, Math.min(Integer.MAX_VALUE, days));
+    }
+
+    private static boolean isPositionResponse(String kind) {
+        return Set.of("ROLL", "ADJUST", "PARTIAL_CLOSE", "CLOSE", "ASSIGNMENT", "EXERCISE",
+                "EXPIRATION", "SETTLE", "VOID").contains(kind);
+    }
+
+    private static boolean responseHonors(String rule, String responseKind) {
+        if (ProtocolEvaluator.ROLL.equals(rule) || ProtocolEvaluator.TIME_EXIT.equals(rule)) {
+            return Set.of("ROLL", "CLOSE", "PARTIAL_CLOSE").contains(responseKind);
+        }
+        return Set.of("CLOSE", "PARTIAL_CLOSE", "ROLL").contains(responseKind);
+    }
+
+    private List<ExecutionLaneReview> executionLaneReviews(Connection c, CampaignRow row,
+                                                           List<TxnEvent> txns,
+                                                           List<PendingEvent> pending,
+                                                           YieldView realYield) throws SQLException {
+        boolean finalReview = !"ACTIVE".equals(row.status()) && row.closedAt() != null;
+        int realOpenLots = 0;
+        if (!txns.isEmpty()) {
+            List<String> ids = txns.stream().map(TxnEvent::id).toList();
+            realOpenLots = Math.toIntExact(Db.queryOn(c,
+                    params("SELECT COUNT(*) n FROM portfolio_lot WHERE remaining_quantity>0 " +
+                            "AND opening_transaction_id IN (%s)", ids.size()), r -> r.lng("n"),
+                    ids.toArray()).getFirst());
+        }
+        boolean realAvailable = finalReview && !txns.isEmpty() && pending.isEmpty() && realOpenLots == 0;
+        ExecutionLaneReview real = new ExecutionLaneReview("REAL", txns.size(),
+                realAvailable ? txns.size() : Math.max(0, txns.size() - realOpenLots), realAvailable,
+                realAvailable ? realYield.realizedPnlCents() : null,
+                txns.isEmpty() ? "No recorded-at-broker campaign members."
+                        : realAvailable ? "Final recorded-at-broker result from campaign members; Practice is not included."
+                        : pending.isEmpty()
+                            ? "Unavailable as a final REAL result — the campaign is active or tracked lots remain open."
+                            : "Unavailable as a final REAL result — unresolved imports still withhold final accounting.");
+
+        record PracticeFacts(long members, long terminal, long withResult, Long result) {}
+        PracticeFacts pf = Db.queryOn(c, "SELECT COUNT(*) members," +
+                        "COUNT(*) FILTER (WHERE t.status IN ('CLOSED','EXPIRED')) terminal," +
+                        "COUNT(t.realized_pnl_cents) FILTER (WHERE t.status IN ('CLOSED','EXPIRED')) with_result," +
+                        "SUM(t.realized_pnl_cents) FILTER (WHERE t.status IN ('CLOSED','EXPIRED')) result " +
+                        "FROM campaign_practice_trade_member m JOIN trades t ON t.id=m.trade_id " +
+                        "WHERE m.campaign_id=?",
+                r -> new PracticeFacts(r.lng("members"), r.lng("terminal"), r.lng("with_result"),
+                        r.lngOrNull("result")), row.id()).getFirst();
+        boolean practiceAvailable = finalReview && pf.members() > 0 && pf.terminal() == pf.members()
+                && pf.withResult() == pf.members();
+        ExecutionLaneReview practice = new ExecutionLaneReview("PRACTICE", Math.toIntExact(pf.members()),
+                Math.toIntExact(pf.terminal()), practiceAvailable,
+                practiceAvailable ? pf.result() : null,
+                pf.members() == 0 ? "No Practice campaign members."
+                        : practiceAvailable ? "Final Practice result from its isolated learning ledger; REAL is not included."
+                        : "Unavailable as a final Practice result — every Practice member must be closed with a recorded result.");
+        return List.of(real, practice);
+    }
+
+    /**
+     * Cross-campaign participation patterns.  A label needs at least two independently closed
+     * campaign windows in the same execution lane; one supporting window is reported as
+     * insufficient, never promoted to a "pattern".  REAL and PRACTICE evidence are not pooled.
+     */
+    private List<PatternFinding> patternFindings(Connection c, CampaignRow current) throws SQLException {
+        List<CampaignRow> closed = Db.queryOn(c, "SELECT * FROM campaign WHERE user_id=? " +
+                        "AND status IN ('CLOSED','ARCHIVED') AND closed_at IS NOT NULL " +
+                        "ORDER BY closed_at,id",
+                r -> new CampaignRow(r.str("id"), r.str("user_id"), r.str("symbol"), r.str("title"),
+                        r.str("status"), r.str("account_objective_revision_id"), r.str("lesson_note"),
+                        r.odt("closed_at"), r.str("created_at"), r.str("updated_at")), current.userId());
+        List<PatternFinding> out = new ArrayList<>();
+        for (String lane : List.of("REAL", "PRACTICE")) {
+            for (String key : List.of("CSP_REGRET", "COVERED_CALL_MELT_UP")) {
+                List<PatternEvidence> evidence = new ArrayList<>();
+                for (CampaignRow candidate : closed) {
+                    PatternEvidence item = patternEvidence(c, candidate, lane, key);
+                    if (item != null) evidence.add(item);
+                }
+                String label = "CSP_REGRET".equals(key)
+                        ? "Cash-secured-put regret in a rising market"
+                        : "Covered-call melt-up mirror";
+                String status = evidence.size() >= 2 ? "IDENTIFIED"
+                        : evidence.size() == 1 ? "INSUFFICIENT" : "UNAVAILABLE";
+                String note = switch (status) {
+                    case "IDENTIFIED" -> "Repeated closed-campaign evidence: the same low-participation "
+                            + "structure met an observed rise of at least "
+                            + PARTICIPATION_PATTERN_MIN_RISE_PCT.stripTrailingZeros().toPlainString()
+                            + "% in " + evidence.size() + " " + lane + " campaigns.";
+                    case "INSUFFICIENT" -> "One closed " + lane + " campaign supports this shape, but one "
+                            + "example is not a cross-campaign pattern.";
+                    default -> "Unavailable — no repeated closed " + lane + " campaign has the required "
+                            + "structure, final result, and one coherent observed price window. Nothing was inferred.";
+                };
+                out.add(new PatternFinding(key, label, lane, status, evidence.size(),
+                        List.copyOf(evidence), note));
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    private PatternEvidence patternEvidence(Connection c, CampaignRow row, String lane, String key)
+            throws SQLException {
+        if (row.symbol() == null || row.closedAt() == null) return null;
+        OffsetDateTime start;
+        Long result;
+        boolean signature;
+        if ("REAL".equals(lane)) {
+            List<TxnEvent> txns = loadTransactionMembers(c, row.id());
+            if (txns.isEmpty() || !loadPendingMembers(c, row.id()).isEmpty()) return null;
+            start = txns.stream().map(TxnEvent::occurredAt).min(Comparator.naturalOrder()).orElse(null);
+            boolean shortPut = false, longPut = false, shortCall = false;
+            boolean stockOpened = false, stockClosed = false;
+            for (TxnEvent txn : txns) {
+                for (Leg leg : txn.legs()) {
+                    if ("OPTION".equals(leg.instrumentType()) && "PUT".equals(leg.optionType())
+                            && "OPEN".equals(leg.positionEffect())) {
+                        if ("SELL".equals(leg.action())) shortPut = true;
+                        else longPut = true;
+                    }
+                    if ("OPTION".equals(leg.instrumentType()) && "CALL".equals(leg.optionType())
+                            && "SELL".equals(leg.action()) && "OPEN".equals(leg.positionEffect())) {
+                        shortCall = true;
+                    }
+                    if ("STOCK".equals(leg.instrumentType()) && "BUY".equals(leg.action())
+                            && "OPEN".equals(leg.positionEffect())) stockOpened = true;
+                    if ("STOCK".equals(leg.instrumentType()) && "SELL".equals(leg.action())
+                            && "CLOSE".equals(leg.positionEffect())) stockClosed = true;
+                }
+            }
+            int openLots = 0;
+            List<String> ids = txns.stream().map(TxnEvent::id).toList();
+            if (!ids.isEmpty()) {
+                openLots = Math.toIntExact(Db.queryOn(c,
+                        params("SELECT COUNT(*) n FROM portfolio_lot WHERE remaining_quantity>0 " +
+                                "AND opening_transaction_id IN (%s)", ids.size()), r -> r.lng("n"),
+                        ids.toArray()).getFirst());
+            }
+            if (openLots > 0) return null;
+            signature = "CSP_REGRET".equals(key)
+                    ? shortPut && !longPut && !stockOpened
+                    : shortCall && stockOpened && stockClosed;
+            result = txns.stream().filter(t -> !"INTEREST".equals(t.eventType()) || t.explicitInterest())
+                    .mapToLong(TxnEvent::cashEffectCents).sum();
+        } else {
+            record Practice(String status, Long realized, OffsetDateTime createdAt,
+                            OffsetDateTime closedAt, long sharesLocked, String legsJson) {}
+            List<Practice> trades = Db.queryOn(c, "SELECT t.status,t.realized_pnl_cents,t.created_at," +
+                            "t.closed_at,t.shares_locked,t.legs_json::text legs_json " +
+                            "FROM campaign_practice_trade_member m JOIN trades t ON t.id=m.trade_id " +
+                            "WHERE m.campaign_id=? ORDER BY t.created_at,t.id",
+                    r -> new Practice(r.str("status"), r.lngOrNull("realized_pnl_cents"),
+                            r.odt("created_at"), r.odt("closed_at"), r.lng("shares_locked"),
+                            r.str("legs_json")), row.id());
+            if (trades.isEmpty() || trades.stream().anyMatch(t ->
+                    !("CLOSED".equals(t.status()) || "EXPIRED".equals(t.status()))
+                            || t.realized() == null)) return null;
+            start = trades.stream().map(Practice::createdAt).min(Comparator.naturalOrder()).orElse(null);
+            boolean shortPut = false, longPut = false, shortCall = false, stock = false, covered = false;
+            try {
+                for (Practice trade : trades) {
+                    for (io.liftandshift.strikebench.model.Leg leg : TradeRecord.legsFromJson(trade.legsJson())) {
+                        if (leg.type() == io.liftandshift.strikebench.model.OptionType.PUT) {
+                            if (leg.action() == io.liftandshift.strikebench.model.LegAction.SELL) shortPut = true;
+                            else longPut = true;
+                        }
+                        if (leg.type() == io.liftandshift.strikebench.model.OptionType.CALL
+                                && leg.action() == io.liftandshift.strikebench.model.LegAction.SELL) shortCall = true;
+                        if (leg.isStock() && leg.action() == io.liftandshift.strikebench.model.LegAction.BUY) {
+                            stock = true;
+                        }
+                    }
+                    if (trade.sharesLocked() > 0) covered = true;
+                }
+            } catch (RuntimeException malformedHistoricalTrade) {
+                return null;
+            }
+            signature = "CSP_REGRET".equals(key)
+                    ? shortPut && !longPut && !stock
+                    : shortCall && (stock || covered);
+            result = trades.stream().mapToLong(t -> t.realized()).sum();
+        }
+        if (!signature || start == null) return null;
+        LocalDate from = marketDate(start);
+        LocalDate to = marketDate(row.closedAt());
+        if (!to.isAfter(from)) return null;
+        ObservedSeries series = observedSeries(c, row.symbol(), from, to);
+        if (series.points().size() < 2) return null;
+        ObservedPoint first = series.points().getFirst();
+        ObservedPoint last = series.points().getLast();
+        if (first.closeCents() <= 0) return null;
+        BigDecimal move = BigDecimal.valueOf(last.closeCents() - first.closeCents())
+                .multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(first.closeCents()), 4, RoundingMode.HALF_EVEN);
+        if (move.compareTo(PARTICIPATION_PATTERN_MIN_RISE_PCT) < 0) return null;
+        return new PatternEvidence(row.id(), row.title(), row.symbol(), lane, move,
+                first.date().toString(), last.date().toString(), series.source(), result);
     }
 
     private CounterfactualView counterfactuals(Connection c, CampaignRow row, List<TxnEvent> txns,
@@ -938,6 +1483,7 @@ public final class CampaignService {
         return Db.queryOn(c, "SELECT p.id, p.occurred_at occ, p.package_net_cents, p.source_system, "
                         + "p.status, m.attached_at FROM campaign_pending_member m "
                         + "JOIN portfolio_import_pending p ON p.id=m.pending_id WHERE m.campaign_id=? "
+                        + "AND p.status='PENDING' "
                         + "ORDER BY p.occurred_at",
                 r -> new PendingEvent(r.str("id"), r.odt("occ"), r.lng("package_net_cents"),
                         r.str("source_system"), r.str("status"), r.str("attached_at")), campaignId);
@@ -989,6 +1535,14 @@ public final class CampaignService {
      *  never mixed sources, never generated bars). */
     private List<CampaignMath.DatedPrice> observedCloses(Connection c, String symbol, LocalDate from,
                                                          LocalDate to) throws SQLException {
+        return observedSeries(c, symbol, from, to).points().stream()
+                .map(point -> new CampaignMath.DatedPrice(point.date(), point.closeCents()))
+                .toList();
+    }
+
+    /** The coherent source identity is returned with the points so review provenance cannot drift. */
+    private ObservedSeries observedSeries(Connection c, String symbol, LocalDate from,
+                                          LocalDate to) throws SQLException {
         record Bar(LocalDate d, BigDecimal close, String source, boolean adjusted, int quality) {}
         List<Bar> rows = Db.queryOn(c, "SELECT d, close, source, adjusted, quality_rank FROM underlying_bar "
                         + "WHERE symbol=? AND dataset_id='observed' AND observed=1 AND d BETWEEN ? AND ? "
@@ -1004,11 +1558,11 @@ public final class CampaignService {
                 .max(Comparator.<List<Bar>>comparingInt(List::size)
                         .thenComparing(series -> series.getLast().d())
                         .thenComparingInt(series -> series.stream().mapToInt(Bar::quality).max().orElse(0)))
-                .map(series -> series.stream()
-                        .map(bar -> new CampaignMath.DatedPrice(bar.d(),
-                                bar.close().movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact()))
-                        .toList())
-                .orElse(List.of());
+                .map(series -> new ObservedSeries(series.getFirst().source(), series.getFirst().adjusted(),
+                        series.stream().map(bar -> new ObservedPoint(bar.d(),
+                                bar.close().movePointRight(2).setScale(0, RoundingMode.HALF_UP)
+                                        .longValueExact())).toList()))
+                .orElse(new ObservedSeries(null, false, List.of()));
     }
 
     // ---- Helpers ----
@@ -1018,6 +1572,7 @@ public final class CampaignService {
         var rows = Db.queryOn(c, "SELECT * FROM campaign WHERE id=? AND user_id=?",
                 r -> new CampaignRow(r.str("id"), r.str("user_id"), r.str("symbol"), r.str("title"),
                         r.str("status"), r.str("account_objective_revision_id"),
+                        r.str("lesson_note"), r.odt("closed_at"),
                         r.str("created_at"), r.str("updated_at")), id, owner);
         if (rows.isEmpty()) throw new ResourceNotFoundException("No campaign " + id);
         return rows.getFirst();
@@ -1126,5 +1681,19 @@ public final class CampaignService {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static Integer integerOrNull(Db.Row row, String column) {
+        Long value = row.lngOrNull(column);
+        return value == null ? null : Math.toIntExact(value);
+    }
+
+    private static String optionalText(String value, String what, int max) {
+        if (value == null || value.isBlank()) return null;
+        String trimmed = value.trim();
+        if (trimmed.length() > max) {
+            throw new IllegalArgumentException(what + " is limited to " + max + " characters");
+        }
+        return trimmed;
     }
 }

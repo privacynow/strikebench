@@ -35,6 +35,14 @@ public final class PlanEvidenceService {
 
     public SavedStudy run(String userId, Plan.View plan, ResearchQuestionEngine.RunRequest raw,
                           AnalysisContext analysis, String worldId) {
+        return run(userId, plan, raw, analysis, worldId, null);
+    }
+
+    /** Re-derives a public study only when its immutable data/content key is unchanged.
+     * Matching keys guarantee the deterministic result is byte-for-byte the same receipt;
+     * drift is rejected before any Plan row is written. */
+    public SavedStudy run(String userId, Plan.View plan, ResearchQuestionEngine.RunRequest raw,
+                          AnalysisContext analysis, String worldId, String expectedStudyKey) {
         if (raw == null) throw new IllegalArgumentException("study request is required");
         if (raw.symbol() != null && !raw.symbol().isBlank()
                 && !plan.symbol().equalsIgnoreCase(raw.symbol())) {
@@ -45,6 +53,11 @@ public final class PlanEvidenceService {
         ResearchQuestionEngine.RunRequest request = new ResearchQuestionEngine.RunRequest(
                 raw.key(), plan.symbol(), raw.from(), raw.to(), Map.copyOf(params));
         ResearchQuestionEngine.QuestionResult result = research.run(request, analysis, worldId);
+        if (expectedStudyKey != null && !expectedStudyKey.isBlank()
+                && !Objects.equals(expectedStudyKey, result.studyKey())) {
+            throw new IllegalStateException("Historical Evidence changed before it could be attached to this Plan. " +
+                    "Return to Evidence and run the study again; the earlier result was not saved under a new identity.");
+        }
         String id = Ids.newId("pe");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String basis = basis(plan, analysis);

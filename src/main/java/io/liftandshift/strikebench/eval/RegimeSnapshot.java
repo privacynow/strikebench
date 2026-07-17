@@ -14,7 +14,8 @@ public record RegimeSnapshot(
         Double drawdownPct,          // % below the lookback high (<= 0), null with trend
         Double varianceRiskPremium,  // atmIv - realizedVol30; positive = options rich vs realized
         Double ivRankPct,            // 0..100 within the trailing observed window
-        boolean eventSoon,           // earnings-like proximity (estimate-labeled upstream)
+        Boolean eventSoon,           // true/false with evidence; null means proximity unavailable
+        String eventBasis,           // estimate/provenance or an explicit unavailable explanation
         String basis                 // provenance: what window, which lane
 ) {
     public enum Trend { UP, DOWN, SIDEWAYS }

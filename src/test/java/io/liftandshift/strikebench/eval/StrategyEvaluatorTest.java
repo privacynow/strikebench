@@ -208,6 +208,46 @@ class StrategyEvaluatorTest {
         });
     }
 
+    @Test void theSameShortPremiumBookFlipsOnlyCoherenceWhenItsObjectiveChanges() {
+        Candidate shortPut = candidate("CASH_SECURED_PUT", List.of(
+                new LegView("SELL", "PUT", "240", "2026-08-21", 1, "3.00", 100, "OPEN")),
+                30_000L, 30_000L, 2_370_000L);
+        EvalContext base = ctx();
+        var accumulate = new DeclaredObjective("ACCUMULATE", "BULLISH", 252, "SEEK",
+                "account objective revision 1");
+        var income = new DeclaredObjective("INCOME", null, 252, "ACCEPT",
+                "account objective revision 2");
+        StrategyEvaluation accumulationView = evaluator.evaluate(shortPut, null,
+                withDeclared(base, accumulate));
+        StrategyEvaluation incomeView = evaluator.evaluate(shortPut, null,
+                withDeclared(base, income));
+
+        assertThat(accumulationView.assessment().coherence().verdict())
+                .isEqualTo(FourOutputAssessment.Coherence.INCOHERENT);
+        assertThat(accumulationView.assessment().coherence().durationAssessment())
+                .contains("ends before the thesis");
+        assertThat(incomeView.assessment().coherence().verdict())
+                .isEqualTo(FourOutputAssessment.Coherence.COHERENT);
+        assertThat(incomeView.assessment().coherence().durationAssessment())
+                .containsIgnoringCase("income cycles");
+
+        // Scenario 2's decisive invariant: redeclaring the purpose changes interpretation only.
+        assertThat(incomeView.assessment().economics()).isEqualTo(accumulationView.assessment().economics());
+        assertThat(incomeView.assessment().mechanics()).isEqualTo(accumulationView.assessment().mechanics());
+        assertThat(incomeView.stance()).isEqualTo(accumulationView.stance());
+        assertThat(incomeView.participation()).isEqualTo(accumulationView.participation());
+        assertThat(incomeView.impliedStance()).isEqualTo(accumulationView.impliedStance());
+        assertThat(incomeView.capital()).isEqualTo(accumulationView.capital());
+        assertThat(incomeView.risk()).isEqualTo(accumulationView.risk());
+        assertThat(incomeView.evidence()).isEqualTo(accumulationView.evidence());
+        assertThat(incomeView.assessment().portfolioImpacts())
+                .isEqualTo(accumulationView.assessment().portfolioImpacts());
+        assertThat(accumulationView.score().components())
+                .anyMatch(component -> component.name().contains("Accumulation"));
+        assertThat(incomeView.score().components())
+                .noneMatch(component -> component.name().contains("Accumulation"));
+    }
+
     @Test void multiExpirationMetricsStayUnknownRatherThanInventingATerminalPayoff() {
         Candidate calendar = candidate("CALENDAR_CALL", List.of(
                 new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00", 100, "OPEN"),
@@ -300,5 +340,13 @@ class StrategyEvaluatorTest {
                 entryNet, maxProfit, maxLoss, List.of(), 0.50, 0L, 0.8, "DELAYED", List.of(),
                 0.7, "test", "test", "test", "test", "test", "DIRECTIONAL",
                 List.of("DIRECTIONAL"), null, null, null, null, false, null, maxLoss);
+    }
+
+    private static EvalContext withDeclared(EvalContext base, DeclaredObjective declared) {
+        return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.daysToExpiry(),
+                base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
+                base.marketOpen(), base.feePerContractCents(), base.feePerOrderCents(),
+                base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), declared,
+                base.regime(), base.trailingCloses());
     }
 }

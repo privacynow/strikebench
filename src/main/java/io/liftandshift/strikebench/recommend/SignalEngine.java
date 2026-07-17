@@ -3,7 +3,6 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
@@ -27,17 +26,10 @@ import java.util.Optional;
  */
 public final class SignalEngine {
 
-    /** Naive keyword sentiment. Stems, matched case-insensitively against headlines. */
-    static final List<String> POSITIVE = List.of(
-            "beat", "beats", "record", "surge", "surges", "rally", "rallies", "rallied", "upgrade",
-            "upgraded", "growth", "accelerat", "strong", "tops", "exceed", "profit", "gain", "jump",
-            "soar", "bullish", "outperform", "cools", "eases", "optimis", "breakthrough");
-    static final List<String> NEGATIVE = List.of(
-            "miss", "misses", "downgrade", "probe", "investigation", "lawsuit", "recall", "cuts",
-            "falls", "fall", "plunge", "drop", "drops", "weak", "warning", "bearish", "layoff",
-            "fraud", "scrutiny", "slump", "fears", "concern", "halt", "underperform", "loss");
-    static final List<String> EVENT = List.of(
-            "earnings", "guidance", "results", "fda", "merger", "acquisition", "8-k", "dividend date");
+    /** Compatibility aliases; {@link NewsSentimentScorer} is the one scorer and vocabulary owner. */
+    static final List<String> POSITIVE = NewsSentimentScorer.POSITIVE_KEYWORDS;
+    static final List<String> NEGATIVE = NewsSentimentScorer.NEGATIVE_KEYWORDS;
+    public static final String SENTIMENT_SCORER_VERSION = NewsSentimentScorer.VERSION;
 
     public record Signals(
             String symbol,
@@ -55,7 +47,10 @@ public final class SignalEngine {
             Double liquidityScore,      // 0..1 from ATM spread
             String thesis,              // BULLISH | BEARISH | NEUTRAL | VOLATILE
             double confidence,          // 0..1
-            List<String> rationale      // human-readable evidence, in order of weight
+            List<String> rationale,     // human-readable evidence, in order of weight
+            String sentimentScorerVersion,
+            NewsSentimentScorer.Aggregate sentimentAggregate,
+            List<NewsSentimentScorer.HeadlineSentiment> headlineSentiment
     ) {}
 
     private final MarketDataService market;
@@ -123,19 +118,25 @@ public final class SignalEngine {
         // Demo headlines are explicitly fabricated practice prompts and simulated worlds have
         // no real-company news. They may be displayed as teaching catalysts, but must never
         // become sentiment, thesis, confidence, or event-risk evidence.
-        List<NewsItem> news = lane == MarketLane.OBSERVED ? market.news(sym, worldId) : List.of();
-        List<String> posHits = new ArrayList<>();
-        List<String> negHits = new ArrayList<>();
-        boolean eventRisk = false;
-        for (NewsItem item : news) {
-            String h = item.headline() == null ? "" : item.headline().toLowerCase(Locale.ROOT);
-            int p = countHits(h, POSITIVE), n = countHits(h, NEGATIVE);
-            if (p > n) posHits.add(item.headline());
-            else if (n > p) negHits.add(item.headline());
-            if (containsAny(h, EVENT)) eventRisk = true;
-        }
+        NewsSentimentScorer.Result newsSentiment = lane == MarketLane.OBSERVED
+                ? NewsSentimentScorer.score(market.news(sym, worldId))
+                : NewsSentimentScorer.unavailable(List.of(),
+                        lane == MarketLane.DEMO ? NewsSentimentScorer.DEMO_BASIS
+                                : NewsSentimentScorer.UNAVAILABLE_BASIS,
+                        lane == MarketLane.DEMO
+                                ? "News sentiment unavailable — Demo catalysts are fabricated teaching prompts."
+                                : "News sentiment unavailable — this generated market has no issuer-news feed.");
+        List<String> posHits = newsSentiment.headlines().stream()
+                .filter(item -> item.classification() == NewsSentimentScorer.Classification.POSITIVE)
+                .map(NewsSentimentScorer.HeadlineSentiment::headline).toList();
+        List<String> negHits = newsSentiment.headlines().stream()
+                .filter(item -> item.classification() == NewsSentimentScorer.Classification.NEGATIVE)
+                .map(NewsSentimentScorer.HeadlineSentiment::headline).toList();
         int scored = posHits.size() + negHits.size();
-        double sentiment = scored == 0 ? 0 : (posHits.size() - negHits.size()) / (double) scored;
+        double sentiment = newsSentiment.aggregate().score() == null ? 0.0
+                : newsSentiment.aggregate().score();
+        boolean eventRisk = newsSentiment.aggregate().available()
+                && newsSentiment.aggregate().eventRisk();
 
         // Direction blends price action (heavier) with sentiment
         double momentum = ret20 == null ? 0 : Math.clamp(ret20 / 0.05, -1, 1); // +-5% over 20d saturates
@@ -164,7 +165,9 @@ public final class SignalEngine {
                     momentum > 0.2 ? "upward" : momentum < -0.2 ? "downward" : "flat",
                     demoHistory ? " — DEMO price history, no live candle source configured" : ""));
         }
-        if (scored > 0) {
+        if (!newsSentiment.aggregate().available()) {
+            rationale.add(newsSentiment.aggregate().note());
+        } else if (scored > 0) {
             rationale.add(String.format("News sentiment %+.2f (%d positive vs %d negative headline%s)",
                     sentiment, posHits.size(), negHits.size(), scored == 1 ? "" : "s"));
         } else {
@@ -183,7 +186,8 @@ public final class SignalEngine {
 
         return Optional.of(new Signals(sym, optionable, ret5, ret20, ivAtm, hv30, ivHv, volSignal,
                 round2(sentiment), List.copyOf(posHits), List.copyOf(negHits), eventRisk,
-                liquidity, thesis, round2(confidence), List.copyOf(rationale)));
+                liquidity, thesis, round2(confidence), List.copyOf(rationale), SENTIMENT_SCORER_VERSION,
+                newsSentiment.aggregate(), newsSentiment.headlines()));
     }
 
     private static Double trailingReturn(List<Candle> candles, int days) {
@@ -194,16 +198,7 @@ public final class SignalEngine {
     }
 
     static int countHits(String haystack, List<String> stems) {
-        int hits = 0;
-        for (String stem : stems) {
-            if (haystack.contains(stem)) hits++;
-        }
-        return hits;
-    }
-
-    private static boolean containsAny(String haystack, List<String> stems) {
-        for (String stem : stems) if (haystack.contains(stem)) return true;
-        return false;
+        return NewsSentimentScorer.countHits(haystack, stems);
     }
 
     private static double round2(double v) {

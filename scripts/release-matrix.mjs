@@ -52,10 +52,17 @@ const rows = liveOnly
   ? [['Live-provider browser', browserResult('dom-live.tap')]]
   : [
       ['JUnit', junitResult()],
+      ['No-silent-defaults contract', browserResult('dom-defaults.tap')],
+      ['Scenario level-lens contract', browserResult('dom-scenario.tap')],
+      ['Mounted SPA identity contract', browserResult('dom-spa.tap')],
       ['Fixture browser', browserResult('dom-fixture.tap')],
       ['Responsive widths', browserResult('dom-audit.tap')],
       ['Grown-state browser', browserResult('dom-seeded.tap')],
-      ['Auth-on browser (signed-out + signed-in)', browserResult('dom-auth.tap')]
+      ['Auth-on browser (signed-out + signed-in)', browserResult('dom-auth.tap')],
+      ['Book Risk browser', browserResult('dom-bookrisk.tap')],
+      ['Adopted-position two-lens browser', browserResult('dom-adoption.tap')],
+      ['Learn explanation coverage', browserResult('dom-learn-coverage.tap')],
+      ['Learn SPA browser', browserResult('dom-learn.tap')]
     ];
 if (!liveOnly && fs.existsSync(path.join(target, 'dom-live.tap'))) {
   rows.push(['Live-provider browser', browserResult('dom-live.tap')]);

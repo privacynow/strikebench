@@ -18,6 +18,8 @@
   </script>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%232f6bde'/%3E%3Cstop%20offset='1'%20stop-color='%237c4fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='24'%20height='24'%20rx='6'%20fill='url(%23g)'/%3E%3Cpath%20d='M5%2019h14'%20stroke='rgba(255,255,255,.4)'%20stroke-width='1.2'%20stroke-linecap='round'%20stroke-dasharray='1.4%202.6'/%3E%3Cpath%20d='M5%2015.5h6l7.5-8.5'%20stroke='%23fff'%20stroke-width='2.2'%20fill='none'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='11'%20cy='15.5'%20r='1.9'%20fill='%23fff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/css/app.css?v=@asset.version@">
+  <link rel="stylesheet" href="/css/workspace.css?v=@asset.version@">
+  <link rel="stylesheet" href="/css/learn.css?v=@asset.version@">
 </head>
 <body>
   <a class="skip-link" href="#app">Skip to main content</a>
@@ -45,14 +47,15 @@
       <span id="lane-chip" class="badge badge-dim" aria-label="Active market: loading">MARKET</span>
       <button id="theme-toggle" type="button" class="theme-toggle"
               title="Theme: follows your system. Click to cycle System / Light / Dark."></button>
-      <label class="risk-select" title="Risk mode used for new ideas and tickets">
-        <span>Risk</span>
-        <select id="risk-mode" title="How much capital one new idea may put at risk. It never changes the math — the same contract has the same odds in every mode.">
-          <option value="conservative" selected>Cautious — 1%/idea</option>
-          <option value="balanced">Standard — 2%/idea</option>
-          <option value="aggressive">High — 5%/idea</option>
-        </select>
-      </label>
+      <a id="learn-link" class="learn-utility-link" href="#/learn"
+         title="Open the searchable terms and strategy guide">Learn</a>
+      <div class="risk-picker" id="header-risk-picker">
+        <span class="risk-picker-label">Risk</span>
+        <button id="risk-mode" class="risk-mode-trigger" type="button" value=""
+                aria-haspopup="true" aria-expanded="false" aria-controls="risk-mode-popover"
+                aria-label="Choose how much capital one new idea may put at risk">Choose</button>
+        <div id="risk-mode-popover" class="risk-mode-popover" hidden></div>
+      </div>
       <div class="level-switch" id="level-switch" role="group" aria-label="Experience level"
            title="Beginner: question-driven flows, plain language, extra safety context. Expert: dense, data-first screens with deeper analytics.">
         <button data-level="beginner" type="button">Beginner</button>
@@ -102,6 +105,7 @@
   <script src="/js/builder.js?v=@asset.version@"></script>
   <script src="/js/position-editor.js?v=@asset.version@"></script>
   <script src="/js/views.js?v=@asset.version@"></script>
+  <script src="/js/views-learn.js?v=@asset.version@"></script>
   <script src="/js/views-research.js?v=@asset.version@"></script>
   <script src="/js/views-plan.js?v=@asset.version@"></script>
   <script src="/js/views-portfolio.js?v=@asset.version@"></script>

@@ -169,6 +169,7 @@ class PlanServiceTest {
         db.exec("INSERT INTO plan_evidence(id,plan_id,context_rev,basis,as_of,engine_version,input_hash," +
                         "evidence_provenance,state) VALUES('pe_1',?,1,'DEMO_HISTORY',now(),'study-1','old','DEMO','CURRENT')",
                 plan.id());
+        seedCurrentOutcomeArtifacts(plan.id(), "context");
         String oldHash = plan.context().inputHash();
 
         Plan.View changed = plans.updateContext(null, plan.id(), new Plan.ContextUpdateRequest(
@@ -183,15 +184,18 @@ class PlanServiceTest {
                 r -> r.str("input_hash"), plan.id())).containsExactly(oldHash, changed.context().inputHash());
         assertThat(db.query("SELECT state FROM plan_evidence WHERE id='pe_1'", r -> r.str("state")))
                 .containsExactly("STALE");
+        assertOutcomeArtifactsAreStale("context");
     }
 
     @Test
     void intentIsEditableBeforeDecisionAndOptimisticVersionsFailClosed() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-lock", "AAPL", null, 30));
+        seedCurrentOutcomeArtifacts(plan.id(), "intent");
         Plan.View claimed = plans.claimIntent(null, plan.id(), new Plan.IntentRequest(plan.version(), "INCOME"));
         assertThat(claimed.intent()).isEqualTo("INCOME");
         assertThat(claimed.context().rev()).isEqualTo(2);
+        assertOutcomeArtifactsAreStale("intent");
 
         Plan.View changedGoal = plans.claimIntent(null, plan.id(),
                 new Plan.IntentRequest(claimed.version(), "HEDGE"));
@@ -296,6 +300,40 @@ class PlanServiceTest {
     private static Plan.CreateRequest create(String requestId, String symbol, String intent, int horizon) {
         return new Plan.CreateRequest(requestId, symbol, intent, null, null, "bullish", horizon,
                 25000L, "conservative", 0L, null, null, null);
+    }
+
+    private void seedCurrentOutcomeArtifacts(String planId, String suffix) {
+        String fingerprint = "fp_" + suffix;
+        String ensemble = "ensemble_" + suffix;
+        String candidate = "candidate_" + suffix;
+        db.exec("INSERT INTO ensemble_artifact(fingerprint,model_version,basis,n_paths,n_steps,codec,raw_bytes," +
+                        "spot_matrix,iv_path,rate_annual,step_seconds,source_content_hash) " +
+                        "VALUES(?,'paths-test','PARAMETRIC',2,2,'raw',2,?,?,0.04,60,?)",
+                fingerprint, new byte[]{1}, new byte[]{2}, "source_" + suffix);
+        db.exec("INSERT INTO plan_ensemble(id,plan_id,context_rev,fingerprint,model_version,anchor_spot_cents," +
+                        "anchor_source,anchor_freshness,as_of,input_hash,state,spec_model,spec_shape,spec_horizon_days," +
+                        "spec_steps_per_day,spec_drift_annual,spec_vol_annual,spec_jumps_per_year,spec_jump_mean," +
+                        "spec_jump_vol,spec_tail_nu,spec_seed,spec_paths,iv_start,iv_longrun,iv_shape) " +
+                        "VALUES(?,?,1,?,'paths-test',10000,'fixture','FIXTURE',now(),?,'CURRENT','GBM','BASE',30," +
+                        "1,0,0.2,0,0,0,8,42,2,0.2,0.2,'FLAT')",
+                ensemble, planId, fingerprint, "ensemble-input-" + suffix);
+        db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,evaluation_snapshot) " +
+                        "VALUES(?,?,1,'LONG_CALL',?,'CURRENT','{}'::jsonb)",
+                candidate, planId, "candidate-input-" + suffix);
+        db.exec("INSERT INTO plan_outcome_run(id,plan_id,context_rev,candidate_id,ensemble_id,basis,interpretation," +
+                        "input_hash,engine_version,state) VALUES(?,?,1,?,?,'PARAMETRIC','test run',?,'outcome-test','CURRENT')",
+                "outcome_" + suffix, planId, candidate, ensemble, "outcome-input-" + suffix);
+        db.exec("INSERT INTO plan_outcome_comparison(id,plan_id,context_rev,ensemble_id,ensemble_fingerprint,basis," +
+                        "interpretation,fairness,input_hash,engine_version,state) VALUES(?,?,1,?,?,'PARAMETRIC'," +
+                        "'test comparison','same paths',?,'comparison-test','CURRENT')",
+                "comparison_" + suffix, planId, ensemble, fingerprint, "comparison-input-" + suffix);
+    }
+
+    private void assertOutcomeArtifactsAreStale(String suffix) {
+        assertThat(db.query("SELECT state FROM plan_outcome_run WHERE id=?", r -> r.str("state"),
+                "outcome_" + suffix)).containsExactly("STALE");
+        assertThat(db.query("SELECT state FROM plan_outcome_comparison WHERE id=?", r -> r.str("state"),
+                "comparison_" + suffix)).containsExactly("STALE");
     }
 
     private static void await(java.util.function.BooleanSupplier condition) {

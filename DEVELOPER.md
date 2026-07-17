@@ -3,42 +3,59 @@
 User-facing overview lives in [README.md](README.md). This file is everything else: build,
 architecture, tests, configuration, and deployment.
 
-## Current product shape (2026-07-14)
+## Current product shape (2026-07-17)
 
-The Plan-centered journey is complete on `feature/journey_refactor` and is not deployed.
+Program ONE is complete in the source tree on `feature/journey_refactor`; it is not deployed.
 
-- The visible workflow is **Understand -> Evidence -> Strategy -> Outcomes -> Decide ->
-  Manage & Review** at `#/plan/{id}/{stage}`. Research starts ticker- and universe-led work,
-  Home is the bounded multi-Plan desk, Portfolio owns positions and construction, and Data owns
-  sources, datasets, and simulated markets.
+- The primary information architecture is **Desk / Workspace / Book / Data**. Desk owns attention,
+  resume, alerts, argued ideas, and the bounded Plan drawer. Workspace owns public market research
+  and the durable Plan document. Book owns Practice, tracked accounts, construction, imports,
+  adoption, campaigns, transformations, aggregate risk, and accounting. Data owns sources,
+  datasets, jobs, simulated markets, and administration. Learn is a utility projection of shared
+  registries, not another workflow.
+- A Plan is one mounted SPA document with **Your view -> Evidence -> Strategy -> Outcomes ->
+  Commitment -> Live** bands. Same-Plan stage URLs move attention without replacing that document.
+  Destination and component refreshes preserve drafts, focus, scroll, disclosures, pending work,
+  and subscriptions. `dom-tests/spa-identity.test.js` restricts root rendering to lifecycle seams.
+- Decision facts are declarations, not defaults. Direction, horizon, risk posture, objective,
+  source scope, and scenario inputs remain absent until explicitly supplied. The server policy and
+  `dom-tests/no-silent-defaults.test.js` reject client or route-level substitutions.
 - `StrategyCatalog` is the only strategy-family/template registry. The frontend downloads its
-  metadata from `GET /api/strategies`; Plan Strategy composes ranked proposals, goal-native
-  ladders, the visual catalog, exact-contract Builder, option book, and Scout without route hops.
-- `OutcomeContract` and `POST /api/evaluate` are the only forward-evaluation contract.
-  Basis is explicit (`DECISION_POLICY`, `PARAMETRIC`, `HISTORICAL_ANALOGS`,
-  `CONDITIONAL_BOOTSTRAP`, or `RISK_NEUTRAL`) so shared machinery never blends interpretations.
-- `PathEnsembleService` is the only path source. `ScenarioSimulator` prices supplied ensembles;
-  `HistoricalReplayKernel` owns historical entry/mark/exit pricing for both backtest modes.
-- `PATHS` evaluation is decision-grade rather than a decorative fan: it returns named terminal
-  quantiles, mean/dispersion/standard error, direct end/touch probabilities, median first-touch time,
-  Wilson intervals, a sampling-margin disclosure, and an immutable ensemble fingerprint. `POSITION`
-  can price the exact working package on that same fingerprint, so Research and Trade cannot silently
-  answer with different futures.
-- A live simulated market remains a separate, single-realization practice lane. Its control room shows
-  every session symbol at once, one clearly named focus chart, the moving account/book, and explicit
-  management controls. A Plan hands one stored path to the simulator only as a fingerprinted rehearsal;
-  it never treats one realized path as validation of the distribution.
-- Economic teaching-market labels are reserved for `DEMO_FIXTURE` and `SIMULATED` pricing evidence.
-  `MODELED` is an incomplete input inside another lane, not a generated market; otherwise-promising
-  modeled fallbacks remain `MIXED` until end-to-end evidence supports a stronger verdict.
-- The old Lab, standalone Decision, ETF-replicator, old Trade-stage, and
-  `/api/sim/{scenario,strategy,compare}` surfaces are gone. Do not restore internal aliases or DTO
-  overloads for hypothetical API consumers. The pre-release database has one current schema and no
-  historical translation path; model-version receipts remain because deterministic identity is a fact.
+  metadata from `GET /api/strategies`; proposals, intent ladders, exact Builder, custom packages,
+  Scout selections, and cash all enter the same Plan competition and decision policy.
+- `OutcomeContract` and `POST /api/evaluate` are the forward-evaluation contract. Basis is explicit
+  (`DECISION_POLICY`, `PARAMETRIC`, `HISTORICAL_ANALOGS`, `CONDITIONAL_BOOTSTRAP`, or
+  `RISK_NEUTRAL`), so shared machinery never blends interpretations.
+- `PathEnsembleService` is the only path source. `ScenarioSimulator` prices supplied ensembles and
+  `HistoricalReplayKernel` owns historical entry/mark/exit pricing. The Evidence fan, Outcomes,
+  comparison, rehearsal, and review share its immutable fingerprint. Scenario Canvas authors
+  waypoints, IV paths, event templates, and symbol/position scope on that same spine; exact
+  conditional and guided interpolation fills remain distinguishable.
+- `TrackedPackageAnalysisService` and `PlanAdoptionReviewService` reuse exact tracked-package
+  economics for Book analysis and the adopted Plan's fresh-eyes/campaign lenses. Broker statement
+  preview, confirmation, pending resolution, and commands live under one
+  `/api/portfolio/broker-imports` journey; confirmed lots flow through `PlanAdoptionService` rather
+  than a second ledger or Plan writer.
+- `CampaignService`, `BookRiskService`, and `AlertCenterService` are the singular owners for campaign
+  truth/review, lot-derived aggregate risk, and user attention respectively. Their UI commands deep
+  link to canonical Book or Workspace actions instead of duplicating mutations on the Desk.
+- Beginner and Expert are pure presentation lenses over the same controls, state, requests, and
+  results. The rendered-label audit exercises real Strategy, Outcomes Canvas, Book Import, and Book
+  Risk surfaces at both levels against `Learn.INFO` or a reviewed plain-language allowlist.
+- Responsive evidence covers **2560**, 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels.
+  Wide layouts must add useful co-visibility rather than empty tracks or stretched controls; mobile
+  retains the same capabilities and calculations.
+- Economic teaching-market labels are reserved for `DEMO_FIXTURE` and `SIMULATED` evidence.
+  `MODELED` is an incomplete input inside another lane, not a generated-market fallback. Missing
+  observed inputs stay unavailable.
+- The old Lab, standalone Decision, ETF-replicator, old Trade-stage, duplicate Plan tools, and
+  `/api/sim/{scenario,strategy,compare}` surfaces are absent. The pre-release database has one
+  fingerprinted current schema and no translation layer; model-version receipts remain because
+  deterministic identity is a product fact.
 - Release evidence is generated from Surefire XML and per-suite browser TAP reports by
-  `scripts/release-matrix.mjs` on every CI run. The workflow summary is authoritative for that
-  exact commit; test counts are never transcribed here. Representative screenshots are under
-  `dom-tests/shots/final-*.png`.
+  `scripts/release-matrix.mjs`. The report for the exact branch tip is authoritative; fixed test
+  counts are never transcribed here. Screenshots and product-walk evidence live under
+  `dom-tests/shots/`.
 
 ## Build & run
 
@@ -124,13 +141,16 @@ io.liftandshift.strikebench
                 typed ApiResponses, shared stream broadcaster, WorldTransitionService
 ```
 
-**Decision flow.** Research establishes a lane-owned symbol and can open or resume a durable Plan.
-Understand records the question; Evidence keeps historical observations and modeled futures distinct;
-Strategy selects a server-catalog family, ranked proposal, intent ladder, or custom package; Outcomes
-evaluates those exact contracts under explicitly named bases; Decide assembles economics, probability
-map, execution quality, account sizing, guardrails, and management guidance; Manage & Review preserves
-the frozen comparison, paper action, and rehearsal record. Beginner and Expert traverse this same state
-machine with different composition and explanation, never different requests or math.
+**Mounted Workspace flow.** Public Workspace Research establishes a lane-owned symbol and asks what
+just happened before asking what the user believes happens next. Starting a Plan carries only facts
+the user explicitly declared. Your view owns the question, direction, horizon, risk posture, and
+optional target; Evidence keeps historical observations and modeled futures distinct and creates the
+one stored fan; Strategy selects a server-catalog proposal, exact Builder/custom package, intent
+ladder, or Scout choice; Outcomes reprices those exact contracts on the same fan under explicitly
+named bases; Commitment assembles executable economics, sizing, guardrails, acknowledgments, and
+practice/cash/broker outcomes; Live owns position management and review. Earlier bands collapse to
+their conclusions inside the same document. Beginner and Expert traverse this same state machine
+with different composition and explanation, never different controls, requests, or math.
 
 **Canonical evaluation API.** `POST /api/evaluate` accepts a versioned `OutcomeContract.Request`
 containing operation, basis, market context, exact position(s), and optional scenario/study inputs.
@@ -210,30 +230,52 @@ were doing and quietly prepares the next step.
   always allows). The app warms the likely next step (expirations/history for the working
   symbol) during idle time after each render; denials are silent and cost the user nothing.
 - *Status UX*: provider rate-limit cooldowns show as a calm amber header chip (self-expiring),
-  a synthetic active dataset shows the loud SCENARIO MODE banner, and Home offers
+  a synthetic active dataset shows the loud SCENARIO MODE banner, and the Desk offers
   "Pick up where you left off" chips into the working context.
 
 ## Tests
 
 ```bash
-mvn test                                             # JUnit (unit + API integration)
+docker compose up -d db
+mvn -q clean package                                # JUnit + fresh release jar
 cd dom-tests
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7101 node --test dom.test.js        # fixture UI suite
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7102 node --test dom-audit.test.js  # 8-width responsive/geometry sweep
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7103 node --test dom-seeded.test.js # grown-DB walk (both levels)
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7104 node --test dom-auth.test.js   # auth-on signed-out + signed-in OIDC journey
-JAVA_BIN=$JAVA_HOME/bin/java PORT=7105 node --test dom-live.test.js   # REAL Cboe/EDGAR, every screen
+npm ci
+npx playwright install chromium
+npm run test:ci                                     # complete deterministic browser matrix
+npm run test:live                                   # observed Cboe/EDGAR lane
 ```
 
-DOM suites use Playwright (`npm i` inside `dom-tests/` once) against the real jar on a fresh
-temp database; each suite needs its own port. Page JS errors and 5xx responses are hard
-failures. Run all suites — fresh-DB suites miss grown-state bugs, fixture suites miss live
-ones. The responsive audit checks 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 pixels and
-fails on horizontal overflow, clipped controls, or inaccessible geometry. CI retains one TAP report
-per browser suite and runs `node scripts/release-matrix.mjs`; that command sums the actual Surefire
-and TAP reports, fails on reported failures, writes `target/release-matrix.md`, and publishes it to
-the workflow summary. `.github/workflows/ci.yml` runs the backend and non-network browser matrix on every push/PR;
-`live-providers.yml` runs the observed-lane suite on a weekday schedule and by manual dispatch.
+`npm run test:ci` runs these owned suites in order:
+
+| Script | Contract |
+|---|---|
+| `test:defaults` | explicit declarations and absence of silent defaults |
+| `test:scenario` | one Scenario form/state across Beginner and Expert |
+| `test:spa` | mounted destination/component identity and render-call boundary |
+| `test:fixture` | full deterministic product journey and rendered-label audit |
+| `test:seeded` | grown-database product walk |
+| `test:audit` | responsive/geometry sweep |
+| `test:auth` | auth-on signed-out and signed-in ownership journey |
+| `test:bookrisk` | aggregate Book Risk lane |
+| `test:adoption` | adopted-position fresh-eyes/campaign review at 2560 and 390 |
+| `test:learn` | registry completeness and searchable Learn route |
+
+The DOM suites use Playwright against the real jar and isolated temporary databases. Page errors,
+5xx responses, horizontal overflow, clipped controls, and inaccessible geometry fail the owning
+suite. The responsive audit covers **2560**, 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS
+pixels. The fixture/grown-state suites and the live-provider suite test different evidence lanes;
+neither substitutes for the other.
+
+CI records one TAP file per browser suite under `target/`, then runs
+`node scripts/release-matrix.mjs`. The script sums actual Surefire and TAP reports, fails on any
+reported failure, writes `target/release-matrix.md`, and publishes it to the workflow summary.
+`.github/workflows/ci.yml` owns the deterministic release matrix on every push/PR;
+`live-providers.yml` owns the observed-provider run on its weekday schedule and manual dispatch.
+Exact counts come from those generated reports, never from a copied documentation total.
+
+After deleting or renaming test classes, use `mvn -q clean package`; incremental Maven output can
+retain stale compiled tests. Do not rebuild the jar while a browser suite is running: the app's
+changed-jar guard intentionally refuses the mismatched process.
 
 Browser tabs share one origin-wide market/event stream pair through a short leader lease and
 `BroadcastChannel`; followers consume relayed frames and retain an ordinary polling fallback until
@@ -242,7 +284,7 @@ and default observed frames resolve the current universe on every computation ra
 the sector present when the connection opened. The five-tab fixture regression must remain green:
 long-lived streams may never exhaust the browser connection pool and starve ordinary API reads.
 
-`db/schema.sql` is the only database definition. An empty database initializes from it; every later
+`db/schema.sql` is the only database definition. An empty database initializes from it; every subsequent
 boot verifies its SHA-256 fingerprint. A different or unmarked schema fails loud with a recreate
 instruction. During pre-release development, edit the baseline and recreate local/test databases;
 never add a translation migration, compatibility column, or historical record shape.

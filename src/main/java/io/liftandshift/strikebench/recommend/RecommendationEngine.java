@@ -85,7 +85,7 @@ public final class RecommendationEngine {
             List<String> allowedStrategies, // optional whitelist
             Boolean avoidEarnings,
             Boolean allow0dte,
-            String intent,               // StrategyIntent name; null/blank = DIRECTIONAL (historic behavior)
+            String intent,               // explicit StrategyIntent at every product/API decision boundary
             Holdings holdings,           // shares context for EXIT/HEDGE/ACQUIRE flows, optional
             Filters filters              // hard screens on candidate metrics, optional
     ) {}

@@ -38,7 +38,9 @@
         ? Object.keys(App.state.planUi).reduce(function (out, id) {
             var e = App.state.planUi[id] && App.state.planUi[id].evidence;
             var planUi = App.state.planUi[id] || {};
-            if (e && e.mode || planUi.strategyView) out[id] = { evidenceMode: e && e.mode || null,
+            var thesis = planUi.thesis || {};
+            if (e && e.mode || thesis.setup || planUi.strategyView) out[id] = { evidenceMode: e && e.mode || null,
+              evidenceSetup: thesis.setup || null,
               strategyView: planUi.strategyView || null,
               contextRev: planUi.contextRev || null };
             return out;
@@ -67,7 +69,9 @@
       var ui = App.state.planUi[id] = App.state.planUi[id] || {};
       ui.contextRev = s.planPresentation[id].contextRev || null;
       ui.evidence = ui.evidence || {};
+      ui.thesis = ui.thesis || {};
       if (s.planPresentation[id].evidenceMode) ui.evidence.mode = s.planPresentation[id].evidenceMode;
+      if (s.planPresentation[id].evidenceSetup) ui.thesis.setup = s.planPresentation[id].evidenceSetup;
       if (s.planPresentation[id].strategyView) ui.strategyView = s.planPresentation[id].strategyView;
     });
     Object.keys(s.forms || {}).forEach(function (k) {
@@ -141,14 +145,9 @@
     lastSavedJson = ''; // first save after boot always writes
     window.addEventListener('hashchange', saveIfDirty);
     setInterval(saveIfDirty, 4000);
-    // A tab that adopted another tab's state while hidden still SHOWS its old DOM —
-    // re-render once when the user comes back to it.
-    document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && adoptedWhileHidden) {
-        adoptedWhileHidden = false;
-        if (window.App && App.render) App.render();
-      }
-    });
+    // The app owns the one visibility reconciliation sequence (world, workspace, mounted
+    // destination, then streams). `reconcile()` below reports a hidden adoption so that
+    // sequence can refresh the live destination once without a competing root repaint.
     // Leaving the page: localStorage synchronously; the backend via keepalive fetch (a normal
     // request would be cancelled by the unload).
     window.addEventListener('pagehide', function () {
@@ -190,15 +189,20 @@
     if (!newRev || newRev <= rev) return;
     if (!document.hidden) return; // visible tab keeps its own state; it will overwrite on next save
     API.getFresh('/api/workspace').then(function (r) {
-      adoptRemote(r, true); // the DOM still shows pre-adoption state — refresh on return
+      // Visibility may change while this request is in flight. Once visible, the app's
+      // ordered world/workspace reconciliation owns adoption; a late hidden-tab callback
+      // must not mutate state after that sequence already decided what to paint.
+      if (document.hidden) adoptRemote(r, true);
     }).catch(function () { /* ignore */ });
   }
 
   function reconcile() {
     if (!started || !window.API) return Promise.resolve(false);
+    var adoptedBeforeVisibility = adoptedWhileHidden;
+    adoptedWhileHidden = false;
     return API.getFresh('/api/workspace').then(function (remote) {
-      return adoptRemote(remote, false);
-    }).catch(function () { return false; });
+      return adoptRemote(remote, false) || adoptedBeforeVisibility;
+    }).catch(function () { return adoptedBeforeVisibility; });
   }
 
   window.Workspace = {

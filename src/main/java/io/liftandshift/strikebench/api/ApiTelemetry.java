@@ -99,7 +99,7 @@ final class ApiTelemetry {
         if (path.startsWith("/api/sparklines")) return "quotes";
         if (path.startsWith("/api/research/scout") || path.contains("/intent-ladder")
                 || path.contains("/strategy/run") || path.contains("/strategy/fit")
-                || path.startsWith("/api/evaluate") || path.startsWith("/api/opportunities")
+                || path.startsWith("/api/evaluate")
                 || path.startsWith("/api/optimize")) return "compute";
         if (path.startsWith("/api/research")) return "research";
         if (path.startsWith("/api/quotes") || path.startsWith("/api/market")) return "quotes";

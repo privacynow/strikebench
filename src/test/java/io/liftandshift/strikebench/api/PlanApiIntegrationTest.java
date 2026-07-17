@@ -223,6 +223,38 @@ class PlanApiIntegrationTest {
         assertThat(!afterRevision.has("evidence") || afterRevision.get("evidence").isNull()).isTrue();
     }
 
+    @Test void publicHistoricalReceiptMustKeepItsExactStudyIdentityWhenAttachedToAPlan() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"evidence-exact-public-1","symbol":"TSLA","intent":"DIRECTIONAL",
+                 "title":"Exact public evidence","thesis":"bearish","horizonDays":23,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        String study = """
+                {"key":"pullback_rebound","symbol":"TSLA","from":"2023-01-01","to":"2026-07-10",
+                 "params":{"lookback":20,"dropPct":5,"forward":23,"eventSpacing":23,
+                 "minSample":5,"confidencePct":95,"bootstrapSamples":200,
+                 "regime":"ALL","multiplicity":"CATALOG_BONFERRONI","splitHalf":true}}
+                """;
+        JsonNode publicResult = json(post("/api/research/event-studies", study));
+        String exactKey = publicResult.get("studyKey").asText();
+
+        ObjectNode drifted = (ObjectNode) Json.parse(study);
+        drifted.put("expectedStudyKey", "not-the-public-study-key");
+        HttpResponse<String> rejected = post("/api/plans/" + id + "/evidence/study", drifted.toString());
+        assertThat(rejected.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(rejected.body()).get("detail").asText()).contains("changed");
+        JsonNode afterReject = json(get("/api/plans/" + id + "/evidence/latest"));
+        assertThat(afterReject.path("evidence").isMissingNode() || afterReject.path("evidence").isNull()).isTrue();
+
+        ObjectNode exact = (ObjectNode) Json.parse(study);
+        exact.put("expectedStudyKey", exactKey);
+        JsonNode saved = json(post("/api/plans/" + id + "/evidence/study", exact.toString()));
+        assertThat(saved.at("/result/studyKey").asText()).isEqualTo(exactKey);
+        assertThat(saved.at("/result/analogPaths")).isEqualTo(publicResult.get("analogPaths"));
+        assertThat(json(get("/api/plans/" + id + "/evidence/latest"))
+                .at("/evidence/result/studyKey").asText()).isEqualTo(exactKey);
+    }
+
     @Test void planEvidenceRestoresOnlyTheActiveAnalysisDataset() throws Exception {
         json(put("/api/datasets/active", "{\"id\":\"observed\"}"));
         JsonNode plan = json(post("/api/plans", """
@@ -414,16 +446,103 @@ class PlanApiIntegrationTest {
                 "{\"scope\":\"ALTERNATIVES\",\"maxPicks\":4}"));
         JsonNode scoutCandidates = scout.at("/scout/result/candidates");
         assertThat(scoutCandidates.size()).isGreaterThan(0);
+        assertThat(scout.at("/scout/result/sentimentScorerVersion").asText())
+                .isEqualTo("sentiment-keyword-v1");
         JsonNode pick = scoutCandidates.get(0);
         assertThat(pick.get("symbol").asText()).isNotEqualTo("AAPL");
+        assertThat(pick.at("/sentimentScorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
+        JsonNode restoredScout = json(get("/api/plans/" + scoutId + "/scout/latest?scope=ALTERNATIVES"));
+        assertThat(restoredScout.at("/scout/result/sentimentScorerVersion").asText())
+                .isEqualTo("sentiment-keyword-v1");
+        assertThat(restoredScout.at("/scout/result/candidates/0/sentimentScorerVersion").asText())
+                .isEqualTo("sentiment-keyword-v1");
 
         JsonNode child = json(post("/api/plans/" + scoutId + "/scout/spawn", """
                 {"clientRequestId":"spawn-scout-api-1","candidateId":"%s","role":"ALTERNATIVE"}
                 """.formatted(pick.get("id").asText())));
         assertThat(child.at("/plan/originPlanId").asText()).isEqualTo(scoutId);
         assertThat(child.at("/plan/symbol").asText()).isEqualTo(pick.get("symbol").asText());
-        assertThat(json(get("/api/plans/" + child.at("/plan/id").asText() + "/strategy/latest"))
-                .at("/selected/legs")).isEqualTo(pick.get("legs"));
+        JsonNode childStrategy = json(get("/api/plans/" + child.at("/plan/id").asText() + "/strategy/latest"));
+        assertThat(childStrategy.at("/selected/legs")).isEqualTo(pick.get("legs"));
+        assertThat(childStrategy.at("/selected/sentimentScorerVersion").asText())
+                .isEqualTo("sentiment-keyword-v1");
+    }
+
+    @Test void exactBuilderSelectionCompetesBesideServerProposalsOnOneStoredFan() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"custom-vs-proposals-one-fan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"My structure beside the ranked field","thesis":"bullish","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        JsonNode ranked = json(post("/api/plans/" + id + "/strategy/run", "{}"));
+        JsonNode proposals = ranked.at("/strategy/result/candidates");
+        assertThat(proposals.size()).isGreaterThan(1);
+        JsonNode source = proposals.get(0);
+
+        var customBody = Json.MAPPER.createObjectNode();
+        customBody.put("expectedVersion", ranked.at("/plan/version").asLong());
+        var position = customBody.putObject("position");
+        position.put("symbol", "AAPL");
+        position.put("strategy", "CUSTOM");
+        position.put("qty", source.path("qty").asInt(1));
+        position.put("fillNature", "PROPOSED");
+        position.set("legs", source.get("legs"));
+        JsonNode custom = json(post("/api/plans/" + id + "/strategy/custom", customBody.toString()));
+        String customId = custom.at("/strategy/result/candidate/id").asText();
+        long version = custom.at("/plan/version").asLong();
+        assertThat(custom.at("/strategy/result/candidate/selected").asBoolean()).isTrue();
+        assertThat(customId).isNotBlank();
+        assertThat(proposals.toString()).doesNotContain(customId);
+
+        JsonNode fan = json(post("/api/plans/" + id + "/outcomes/ensemble", """
+                {"expectedVersion":%d,
+                 "over":{"model":"GBM","shape":"GRIND_UP","horizonDays":30,"stepsPerDay":2,
+                   "driftAnnual":0.08,"volAnnual":0.30,"jumpsPerYear":0,"jumpMean":0,
+                   "jumpVol":0,"tailNu":6,"seed":1414,"paths":120},
+                 "iv":{"startIv":0.32,"driftPerYear":0,"meanRevertSpeed":1,"longRunIv":0.30,
+                   "eventDay":-1,"eventShockPct":0,"minIv":0.03,"maxIv":4.0}}
+                """.formatted(version)));
+        String ensembleId = fan.at("/ensemble/id").asText();
+        String fingerprint = fan.at("/ensemble/fingerprint").asText();
+
+        JsonNode compared = json(post("/api/plans/" + id + "/outcomes/compare", """
+                {"expectedVersion":%d,"basis":"PARAMETRIC","ensembleId":"%s"}
+                """.formatted(version, ensembleId)));
+        assertThat(compared.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+        assertThat(compared.at("/ensemble/fingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(compared.at("/comparison/ensembleId").asText()).isEqualTo(ensembleId);
+        assertThat(compared.at("/comparison/ensembleFingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(compared.at("/comparison/fairness").asText())
+                .contains(fingerprint).contains("captured proposal entries").contains("cash");
+
+        JsonNode items = compared.at("/comparison/items");
+        JsonNode customItem = null;
+        int proposalRows = 0;
+        boolean cash = false;
+        java.util.Set<String> proposalIds = new java.util.HashSet<>();
+        proposals.forEach(node -> proposalIds.add(node.path("id").asText()));
+        for (JsonNode item : items) {
+            if (customId.equals(item.path("candidateId").asText())) customItem = item;
+            if (proposalIds.contains(item.path("candidateId").asText())) proposalRows++;
+            if ("CASH".equals(item.path("key").asText())) cash = true;
+        }
+        assertThat(customItem).as("the exact selected Builder package stays in the field").isNotNull();
+        assertThat(customItem.path("selected").asBoolean()).isTrue();
+        assertThat(customItem.path("strategy").asText())
+                .isEqualTo(custom.at("/strategy/result/candidate/strategy").asText());
+        assertThat(proposalRows).as("server-ranked alternatives stay beside the user's package")
+                .isEqualTo(proposals.size());
+        assertThat(cash).as("cash stays in the same fair comparison").isTrue();
+
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM plan_ensemble WHERE plan_id=?",
+                row -> row.intv("n"), id)).containsExactly(1);
+        assertThat(inspectDb.query("SELECT psr.run_kind FROM plan_strategy_run psr "
+                        + "JOIN plan_candidate pc ON pc.run_id=psr.id WHERE pc.id=?",
+                row -> row.str("run_kind"), customId)).containsExactly("CUSTOM");
+        assertThat(inspectDb.query("SELECT ensemble_id || ':' || ensemble_fingerprint receipt "
+                        + "FROM plan_outcome_comparison WHERE plan_id=?",
+                row -> row.str("receipt"), id)).containsExactly(ensembleId + ":" + fingerprint);
     }
 
     @Test void customPlanAnalysisPreservesAdjustedContractMultipliersEndToEnd() throws Exception {
@@ -650,6 +769,63 @@ class PlanApiIntegrationTest {
                 .isEqualTo(ran.at("/ensemble/fingerprint").asText());
         assertThat(restored.at("/preview/decisionMap/levels")).hasSize(2);
         assertJsonEquivalent(restored.get("preview"), ran.get("preview"));
+    }
+
+    @Test void unifiedScenarioCanvasPersistsSurfaceTemplateReceiptAndSameEnsemblePositions() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"unified-scenario-canvas","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Unified scenario canvas","thesis":"neutral","horizonDays":8,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        long version = plan.get("version").asLong();
+        JsonNode run = json(post("/api/plans/" + id + "/outcomes/ensemble", """
+                {"expectedVersion":%d,
+                 "canvas":{"calendar":"NYSE","dividendYieldAnnual":0.012,
+                   "dividendBasis":"User-authored annualized continuous dividend yield.",
+                   "skewVolPerLogMoneyness":-0.25,"termVolPerSqrtYear":0.08,
+                   "surfaceDynamics":"STICKY_STRIKE","settlementPolicy":"PHYSICAL_IF_ITM",
+                   "exercisePolicy":"EXPIRATION_ONLY",
+                   "ivNodes":[{"dayIndex":0,"atmIv":0.42},{"dayIndex":8,"atmIv":0.24}]},
+                 "template":{"kind":"DRIFT_TO_TARGET","targetPriceCents":27000}}
+                """.formatted(version)));
+
+        assertThat(run.at("/preview/waypointFill").asText()).isEqualTo("EXACT_CONDITIONAL");
+        assertThat(run.at("/preview/waypoints")).hasSize(1);
+        assertThat(run.at("/preview/canvas/underlying")).hasSize(9);
+        assertThat(run.at("/preview/canvas/positions").size()).isGreaterThanOrEqualTo(1);
+        assertThat(run.at("/preview/canvas/positions").toString()).contains("STOCK_BASELINE");
+        assertThat(run.at("/preview/canvas/modelReceipt/authoredPathMeaning").asText())
+                .isEqualTo("USER_HYPOTHESIS_NOT_FORECAST");
+        assertThat(run.at("/preview/canvas/modelReceipt/template/kind").asText())
+                .isEqualTo("DRIFT_TO_TARGET");
+        assertThat(run.at("/preview/canvas/modelReceipt/template/noHindsight").asBoolean()).isTrue();
+        assertThat(run.at("/preview/canvas/modelReceipt/ivNodes")).hasSize(2);
+        assertThat(run.at("/preview/canvasModel/surfaceDynamics").asText()).isEqualTo("STICKY_STRIKE");
+
+        JsonNode restored = json(get("/api/plans/" + id + "/outcomes/ensemble/latest"));
+        assertThat(restored.at("/ensemble/fingerprint").asText())
+                .isEqualTo(run.at("/ensemble/fingerprint").asText());
+        assertThat(restored.at("/preview/canvas/modelReceipt/template/fingerprint").asText())
+                .isEqualTo(run.at("/preview/canvas/modelReceipt/template/fingerprint").asText());
+        assertThat(restored.at("/preview/canvasModel")).isEqualTo(run.at("/preview/canvasModel"));
+
+        ObjectNode save = Json.MAPPER.createObjectNode();
+        save.put("expectedVersion", version);
+        save.put("title", "Target hypothesis");
+        save.put("baseEnsembleId", run.at("/ensemble/id").asText());
+        save.set("over", run.at("/preview/receipt/spec"));
+        JsonNode authored = json(post("/api/plans/" + id + "/scenarios", save.toString()));
+        assertThat(authored.at("/scenario/canvas/template/kind").asText()).isEqualTo("DRIFT_TO_TARGET");
+        assertThat(authored.at("/scenario/modelReceipt/baseEnsembleFingerprint").asText())
+                .isEqualTo(run.at("/ensemble/fingerprint").asText());
+        assertThat(authored.at("/scenario/modelReceipt/authoredPathMeaning").asText())
+                .isEqualTo("USER_HYPOTHESIS_NOT_FORECAST");
+
+        HttpResponse<String> borrowedEvent = post("/api/plans/" + id + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + version + ",\"template\":{\"kind\":\"EARNINGS_GAP_UP\"}}");
+        assertThat(borrowedEvent.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(borrowedEvent.body()).path("detail").asText())
+                .contains("Observed market").contains("never borrowed into Demo");
     }
 
     @Test void authoredWaypointsReachGenerationCarryTheirHonestyLabelAndFreezeAsScenarios() throws Exception {
@@ -1001,7 +1177,7 @@ class PlanApiIntegrationTest {
         }
     }
 
-    @Test void adoptingATrackedPositionSpawnsAMidJourneyPlanWithAnAdoptionReceipt() throws Exception {
+    @Test void trackedPositionAdoptionIsRefusedOutsideObservedAtTheApiBoundary() throws Exception {
         JsonNode account = json(post("/api/portfolio/accounts", """
                 {"name":"Adoption brokerage","accountType":"TAXABLE","broker":"Example","openingCashCents":9000000}
                 """));
@@ -1023,37 +1199,18 @@ class PlanApiIntegrationTest {
         var allocations = request.putArray("allocations");
         allocations.addObject().put("lotId", lotId);
 
-        JsonNode adopted = json(post("/api/plans/adopt", request.toString()));
-        assertThat(adopted.at("/plan/status").asText()).isEqualTo("ACTIVE");
-        assertThat(adopted.at("/plan/furthestStage").asText())
-                .as("the adopted Plan is mid-journey: managing is live while the view stays undeclared")
-                .isEqualTo("MANAGE_REVIEW");
-        assertThat(adopted.at("/plan/context/thesis").isMissingNode()
-                || adopted.at("/plan/context/thesis").isNull()).isTrue();
-        assertThat(adopted.get("structureId").asText()).isNotBlank();
-        assertThat(adopted.get("receiptId").asText()).isNotBlank();
-
-        String planId = adopted.at("/plan/id").asText();
-        JsonNode manage = json(get("/api/plans/" + planId + "/manage"));
-        JsonNode tracked = manage.at("/management/trackedStructure");
-        assertThat(tracked.path("receiptKind").asText()).isEqualTo("ADOPTION");
-        assertThat(tracked.path("authority").asText()).isEqualTo("USER_ALLOCATED");
-        assertThat(tracked.path("positionState").asText()).isEqualTo("OPEN");
-        assertThat(tracked.path("openQuantityRemaining").asLong()).isEqualTo(200L);
-
-        // The journey continues normally: declaring a view on the adopted position works.
-        JsonNode declared = json(put("/api/plans/" + planId + "/context",
-                "{\"expectedVersion\":" + adopted.at("/plan/version").asLong()
-                        + ",\"thesis\":\"bullish\",\"horizonDays\":30,\"riskMode\":\"conservative\"}"));
-        assertThat(declared.at("/context/thesis").asText()).isEqualTo("bullish");
-
-        // A lot the account does not own is refused before anything is created.
-        var bogus = Json.MAPPER.createObjectNode();
-        bogus.put("clientRequestId", "adopt-bogus-1");
-        bogus.put("portfolioAccountId", accountId);
-        bogus.put("symbol", "AAPL");
-        bogus.putArray("allocations").addObject().put("lotId", "lot_nope");
-        assertThat(post("/api/plans/adopt", bogus.toString()).statusCode()).isBetween(400, 499);
+        int plansBefore = inspectDb.query("SELECT COUNT(*) n FROM plans WHERE custom_title=?",
+                row -> row.intv("n"), "Adopted AAPL shares").getFirst();
+        int receiptsBefore = inspectDb.query("SELECT COUNT(*) n FROM position_receipt WHERE kind='ADOPTION'",
+                row -> row.intv("n")).getFirst();
+        HttpResponse<String> rejected = post("/api/plans/adopt", request.toString());
+        assertThat(rejected.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(rejected.body()).path("detail").asText())
+                .contains("real tracked position").contains("Observed market");
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM plans WHERE custom_title=?",
+                row -> row.intv("n"), "Adopted AAPL shares")).containsExactly(plansBefore);
+        assertThat(inspectDb.query("SELECT COUNT(*) n FROM position_receipt WHERE kind='ADOPTION'",
+                row -> row.intv("n"))).containsExactly(receiptsBefore);
     }
 
     @Test void brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically() throws Exception {

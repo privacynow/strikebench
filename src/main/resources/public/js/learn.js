@@ -21,6 +21,26 @@
       short: 'Capital the account sets aside for an open obligation; it is not a loss forecast. Formerly labeled Reserved.',
       beginner: 'The account holds this amount so the position can meet its obligations. It reduces buying power while the trade is open and is released or reconciled when the position changes.',
       expert: 'Collateral encumbrance under the account model. Keep distinct from economic exposure and theoretical max loss, especially for credit structures.' },
+    buyingPower: { label: 'Buying power', infoKey: 'buyingpower',
+      short: 'Cash still available for a new obligation after the account’s current broker reserves.',
+      beginner: 'Start with cash, then subtract the money being held for open positions. What remains is buying power. It can be much larger or smaller than the amount you should risk on one idea.',
+      expert: 'Practice-account cash less active reserve encumbrances under the canonical reserve policy. It is an account-capacity field, not NLV, economic exposure, theoretical max loss, or a broker-margin forecast.' },
+    netDelta: { label: 'Net delta', infoKey: 'netdelta',
+      short: 'The position’s current share-like directional sensitivity after all legs are added together.',
+      beginner: 'A net delta of +40 moves roughly like 40 long shares for the next small stock-price move; −40 leans the other way. It changes as price, time, and volatility change.',
+      expert: 'Signed sum of leg delta × ratio × quantity × contract multiplier, expressed in share equivalents for one underlying. Cross-symbol Book aggregation uses dollar and beta weighting instead of summing raw share deltas.' },
+    gamma: { label: 'Gamma', infoKey: 'gamma',
+      short: 'How quickly delta changes when the underlying price moves.',
+      beginner: 'Gamma tells you whether today’s share-like lean can change quickly. Large gamma near a strike or expiry means a small price move can make the position act very different.',
+      expert: 'Second derivative of option value with respect to spot. Position views report signed share-delta change per $1 underlying move; cross-symbol Book risk reports dollar-delta change for a 1% move.' },
+    thetaPerDay: { label: 'Theta / day', infoKey: 'thetaperday',
+      short: 'The position’s modeled value change from one calendar day passing, with price and volatility held fixed.',
+      beginner: 'Positive theta means the position tends to collect value as time passes; negative theta means it tends to lose value. Real price and volatility moves can easily outweigh it.',
+      expert: 'Signed first-order time sensitivity aggregated across marked legs and expressed in dollars per calendar day. It is a local model statistic, not a promised daily P/L.' },
+    vegaPerVolPoint: { label: 'Vega / vol pt', infoKey: 'vegapervolpoint',
+      short: 'The position’s modeled dollar change when implied volatility moves by one percentage point.',
+      beginner: 'Positive vega tends to benefit when option uncertainty rises; negative vega tends to benefit when it falls. This describes a small move around today’s marks, not a full scenario.',
+      expert: 'Signed first-order IV sensitivity aggregated across marked legs, reported in dollars per one absolute volatility point. Surface skew, term movement, and large shocks require the Scenario Canvas rather than linear vega.' },
     economicExposure: { label: 'Economic exposure', infoKey: 'economicexposure',
       short: 'The capital or asset value whose movement economically affects this position.',
       beginner: 'This includes value already tied up in shares or cash, not only the new premium paid today. It answers how much of your book participates in the result.',
@@ -46,7 +66,7 @@
       beginner: 'Practice trades use separate cash so you can rehearse decisions without changing a tracked real-money book.',
       expert: 'Execution lane PRACTICE. Never numerically netted with tracked-account cash, exposure, or performance.' },
     recordedAtBroker: { label: 'Recorded at broker', infoKey: 'brokerprovenance',
-      short: 'A factual external transaction entered from a broker record; StrikeBench did not place it. Formerly labeled EXTERNAL.',
+      short: 'A factual tracked-book transaction entered from a broker record; StrikeBench did not place it.',
       beginner: 'The fill belongs to a tracked account and must use the actual broker facts. Modeled prices cannot become its basis.',
       expert: 'Execution lane REAL with factual source, account, time, quantity, multiplier, and fill provenance.' },
     campaignEconomicBasis: { label: 'Campaign-adjusted economic basis', infoKey: 'campaignbasis',
@@ -81,6 +101,26 @@
       short: 'What exiting and re-entering the same shares actually cost: the price gap times the shares, plus fees.',
       beginner: 'Selling at one price and buying back higher is a real cost even though no line item says so. This adds those round trips up.',
       expert: '(re-entry price − exit price) × paired shares + both legs’ fees, paired chronologically. The wash-sale consequence lands on the tracked tax basis, which is reported separately.' },
+    campaignReview: { label: 'Close review', infoKey: 'campaignreview',
+      short: 'The campaign’s frozen close record: what you authored, what happened, how you managed it, what it earned, and what you learned.',
+      beginner: 'When a campaign closes, this puts the whole story in one place. It does not change any trade, lot, tax number, or recorded result; your lesson is the only editable part.',
+      expert: 'Journey-E read model over immutable Plan/scenario lineage, recorded management marks/actions, and canonical campaign accounting. Review facts are recomputed from those owners; lessonNote is the sole mutable review field.' },
+    authoredVsRealized: { label: 'Authored vs realized path', infoKey: 'authoredvsrealized',
+      short: 'Your exact saved scenario pins over the observed closes that later arrived — your hypothesis beside reality.',
+      beginner: 'The authored line connects only the prices you pinned in the Scenario Canvas. The realized line uses one coherent observed price source. If either is missing, StrikeBench says unavailable instead of drawing a substitute.',
+      expert: 'Latest saved authored_scenario among confirmed campaign Plan members, chained by scenario fingerprint to its base ensemble fingerprint/context revision. Day 0 uses the ensemble anchor; waypoint dates use the NYSE session clock; realized bars must be coherent dataset=observed, observed=1, and non-generated.' },
+    protocolAdherence: { label: 'Protocol adherence', infoKey: 'protocoladherence',
+      short: 'Whether you answered the target, stop, or time line frozen with the decision — and the signed cost when an override is exactly priceable.',
+      beginner: 'A respected rule was answered by the next recorded position action. An override needs evidence that the line was allowed to pass or answered with a different action. A negative signed cost means waiting hurt; a positive one means it helped.',
+      expert: 'All thresholds come from ProtocolEvaluator.rules/evaluate. Override cost is response result minus trigger-mark P/L only when both prove the same whole-package trade and quantity; partial/changed-package bases withhold the number explicitly.' },
+    campaignPattern: { label: 'Cross-campaign pattern', infoKey: 'campaignpattern',
+      short: 'A repeated participation lesson supported by at least two closed campaigns in the same execution lane.',
+      beginner: 'One example is a story, not a pattern. StrikeBench only names cash-secured-put regret or the covered-call melt-up mirror after two closed campaigns show the same structure during a material observed rise.',
+      expert: 'Deterministic structural signature + final lane result + one coherent observed window with at least a 5% rise. REAL and PRACTICE support counts remain separate; fewer than two supports renders insufficient/unavailable, never inferred.' },
+    lessonNote: { label: 'Lesson note', infoKey: 'lessonnote',
+      short: 'Your own editable takeaway from the campaign; it never rewrites the evidence or accounting beside it.',
+      beginner: 'Write the one thing you want your future self to remember before making this kind of decision again. You can edit it later.',
+      expert: 'Owner-scoped campaign.lesson_note (max 4,000 characters), updated through the canonical campaign PUT. closed_at and every review fact remain immutable under lesson-only edits.' },
     accountObjective: { label: 'Account objective', infoKey: 'accountobjective',
       short: 'Your declaration of what this tracked account is FOR; every analysis on it is judged against the latest revision.',
       beginner: 'Income, accumulating shares, hedging, a directional view, or preserving capital — once you declare it, StrikeBench checks every idea on this account against that purpose and says whether they match. Declaring again adds a new revision; what you said before stays on record.',
@@ -121,6 +161,10 @@
       short: 'Directional exposure in dollars, scaled by how hard each name historically moves with the market.',
       beginner: 'A dollar of NVDA exposure moves you more than a dollar of a utility, so raw exposure across different stocks does not add up fairly. Each name’s dollar exposure is multiplied by its observed sensitivity to the market (its beta) before summing. Names without enough price history are included unweighted, and the note says how many.',
       expert: 'Σ(option Δ × signed units × observed spot × β) with β regressed from observed underlying_bar closes vs SPY over matched sessions. The coverage line states the session count and how many symbols lack history (those enter at β=1, disclosed). Raw share delta is not additive across names and never appears in cross-symbol aggregates.' },
+    symbolConcentration: { label: 'Symbol concentration', infoKey: 'symbolconcentration',
+      short: 'The share of this lane’s gross directional exposure carried by the focused symbol.',
+      beginner: 'This shows whether one ticker dominates the account after the proposed package is added. A high percentage can mean several positions are really one directional bet.',
+      expert: 'Absolute focused-symbol dollar delta divided by the lane’s gross absolute dollar delta, before and after the exact package. Empty books stay named rather than receiving a fabricated zero denominator.' },
     stressedAssignment: { label: 'Stressed assignment capital', infoKey: 'stressedassignment',
       short: 'If the market drops, what your short puts would make you buy — versus the cash you actually have.',
       beginner: 'Every short put is a promise to buy shares at its strike. This applies one downside shock to every stock at once and totals the purchases those promises would force, next to the account’s recorded cash. It is a what-if, not a forecast.',
@@ -132,7 +176,19 @@
     themeConcentration: { label: 'Theme concentration', infoKey: 'themeconcentration',
       short: 'How much of the book sits in one theme — a label-based grouping, not a measured correlation.',
       beginner: 'Ten positions across five semiconductor names can be one bet wearing ten costumes. This groups your positions by StrikeBench’s curated theme labels and shows how much sits together. It is a classification, not a claim about how the stocks actually move together.',
-      expert: 'Grouping by the curated 13-sector map (a theme CLASSIFICATION). True correlation claims would require observed return series and a stated coverage; none is asserted. Intra-theme contradiction detection compares structurally bullish exposure (short puts, long calls, long shares) against bearish (covered/short calls, long puts) within one theme and quotes the account’s declared objective revision when one exists.' }
+      expert: 'Grouping by the curated 13-sector map (a theme CLASSIFICATION). True correlation claims would require observed return series and a stated coverage; none is asserted. Intra-theme contradiction detection compares structurally bullish exposure (short puts, long calls, long shares) against bearish (covered/short calls, long puts) within one theme and quotes the account’s declared objective revision when one exists.' },
+    pendingImport: { label: 'Pending import', infoKey: 'pendingimport',
+      short: 'Exact package cash from a broker record whose per-leg fills are still unresolved.',
+      beginner: 'The total debit or credit is a real broker fact, but the price assigned to each leg is missing. It stays outside every tracked account until you resolve every leg to the same exact total.',
+      expert: 'Owner-scoped portfolio_import_pending fact keyed by source system + non-reversible account fingerprint + external reference. It may contribute package economics to a campaign but cannot create lots or authoritative tax basis.' },
+    resolutionAuthority: { label: 'Resolution authority', infoKey: 'resolutionauthority',
+      short: 'Whether resolved per-leg prices came from the broker or from your own allocation.',
+      beginner: 'Broker-confirmed leg fills can become tracked tax basis. Your own allocation keeps the package economics exact but remains provisional for taxes.',
+      expert: 'BROKER_REPORTED creates AUTHORITATIVE basis provenance; USER_ALLOCATED creates PROVISIONAL basis provenance and withholds dependent tax output. Both reconcile the signed package cash to the cent and freeze a RESOLUTION receipt.' },
+    accountFingerprint: { label: 'Source account fingerprint', infoKey: 'accountfingerprint',
+      short: 'A one-way account identifier used to keep the same broker order reference distinct across accounts.',
+      beginner: 'Two accounts can reuse the same order number. StrikeBench turns your account label or last four into a one-way fingerprint, then discards the raw value.',
+      expert: 'Versioned SHA-256 derivation over source system + normalized source account, truncated for identity. Raw account identifiers are neither persisted nor returned to the UI.' }
   });
 
   var MOVED_TERMS = Object.freeze([
@@ -148,10 +204,8 @@
       detail: 'Universe Scout finds tickers; in-Plan Scout finds similar setups, better fits, and offsets.' },
     { former: 'Paper', current: 'Practice',
       detail: 'The isolated learning account remains separate from tracked brokerage records.' },
-    { former: 'Reserved', current: 'Broker reserve',
-      detail: 'Capital held for obligations remains distinct from worst-case economic loss.' },
-    { former: 'EXTERNAL', current: 'Recorded at broker',
-      detail: 'The label names factual fills that StrikeBench did not execute.' }
+    { former: 'Reserved', current: 'Broker reserve', infoKey: 'brokerreserve',
+      detail: 'Capital held for obligations remains distinct from worst-case economic loss.' }
   ]);
 
   // ---- Glossary: tap-to-define for terms of art ----
@@ -162,9 +216,27 @@
    * short = the one-liner every bubble opens with; beginner/expert = the expanded detail.
    */
   var INFO = {
+    breakeven: { short: 'The underlying price where the exact package has neither a gain nor a loss before costs.',
+      beginner: 'A breakeven is one boundary, not a safety promise. The stock can cross it along the way, and fees or a multi-expiration option’s remaining time value can change the actual result.',
+      expert: 'Zero of the exact selected package payoff on its stated valuation date before commissions. Single-expiry terminal roots are reported directly; multi-expiry structures do not receive a fabricated one-date scalar.' },
     thesis: { short: 'Your declared view — the product judges everything against it, and never invents one for you.',
       beginner: 'Up, down, sideways, or a big move either way: what you believe this stock does over your horizon. Proposals are ranked for it, evidence tests it, and later StrikeBench warns you when your positions stop expressing it. If you have no view yet, that is fine — explore the evidence first; nothing ranks until you declare.',
       expert: 'The context revision’s thesis field. It conditions DecisionPolicy ranking, seeds scenario drift defaults, anchors the coherence check (declared view vs the book’s stance vector), and is frozen into every decision receipt at its revision. Null is a legal state: ranking is refused, never defaulted.' },
+    historicalsetup: { short: 'The event that happens first; the view says what you expect after it.',
+      beginner: 'Choose one observable starting condition. A pullback measures distance below a recent high; a sharp down day is one large daily loss; a new high is a breakout; momentum is a gain across several sessions; an up streak counts consecutive rising closes. This trigger is separate from what you expect next.',
+      expert: 'The ResearchQuestionEngine catalog key and its visible threshold parameters. The signal is evaluated at session t using information available through t only; the Plan thesis is the distinct forward-outcome claim over horizonDays. Pullback and momentum are multi-session measurements, oversold_bounce is a single-session return, breakout is a rolling-high test, and up_streak counts consecutive positive closes.' },
+    plangoal: { short: 'The job this one Plan should accomplish; it decides which structures belong in the comparison.',
+      beginner: 'Choose whether the Plan should trade a view, collect income, protect shares, buy shares lower, or sell shares at a target. StrikeBench then uses the same Plan journey and ranks structures for that job.',
+      expert: 'StrategyIntent is Plan-owned and feeds the existing catalog filter, account-fit checks, ranking, assignment interpretation, and Decision policy. Changing it does not create a parallel recommendation path or a second Plan entry point.' },
+    pendingimport: { short: 'Exact broker package cash awaiting per-leg prices before it can enter a tracked account.',
+      beginner: 'A pending import is not a position yet. Resolve every leg from a broker confirmation or a clearly labeled personal allocation, or reject it. Nothing is auto-submitted.',
+      expert: 'Separate owner-scoped quarantine keyed by source system, account fingerprint, and external reference. No portfolio_transaction or lot exists until an exact-cent resolution commits.' },
+    resolutionauthority: { short: 'The provenance of the per-leg values used to resolve package cash.',
+      beginner: 'Broker-reported means the broker supplied every leg fill. User-allocated means you divided the exact total yourself; the economics work, but tax truth stays provisional.',
+      expert: 'BROKER_REPORTED/AUTHORITATIVE versus USER_ALLOCATED/PROVISIONAL. The distinction is frozen on the RESOLUTION receipt and enforced in tax output.' },
+    accountfingerprint: { short: 'A non-reversible identity for one source account — never the raw account number.',
+      beginner: 'It prevents the same order number in two accounts from being mistaken for a duplicate. You cannot recover the account number from it.',
+      expert: 'SHA-256(source-system namespace + normalized source account), versioned and truncated. It participates in the four-part pending-import uniqueness key.' },
     horizon: { short: 'How long the view gets to play out — studies and expirations focus around it.',
       beginner: 'The number of trading sessions you give this idea. Shorter horizons favor nearer expirations and tighter evidence windows; longer horizons widen both.',
       expert: 'Context horizonDays. It is THE study hold-forward horizon (one truth across evidence and strategy), filters candidate expirations, and scales scenario path length. Revisions version it; receipts pin it.' },
@@ -181,7 +253,7 @@
       beginner: 'These numbers define what must have happened on a past day for it to count — for example, how far the stock fell from its recent high. Every counted day is then compared with the stock’s normal days over your horizon.',
       expert: 'Signal definition evaluated on daily closes with no look-ahead: the condition uses only data up to day t. Counted events respect the minimum-separation rule; the baseline is the disjoint non-signal complement of the same sample.' },
     studyRegime: { short: 'Restricts the study to past days with a chosen market backdrop, compared against normal days from that same backdrop.',
-      beginner: 'Markets behave differently in uptrends, downtrends, choppy stretches and quiet stretches. Choosing a backdrop asks: did my setup work under conditions like these? Both the counted examples and the normal days they are compared with come from the same backdrop, so the comparison stays fair.',
+      beginner: 'Markets behave differently in uptrends, downtrends, more-volatile stretches and quieter stretches. Choosing a backdrop asks: did my setup work under conditions like these? Both the counted examples and the normal days they are compared with come from the same backdrop, so the comparison stays fair. Volatility measures the size of swings; it does not claim those swings were directionless or choppy.',
       expert: 'Engine-side conditioning (regime parameter): ABOVE/BELOW_200DMA classify by close vs the trailing 200-session mean; HIGH/LOW_VOL by 20-session realized σ vs its 60-session baseline. Both events AND baseline days are restricted, so the comparison is within-regime. The on-screen today-indicator mirrors the same math on the same candle series and is omitted when history is insufficient.' },
     studyWindow: { short: 'Which stretch of past sessions the study is allowed to search.',
       beginner: 'A short window reflects the stock as it trades now but holds fewer examples; all history holds more examples that may come from a very different company or market. The dates shown under the control are exactly what will be searched.',
@@ -198,6 +270,45 @@
     authoredScenario: { short: 'A path you drew on the fan — your pins plus the exact model settings, frozen with a receipt naming the fan it was authored on.',
       beginner: 'Click the chart to pin where you believe the price goes; the futures re-run through your pins immediately. Saving names that belief and keeps it — loading it later re-applies the same pins so you can re-judge the same story as the market moves. If the Plan’s assumptions change, the saved scenario says so and offers to re-anchor instead of silently pretending nothing moved.',
       expert: 'An authored scenario freezes the full sane spec (waypoints included), the waypoint-fill label, and a SHA-256 receipt chained to the base fan’s fingerprint — the same lineage family as every other stored simulation. Saving requires the base fan to belong to the current context revision; loading a stale-revision scenario surfaces the drift and re-anchors by re-running the pins on the current fan (out-of-horizon pins are dropped visibly, never silently).' },
+    cashbaseline: { short: 'The explicit do-nothing alternative: no position, no cost, and $0 modeled P/L on every shared path.',
+      beginner: 'Every proposal must earn its place beside simply keeping the cash. Cash is not another prediction; it is the unchanged baseline that exposes trades whose costs and bad outcomes are not worth taking.',
+      expert: 'A zero-exposure, zero-fee comparison row evaluated on the identical stored ensemble and fingerprint. It participates in ranking without creating a second path fan or pricing API.' },
+    entrycashflow: { short: 'The signed package cash at entry: a debit costs cash and a credit brings cash in.',
+      beginner: 'This is only the opening cash movement for the exact contracts and quantity. It is not the same as the most you can lose, the broker reserve, or the amount needed if assigned.',
+      expert: 'Executable-side net option premium for the captured package and quantity, with the sign displayed consistently across proposals, Builder, Outcomes, and the frozen decision receipt. Fees and risk limits remain separate fields.' },
+    marketodds: { short: 'Odds and expected value implied by the captured option prices, not a forecast of what the stock will do.',
+      beginner: 'This lens asks what the option market’s own prices imply for this exact package. Compare it with possible futures and history, but never average those different questions into one confidence number.',
+      expert: 'Risk-neutral terminal valuation from the captured executable package, chain IV, rate, and disclosed dividend assumption. It is an economic pricing lens and remains separate from physical path and historical evidence.' },
+    possiblefutures: { short: 'Many modeled price and volatility paths drawn from one stored, fingerprinted ensemble for this Plan.',
+      beginner: 'The fan shows a range of ways the market could travel, including ordinary and bad outcomes. It is a what-if distribution, not a promise, and every structure in the comparison uses these same futures.',
+      expert: 'The Plan-owned PathEnsembleService artifact with explicit model, seed, horizon, path count, calibration, and fingerprint. ScenarioSimulator and the Canvas revalue packages on this artifact; consumers never generate a second fan.' },
+    pastanalogs: { short: 'Observed historical episodes selected because their starting conditions resemble this Plan’s named setup.',
+      beginner: 'This lens asks what followed similar past situations. A small or incomplete sample stays visible as a limitation, and history is not treated as model odds.',
+      expert: 'Condition-matched observed episodes or conditional block resamples using the declared setup and horizon with no look-ahead. Provenance, sample size, overlap, and coverage remain attached.' },
+    rulereplay: { short: 'A named entry and management rule repeated through history without using future information.',
+      beginner: 'Replay tests whether a repeatable process held up across many past entries. It does not pretend today’s exact listed contracts existed on every date.',
+      expert: 'No-look-ahead historical strategy replay with explicit entry, exit, pricing tier, costs, capital gate, and window-end treatment. It is a rule-level experiment, distinct from exact-package analog valuation.' },
+    dividendyield: { short: 'The annualized dividend assumption used while repricing options on the scenario path.',
+      beginner: 'Dividends can change call and put values. Leave this blank when you do not have a defensible source; pricing then uses 0% and keeps that limitation visible.',
+      expert: 'Continuous annual dividend yield q supplied to the canonical path valuation kernel. Null retains unavailable provenance and invokes the explicitly disclosed 0% pricing fallback; it never becomes observed data.' },
+    volatilityskew: { short: 'How implied volatility changes across lower and higher strikes.',
+      beginner: 'A negative strike tilt makes lower-strike options use more volatility than higher strikes. This changes option values even when the stock path stays the same.',
+      expert: 'Scenario surface skew in volatility points per log-moneyness, applied by the shared PathValuationKernel around each day’s ATM-IV node.' },
+    volatilityterm: { short: 'How implied volatility changes between nearer and later expirations.',
+      beginner: 'A positive time tilt makes later-expiring options use more volatility than nearer ones. It matters when a package has different expiration dates.',
+      expert: 'Scenario term slope in volatility points per square-root year, applied consistently to every surviving leg on each valuation session.' },
+    surfacedynamics: { short: 'Whether the volatility tilt stays attached to strikes or moves with the stock.',
+      beginner: 'Sticky strike leaves the tilt at the original strike prices; sticky moneyness lets the tilt travel as the stock moves. The choice can materially change multi-day option values.',
+      expert: 'Typed STICKY_STRIKE versus STICKY_MONEYNESS transformation policy for the scenario IV surface, frozen in the authored-scenario receipt.' },
+    settlementpolicy: { short: 'What the scenario valuation does when an option reaches expiration.',
+      beginner: 'Cash settlement turns the expiring option’s intrinsic value into cash. Physical transformation can create or deliver shares while later legs keep running.',
+      expert: 'Typed CASH_INTRINSIC versus PHYSICAL_IF_ITM expiry transformation in PathValuationKernel. Each leg uses its own expiry session; surviving legs retain time value.' },
+    exercisepolicy: { short: 'When the scenario is allowed to transform an in-the-money option before or at expiration.',
+      beginner: 'Expiration only waits until the contract ends. The low-time-value rule can exercise at a modeled daily close when very little extra option value remains.',
+      expert: 'Typed EXPIRATION_ONLY versus EXTRINSIC_THRESHOLD exercise policy. Threshold checks occur only on modeled daily closes and remain distinct from broker-specific assignment prediction.' },
+    scenariocomparison: { short: 'The baseline question used to choose which exact packages appear side by side on the same paths.',
+      beginner: 'Compare your position with the Plan idea, compare two structures, or compare one structure with shares. Only the question changes; the saved futures and pricing assumptions do not.',
+      expert: 'Presentation-only selection among canonical same-symbol PositionViews plus the stock baseline. It changes neither ensemble identity nor package valuation and creates no parallel comparison API.' },
     simulationLineage: { short: 'One simulation per Plan: every band quotes this same stored run, named by this fingerprint.',
       beginner: 'When you declared your view, StrikeBench generated one set of possible futures for it. Every later step — evidence, outcomes on your exact trade, review — re-uses that same stored set, so numbers agree everywhere. The # code names that one simulation.',
       expert: 'The plan-context ensemble is generated once, persisted, and fingerprint-pinned (SHA-256 over spec + path bytes). Evidence fans, structure repricing, comparisons, and rehearsals all consume the identical stored path matrix; the chip exposes EnsembleRef{id, fingerprint, basis}. A context revision that invalidates inputs mints a NEW ensemble and fingerprint — never a silent regeneration.' },
@@ -360,6 +471,79 @@
     beginner: 'If this account exists to bet on a direction, or to protect against one, say which. Ideas are then checked against that view. Income and accumulation accounts can skip this entirely.',
     expert: 'Optional revision field: BULLISH | BEARISH | NEUTRAL | NON_DIRECTIONAL. Maps to the coherence engine’s thesis side; NON_DIRECTIONAL declares that no direction should ever count for or against an idea, which differs from leaving it undeclared.'
   };
+
+  // Program ONE product concepts that are not canonical numeric vocabulary still
+  // own a first-class explanation key. Keep these distinct: consumers and the
+  // release audit use the keys to prove that materially different contracts are
+  // not collapsed into one generic tooltip.
+  Object.assign(INFO, {
+    participation: {
+      label: 'Participation',
+      short: 'How strongly the exact package participates in an underlying move, now and across a named price interval.',
+      beginner: 'Participation compares the package with owning the equivalent shares. It shows how much of a move you participate in now, then how that participation changes as the stock rises through the interval; caps, reversals, and regime changes stay visible.',
+      expert: 'Reports current dollar delta relative to equivalent-share dollar delta plus terminal upside capture over a named rising-price interval and terminal date. Regime points identify prices where the participation interpretation changes; it is not a single strategy-label heuristic.'
+    },
+    impliedstance: {
+      label: 'Implied stance',
+      short: 'The plain-language market posture measured from the package’s exposures, not inferred from its catalog name.',
+      beginner: 'StrikeBench reads what the exact position actually does: whether it leans up, down, or neutral; likes or dislikes large moves; benefits or suffers from volatility and time; and which tail hurts most. A strategy name never substitutes for those measurements.',
+      expert: 'Classification derived from the stance vector: direction BULLISH/BEARISH/NEUTRAL, convexity LONG/SHORT/FLAT, volatility LONG/SHORT/FLAT, carry POSITIVE/NEGATIVE/FLAT, and primary tail. The receipt retains the measured vector and the resulting label/summary.'
+    },
+    stancevector: {
+      label: 'Stance vector',
+      short: 'One unit-consistent fingerprint for direction, curvature, volatility, time decay, tail loss, and duration.',
+      beginner: 'This is the measured shape behind implied stance. It lets StrikeBench compare a proposed structure, an existing book, and your stated objective using the same ingredients instead of relying on strategy names.',
+      expert: 'Fixed-unit vector: dollarDeltaCents; gamma as dollar-delta change per 1% underlying move; vega cents per volatility point; theta cents per day; downside/upside loss at ±1σ and ±2σ; and calendar-day duration. Participation, coherence, and book aggregation consume this shared contract.'
+    },
+    campaign: {
+      label: 'Campaign',
+      short: 'The economic story joining every action in one ongoing idea without rewriting broker, accounting, or tax facts.',
+      beginner: 'A campaign keeps the shares, options, rolls, assignments, dividends, fees, pending imports, and related Plan together so you can judge the whole journey. It is an organizing and interpretation layer; the original records remain unchanged.',
+      expert: 'Typed interpretation aggregate spanning recorded transactions, pending-import packages, Plans, practice activity, and structures. Membership and attribution drive campaign economics while normalized ledger entries, realized matches, and tracked tax lots remain authoritative and immutable.'
+    },
+    coveragereceipt: {
+      label: 'Coverage receipt',
+      short: 'An auditable list of which inputs were used, missing, modeled, or limited for this result.',
+      beginner: 'Open this receipt to see what evidence StrikeBench had and what it did not. Missing prices, history, volatility, or other inputs stay named, and any model or limitation stays attached to the conclusion.',
+      expert: 'DataCoverageReceipt maps each required input to an EvidenceLevel plus detail, records the pricing model, and enumerates limitations. Missing coverage remains explicit and cannot be silently replaced by a lower-provenance lane.'
+    },
+    fresheyes: {
+      label: 'Fresh-eyes review',
+      short: 'Would you open the exact remaining package today at current prices if sunk costs did not exist?',
+      beginner: 'Fresh-eyes review judges the position you still own as if today were the first decision. It uses today’s executable prices and asks whether that exact risk is attractive now, separately from whether the campaign has made or lost money so far.',
+      expert: 'Re-evaluates the as-is package through the existing DecisionPolicy at current executable marks, excluding sunk campaign cash from the forward choice. Its receipt remains separate from the campaign-anchored economic review so neither frame overwrites the other.'
+    },
+    adoption: {
+      label: 'Adoption',
+      short: 'Bring an existing tracked position into a Plan without pretending a new trade or market event occurred.',
+      beginner: 'Adoption starts managing shares or options you already hold. StrikeBench records the exact position and current baseline, then opens the Plan at Manage & Review; it does not invent an opening order or change the broker record.',
+      expert: 'An ADOPTION receipt freezes the as-is lots, quantities, eligible marks, and baseline provenance, then initializes the Plan mid-journey at Manage & Review. It creates neither execution cash flow nor a claim that StrikeBench originated the position.'
+    },
+    waypoint: {
+      label: 'Waypoint',
+      short: 'A user-authored price pin on a future trading session inside a scenario, not a forecast.',
+      beginner: 'A waypoint says, “for this what-if, make the stock pass through this price on this future session.” It is an explicit scenario assumption, so every chart and outcome that uses it keeps the pin visible.',
+      expert: 'Scenario-spec constraint with an ordered in-horizon trading-day index and price ratio, preserved with its tolerance and authorship context. Generators must honor the pin; the fill method determines whether the surrounding path has an exact conditional law or guided approximation.'
+    },
+    bridgefill: {
+      label: 'Bridge fill',
+      short: 'An exact conditional path fill between waypoints for models with a compatible Gaussian Brownian motion.',
+      beginner: 'For a smooth Gaussian model, StrikeBench samples the movement between pins from the model’s real conditional distribution. The path is still random, but it is random given that it must pass through the waypoints.',
+      expert: 'EXACT_CONDITIONAL fill uses segmented Brownian-bridge sampling under the Gaussian GBM-compatible process, conditioning each segment on its pinned endpoints. It preserves the model’s conditional law; this claim does not extend to fat-tail, jump, stochastic-volatility, or bootstrap generators.'
+    },
+    guidedinterpolation: {
+      label: 'Guided interpolation',
+      short: 'An approximate path correction that honors waypoints when an exact conditional bridge is unavailable.',
+      beginner: 'For jump, fat-tail, stochastic-volatility, or historical-block models, StrikeBench smoothly guides sampled paths through your pins. The pins are exact scenario instructions, but the odds between them are approximate and should not be read as the model’s true conditional probability.',
+      expert: 'GUIDED_INTERPOLATION applies a smooth multiplicative/log-path correction to Student-t, jump-diffusion, Heston, and block-bootstrap paths. Waypoints are honored, but the transformed ensemble is not sampled from the generator’s conditional law; probabilities retain a guide/approximation limitation.'
+    },
+    headlinesentiment: {
+      label: 'Keyword-derived headline sentiment',
+      short: 'A deterministic keyword classification of observed headline text, with its scorer version attached.',
+      beginner: 'StrikeBench marks a headline positive, negative, mixed, or neutral by showing which configured words matched. It does not understand the full article or context, so open the source before treating the label as evidence. Demo headlines never become sentiment evidence.',
+      expert: 'NewsSentimentScorer applies the versioned sentiment-keyword-v1 positive/negative stem sets to headline text, reports matched terms and per-headline basis, then aggregates (positive − negative) / directional headlines with coverage and event flags. The scorerVersion is receipt identity; unavailable or Demo inputs remain UNAVAILABLE rather than neutral.'
+    }
+  });
 
   Object.keys(VOCABULARY).forEach(function (key) {
     var item = VOCABULARY[key];

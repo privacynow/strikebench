@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.position;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
+import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterEach;
@@ -62,16 +63,51 @@ class PositionArtifactStoreTest {
     }
 
     @Test
+    void decisionAndAdoptionReceiptsFreezeTheObjectiveRevisionInForceProspectively() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Objective history", "TAXABLE", "Broker", "FIFO", null, null, null, null, 10_000_000L));
+        var opening = books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-01-02T15:00:00Z", "TRADE", null, 0L, null, "BROKER", "shares-objective", null,
+                List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "NVDA", null,
+                        null, null, 500L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
+        String lotId = books.lots("local", account.id(), false).getFirst().id();
+        createPlan("plan-objective", "NVDA");
+        var objectives = new AccountObjectiveService(db, CLOCK);
+        var accumulate = objectives.declare("local", account.id(), "ACCUMULATE", "BULLISH",
+                5_000_000L, "SEEK");
+        PositionArtifactStore store = new PositionArtifactStore(db);
+
+        var beforeChange = store.recordNewStructureAction(
+                action("plan-objective", account.id(), opening.id(), lotId, 200));
+        var income = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
+                null, "ACCEPT");
+        var afterChange = store.recordNewStructureAction(
+                action("plan-objective", account.id(), opening.id(), lotId, 200));
+
+        assertThat(db.query("SELECT account_objective_revision_id FROM position_receipt WHERE id=?",
+                r -> r.str("account_objective_revision_id"), beforeChange.receiptId()))
+                .containsExactly(accumulate.id());
+        assertThat(db.query("SELECT account_objective_revision_id FROM position_receipt WHERE id=?",
+                r -> r.str("account_objective_revision_id"), afterChange.receiptId()))
+                .containsExactly(income.id());
+        assertThat(objectives.history("local", account.id()))
+                .extracting(AccountObjectiveService.Revision::id)
+                .containsExactly(accumulate.id(), income.id());
+    }
+
+    @Test
     void pendingImportIdentityIncludesTheNonReversibleAccountFingerprintAndStaysOutOfLedger() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Import destination", "ROTH_IRA", null, "FIFO", null, null, null, null, null));
         long before = db.query("SELECT COUNT(*) n FROM portfolio_transaction", r -> r.lng("n")).getFirst();
-        insertPending("pending-a", "fingerprint-a", "order-17");
-        insertPending("pending-b", "fingerprint-b", "order-17");
+        insertPending(account.id(), "pending-a", "fingerprint-a", "order-17");
+        insertPending(account.id(), "pending-b", "fingerprint-b", "order-17");
         assertThat(db.query("SELECT COUNT(*) n FROM portfolio_import_pending", r -> r.lng("n")).getFirst())
                 .isEqualTo(2);
         assertThat(db.query("SELECT COUNT(*) n FROM portfolio_transaction", r -> r.lng("n")).getFirst())
                 .isEqualTo(before);
 
-        assertThatThrownBy(() -> insertPending("pending-c", "fingerprint-a", "order-17"))
+        assertThatThrownBy(() -> insertPending(account.id(), "pending-c", "fingerprint-a", "order-17"))
                 .isInstanceOf(RuntimeException.class);
 
         db.exec("INSERT INTO campaign(id,user_id,symbol,title,status) VALUES(?,?,?,?,?)",
@@ -107,9 +143,11 @@ class PositionArtifactStoreTest {
                 List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "MU", null,
                         null, null, 1L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
-                        + "external_ref,occurred_at,package_net_cents,fees_cents) VALUES(?,?,?,?,?,?,?,?)",
+                        + "external_ref,occurred_at,package_net_cents,fees_cents,destination_portfolio_account_id,"
+                        + "payload_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 "pending-resolution", "local", "BROKER_CSV", "fingerprint-resolution", "resolved-order",
-                OffsetDateTime.parse("2026-07-01T15:00:00Z"), -10_000L, 0L);
+                OffsetDateTime.parse("2026-07-01T15:00:00Z"), -10_000L, 0L, account.id(),
+                "payload-resolution");
         db.exec("INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
                         + "portfolio_account_id,transaction_id,marks_as_of,evidence_level,model_version) "
                         + "VALUES(?,?,?,?,?,?,?,?,?,?,?)", "resolution-receipt", "local", "RESOLUTION",
@@ -119,9 +157,9 @@ class PositionArtifactStoreTest {
         assertThatThrownBy(() -> db.tx(c -> {
             Db.execOn(c, "UPDATE portfolio_import_pending SET status='RESOLVED',resolved_at=now() WHERE id=?",
                     "pending-resolution");
-            Db.execOn(c, "INSERT INTO portfolio_import_resolution(pending_id,portfolio_account_id,transaction_id,"
+            Db.execOn(c, "INSERT INTO portfolio_import_resolution(id,pending_id,portfolio_account_id,transaction_id,"
                             + "receipt_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?)", "pending-resolution", account.id(), transaction.id(),
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?)", "resolution-event", "pending-resolution", account.id(), transaction.id(),
                     "resolution-receipt", "BROKER_REPORTED", "AUTHORITATIVE", -9_999L, -9_999L, "local");
             return null;
         })).isInstanceOf(RuntimeException.class).hasMessageContaining("does not reconcile");
@@ -131,9 +169,9 @@ class PositionArtifactStoreTest {
         db.tx(c -> {
             Db.execOn(c, "UPDATE portfolio_import_pending SET status='RESOLVED',resolved_at=now() WHERE id=?",
                     "pending-resolution");
-            Db.execOn(c, "INSERT INTO portfolio_import_resolution(pending_id,portfolio_account_id,transaction_id,"
+            Db.execOn(c, "INSERT INTO portfolio_import_resolution(id,pending_id,portfolio_account_id,transaction_id,"
                             + "receipt_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?)", "pending-resolution", account.id(), transaction.id(),
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?)", "resolution-event", "pending-resolution", account.id(), transaction.id(),
                     "resolution-receipt", "BROKER_REPORTED", "AUTHORITATIVE", -10_000L, -10_000L, "local");
             return null;
         });
@@ -199,11 +237,13 @@ class PositionArtifactStoreTest {
         db.exec("UPDATE plans SET active_context_rev=1 WHERE id=?", id);
     }
 
-    private void insertPending(String id, String fingerprint, String ref) {
+    private void insertPending(String accountId, String id, String fingerprint, String ref) {
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
-                        + "external_ref,occurred_at,package_net_cents,fees_cents) VALUES(?,?,?,?,?,?,?,?)",
+                        + "external_ref,occurred_at,package_net_cents,fees_cents,destination_portfolio_account_id,"
+                        + "payload_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 id, "local", "VANGUARD_CSV", fingerprint, ref,
-                OffsetDateTime.parse("2026-07-01T15:00:00Z"), 221_200L, 0L);
+                OffsetDateTime.parse("2026-07-01T15:00:00Z"), 221_200L, 0L, accountId,
+                "payload-" + id);
         db.exec("INSERT INTO portfolio_import_pending_leg(pending_id,leg_no,instrument_type,action,position_effect,"
                         + "symbol,option_type,strike,expiration,quantity,multiplier) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 id, 0, "OPTION", "SELL", "OPEN", "MU", "PUT", new BigDecimal("980"),

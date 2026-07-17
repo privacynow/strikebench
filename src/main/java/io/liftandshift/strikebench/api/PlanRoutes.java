@@ -9,6 +9,7 @@ public final class PlanRoutes {
             Handler list,
             Handler create,
             Handler adopt,
+            Handler adoptBatch,
             Handler portfolio,
             Handler get,
             Handler updateContext,
@@ -56,6 +57,7 @@ public final class PlanRoutes {
         config.routes.get("/api/plans", h.list());
         config.routes.post("/api/plans", h.create());
         config.routes.post("/api/plans/adopt", h.adopt());
+        config.routes.post("/api/plans/adopt-batch", h.adoptBatch());
         config.routes.get("/api/plans/portfolio", h.portfolio());
         config.routes.get("/api/plans/{id}", h.get());
         config.routes.put("/api/plans/{id}/context", h.updateContext());

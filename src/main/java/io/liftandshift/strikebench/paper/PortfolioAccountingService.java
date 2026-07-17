@@ -57,6 +57,7 @@ public final class PortfolioAccountingService {
     private final Db db;
     private final Clock clock;
     private final MarksSource marks;
+    private volatile java.util.function.Consumer<String> ownerChanged = ignored -> {};
 
     public PortfolioAccountingService(Db db, Clock clock) {
         this(db, clock, null);
@@ -66,6 +67,11 @@ public final class PortfolioAccountingService {
         this.db = db;
         this.clock = clock;
         this.marks = marks;
+    }
+
+    /** Post-commit seam used by the one Alert Center; no accounting logic is duplicated. */
+    public void setOwnerChangedHook(java.util.function.Consumer<String> hook) {
+        ownerChanged = hook == null ? ignored -> {} : hook;
     }
 
     public record AccountInput(String name, String accountType, String broker, String lotMethod,
@@ -368,7 +374,9 @@ public final class PortfolioAccountingService {
     public TransactionView record(String ownerId, String accountId, TransactionInput input) {
         String owner = owner(ownerId);
         try {
-            return db.tx(c -> recordOn(c, requireAccount(c, owner, accountId, true), input));
+            TransactionView recorded = db.tx(c -> recordOn(c, requireAccount(c, owner, accountId, true), input));
+            notifyOwnerChanged(owner);
+            return recorded;
         } catch (ArithmeticException e) {
             throw new IllegalArgumentException("transaction amounts exceed the supported range");
         }
@@ -381,15 +389,22 @@ public final class PortfolioAccountingService {
         List<TransactionInput> ordered = new ArrayList<>(inputs);
         ordered.sort(Comparator.comparing(input -> parseTime(input == null ? null : input.occurredAt())));
         try {
-            return db.tx(c -> {
+            List<TransactionView> recorded = db.tx(c -> {
                 AccountProfile account = requireAccount(c, owner, accountId, true);
                 List<TransactionView> out = new ArrayList<>(ordered.size());
                 for (TransactionInput input : ordered) out.add(recordOn(c, account, input));
                 return List.copyOf(out);
             });
+            notifyOwnerChanged(owner);
+            return recorded;
         } catch (ArithmeticException e) {
             throw new IllegalArgumentException("transaction amounts exceed the supported range");
         }
+    }
+
+    private void notifyOwnerChanged(String owner) {
+        try { ownerChanged.accept(owner); }
+        catch (RuntimeException ignored) { /* ledger already committed; attention GET remains authoritative */ }
     }
 
     /** Records inside a caller-owned transaction so a Plan promotion commits the ledger row
@@ -838,7 +853,8 @@ public final class PortfolioAccountingService {
         List<RealizedLotView> realized = Db.queryOn(c,
                     "SELECT m.*,l.symbol,l.instrument_type,l.side FROM portfolio_lot_match m "
                             + "JOIN portfolio_lot l ON l.id=m.lot_id WHERE m.portfolio_account_id=? "
-                            + "AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? ORDER BY m.closed_at,m.id",
+                            + "AND EXTRACT(YEAR FROM (m.closed_at AT TIME ZONE 'America/New_York'))=? "
+                            + "ORDER BY m.closed_at,m.id",
                     PortfolioAccountingService::mapRealized, account.id(), year);
         long ordinarySt = exactSum(realized.stream().filter(r -> "SHORT_TERM".equals(r.holdingTerm()))
                     .map(r -> Math.addExact(r.realizedGainCents(), r.washSaleAdjustmentCents())).toList(), "short-term gains");

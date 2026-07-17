@@ -206,8 +206,9 @@ class PlanStrategyServiceTest {
                  "riskMode":"conservative","intent":"DIRECTIONAL","riskBudgetCents":100000,
                  "economicMessage":"One peer matched","favorableCount":0,"mixedCount":1,
                  "unfavorableCount":0,"unavailableCount":0,"notes":["Same-sector scan"],
-                 "disclaimer":"Education only","candidates":[{
+                 "disclaimer":"Education only","sentimentScorerVersion":"sentiment-keyword-v1","candidates":[{
                    "symbol":"SPY","scoutThesis":"BULLISH","strategy":"DEBIT_CALL_SPREAD",
+                   "sentimentScorerVersion":"sentiment-keyword-v1",
                    "displayName":"Bull call spread","structureGroup":"DIRECTIONAL","label":"BUY 560C / SELL 570C",
                    "qty":1,"entryNetPremiumCents":-34000,"maxProfitCents":66000,"maxLossCents":34000,
                    "breakevens":[563.4],"pop":0.47,"expectedValueCents":-900,"liquidityScore":0.92,
@@ -232,8 +233,11 @@ class PlanStrategyServiceTest {
         PlanStrategyService.SavedRun saved = strategies.saveScout(null, origin, "PEERS",
                 Json.parse("{\"scope\":\"PEERS\"}"), result);
         String candidateId = saved.result().at("/candidates/0/id").asText();
-        assertThat(strategies.latestScout(null, origin.id(), "PEERS").result().at("/candidates/0/symbol").asText())
-                .isEqualTo("SPY");
+        PlanStrategyService.SavedRun restored = strategies.latestScout(null, origin.id(), "PEERS");
+        assertThat(restored.result().at("/sentimentScorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
+        assertThat(restored.result().at("/candidates/0/symbol").asText()).isEqualTo("SPY");
+        assertThat(restored.result().at("/candidates/0/sentimentScorerVersion").asText())
+                .isEqualTo("sentiment-keyword-v1");
         assertThatThrownBy(() -> strategies.select(null, origin.id(), candidateId, origin.version()))
                 .isInstanceOf(java.util.NoSuchElementException.class)
                 .hasMessageContaining("no current candidate");
@@ -245,10 +249,14 @@ class PlanStrategyServiceTest {
         plans.linkRelated(null, origin.id(), child.id(), "PEER");
         strategies.copyScoutSelection(null, origin.id(), candidateId, child);
 
-        assertThat(strategies.selectedCandidate(null, child.id()).at("/symbol").asText()).isEqualTo("SPY");
+        JsonNode selected = strategies.selectedCandidate(null, child.id());
+        assertThat(selected.at("/symbol").asText()).isEqualTo("SPY");
+        assertThat(selected.at("/sentimentScorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
         assertThat(db.query("SELECT role FROM plan_link WHERE plan_id=? AND related_plan_id=?",
                 r -> r.str("role"), origin.id(), child.id())).containsExactly("PEER");
         assertThat(db.query("SELECT source_kind FROM plan_candidate WHERE plan_id=? AND selected=1",
                 r -> r.str("source_kind"), child.id())).containsExactly("SCOUT");
+        assertThat(db.query("SELECT sentiment_scorer_version FROM plan_strategy_run WHERE plan_id=?",
+                r -> r.str("sentiment_scorer_version"), child.id())).containsExactly("sentiment-keyword-v1");
     }
 }
