@@ -153,7 +153,8 @@
       el('div', { class: 'candidate-position-summary-facts' },
         UI.fact(UI.vocabulary('theoreticalMaxLoss'), c.maxLossCents == null ? '—' : fmtMoney(c.maxLossCents), 'f-danger'),
         UI.fact(UI.vocabulary('theoreticalMaxProfit'), UI.maxProfitLabel(c.strategy, c.structureGroup,
-          c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs), 'f-ok'),
+          c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs),
+          UI.maxProfitTone(c.strategy, c.structureGroup, c.maxProfitCents, c.legs)),
         UI.fact(UI.term('breakeven', 'Breakeven'), (c.breakevens || []).map(fmtBreakeven).join(' / ') || '—'),
         UI.fact('Chance of any profit', candidatePop(c) == null ? '—' : fmtPct(candidatePop(c)))));
   }
@@ -553,7 +554,8 @@
       el('div', { class: 'fact-grid' },
         maxLossFact,
         UI.fact(UI.vocabulary('theoreticalMaxProfit', 'Best possible profit'), UI.maxProfitLabel(
-          c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs), 'f-ok'),
+          c.strategy, c.structureGroup, c.maxProfitCents, true, c.legs),
+          UI.maxProfitTone(c.strategy, c.structureGroup, c.maxProfitCents, c.legs)),
         profitFact,
         assignmentFact),
       el('p', { style: 'margin:6px 0' },
@@ -701,8 +703,10 @@
         economics.realizedVolEvAfterCostsCents == null
         ? 'Unavailable' : pnlSpan(economics.realizedVolEvAfterCostsCents)));
     if (density === 'hero') {
-      facts.insertBefore(chip(UI.term('entrycashflow', 'Cost / credit'),
-        fmtMoney(c.entryNetPremiumCents, { plus: true })), facts.firstChild);
+      facts.insertBefore(chip(
+        UI.term('entrycashflow', c.entryNetPremiumCents < 0 ? 'You pay (debit)' : 'You collect (credit)'),
+        el('span', { class: c.entryNetPremiumCents < 0 ? 'loss' : 'gain' },
+          fmtMoney(Math.abs(c.entryNetPremiumCents)))), facts.firstChild);
       facts.insertBefore(chip(UI.vocabulary('theoreticalMaxProfit', beginner ? 'Best possible profit' : null),
         UI.maxProfitLabel(c.strategy, c.structureGroup, c.maxProfitCents, beginner, c.legs)), facts.children[2]);
     }
@@ -819,7 +823,7 @@
       { key: 'displayName', label: 'Strategy', get: function (c) { return c.displayName; }, render: function (c) { return el('b', {}, c.displayName); } },
       { key: 'entryNetPremiumCents', label: 'Cost/Credit', infoKey: 'entrycashflow', get: function (c) { return c.entryNetPremiumCents; }, render: function (c) { return pnlSpan(c.entryNetPremiumCents); } },
       { key: 'maxLossCents', label: 'Theor. max loss', infoKey: 'theoreticalmaxloss', get: function (c) { return c.usesHeldShares && c.combinedMaxLossCents ? c.combinedMaxLossCents : c.maxLossCents; }, render: function (c) { return c.usesHeldShares && c.maxLossCents === 0 ? el('span', {}, '$0*') : el('span', { class: 'loss' }, fmtMoney(c.maxLossCents)); } },
-      { key: 'maxProfitCents', label: 'Best possible profit', infoKey: 'maxprofit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return el('span', { class: k === 'finite' || k === 'uncapped' ? 'gain' : 'muted' }, UI.maxProfitLabel(c.strategy, c.structureGroup, c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs)); } },
+      { key: 'maxProfitCents', label: 'Best possible profit', infoKey: 'maxprofit', get: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return k === 'uncapped' ? Infinity : k === 'model-dependent' ? -Infinity : c.maxProfitCents; }, render: function (c) { var k = UI.profitCeilingKind(c.strategy, c.structureGroup, c.maxProfitCents, c.legs); return el('span', { class: (k === 'uncapped' || (k === 'finite' && c.maxProfitCents > 0)) ? 'gain' : (k === 'finite' && c.maxProfitCents <= 0) ? 'loss' : 'muted' }, UI.maxProfitLabel(c.strategy, c.structureGroup, c.maxProfitCents, Learn.currentLevel() === 'beginner', c.legs)); } },
       { key: 'rr', label: 'R:R', get: rrValue, render: function (c) { var v = rrValue(c); return el('span', {}, v === -1 ? '\u2014' : v === Infinity ? '\u221E' : fmtNum(v, 2)); } },
       { key: 'pop', label: 'POP', infoKey: 'pop', get: function (c) { var v = candidatePop(c); return v === null || v === undefined ? -1 : v; }, render: function (c) { return el('span', {}, fmtPct(candidatePop(c))); } },
       { key: 'marketEv', label: 'Market EV', infoKey: 'ev', get: function (c) { var v = marketEvAfterCosts(c); return v === null || v === undefined ? -Infinity : v; }, render: function (c) { var v = marketEvAfterCosts(c); return v !== null && v !== undefined ? pnlSpan(v) : '—'; } },
@@ -2258,6 +2262,9 @@
       return v == null ? null : Number(v);
     }
     var pAny = prob('pAnyProfit'), pMax = prob('pMaxProfit'), pLoss = prob('pMaxLoss');
+    // When the best case is not a profit, "chance of max profit" reads as a flat contradiction
+    // to "chance of any profit 0%". Name it honestly and reconcile it in words.
+    var cannotProfit = pAny != null && pAny <= 0.0005;
     var ev = value('expectedValueAfterFeesCents');
     return el('div', { class: 'plan-market-outcome' },
       alertBox(ev != null && ev >= 0 ? 'ok' : 'caution',
@@ -2267,9 +2274,13 @@
         ]),
       el('div', { class: 'grid grid-4' },
         stat('Chance of any profit', pAny == null ? '—' : Math.round(pAny * 100) + '%'),
-        stat('Chance of theoretical max profit', pMax == null ? '—' : Math.round(pMax * 100) + '%'),
+        stat(cannotProfit ? 'Chance of the best case (still a loss)' : 'Chance of theoretical max profit',
+          pMax == null ? '—' : Math.round(pMax * 100) + '%'),
         stat('Chance of theoretical max loss', pLoss == null ? '—' : Math.round(pLoss * 100) + '%'),
         stat('Expected P/L after costs', ev == null ? '—' : pnlSpan(ev))),
+      cannotProfit ? el('p', { class: 'muted small' }, 'This position cannot profit — its best '
+        + 'possible outcome is still a loss. A 0% chance of any profit and a high chance of the '
+        + '“best case” describe the same losing position; they are not a contradiction.') : null,
       el('p', { class: 'muted small' }, value('source') ? 'Priced from ' + value('source') + ' · ' + (value('freshness') || 'source age unavailable') : 'The saved result retains its captured market inputs.'));
   }
 
@@ -4204,7 +4215,7 @@
               onclick: function (event) {
                 event.stopPropagation();
                 PlanStore.closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
-              } }, '\u2715')));
+              } }, icon('x', 14))));
       };
       // Severity first, then recency: the alert center owns the needs-attention ordering.
       var LOOSE_LIMIT = 8;

@@ -3342,6 +3342,46 @@ test('financial formatters and mixed packages fail closed instead of rendering N
     'the near-tie threshold is principled, disclosed, and executable');
   assert.equal(await page.evaluate(() => UI.maxProfitLabel('LONG_CALL', 'single_long', null, true)),
     'no fixed ceiling', 'a genuinely unbounded structure keeps its theoretical truth');
+
+  // Legibility invariant (the AMD bear-call-priced-as-a-debit): a "best possible profit" that is
+  // not positive must never launder as a gain — neither in words nor in green styling.
+  const profitTruth = await page.evaluate(() => ({
+    negExpert: UI.maxProfitLabel('IRON_CONDOR', 'range_credit', -17500, false, []),
+    negBeginner: UI.maxProfitLabel('IRON_CONDOR', 'range_credit', -17500, true, []),
+    toneNeg: UI.maxProfitTone('IRON_CONDOR', 'range_credit', -17500, []),
+    toneZero: UI.maxProfitTone('IRON_CONDOR', 'range_credit', 0, []),
+    tonePos: UI.maxProfitTone('IRON_CONDOR', 'range_credit', 30000, []),
+    toneUncapped: UI.maxProfitTone('LONG_CALL', 'single_long', null, [])
+  }));
+  assert.match(profitTruth.negExpert, /no profit possible/,
+    'a negative best-case names itself as impossible profit, not a bare dollar figure');
+  assert.match(profitTruth.negBeginner, /cannot make money/, 'the beginner label is just as honest');
+  assert.equal(profitTruth.toneNeg, 'f-danger', 'a negative ceiling is never styled as a gain');
+  assert.equal(profitTruth.toneZero, 'f-danger', 'a break-even ceiling is not a profit either');
+  assert.equal(profitTruth.tonePos, 'f-ok', 'genuine upside keeps its green');
+  assert.equal(profitTruth.toneUncapped, 'f-ok', 'uncapped upside keeps its green');
+
+  // Info-tooltip invariant (B1): on a fine-pointer desktop the injected italic-i is removed from
+  // the text flow (no baseline break) and the LABEL becomes the hover target.
+  const infoContract = await page.evaluate(async () => {
+    const host = document.createElement('span');
+    host.textContent = 'Chance of any profit ';
+    const trig = UI.info('pop');
+    host.appendChild(trig);
+    document.body.appendChild(host);
+    await Promise.resolve(); // flush bindInfoHost's microtask
+    const out = { hasInfoClass: host.classList.contains('has-info'),
+      triggerWidth: trig.getBoundingClientRect().width,
+      triggerFocusable: trig.tabIndex >= 0 || trig.tagName === 'BUTTON' };
+    host.remove();
+    return out;
+  });
+  assert.equal(infoContract.hasInfoClass, true,
+    'the label hosting an info trigger becomes the desktop hover target');
+  assert.ok(infoContract.triggerWidth <= 2,
+    'the injected italic-i is pulled out of the text flow on a fine-pointer desktop — no baseline break');
+  assert.ok(infoContract.triggerFocusable,
+    'the icon stays keyboard-reachable even while visually hidden (a11y preserved)');
 });
 
 test('welcome proof treats no qualifying idea as a complete result', async () => {
@@ -3741,10 +3781,10 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   await page.waitForFunction(() => Learn.currentLevel() === 'expert' && document.querySelector('#tv-setup'));
   assert.equal(await page.evaluate(() => window.__researchLensFlow === document.getElementById('research-flow')), true,
     'Beginner/Expert changes the mounted Research lens without remounting the destination');
-  await page.hover('#tv-setup .info-trigger[data-term="historicalsetup"]');
+  await page.locator('#tv-setup .info-trigger[data-term="historicalsetup"]').first().evaluate(el => el.focus());
   await page.waitForSelector('#info-pop');
   assert.match(await page.textContent('#info-pop'), /ResearchQuestionEngine catalog key.*forward-outcome claim/is,
-    'Expert hover opens the registry-backed technical definition instead of losing earlier explanations');
+    'Expert opens the registry-backed technical definition (label hover / keyboard focus) instead of losing earlier explanations');
   await page.keyboard.press('Escape');
   await page.click('#level-switch button[data-level="beginner"]');
   await page.waitForFunction(() => Learn.currentLevel() === 'beginner' && document.querySelector('#tv-setup'));
@@ -6349,7 +6389,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await go('#/plan/' + plan.id + '/decide');
   await page.waitForSelector('#plan-review-order');
   await page.click('#plan-review-order');
-  await page.waitForSelector('#plan-decision-review .info-trigger', { timeout: 30000 });
+  await page.waitForSelector('#plan-decision-review .info-trigger', { state: 'attached', timeout: 30000 });
   // AUDIT 1: every used term key resolves in the registry (anti-drift).
   const missing = await page.evaluate(() =>
     (window.__usedInfoTerms || []).filter(k => !(window.Learn && Learn.INFO && Learn.INFO[k])));
@@ -6372,14 +6412,27 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   assert.match(additiveHelp.requestbudget, /pauses provider work/i);
   assert.match(additiveHelp.synccursor, /not downloaded again/i);
   assert.match(additiveHelp.marketanchor, /never rewrites the observed/i);
-  // AUDIT 2: triggers are VISIBLE (quiet but discoverable) and carry no competing native title.
+  // AUDIT 2: on a fine-pointer desktop the injected icon is visually removed (no baseline break)
+  // but present + keyboard-reachable; the LABEL host carries the hover explanation. It never
+  // pairs with a competing native title tooltip.
   const trig = page.locator('#plan-decision-review .info-trigger[data-term="pop"]').first();
-  assert.ok(await trig.isVisible(), 'info trigger must be visible without hovering');
+  assert.equal(await trig.count(), 1, 'the info trigger is present in the DOM');
+  // sr-only clips it to 1px (Playwright's isVisible still reports a 1px box as "visible", so
+  // measure the flow width): the icon is pulled out of the text flow — no baseline break.
+  const trigWidth = await trig.evaluate(el => el.getBoundingClientRect().width);
+  assert.ok(trigWidth <= 2,
+    'the injected icon is visually removed on desktop — the label carries the hover explanation');
+  const hostMarked = await trig.evaluate(el => {
+    var h = el.closest('.has-info'); return !!h || (el.parentElement && el.parentElement.classList.contains('has-info'));
+  });
+  assert.ok(hostMarked, 'the trigger’s label host is marked as the hover target');
   const dup = await page.$$eval('#plan-decision-review .info-trigger', els =>
     els.filter(e => e.closest('[title]')).length);
   assert.equal(dup, 0, 'a bubble label must not also carry a native title tooltip');
-  // AUDIT 3: click opens immediately; one-liner first; [+] expands the BEGINNER detail.
-  await trig.click();
+  // AUDIT 3: activating the (present, keyboard-reachable) trigger opens the bubble immediately;
+  // one-liner first; [+] expands the BEGINNER detail. force:true because the icon is visually
+  // clipped on desktop (the label hover is the pointer path; this exercises the tap/keyboard path).
+  await trig.evaluate(el => el.click());
   await page.waitForSelector('#info-pop');
   const shortText = await page.textContent('#info-pop .info-short');
   assert.ok(shortText.length > 20, 'one-liner present');
@@ -6428,8 +6481,12 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   await page.keyboard.press('Escape');
   // AUDIT 4: the SAME trigger at Expert level yields the expert detail (same truth, deeper words).
   await page.click('#level-switch button[data-level="expert"]');
-  await page.waitForSelector('#plan-decision-review .info-trigger', { timeout: 20000 });
-  await page.locator('#plan-decision-review .info-trigger[data-term="pop"]').first().click();
+  // Let the expert re-render settle before invoking the (freshly re-created) trigger — el.click()
+  // fires immediately and must not race a detaching beginner-level node.
+  await page.waitForFunction(() => window.Learn && Learn.currentLevel() === 'expert'
+    && document.querySelector('#plan-decision-review .info-trigger[data-term="pop"]'));
+  await page.waitForTimeout(150);
+  await page.locator('#plan-decision-review .info-trigger[data-term="pop"]').first().evaluate(el => el.click());
   await page.waitForSelector('#info-pop');
   await page.click('#info-pop .info-expand');
   const expDetail = await page.textContent('#info-pop .info-detail');
