@@ -24,8 +24,8 @@ class TradeControllerTest {
                 TradeRecord.ACTIVE, 1, List.of(adjustedCall), "income", "30d", "balanced",
                 10_000L, 1_000L, 29_000L, 11_000L, List.of("101"), null,
                 0L, 0L, null, null, null, "{\"heldShareContextShares\":10}", false,
-                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L, "PAPER",
-                null, null, null, null, null, null, null);
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, null, null, null);
 
         var low = TradeController.payoffPoints(trade).stream()
                 .filter(point -> "70.00".equals(point.price()))

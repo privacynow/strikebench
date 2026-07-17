@@ -128,6 +128,48 @@ read-only, one CTA, one destination, one data source). Beginner-tuned first-step
 tour becomes a guided first run OF the flow (its two load-bearing jobs — level selection and
 the rename glossary — move into it).
 
+### 2.6 The SPA and desktop workspace contract
+
+StrikeBench is one stateful application, not a set of screens that happen to share a header.
+There is one long-lived app shell and one nested Workspace document. Client-side navigation
+changes the active destination or band without rebuilding an unchanged destination, losing its
+controls, or flashing a page skeleton. Back/forward, deep links, level changes, market changes,
+and in-band actions all reconcile through the same route and state owners. A route may mount or
+unmount a genuinely different destination; it may not use a whole-root repaint as the ordinary
+way to update a choice, result, badge, or flow position. Focus, scroll, pending work, expanded
+detail, and live subscriptions have explicit lifecycle ownership.
+
+Desktop is a working surface, not a stretched mobile column and not an article floating in a
+wide viewport. At every supported desktop width, the layout spends available space on useful
+co-visibility: question beside consequence, controls beside their result, hero beside genuine
+alternatives, and summary beside detail. Merely widening controls does not count. Controls stay
+top-aligned with the decision they affect; no action cluster is vertically centered in an empty
+card, no prose line grows to scanning-hostile width, and no layout leaves a large blank track
+when a related result or explanation can occupy it. Each wide-layout rule must prove what is
+being compared across columns and must collapse deliberately, not accidentally, below its
+content threshold.
+
+The responsive product gate covers **2560** (the owner's fully expanded 5K display), 2048,
+1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels. A 2560 composition may gain a useful
+column; 1440 may reduce co-visibility; mobile may sequence the same objects vertically. None may
+change the capability, state owner, calculation, or journey, and no breakpoint may be justified
+by simply stretching controls or hiding required content.
+
+The journey's questions follow time and causality. While a view is being formed in Research,
+first: **what just happened?** (pullback, sharp down day, new high, strong momentum, up streak),
+then: **what do you believe happens from here, and over what horizon?** The evidence answers
+**what happened after comparable past setups?** If a durable Plan already owns the forward view,
+the band quotes it instead of asking again, then asks only which setup should test it.
+“Choppy/quiet” describes the backdrop that filters both trigger and comparison days; it is not a
+duplicate setup or a competing forward view. Similar-sounding choices carry an immediate
+plain-language distinction and the same registry-backed Beginner/Expert explanation control.
+
+Capability ownership is singular. One journey owns each decision, one component owns each
+interaction pattern, and one API/domain service owns each calculation or mutation. Existing
+capabilities are composed into the Workspace and Book; they are not copied into parallel cards,
+alternate entry routes, client-side formulas, or second backend endpoints. Extend the canonical
+owner when its contract needs more depth; create a new owner only for a genuinely new job.
+
 ## 3. Control language contract
 
 Every parameter: its **natural control**, a **plain label that survives "what does that even
@@ -234,3 +276,81 @@ survive). New UX scenarios, from the owner's own walk:
 job is to let a person declare what they believe, see it tested honestly, choose a structure
 with full attention, commit deliberately, and watch reality answer — in one place, in one flow,
 in language they already speak. Simplicity is not a feature of this program; it is the program.
+
+## Appendix A — completion and executable evidence (2026-07-17)
+
+Program ONE R0–R6 is complete in the integrated source tree on `feature/journey_refactor`. The
+production host has not received this branch. Exact test totals are generated from Surefire and
+per-suite TAP reports for the exact branch tip by `scripts/release-matrix.mjs`; this specification
+does not freeze a count that can become stale.
+
+### A.1 Release closure
+
+| Release | Closure evidence |
+|---|---|
+| R0 | `dom.test.js` contracts-as-code and rendered-label tests; `no-silent-defaults.test.js` |
+| R1 | public Evidence handoff/fan persistence browser tests; `PlanDeclarationLifecycleTest`; `PlanStrategyDeclarationTest` |
+| R2 | `PlanApiIntegrationTest` strategy competition, one-ensemble Outcomes, decision freeze, rehearsal/review cases |
+| R3 | `spa-identity.test.js`; canonical-route/same-hash Workspace browser cases; atomic broker promotion integration |
+| R4 | `ObjectiveCoherenceTest`; `CampaignServiceTest`; `ScenarioCanvasTest`; composite and objective-lens suites |
+| R5 | `AlertCenterServiceTest`; `BookRiskServiceTest`; `BrokerStatementParserTest`; `BrokerImportServiceTest`; `PlanAdoptionBatchTest`; `dom-bookrisk.test.js` |
+| R6 | `NewsSentimentScorerTest`; `dom-learn-coverage.test.js`; `dom-learn.test.js`; `adoption-review.test.js`; `dom-audit.test.js`; `scenario-form.test.js` |
+
+### A.2 Battery traceability
+
+The exact scenario descriptions remain normative in `TRADER_OWN_SPEC.md` scenarios 1–16 and this
+specification scenarios 17–22. The strongest focused traces are:
+
+- **1–3, participation and objective framing:**
+  `StrategyEvaluatorTest#shortPremiumParticipationAndRegimePointsDoNotMasqueradeAsUpsideOwnership`,
+  `#theSameShortPremiumBookFlipsOnlyCoherenceWhenItsObjectiveChanges`, and
+  `CampaignServiceTest#crossCampaignPatternsNeedTwoClosedObservedExamplesPerLaneAndNeverPoolRealWithPractice`.
+- **4, 7, 8, position transformations:** `PositionTransformationTest` leg-out, roll/fresh-eyes,
+  residual-hedge cases and the signed lifecycle cases in `PositionTransformationApiTest`.
+- **5 and 10–12, event/history/model honesty:** evaluator buying-power, IV-context, and thin-history
+  cases; `ScenarioCanvasTest` event template, IV path, and observed-to-modeled replay boundary;
+  `JourneySurfaceTest#everyHistoricalReplayUsesOneNoLookAheadTimeline`.
+- **6, the Vanguard aggregate:** the seeded `BookRiskServiceTest` battery plus
+  `dom-bookrisk.test.js` covers beta/Greek coverage, stress, the 8/07 cluster, theme
+  classification, contradiction, JEPQ collision, INTC churn, and cross-account subtotals.
+- **9, adopted loser:** `PlanAdoptionReviewServiceTest` and `adoption-review.test.js` keep the
+  ADOPTION baseline, current-view analysis, and campaign truth separate.
+- **13, multi-account reality:** atomic account promotion in `PlanApiIntegrationTest`, campaign
+  and Book Risk account subtotals, and retirement-wrapper tax suppression suites.
+- **14, yours vs ours:**
+  `PlanApiIntegrationTest#exactBuilderSelectionCompetesBesideServerProposalsOnOneStoredFan`.
+- **15–16, coherence over time:** direction/duration cases in `ObjectiveCoherenceTest` and
+  `PositionArtifactStoreTest#decisionAndAdoptionReceiptsFreezeTheObjectiveRevisionInForceProspectively`.
+- **17, flip-without-loss:** the R0 rail browser case, `scenario-form.test.js`, and the SPA
+  identity suite preserve drafts, selections, acknowledgments, inputs, lineage, and results.
+- **18, label test:** the rendered-label browser gate exercises real Strategy, Outcomes Canvas,
+  Book Import, and Book Risk surfaces at both levels; `dom-learn-coverage.test.js` checks registry
+  depth.
+- **19, two-interaction declaration:** `no-silent-defaults.test.js`,
+  `PlanStrategyDeclarationTest`, `DecisionDeclarationPolicyTest`, and the public Evidence handoff
+  browser case.
+- **20, one-fan continuity:** Plan integration tests for ensemble reuse and byte-compatible restore,
+  plus the browser test that keeps the same fan node mounted across attention moves.
+- **21–22, novice and expert walks:** the fixture journey, responsive audit, Scenario level-lens
+  suite, and fresh artifacts under `dom-tests/shots/` cover the same end-to-end flow at both
+  presentation depths and at desktop/mobile widths.
+
+### A.3 Journey traceability
+
+- **B:** atomic tracked-account promotion (`PlanApiIntegrationTest`), signed assignment/close
+  transformations, and closed Campaign overlay/counterfactual/calibration review.
+- **C:** deterministic ToS parse and pending queue (`BrokerStatementParserTest`,
+  `BrokerImportServiceTest`), atomic batch adoption (`PlanAdoptionBatchTest`), two-lens adoption
+  review, surviving-15 partial close, loss-visible roll, alerts, and Campaign lesson.
+- **D:** exact Builder/custom and server proposals compare with cash on one stored authored
+  earnings fan (`PlanApiIntegrationTest` and `ScenarioCanvasTest`).
+- **E:** closed MU Campaign review keeps scenario lineage, realized-versus-headline yield,
+  protocol override cost, pattern evidence, and the owner-scoped lesson (`CampaignServiceTest`).
+- **V:** the sanitized Vanguard fixture preserves packages/accounts/8/07 facts
+  (`BrokerStatementParserTest#sanitizedJourneyVPreservesPackagesAccountsAndTheAugustClusterWithoutInventingFacts`),
+  then import authority, adoption, Book Risk, income-versus-accumulate coherence, and provisional
+  versus attested tax-bearing history are covered by their owning service and browser suites.
+
+The full command sequence and the detailed scenario-by-scenario evidence map are maintained in
+`PROGRAM_ONE_HANDOFF.md`. Deployment is the remaining operational action and does not change the
+Program ONE product contract.

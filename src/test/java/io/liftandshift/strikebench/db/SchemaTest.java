@@ -22,6 +22,14 @@ class SchemaTest {
                     .containsExactly("demo-fixture", "observed");
             assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate_warning", r -> r.lng("n")))
                     .containsExactly(0L);
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_strategy_run' "
+                            + "AND column_name='sentiment_scorer_version'",
+                    r -> r.str("column_name"))).containsExactly("sentiment_scorer_version");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_backtest' "
+                            + "AND column_name='sentiment_scorer_version'",
+                    r -> r.str("column_name"))).isEmpty();
         }
     }
 

@@ -1,10 +1,9 @@
 /* StrikeBench Scenario Studio — the shared "imagine a future" surface.
- * One module, two altitudes:
- *   Beginner: story cards ("Drops, then recovers"), plain magnitude chips with live ±% previews,
- *             one button, sentence verdicts in dollars. No Greek letters, no model names.
- *   Expert:   the quant terminal — model select (GBM/bridge/bootstrap/Student-t/jump/Heston),
- *             numeric drift/vol/jump/tail/Heston params, the IV path (start/drift/revert/event
- *             crush), seed + paths, expandable "The math" cards with the actual equations.
+ * One question and one parameter state, presented at two altitudes:
+ *   Beginner: story, horizon, and wildness controls plus a plain-language read-only receipt of
+ *             every carried model parameter.
+ *   Expert:   those SAME controls and values, with the complete parameter editor revealed below.
+ * A level switch never changes the spec, IV path, seed, or result. Presentation is the only delta.
  * Used by Research ("What could happen next?"), Trade→Verify ("Imagine a future"), and the
  * Data Center (generate a synthetic dataset). Everything is honestly labeled MODELED.
  */
@@ -84,176 +83,153 @@
     if (!ownedState) throw new Error('Scenario form state must have an explicit owner.');
     var f = ownedState;
     if (f.seed == null) f.seed = Math.floor(Math.random() * 1000000);
-    // A fresh studio opens on the user's WORKING VIEW — the thesis they picked in Ideas seeds
-    // the story (bullish → climbs, bearish → fades, volatile → news shock). Pure default: the
-    // user can pick any other shape, and a persisted choice always wins.
+    // A fresh studio opens on the user's declared working view — the thesis they already own
+    // visibly selects a story (bullish → climbs, bearish → fades, volatile → news shock).
+    // With no declared view, nothing is selected; a persisted choice always wins.
     if (!f.shape) {
-      var thesis = seedContext.thesis || (App.context && App.context.thesis()) || '';
+      var thesis = seedContext.thesis || '';
       f.shape = { bullish: 'GRIND_UP', bearish: 'RALLY_FADE', neutral: 'CHOP', volatile: 'EVENT_JUMP' }[thesis]
-             || 'SELLOFF_REBOUND';
+             || null;
     }
-    f.horizon = f.horizon || seedContext.horizonDays || 10;
-    f.mag = f.mag || 'typical';
+    var seededHorizon = Number(f.horizon || seedContext.horizonDays);
+    f.horizon = seededHorizon > 0 ? seededHorizon : null;
+    f.mag = MAGS.some(function (m) { return m.key === f.mag; }) ? f.mag : 'typical';
+
+    // Canonical parameters live in the owner, not in a level-specific rendering. Existing
+    // sessions that already contain an Expert edit retain it; new sessions inherit the story
+    // preset and lane calibration without manufacturing a 30% input.
+    var initialShape = f.shape ? shapeOf(f.shape) : null;
+    if (!f.model && initialShape) f.model = initialShape.model;
+    if (f.spd == null) f.spd = 4;
+    if (f.drift == null) f.drift = initialShape ? initialShape.drift * 100 : 0;
+    if (f.jumps == null) f.jumps = initialShape && initialShape.model === 'JUMP_DIFFUSION' ? 8 : 0;
+    if (f.jumpSize == null) f.jumpSize = f.shape === 'GAP_DOWN' ? -5 : f.shape === 'GAP_UP' ? 5 : 0;
+    if (f.jumpVol == null) f.jumpVol = initialShape && initialShape.model === 'JUMP_DIFFUSION' ? 4 : 0;
+    if (f.nu == null) f.nu = 6;
+    if (f.paths == null) f.paths = 2000;
+    if (f.hKappa == null) f.hKappa = 3;
+    if (f.hXi == null) f.hXi = 0.5;
+    if (f.hRho == null) f.hRho = -0.6;
+    if (!f.volMode) f.volMode = Number(f.vol) > 0 ? 'custom' : 'lane';
+    if (!f.ivMode) f.ivMode = Number(f.ivStart) > 0 ? 'custom' : 'lane';
+    if (f.ivDrift == null) f.ivDrift = 0;
+    if (f.ivMeanRevert == null) f.ivMeanRevert = 0.5;
+    if (f.ivEventDay == null) f.ivEventDay = -1;
+    if (f.ivShock == null) f.ivShock = -35;
+    if (f.ivMin == null) f.ivMin = 3;
+    if (f.ivMax == null) f.ivMax = 400;
+    f.formVersion = 2;
+
     var box = el('div', { class: 'scenario-form' });
     var onchange = function () {};
-    var expertInputs = {};
+    var controls = {};
+    var factHost = null;
+    var syncing = false;
 
     function magPct(vol, days) { return Math.round(vol * Math.sqrt(days / 252) * 100); }
 
-    // Per-ticker calibration: annualized HV from the symbol's (usually prefetched) history.
-    // While unknown, magVolFor returns 0 — the server-side sentinel for "use market vol"
-    // (the chain's ATM IV) — so no symbol ever gets a hardcoded 30%.
-    var hvBase = { v: null, evidence: null, loaded: false };
-    function magVolFor(key) {
-      var m2 = MAGS.find(function (x) { return x.key === key; }) || MAGS[1];
-      return hvBase.v ? m2.mult * hvBase.v : 0;
+    function finite(value) { return value !== null && value !== '' && Number.isFinite(Number(value)); }
+    function pct(value, digits) {
+      if (!finite(value)) return 'not set';
+      return Number(value).toFixed(digits == null ? 1 : digits).replace(/\.0+$/, '') + '%';
     }
-    if (symbol) historicalVol(symbol).then(function (calibration) {
-      hvBase.loaded = true;
-      hvBase.v = calibration && calibration.vol;
-      hvBase.evidence = calibration && calibration.evidence;
+    function modelLabel(value) {
+      var item = MODELS.find(function (m) { return m.v === value; });
+      return item ? item.label : 'Choose a story or engine';
+    }
+
+    function calibration() {
+      return f.calibration && f.calibration.loaded ? f.calibration : { loaded: false, vol: null, evidence: null };
+    }
+
+    function laneVolAnnual() {
+      var c = calibration();
+      if (!(Number(c.vol) > 0)) return 0;
+      var magnitude = MAGS.find(function (m) { return m.key === f.mag; }) || MAGS[1];
+      return Number(c.vol) * magnitude.mult;
+    }
+
+    function effectiveVolAnnual() {
+      return f.volMode === 'custom' && Number(f.vol) > 0 ? Number(f.vol) / 100 : laneVolAnnual();
+    }
+
+    function provenanceText() {
+      var c = calibration();
+      var provenance = String(c.evidence && c.evidence.provenance || '').toUpperCase();
+      return provenance === 'DEMO' ? 'fabricated Demo history'
+        : provenance === 'SIMULATED' ? 'this simulated session\u2019s generated history'
+        : provenance === 'MODELED' ? 'modeled history'
+        : provenance === 'OBSERVED' || provenance === 'BROKER' ? 'observed recent history'
+        : 'the eligible recent history in this lane';
+    }
+
+    function applyShapePreset(key) {
+      var shape = shapeOf(key);
+      f.shape = shape.key;
+      f.model = shape.model;
+      f.drift = shape.drift * 100;
+      f.jumps = shape.model === 'JUMP_DIFFUSION' ? 8 : 0;
+      f.jumpSize = key === 'GAP_DOWN' ? -5 : key === 'GAP_UP' ? 5 : 0;
+      f.jumpVol = shape.model === 'JUMP_DIFFUSION' ? 4 : 0;
+      sync();
+    }
+
+    function applyMagnitude(key) {
+      f.mag = key;
+      f.volMode = 'lane';
+      delete f.vol;
+      // Heston's long-run and initial variance follow the same wildness choice unless the
+      // Expert subsequently authors explicit values.
+      delete f.hLongVol;
+      delete f.hInitialVol;
+      sync();
+    }
+
+    // Per-ticker calibration: annualized HV from the symbol's (usually prefetched) history.
+    // While unknown, volAnnual remains 0: the explicit server sentinel for this lane's
+    // nearest-horizon option volatility. Persisting calibration in the owner makes a level flip
+    // byte-stable; a newly mounted form never starts over with another default.
+    if (symbol && !calibration().loaded) historicalVol(symbol).then(function (result) {
+      f.calibration = { loaded: true, vol: result && result.vol || null,
+        evidence: result && result.evidence || null };
       if (box._sync) box._sync();
-      onchange();
     });
 
-    if (level === 'beginner') {
-      // 1) The story — what do you think happens?
-      box.appendChild(el('div', { class: 'field-label' }, 'What do you think ' + (symbol || 'it') + ' does?'));
-      var grid = el('div', { class: 'q-grid sc-grid', id: 'sc-shapes', role: 'group',
-        'aria-label': 'Possible market story' });
-      SHAPES.forEach(function (s) {
-        grid.appendChild(el('button', { type: 'button', 'data-shape': s.key,
-          class: 'q-card sc-card' + (f.shape === s.key ? ' active' : ''),
-          'aria-pressed': String(f.shape === s.key), onclick: function () {
-            f.shape = s.key; grid.querySelectorAll('.sc-card').forEach(function (b) {
-              var active = b.getAttribute('data-shape') === s.key;
-              b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active));
-            }); sync();
-          } },
-          sketch(s.pts), el('b', {}, s.label), el('div', { class: 'muted small' }, s.blurb)));
-      });
-      box.appendChild(grid);
-      // 2) Over how long, and how wild?
-      var row = el('div', { class: 'form-grid' });
-      var hzWrap = el('div', { class: 'chip-row', id: 'sc-horizon', role: 'group', 'aria-label': 'Scenario horizon' });
-      HORIZONS.forEach(function (h) {
-        hzWrap.appendChild(el('button', { type: 'button', class: 'sym-chip' + (f.horizon === h.d ? ' active' : ''), 'data-days': h.d,
-          'aria-pressed': String(f.horizon === h.d), onclick: function () {
-            f.horizon = h.d; hzWrap.querySelectorAll('.sym-chip').forEach(function (b) {
-              var active = +b.getAttribute('data-days') === h.d;
-              b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active));
-            }); sync();
-          } }, h.label));
-      });
-      var magWrap = el('div', { class: 'chip-row', id: 'sc-mag', role: 'group', 'aria-label': 'Scenario volatility' });
-      var magNote = el('div', { class: 'muted small', id: 'sc-mag-note' });
-      MAGS.forEach(function (m) {
-        magWrap.appendChild(el('button', { type: 'button', class: 'sym-chip' + (f.mag === m.key ? ' active' : ''), 'data-mag': m.key,
-          'aria-pressed': String(f.mag === m.key), onclick: function () {
-            f.mag = m.key; magWrap.querySelectorAll('.sym-chip').forEach(function (b) {
-              var active = b.getAttribute('data-mag') === m.key;
-              b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active));
-            }); sync();
-          } }, m.label));
-      });
-      row.appendChild(el('div', { class: 'field' }, el('div', { class: 'field-label' }, 'Over the next'), hzWrap));
-      row.appendChild(el('div', { class: 'field' }, el('div', { class: 'field-label' }, 'How wild could it get?'), magWrap, magNote));
-      box.appendChild(row);
-      box.appendChild(UI.expandable('How this works', function () {
-        return el('div', {},
-          el('p', {}, 'We draw hundreds of made-up-but-realistic price paths that follow the story you picked, sized by the wildness you chose. It is a model of what COULD happen — never a forecast.'),
-          el('p', {}, 'Option prices along each path come from a standard pricing model, so time decay and volatility changes are included. Every run is labeled as simulated.'));
-      }));
-      function sync() {
-        if (!hvBase.loaded) {
-          magNote.textContent = 'Loading volatility calibration for this market lane\u2026';
-        } else if (!hvBase.v) {
-          magNote.textContent = 'No eligible daily history here; the run will use this lane\u2019s nearest-horizon option volatility.';
-        } else {
-          var provenance = String(hvBase.evidence && hvBase.evidence.provenance || '').toUpperCase();
-          var basis = provenance === 'DEMO' ? 'fabricated Demo history'
-            : provenance === 'SIMULATED' ? 'this simulated session\u2019s generated history'
-            : provenance === 'MODELED' ? 'modeled history'
-            : provenance === 'OBSERVED' || provenance === 'BROKER' ? 'observed recent history'
-            : 'the eligible recent history in this lane';
-          magNote.textContent = 'Typically within ±' + magPct(magVolFor(f.mag), f.horizon)
-            + '% by the end — scaled to ' + basis + ' for ' + (symbol || 'this stock') + '.';
-        }
-        onchange();
-      }
-      box._sync = sync;
-      sync();
-    } else {
-      // Expert terminal — everything inline, math on demand.
-      // Model and shape are decisions, not data pickers — purpose-built controls, no listbox.
-      var model = UI.segmented({ id: 'sc-model',
-        options: MODELS.map(function (i) { return { value: i.v, label: i.label }; }),
-        value: f.model || shapeOf(f.shape).model,
-        onChange: function (v) { f.model = v; onchange(); updateRelevance(); } });
-      var shapeSel = UI.chipSet({ id: 'sc-shape',
-        options: SHAPES.map(function (s) { return { value: s.key, label: s.label }; }),
-        value: f.shape,
-        onChange: function (v) { f.shape = v; onchange(); } });
-      var horizon = num('sc-days', f.horizon, 1, 756, function (v) { f.horizon = v; onchange(); });
-      var vol = num('sc-vol', f.vol != null ? f.vol : 30, 1, 500, function (v) { f.vol = v; onchange(); });
-      var drift = num('sc-drift', f.drift != null ? f.drift : Math.round(shapeOf(f.shape).drift * 100), -200, 200, function (v) { f.drift = v; onchange(); });
-      var jumps = num('sc-jumps', f.jumps != null ? f.jumps : 0, 0, 260, function (v) { f.jumps = v; onchange(); });
-      var jumpSize = num('sc-jumpsize', f.jumpSize != null ? f.jumpSize : -4, -50, 50, function (v) { f.jumpSize = v; onchange(); });
-      var tailNu = num('sc-nu', f.nu != null ? f.nu : 6, 2.5, 200, function (v) { f.nu = v; onchange(); });
-      var seed = num('sc-seed', f.seed, 0, 99999999, function (v) { f.seed = v; onchange(); });
-      var paths = num('sc-paths', f.paths || 2000, 20, 2000, function (v) { f.paths = v; onchange(); });
-      var ivStart = num('sc-iv', f.ivStart != null ? f.ivStart : 30, 3, 400, function (v) { f.ivStart = v; onchange(); });
-      var ivEvent = num('sc-ivday', f.ivEventDay != null ? f.ivEventDay : -1, -1, 756, function (v) { f.ivEventDay = v; onchange(); });
-      var ivShock = num('sc-ivshock', f.ivShock != null ? f.ivShock : -35, -90, 300, function (v) { f.ivShock = v; onchange(); });
-      var spd = num('sc-spd', f.spd || 4, 1, 16, function (v) { f.spd = v; onchange(); });
-      var hKappa = num('sc-hkappa', f.hKappa != null ? f.hKappa : 3, 0.1, 20, function (v) { f.hKappa = v; onchange(); });
-      var hXi = num('sc-hxi', f.hXi != null ? f.hXi : 0.5, 0.01, 3, function (v) { f.hXi = v; onchange(); });
-      var hRho = num('sc-hrho', f.hRho != null ? f.hRho : -0.6, -0.99, 0.99, function (v) { f.hRho = v; onchange(); });
-      expertInputs = { model: model, seed: seed };
-      box.appendChild(fld('Model', model));
-      box.appendChild(fld('Shape guide', shapeSel));
-      box.appendChild(el('div', { class: 'form-grid compact-filters' },
-        fld('Horizon (trading days)', horizon), fld('Steps/day', spd),
-        fld('Volatility σ (%/yr)', vol), fld('Drift μ (%/yr)', drift),
-        fld('Jump frequency (/yr)', jumps), fld('Jump size (%)', jumpSize), fld('Tail ν', tailNu)));
-      box.appendChild(el('div', { class: 'form-grid compact-filters' },
-        fld('Heston κ', hKappa), fld('Heston ξ', hXi), fld('Heston ρ', hRho),
-        fld('IV start %', ivStart), fld('Event on trading day #', ivEvent, 'eventday'), fld('IV change %', ivShock, 'ivchange'),
-        fld('Seed', seed), fld('Paths', paths)));
-      // Only the selected model's knobs are live — a control that silently does nothing teaches
-      // the wrong lesson. Irrelevant fields disable with an honest tooltip.
-      function updateRelevance() {
-        var m = model.value();
-        var offNote = 'Not used by ' + (MODELS.find(function (x) { return x.v === m; }) || { label: m }).label;
-        [[jumps, m === 'JUMP_DIFFUSION'], [jumpSize, m === 'JUMP_DIFFUSION'],
-         [tailNu, m === 'STUDENT_T'],
-         [hKappa, m === 'HESTON'], [hXi, m === 'HESTON'], [hRho, m === 'HESTON'],
-         [vol, m !== 'HESTON']].forEach(function (pair) {
-          pair[0].disabled = !pair[1];
-          pair[0].title = pair[1] ? '' : offNote;
-        });
-      }
-      updateRelevance();
-      box.appendChild(UI.expandable('The math', function () {
-        return el('div', { class: 'sc-math' },
-          el('p', {}, el('b', {}, 'GBM / Student-t: '), 'Gaussian GBM uses the usual σ²/2 correction. Student-t shocks use the selected non-integer ν, are capped at ±8 standardized deviations, re-scaled, and use that bounded law’s exponential compensator so the guide remains the expected price path.'),
-          el('p', {}, el('b', {}, 'Jump-diffusion (Merton): '), 'adds Σ Jᵢ per step, N ~ Poisson(λdt), J ~ N(m, s²).'),
-          el('p', {}, el('b', {}, 'Heston: '), 'dv = κ(θ − v)dt + ξ√v·dWᵥ, corr(dWₛ, dWᵥ) = ρ; full-truncation Euler.'),
-          el('p', {}, el('b', {}, 'Bootstrap: '), 'resamples blocks of the symbol’s own observed daily returns (mean-removed), preserving fat tails and autocorrelation; an empirical block-prefix compensator keeps the guide mean-honest.'),
-          el('p', {}, el('b', {}, 'Shape guide: '), 'a deterministic log-drift curve (valley/mountain/linear) the noise rides on; the bridge pins the endpoint.'),
-          el('p', {}, el('b', {}, 'IV path: '), 'deterministic: dIV = drift·dt + κ(long-run − IV)dt, with a one-off shock at the event day’s close. Option values are BSM on this path — always labeled MODELED.'),
-          el('p', { class: 'muted small' }, 'Same seed ⇒ byte-identical paths. Each result names whether entry is quoted or modeled and includes configured round-trip commissions; future exit spread and early assignment are not modeled.'));
-      }));
-    }
+    // The primary controls are identical at both altitudes.
+    box.appendChild(el('div', { class: 'field-label' },
+      'What do you think ' + (symbol || 'it') + ' does?', UI.info('scenario')));
+    var grid = el('div', { class: 'q-grid sc-grid', id: 'sc-shapes', role: 'group',
+      'aria-label': 'Possible market story' });
+    SHAPES.forEach(function (shape) {
+      grid.appendChild(el('button', { type: 'button', 'data-shape': shape.key,
+        class: 'q-card sc-card', onclick: function () { applyShapePreset(shape.key); } },
+        sketch(shape.pts), el('b', {}, shape.label), el('div', { class: 'muted small' }, shape.blurb)));
+    });
+    box.appendChild(grid);
 
-    function sel(id, items, val, on) {
-      var s = el('select', { id: id }, items.map(function (i) { return el('option', { value: i.v }, i.label); }));
-      s.value = val; s.addEventListener('change', function () { on(s.value); });
-      return s;
-    }
-    function num(id, val, min, max, on) {
-      var i = el('input', { type: 'number', id: id, value: val, min: String(min), max: String(max), step: 'any' });
-      i.addEventListener('change', function () { on(+i.value); });
+    var row = el('div', { class: 'form-grid sc-primary-controls' });
+    var hzWrap = el('div', { class: 'chip-row', id: 'sc-horizon', role: 'group', 'aria-label': 'Scenario horizon' });
+    var magWrap = el('div', { class: 'chip-row', id: 'sc-mag', role: 'group', 'aria-label': 'Scenario volatility' });
+    var magNote = el('div', { class: 'muted small', id: 'sc-mag-note', 'aria-live': 'polite' });
+    MAGS.forEach(function (magnitude) {
+      magWrap.appendChild(el('button', { type: 'button', class: 'sym-chip', 'data-mag': magnitude.key,
+        onclick: function () { applyMagnitude(magnitude.key); } }, magnitude.label));
+    });
+    row.appendChild(el('div', { class: 'field' }, el('div', { class: 'field-label' }, 'Over the next'), hzWrap));
+    row.appendChild(el('div', { class: 'field' },
+      el('div', { class: 'field-label' }, 'How wild could it get?', UI.info('hv30')), magWrap, magNote));
+    box.appendChild(row);
+
+    box.appendChild(UI.expandable('How this works', function () {
+      return el('div', {},
+        el('p', {}, 'We draw hundreds of made-up-but-realistic price paths that follow the story you picked, sized by the wildness you chose. It is a model of what COULD happen — never a forecast.'),
+        el('p', {}, 'Option prices along each path use the IV assumption named below, so time decay and volatility changes are included. Every run is labeled as simulated.'));
+    }, { persist: false }));
+
+    function num(id, val, min, max, on, placeholder) {
+      var i = el('input', { type: 'number', id: id, value: val == null ? '' : val,
+        min: String(min), max: String(max), step: 'any', placeholder: placeholder || null });
+      i.addEventListener('change', function () { on(i.value === '' ? null : Number(i.value)); });
       return i;
     }
     function fld(label, input, infoKey) {
@@ -268,48 +244,291 @@
       return el('div', { class: 'field' }, labelEl, input);
     }
 
-    function getSpec() {
-      var s = shapeOf(f.shape);
-      if (level === 'beginner') {
-        var jumpy = s.model === 'JUMP_DIFFUSION';
-        // 4 steps/day: real Brownian squiggle instead of connect-the-dots line segments.
-      return { model: s.model, shape: f.shape, horizonDays: f.horizon, stepsPerDay: 4,
-          driftAnnual: s.drift, volAnnual: magVolFor(f.mag), jumpsPerYear: jumpy ? 8 : 0,
-          jumpMean: f.shape === 'GAP_DOWN' ? -0.05 : (f.shape === 'GAP_UP' ? 0.05 : 0),
-          jumpVol: jumpy ? 0.04 : 0, tailNu: 6, heston: null, seed: f.seed, paths: 2000 };
+    function advancedEditor() {
+      var host = el('div', { class: 'sc-advanced', id: 'sc-advanced' });
+      controls.model = UI.segmented({ id: 'sc-model', label: 'Path engine',
+        options: MODELS.map(function (item) { return { value: item.v, label: item.label }; }),
+        value: f.model, onChange: function (value) {
+          if (syncing) return;
+          f.model = value; sync();
+        } });
+      host.appendChild(controls.model);
+
+      controls.days = num('sc-days', f.horizon, 1, 756, function (v) { if (v != null) f.horizon = v; sync(); });
+      controls.spd = num('sc-spd', f.spd, 1, 16, function (v) { if (v != null) f.spd = v; sync(); });
+      controls.vol = num('sc-vol', f.volMode === 'custom' ? f.vol : null, 1, 500, function (v) {
+        if (v == null) { f.volMode = 'lane'; delete f.vol; }
+        else { f.volMode = 'custom'; f.vol = v; }
+        sync();
+      }, 'Lane calibrated');
+      controls.drift = num('sc-drift', f.drift, -200, 200, function (v) { if (v != null) f.drift = v; sync(); });
+      controls.jumps = num('sc-jumps', f.jumps, 0, 260, function (v) { if (v != null) f.jumps = v; sync(); });
+      controls.jumpSize = num('sc-jumpsize', f.jumpSize, -100, 100, function (v) { if (v != null) f.jumpSize = v; sync(); });
+      controls.jumpVol = num('sc-jumpvol', f.jumpVol, 0, 100, function (v) { if (v != null) f.jumpVol = v; sync(); });
+      controls.tailNu = num('sc-nu', f.nu, 2.5, 200, function (v) { if (v != null) f.nu = v; sync(); });
+      controls.seed = num('sc-seed', f.seed, 0, 99999999, function (v) { if (v != null) f.seed = v; sync(); });
+      controls.paths = num('sc-paths', f.paths, 20, 2000, function (v) { if (v != null) f.paths = v; sync(); });
+      host.appendChild(el('div', { class: 'form-grid compact-filters sc-param-grid' },
+        fld('Horizon (trading days)', controls.days), fld('Steps/day', controls.spd),
+        fld('Volatility σ (%/yr)', controls.vol), fld('Drift μ (%/yr)', controls.drift),
+        fld('Jump frequency (/yr)', controls.jumps), fld('Jump mean (%)', controls.jumpSize),
+        fld('Jump dispersion (%)', controls.jumpVol), fld('Tail ν', controls.tailNu),
+        fld('Seed', controls.seed), fld('Paths', controls.paths)));
+
+      controls.hKappa = num('sc-hkappa', f.hKappa, 0.1, 20, function (v) { if (v != null) f.hKappa = v; sync(); });
+      controls.hLongVol = num('sc-htheta', f.hLongVol, 1, 500, function (v) { f.hLongVol = v; sync(); }, 'Same as σ');
+      controls.hXi = num('sc-hxi', f.hXi, 0.01, 3, function (v) { if (v != null) f.hXi = v; sync(); });
+      controls.hRho = num('sc-hrho', f.hRho, -0.99, 0.99, function (v) { if (v != null) f.hRho = v; sync(); });
+      controls.hInitialVol = num('sc-hv0', f.hInitialVol, 1, 500, function (v) { f.hInitialVol = v; sync(); }, 'Same as σ');
+      host.appendChild(el('div', { class: 'sc-param-section' },
+        el('div', { class: 'field-label' }, 'Heston variance path'),
+        el('div', { class: 'form-grid compact-filters sc-param-grid' },
+          fld('Mean reversion κ', controls.hKappa), fld('Long-run vol (θ½) %', controls.hLongVol),
+          fld('Vol of variance ξ', controls.hXi), fld('Spot/vol correlation ρ', controls.hRho),
+          fld('Initial vol (v₀½) %', controls.hInitialVol))));
+
+      controls.ivMode = UI.segmented({ id: 'sc-iv-mode', label: 'Option-volatility path',
+        options: [
+          { value: 'lane', label: 'Use lane option IV', detail: 'No invented starting value' },
+          { value: 'custom', label: 'Custom IV path', detail: 'Author every value below' }
+        ], value: f.ivMode, revealDetails: 'expert', onChange: function (value) {
+          if (syncing) return;
+          f.ivMode = value;
+          if (value === 'custom' && !(Number(f.ivStart) > 0)) {
+            var effective = effectiveVolAnnual();
+            f.ivStart = effective > 0 ? effective * 100 : null;
+            f.ivLongRun = effective > 0 ? effective * 100 : null;
+          }
+          sync();
+        } });
+      host.appendChild(controls.ivMode);
+      controls.ivStart = num('sc-iv', f.ivStart, 3, 400, function (v) { f.ivStart = v; sync(); }, 'Required for custom');
+      controls.ivDrift = num('sc-ivdrift', f.ivDrift, -300, 300, function (v) { if (v != null) f.ivDrift = v; sync(); });
+      controls.ivMeanRevert = num('sc-ivrevert', f.ivMeanRevert, 0, 20, function (v) { if (v != null) f.ivMeanRevert = v; sync(); });
+      controls.ivLongRun = num('sc-ivlong', f.ivLongRun, 3, 400, function (v) { f.ivLongRun = v; sync(); }, 'Required for custom');
+      controls.ivEvent = num('sc-ivday', f.ivEventDay, -1, 756, function (v) { if (v != null) f.ivEventDay = v; sync(); });
+      controls.ivShock = num('sc-ivshock', f.ivShock, -90, 300, function (v) { if (v != null) f.ivShock = v; sync(); });
+      controls.ivMin = num('sc-ivmin', f.ivMin, 1, 400, function (v) { if (v != null) f.ivMin = v; sync(); });
+      controls.ivMax = num('sc-ivmax', f.ivMax, 3, 500, function (v) { if (v != null) f.ivMax = v; sync(); });
+      controls.ivFields = [controls.ivStart, controls.ivDrift, controls.ivMeanRevert, controls.ivLongRun,
+        controls.ivEvent, controls.ivShock, controls.ivMin, controls.ivMax];
+      controls.ivNote = el('p', { class: 'muted small', id: 'sc-iv-basis-note' });
+      host.appendChild(controls.ivNote);
+      host.appendChild(el('div', { class: 'form-grid compact-filters sc-param-grid' },
+        fld('IV start %', controls.ivStart), fld('IV drift (points/yr)', controls.ivDrift),
+        fld('IV mean reversion', controls.ivMeanRevert), fld('IV long-run %', controls.ivLongRun),
+        fld('Event on trading day #', controls.ivEvent, 'eventday'), fld('IV change %', controls.ivShock, 'ivchange'),
+        fld('IV floor %', controls.ivMin), fld('IV ceiling %', controls.ivMax)));
+      syncAdvanced();
+      return host;
+    }
+
+    function laneIvText() {
+      if (f.shape === 'EVENT_JUMP') {
+        return 'Lane ATM IV × 1.4 at the start; mean-reverts to lane ATM at 1.5/yr; '
+          + '−35% event shock after day ' + Math.max(1, Math.round(Number(f.horizon) / 3))
+          + '; 3% floor; 400% ceiling.';
       }
-      var vol = (f.vol != null ? f.vol : 30) / 100;
+      return 'Flat at this lane\u2019s nearest-horizon ATM option IV; no event; 3% floor; 400% ceiling.';
+    }
+
+    function assumptionRows() {
+      var vol = effectiveVolAnnual();
+      var hLong = Number(f.hLongVol) > 0 ? Number(f.hLongVol) / 100 : vol;
+      var hInitial = Number(f.hInitialVol) > 0 ? Number(f.hInitialVol) / 100 : vol;
+      var volText = f.volMode === 'custom'
+        ? pct(f.vol) + ' annualized (carried Expert override)'
+        : vol > 0
+          ? pct(vol * 100) + ' annualized (' + f.mag + ' × ' + provenanceText() + ')'
+          : calibration().loaded
+            ? 'Resolved by the server from this lane\u2019s nearest-horizon option IV'
+            : 'Lane calibration is loading; the server market-IV sentinel is carried until it resolves';
+      var ivText = f.ivMode !== 'custom' ? laneIvText()
+        : 'Start ' + pct(f.ivStart) + '; drift ' + pct(f.ivDrift) + '/yr; mean reversion '
+          + f.ivMeanRevert + '/yr; long-run ' + pct(f.ivLongRun) + '; event day '
+          + f.ivEventDay + '; shock ' + pct(f.ivShock) + '; bounds ' + pct(f.ivMin) + '–' + pct(f.ivMax) + '.';
+      return [
+        ['shape', 'Story guide', f.shape ? shapeOf(f.shape).label + ' (' + f.shape + ')' : 'Not chosen'],
+        ['model', 'Path engine', modelLabel(f.model)],
+        ['horizon', 'Clock', Number(f.horizon) > 0
+          ? f.horizon + ' trading days × ' + f.spd + ' steps/day' : 'Not chosen'],
+        ['drift', 'Annual drift μ', pct(f.drift)],
+        ['vol', 'Annual realized volatility σ', volText],
+        ['jumps', 'Jump process', f.jumps + '/yr; mean ' + pct(f.jumpSize) + '; dispersion ' + pct(f.jumpVol)],
+        ['tail', 'Student-t tail ν', String(f.nu)],
+        ['heston', 'Heston parameters', 'κ ' + f.hKappa + '; θ½ ' + (hLong > 0 ? pct(hLong * 100) : 'lane σ')
+          + '; ξ ' + f.hXi + '; ρ ' + f.hRho + '; v₀½ ' + (hInitial > 0 ? pct(hInitial * 100) : 'lane σ')],
+        ['sampling', 'Reproducible sample', Number(f.paths).toLocaleString() + ' paths; seed ' + f.seed],
+        ['iv', 'Option-volatility path', ivText]
+      ];
+    }
+
+    function readOnlyFacts() {
+      factHost = el('div', { class: 'sc-assumption-list', id: 'sc-assumption-facts' });
+      renderFacts();
+      return el('div', {},
+        el('p', { class: 'muted small' }, 'These are the exact inputs carried into the run. Switch to Expert only if you want to edit them; switching by itself changes nothing.'),
+        factHost);
+    }
+
+    function renderFacts() {
+      if (!factHost) return;
+      factHost.innerHTML = '';
+      assumptionRows().forEach(function (row2) {
+        factHost.appendChild(el('div', { class: 'sc-assumption-row', 'data-param': row2[0] },
+          el('span', { class: 'sc-assumption-label' }, row2[1]),
+          el('span', { class: 'sc-assumption-value' }, row2[2])));
+      });
+    }
+
+    box.appendChild(UI.expandable(level === 'expert' ? 'Edit the carried model parameters' : 'See every model assumption',
+      level === 'expert' ? advancedEditor : readOnlyFacts,
+      { open: level === 'expert', persist: false, stateKey: 'scenario-canonical-parameters' }));
+
+    if (level === 'expert') box.appendChild(UI.expandable('The math', function () {
+      return el('div', { class: 'sc-math' },
+        el('p', {}, el('b', {}, 'GBM / Student-t: '), 'Gaussian GBM uses the usual σ²/2 correction. Student-t shocks use the selected non-integer ν, are capped at ±8 standardized deviations, re-scaled, and use that bounded law’s exponential compensator so the guide remains the expected price path.'),
+        el('p', {}, el('b', {}, 'Jump-diffusion (Merton): '), 'adds Σ Jᵢ per step, N ~ Poisson(λdt), J ~ N(m, s²).'),
+        el('p', {}, el('b', {}, 'Heston: '), 'dv = κ(θ − v)dt + ξ√v·dWᵥ, corr(dWₛ, dWᵥ) = ρ; full-truncation Euler.'),
+        el('p', {}, el('b', {}, 'Bootstrap: '), 'resamples blocks of the symbol’s own observed daily returns (mean-removed), preserving fat tails and autocorrelation; an empirical block-prefix compensator keeps the guide mean-honest.'),
+        el('p', {}, el('b', {}, 'Shape guide: '), 'a deterministic log-drift curve (valley/mountain/linear) the noise rides on; the bridge pins the endpoint.'),
+        el('p', {}, el('b', {}, 'IV path: '), 'deterministic: dIV = drift·dt + κ(long-run − IV)dt, with a one-off shock at the event day’s close. Option values are BSM on this path — always labeled MODELED.'),
+        el('p', { class: 'muted small' }, 'Same seed ⇒ byte-identical paths. Each result names whether entry is quoted or modeled and includes configured round-trip commissions; future exit spread and early assignment are not modeled.'));
+    }, { persist: false }));
+
+    function syncAdvanced() {
+      if (!controls.model) return;
+      syncing = true;
+      controls.model.set(f.model);
+      if (controls.ivMode) controls.ivMode.set(f.ivMode);
+      syncing = false;
+      controls.days.value = f.horizon;
+      controls.spd.value = f.spd;
+      controls.drift.value = f.drift;
+      controls.jumps.value = f.jumps;
+      controls.jumpSize.value = f.jumpSize;
+      controls.jumpVol.value = f.jumpVol;
+      controls.tailNu.value = f.nu;
+      controls.seed.value = f.seed;
+      controls.paths.value = f.paths;
+      controls.vol.value = f.volMode === 'custom' ? f.vol : (effectiveVolAnnual() > 0
+        ? +(effectiveVolAnnual() * 100).toFixed(4) : '');
+      controls.vol.dataset.basis = f.volMode;
+      if (controls.hLongVol && f.hLongVol == null) controls.hLongVol.value = effectiveVolAnnual() > 0
+        ? +(effectiveVolAnnual() * 100).toFixed(4) : '';
+      if (controls.hInitialVol && f.hInitialVol == null) controls.hInitialVol.value = effectiveVolAnnual() > 0
+        ? +(effectiveVolAnnual() * 100).toFixed(4) : '';
+      var model = f.model;
+      var offNote = 'Not used by ' + modelLabel(model);
+      [[controls.jumps, model === 'JUMP_DIFFUSION'], [controls.jumpSize, model === 'JUMP_DIFFUSION'],
+       [controls.jumpVol, model === 'JUMP_DIFFUSION'], [controls.tailNu, model === 'STUDENT_T'],
+       [controls.hKappa, model === 'HESTON'], [controls.hLongVol, model === 'HESTON'],
+       [controls.hXi, model === 'HESTON'], [controls.hRho, model === 'HESTON'],
+       [controls.hInitialVol, model === 'HESTON']].forEach(function (pair) {
+        pair[0].disabled = !pair[1];
+        pair[0].title = pair[1] ? '' : offNote;
+      });
+      (controls.ivFields || []).forEach(function (input) {
+        input.disabled = f.ivMode !== 'custom';
+        input.title = f.ivMode === 'custom' ? '' : 'The server uses this lane\u2019s option IV; choose Custom IV path to edit.';
+      });
+      var ivNote = controls.ivNote;
+      if (ivNote) ivNote.textContent = f.ivMode === 'custom'
+        ? 'These eight values are sent exactly. A missing start or long-run value stops the run instead of inventing one.'
+        : laneIvText() + ' No IV object is sent, so there is no hidden starting percentage.';
+    }
+
+    function renderHorizonChips() {
+      hzWrap.innerHTML = '';
+      var choices = HORIZONS.slice();
+      if (Number(f.horizon) > 0
+          && !choices.some(function (h) { return Number(h.d) === Number(f.horizon); })) {
+        choices.push({ d: Number(f.horizon), label: Number(f.horizon) + ' days' });
+      }
+      choices.forEach(function (horizon) {
+        var active = Number(f.horizon) === Number(horizon.d);
+        hzWrap.appendChild(el('button', { type: 'button', class: 'sym-chip' + (active ? ' active' : ''),
+          'data-days': horizon.d, 'aria-pressed': String(active), onclick: function () {
+            f.horizon = Number(horizon.d); sync();
+          } }, horizon.label));
+      });
+    }
+
+    function sync() {
+      grid.querySelectorAll('.sc-card').forEach(function (button) {
+        var active = button.getAttribute('data-shape') === f.shape;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      magWrap.querySelectorAll('.sym-chip').forEach(function (button) {
+        var active = button.getAttribute('data-mag') === f.mag;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      renderHorizonChips();
+      var vol = effectiveVolAnnual();
+      if (!(Number(f.horizon) > 0)) {
+        magNote.textContent = 'Choose a horizon above; StrikeBench will not silently assume one.';
+      } else if (f.volMode === 'custom' && Number(f.vol) > 0) {
+        magNote.textContent = 'Custom carried volatility: ' + pct(f.vol) + ' annualized (about ±'
+          + magPct(vol, f.horizon) + '% over this horizon). Choose a wildness preset to return to lane calibration.';
+      } else if (!calibration().loaded) {
+        magNote.textContent = 'Loading volatility calibration for this market lane\u2026';
+      } else if (!(vol > 0)) {
+        magNote.textContent = 'No eligible daily history here; the run will use this lane\u2019s nearest-horizon option volatility.';
+      } else {
+        magNote.textContent = 'Typically within ±' + magPct(vol, f.horizon)
+          + '% by the end — scaled to ' + provenanceText() + ' for ' + (symbol || 'this stock') + '.';
+      }
+      syncAdvanced();
+      renderFacts();
+      onchange();
+    }
+
+    box._sync = sync;
+    sync();
+
+    function getSpec() {
+      if (!f.shape) throw new Error('Choose a market story; StrikeBench will not silently assume one.');
+      if (!(Number(f.horizon) > 0)) throw new Error('Choose a scenario horizon; StrikeBench will not silently assume one.');
+      var s = shapeOf(f.shape);
+      var vol = effectiveVolAnnual();
+      if (f.volMode === 'custom' && !(vol > 0)) throw new Error('Enter a positive custom volatility or choose a wildness preset.');
       var wantHeston = (f.model || s.model) === 'HESTON';
-      return { model: f.model || s.model, shape: f.shape, horizonDays: f.horizon,
-        stepsPerDay: f.spd || 4,
-        driftAnnual: (f.drift != null ? f.drift : s.drift * 100) / 100, volAnnual: vol,
-        jumpsPerYear: f.jumps || 0, jumpMean: (f.jumpSize || 0) / 100, jumpVol: Math.abs((f.jumpSize || 0) / 100) * 0.5,
-        tailNu: f.nu || 6,
-        heston: wantHeston ? { kappa: f.hKappa != null ? f.hKappa : 3, theta: vol * vol,
-          xi: f.hXi != null ? f.hXi : Math.max(0.05, vol * 0.5), rho: f.hRho != null ? f.hRho : -0.6, v0: vol * vol } : null,
-        seed: f.seed, paths: f.paths || 2000 };
+      var hLong = Number(f.hLongVol) > 0 ? Number(f.hLongVol) / 100 : vol;
+      var hInitial = Number(f.hInitialVol) > 0 ? Number(f.hInitialVol) / 100 : vol;
+      var heston = wantHeston && hLong > 0 && hInitial > 0 ? {
+        kappa: Number(f.hKappa), theta: hLong * hLong, xi: Number(f.hXi),
+        rho: Number(f.hRho), v0: hInitial * hInitial
+      } : null;
+      return { model: f.model || s.model, shape: f.shape, horizonDays: Number(f.horizon),
+        stepsPerDay: Number(f.spd), driftAnnual: Number(f.drift) / 100, volAnnual: vol,
+        jumpsPerYear: Number(f.jumps), jumpMean: Number(f.jumpSize) / 100,
+        jumpVol: Number(f.jumpVol) / 100, tailNu: Number(f.nu), heston: heston,
+        seed: Number(f.seed), paths: Number(f.paths) };
     }
 
     function getIv() {
-      if (level === 'beginner') {
-        // Null on purpose: the server anchors the IV path to this lane's nearest-horizon ATM IV.
-        // EVENT_JUMP adds its rich-IV-then-crush shape there too; it must never fall back to a
-        // hidden canned 30% merely because daily history is unavailable.
-        return null;
+      // Lane mode is deliberately null at BOTH levels. The server resolves the exact ATM option
+      // IV and writes it into the receipt; the browser never substitutes an invisible 30%.
+      if (f.ivMode !== 'custom') return null;
+      if (!(Number(f.ivStart) > 0) || !(Number(f.ivLongRun) > 0)) {
+        throw new Error('Custom IV needs both a starting and long-run percentage.');
       }
-      return { startIv: (f.ivStart != null ? f.ivStart : 30) / 100, driftPerYear: 0, meanRevertSpeed: 0.5,
-        longRunIv: (f.ivStart != null ? f.ivStart : 30) / 100,
-        eventDay: f.ivEventDay != null ? f.ivEventDay : -1, eventShockPct: (f.ivShock != null ? f.ivShock : -35) / 100,
-        minIv: 0.03, maxIv: 4 };
+      return { startIv: Number(f.ivStart) / 100, driftPerYear: Number(f.ivDrift) / 100,
+        meanRevertSpeed: Number(f.ivMeanRevert), longRunIv: Number(f.ivLongRun) / 100,
+        eventDay: Number(f.ivEventDay), eventShockPct: Number(f.ivShock) / 100,
+        minIv: Number(f.ivMin) / 100, maxIv: Number(f.ivMax) / 100 };
     }
 
     function describe() {
+      if (!f.shape || !(Number(f.horizon) > 0)) return 'Scenario not fully specified';
       var s = shapeOf(f.shape);
       var hz = HORIZONS.find(function (h) { return h.d === f.horizon; });
       return s.label + ' over ' + (hz ? hz.label : f.horizon + ' days');
     }
 
-    function reroll() { f.seed = Math.floor(Math.random() * 1000000); if (expertInputs.seed) expertInputs.seed.value = f.seed; }
+    function reroll() { f.seed = Math.floor(Math.random() * 1000000); sync(); }
 
     return { el: box, getSpec: getSpec, getIv: getIv, describe: describe, reroll: reroll,
       setOnChange: function (fn) { onchange = fn; } };
@@ -388,7 +607,8 @@
       + '<text x="' + padL + '" y="' + (H - 6) + '" font-size="10" fill="var(--text-dim)">today</text>'
       + '<text x="' + (W - padR) + '" y="' + (H - 6) + '" text-anchor="end" font-size="10" fill="var(--text-dim)">+' + days + 'd</text>'
       + '</svg>';
-    var wrap = el('div', { class: 'fan-chart' }, el('div', { html: svg }));
+    var wrap = el('div', { class: 'fan-chart', 'data-vocabulary': 'possiblefutures' },
+      el('div', { html: svg }));
     // Hover readout: day + the p10/median/p90 at that day (the chart must explain itself).
     (function wireHover() {
       var host = wrap.firstChild;
@@ -557,10 +777,10 @@
     var likelyHi = terminal ? terminal.p84 : p.endP90;
     var pctDown = Math.round((likelyLo / p.spot - 1) * 100), pctUp = Math.round((likelyHi / p.spot - 1) * 100);
     wrap.appendChild(el('div', { class: 'chip-row chart-summary' },
-      UI.chip('Futures drawn', String(p.paths)),
+      UI.chip(UI.term('possiblefutures', 'Futures drawn'), String(p.paths)),
       UI.chip('Median ending price', String(terminal ? terminal.p50 : p.endP50)),
       UI.chip('Middle 68% end between', likelyLo + ' and ' + likelyHi),
-      UI.chip('That’s', (pctDown >= 0 ? '+' : '') + pctDown + '% to ' + (pctUp >= 0 ? '+' : '') + pctUp + '%')));
+      UI.chip('Range vs today', (pctDown >= 0 ? '+' : '') + pctDown + '% to ' + (pctUp >= 0 ? '+' : '') + pctUp + '%')));
     if (!opts.noNotes) (p.notes || []).forEach(function (n) { wrap.appendChild(el('div', { class: 'muted small' }, n)); });
     return wrap;
   }
@@ -838,6 +1058,65 @@
     });
   }
 
+  /** Resolve the horizon only from an exact option expiry or an explicitly carried stock-only
+   * horizon. A missing contract date is not permission to manufacture a month. */
+  function realisticHorizon(candidate, legs, opts) {
+    var source = candidate && candidate.legs || [];
+    var optionIndexes = [];
+    source.forEach(function (leg, index) {
+      if (!(leg.stock || String(leg.type || '').toUpperCase() === 'STOCK')) optionIndexes.push(index);
+    });
+    if (!optionIndexes.length) {
+      var explicit = Number(opts && opts.horizonDays != null ? opts.horizonDays : candidate && candidate.horizonDays);
+      if (Number.isFinite(explicit) && explicit >= 1 && explicit <= 756) {
+        return { days: Math.round(explicit), source: 'declared horizon', error: null };
+      }
+      return { days: null, source: null,
+        error: 'A stock-only scenario needs an explicit declared horizon; no 21-session month was assumed.' };
+    }
+    var days = [];
+    for (var i = 0; i < optionIndexes.length; i++) {
+      var index = optionIndexes[i];
+      var original = source[index] || {};
+      var expiry = String(original.expiration || '').trim();
+      var derived = legs && legs[index] && Number(legs[index].expiryDay);
+      if (!expiry || !Number.isFinite(Date.parse(expiry + 'T16:00:00-04:00'))
+          || !Number.isFinite(derived) || derived < 1) {
+        return { days: null, source: null,
+          error: 'Every option needs an exact valid expiration before scenario outcomes can choose a horizon.' };
+      }
+      days.push(derived);
+    }
+    return { days: Math.max(1, Math.min.apply(Math, days)), source: 'earliest exact option expiration', error: null };
+  }
+
+  /** One IV value from server-priced Canvas output, an explicit authored node path, or the exact
+   * stored fan receipt. Null means unavailable; callers must never turn it into a hidden 30%. */
+  function canvasIvValue(preview, model, day) {
+    model = model || {};
+    var nodes = (model.ivNodes || []).slice().filter(function (node) {
+      return node && Number.isFinite(Number(node.dayIndex)) && Number(node.dayIndex) >= 0
+        && Number.isFinite(Number(node.atmIv)) && Number(node.atmIv) >= .01 && Number(node.atmIv) <= 4;
+    }).sort(function (a, b) { return Number(a.dayIndex) - Number(b.dayIndex); });
+    var canvas = preview && preview.canvas;
+    var row = canvas && (canvas.underlying || []).find(function (x) { return Number(x.day) === Number(day); });
+    if (row && Number.isFinite(Number(row.atmIv)) && Number(row.atmIv) >= .01) return Number(row.atmIv);
+    if (nodes.length) {
+      var d = Number(day) || 0;
+      if (d <= Number(nodes[0].dayIndex)) return Number(nodes[0].atmIv);
+      if (d >= Number(nodes[nodes.length - 1].dayIndex)) return Number(nodes[nodes.length - 1].atmIv);
+      for (var i = 1; i < nodes.length; i++) {
+        if (d > Number(nodes[i].dayIndex)) continue;
+        var left = nodes[i - 1], right = nodes[i];
+        var w = (d - Number(left.dayIndex)) / (Number(right.dayIndex) - Number(left.dayIndex));
+        return Number(left.atmIv) + w * (Number(right.atmIv) - Number(left.atmIv));
+      }
+    }
+    var receiptIv = Number(preview && preview.receipt && preview.receipt.spec
+      && preview.receipt.spec.volAnnual);
+    return Number.isFinite(receiptIv) && receiptIv >= .01 ? receiptIv : null;
+  }
+
   /**
    * Theoretical payoff limits stay visible, but these four distributions answer the trader's
    * practical question: what does this exact package tend to do in plausible market shapes?
@@ -845,13 +1124,14 @@
    */
   var realisticOutcomeCache = new Map();
 
-  function realisticOutcomeKey(symbol, candidate) {
+  function realisticOutcomeKey(symbol, candidate, opts) {
     var market = [App.state && App.state.world || '', App.state && App.state.dataset || ''];
     var legs = (candidate.legs || []).map(function (leg) {
       return [leg.action, leg.type, leg.stock === true, leg.strike, leg.expiration, leg.ratio, leg.multiplier];
     });
     return JSON.stringify([market, symbol, candidate.strategy, candidate.qty || 1,
-      candidate.entryNetPremiumCents, legs]);
+      candidate.entryNetPremiumCents, legs,
+      opts && opts.horizonDays != null ? Number(opts.horizonDays) : null]);
   }
 
   function realisticOutcomeStateKey(key) {
@@ -868,7 +1148,7 @@
     symbol = String(symbol || '').toUpperCase();
     candidate = candidate || {};
     var beginner = Learn.currentLevel() === 'beginner';
-    var key = realisticOutcomeKey(symbol, candidate);
+    var key = realisticOutcomeKey(symbol, candidate, opts);
     var entry = realisticOutcomeCache.get(key);
     if (!entry) {
       entry = { status: 'idle', rows: [], evidence: null, usedHistory: false, views: new Set() };
@@ -988,8 +1268,11 @@
         var leg = sourceLegs[idx] || {};
         return leg.stock || String(leg.type || '').toUpperCase() === 'STOCK' || !!exp;
       });
-      var optionDays = legs.filter(function (leg) { return leg.type !== 'STOCK'; }).map(function (leg) { return leg.expiryDay; });
-      var days = optionDays.length ? Math.max(1, Math.min.apply(Math, optionDays)) : 21;
+      var resolvedHorizon = realisticHorizon(candidate, legs, opts);
+      if (resolvedHorizon.error) {
+        entry.status = 'error'; entry.error = resolvedHorizon.error; paintAll(); return;
+      }
+      var days = resolvedHorizon.days;
       var cases = [
         { key: 'calm', label: 'Calm / narrow', shape: 'CHOP', drift: 0, mult: 0.6, seed: 41101 },
         { key: 'up', label: 'Steady rise', shape: 'GRIND_UP', drift: 0.15, mult: 1.0, seed: 41102 },
@@ -1047,17 +1330,19 @@
     var ui = PlanStore.ui(planRef.plan.id);
     var state = ui.canvas = ui.canvas || {};
     state.pins = state.pins || [];
+    state.compareMode = state.compareMode || 'YOURS_VS_PROPOSED';
+    state.selectedPositions = state.selectedPositions || [];
     var runSeq = 0, runTimer = null;
     var railHost = null, savedHost = null;
 
     var status = el('div', { class: 'plan-outcome-action-status scenario-canvas-status', 'aria-live': 'polite' });
     var body = el('div', { class: 'scenario-canvas-body' });
     var root = el('section', { class: 'card plan-scenario-canvas', id: 'plan-scenario-canvas' },
-      UI.cardHeader(el('span', {}, 'Draw your believed path', UI.info('authoredScenario')),
+      UI.cardHeader(el('span', {}, 'Scenario Canvas', UI.info('authoredScenario')),
         el('span', { class: 'badge badge-modeled' }, 'SCENARIO MODEL')),
       el('p', { class: 'muted' }, beginner
-        ? 'Click the chart where you believe the price goes. Every pin means “the price touches this level around this session.” The futures re-run through your pins right here, and the label below says honestly how they were honored.'
-        : 'Pin price×session waypoints on the stored fan; the identical model, seed and calibration re-run conditioned on your pins. The fill label states whether pins are honored by exact conditioning or guided interpolation.'),
+        ? 'Draw the price story, decide how uncertainty changes, and compare your real or practice positions on the same possible futures.'
+        : 'Author price×session and ATM-IV paths, declare the surface and settlement rules, then reprice canonical same-symbol packages on one stored ensemble.'),
       status, body);
 
     function setStatus(node) { status.replaceChildren(); if (node) status.appendChild(node); }
@@ -1093,10 +1378,97 @@
       });
       return spec;
     }
+    function defaultCanvasModel() {
+      return { calendar: 'NYSE', dividendYieldAnnual: null,
+        dividendBasis: 'Dividend source unavailable; pricing uses 0% and discloses that limitation.',
+        skewVolPerLogMoneyness: 0, termVolPerSqrtYear: 0,
+        surfaceDynamics: 'STICKY_MONEYNESS', settlementPolicy: 'CASH_INTRINSIC',
+        exercisePolicy: 'EXPIRATION_ONLY', ivNodes: [], template: null };
+    }
+    function canvasModel() {
+      var model = state.canvasModel || defaultCanvasModel();
+      model.ivNodes = (model.ivNodes || []).slice().sort(function (a, b) { return a.dayIndex - b.dayIndex; });
+      return model;
+    }
+    function cloneCanvasModel() {
+      return JSON.parse(JSON.stringify(canvasModel()));
+    }
+    function setIvNode(day, iv) {
+      var model = cloneCanvasModel();
+      model.ivNodes = (model.ivNodes || []).filter(function (node) { return node.dayIndex !== day; });
+      if (isFinite(iv) && iv >= 0.01 && iv <= 4) model.ivNodes.push({ dayIndex: day, atmIv: iv });
+      model.ivNodes.sort(function (a, b) { return a.dayIndex - b.dayIndex; });
+      // Keep the template receipt: it identifies the real input that seeded the price path.
+      // The exact edited IV nodes are separately fingerprinted in this canvas model.
+      state.canvasModel = model;
+    }
+    function ivAt(day) {
+      return canvasIvValue(state.preview, canvasModel(), day);
+    }
+    function updateCanvasModel(mutator) {
+      var model = cloneCanvasModel();
+      mutator(model);
+      state.canvasModel = model;
+      scheduleRun(0);
+    }
+    function applyIvPreset(kind) {
+      var model = cloneCanvasModel();
+      var hz = Math.max(1, horizon() || 1);
+      var available = ivAt(0);
+      if (!(Number(available) >= .01)) {
+        setStatus(UI.alertBox('warn', 'Starting IV is unavailable', [
+          'Enter an explicit ATM IV for a session or run a fan with a server-owned volatility input before applying a guide.'
+        ]));
+        return;
+      }
+      var start = Math.max(.01, Math.min(4, available));
+      var eventDay = Math.max(1, Math.min(hz - 1, Math.round(hz / 3)));
+      if (kind === 'STABLE') model.ivNodes = [{ dayIndex: 0, atmIv: start }, { dayIndex: hz, atmIv: start }];
+      else if (kind === 'FADES') model.ivNodes = [{ dayIndex: 0, atmIv: start }, { dayIndex: hz, atmIv: Math.max(.01, start * .80) }];
+      else if (kind === 'RISES') model.ivNodes = [{ dayIndex: 0, atmIv: start }, { dayIndex: hz, atmIv: Math.min(4, start * 1.25) }];
+      else {
+        model.ivNodes = [{ dayIndex: 0, atmIv: Math.min(4, start * 1.20) },
+          { dayIndex: eventDay, atmIv: Math.min(4, start * 1.20) }];
+        if (eventDay < hz) model.ivNodes.push({ dayIndex: eventDay + 1, atmIv: Math.max(.01, start * .72) });
+        else model.ivNodes[eventDay === 0 ? 0 : 1].atmIv = Math.max(.01, start * .72);
+      }
+      state.ivPreset = kind;
+      state.canvasModel = model;
+      scheduleRun(0);
+    }
+    async function applyTemplate(request, button) {
+      if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+      setStatus(UI.spinner('Seeding the same canvas from dated inputs…'));
+      try {
+        var spec = specWithPins();
+        var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
+        var out = await PlanStore.runEnsemble(live, {
+          over: spec, canvas: cloneCanvasModel(), template: request
+        });
+        adoptRun(out, false);
+        state.pins = (out.preview.waypoints || []).map(function (w) {
+          return { dayIndex: w.dayIndex, priceRatio: w.priceRatio,
+            tolerance: w.tolerance != null ? w.tolerance : null };
+        });
+        state.loadedSpec = adoptSpec(out.preview && out.preview.receipt && out.preview.receipt.spec);
+        syncEvidencePin(out, specWithPins());
+        setStatus(UI.alertBox('ok', 'Template applied to this canvas', [
+          'Its dated source and no-hindsight boundary are in the immutable model receipt below.'
+        ]));
+        paint();
+      } catch (e) {
+        setStatus(UI.alertBox('danger', 'This template could not be applied honestly', [
+          (e && e.message) || 'Its required dated inputs are unavailable in this market lane.'
+        ]));
+      } finally {
+        if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+      }
+    }
     function adoptRun(out, restored) {
       if (!out || !out.preview) return;
       state.preview = out.preview;
       state.ensembleRef = out.ensemble || null;
+      state.canvasModel = out.preview.canvasModel || state.canvasModel || defaultCanvasModel();
       var pins = (out.preview.waypoints || []).map(function (w) {
         return { dayIndex: w.dayIndex, priceRatio: w.priceRatio, tolerance: w.tolerance != null ? w.tolerance : null };
       });
@@ -1115,7 +1487,8 @@
       evidence.planEnsembleId = out.ensemble && out.ensemble.id;
       evidence.planEnsembleFingerprint = out.ensemble && out.ensemble.fingerprint;
       evidence.whatifResults = evidence.whatifResults || {};
-      evidence.whatifResults[planRef.plan.symbol] = { preview: out.preview, ensemble: out.ensemble || null, spec: spec };
+      evidence.whatifResults[planRef.plan.symbol] = { preview: out.preview, ensemble: out.ensemble || null,
+        spec: spec, canvas: cloneCanvasModel() };
       if (window.Workspace && Workspace.save) Workspace.save();
     }
 
@@ -1131,7 +1504,7 @@
       try {
         var spec = specWithPins();
         var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
-        var out = await PlanStore.runEnsemble(live, { over: spec });
+        var out = await PlanStore.runEnsemble(live, { over: spec, canvas: cloneCanvasModel() });
         if (seq !== runSeq || !root.isConnected) return;
         adoptRun(out, false);
         syncEvidencePin(out, spec);
@@ -1158,7 +1531,7 @@
       setStatus(UI.spinner('Generating this Plan’s possible futures…'));
       try {
         var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
-        var out = await PlanStore.runEnsemble(live, {});
+        var out = await PlanStore.runEnsemble(live, { canvas: cloneCanvasModel() });
         adoptRun(out, false);
         syncEvidencePin(out, out.preview && out.preview.receipt && out.preview.receipt.spec);
         setStatus(null);
@@ -1181,7 +1554,10 @@
         var live = await PlanStore.get(planRef.plan.id, true); planRef.plan = live;
         var out = await API.post('/api/plans/' + live.id + '/scenarios', {
           expectedVersion: live.version, title: state.title || null,
-          baseEnsembleId: state.baseEnsembleId || null, over: specWithPins() });
+          // The current pinned ensemble carries the exact IV surface, rate, calendar and
+          // settlement receipt. Freeze THAT artifact, not only the earlier unpinned fan.
+          baseEnsembleId: state.ensembleRef && state.ensembleRef.id || state.baseEnsembleId || null,
+          over: specWithPins() });
         UI.toast('Scenario saved' + (out.scenario && out.scenario.title ? ': ' + out.scenario.title : ''), 'info');
         await loadSaved();
         paintSaved();
@@ -1204,6 +1580,7 @@
         return;
       }
       state.loadedSpec = adoptSpec(saved.spec);
+      if (saved.canvas) state.canvasModel = JSON.parse(JSON.stringify(saved.canvas));
       state.pins = kept;
       var notes = [];
       if (saved.staleness) notes.push(saved.staleness);
@@ -1250,7 +1627,8 @@
     function paintRail() {
       if (!railHost) return;
       railHost.replaceChildren();
-      railHost.appendChild(el('div', { class: 'field-label' }, 'Your waypoints (' + state.pins.length + ')'));
+      railHost.appendChild(el('div', { class: 'field-label' },
+        UI.term('waypoint', 'Your waypoints (' + state.pins.length + ')')));
       if (!state.pins.length) {
         railHost.appendChild(el('p', { class: 'muted small' }, 'None yet — click the chart to place the first one.'));
       }
@@ -1300,6 +1678,509 @@
       }
     }
 
+    function canvasSection(kicker, title, copy) {
+      return el('div', { class: 'scenario-canvas-section-head' },
+        el('div', {}, el('span', { class: 'eyebrow' }, kicker), el('h4', {}, title)),
+        copy ? el('p', { class: 'muted small' }, copy) : null);
+    }
+
+    function paintTemplates() {
+      var section = el('section', { class: 'scenario-canvas-section scenario-canvas-templates',
+        'aria-labelledby': 'scenario-template-heading' });
+      var head = canvasSection('START FROM DATED INPUTS', 'Seed the path, then edit it',
+        'These controls place assumptions onto this same canvas. A template refuses to run when its required lane-owned input is unavailable.');
+      head.querySelector('h4').id = 'scenario-template-heading';
+      section.appendChild(head);
+      var grid = el('div', { class: 'scenario-template-grid' });
+
+      var earnings = el('article', { class: 'scenario-template-card' },
+        el('b', {}, 'Earnings gap + IV crush'),
+        el('p', { class: 'muted small' }, 'Uses the Observed lane’s SEC filing cadence and dated close-to-open gaps. The event date remains explicitly estimated.'));
+      earnings.appendChild(el('div', { class: 'btn-row' },
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+          applyTemplate({ kind: 'EARNINGS_GAP_UP' }, this);
+        } }, 'Gap up'),
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+          applyTemplate({ kind: 'EARNINGS_GAP_DOWN' }, this);
+        } }, 'Gap down')));
+      grid.appendChild(earnings);
+
+      var targetId = 'scenario-template-target-' + planRef.plan.id;
+      var target = el('input', { id: targetId, type: 'number', min: '0.01', step: '0.01',
+        inputmode: 'decimal', value: state.templateTarget || '', placeholder: spot() ? spot().toFixed(2) : 'Target price' });
+      target.addEventListener('input', function () { state.templateTarget = target.value; });
+      var targetCard = el('article', { class: 'scenario-template-card' },
+        el('b', {}, 'Drift to your target'),
+        el('p', { class: 'muted small' }, 'Pins the final session to your declared price with an exact bridge. This is your hypothesis, never market evidence.'),
+        el('label', { for: targetId }, 'Final price ($)'), target,
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+          var value = parseFloat(target.value);
+          applyTemplate({ kind: 'DRIFT_TO_TARGET', targetPriceCents: isFinite(value) ? Math.round(value * 100) : null }, this);
+        } }, 'Use target'));
+      grid.appendChild(targetCard);
+
+      var sectorId = 'scenario-template-sector-' + planRef.plan.id;
+      var sector = el('input', { id: sectorId, type: 'text', maxlength: '12', value: state.templateSector || '',
+        autocapitalize: 'characters', placeholder: 'e.g. XLK' });
+      sector.addEventListener('input', function () { state.templateSector = sector.value.toUpperCase(); });
+      var sectorCard = el('article', { class: 'scenario-template-card' },
+        el('b', {}, 'Sector drawdown'),
+        el('p', { class: 'muted small' }, 'Transfers a selected ETF’s worst dated 10-session drawdown. It does not claim the stock has the same correlation.'),
+        el('label', { for: sectorId }, 'Sector ETF'), sector,
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+          applyTemplate({ kind: 'SECTOR_DRAWDOWN', sectorSymbol: sector.value.trim().toUpperCase() }, this);
+        } }, 'Use drawdown'));
+      grid.appendChild(sectorCard);
+
+      var fromId = 'scenario-template-from-' + planRef.plan.id;
+      var toId = 'scenario-template-to-' + planRef.plan.id;
+      var from = el('input', { id: fromId, type: 'date', value: state.templateFrom || '' });
+      var to = el('input', { id: toId, type: 'date', value: state.templateTo || '' });
+      from.addEventListener('input', function () { state.templateFrom = from.value; });
+      to.addEventListener('input', function () { state.templateTo = to.value; });
+      var replay = el('article', { class: 'scenario-template-card' },
+        el('b', {}, 'Actual historical replay'),
+        el('p', { class: 'muted small' }, 'Replays only closes available in a completed window. Future option values remain modeled and are never described as historical chain observations.'),
+        el('div', { class: 'scenario-date-pair' },
+          el('div', { class: 'field' }, el('label', { for: fromId }, 'From'), from),
+          el('div', { class: 'field' }, el('label', { for: toId }, 'To'), to)),
+        el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
+          applyTemplate({ kind: 'HISTORICAL_REPLAY', historicalFrom: from.value || null,
+            historicalTo: to.value || null }, this);
+        } }, 'Replay window'));
+      grid.appendChild(replay);
+      section.appendChild(grid);
+      return section;
+    }
+
+    function assumptionSelect(id, value, options, onChange) {
+      var select = el('select', { id: id }, options.map(function (option) {
+        return el('option', { value: option.value }, option.label);
+      }));
+      select.value = value;
+      select.addEventListener('change', function () { onChange(select.value); });
+      return select;
+    }
+
+    function paintAssumptions() {
+      var model = canvasModel();
+      var section = el('section', { class: 'scenario-canvas-section scenario-canvas-assumptions' });
+      section.appendChild(canvasSection('PRICE THE STRUCTURES', 'Calendar, surface, and settlement',
+        beginner
+          ? 'These assumptions decide how each option changes while your price story unfolds. Every value is kept in the receipt.'
+          : 'The same PathValuationKernel reprices every selected package with this typed surface and transformation policy.'));
+      var grid = el('div', { class: 'scenario-assumption-grid' });
+      var dividendId = 'scenario-dividend-' + planRef.plan.id;
+      var dividend = el('input', { id: dividendId, type: 'number', min: '-25', max: '100', step: '0.01',
+        value: model.dividendYieldAnnual == null ? '' : String(Math.round(model.dividendYieldAnnual * 10000) / 100),
+        placeholder: 'Unavailable → 0' });
+      dividend.addEventListener('change', function () {
+        var value = dividend.value.trim() === '' ? null : parseFloat(dividend.value) / 100;
+        updateCanvasModel(function (next) {
+          next.dividendYieldAnnual = isFinite(value) ? value : null;
+          next.dividendBasis = next.dividendYieldAnnual == null
+            ? 'Dividend source unavailable; pricing uses 0% and discloses that limitation.'
+            : 'User-authored annualized continuous dividend yield.';
+        });
+      });
+      grid.appendChild(el('div', { class: 'field' },
+        el('label', { for: dividendId }, UI.term('dividendyield', 'Annual dividend yield (%)')), dividend,
+        el('span', { class: 'muted small' }, 'Blank stays unavailable; pricing then uses 0% and says so.')));
+
+      var skewId = 'scenario-skew-' + planRef.plan.id;
+      var skew = el('input', { id: skewId, type: 'number', min: '-300', max: '300', step: '0.1',
+        value: String(Math.round(model.skewVolPerLogMoneyness * 1000) / 10) });
+      skew.addEventListener('change', function () {
+        var value = parseFloat(skew.value);
+        updateCanvasModel(function (next) { next.skewVolPerLogMoneyness = isFinite(value) ? value / 100 : 0; });
+      });
+      grid.appendChild(el('div', { class: 'field' },
+        el('label', { for: skewId }, UI.term('volatilityskew', beginner ? 'Strike tilt (IV points)' : 'Skew (IV pts / log-moneyness)')), skew,
+        el('span', { class: 'muted small' }, 'Negative means lower strikes carry more volatility.')));
+
+      var termId = 'scenario-term-' + planRef.plan.id;
+      var term = el('input', { id: termId, type: 'number', min: '-300', max: '300', step: '0.1',
+        value: String(Math.round(model.termVolPerSqrtYear * 1000) / 10) });
+      term.addEventListener('change', function () {
+        var value = parseFloat(term.value);
+        updateCanvasModel(function (next) { next.termVolPerSqrtYear = isFinite(value) ? value / 100 : 0; });
+      });
+      grid.appendChild(el('div', { class: 'field' },
+        el('label', { for: termId }, UI.term('volatilityterm', beginner ? 'Time tilt (IV points)' : 'Term slope (IV pts / √year)')), term,
+        el('span', { class: 'muted small' }, 'Positive means later expirations use higher volatility.')));
+
+      var surfaceId = 'scenario-surface-' + planRef.plan.id;
+      var surface = assumptionSelect(surfaceId, model.surfaceDynamics, [
+        { value: 'STICKY_MONEYNESS', label: beginner ? 'Tilt moves with price' : 'Sticky moneyness' },
+        { value: 'STICKY_STRIKE', label: beginner ? 'Tilt stays at strikes' : 'Sticky strike' }
+      ], function (value) { updateCanvasModel(function (next) { next.surfaceDynamics = value; }); });
+      grid.appendChild(el('div', { class: 'field' },
+        el('label', { for: surfaceId }, UI.term('surfacedynamics', 'Surface movement')), surface,
+        el('span', { class: 'muted small' }, 'Controls whether the strike tilt travels with the stock.')));
+
+      var settleId = 'scenario-settle-' + planRef.plan.id;
+      var settlement = assumptionSelect(settleId, model.settlementPolicy, [
+        { value: 'CASH_INTRINSIC', label: beginner ? 'Turn expiry value into cash' : 'Cash intrinsic' },
+        { value: 'PHYSICAL_IF_ITM', label: beginner ? 'Transform in-the-money legs' : 'Physical if ITM' }
+      ], function (value) { updateCanvasModel(function (next) { next.settlementPolicy = value; }); });
+      grid.appendChild(el('div', { class: 'field' },
+        el('label', { for: settleId }, UI.term('settlementpolicy', 'At expiration')), settlement,
+        el('span', { class: 'muted small' }, 'Later-expiring legs continue after the front leg settles or transforms.')));
+
+      var exerciseId = 'scenario-exercise-' + planRef.plan.id;
+      var exercise = assumptionSelect(exerciseId, model.exercisePolicy, [
+        { value: 'EXPIRATION_ONLY', label: 'Expiration only' },
+        { value: 'EXTRINSIC_THRESHOLD', label: beginner ? 'Allow low-time-value exercise' : 'Extrinsic threshold' }
+      ], function (value) { updateCanvasModel(function (next) { next.exercisePolicy = value; }); });
+      grid.appendChild(el('div', { class: 'field' },
+        el('label', { for: exerciseId }, UI.term('exercisepolicy', 'Exercise rule')), exercise,
+        el('span', { class: 'muted small' }, 'The threshold rule is checked only at modeled daily closes.')));
+      section.appendChild(grid);
+      return section;
+    }
+
+    function paintIvControls() {
+      var section = el('section', { class: 'scenario-canvas-section scenario-canvas-iv' });
+      section.appendChild(canvasSection('DAY-BY-DAY VOLATILITY', beginner ? 'What happens to option uncertainty?' : 'ATM IV path',
+        beginner ? 'Choose a guide, then edit any session. The exact values—not the guide name—are priced and saved.'
+          : 'Each session node is annualized ATM IV. Unset days interpolate between the exact stored nodes.'));
+      var presets = el('div', { class: 'chip-row scenario-iv-presets', role: 'group', 'aria-label': 'Volatility path guide' });
+      [{ key: 'STABLE', label: 'Stays steady' }, { key: 'FADES', label: 'Fades slowly' },
+       { key: 'CRUSH', label: 'Drops after an event' }, { key: 'RISES', label: 'Builds higher' }].forEach(function (preset) {
+        presets.appendChild(el('button', { type: 'button', class: 'sym-chip' + (state.ivPreset === preset.key ? ' active' : ''),
+          'aria-pressed': String(state.ivPreset === preset.key), onclick: function () { applyIvPreset(preset.key); } }, preset.label));
+      });
+      section.appendChild(presets);
+      if (!(Number(ivAt(0)) >= .01)) {
+        section.appendChild(UI.alertBox('warn', 'No starting IV is available', [
+          'The Canvas will not assume 30%. Enter an explicit session IV or run a fan with a named volatility input.'
+        ]));
+      }
+      var table = paintDayInputs();
+      if (beginner) section.appendChild(UI.expandable('Edit the exact price and volatility for every session', function () { return table; },
+        { stateKey: 'scenario-day-inputs-' + planRef.plan.id }));
+      else section.appendChild(table);
+      return section;
+    }
+
+    function paintDayInputs() {
+      var rows = state.preview && state.preview.canvas && state.preview.canvas.underlying || [];
+      var table = el('table', { class: 'tbl scenario-day-table' },
+        el('thead', {}, el('tr', {}, el('th', {}, 'Session'), el('th', {}, 'Date'),
+          el('th', {}, beginner ? 'Your price ($)' : 'Price waypoint ($)'),
+          el('th', {}, beginner ? 'Uncertainty (%)' : UI.term('atmiv', 'ATM IV (%)')),
+          el('th', {}, 'Stored path range'))));
+      var tbody = el('tbody');
+      rows.forEach(function (row) {
+        var pin = state.pins.find(function (candidate) { return candidate.dayIndex === row.day; });
+        var priceId = 'scenario-day-price-' + planRef.plan.id + '-' + row.day;
+        var ivId = 'scenario-day-iv-' + planRef.plan.id + '-' + row.day;
+        var price = row.day === 0
+          ? el('span', { class: 'scenario-day-anchor' }, '$' + Number(row.p50).toFixed(2))
+          : el('input', { id: priceId, type: 'number', min: '0.01', step: '0.01', inputmode: 'decimal',
+              value: Number(pin ? pin.priceRatio * spot() : row.p50).toFixed(2),
+              'aria-label': 'Price at ' + sessionLabel(row.day) });
+        if (row.day > 0) price.addEventListener('change', function () {
+          var value = parseFloat(price.value);
+          if (!isFinite(value) || value <= 0 || !spot()) return;
+          var existing = state.pins.find(function (candidate) { return candidate.dayIndex === row.day; });
+          if (existing) existing.priceRatio = value / spot();
+          else state.pins.push({ dayIndex: row.day, priceRatio: value / spot(), tolerance: null });
+          state.pins.sort(function (a, b) { return a.dayIndex - b.dayIndex; });
+          scheduleRun(0);
+        });
+        var currentIv = ivAt(row.day);
+        var iv = el('input', { id: ivId, type: 'number', min: '1', max: '400', step: '0.1', inputmode: 'decimal',
+          value: Number(currentIv) >= .01 ? (currentIv * 100).toFixed(1) : '',
+          placeholder: Number(currentIv) >= .01 ? null : 'Enter IV',
+          'aria-label': 'ATM implied volatility at ' + sessionLabel(row.day) });
+        iv.addEventListener('change', function () {
+          var value = parseFloat(iv.value);
+          if (!isFinite(value)) return;
+          setIvNode(row.day, value / 100); state.ivPreset = null; scheduleRun(0);
+        });
+        tbody.appendChild(el('tr', { 'data-canvas-day': String(row.day) },
+          el('td', {}, row.day === 0 ? 'Now' : String(row.day)),
+          el('td', { class: 'nowrap' }, row.sessionDate || '—'),
+          el('td', {}, price), el('td', {}, iv),
+          el('td', { class: 'nowrap muted small' }, '$' + Number(row.p10).toFixed(2) + ' — $' + Number(row.p90).toFixed(2))));
+      });
+      table.appendChild(tbody);
+      return el('div', { class: 'tbl-wrap scenario-day-table-wrap' }, table);
+    }
+
+    function positionByKey(key) {
+      var positions = state.preview && state.preview.canvas && state.preview.canvas.positions || [];
+      return positions.find(function (position) { return position.key === key; });
+    }
+
+    function ensurePositionSelection() {
+      var positions = state.preview && state.preview.canvas && state.preview.canvas.positions || [];
+      var liveKeys = positions.map(function (position) { return position.key; });
+      state.selectedPositions = (state.selectedPositions || []).filter(function (key) { return liveKeys.indexOf(key) >= 0; });
+      if (state.positionSelectionInitialized) return;
+      var actual = positions.find(function (position) { return position.lane === 'PRACTICE' || position.lane === 'REAL'; });
+      var proposed = positions.find(function (position) { return position.proposed; });
+      if (actual) state.selectedPositions.push(actual.key);
+      if (proposed && state.selectedPositions.indexOf(proposed.key) < 0) state.selectedPositions.push(proposed.key);
+      if (!state.selectedPositions.length && positions.length) state.selectedPositions.push(positions[0].key);
+      state.positionSelectionInitialized = true;
+    }
+
+    function comparisonRows() {
+      var report = state.preview && state.preview.canvas || {};
+      var rows = report.comparison || [];
+      var selected = rows.filter(function (row) { return state.selectedPositions.indexOf(row.key) >= 0; });
+      var stock = rows.find(function (row) {
+        var position = positionByKey(row.key); return position && position.source === 'STOCK_BASELINE';
+      });
+      var proposed = rows.find(function (row) { return row.proposed; });
+      var actual = rows.find(function (row) { return row.lane === 'PRACTICE' || row.lane === 'REAL'; });
+      var structures = selected.filter(function (row) {
+        var position = positionByKey(row.key); return !position || position.source !== 'STOCK_BASELINE';
+      });
+      var out = [];
+      function add(row) { if (row && !out.some(function (x) { return x.key === row.key; })) out.push(row); }
+      if (state.compareMode === 'STRUCTURE_VS_STOCK') {
+        add(structures[0] || proposed || actual || rows.find(function (row) { return row !== stock; })); add(stock);
+      } else if (state.compareMode === 'TWO_STRUCTURES') {
+        (structures.length >= 2 ? structures : rows.filter(function (row) {
+          var position = positionByKey(row.key); return !position || position.source !== 'STOCK_BASELINE';
+        })).slice(0, 2).forEach(add);
+      } else {
+        add(structures.find(function (row) { return row.lane === 'PRACTICE' || row.lane === 'REAL'; }) || actual);
+        add(structures.find(function (row) { return row.proposed; }) || proposed);
+      }
+      return out;
+    }
+
+    function valueBandChart(position) {
+      var days = position.days || [];
+      if (!days.length) return el('div');
+      var values = [];
+      days.forEach(function (day) { values.push(day.pnlP10Cents, day.pnlP50Cents, day.pnlP90Cents); });
+      var lo = Math.min.apply(Math, values), hi = Math.max.apply(Math, values);
+      if (lo === hi) { lo -= 100; hi += 100; }
+      var w = 720, h = 180, pad = 12;
+      function x(i) { return pad + i * (w - pad * 2) / Math.max(1, days.length - 1); }
+      function y(value) { return pad + (hi - value) * (h - pad * 2) / (hi - lo); }
+      function points(field, reverse) {
+        var source = reverse ? days.slice().reverse() : days;
+        return source.map(function (day, index) {
+          var original = reverse ? days.length - 1 - index : index;
+          return x(original).toFixed(1) + ',' + y(day[field]).toFixed(1);
+        }).join(' ');
+      }
+      var zero = lo <= 0 && hi >= 0 ? '<line x1="12" y1="' + y(0).toFixed(1)
+        + '" x2="708" y2="' + y(0).toFixed(1) + '" class="scenario-position-zero"/>' : '';
+      return el('div', { class: 'scenario-position-band', role: 'img',
+        'aria-label': position.label + ' modeled profit and loss band by session', html:
+        '<svg viewBox="0 0 720 180" preserveAspectRatio="none" aria-hidden="true">'
+        + zero + '<polygon class="scenario-position-band-fill" points="' + points('pnlP90Cents', false)
+        + ' ' + points('pnlP10Cents', true) + '"/>'
+        + '<polyline class="scenario-position-median" points="' + points('pnlP50Cents', false) + '"/>'
+        + '</svg>' });
+    }
+
+    function greekText(greeks, key, money) {
+      if (!greeks || greeks[key] == null) return '—';
+      return money ? UI.fmtMoneyCompact(greeks[key]) : Number(greeks[key]).toFixed(2);
+    }
+
+    function positionDayTable(position) {
+      var table = el('table', { class: 'tbl scenario-position-day-table' },
+        el('thead', {}, el('tr', {}, el('th', {}, 'Day'), el('th', {}, 'Date'),
+          el('th', {}, 'Modeled value p10 / p50 / p90'), el('th', {}, 'Median P&L'),
+          el('th', {}, UI.vocabulary('netDelta', 'Δ sh')),
+          el('th', {}, UI.vocabulary('gamma', 'Γ sh/$')),
+          el('th', {}, UI.vocabulary('thetaPerDay', 'Θ /day')),
+          el('th', {}, UI.vocabulary('vegaPerVolPoint', 'Vega /pt')))));
+      var tbody = el('tbody');
+      (position.days || []).forEach(function (day) {
+        tbody.appendChild(el('tr', {}, el('td', {}, String(day.day)), el('td', { class: 'nowrap' }, day.sessionDate),
+          el('td', { class: 'nowrap' }, UI.fmtMoneyCompact(day.valueP10Cents) + ' / '
+            + UI.fmtMoneyCompact(day.valueP50Cents) + ' / ' + UI.fmtMoneyCompact(day.valueP90Cents)),
+          el('td', {}, UI.pnlSpan(day.pnlP50Cents)),
+          el('td', {}, greekText(day.greeks, 'deltaShares', false)),
+          el('td', {}, greekText(day.greeks, 'gammaSharesPerDollar', false)),
+          el('td', {}, greekText(day.greeks, 'thetaCentsPerDay', true)),
+          el('td', {}, greekText(day.greeks, 'vegaCentsPerPoint', true))));
+      });
+      table.appendChild(tbody);
+      return el('div', { class: 'tbl-wrap scenario-position-table-wrap' }, table);
+    }
+
+    function legDayTable(leg) {
+      var table = el('table', { class: 'tbl scenario-leg-day-table' },
+        el('thead', {}, el('tr', {}, el('th', {}, 'Day'), el('th', {}, 'Modeled unit price'),
+          el('th', {}, 'Leg value'), el('th', {}, 'State'),
+          el('th', {}, UI.vocabulary('netDelta', 'Δ sh')),
+          el('th', {}, UI.vocabulary('gamma', 'Γ sh/$')),
+          el('th', {}, UI.vocabulary('thetaPerDay', 'Θ /day')),
+          el('th', {}, UI.vocabulary('vegaPerVolPoint', 'Vega /pt')))));
+      var tbody = el('tbody');
+      (leg.days || []).forEach(function (day) {
+        tbody.appendChild(el('tr', {}, el('td', {}, String(day.day)),
+          el('td', {}, UI.fmtMoneyCompact(day.optionPriceCents)),
+          el('td', {}, UI.fmtMoneyCompact(day.valueCents)), el('td', {}, day.state || 'OPEN'),
+          el('td', {}, greekText(day.greeks, 'deltaShares', false)),
+          el('td', {}, greekText(day.greeks, 'gammaSharesPerDollar', false)),
+          el('td', {}, greekText(day.greeks, 'thetaCentsPerDay', true)),
+          el('td', {}, greekText(day.greeks, 'vegaCentsPerPoint', true))));
+      });
+      table.appendChild(tbody);
+      return el('div', { class: 'tbl-wrap scenario-leg-table-wrap' }, table);
+    }
+
+    function paintPosition(position) {
+      var finalDay = (position.days || [])[Math.max(0, (position.days || []).length - 1)] || {};
+      var card = el('article', { class: 'scenario-position-detail', 'data-position-key': position.key },
+        el('div', { class: 'scenario-position-title' },
+          el('div', {}, el('span', { class: 'badge ' + (position.proposed ? 'badge-modeled' : 'badge-neutral') },
+            position.proposed ? 'PLAN PROPOSAL' : position.lane), el('h4', {}, position.label)),
+          el('div', { class: 'scenario-position-final' }, el('span', { class: 'muted small' }, 'Horizon median P&L'),
+            UI.pnlSpan(finalDay.pnlP50Cents))),
+        valueBandChart(position),
+        el('div', { class: 'scenario-band-legend muted small' },
+          el('span', { class: 'scenario-band-key range' }, '10–90% modeled band'),
+          el('span', { class: 'scenario-band-key median' }, 'Median')),
+        positionDayTable(position));
+      if ((position.transformations || []).length) {
+        var transformations = el('div', { class: 'scenario-transformations' },
+          el('b', {}, 'Expiry transformations'));
+        position.transformations.forEach(function (event) {
+          transformations.appendChild(el('div', { class: 'scenario-transformation-row' },
+            el('span', { class: 'badge badge-warn' }, 'DAY ' + event.day),
+            el('span', {}, event.leg + ' · ' + event.note)));
+        });
+        card.appendChild(transformations);
+      }
+      var legs = el('div', { class: 'scenario-leg-details' });
+      (position.legs || []).forEach(function (leg) {
+        legs.appendChild(UI.expandable('Leg ' + (leg.legNo + 1) + ': ' + leg.label
+          + (leg.expiration ? ' · expires ' + leg.expiration : ''), function () { return legDayTable(leg); },
+          { stateKey: 'scenario-leg-' + planRef.plan.id + '-' + position.key + '-' + leg.legNo }));
+      });
+      card.appendChild(legs);
+      return card;
+    }
+
+    function paintComparisons() {
+      ensurePositionSelection();
+      var report = state.preview && state.preview.canvas || {};
+      var positions = report.positions || [];
+      var section = el('section', { class: 'scenario-canvas-section scenario-canvas-comparisons' });
+      section.appendChild(canvasSection('ONE PATH SET · EVERY PACKAGE', 'Compare same-symbol positions side by side',
+        beginner ? 'Pick what you want to inspect. Every card sees the identical future prices and volatility assumptions.'
+          : 'Practice, Tracked, proposal, and stock baseline are canonical package views valued on the same stored ensemble.'));
+      if (!positions.length) {
+        var unavailable = report.refused || [];
+        section.appendChild(UI.alertBox('caution', 'No position package could be priced',
+          unavailable.length
+            ? unavailable.map(function (row) { return row.label + ': ' + row.reason; })
+            : ['The underlying canvas still works. Add or select a same-symbol position to unlock structure comparisons.']));
+        return section;
+      }
+      var modes = UI.segmented({ id: 'scenario-compare-mode-' + planRef.plan.id, label: 'Comparison question',
+        info: 'scenariocomparison',
+        options: [
+          { value: 'YOURS_VS_PROPOSED', label: beginner ? 'Mine vs the idea' : 'Yours vs proposal' },
+          { value: 'TWO_STRUCTURES', label: 'Two structures' },
+          { value: 'STRUCTURE_VS_STOCK', label: 'Structure vs stock' }
+        ], value: state.compareMode, onChange: function (value) { state.compareMode = value; paint(); } });
+      section.appendChild(modes);
+      var chooser = el('div', { class: 'scenario-position-chooser', role: 'group', 'aria-label': 'Positions shown in detail' });
+      positions.forEach(function (position, index) {
+        var id = 'scenario-position-' + planRef.plan.id + '-' + index;
+        var checked = state.selectedPositions.indexOf(position.key) >= 0;
+        var checkbox = el('input', { id: id, type: 'checkbox', checked: checked ? 'checked' : null });
+        checkbox.addEventListener('change', function () {
+          if (checkbox.checked && state.selectedPositions.indexOf(position.key) < 0) state.selectedPositions.push(position.key);
+          if (!checkbox.checked) state.selectedPositions = state.selectedPositions.filter(function (key) { return key !== position.key; });
+          paint();
+        });
+        chooser.appendChild(el('label', { class: 'scenario-position-choice' + (checked ? ' active' : ''), for: id },
+          checkbox, el('span', {}, el('b', {}, position.label),
+            el('small', { class: 'muted' }, position.proposed ? 'Plan proposal' : position.lane + ' · ' + position.source))));
+      });
+      section.appendChild(chooser);
+      var compare = comparisonRows();
+      var compareGrid = el('div', { class: 'scenario-compare-grid', 'data-compare-mode': state.compareMode });
+      compare.forEach(function (row) {
+        compareGrid.appendChild(el('article', { class: 'scenario-compare-card' },
+          el('div', { class: 'scenario-compare-card-head' }, el('b', {}, row.label),
+            el('span', { class: 'badge badge-neutral' }, row.proposed ? 'PROPOSAL' : row.lane)),
+          el('div', { class: 'scenario-compare-hero' },
+            el('span', { class: 'muted small' }, 'Horizon median'), UI.pnlSpan(row.horizonP50Cents)),
+          el('dl', { class: 'scenario-metric-grid' },
+            el('div', {}, el('dt', {}, '1-in-20 low'), el('dd', {}, UI.fmtMoneyCompact(row.horizonP5Cents))),
+            el('div', {}, el('dt', {}, '1-in-20 high'), el('dd', {}, UI.fmtMoneyCompact(row.horizonP95Cents))),
+            el('div', {}, el('dt', {}, 'Average'), el('dd', {}, UI.fmtMoneyCompact(row.expectedHorizonCents))),
+            el('div', {}, el('dt', {}, 'Chance of gain'), el('dd', {}, Number(row.chanceOfGainPct).toFixed(1) + '%')),
+            row.versusStockP50Cents == null ? null
+              : el('div', {}, el('dt', {}, 'Vs 100 shares'), el('dd', {}, UI.fmtMoneyCompact(row.versusStockP50Cents))))));
+      });
+      if (!compare.length) compareGrid.appendChild(el('p', { class: 'muted' }, 'Select structures above to answer this comparison.'));
+      section.appendChild(compareGrid);
+      var refused = report.refused || [];
+      if (refused.length) {
+        section.appendChild(UI.alertBox('caution', 'Some same-symbol packages were not comparable',
+          refused.map(function (row) { return row.label + ': ' + row.reason; })));
+      }
+      var details = el('div', { class: 'scenario-position-details' });
+      positions.filter(function (position) { return state.selectedPositions.indexOf(position.key) >= 0; })
+        .forEach(function (position) { details.appendChild(paintPosition(position)); });
+      if (!details.childNodes.length) details.appendChild(el('p', { class: 'muted' }, 'Select at least one position to see its daily value, Greeks, legs, and expirations.'));
+      section.appendChild(details);
+      return section;
+    }
+
+    function paintModelReceipt() {
+      var report = state.preview && state.preview.canvas || {};
+      var receipt = report.modelReceipt || {};
+      var template = receipt.template || null;
+      var section = el('section', { class: 'scenario-canvas-section scenario-model-receipt' });
+      section.appendChild(canvasSection('IMMUTABLE RECEIPT', beginner ? 'What this canvas assumes' : 'Model and provenance receipt',
+        'Your path is a user hypothesis, never a forecast. Restoring this stored fan restores these exact assumptions.'));
+      if (template) {
+        section.appendChild(el('article', { class: 'scenario-template-receipt' },
+          el('div', {}, el('span', { class: 'badge ' + (template.observed ? 'badge-ok' : 'badge-modeled') }, template.provenance),
+            el('b', {}, String(template.kind || '').replaceAll('_', ' '))),
+          el('p', {}, template.note),
+          el('p', { class: 'muted small' }, template.source + ' · input as of ' + template.inputAsOf
+            + (template.windowFrom ? ' · window ' + template.windowFrom + ' — ' + template.windowTo : '')
+            + ' · ' + template.observations + ' dated observation' + (template.observations === 1 ? '' : 's')
+            + (template.noHindsight ? ' · no-hindsight boundary enforced' : '')),
+          el('p', { class: 'muted small' }, template.legDayProvenance)));
+      }
+      var facts = el('dl', { class: 'scenario-receipt-grid' },
+        el('div', {}, el('dt', {}, 'Calendar'), el('dd', {}, receipt.calendar || 'NYSE')),
+        el('div', {}, el('dt', {}, 'Risk-free rate'), el('dd', {}, receipt.rateAnnual == null ? '—' : (receipt.rateAnnual * 100).toFixed(2) + '%')),
+        el('div', {}, el('dt', {}, 'Dividend'), el('dd', {}, receipt.dividendYieldAnnual == null ? 'Unavailable → 0% in pricing' : (receipt.dividendYieldAnnual * 100).toFixed(2) + '%')),
+        el('div', {}, el('dt', {}, 'Surface'), el('dd', {}, String(receipt.surfaceDynamics || '').replaceAll('_', ' ').toLowerCase())),
+        el('div', {}, el('dt', {}, UI.term('settlementpolicy', 'Settlement')), el('dd', {}, String(receipt.settlementPolicy || '').replaceAll('_', ' ').toLowerCase())),
+        el('div', {}, el('dt', {}, UI.term('exercisepolicy', 'Exercise')), el('dd', {}, String(receipt.exercisePolicy || '').replaceAll('_', ' ').toLowerCase())),
+        el('div', {}, el('dt', {}, UI.term('volatilityskew', 'Skew / term')), el('dd', {}, Number(receipt.skewVolPerLogMoneyness || 0).toFixed(3)
+          + ' / ' + Number(receipt.termVolPerSqrtYear || 0).toFixed(3))),
+        el('div', {}, el('dt', {}, 'Positions priced'), el('dd', {}, String(receipt.positionScopeCount == null ? 0 : receipt.positionScopeCount))));
+      section.appendChild(facts);
+      var notes = report.notes || [];
+      if (notes.length) {
+        section.appendChild(el('div', { class: 'scenario-receipt-notes', 'aria-label': 'How to read these modeled results' },
+          el('b', {}, beginner ? 'How to read this' : 'Valuation methodology'),
+          el('ul', {}, notes.map(function (note) { return el('li', {}, note); }))));
+      }
+      section.appendChild(UI.expandable(beginner ? 'Show the technical identity' : 'Exact model identity and dividend basis', function () {
+        return el('div', { class: 'scenario-receipt-technical' },
+          el('p', {}, receipt.dividendBasis || canvasModel().dividendBasis),
+          el('p', { class: 'muted small' }, 'Ensemble fingerprint ' + (receipt.fingerprint || '—')),
+          el('p', { class: 'muted small' }, 'Path model ' + (receipt.pathModelVersion || '—')
+            + ' · canvas model ' + (receipt.canvasModelVersion || '—') + ' · anchor ' + (receipt.anchorDate || '—')),
+          el('p', { class: 'muted small' }, 'Exact ATM IV nodes: ' + JSON.stringify(receipt.ivNodes || [])));
+      }, { stateKey: 'scenario-receipt-' + planRef.plan.id }));
+      return section;
+    }
+
     function paintSaved() {
       if (!savedHost) return;
       savedHost.replaceChildren();
@@ -1345,7 +2226,11 @@
       }
       var fill = state.preview.waypointFill || 'NONE';
       root.setAttribute('data-waypoint-fill', fill);
+      body.appendChild(el('div', { class: 'scenario-hypothesis-banner' },
+        el('b', {}, 'Your hypothesis, never a forecast.'),
+        el('span', {}, ' Every price pin and volatility node is an assumption you can inspect, edit, and restore from its receipt.')));
       body.appendChild(fillBanner(fill));
+      body.appendChild(paintTemplates());
       var main = el('div', { class: 'scenario-canvas-main' });
       main.appendChild(fanChart(state.preview, {
         noNotes: true,
@@ -1361,6 +2246,9 @@
       railHost = el('div', { class: 'scenario-canvas-rail' });
       paintRail();
       body.appendChild(el('div', { class: 'scenario-canvas-cols' }, main, railHost));
+      body.appendChild(el('div', { class: 'scenario-control-deck' }, paintIvControls(), paintAssumptions()));
+      body.appendChild(paintComparisons());
+      body.appendChild(paintModelReceipt());
       savedHost = el('div', { class: 'authored-scenario-saved' });
       paintSaved();
       body.appendChild(savedHost);
@@ -1387,6 +2275,7 @@
     form: form, fanChart: fanChart, decisionView: decisionView, pnlView: pnlView,
     canvasStudio: canvasStudio,
     workingLegs: workingLegs, workingPosition: workingPosition,
-    realisticOutcomes: realisticOutcomes, sketch: sketch, applyCatalog: applyCatalog
+    realisticOutcomes: realisticOutcomes, sketch: sketch, applyCatalog: applyCatalog,
+    contracts: Object.freeze({ realisticHorizon: realisticHorizon, canvasIvValue: canvasIvValue })
   };
 })();

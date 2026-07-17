@@ -17,6 +17,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.pricing.HistoricalVol;
+import io.liftandshift.strikebench.recommend.NewsSentimentScorer;
 import io.liftandshift.strikebench.research.NotebookService;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
 import io.liftandshift.strikebench.strategy.ExposureSizer;
@@ -60,6 +61,7 @@ final class ResearchController {
     private final PlanEligibility planEligibility;
 
     ResearchController(AppConfig cfg, Db db, Clock clock, MarketDataService market,
+                       EventService events,
                        EvaluationService evaluations,
                        Function<Context, String> ownerId,
                        Function<Context, String> activeWorld,
@@ -68,7 +70,7 @@ final class ResearchController {
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
-        this.events = new EventService(market, clock);
+        this.events = java.util.Objects.requireNonNull(events, "events");
         this.evaluations = evaluations;
         this.questions = new ResearchQuestionEngine(market, clock);
         this.notes = new NotebookService(db, clock);
@@ -227,7 +229,16 @@ final class ResearchController {
             MarketLane planLane = MarketLane.of(world, cfg.fixturesOnly());
             var eligibility = planEligibility.evaluate(
                     symbol, planLane, current, option.expirations(), option.evidence());
-            boolean eventSoon = earnings.date() != null;
+            EventService.EarningsProximity eventProximity;
+            if ("observed".equals(world)) {
+                eventProximity = events.earningsProximity(symbol,
+                        today.plusDays(volatilityHorizonDays));
+            } else {
+                eventProximity = new EventService.EarningsProximity(false, false, null,
+                        "earnings proximity unavailable in this "
+                                + ("demo".equals(world) ? "demo" : "simulated")
+                                + " market — Observed issuer events are not borrowed");
+            }
             var volProfileForRegime = new io.liftandshift.strikebench.eval.VolatilityProfiler()
                     .profile(option.atmIv(), realizedVol30, List.of(), volatilityHorizonDays);
             var regime = ApiResponses.Regime.of(io.liftandshift.strikebench.eval.RegimeProfiler.profile(
@@ -237,7 +248,8 @@ final class ResearchController {
                             volProfileForRegime.realizedVol30(), volProfileForRegime.varianceRiskPremium(),
                             volProfileForRegime.expectedMovePct(), volatility.historyDays(),
                             volatility.source()),
-                    eventSoon,
+                    eventProximity.available() ? eventProximity.likelyBefore() : null,
+                    eventProximity.note(),
                     "demo".equals(world) ? "demo sessions (fabricated teaching data)"
                             : world != null && !"observed".equals(world) ? "this simulated world's sessions"
                             : "observed sessions"));
@@ -343,11 +355,30 @@ final class ResearchController {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
         if (!"observed".equals(world) && !"demo".equals(world)) {
-            ctx.json(new ApiResponses.SymbolItems<>(symbol, List.of(), null,
-                    "simulated market — there is no news in this world; headlines belong to the real market"));
+            var unavailable = NewsSentimentScorer.unavailable(List.of(),
+                    NewsSentimentScorer.UNAVAILABLE_BASIS,
+                    "Simulated market — there is no issuer-news feed in this world; Observed headlines are not borrowed.");
+            ctx.json(researchNews(symbol, unavailable, "UNAVAILABLE", unavailable.aggregate().note()));
             return;
         }
-        ctx.json(new ApiResponses.SymbolItems<>(symbol, market.news(symbol, world), null, null));
+        List<io.liftandshift.strikebench.model.NewsItem> raw = market.news(symbol, world);
+        NewsSentimentScorer.Result sentiment = "demo".equals(world)
+                ? NewsSentimentScorer.unavailable(raw, NewsSentimentScorer.DEMO_BASIS,
+                        "Demo headlines are fabricated teaching catalysts; they are never scored as news evidence.")
+                : NewsSentimentScorer.score(raw);
+        String evidence = "demo".equals(world) ? "DEMO_FABRICATED"
+                : sentiment.aggregate().available() ? "OBSERVED" : "UNAVAILABLE";
+        ctx.json(researchNews(symbol, sentiment, evidence, sentiment.aggregate().note()));
+    }
+
+    private static ApiResponses.ResearchNews<List<NewsSentimentScorer.HeadlineSentiment>,
+            NewsSentimentScorer.Aggregate> researchNews(String symbol,
+                                                        NewsSentimentScorer.Result sentiment,
+                                                        String evidence, String note) {
+        List<NewsSentimentScorer.HeadlineSentiment> eventRisk = sentiment.headlines().stream()
+                .filter(NewsSentimentScorer.HeadlineSentiment::eventRisk).toList();
+        return new ApiResponses.ResearchNews<>(symbol, NewsSentimentScorer.VERSION,
+                sentiment.headlines(), sentiment.aggregate(), eventRisk, evidence, note);
     }
 
     private void lookup(Context ctx) {

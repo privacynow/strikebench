@@ -143,11 +143,7 @@ final class MarketStreamController implements AutoCloseable {
         }
         String caller = auth.enabled() ? ownerId.apply(client.ctx()) : null;
         boolean scoped = auth.enabled();
-        Predicate<EventBus.Event> visible = event -> {
-            if (!scoped) return true;
-            Object owner = event.data().get("user");
-            return owner == null || owner.equals(caller);
-        };
+        Predicate<EventBus.Event> visible = event -> visibleToCaller(event, scoped, caller);
         AtomicReference<Runnable> unsubscribeRef = new AtomicReference<>();
         Runnable unsubscribe = events.subscribe(event -> {
             if (client.terminated()) {
@@ -162,6 +158,18 @@ final class MarketStreamController implements AutoCloseable {
         for (EventBus.Event event : events.since(last)) {
             if (visible.test(event)) sendEvent(client, event);
         }
+    }
+
+    /**
+     * Authenticated event visibility. Most missing-user events are intentionally global system
+     * hints (for example provider cooldowns). alerts.updated is intrinsically owner-scoped, so a
+     * missing user is malformed and fails closed instead of being broadcast to every account.
+     */
+    static boolean visibleToCaller(EventBus.Event event, boolean scoped, String caller) {
+        if (!scoped) return true;
+        Object owner = event.data().get("user");
+        if (owner != null) return owner.equals(caller);
+        return !"alerts.updated".equals(event.type());
     }
 
     private static void sendEvent(SseClient client, EventBus.Event event) {

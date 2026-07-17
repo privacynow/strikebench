@@ -582,7 +582,7 @@ class PaperCoreTest {
     }
 
     @Test
-    void paperOrderCannotClaimAFavorableUnfilledLimitButRealFillCanBeRecorded() {
+    void paperOrderCannotClaimAFavorableUnfilledLimit() {
         Account acct = accounts.getOrCreateDefault();
         // Natural executable credit is $180. Asking for $200 is a valid what-if, but it is not
         // an immediate fill: a paper ledger must not mint the extra $20 as if the market paid it.
@@ -604,14 +604,6 @@ class PaperCoreTest {
                 .isInstanceOf(TradeRejectedException.class)
                 .hasMessageContaining("cannot claim this paper order filled");
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
-
-        TradeRecord actual = trades.createExternal(resting,
-                new TradeService.ExternalMeta("2026-07-08T15:30:00Z", "manual broker record", "order-1", false));
-        assertThat(actual.entryNetPremiumCents()).isEqualTo(200_00L);
-        assertThat(actual.external()).isTrue();
-        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
-        assertThat(db.query("SELECT COUNT(*) AS n FROM ledger WHERE trade_id=?", r -> r.lng("n"), actual.id()).getFirst())
-                .isZero();
     }
 
     @org.junit.jupiter.api.Test
@@ -634,80 +626,6 @@ class PaperCoreTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
         assertThat((String) prob.get("timeBasis")).contains("trading sessions");
-    }
-
-    @org.junit.jupiter.api.Test
-    void historicalExternalTradesRecordFromUserFillsEvenWhenContractsAreDead() {
-        Account acct = accounts.getOrCreateDefault();
-        // Legs that expired LAST WEEK (dead vs the fixed 2026-07-08 clock) with the user's fills.
-        LocalDate dead = LocalDate.of(2026, 7, 2);
-        TradeService.OpenRequest past = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
-                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), dead, 1, new BigDecimal("3.10")),
-                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), dead, 1, new BigDecimal("1.35"))),
-                "bullish", "week", "balanced", null, null, null, 200L, "IMPORT");
-        TradeRecord t = trades.createExternal(past,
-                new TradeService.ExternalMeta("2026-07-01", "ETRADE", "ORD-123", true));
-        assertThat(t.external()).isTrue();
-        assertThat(t.entryNetPremiumCents()).isEqualTo(175_00); // 3.10 - 1.35 per share
-        assertThat(t.broker()).isEqualTo("ETRADE");
-        assertThat(t.orderRef()).isEqualTo("ORD-123");
-        assertThat(t.executedAt()).isNotNull();
-        // Legs carry the REAL user fills — nothing fabricated, nothing validated against a dead book.
-        assertThat(t.legs().getFirst().entryPrice()).isEqualByComparingTo("3.10");
-        // Still zero paper-money mutation.
-        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
-    }
-
-    @org.junit.jupiter.api.Test
-    void externalTradesNeverTouchPaperMoney() {
-        Account acct = accounts.getOrCreateDefault();
-        long cashBefore = acct.cashCents(), reservedBefore = acct.reservedCents();
-
-        // Record a REAL fill: the exact spread at MY price, with MY fees.
-        TradeService.OpenRequest real = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
-                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
-                "bullish", "month", "balanced", null, null, 173L * 100, 200L, "IMPORT");
-        TradeRecord t = trades.createExternal(real);
-        assertThat(t.external()).isTrue();
-        assertThat(t.entryNetPremiumCents()).isEqualTo(173_00);
-
-        // ZERO paper-money mutation: cash, reserve and the ledger are untouched.
-        Account after = accounts.get(acct.id());
-        assertThat(after.cashCents()).isEqualTo(cashBefore);
-        assertThat(after.reservedCents()).isEqualTo(reservedBefore);
-        long ledgerRows = db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst();
-        assertThat(ledgerRows).isZero();
-
-        // Excluded from the paper-money aggregate (identity: totalValue = cash + shares + closes)...
-        TradeService.OpenPositionsValue open = trades.openPositionsValue(acct.id());
-        assertThat(open.openTradesCount()).isZero();
-
-        // ...but closing records the real outcome on the trade row — still zero ledger rows.
-        TradeService.CloseResult closed = trades.unwind(t.id(), true);
-        assertThat(closed.trade().status()).isEqualTo(TradeRecord.CLOSED);
-        assertThat(closed.trade().realizedPnlCents()).isNotNull();
-        assertThat(closed.trade().feesOpenCents()).isEqualTo(200L); // recorded entry fact
-        assertThat(closed.trade().feesCloseCents()).isEqualTo(130L); // current default, not an invented copy
-        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
-        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
-    }
-
-    @Test
-    void brokerRecordCannotEnterThePracticePartialCloseMoneyPath() {
-        Account acct = accounts.getOrCreateDefault();
-        TradeService.OpenRequest real = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 3,
-                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
-                "bullish", "month", "balanced", null, null, 519_00L, 600L, "IMPORT");
-        TradeRecord external = trades.createExternal(real);
-        Account before = accounts.get(acct.id());
-
-        assertThatThrownBy(() -> trades.previewPartialClose(external.id(), 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("tracked book").hasMessageContaining("Practice");
-        assertThat(trades.get(external.id()).qty()).isEqualTo(3);
-        assertThat(accounts.get(acct.id())).isEqualTo(before);
-        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?",
-                row -> row.lng("n"), external.id())).containsExactly(0L);
     }
 
     // ==================== GOLDEN REGRESSION PORTFOLIO (the release gate) ====================

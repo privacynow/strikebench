@@ -73,7 +73,8 @@ class EvaluateIntegrationTest {
         return """
                 {"operation":"DECISION","basis":"DECISION_POLICY",
                  "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
-                 "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced"}}
+                 "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced",
+                             "intent":"DIRECTIONAL"}}
                 """;
     }
 
@@ -113,31 +114,30 @@ class EvaluateIntegrationTest {
         }
     }
 
-    @Test void opportunitiesScanRanksAcrossTheUniverse() throws Exception {
-        HttpResponse<String> r = post("/api/opportunities",
-                "{\"thesis\":\"neutral\",\"horizon\":\"month\",\"riskMode\":\"balanced\",\"topN\":5}");
-        assertThat(r.statusCode()).isEqualTo(200);
-        JsonNode body = Json.MAPPER.readTree(r.body());
-        assertThat(body.get("scanned").asInt()).isGreaterThan(0); // scanned the active demo universe
-        JsonNode ranked = body.get("ranked");
-        assertThat(ranked.isArray()).isTrue();
-        assertThat(ranked).isNotEmpty();
+    @Test void decisionWithoutAnExplicitGoalIsRejectedInsteadOfDefaultingDirectional() throws Exception {
+        HttpResponse<String> response = post("/api/evaluate", """
+                {"operation":"DECISION","basis":"DECISION_POLICY",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced"}}
+                """);
+        assertThat(response.statusCode()).isEqualTo(400);
+        JsonNode error = Json.MAPPER.readTree(response.body());
+        assertThat(error.get("error").asText()).isEqualTo("bad_request");
+        assertThat(error.get("detail").asText())
+                .contains("explicit goal (intent)")
+                .contains("no decision default was substituted");
+    }
 
-        // Each winner is a full evaluation carrying its symbol; the list uses the same explicit
-        // monotonic Decision-score order as a single-symbol competition.
-        double previousDecisionScore = Double.MAX_VALUE;
-        java.util.Set<String> symbols = new java.util.HashSet<>();
-        for (JsonNode e : ranked) {
-            symbols.add(e.get("spec").get("symbol").asText());
-            double decisionScore = e.get("decisionScore").asDouble();
-            assertThat(decisionScore).isLessThanOrEqualTo(previousDecisionScore);
-            previousDecisionScore = decisionScore;
-        }
-        assertThat(symbols).isNotEmpty(); // at least one symbol's best idea surfaced
+    @Test void duplicateOpportunitiesSurfaceIsNotRegistered() throws Exception {
+        HttpResponse<String> response = post("/api/opportunities",
+                "{\"intent\":\"DIRECTIONAL\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\",\"topN\":5}");
+        assertThat(response.statusCode()).isEqualTo(404);
     }
 
     @Test void calibrationEndpointReports() throws Exception {
-        post("/api/evaluate", decisionBody());
+        HttpResponse<String> setup = post("/api/evaluate", decisionBody());
+        assertThat(setup.statusCode()).as("decision setup: %s", setup.body()).isEqualTo(200);
         HttpResponse<String> r = get("/api/calibration");
         assertThat(r.statusCode()).isEqualTo(200);
         JsonNode rep = Json.MAPPER.readTree(r.body());
@@ -147,7 +147,8 @@ class EvaluateIntegrationTest {
     }
 
     @Test void demoEvaluationsDoNotPolluteObservedHistory() throws Exception {
-        post("/api/evaluate", decisionBody());
+        HttpResponse<String> setup = post("/api/evaluate", decisionBody());
+        assertThat(setup.statusCode()).as("decision setup: %s", setup.body()).isEqualTo(200);
         JsonNode listed = Json.MAPPER.readTree(get("/api/evaluations").body()).get("evaluations");
         assertThat(listed.isArray()).isTrue();
         assertThat(listed).isEmpty();
@@ -172,7 +173,7 @@ class EvaluateIntegrationTest {
         assertThat(envelope.get("basis").asText()).isEqualTo("PARAMETRIC");
         assertThat(envelope.at("/context/marketLane").asText()).isEqualTo("DEMO");
         assertThat(envelope.at("/result/bands").isArray()).isTrue();
-        assertThat(envelope.at("/result/pathModelVersion").asText()).isEqualTo("paths-3");
+        assertThat(envelope.at("/result/pathModelVersion").asText()).isEqualTo("paths-4-calendar");
         assertThat(envelope.at("/result/decisionMap/terminal/p5").asDouble())
                 .isLessThanOrEqualTo(envelope.at("/result/decisionMap/terminal/p50").asDouble());
         assertThat(envelope.at("/result/decisionMap/terminal/p50").asDouble())
@@ -182,7 +183,10 @@ class EvaluateIntegrationTest {
                 .isBetween(0.0, 1.0);
         assertThat(envelope.at("/result/decisionMap/levels/0/touchProbability").asDouble())
                 .isGreaterThanOrEqualTo(envelope.at("/result/decisionMap/levels/0/endBeyondProbability").asDouble());
-        assertThat(envelope.at("/result/receipt/fingerprint").asText()).hasSize(24);
+        assertThat(envelope.at("/result/receipt/fingerprint").asText()).hasSize(64);
+        assertThat(envelope.at("/result/ensemble/fingerprint").asText())
+                .isEqualTo(envelope.at("/result/receipt/fingerprint").asText());
+        assertThat(envelope.at("/result/ensemble/id").asText()).startsWith("rer_");
         assertThat(envelope.at("/result/receipt/worldId").asText()).isEqualTo("demo");
         assertThat(envelope.at("/result/receipt/datasetId").asText()).isEqualTo("observed");
         assertThat(envelope.at("/result/receipt/anchorSpot").asDouble())
@@ -221,6 +225,49 @@ class EvaluateIntegrationTest {
         assertThat(post("/api/sim/strategy", "{}").statusCode()).isEqualTo(404);
         assertThat(post("/api/sim/compare", "{}").statusCode()).isEqualTo(404);
         assertThat(post("/api/trade/replicate", "{}").statusCode()).isEqualTo(404);
+    }
+
+    @Test void publicPossibleFuturesPromotesTheExactFanAndRetryIsIdempotent() throws Exception {
+        String paths = """
+                {"operation":"PATHS","basis":"PARAMETRIC",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":7,"stepsPerDay":2,
+                         "driftAnnual":0.01,"volAnnual":0.28,"jumpsPerYear":0,"jumpMean":0,
+                         "jumpVol":0,"tailNu":6,"seed":9077,"paths":48},
+                 "iv":{"startIv":0.31,"driftPerYear":0,"meanRevertSpeed":0,"longRunIv":0.31,
+                       "eventDay":-1,"eventShockPct":0,"minIv":0.03,"maxIv":4},
+                 "levels":[{"key":"target","price":270}]}
+                """;
+        JsonNode publicRun = Json.MAPPER.readTree(post("/api/evaluate", paths).body()).get("result");
+        JsonNode researchRef = publicRun.get("ensemble");
+        String fingerprint = researchRef.get("fingerprint").asText();
+
+        JsonNode plan = Json.MAPPER.readTree(post("/api/plans", """
+                {"clientRequestId":"exact-public-fan-9077","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Exact public fan","thesis":"exact public fan 9077",
+                 "horizonDays":7,"riskMode":"conservative"}
+                """).body());
+        String planId = plan.get("id").asText();
+        String adoptBody = """
+                {"expectedVersion":%d,"researchReceiptId":"%s","expectedFingerprint":"%s"}
+                """.formatted(plan.get("version").asLong(), researchRef.get("id").asText(), fingerprint);
+
+        HttpResponse<String> firstResponse = post("/api/plans/" + planId + "/outcomes/ensemble", adoptBody);
+        assertThat(firstResponse.statusCode()).isEqualTo(200);
+        JsonNode first = Json.MAPPER.readTree(firstResponse.body());
+        assertThat(first.at("/ensemble/fingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(first.at("/preview/receipt/fingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(first.at("/preview/bands")).isEqualTo(publicRun.get("bands"));
+        assertThat(first.at("/preview/samples")).isEqualTo(publicRun.get("samples"));
+        assertThat(first.at("/preview/decisionMap")).isEqualTo(publicRun.get("decisionMap"));
+
+        JsonNode retried = Json.MAPPER.readTree(
+                post("/api/plans/" + planId + "/outcomes/ensemble", adoptBody).body());
+        assertThat(retried.at("/ensemble/id").asText()).isEqualTo(first.at("/ensemble/id").asText());
+        assertThat(retried.at("/ensemble/fingerprint").asText()).isEqualTo(fingerprint);
+        assertThat(server.planOutcomes.latestEnsemble(null, server.planSvc.get(null, planId),
+                "PARAMETRIC", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).id())
+                .isEqualTo(first.at("/ensemble/id").asText());
     }
 
     @Test void aMissingMarketAnchorIsADataGapRatherThanAFakeMissingRoute() throws Exception {
@@ -357,7 +404,10 @@ class EvaluateIntegrationTest {
     }
 
     @Test void ideasDecisionAndTicketShareOneRiskNeutralCalculation() throws Exception {
-        JsonNode envelope = Json.MAPPER.readTree(post("/api/evaluate", decisionBody()).body());
+        HttpResponse<String> decisionResponse = post("/api/evaluate", decisionBody());
+        assertThat(decisionResponse.statusCode())
+                .as("decision competition: %s", decisionResponse.body()).isEqualTo(200);
+        JsonNode envelope = Json.MAPPER.readTree(decisionResponse.body());
         JsonNode evaluation = null;
         for (JsonNode item : envelope.at("/result/evaluations")) {
             JsonNode candidate = item.get("candidate");
@@ -418,7 +468,8 @@ class EvaluateIntegrationTest {
             String body = """
                     {"operation":"DECISION","basis":"DECISION_POLICY",
                      "context":{"symbol":"AAPL","marketLane":"SIMULATED","worldId":"%s","datasetId":"observed"},
-                     "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced"}}
+                     "decision":{"symbol":"AAPL","thesis":"bullish","horizon":"month","riskMode":"balanced",
+                                 "intent":"DIRECTIONAL"}}
                     """.formatted(world);
             HttpResponse<String> response = post("/api/evaluate", body);
             assertThat(response.statusCode()).isEqualTo(200);

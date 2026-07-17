@@ -214,11 +214,11 @@ class SimulationStackTest {
         var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null,
                 "observed", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         assertThat(run.bars()).isGreaterThan(10);
-        assertThat(run.pathModelVersion()).isEqualTo("paths-3");
+        assertThat(run.pathModelVersion()).isEqualTo(PathGenerator.MODEL_VERSION);
         DatasetService.DatasetRow saved = datasets.list(null).stream()
                 .filter(d -> d.id().equals(run.datasetId())).findFirst().orElseThrow();
         assertThat(io.liftandshift.strikebench.util.Json.parse(saved.spec()).get("pathModelVersion").asText())
-                .isEqualTo("paths-3");
+                .isEqualTo(PathGenerator.MODEL_VERSION);
         // Observed rows are untouched: the synthetic bars live ONLY under the new dataset_id.
         long observedRows = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id='observed'",
                 r -> r.lng("c")).getFirst();

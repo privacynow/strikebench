@@ -18,9 +18,9 @@
   var THESIS_BADGE = { BULLISH: 'badge-ok', BEARISH: 'badge-danger', NEUTRAL: 'badge-dim', VOLATILE: 'badge-warn' };
 
   var RESEARCH_VIEWS = {
-    overview: { label: 'Overview', note: 'Price, movement, events and news', icon: 'scope' },
-    evidence: { label: 'Evidence & scenarios', note: 'Past conditions and possible futures', icon: 'chart' },
-    options: { label: 'Options', note: 'Expirations, strikes and market prices', icon: 'grid' }
+    overview: { label: 'Understand the market', note: 'Price, movement, events and news', icon: 'scope' },
+    evidence: { label: 'Test a view', note: 'Past conditions and possible futures', icon: 'chart' },
+    options: { label: 'Inspect the option market', note: 'Expirations, strikes and market prices', icon: 'grid' }
   };
 
   function publicResearchView() {
@@ -29,29 +29,9 @@
     return RESEARCH_VIEWS[view] ? view : 'overview';
   }
 
-  function researchLocalNav(symbol, active) {
-    var tabs = el('div', { class: 'research-local-tabs', role: 'tablist',
-      'aria-label': symbol + ' research sections' });
-    Object.keys(RESEARCH_VIEWS).forEach(function (key) {
-      var meta = RESEARCH_VIEWS[key];
-      tabs.appendChild(el('button', { type: 'button', role: 'tab',
-        id: 'research-tab-' + key, 'aria-controls': 'research-local-panel',
-        class: active === key ? 'active' : '', 'data-research-view': key,
-        'aria-selected': String(active === key), onclick: function () {
-          App.navigate('#/research/' + encodeURIComponent(symbol) + (key === 'overview' ? '' : '?view=' + key));
-        } }, icon(meta.icon), el('span', {}, el('b', {}, meta.label), el('small', {}, meta.note))));
-    });
-    UI.bindTabList(tabs, function (button) { button.click(); });
-    tabs.syncTabs();
-    return el('nav', { class: 'research-local-nav', 'aria-label': symbol + ' analysis workspace' },
-      el('div', { class: 'research-local-nav-head' }, el('b', {}, symbol + ' analysis'),
-        el('span', { class: 'muted small' }, 'Inspect freely. A Plan starts only when you choose to carry work forward.')),
-      tabs);
-  }
-
   // ---------- 2. Research ----------
 
-  async function research(root, params, embedded) {
+  async function researchSection(root, params, embedded) {
     var inPlan = !!(embedded && embedded.plan);
     var provisionalResearch = !!(embedded && embedded.provisional);
     var symbol = inPlan ? embedded.plan.symbol
@@ -62,7 +42,8 @@
       if (input.value.trim()) App.navigate('#/research/' + encodeURIComponent(input.value.trim().toUpperCase()));
     };
 
-    if (!inPlan || provisionalResearch) root.appendChild(el('h1', {}, 'Research'));
+    var skipChrome = !!(embedded && embedded.skipChrome);
+    if ((!inPlan || provisionalResearch) && !skipChrome) root.appendChild(el('h1', {}, 'Research'));
     var recentBox = el('div', { class: 'research-recents', id: 'recent-symbols' });
     var researchContext = UI.symbolContext({
       mode: 'editable', id: 'research-symbol-context', input: input,
@@ -74,7 +55,9 @@
     var contextExtras = el('div', { class: 'symbol-context-extras' },
       symbol ? el('a', { href: '#/research', class: 'context-extras-action', id: 'back-to-sectors' }, 'All sectors') : null,
       recentBox);
-    if (!inPlan || provisionalResearch) root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
+    if ((!inPlan || provisionalResearch) && !skipChrome) {
+      root.appendChild(el('div', { class: 'research-symbol-shell' }, researchContext, contextExtras));
+    }
     function renderRecents() {
       recentBox.innerHTML = '';
       var list = recentSymbols();
@@ -94,16 +77,10 @@
       root.appendChild(idxBody);
       var _it = App.navToken;
       (async function fillIndex() {
-        // The Workspace owns the journeys: resuming a plan is this page's first affordance
-        // now that the separate Plans destination is folded in (Program ONE R1.3).
-        var resume = el('section', { class: 'card workspace-plan-strip', id: 'workspace-plan-strip' });
-        idxBody.appendChild(resume);
-        var resumeFill = window.ViewPlan && ViewPlan.renderLibrary
-          ? ViewPlan.renderLibrary(resume, { compact: true, removeWhenEmpty: true, title: 'Your plans' })
-          : null;
+        // Plan resume/library ownership stays on the Desk. Workspace begins with one market
+        // exploration surface and one canonical Plan handoff, never a second Plan drawer.
         idxBody.appendChild(universePlanScout());
         await sectorExplorer(idxBody, 'research');
-        if (resumeFill) await resumeFill;
         if (!App.alive(_it)) return;
         idxBody.appendChild(await studyToolsSection());
         if (App.state.explorerScroll != null) {
@@ -115,19 +92,11 @@
       return;
     }
 
-    var publicView = !inPlan && !provisionalResearch ? publicResearchView() : null;
-    if (publicView) {
-      root.appendChild(researchLocalNav(symbol, publicView));
-      var publicPanel = el('section', { id: 'research-local-panel', role: 'tabpanel',
-        'aria-labelledby': 'research-tab-' + publicView });
-      root.appendChild(publicPanel);
-      root = publicPanel;
-    }
     var section = embedded && embedded.stage
-      || (publicView === 'options' ? 'strategy' : publicView === 'evidence' ? 'evidence' : 'understand');
+      || 'understand';
     if (section === 'evidence') {
       if (inPlan) root.appendChild(planAnalysisSourceControl(embedded.plan));
-      root.appendChild(testYourViewSection(symbol, inPlan ? embedded.plan : null));
+      root.appendChild(testYourViewSection(symbol, inPlan ? embedded.plan : null, embedded));
       return;
     }
 
@@ -156,7 +125,9 @@
     var newsOverviewCard = el('div', { class: 'card', id: 'news-overview-card' },
       UI.cardHeader('Latest news & filings'), UI.spinner('Loading headlines…'));
     if (section === 'understand') researchPanels.overview.appendChild(newsOverviewCard);
-    if (section === 'strategy') researchPanels.options.appendChild(actionsAnchor);
+    if (section === 'strategy' && !(embedded && embedded.suppressPlanAction)) {
+      researchPanels.options.appendChild(actionsAnchor);
+    }
 
     // Price history — its own endpoint, independent of /api/research.
     if (section === 'understand') researchPanels.overview.appendChild(el('div', { class: 'card', id: 'history-card' },
@@ -175,12 +146,16 @@
       researchPanels.overview.appendChild(newsCard);
     }
     if (section === 'understand') (async function fillNews() {
+      var newsResponse = { items: [], aggregate: null, eventRisk: [], evidence: 'UNAVAILABLE', note: null };
       var newsItems = [];
-      try { newsItems = ((await API.get('/api/research/' + symbol + '/news')).items || []); }
+      try {
+        newsResponse = await API.get('/api/research/' + symbol + '/news');
+        newsItems = newsResponse.items || [];
+      }
       catch (e) { /* empty state below */ }
       var researchMeta = null;
       try { researchMeta = await researchP; } catch (e) { /* the hero owns the visible research error */ }
-      var demoNews = App.state.world === 'demo'
+      var demoNews = newsResponse.evidence === 'DEMO_FABRICATED' || App.state.world === 'demo'
         || (newsItems.length > 0 && newsItems.every(function (n) { return /fixture|demo/i.test(n.source || ''); }));
       var demoFundLike = !!(researchMeta && researchMeta.quote
         && /\b(fund|etf|index)\b/i.test(researchMeta.quote.description || ''));
@@ -191,6 +166,52 @@
           'Volatility reprices around a catalyst'];
       var isFiling = function (n) { return !demoNews
         && (/edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || '')); };
+      function sentimentLabel(raw) {
+        var value = String(raw || 'UNAVAILABLE').toUpperCase();
+        return value === 'POSITIVE' ? 'Positive' : value === 'NEGATIVE' ? 'Negative'
+          : value === 'MIXED' ? 'Mixed' : value === 'NEUTRAL' ? 'Neutral' : 'Unavailable';
+      }
+      function eventFlagLabel(raw) {
+        var value = String(raw || '').toUpperCase();
+        return value === 'M_AND_A' ? 'M&A' : value === 'SEC_FILING' ? 'SEC filing'
+          : value.replace(/_/g, ' ').toLowerCase().replace(/(^|\s)\S/g, function (c) { return c.toUpperCase(); });
+      }
+      function sentimentChip(n) {
+        if (demoNews || !n || n.classification === 'UNAVAILABLE') return null;
+        var kind = String(n.classification || 'NEUTRAL').toLowerCase();
+        var plus = (n.positiveKeywords || []).join(', ');
+        var minus = (n.negativeKeywords || []).join(', ');
+        var matches = [plus ? 'positive: ' + plus : '', minus ? 'negative: ' + minus : ''].filter(Boolean).join(' · ');
+        return el('span', { class: 'badge news-sentiment news-sentiment-' + kind,
+          title: 'Deterministic headline-keyword classification' + (matches ? ' · ' + matches : ' · no configured directional keyword matched') },
+          sentimentLabel(n.classification) + ' · keyword-derived');
+      }
+      function eventChips(n) {
+        return (n && n.eventRiskFlags || []).map(function (flag) {
+          return el('span', { class: 'badge badge-warn news-event-chip' }, eventFlagLabel(flag));
+        });
+      }
+      function sentimentSummary(summaryId) {
+        var a = newsResponse.aggregate;
+        if (demoNews) return el('div', { class: 'news-sentiment-summary news-sentiment-unavailable', id: summaryId },
+          el('div', { class: 'heading-info-row' }, el('b', {}, 'Headline trend is not scored in Demo'), UI.info('headlinesentiment')),
+          el('span', { class: 'muted' }, newsResponse.note || 'Fabricated teaching catalysts never become evidence.'));
+        if (!a || !a.available) return el('div', { class: 'news-sentiment-summary news-sentiment-unavailable', id: summaryId },
+          el('div', { class: 'heading-info-row' }, el('b', {}, 'Headline trend unavailable'), UI.info('headlinesentiment')),
+          el('span', { class: 'muted' }, newsResponse.note || 'No observed headline source answered.'));
+        var coverage = Math.round(Number(a.coverageRatio || 0) * 100);
+        return el('div', { class: 'news-sentiment-summary', id: summaryId },
+          el('div', { class: 'news-sentiment-summary-main' },
+            el('span', { class: 'badge news-sentiment news-sentiment-' + String(a.trend || 'neutral').toLowerCase() },
+              sentimentLabel(a.trend) + ' keyword trend'),
+            UI.info('headlinesentiment'),
+            el('b', {}, String(a.scoredHeadlines) + ' of ' + String(a.totalHeadlines) + ' headlines matched · ' + coverage + '% coverage'),
+            a.eventRisk ? el('span', { class: 'badge badge-warn' }, String(a.eventRiskHeadlines) + ' event-risk headline' + (a.eventRiskHeadlines === 1 ? '' : 's')) : null),
+          a.eventRiskFlags && a.eventRiskFlags.length ? el('div', { class: 'chip-row news-event-feed', 'aria-label': 'Headline event-risk feed' },
+            a.eventRiskFlags.map(function (flag) { return el('span', { class: 'chip' }, eventFlagLabel(flag)); })) : null,
+          el('p', { class: 'muted small' }, a.note,
+            Learn.currentLevel() === 'expert' ? ' Scorer ' + a.scorerVersion + '; aggregate score ' + Number(a.score || 0).toFixed(2) + '.' : ''));
+      }
       function newsContext(n) {
         var h = String(n.headline || '').toLowerCase();
         if (isFiling(n)) return 'Official company disclosure. Open the source to inspect the filing type, dates and material changes.';
@@ -207,6 +228,7 @@
           el('div', { class: 'news-meta' },
             el('span', { class: 'badge ' + (demoNews ? 'badge-warn' : 'badge-dim') },
               demoNews ? 'FABRICATED CATALYST' : isFiling(n) ? 'FILING' : 'NEWS'),
+            sentimentChip(n), eventChips(n),
             el('span', { class: 'muted' }, demoNews ? 'Demo teaching market' : [when, n.source].filter(Boolean).join(' · '))),
           n.url && !demoNews ? el('a', { class: 'news-headline', href: n.url, target: '_blank', rel: 'noopener' }, headline)
             : el('b', { class: 'news-headline' }, headline),
@@ -227,6 +249,8 @@
       newsCard.appendChild(UI.cardHeader(demoNews ? 'Teaching catalysts — fabricated' : 'News & filings',
         el('button', { type: 'button', class: 'btn btn-sm btn-secondary',
           onclick: function () { newsCard.hidden = true; newsOverviewCard.hidden = false; } }, 'Show latest')));
+      newsOverviewCard.appendChild(sentimentSummary('news-sentiment-summary'));
+      newsCard.appendChild(sentimentSummary('news-sentiment-summary-full'));
       if (!newsItems.length) {
         newsOverviewCard.appendChild(el('p', { class: 'muted' },
           'No headline or filing source answered for ' + symbol + '. Price research remains available.'));
@@ -353,15 +377,12 @@
         r.priceIsPreviousClose ? el('span', { class: 'muted small' }, 'previous close') : UI.delta(q.last, q.prevClose),
         evSummary && evSummary.provenance === 'DEMO' ? null : badge(r.freshness),
         el('span', { class: 'spacer' }),
-        el('button', { class: 'btn btn-sm', id: 'plan-understand-next', onclick: async function () {
+        !inPlan ? null : el('button', { class: 'btn btn-sm', id: 'plan-understand-next', onclick: async function () {
+          var origin = window.location.hash;
           try {
             if (embedded && embedded.onBeginEvidence) { await embedded.onBeginEvidence(); return; }
-            if (!inPlan) {
-              App.navigate('#/research/' + encodeURIComponent(symbol) + '?view=evidence');
-              return;
-            }
             var moved = await PlanStore.advance(embedded.plan, 'EVIDENCE');
-            App.navigate(PlanStore.path(moved, 'EVIDENCE'));
+            if (window.location.hash === origin) App.navigate(PlanStore.path(moved, 'EVIDENCE'));
           } catch (e) { UI.toast(e.message, 'error'); }
         } }, embedded && embedded.plan && embedded.plan.context && embedded.plan.context.thesis
           ? 'Test ' + embedded.plan.context.thesis + ' view' : 'Set and test a market view')),
@@ -439,11 +460,18 @@
         var visible = showAll ? strikes : strikes.slice(Math.max(0, atmIdx - 6), atmIdx + 7);
 
         var learning = Learn.currentLevel() === 'beginner';
+        var readOnlyChain = !!(embedded && embedded.readOnlyChain);
         var rows = visible.map(function (k) {
           var pair = byStrike[k] || {};
           var c = pair.call || {}, p = pair.put || {};
           var isAtm = k === strikes[atmIdx];
           if (learning) {
+            if (readOnlyChain) {
+              return el('tr', { class: isAtm ? 'atm' : '' },
+                el('td', { class: k < spot ? 'itm' : '' }, c.bid !== undefined ? fmtNum(c.bid) + ' / ' + fmtNum(c.ask) : '—'),
+                el('td', {}, el('b', {}, stripZeros(k))),
+                el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'));
+            }
             return el('tr', { class: isAtm ? 'atm' : '' },
               el('td', {}, buildBtn('CALL')),
               el('td', { class: k < spot ? 'itm' : '' }, c.bid !== undefined ? fmtNum(c.bid) + ' / ' + fmtNum(c.ask) : '—'),
@@ -462,20 +490,18 @@
                 if (embedded && typeof embedded.onBuildLeg === 'function') embedded.onBuildLeg(seed);
                 else {
                   visibleCommand(button, function () {
-                    return startPlan({ symbol: symbol, intent: seed.goal }, planIntentDestination(seed.goal)).then(function (plan) {
-                      if (!plan) return;
+                    return startPlan({ symbol: symbol, intent: seed.goal }, planIntentDestination(seed.goal), function (plan) {
                       var planUi = PlanStore.ui(plan.id);
                       planUi.strategyView = 'builder';
                       planUi.buildState = planUi.buildState || {};
                       planUi.buildState.builderForm = seed;
-                      App.render();
+                      return plan;
                     });
                   }, 'This contract could not be added to a Plan.');
                 }
               }, 'aria-label': 'Start a custom package with this ' + type.toLowerCase() }, 'Add');
           }
-          return el('tr', { class: isAtm ? 'atm' : '' },
-            el('td', {}, buildBtn('CALL')),
+          var expertCells = [
             el('td', { class: k < spot ? 'itm' : '' }, c.bid !== undefined ? fmtNum(c.bid) + ' / ' + fmtNum(c.ask) : '—'),
             el('td', { class: k < spot ? 'itm' : '' }, c.delta !== undefined && c.delta !== null ? fmtNum(c.delta) : '—'),
             el('td', { class: k < spot ? 'itm' : '' }, c.iv ? fmtPct(c.iv) : '—'),
@@ -486,8 +512,12 @@
               (p.openInterest != null ? fmtNum(p.openInterest, 0) : '—') + ' / ' + (p.volume != null ? fmtNum(p.volume, 0) : '—')),
             el('td', { class: k > spot ? 'itm' : '' }, p.iv ? fmtPct(p.iv) : '—'),
             el('td', { class: k > spot ? 'itm' : '' }, p.delta !== undefined && p.delta !== null ? fmtNum(p.delta) : '—'),
-            el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—'),
-            el('td', {}, buildBtn('PUT')));
+            el('td', { class: k > spot ? 'itm' : '' }, p.bid !== undefined ? fmtNum(p.bid) + ' / ' + fmtNum(p.ask) : '—')];
+          if (!readOnlyChain) {
+            expertCells.unshift(el('td', {}, buildBtn('CALL')));
+            expertCells.push(el('td', {}, buildBtn('PUT')));
+          }
+          return el('tr', { class: isAtm ? 'atm' : '' }, expertCells);
         });
         chainBody.appendChild(el('div', { class: 'chip-row' },
           chip('Underlying', fmtNum(spot)), chip('Strikes', visible.length + ' of ' + strikes.length), badge(chain.freshness)));
@@ -501,8 +531,12 @@
           }));
         }
         chainBody.appendChild(table(
-          learning ? ['Build', 'Call price', 'Strike', 'Put price', 'Build']
-                   : ['', 'Call bid/ask', 'Call Δ', 'Call IV', 'C OI/Vol', 'Strike', 'P OI/Vol', 'Put IV', 'Put Δ', 'Put bid/ask', ''], rows));
+          learning
+            ? (readOnlyChain ? ['Call price', 'Strike', 'Put price']
+              : ['Build', 'Call price', 'Strike', 'Put price', 'Build'])
+            : (readOnlyChain
+              ? ['Call bid/ask', 'Call Δ', 'Call IV', 'C OI/Vol', 'Strike', 'P OI/Vol', 'Put IV', 'Put Δ', 'Put bid/ask']
+              : ['', 'Call bid/ask', 'Call Δ', 'Call IV', 'C OI/Vol', 'Strike', 'P OI/Vol', 'Put IV', 'Put Δ', 'Put bid/ask', '']), rows));
       };
       loadChain(r.expirations[0]);
       // MATERIAL-MOVE refresh (the admitted chain-cadence leftover): when the streamed spot
@@ -553,26 +587,91 @@
   }
 
   function universePlanScout() {
-    var intent = el('select', { id: 'universe-scout-intent' }, (Learn.INTENTS || []).map(function (meta) {
-      return el('option', { value: meta.key }, meta.label);
-    }));
-    var horizon = el('select', { id: 'universe-scout-horizon' },
-      el('option', { value: 'week' }, 'About 1 week'),
-      el('option', { value: 'month', selected: '' }, 'About 1 month'),
-      el('option', { value: 'quarter' }, 'About 3 months'),
-      el('option', { value: '0DTE' }, 'Today (0DTE)'));
     var results = el('div', { id: 'universe-scout-results' });
+    var readiness = el('p', { class: 'muted small universe-scout-readiness',
+      id: 'universe-scout-readiness', 'aria-live': 'polite' });
+    var runSeq = 0;
+    var completedKey = null;
+    var run;
+    function riskConsequence(value) {
+      if (!value) return 'Choose the maximum capital one Scout idea may put at risk.';
+      var modes = App.state.riskBudget && App.state.riskBudget.modes || [];
+      var mode = modes.find(function (item) { return item.mode === value; });
+      return mode ? mode.label + ' allows up to ' + fmtMoney(mode.effectiveBudgetCents)
+        + ' at risk in one proposed idea.' : 'This choice travels with every result from this Scout run.';
+    }
+    function changed() {
+      runSeq += 1; // retire an in-flight/result set that used the prior declaration
+      if (completedKey) {
+        completedKey = null;
+        results.replaceChildren(UI.emptyState('Scout inputs changed',
+          'Run this one Scout again so every visible pick uses the goal, horizon, and risk posture now shown.'));
+      }
+      paintReadiness();
+    }
+    var intent = UI.chipSet({ id: 'universe-scout-intent', label: 'Goal', info: 'plangoal',
+      options: (Learn.INTENTS || []).map(function (meta) {
+        return { value: meta.key, label: meta.label };
+      }), value: null,
+      consequence: function (value) {
+        var meta = (Learn.INTENTS || []).find(function (item) { return item.key === value; });
+        return meta ? (meta.story || meta.blurb || 'This goal controls which structures fit.')
+          : 'Choose the job these proposed trades should do.';
+      }, onChange: changed });
+    var horizon = UI.segmented({ id: 'universe-scout-horizon', label: 'Horizon', info: 'horizon',
+      options: [
+        { value: 'week', label: '1 week', detail: '5 sessions' },
+        { value: 'month', label: '1 month', detail: '21 sessions' },
+        { value: 'quarter', label: '3 months', detail: '63 sessions' },
+        { value: '0DTE', label: 'Today', detail: '0DTE' }
+      ], value: null, revealDetails: 'expert',
+      consequence: function (value) {
+        var sessions = Product.Horizon.sessions(value, null);
+        return value ? (value === '0DTE' ? 'Only same-session expirations qualify.'
+          : 'Compare expirations around ' + sessions + ' trading sessions out.')
+          : 'Choose how long the idea gets to work.';
+      }, onChange: changed });
+    var risk = UI.chipSet({ id: 'universe-scout-risk', label: 'Risk posture', info: 'riskbudget',
+      options: [
+        { value: 'conservative', label: 'Cautious' },
+        { value: 'balanced', label: 'Standard' },
+        { value: 'aggressive', label: 'High' }
+      ], value: null, consequence: riskConsequence, onChange: changed });
+    function selections() {
+      return { intent: intent.value(), horizon: horizon.value(), riskMode: risk.value() };
+    }
+    function missingSelections(value) {
+      var missing = [];
+      if (!value.intent) missing.push('goal');
+      if (!value.horizon) missing.push('horizon');
+      if (!value.riskMode) missing.push('risk posture');
+      return missing;
+    }
+    function paintReadiness() {
+      var value = selections();
+      var missing = missingSelections(value);
+      readiness.textContent = missing.length
+        ? 'Choose before Scout can run: ' + missing.join(', ') + '.'
+        : 'Ready to scan this universe with the exact goal, horizon, and risk posture shown.';
+      readiness.classList.toggle('ready', missing.length === 0);
+      if (run && !run.hasAttribute('aria-busy')) run.disabled = missing.length > 0;
+    }
     var run = el('button', { type: 'button', class: 'btn', id: 'universe-scout-run', onclick: async function () {
+      var chosen = selections();
+      var missing = missingSelections(chosen);
+      if (missing.length) { paintReadiness(); return; }
+      var seq = ++runSeq;
       run.disabled = true; run.setAttribute('aria-busy', 'true');
       results.innerHTML = ''; results.appendChild(UI.spinner('Scanning this universe…'));
       try {
         var universe = App.state.universe && App.state.universe.active && App.state.universe.active.symbols || [];
-        var risk = document.getElementById('risk-mode');
         var response = await API.post('/api/research/scout', {
-          universe: universe, horizons: [horizon.value], maxPicks: 5,
-          riskMode: risk ? risk.value : 'conservative', allow0dte: horizon.value === '0DTE',
-          intents: [intent.value]
+          universe: universe, horizons: [chosen.horizon], maxPicks: 5,
+          riskMode: chosen.riskMode, allow0dte: chosen.horizon === '0DTE',
+          intents: [chosen.intent]
         });
+        if (seq !== runSeq) return;
+        completedKey = JSON.stringify(chosen);
         results.innerHTML = '';
         if (!response.picks || !response.picks.length) {
           results.appendChild(UI.emptyState('No symbol passed this Scout',
@@ -581,7 +680,7 @@
         }
         var grid = el('div', { class: 'universe-scout-grid' });
         response.picks.forEach(function (pick) {
-          var h = (pick.horizons || []).find(function (item) { return item.horizon === horizon.value; })
+          var h = (pick.horizons || []).find(function (item) { return item.horizon === chosen.horizon; })
             || (pick.horizons || [])[0];
           var top = h && h.candidates && h.candidates[0];
           var candidate = window.ViewPlan.candidateFromEvaluation(top);
@@ -593,11 +692,13 @@
                 var opened;
                 if (candidate) {
                   opened = await window.ViewPlan.openCandidateAsPlan(candidate, pick.symbol, {
-                    destination: 'STRATEGY', horizon: horizon.value, thesis: thesis
+                    destination: 'STRATEGY', horizon: chosen.horizon, thesis: thesis,
+                    riskMode: chosen.riskMode
                   });
                 } else {
-                  opened = await startPlan({ symbol: pick.symbol, intent: pick.intent,
-                    horizon: horizon.value, thesis: thesis }, 'STRATEGY');
+                  opened = await startPlan({ symbol: pick.symbol, intent: pick.intent || chosen.intent,
+                    horizon: chosen.horizon, thesis: thesis,
+                    riskMode: chosen.riskMode }, 'STRATEGY');
                 }
                 if (!opened) throw new Error('This Scout pick could not be opened in a Plan.');
               } catch (e) { UI.toast(e.message, 'error'); this.disabled = false; this.removeAttribute('aria-busy'); }
@@ -649,51 +750,303 @@
           return el('ul', { class: 'rationale' }, response.notes.map(function (note) { return el('li', {}, note); }));
         }));
       } catch (e) {
+        if (seq !== runSeq) return;
         results.innerHTML = ''; results.appendChild(alertBox('danger', 'Scout could not finish', [e.message]));
-      } finally { run.disabled = false; run.removeAttribute('aria-busy'); }
+      } finally {
+        // The same button owns the run. A declaration change retires the response, but it
+        // must not strand this control in a permanent busy state.
+        run.removeAttribute('aria-busy');
+        paintReadiness();
+      }
     } }, 'Scout this universe');
+    paintReadiness();
     return el('section', { class: 'research-plan-scout', id: 'research-plan-scout' },
       el('div', { class: 'section-heading' }, el('div', {},
         el('div', { class: 'heading-info-row' }, el('h2', {}, 'Scout for a new Plan'), UI.info('scout')),
-        el('p', { class: 'muted' }, 'Scan the current sector when you do not already have a ticker. A pick starts the same six-stage Plan journey.'))),
+        el('p', { class: 'muted' }, 'Scan the current sector when you do not already have a ticker. A pick starts the same Plan journey.'))),
       el('div', { class: 'card' },
-        el('div', { class: 'form-grid grid-3' },
-          el('div', { class: 'field' }, el('label', { for: 'universe-scout-intent' }, 'Goal'), intent),
-          el('div', { class: 'field' }, el('label', { for: 'universe-scout-horizon' }, 'Horizon'), horizon),
-          el('div', { class: 'field field-end' }, run))), results);
+        el('div', { class: 'universe-scout-controls' }, intent, horizon, risk),
+        el('div', { class: 'universe-scout-command' }, readiness, run)), results);
+  }
+
+  // Public Evidence prepares context and an evidence receipt, but it never creates a second
+  // Plan entry path. The one durable handoff remains Ready to compare in Overview.
+  function researchEvidenceOwnerKey(symbol) {
+    var context = App.outcomeContext(symbol);
+    return [context.marketLane, context.worldId, context.datasetId,
+      String(symbol || '').trim().toUpperCase()].join('|');
+  }
+
+  function researchEvidenceAssumptionKey(value) {
+    value = value || {};
+    var setup = String(value.setup || '').trim();
+    var thesis = String(value.thesis || '').trim().toLowerCase();
+    var horizonDays = Number(value.horizonDays);
+    if (!(horizonDays > 0) && value.horizon) {
+      horizonDays = Product.Horizon.sessions(value.horizon, null);
+    }
+    return setup && thesis && horizonDays > 0
+      ? JSON.stringify({ setup: setup, thesis: thesis, horizonDays: horizonDays }) : null;
+  }
+
+  function currentResearchEvidenceAssumptionKey(symbol) {
+    var ownerKey = researchEvidenceOwnerKey(symbol);
+    var state = App.state.researchEvidenceBySymbol && App.state.researchEvidenceBySymbol[ownerKey];
+    return researchEvidenceAssumptionKey(state && state.thesis);
+  }
+
+  function stagedResearchEvidence(symbol) {
+    App.state.researchHandoffBySymbol = App.state.researchHandoffBySymbol || {};
+    var ownerKey = researchEvidenceOwnerKey(symbol);
+    var staged = App.state.researchHandoffBySymbol[ownerKey] || null;
+    var hasResearchQuestion = !!(App.state.researchEvidenceBySymbol
+      && Object.prototype.hasOwnProperty.call(App.state.researchEvidenceBySymbol, ownerKey));
+    var currentKey = currentResearchEvidenceAssumptionKey(symbol);
+    if (staged && staged.assumptionKey && hasResearchQuestion && staged.assumptionKey !== currentKey) {
+      // A receipt belongs to the exact causal question that produced it. Never let an old
+      // bullish/20d fan hitch a ride with a later bearish/10d study merely because the
+      // symbol matches.
+      (staged.failedPlanIds || []).forEach(function (planId) {
+        var evidenceUi = PlanStore.ui(planId).evidence;
+        if (!evidenceUi || evidenceUi.carryWarningAssumptionKey !== staged.assumptionKey) return;
+        evidenceUi.carryWarnings = [];
+        delete evidenceUi.carryWarningAssumptionKey;
+        delete evidenceUi.carryWarningOwnerKey;
+      });
+      delete App.state.researchHandoffBySymbol[ownerKey];
+      var staleCarry = document.querySelector('#symbol-proposed-trades .symbol-proposed-carry');
+      if (staleCarry) staleCarry.remove();
+      return null;
+    }
+    return staged;
+  }
+
+  async function stageResearchEvidence(symbol, patch) {
+    App.state.researchHandoffBySymbol = App.state.researchHandoffBySymbol || {};
+    var ownerKey = researchEvidenceOwnerKey(symbol);
+    patch = patch || {};
+    var assumptionKey = patch.assumptionKey || researchEvidenceAssumptionKey(patch);
+    var prior = App.state.researchHandoffBySymbol[ownerKey] || null;
+    // Compatible receipts may travel together (for example, a fan and an analog study for
+    // the same question). An incompatible question begins a clean handoff.
+    var staged = prior && (!prior.assumptionKey || !assumptionKey || prior.assumptionKey === assumptionKey)
+      ? prior : {};
+    Object.assign(staged, patch, { assumptionKey: assumptionKey || staged.assumptionKey,
+      ownerKey: ownerKey,
+      stagedAt: new Date().toISOString() });
+    App.state.researchHandoffBySymbol[ownerKey] = staged;
+    App.context.update({ symbol: symbol,
+      thesis: staged.thesis === undefined ? App.context.thesis(null) : staged.thesis,
+      horizon: staged.horizon || App.context.horizon(null) });
+    // Staging is a local, completed fact. Moving attention back to the one handoff must not
+    // wait on a quote/research provider. Update the already-mounted card in place; its click
+    // reads the staged receipt dynamically and the normal Overview render remains the
+    // fallback after reload.
+    var priorCard = document.getElementById('symbol-proposed-trades');
+    if (priorCard) {
+      var carry = priorCard.querySelector('.symbol-proposed-carry');
+      if (!carry) {
+        carry = el('p', { class: 'symbol-proposed-carry' });
+        var starting = priorCard.querySelector('.symbol-proposed-starting');
+        if (starting) starting.before(carry);
+        else priorCard.querySelector('.symbol-proposed-copy').appendChild(carry);
+      }
+      carry.replaceChildren(el('b', {}, 'Evidence ready to carry: '), staged.label,
+        el('span', { class: 'muted' }, ' · it is saved only when you continue here'));
+    }
+    App.navigate(publicResearchHash(symbol, 'overview'));
+    return staged;
+  }
+
+  function recordStagedCarryWarnings(planId, staged, warnings) {
+    var evidenceUi = PlanStore.ui(planId).evidence = PlanStore.ui(planId).evidence || {};
+    evidenceUi.carryWarnings = warnings || [];
+    if (evidenceUi.carryWarnings.length) {
+      evidenceUi.carryWarningAssumptionKey = staged && staged.assumptionKey || null;
+      evidenceUi.carryWarningOwnerKey = staged && staged.ownerKey || null;
+      if (staged) {
+        // A partial carry is a retry of this exact durable Plan, not a fresh Plan
+        // declaration. Keep one canonical target so returning through Research never asks
+        // the user to choose the already-owned goal again or attaches the receipt elsewhere.
+        if (!staged.retryPlanId) staged.retryPlanId = planId;
+        staged.failedPlanIds = Array.from(new Set((staged.failedPlanIds || []).concat([planId])));
+      }
+      return;
+    }
+    var affected = staged && staged.failedPlanIds || [planId];
+    affected.forEach(function (id) {
+      var ui = PlanStore.ui(id).evidence;
+      if (!ui) return;
+      ui.carryWarnings = [];
+      delete ui.carryWarningAssumptionKey;
+      delete ui.carryWarningOwnerKey;
+    });
+    if (staged) staged.failedPlanIds = [];
+  }
+
+  async function applyStagedResearchEvidence(plan) {
+    var staged = stagedResearchEvidence(plan.symbol);
+    if (!staged) return plan;
+    var live = await PlanStore.get(plan.id, true);
+    var evidenceUi = PlanStore.ui(live.id).evidence = PlanStore.ui(live.id).evidence || {};
+    var warnings = [];
+    if (staged.scenario) {
+      try {
+        var scenarioRun = await PlanStore.adoptResearchEnsemble(live, {
+          id: staged.scenario.researchReceiptId,
+          fingerprint: staged.scenario.fingerprint
+        });
+        if (!scenarioRun.ensemble || scenarioRun.ensemble.fingerprint !== staged.scenario.fingerprint) {
+          throw new Error('The server did not promote the exact Possible Futures fingerprint.');
+        }
+        live = scenarioRun.plan || await PlanStore.get(live.id, true);
+        evidenceUi.planEnsembleId = scenarioRun.ensemble && scenarioRun.ensemble.id;
+        evidenceUi.planEnsembleFingerprint = scenarioRun.ensemble && scenarioRun.ensemble.fingerprint;
+        evidenceUi.whatifResults = evidenceUi.whatifResults || {};
+        evidenceUi.whatifResults[live.symbol] = {
+          preview: scenarioRun.preview, ensemble: scenarioRun.ensemble || null,
+          spec: scenarioRun.preview && scenarioRun.preview.receipt
+            ? scenarioRun.preview.receipt.spec : null
+        };
+        delete staged.scenario;
+      } catch (error) {
+        warnings.push('The possible-futures receipt did not save: ' + error.message);
+      }
+    }
+    if (staged.analog) {
+      try {
+        var savedStudy = await API.post('/api/plans/' + live.id + '/evidence/study', staged.analog.request);
+        if (!savedStudy || !savedStudy.result
+            || savedStudy.result.studyKey !== staged.analog.selection.studyKey) {
+          throw new Error('The historical study identity changed while it was being attached.');
+        }
+        evidenceUi.analogSelection = staged.analog.selection;
+        delete staged.analog;
+      } catch (error) {
+        warnings.push('The historical-study receipt did not save: ' + error.message);
+      }
+    }
+    recordStagedCarryWarnings(live.id, staged, warnings);
+    if (!staged.scenario && !staged.analog) {
+      delete App.state.researchHandoffBySymbol[researchEvidenceOwnerKey(plan.symbol)];
+    }
+    return PlanStore.get(live.id, true);
   }
 
   async function symbolProposedTradesCard(symbol) {
     var research = await API.get('/api/research/' + encodeURIComponent(symbol));
-    var goal = el('select', { id: 'symbol-proposed-goal' }, (Learn.INTENTS || []).map(function (meta) {
-      return el('option', { value: meta.key }, meta.label);
-    }));
+    var stagedEvidence = stagedResearchEvidence(symbol);
+    var retryPlan = null;
+    var retryPlanId = stagedEvidence && (stagedEvidence.retryPlanId
+      || (stagedEvidence.failedPlanIds || [])[0]);
+    if (retryPlanId) {
+      try {
+        var retryCandidate = await PlanStore.get(retryPlanId, true);
+        if (retryCandidate && retryCandidate.status === 'ACTIVE'
+            && retryCandidate.assumptionsEditable !== false
+            && retryCandidate.symbol === symbol) retryPlan = retryCandidate;
+      } catch (e) { /* the bound Plan's warning remains the honest recovery surface */ }
+    }
+    var goalValue = retryPlan ? retryPlan.intent : (App.context.goal(null) || '');
+    var riskControl = document.getElementById('risk-mode');
     var feedback = el('div', { class: 'symbol-proposed-feedback', 'aria-live': 'polite' });
     var detail = research.planEligibility || 'This market does not have the executable option inputs needed for a Plan.';
-    function needsDirectionalView() {
-      return goal.value === 'DIRECTIONAL' && !App.context.thesis(null);
+    function handoffFacts() {
+      var staged = stagedResearchEvidence(symbol);
+      var provisional = App.context.source();
+      var thesis = staged && staged.thesis !== undefined ? staged.thesis : App.context.thesis(null);
+      var horizon = staged && staged.horizon ? staged.horizon : App.context.horizon(null);
+      var risk = App.state.headerRiskExplicit && riskControl ? riskControl.value : null;
+      return { thesis: thesis || null, horizon: horizon || null, riskMode: risk || null,
+        target: staged && staged.target ? staged.target
+          : provisional.targetCents > 0 ? String(provisional.targetCents / 100) : null };
+    }
+    function declarationMissing(facts) {
+      if (retryPlan) return [];
+      facts = facts || handoffFacts();
+      var missing = [];
+      if (!goalValue) missing.push('goal');
+      if (goalValue === 'DIRECTIONAL' || goalValue === 'ACQUIRE' || goalValue === 'EXIT') {
+        if (!facts.thesis) missing.push('view');
+      }
+      if (!facts.horizon) missing.push('horizon');
+      if (!facts.riskMode) missing.push('risk posture');
+      return missing;
     }
     var action = el('button', { type: 'button', class: 'btn', id: 'symbol-find-proposed',
-      disabled: research.planEligible ? null : 'disabled',
-      'aria-describedby': research.planEligible ? null : 'symbol-proposed-unavailable', onclick: function () {
+      disabled: retryPlan || research.planEligible && goalValue ? null : 'disabled',
+      'aria-describedby': retryPlan || research.planEligible ? null : 'symbol-proposed-unavailable', onclick: function () {
         var button = this;
         visibleCommand(button, async function () {
-          var handoff = { symbol: symbol, intent: goal.value };
-          var thesis = App.context.thesis(null);
-          var horizon = App.context.horizon(null);
-          if (thesis) handoff.thesis = thesis;
-          if (horizon) handoff.horizon = horizon;
-          var chooseViewFirst = needsDirectionalView();
-          var opened = await startPlan(handoff, chooseViewFirst ? 'EVIDENCE' : 'STRATEGY', chooseViewFirst ? null : async function (plan) {
-            var out = await PlanStore.runStrategy(plan, { allow0dte: false, maxLossCents: null, filters: null });
-            var updated = out.plan || plan;
-            var result = out.strategy && out.strategy.result;
-            var top = result && result.candidates && result.candidates[0];
-            var ui = PlanStore.ui(updated.id);
-            ui.strategyView = 'compare';
-            ui.strategyDraftDirty = false;
-            if (top) ui.strategyFocusCandidate = top.id;
-            return updated;
+          var currentStagedEvidence = stagedResearchEvidence(symbol);
+          if (retryPlan) {
+            var currentRetryPlanId = currentStagedEvidence && (currentStagedEvidence.retryPlanId
+              || (currentStagedEvidence.failedPlanIds || [])[0]);
+            if (currentRetryPlanId !== retryPlan.id) {
+              throw new Error('This Evidence retry is no longer staged for that Plan.');
+            }
+            var exactPlan = await PlanStore.get(retryPlan.id, true);
+            exactPlan = await applyStagedResearchEvidence(exactPlan);
+            // Preserve the user's already-explicit declaration as the public Research draft.
+            // A later, separate Evidence lens can then augment the same inquiry without a
+            // silent default or another redundant goal question.
+            App.context.update({ symbol: exactPlan.symbol, goal: exactPlan.intent,
+              thesis: exactPlan.context && exactPlan.context.thesis,
+              horizon: exactPlan.context && exactPlan.context.horizonDays
+                ? String(exactPlan.context.horizonDays) + 'd' : null,
+              targetCents: exactPlan.context && exactPlan.context.targetCents });
+            return PlanStore.focus(exactPlan, 'STRATEGY');
+          }
+          if (!goalValue) throw new Error('Choose what this Plan should accomplish first.');
+          var handoff = { symbol: symbol, intent: goalValue };
+          var facts = handoffFacts();
+          if (facts.thesis) handoff.thesis = facts.thesis;
+          if (facts.horizon) handoff.horizon = facts.horizon;
+          if (facts.riskMode) handoff.riskMode = facts.riskMode;
+          if (facts.target) handoff.target = facts.target;
+          var chooseViewFirst = declarationMissing(facts).length > 0;
+          var opened = await startPlan(handoff, chooseViewFirst ? 'UNDERSTAND' : 'STRATEGY', async function (plan) {
+            var ui = PlanStore.ui(plan.id);
+            var evidenceUi = ui.evidence = ui.evidence || {};
+            try {
+              plan = await applyStagedResearchEvidence(plan);
+            } catch (error) {
+              var staged = stagedResearchEvidence(plan.symbol);
+              recordStagedCarryWarnings(plan.id, staged, (evidenceUi.carryWarnings || []).concat([
+                'The Plan was opened, but its staged Evidence receipt could not be checked: ' + error.message
+              ]));
+            }
+            // `startPlan` also checks the server-returned Plan. This local gate prevents a
+            // ranking request even if a stale client-side handoff happened to look complete.
+            if (!S.planContextDeclared(plan)) return plan;
+            try {
+              var priorStrategy = await PlanStore.latestStrategy(plan.id, true).catch(function () { return null; });
+              var priorResult = priorStrategy && priorStrategy.strategy && priorStrategy.strategy.result;
+              if (priorResult && !ui.strategyRunWarning) {
+                ui.strategyView = 'compare';
+                ui.strategyDraftDirty = false;
+                var priorTop = priorResult.candidates && priorResult.candidates[0];
+                if (priorTop) ui.strategyFocusCandidate = priorTop.id;
+                return plan;
+              }
+              var out = await PlanStore.runStrategy(plan, { allow0dte: false, maxLossCents: null, filters: null });
+              var updated = out.plan || plan;
+              var result = out.strategy && out.strategy.result;
+              var top = result && result.candidates && result.candidates[0];
+              ui = PlanStore.ui(updated.id);
+              ui.strategyView = 'compare';
+              ui.strategyDraftDirty = false;
+              delete ui.strategyRunWarning;
+              if (top) ui.strategyFocusCandidate = top.id;
+              return updated;
+            } catch (error) {
+              // Plan creation and any Evidence receipts above are durable facts. A ranking
+              // outage must not turn that partial success into the false "Plan unchanged"
+              // failure emitted by startPlan's outer transaction boundary.
+              ui.strategyRunWarning = 'The Plan and its Evidence were saved, but proposed-trade ranking did not finish: '
+                + error.message;
+              return plan;
+            }
           });
           if (!opened && feedback.isConnected) {
             UI.setActionFeedback(feedback, 'danger', 'Proposed trades could not be opened',
@@ -702,24 +1055,80 @@
           return opened;
         }, 'Proposed trades could not be opened.');
       } });
-    function labelAction() {
-      action.textContent = needsDirectionalView() ? 'Choose a view for ' + symbol : 'Find proposed trades for ' + symbol;
+    var readinessEyebrow = null, readinessHeading = null, missingNote = null;
+    function paintDeclarationState() {
+      var missingNow = declarationMissing();
+      action.textContent = retryPlan ? 'Retry Evidence carry'
+        : !goalValue ? 'Choose a Plan goal'
+        : missingNow.length ? 'Continue to Your view' : 'Compare proposed trades';
+      action.disabled = retryPlan ? false : (!research.planEligible || !goalValue);
+      if (readinessEyebrow) readinessEyebrow.textContent = retryPlan ? 'RETRY READY'
+        : missingNow.length ? 'START A PLAN' : 'READY TO COMPARE';
+      if (readinessHeading) readinessHeading.textContent = retryPlan
+        ? 'Finish carrying Evidence into ' + (retryPlan.title || retryPlan.symbol + ' Plan')
+        : missingNow.length ? 'Choose the job, then continue' : 'Ready to compare proposed trades';
+      if (missingNote) {
+        missingNote.hidden = missingNow.length === 0;
+        missingNote.textContent = missingNow.length
+          ? 'Still to declare in Your view: ' + missingNow.join(', ') + '.' : '';
+      }
     }
-    goal.addEventListener('change', labelAction);
-    labelAction();
+    var goal = retryPlan ? el('div', { id: 'symbol-proposed-goal', class: 'field symbol-proposed-retry-target' },
+      el('div', { class: 'field-label' }, 'Existing Plan'),
+      el('div', { class: 'chip-row' }, chip(window.ViewPlan.intentLabel(retryPlan.intent), retryPlan.symbol)),
+      el('p', { class: 'muted small' }, 'The failed receipt is bound to this Plan; its goal and assumptions will not be recreated.'))
+      : UI.chipSet({ id: 'symbol-proposed-goal', label: 'Plan goal', info: 'plangoal',
+      options: (Learn.INTENTS || []).map(function (meta) {
+        return { value: meta.key, label: meta.label };
+      }), value: goalValue, revealDetails: 'expert',
+      consequence: function (value) {
+        var meta = (Learn.INTENTS || []).find(function (item) { return item.key === value; });
+        return meta ? (meta.story || meta.blurb || 'This job sets how structures are compared.')
+          : 'Nothing is created until you choose the job and continue.';
+      },
+      onChange: function (value) {
+        goalValue = value;
+        App.context.update({ goal: value });
+        paintDeclarationState();
+      } });
+    var facts = handoffFacts();
+    var carried = [];
+    if (facts.thesis) carried.push(chip('View', facts.thesis));
+    if (facts.horizon) {
+      var sessions = Product.Horizon.sessions(facts.horizon, null);
+      carried.push(chip(el('span', {}, 'Horizon ', UI.info('horizon')),
+        sessions ? sessions + ' sessions' : String(facts.horizon)));
+    }
+    if (facts.riskMode) {
+      var riskLabel = ({ conservative: 'Cautious', balanced: 'Standard', aggressive: 'High' })[facts.riskMode]
+        || facts.riskMode;
+      carried.push(chip(el('span', {}, 'Risk ', UI.info('riskbudget')), riskLabel + ' · chosen in the app header'));
+    }
+    readinessEyebrow = el('div', { class: 'eyebrow' });
+    readinessHeading = el('h2');
+    missingNote = el('p', { class: 'muted small symbol-proposed-missing' });
+    paintDeclarationState();
     return el('section', { class: 'card symbol-proposed-trades', id: 'symbol-proposed-trades' },
       el('div', { class: 'symbol-proposed-copy' },
-        el('div', { class: 'eyebrow' }, 'READY TO COMPARE'),
-        el('div', { class: 'heading-info-row' }, el('h2', {}, 'Find proposed trades for ' + symbol),
+        readinessEyebrow,
+        el('div', { class: 'heading-info-row' }, readinessHeading,
           UI.info('proposedtrades')),
         el('p', { class: 'muted' },
-          'Choose the job once. StrikeBench creates or reuses the Plan, runs the complete ranked field, and opens the results at Strategy.')),
-      el('div', { class: 'symbol-proposed-action' }, UI.field('Goal', goal), action,
-        research.planEligible ? null : el('p', { class: 'muted small', id: 'symbol-proposed-unavailable' }, detail)),
+          retryPlan
+            ? 'This is the same Plan journey you already declared. Retry only the failed Evidence receipt; its saved context and ranked field stay intact.'
+            : 'Pick what this ' + symbol + ' Plan should accomplish. StrikeBench creates or reuses one Plan journey. Complete declarations open the ranked field; incomplete ones open Your view without filling anything in.'),
+        stagedEvidence ? el('p', { class: 'symbol-proposed-carry' },
+          el('b', {}, 'Evidence ready to carry: '), stagedEvidence.label,
+          el('span', { class: 'muted' }, ' · it is saved only when you continue here')) : null,
+        carried.length ? el('div', { class: 'chip-row symbol-proposed-starting',
+          'aria-label': 'Exact Plan assumptions carried from this workspace' }, carried) : null,
+        missingNote),
+      el('div', { class: 'symbol-proposed-action' },
+        el('div', { class: 'symbol-proposed-goal' }, goal), action,
+        retryPlan || research.planEligible ? null
+          : el('p', { class: 'muted small', id: 'symbol-proposed-unavailable' }, detail)),
       feedback);
   }
-
-  var EARNINGS_RE = /earnings|quarterly results|guidance|earnings call/i;
 
   function laneDateString() {
     var d = App.Market && App.Market.simTime ? new Date(App.Market.simTime) : new Date();
@@ -798,13 +1207,30 @@
       } catch (e) { /* estimate is additive */ }
       if (App.state.world !== 'demo') {
         try {
-          var items = (await newsP).items || [];
-          var earn = items.find(function (n) { return EARNINGS_RE.test(n.headline || ''); });
+          var newsDoc = await newsP;
+          var items = newsDoc.items || [];
+          var eventRisk = newsDoc.eventRisk || [];
+          var earn = eventRisk.find(function (n) {
+            return (n.eventRiskFlags || []).some(function (flag) {
+              return flag === 'EARNINGS' || flag === 'GUIDANCE' || flag === 'RESULTS';
+            });
+          });
           if (earn) {
-            addEvent('EARNINGS NEWS', earn.headline, 'Headline signal; verify the source', 'event', earn.url);
+            addEvent('HEADLINE EVENT RISK', earn.headline,
+              (earn.eventRiskFlags || []).join(' · ').replace(/_/g, ' ') + ' · keyword-derived; verify the source',
+              'event', earn.url);
             had = true;
           }
-          var filings = items.filter(function (n) { return /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); })
+          var otherRisk = eventRisk.find(function (n) { return n !== earn
+            && !(n.eventRiskFlags || []).includes('SEC_FILING'); });
+          if (otherRisk) {
+            addEvent('HEADLINE EVENT RISK', otherRisk.headline,
+              (otherRisk.eventRiskFlags || []).join(' · ').replace(/_/g, ' ') + ' · keyword-derived; verify the source',
+              'event', otherRisk.url);
+            had = true;
+          }
+          var filings = items.filter(function (n) { return (n.eventRiskFlags || []).includes('SEC_FILING')
+              || /edgar|sec/i.test(n.source || '') || /filing$/i.test(n.headline || ''); })
             .sort(function (a, b) { return (b.publishedEpochMs || 0) - (a.publishedEpochMs || 0); });
           if (filings.length) {
             var f = filings[0];
@@ -1214,6 +1640,7 @@
       UI.cardHeader('Explore by sector'), rail, head, instruction, rangeRow, historyNotice, grid,
       explain(quoteBasis + ' Open a stock for its full analysis, or point the Scout at a whole sector. '
         + (u.note ? u.note : '')));
+    card.setAttribute('data-active-universe', u.active.sectorKey || '');
     root.appendChild(card);
 
     var currentSector = null;
@@ -1236,15 +1663,36 @@
       if (u.active.sectorKey !== sector.key) {
         head.appendChild(el('button', {
           class: 'btn btn-sm btn-secondary', id: 'set-universe-btn', onclick: async function () {
+            var button = this;
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
             try {
               if (App.state.world && App.state.world !== 'observed') {
                 if (UI.toast) UI.toast('You are in a simulated session \u2014 its symbols ARE the market here.');
+                button.disabled = false;
+                button.removeAttribute('aria-busy');
                 return;
               }
               await API.put('/api/universe', { sector: sector.key });
-              await App.refreshUniverse();
-              App.render();
-            } catch (e) { UI.toast(e.message || 'Could not change the active universe', 'error'); }
+              await App.refreshUniverse({ strict: true });
+              u = App.state.universe || u;
+              card.setAttribute('data-active-universe', u.active && u.active.sectorKey || '');
+              // This action changes the persisted market scope, not the Research destination.
+              // Keep the Explorer, quote grid, sparkline loaders, and keyboard position alive.
+              var status = el('span', { class: 'badge badge-ok', tabindex: '-1',
+                id: 'active-universe-status' }, 'YOUR UNIVERSE');
+              // A route change may retire this Explorer while the persistence request is in
+              // flight. In that case the successor screen owns the DOM and there is nothing
+              // left to replace or focus.
+              if (document.activeElement === button) button.blur();
+              if (!button.isConnected || !card.isConnected) return;
+              button.replaceWith(status);
+              status.focus({ preventScroll: true });
+            } catch (e) {
+              button.disabled = false;
+              button.removeAttribute('aria-busy');
+              UI.toast(e.message || 'Could not change the active universe', 'error');
+            }
           }
         }, 'Make this my universe'));
       } else {
@@ -1440,10 +1888,11 @@
       return levels;
     }
 
-    function goalAction(p, spec) {
+    function goalAction(p, spec, ensembleRef) {
       var t = p.decisionMap.terminal;
-      var goal = plan && plan.intent || ownedState.publicGoal || 'DIRECTIONAL';
-      var chosen = Number(target.value);
+      var goal = plan ? plan.intent : null;
+      var analyzedTarget = (p.decisionMap.levels || []).find(function (x) { return x.key === 'target'; });
+      var chosen = analyzedTarget ? Number(analyzedTarget.price) : null;
       if (!(chosen > 0)) chosen = goal === 'EXIT' ? t.p84 : (goal === 'ACQUIRE' || goal === 'HEDGE') ? t.p16 : null;
       var labels = {
         ACQUIRE: 'Find ways to buy near ' + scenarioPrice(chosen),
@@ -1453,16 +1902,21 @@
         DIRECTIONAL: 'Find strategies for this view'
       };
       var action = el('button', { class: 'btn', id: 'whatif-act' },
-        publicMode ? 'Use this view in a Plan' : (labels[goal] || labels.DIRECTIONAL));
+        publicMode ? 'Carry this scenario to Ready to compare' : (labels[goal] || labels.DIRECTIONAL));
       action.addEventListener('click', async function () {
         if (publicMode) {
-          await visibleCommand(action, function () {
-            ownedState.publicGoal = goalSelect.value();
-            App.context.update({ symbol: symbol, goal: ownedState.publicGoal,
-              thesis: seedContext.thesis || null, horizon: String(spec.horizonDays) + 'd' });
-            return startPlan({ symbol: symbol, intent: ownedState.publicGoal,
-              thesis: seedContext.thesis || null, horizon: String(spec.horizonDays) + 'd',
-              target: target.value || null }, 'STRATEGY');
+          await visibleCommand(action, async function () {
+            if (!ensembleRef || !ensembleRef.id || !ensembleRef.fingerprint) {
+              throw new Error('Analyze the scenario again to create its exact server receipt.');
+            }
+            await stageResearchEvidence(symbol, {
+              setup: seedContext.setup || null, thesis: seedContext.thesis || null,
+              horizon: String(spec.horizonDays) + 'd', target: chosen > 0 ? String(chosen) : null,
+              label: 'Possible-futures scenario · ' + spec.horizonDays + ' trading days'
+                + (chosen > 0 ? ' · target $' + chosen : ''),
+              scenario: { researchReceiptId: ensembleRef.id, fingerprint: ensembleRef.fingerprint }
+            });
+            return true;
           }, 'This view could not be carried into a Plan.');
           return;
         }
@@ -1495,18 +1949,13 @@
           UI.toast(e.message, 'error');
         }
       });
-      var goalSelect = publicMode ? UI.chipSet({ id: 'whatif-plan-goal', label: 'Plan goal',
-        options: (Learn.INTENTS || []).map(function (meta) {
-          return { value: meta.key, label: meta.label };
-        }),
-        value: goal }) : null;
       return el('div', { class: 'scenario-next' },
         el('div', {}, el('b', {}, 'Use the result'),
           el('p', { class: 'muted small' },
             publicMode
-              ? 'Choose what you want the position to accomplish. Only this explicit action creates a durable Plan; the scenario itself remains read-only Research.'
+              ? 'Carry this result to the one Ready-to-compare handoff. Choose the Plan goal there; nothing is created from Evidence.'
               : 'Keep the same symbol, goal, horizon and decision level as this Plan moves into Strategy.')),
-        el('div', { class: 'btn-row' }, goalSelect, action));
+        el('div', { class: 'btn-row' }, action));
     }
 
     function practiceAction(p, spec) {
@@ -1619,7 +2068,7 @@
             ['The largest change across the central range was ' + scenarioPrice(move)
               + '. Treat the distribution, not any one sample path, as the result.']));
         }
-        var ensembleRef = planRun && planRun.ensemble || null;
+        var ensembleRef = publicMode ? p.ensemble || null : planRun && planRun.ensemble || null;
         // The run outlives this render: a band repaint or level flip must greet the user with
         // the same analysis, not amnesia. The payload is pure JSON (chart rebuilds from it).
         ownedState.whatifResults = ownedState.whatifResults || {};
@@ -1654,7 +2103,7 @@
           : 'Selected chart sample ' + (index + 1) + ' will replay exactly.';
       } });
       out.appendChild(chart);
-      out.appendChild(goalAction(p, spec));
+      out.appendChild(goalAction(p, spec, ensembleRef));
       var rehearsalActions = practiceAction(p, spec);
       if (rehearsalActions) out.appendChild(rehearsalActions);
       var storedTrail = ownedState.whatifResults && ownedState.whatifResults[symbol];
@@ -1819,7 +2268,7 @@
             active = next;
             resetRenderedAnalysis();
             await App.refreshScenarioBanner();
-            await App.render();
+            await App.refreshMounted();
           } catch (e) {
             select.value = previous; paintDetail(); select.disabled = false;
             error.appendChild(alertBox('caution', 'Analysis source did not change', [e.message]));
@@ -1841,32 +2290,105 @@
     return host;
   }
 
-  function testYourViewSection(symbol, plan) {
+  function testYourViewSection(symbol, plan, embedded, mountedOwner) {
     var publicMode = !plan;
     var level = Learn.currentLevel();
     var assumptionsEditable = publicMode || plan.assumptionsEditable === true;
     var historyBasis = activeHistoryBasis();
     App.state.researchEvidenceBySymbol = App.state.researchEvidenceBySymbol || {};
+    var publicOwnerKey = researchEvidenceOwnerKey(symbol);
     var planUi = publicMode
-      ? (App.state.researchEvidenceBySymbol[symbol] = App.state.researchEvidenceBySymbol[symbol] || {})
+      ? (App.state.researchEvidenceBySymbol[publicOwnerKey]
+        = App.state.researchEvidenceBySymbol[publicOwnerKey] || {})
       : PlanStore.ui(plan.id);
     var th = planUi.thesis = planUi.thesis || {};
-    th.setup = th.setup || 'pullback_rebound';
+    if (th.setup === undefined) th.setup = '';
     // Durable Plan context is authoritative. Public Research owns only ephemeral assumptions
     // and creates no durable object until the user explicitly carries the result forward.
     if (publicMode) {
-      if (!th.horizonDays) th.horizonDays = Product.Horizon.sessions(App.context.horizon('month'));
+      if (th.horizonDays === undefined) {
+        var carriedHorizon = App.context.horizon(null);
+        th.horizonDays = carriedHorizon ? Product.Horizon.sessions(carriedHorizon) : null;
+      }
       if (th.thesis === undefined) th.thesis = App.context.thesis('') || '';
     } else {
-      th.horizonDays = plan.context.horizonDays || Product.Horizon.sessions('month');
+      th.horizonDays = plan.context.horizonDays || null;
       th.thesis = plan.context.thesis || '';
     }
-    var wrap = el('div', { class: 'card', id: 'test-your-view' });
+    function invalidatePublicEvidenceOutputs() {
+      if (!publicMode || !planUi.evidence) return;
+      var evidence = planUi.evidence;
+      var hadResults = (evidence.whatifResults && Object.keys(evidence.whatifResults).length)
+        || (evidence.results && Object.keys(evidence.results).length)
+        || evidence.analogSelection || evidence.planEnsembleId;
+      evidence.whatifResults = {};
+      evidence.results = {};
+      delete evidence.analogSelection;
+      delete evidence.planEnsembleId;
+      delete evidence.planEnsembleFingerprint;
+      if (hadResults) evidence.assumptionsChanged = true;
+    }
+    // Repaints rebuild INTO the same connected owner. Passing that owner through the
+    // recursive builder matters: event handlers on the new controls must close over the
+    // mounted node, not a detached staging wrapper whose later repaint would be ignored.
+    var wrap = mountedOwner || el('div', { class: 'card', id: 'test-your-view' });
+    if (mountedOwner) wrap.replaceChildren();
+    function captureWorkbenchFocus(preferred) {
+      if (preferred) return preferred;
+      var active = document.activeElement;
+      if (!active || !wrap.contains(active)) return null;
+      if (active.id) return { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+      var field = active.closest && active.closest('.choice-field[id]');
+      return field && active.matches('.choice-option[data-value]')
+        ? { fieldId: field.id, value: active.getAttribute('data-value') } : null;
+    }
+    function restoreWorkbenchFocus(mark) {
+      if (!mark) return;
+      var target = mark.id ? document.getElementById(mark.id) : null;
+      if (!target && mark.fieldId) {
+        var field = document.getElementById(mark.fieldId);
+        if (field) target = field.querySelector('.choice-option[data-value="' + CSS.escape(String(mark.value)) + '"]');
+      }
+      if (!target || typeof target.focus !== 'function') return;
+      target.focus({ preventScroll: true });
+      if (mark.start != null && typeof target.setSelectionRange === 'function') {
+        try { target.setSelectionRange(mark.start, mark.end == null ? mark.start : mark.end); }
+        catch (e) { /* number controls do not expose a text selection */ }
+      }
+    }
+    function repaintWorkbench(preferredFocus) {
+      if (!wrap.isConnected || wrap.getAttribute('data-repainting') === 'true') return;
+      var focus = captureWorkbenchFocus(preferredFocus);
+      // Keep the workbench owner mounted. Removing a focused input fires blur/change
+      // synchronously; the old whole-node replace could therefore trigger a second repaint
+      // while replaceWith was still removing `wrap`, producing a NotFoundError and leaving
+      // Research in split state. A stable owner plus a short re-entrancy guard lets the new
+      // controls take over atomically without changing the route/component identity.
+      wrap.setAttribute('data-repainting', 'true');
+      try {
+        testYourViewSection(symbol, plan, embedded, wrap);
+      } finally {
+        wrap.removeAttribute('data-repainting');
+      }
+      restoreWorkbenchFocus(focus);
+    }
+    async function acceptPlanContext(updated, preferredFocus) {
+      var focus = captureWorkbenchFocus(preferredFocus);
+      plan = updated;
+      if (embedded && typeof embedded.onContextChanged === 'function') {
+        await embedded.onContextChanged(updated);
+      } else {
+        repaintWorkbench(focus);
+        return;
+      }
+      restoreWorkbenchFocus(focus);
+    }
     wrap.appendChild(UI.cardHeader('Test your view \u2014 ' + symbol));
     wrap.appendChild(explain(level === 'beginner'
-      ? 'State your view and horizon once. Past evidence asks what followed a named setup in ' + historyBasis.plain + '; possible futures turns your view into explicit model scenarios. They inform each other but never become one blended probability.'
-      : (publicMode ? 'One read-only Research context seeds two labeled interpretations: a '
-        : 'One Plan context seeds two labeled interpretations: a ') + historyBasis.expert
+      ? 'Build one testable sentence in time order: what just happened, what you expect next, and how long it gets. Past evidence checks what followed that trigger in ' + historyBasis.plain + '; possible futures turns the expected outcome into explicit model scenarios. They never become one blended probability.'
+      : 'Author one causal question in time order: trigger at t, forward thesis, then horizon. '
+        + (publicMode ? 'One read-only Research context seeds two labeled interpretations: a '
+          : 'One Plan context seeds two labeled interpretations: a ') + historyBasis.expert
         + ' (conditional history, bootstrap CI) and a parametric Monte Carlo fan. '
         + (publicMode ? 'Nothing is saved as a Plan until you choose to carry it forward.'
           : 'The analog windows remain reusable as a distinct path source in this Plan’s Outcomes stage.')));
@@ -1875,22 +2397,52 @@
     var beginnerLevel = level === 'beginner';
     var viewWords = { bullish: 'Up', bearish: 'Down', neutral: 'Sideways', volatile: 'Big move, either way' };
     var SETUP_OPTIONS = [
-      { value: 'pullback_rebound', label: 'After a pullback', sub: beginnerLevel ? 'what followed?' : 'rebound or continue?' },
-      { value: 'oversold_bounce', label: 'After a sharp down day', sub: beginnerLevel ? 'what followed?' : 'bounce or follow-through?' },
-      { value: 'breakout_followthrough', label: 'After a new high', sub: beginnerLevel ? 'what followed?' : 'continue or fade?' },
-      { value: 'momentum', label: 'After strong momentum', sub: beginnerLevel ? 'what followed?' : 'persist or reverse?' },
-      { value: 'up_streak', label: 'After an up streak', sub: beginnerLevel ? 'what followed?' : 'continue or reverse?' }
+      { value: 'pullback_rebound', label: 'Pullback from a high', sub: 'below a recent high',
+        detail: 'multi-session distance from high', sentence: 'pulls back from a recent high' },
+      { value: 'oversold_bounce', label: 'Sharp down day', sub: 'one large daily loss',
+        detail: 'single-session return', sentence: 'has one sharp down day' },
+      { value: 'breakout_followthrough', label: 'Fresh high', sub: 'breakout above recent highs',
+        detail: 'rolling-high test', sentence: 'closes at a fresh high' },
+      { value: 'momentum', label: 'Strong momentum', sub: 'gain across several sessions',
+        detail: 'multi-session return', sentence: 'builds strong momentum' },
+      { value: 'up_streak', label: 'Up streak', sub: 'several rising closes',
+        detail: 'consecutive positive closes', sentence: 'rises several sessions in a row' }
     ];
-    function setupChips() {
-      return UI.chipSet({ id: 'tv-setup', label: 'Historical condition to examine',
-        options: SETUP_OPTIONS, value: th.setup,
-        onChange: function (value) { th.setup = value; if (outcomeWorkspace) outcomeWorkspace.refresh(); } });
+    var questionSummary = el('div', { class: 'tv-question-summary', id: 'tv-question-summary', 'aria-live': 'polite' });
+    function selectedSetup() {
+      return SETUP_OPTIONS.find(function (option) { return option.value === th.setup; }) || null;
     }
+    function paintQuestionSummary() {
+      var setup = selectedSetup();
+      var expectation = { bullish: 'finish higher', bearish: 'finish lower', neutral: 'stay in a range',
+        volatile: 'make a large move in either direction' }[th.thesis];
+      questionSummary.textContent = !setup
+        ? 'Start here: choose the market move that just happened.'
+        : !expectation
+          ? 'Next: when ' + symbol + ' ' + setup.sentence + ', what do you expect it to do from here?'
+          : !th.horizonDays
+            ? 'Last: give that expectation a number of trading days.'
+            : 'Question: After ' + symbol + ' ' + setup.sentence + ', what followed over the next '
+              + th.horizonDays + ' trading days — and does that support your view that it will ' + expectation + '?';
+    }
+    function setupChips() {
+      return UI.chipSet({ id: 'tv-setup',
+        label: beginnerLevel ? '1 · What just happened?' : '1 · Historical trigger', info: 'historicalsetup',
+        options: SETUP_OPTIONS, value: th.setup, revealDetails: 'expert',
+        consequence: function () { return 'This is the starting signal. Your expected outcome comes next.'; },
+        onChange: function (value) {
+          th.setup = value; paintQuestionSummary();
+          if (publicMode) { invalidatePublicEvidenceOutputs(); stagedResearchEvidence(symbol); }
+          if (window.Workspace) Workspace.save();
+          repaintWorkbench({ fieldId: 'tv-setup', value: value });
+        } });
+    }
+    paintQuestionSummary();
     if (!publicMode && th.thesis) {
       // A declared Plan already owns its view and horizon — the evidence tools QUOTE them
       // (one line), never re-ask. The declaration band is the one place to change them.
-      wrap.appendChild(el('div', { class: 'tv-context-line', id: 'tv-context' },
-        el('span', { class: 'muted' }, 'Testing your declared view: '),
+      var contextLine = el('div', { class: 'tv-context-line', id: 'tv-context' },
+        el('span', { class: 'muted' }, '2–3 · Expected next: '),
         el('b', {}, (viewWords[th.thesis] || th.thesis) + ' over ' + th.horizonDays + ' trading days'),
         assumptionsEditable
           ? el('button', { type: 'button', class: 'btn btn-sm btn-secondary', id: 'tv-change-view',
@@ -1898,12 +2450,14 @@
                 var edit = document.getElementById('plan-edit-context');
                 if (edit) edit.click();
               } }, 'Change view')
-          : null));
+          : null);
       if (assumptionsEditable) {
-        wrap.appendChild(setupChips());
+        wrap.appendChild(el('div', { class: 'tv-declaration tv-declaration-owned' }, setupChips(), contextLine));
       } else {
-        wrap.appendChild(el('p', { class: 'muted tv-frozen-setup plan-frozen-context' }, 'Against: '
-          + (SETUP_OPTIONS.find(function (o) { return o.value === th.setup; }) || SETUP_OPTIONS[0]).label.toLowerCase()
+        var frozenSetup = selectedSetup();
+        wrap.appendChild(contextLine);
+        wrap.appendChild(el('p', { class: 'muted tv-frozen-setup plan-frozen-context' }, 'Starting trigger: '
+          + (frozenSetup ? frozenSetup.label.toLowerCase() : 'not chosen')
           + ' — these inputs belong to the recorded decision; a linked revision tests new assumptions without rewriting what happened. ',
           el('button', { type: 'button', class: 'btn btn-sm btn-secondary', onclick: function () {
             var edit = document.getElementById('plan-edit-context');
@@ -1913,40 +2467,56 @@
     } else {
       // No declared view yet (public research, or a Plan still forming one): explicit choosers.
       var viewCtl = UI.chipSet({ id: 'tv-view',
-        label: beginnerLevel ? 'Your market view' : 'Thesis',
+        label: beginnerLevel ? '2 · What do you expect next?' : '2 · Forward thesis', info: 'thesis',
         options: [
-          { value: 'bullish', label: 'Up', sub: beginnerLevel ? 'I expect it to rise' : null },
-          { value: 'bearish', label: 'Down', sub: beginnerLevel ? 'I expect it to fall' : null },
-          { value: 'neutral', label: 'Sideways', sub: beginnerLevel ? 'I expect a range' : null },
-          { value: 'volatile', label: 'Big move', sub: beginnerLevel ? 'either way' : null }],
+          { value: 'bullish', label: 'Up', sub: 'finish higher' },
+          { value: 'bearish', label: 'Down', sub: 'finish lower' },
+          { value: 'neutral', label: 'Sideways', sub: 'stay in a range' },
+          { value: 'volatile', label: 'Big move', sub: 'either direction' }],
         value: th.thesis || '',
         onChange: async function (value) {
           th.thesis = value;
           if (publicMode) {
             App.context.update({ thesis: th.thesis });
-            App.render();
+            invalidatePublicEvidenceOutputs();
+            stagedResearchEvidence(symbol);
+            repaintWorkbench({ fieldId: 'tv-view', value: value });
             return;
           }
           try {
             plan = await PlanStore.updateContext(plan, { thesis: th.thesis });
-            App.render();
-          } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+            await acceptPlanContext(plan, { fieldId: 'tv-view', value: value });
+          } catch (e) {
+            UI.toast(e.message, 'error');
+            repaintWorkbench({ fieldId: 'tv-view', value: value });
+          }
         } });
-      var horIn = el('input', { type: 'number', id: 'tv-horizon', value: String(th.horizonDays), min: '1', max: '63' });
-      wrap.appendChild(el('div', { class: 'form-grid' }, viewCtl, setupChips(),
-        el('div', { class: 'field' },
-          el('label', { class: 'field-label', for: 'tv-horizon' }, 'Over how many trading days?'), horIn)));
+      var horIn = el('input', { type: 'number', id: 'tv-horizon', value: th.horizonDays == null ? '' : String(th.horizonDays),
+        placeholder: 'e.g. 20', min: '1', max: '63' });
+      var horizonField = el('div', { class: 'field tv-horizon-field' },
+        el('div', { class: 'tv-field-label' },
+          el('label', { class: 'field-label', for: 'tv-horizon' }, '3 · Over how many trading days?'), UI.info('horizon')), horIn);
+      wrap.appendChild(el('div', { class: 'tv-declaration' }, setupChips(), viewCtl, horizonField));
+      wrap.appendChild(questionSummary);
+      wrap.appendChild(el('p', { class: 'muted small tv-axis-note' }, beginnerLevel
+        ? 'Sideways is what you expect next. More- or less-volatile is the backdrop before the trigger; Past evidence can filter by the size of swings. That volatility measure does not pretend to know whether the path was choppy.'
+        : 'Forward direction and realized-volatility regime are separate axes: Sideways is a thesis; More / less volatile are optional 20-session-vs-60-session σ filters inside Past evidence. Choppiness is not inferred without a reversal or trend-efficiency classifier.'));
       if (assumptionsEditable) horIn.addEventListener('change', async function () {
-        th.horizonDays = Math.max(1, Math.min(63, parseInt(horIn.value, 10) || 10));
+        var parsedHorizon = parseInt(horIn.value, 10);
+        th.horizonDays = Number.isFinite(parsedHorizon) ? Math.max(1, Math.min(63, parsedHorizon)) : null;
+        horIn.value = th.horizonDays == null ? '' : String(th.horizonDays); paintQuestionSummary();
         if (publicMode) {
-          App.context.update({ horizon: String(th.horizonDays) + 'd' });
-          if (outcomeWorkspace) outcomeWorkspace.refresh();
+          App.context.update({ horizon: th.horizonDays == null ? null : String(th.horizonDays) + 'd' });
+          invalidatePublicEvidenceOutputs();
+          stagedResearchEvidence(symbol);
+          repaintWorkbench({ id: 'tv-horizon' });
           return;
         }
+        if (th.horizonDays == null) { UI.toast('Choose a horizon from 1 to 63 trading days', 'error'); return; }
         try {
           plan = await PlanStore.updateContext(plan, { horizonDays: th.horizonDays });
-          App.render();
-        } catch (e) { UI.toast(e.message, 'error'); App.render(); }
+          await acceptPlanContext(plan, { id: 'tv-horizon' });
+        } catch (e) { UI.toast(e.message, 'error'); repaintWorkbench({ id: 'tv-horizon' }); }
       });
     }
     // Invalidate result artifacts at the context boundary even when the new context has not
@@ -1961,18 +2531,36 @@
         questions: priorEvidence.questions || null,
         scenarioForm: priorEvidence.scenarioForm || {},
         scenarioTargets: priorEvidence.scenarioTargets || {},
+        carryWarnings: priorEvidence.carryWarnings || [],
         assumptionsChanged: true
       };
     }
-    if (!th.thesis) {
-      wrap.appendChild(UI.emptyState('Choose the view you want to test',
-        'Past evidence and possible futures become available after you choose a direction or range view.'));
+    if (!th.setup || !th.thesis || !th.horizonDays) {
+      var missingQuestion = !th.setup ? 'what just happened' : !th.thesis ? 'what you expect next' : 'the trading-day horizon';
+      wrap.appendChild(UI.emptyState('Complete the question to test it',
+        'Choose ' + missingQuestion + '. Past evidence and possible futures stay unavailable until the causal question is explicit.'));
       return wrap;
     }
 
     // ---- Two connected evidence bases through the shared Outcomes component ----
     var tvState = planUi.evidence = planUi.evidence || {};
+    var analysisOwnerKey = researchEvidenceOwnerKey(symbol);
+    if (!publicMode && tvState.analysisOwnerKey && tvState.analysisOwnerKey !== analysisOwnerKey) {
+      tvState.results = {};
+      tvState.whatifResults = {};
+      delete tvState.analogSelection;
+      delete tvState.planEnsembleId;
+      delete tvState.planEnsembleFingerprint;
+      tvState.assumptionsChanged = true;
+    }
+    tvState.analysisOwnerKey = analysisOwnerKey;
     tvState.mode = tvState.mode || 'past';
+    if (tvState.carryWarnings && tvState.carryWarnings.length) {
+      wrap.appendChild(alertBox('warn', 'Some staged Evidence still needs attention',
+        tvState.carryWarnings.concat([publicMode
+          ? 'Return to Ready to compare to retry the handoff; successfully saved receipts will not be duplicated.'
+          : 'Return to this symbol in Research and continue from Ready to compare to retry only the unsaved receipt.'])));
+    }
     if (tvState.assumptionsChanged) {
       wrap.appendChild(alertBox('info', 'Evidence setup kept; prior results need a fresh run', [
         'Your selected evidence lens is still open. The Plan assumptions changed, so old study and scenario results are not shown as current.'
@@ -2064,9 +2652,9 @@
           + ((value === 'ABOVE_200DMA') === above ? 'matches' : 'does not match') + ' this backdrop.';
       }
       if (i < 60) return '';
-      var choppy = logStd(closes, i, 20) >= logStd(closes, i, 60);
-      return 'Today ' + symbol + ' is swinging ' + (choppy ? 'more' : 'less') + ' than its own recent normal, so today '
-        + ((value === 'HIGH_VOL') === choppy ? 'matches' : 'does not match') + ' this backdrop.';
+      var moreVolatile = logStd(closes, i, 20) >= logStd(closes, i, 60);
+      return 'Today ' + symbol + ' is swinging ' + (moreVolatile ? 'more' : 'less') + ' than its own recent normal, so today '
+        + ((value === 'HIGH_VOL') === moreVolatile ? 'matches' : 'does not match') + ' this backdrop.';
     }
     function regimeConsequence(value) {
       var base = {
@@ -2144,8 +2732,13 @@
       picker.innerHTML = '';
       paramInputs = {}; protocolInputs = {};
       var q = cat.find(function (x) { return x.key === qKey; }) || cat[0];
+      var triggerName = {
+        pullback_rebound: 'pullback from a high', oversold_bounce: 'sharp down day',
+        breakout_followthrough: 'fresh high', momentum: 'strong momentum', up_streak: 'up streak'
+      }[q.key] || q.title;
       picker.appendChild(el('div', { class: 'study-question-line', id: 'tv-question-line' },
-        el('b', {}, q.title), el('span', { class: 'muted' }, q.plain + ' · ' + thesis.horizonDays + '-trading-day outcome')));
+        el('b', {}, 'Historical check · ' + triggerName),
+        el('span', { class: 'muted' }, 'What followed over ' + thesis.horizonDays + ' trading days compared with normal?')));
 
       var signalFields = [];
       (q.params || []).forEach(function (pr) {
@@ -2239,13 +2832,13 @@
 
       // "Market conditions" — REAL engine conditioning: the request's regime field.
       protocolInputs.regime = UI.chipSet({
-        label: 'Market conditions', info: 'studyRegime',
+        label: level === 'beginner' ? 'Market backdrop to compare within' : 'Market backdrop · regime filter', info: 'studyRegime',
         options: [
           { value: 'ALL', label: 'Any conditions', sub: 'every day in the window' },
           { value: 'ABOVE_200DMA', label: 'Uptrend days', sub: 'above the 200-day average', detail: 'close ≥ 200-session mean' },
           { value: 'BELOW_200DMA', label: 'Downtrend days', sub: 'below the 200-day average', detail: 'close < 200-session mean' },
-          { value: 'HIGH_VOL', label: 'Choppy days', sub: 'swinging more than usual', detail: '20-session σ ≥ 60-session σ' },
-          { value: 'LOW_VOL', label: 'Quiet days', sub: 'swinging less than usual', detail: '20-session σ < 60-session σ' }
+          { value: 'HIGH_VOL', label: 'More volatile', sub: 'swinging more than usual', detail: '20-session σ ≥ 60-session σ' },
+          { value: 'LOW_VOL', label: 'Quieter volatility', sub: 'swinging less than usual', detail: '20-session σ < 60-session σ' }
         ],
         value: protocol.regime, revealDetails: 'expert',
         consequence: regimeConsequence,
@@ -2345,7 +2938,8 @@
             ? 'The default keeps examples independent, compares them with non-signal days, resamples the events, and protects against finding a pattern by luck.'
             : 'Signal detection uses no future data. The baseline is the disjoint non-signal complement. Event overlap reduces effective sample size; moving-block bootstrap, an overlap-adjusted two-sided z screen, pooled Cohen’s d, split-half consistency and catalog-wide multiplicity are reported separately.')));
       picker.appendChild(protocolDetails);
-      picker.appendChild(el('p', { class: 'muted small study-description' }, q.description));
+      picker.appendChild(el('p', { class: 'muted small study-description' },
+        'Measures the full forward-return distribution after this trigger against non-trigger days from the same market backdrop.'));
 
       [protocolInputs.eventSpacing, protocolInputs.minSample,
         protocolInputs.bootstrapSamples, protocolInputs.splitHalf].forEach(function (node) {
@@ -2444,7 +3038,7 @@
   function futuresStage(symbol, thesis, level, ownedState, plan) {
     var host = el('div', { id: 'tv-futures' });
     ownedState = ownedState || {};
-    var inner = whatIfCard(symbol, { thesis: thesis.thesis, horizonDays: thesis.horizonDays,
+    var inner = whatIfCard(symbol, { setup: thesis.setup, thesis: thesis.thesis, horizonDays: thesis.horizonDays,
       state: ownedState, plan: plan });
     // Composed stage: the card chrome is the section's — strip the duplicate card skin.
     inner.classList.remove('card');
@@ -2649,16 +3243,16 @@
           };
           ownedState.analogSelection = selection;
           if (!plan) {
-            await visibleCommand(button, function () {
-              return startPlan({ symbol: symbol, intent: 'DIRECTIONAL', thesis: thesis.thesis,
-                horizon: String(r.forwardDays) + 'd' }, 'STRATEGY', async function (created) {
-                  await API.post('/api/plans/' + created.id + '/evidence/study', {
-                    key: r.key, symbol: symbol, from: r.from, to: r.to,
-                    params: selection.study.params
-                  });
-                  var planEvidence = PlanStore.ui(created.id).evidence = PlanStore.ui(created.id).evidence || {};
-                  planEvidence.analogSelection = selection;
-                });
+            await visibleCommand(button, async function () {
+              await stageResearchEvidence(symbol, {
+                setup: thesis.setup, thesis: thesis.thesis, horizon: String(r.forwardDays) + 'd',
+                label: 'Historical study · ' + selection.label,
+                analog: { selection: selection, request: {
+                  key: r.key, symbol: symbol, from: r.from, to: r.to,
+                  params: selection.study.params, expectedStudyKey: selection.studyKey
+                } }
+              });
+              return true;
             }, 'This historical study could not be carried into a Plan.');
             return;
           }
@@ -2670,8 +3264,8 @@
             // already moved on. Only follow through if they are still where they clicked.
             if (window.location.hash === origin) App.navigate(PlanStore.path(moved, 'STRATEGY'));
           } catch (e) { UI.toast(e.message, 'error'); } finally { button.disabled = false; }
-        } }, 'Use these ' + r.conditioned.sample + ' ' + occurrenceWord(r)
-          + ' when testing a strategy \u2192')));
+        } }, plan ? 'Use these ' + r.conditioned.sample + ' ' + occurrenceWord(r)
+          + ' when testing a strategy \u2192' : 'Carry this study to Ready to compare')));
     }
   }
 
@@ -2748,22 +3342,110 @@
     return wrap;
   }
 
+  function publicResearchHash(symbol, band) {
+    return '#/research/' + encodeURIComponent(symbol)
+      + (band && band !== 'overview' ? '?view=' + encodeURIComponent(band) : '');
+  }
+
+  /**
+   * Public Research is the open beginning of the Workspace journey, not a three-page tab
+   * set. The three read-only jobs live in one mounted Flow document. Once visited, each band
+   * stays connected while attention moves, so charts, disclosure state, and option inspection
+   * survive Back/Forward without a root repaint. Creating a Plan remains one explicit handoff
+   * in the market-understanding band; the chain is inspection-only until composition owns it.
+   */
+  async function publicResearchWorkspace(root, symbol) {
+    App.context.selectSymbol(symbol);
+    var input = el('input', { type: 'text', id: 'symbol-input', placeholder: 'Ticker, e.g. AAPL', value: symbol });
+    function go() {
+      var next = String(input.value || '').trim().toUpperCase();
+      if (next) App.navigate('#/research/' + encodeURIComponent(next));
+    }
+    var recentBox = el('div', { class: 'research-recents', id: 'recent-symbols' });
+    function paintRecents() {
+      recentBox.replaceChildren();
+      var rows = recentSymbols();
+      if (!rows.length) return;
+      recentBox.appendChild(el('span', { class: 'context-extras-label' }, 'Recent'));
+      rows.forEach(function (recent) {
+        recentBox.appendChild(el('button', { type: 'button', class: 'sym-chip' + (recent === symbol ? ' active' : ''),
+          onclick: function () { App.navigate('#/research/' + encodeURIComponent(recent)); } }, recent));
+      });
+    }
+    paintRecents();
+    root.appendChild(el('h1', {}, 'Research'));
+    root.appendChild(el('div', { class: 'research-symbol-shell' }, UI.symbolContext({
+      mode: 'editable', id: 'research-symbol-context', input: input, label: 'Change stock',
+      compact: true, hideLabel: true, class: 'symbol-context-purpose', commitLabel: 'Go',
+      commitId: 'symbol-go', onCommit: go
+    }), el('div', { class: 'symbol-context-extras' },
+      el('a', { href: '#/research', class: 'context-extras-action', id: 'back-to-sectors' }, 'All sectors'),
+      recentBox)));
+    root.appendChild(el('div', { class: 'research-workspace-intro' },
+      el('b', {}, symbol + ' market workspace'),
+      el('span', { class: 'muted' }, ' One document: understand what is known, test a view, then inspect contracts. A Plan starts only when you choose a job.')));
+
+    var initial = publicResearchView();
+    var flow = Flow.render({ id: 'research-flow', stateKey: 'research:' + symbol + ':flow',
+      focus: initial, ctx: { symbol: symbol }, sections: [
+      { key: 'overview', title: RESEARCH_VIEWS.overview.label,
+        ready: function () { return true; }, complete: function () { return false; }, retainOnFold: true,
+        invitation: function () { return 'Quote, delivered movement, dated events, filings, and the one Plan handoff.'; },
+        onOpen: function () { App.navigate(publicResearchHash(symbol, 'overview')); },
+        render: async function (host) {
+          await researchSection(host, [symbol], { provisional: true, skipChrome: true, stage: 'understand' });
+          var anchor = host.querySelector('#symbol-actions-anchor');
+          if (!anchor) return;
+          try {
+            var proposed = await symbolProposedTradesCard(symbol);
+            if (anchor.isConnected) anchor.replaceWith(proposed);
+          } catch (error) {
+            if (anchor.isConnected) anchor.replaceWith(alertBox('warn', 'Proposed trades are unavailable', [error.message]));
+          }
+          paintRecents();
+        } },
+      { key: 'evidence', title: RESEARCH_VIEWS.evidence.label,
+        ready: function () { return true; }, complete: function () { return false; }, optional: true,
+        retainOnFold: true,
+        invitation: function () { return 'Ask what followed a past setup and compare it with explicit possible futures.'; },
+        onOpen: function () { App.navigate(publicResearchHash(symbol, 'evidence')); },
+        render: function (host) {
+          return researchSection(host, [symbol], { provisional: true, skipChrome: true, stage: 'evidence' });
+        } },
+      { key: 'options', title: RESEARCH_VIEWS.options.label,
+        ready: function () { return true; }, complete: function () { return false; }, optional: true,
+        retainOnFold: true,
+        invitation: function () { return 'Read expirations, strikes, executable sides, liquidity, IV, and Greeks.'; },
+        onOpen: function () { App.navigate(publicResearchHash(symbol, 'options')); },
+        render: function (host) {
+          return researchSection(host, [symbol], { provisional: true, skipChrome: true, stage: 'strategy',
+            suppressPlanAction: true, readOnlyChain: true });
+        } }
+    ] });
+    root.appendChild(flow.el);
+    await flow.whenReady();
+    if (initial !== 'overview') flow.scrollTo(initial);
+    App._researchSeam = { key: 'research:' + symbol, apply: async function (band, generation) {
+      var next = RESEARCH_VIEWS[band] ? band : 'overview';
+      if (generation != null && generation !== App._renderRequestGeneration) return;
+      await flow.setFocus(next);
+      if (generation != null && generation !== App._renderRequestGeneration) return;
+      flow.scrollTo(next);
+    }, refreshLens: function () { return flow.refresh(true); },
+      reload: function () { return flow.refresh(true); } };
+  }
+
+  async function research(root, params, embedded) {
+    if (embedded) return researchSection(root, params, embedded);
+    var symbol = params && params[0] ? decodeURIComponent(params[0]).toUpperCase() : '';
+    if (!symbol) return researchSection(root, params || [], null);
+    return publicResearchWorkspace(root, symbol);
+  }
+
   async function researchRoute(root, params) {
     var symbol = params && params[0] ? decodeURIComponent(params[0]).toUpperCase() : null;
     if (symbol) {
       await research(root, [symbol]);
-      if (publicResearchView() === 'overview') {
-        var planStart = document.getElementById('symbol-actions-anchor');
-        try {
-          var proposed = await symbolProposedTradesCard(symbol);
-          if (planStart && planStart.isConnected) planStart.replaceWith(proposed);
-        }
-        catch (e) {
-          if (planStart && planStart.isConnected) {
-            planStart.replaceWith(alertBox('warn', 'Proposed trades are unavailable', [e.message]));
-          }
-        }
-      }
       return;
     }
     await research(root, params || []);
@@ -2773,6 +3455,7 @@
   window.ViewResearch = Object.freeze({
     research: research,
     route: researchRoute,
+    evidenceOwnerKey: researchEvidenceOwnerKey,
     historyFetch: historyFetch,
     lazySparklines: lazySparklines,
     missingSparkCopy: missingSparkCopy,

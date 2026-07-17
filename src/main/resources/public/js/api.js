@@ -12,9 +12,20 @@
     }
   }
 
+  // Reads that belong to a route render are cancellable as a group. A hash navigation starts
+  // a new group synchronously, so a provider request that never answers cannot hold the SPA's
+  // serialized renderer hostage. Mutations deliberately do not inherit this signal: leaving a
+  // screen must never cancel a write whose server transaction may already have committed.
+  var navigationAbort = null;
+  function beginNavigation() {
+    if (navigationAbort) navigationAbort.abort();
+    navigationAbort = typeof AbortController === 'function' ? new AbortController() : null;
+  }
+
   async function request(method, path, body) {
     if (method !== 'GET') assertMutableRuntime();
     var opts = { method: method, headers: { 'Accept': 'application/json' } };
+    if (method === 'GET' && navigationAbort) opts.signal = navigationAbort.signal;
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -83,7 +94,7 @@
   var STATE_WRITER = /^\/api\/workspace$/;
   // POSTs that ONLY write evaluation/recommendation history — read back solely by /api/evaluations
   // and /api/calibration. Invalidate JUST those views so market/account/quote caches stay warm.
-  var HISTORY_WRITER = /^\/api\/(evaluate$|opportunities$|optimize$)/;
+  var HISTORY_WRITER = /^\/api\/(evaluate$|optimize$)/;
   var HISTORY_KEYS = ['/api/evaluations', '/api/calibration'];
 
   function mutate(method) {
@@ -159,6 +170,7 @@
     invalidate: invalidate,
     flushCache: flushCache,
     upload: upload,
-    prefetch: prefetch
+    prefetch: prefetch,
+    beginNavigation: beginNavigation
   };
 })();

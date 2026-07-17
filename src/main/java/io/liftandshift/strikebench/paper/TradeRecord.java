@@ -36,17 +36,11 @@ public record TradeRecord(
         String updatedAt,
         String intent,        // StrategyIntent name the trade was placed under, nullable
         long sharesLocked,    // held shares pledged as short-call coverage while ACTIVE
-        String origin,        // PAPER | EXTERNAL (a real broker fill recorded for the learning loop)
         Long proposedNetCents,// the USER'S package price when one was set (provenance), nullable
-        String executedAt,    // real execution time for EXTERNAL trades (ISO), nullable
-        String broker,        // e.g. ETRADE, nullable
-        String orderRef,      // broker order id, nullable
         String dataProvenance,
         String dataAge,
         String dataSource
 ) {
-    public boolean external() { return "EXTERNAL".equals(origin); }
-
     public static final String ACTIVE = "ACTIVE";
     public static final String CLOSED = "CLOSED";
     public static final String EXPIRED = "EXPIRED";

@@ -3,12 +3,12 @@ package io.liftandshift.strikebench.sim;
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -411,23 +411,18 @@ public final class SimulationEngine {
             double open = path[from], close = path[to], hi = open, lo = open;
             for (int i = from; i <= to; i++) { hi = Math.max(hi, path[i]); lo = Math.min(lo, path[i]); }
             out.add(new Candle(d, bd(open), bd(hi), bd(lo), bd(close), 0, false));
-            d = nextTradingDay(d.plusDays(1));
+            d = MarketHours.tradingDateAfter(d, 1);
         }
         return out;
     }
 
-    private static LocalDate nextTradingDay(LocalDate d) {
-        while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.plusDays(1);
-        return d;
-    }
-
-    /** The trading day {@code n} trading days before {@code end} (weekend-skipping). */
+    /** The trading day {@code n} exchange sessions before {@code end}. */
     private static LocalDate tradingDaysBack(LocalDate end, int n) {
         LocalDate d = end;
-        while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.minusDays(1);
+        while (!MarketHours.isTradingDay(d)) d = d.minusDays(1);
         for (int i = 0; i < Math.max(0, n); i++) {
             d = d.minusDays(1);
-            while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.minusDays(1);
+            while (!MarketHours.isTradingDay(d)) d = d.minusDays(1);
         }
         return d;
     }

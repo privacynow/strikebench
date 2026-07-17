@@ -39,6 +39,21 @@ public final class PlanService {
 
     public Plan.View create(String userId, Plan.MarketKind marketKind, String worldId, String accountId,
                             Plan.CreateRequest raw) {
+        Plan.View out = db.tx(c -> createOn(c, userId, marketKind, worldId, accountId, raw));
+        announce(out);
+        return out;
+    }
+
+    /** Canonical Plan creator inside a caller-owned transaction (batch adoption). */
+    Plan.View createOn(java.sql.Connection c, String userId, Plan.MarketKind marketKind,
+                       String worldId, String accountId, Plan.CreateRequest raw) throws java.sql.SQLException {
+        return createOn(c, userId, marketKind, worldId, accountId, raw, null);
+    }
+
+    /** Position-owned Plans may share symbol and assumptions without collapsing distinct lots. */
+    Plan.View createOn(java.sql.Connection c, String userId, Plan.MarketKind marketKind,
+                       String worldId, String accountId, Plan.CreateRequest raw,
+                       String positionOwnerKey) throws java.sql.SQLException {
         if (raw == null) throw new IllegalArgumentException("plan body is required");
         String requestId = required(raw.clientRequestId(), "clientRequestId");
         if (requestId.length() > 120) throw new IllegalArgumentException("clientRequestId is too long");
@@ -57,52 +72,55 @@ public final class PlanService {
         String hash = contextHash(symbol, intent, market, resolvedWorld, raw.thesis(), raw.horizonDays(),
                 raw.targetCents(), raw.riskMode(), raw.holdingsShares(), raw.costBasisCents(),
                 raw.priceAssumptionCents(), assignmentPreference);
-        String createHash = createInputHash(hash, origin, title, accountId);
+        String createHash = createInputHash(hash, origin, title, accountId, positionOwnerKey);
         String identityHash = activeIdentityHash(symbol, intent, market, resolvedWorld, origin, accountId,
                 raw.thesis(), raw.horizonDays(), raw.targetCents(), raw.holdingsShares(),
-                raw.costBasisCents(), raw.priceAssumptionCents(), assignmentPreference);
+                raw.costBasisCents(), raw.priceAssumptionCents(), assignmentPreference, positionOwnerKey);
         String ownerId = OwnerScope.id(userId);
 
-        String createdId = db.tx(c -> {
-            lockCreateOn(c, ownerId, "request:" + requestId);
-            List<ExistingRequest> existing = existingRequestOn(c, requestId, userId);
-            if (!existing.isEmpty()) return requireSameRequest(existing.getFirst(), createHash);
+        lockCreateOn(c, ownerId, "request:" + requestId);
+        List<ExistingRequest> existing = existingRequestOn(c, requestId, userId);
+        String createdId;
+        if (!existing.isEmpty()) {
+            createdId = requireSameRequest(existing.getFirst(), createHash);
+        } else {
             lockCreateOn(c, ownerId, "content:" + identityHash);
             List<String> equivalent = activeEquivalentOn(c, userId, symbol, intent, market, resolvedWorld,
                     origin, accountId, raw.thesis(), raw.horizonDays(), raw.targetCents(),
-                    raw.holdingsShares(), raw.costBasisCents(), raw.priceAssumptionCents(), assignmentPreference);
+                    raw.holdingsShares(), raw.costBasisCents(), raw.priceAssumptionCents(),
+                    assignmentPreference, positionOwnerKey);
             if (!equivalent.isEmpty()) {
-                String equivalentId = equivalent.getFirst();
-                Db.execOn(c, "UPDATE plans SET is_open=1,version=version+1,updated_at=? " +
-                        "WHERE id=? AND is_open=0", now, equivalentId);
-                recordRequestOn(c, ownerId, requestId, createHash, equivalentId, now);
-                return equivalentId;
+                createdId = equivalent.getFirst();
+                Db.execOn(c, "UPDATE plans SET is_open=1,version=version+1,updated_at=? "
+                        + "WHERE id=? AND is_open=0", now, createdId);
+                recordRequestOn(c, ownerId, requestId, createHash, createdId, now);
+            } else {
+                if (origin != null) requireOwnedOn(c, origin, userId, false);
+                int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,origin_plan_id,symbol,intent,market_kind,"
+                                + "world_id,account_id,position_owner_key,custom_title,status,furthest_stage,"
+                                + "active_context_rev,version,is_open,created_at,updated_at) "
+                                + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,1,1,?,?) ON CONFLICT DO NOTHING",
+                        id, ownerId, origin, symbol, intent, market.name(), resolvedWorld,
+                        accountId, positionOwnerKey, title, Plan.Status.ACTIVE.name(),
+                        declaredStage(intent, raw.thesis(), raw.horizonDays(), raw.riskMode()).name(), now, now);
+                if (inserted == 0) {
+                    List<ExistingRequest> raced = existingRequestOn(c, requestId, userId);
+                    if (raced.isEmpty()) throw new IllegalStateException("The plan request conflicted with another record");
+                    createdId = requireSameRequest(raced.getFirst(), createHash);
+                } else {
+                    Db.execOn(c, "INSERT INTO plan_context_revision(id,plan_id,rev,thesis,horizon_days,target_cents,"
+                                    + "risk_mode,holdings_shares,cost_basis_cents,price_assumption_cents,assignment_preference,"
+                                    + "input_hash,engine_version,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            contextId, id, 1, cleanThesis(raw.thesis()), raw.horizonDays(), raw.targetCents(),
+                            normalizeRisk(raw.riskMode()), raw.holdingsShares(), raw.costBasisCents(),
+                            raw.priceAssumptionCents(), assignmentPreference, hash, CONTEXT_ENGINE_VERSION, now);
+                    Db.execOn(c, "UPDATE plans SET active_context_rev=1 WHERE id=?", id);
+                    recordRequestOn(c, ownerId, requestId, createHash, id, now);
+                    createdId = id;
+                }
             }
-            if (origin != null) requireOwnedOn(c, origin, userId, false);
-            int inserted = Db.execOn(c, "INSERT INTO plans(id,user_id,origin_plan_id,symbol,intent,market_kind," +
-                            "world_id,account_id,custom_title,status,furthest_stage,active_context_rev,version,is_open," +
-                            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,1,1,?,?) ON CONFLICT DO NOTHING",
-                    id, ownerId, origin, symbol, intent, market.name(), resolvedWorld,
-                    accountId, title, Plan.Status.ACTIVE.name(),
-                    intent == null ? Plan.Stage.UNDERSTAND.name() : Plan.Stage.STRATEGY.name(), now, now);
-            if (inserted == 0) {
-                List<ExistingRequest> raced = existingRequestOn(c, requestId, userId);
-                if (raced.isEmpty()) throw new IllegalStateException("The plan request conflicted with another record");
-                return requireSameRequest(raced.getFirst(), createHash);
-            }
-            Db.execOn(c, "INSERT INTO plan_context_revision(id,plan_id,rev,thesis,horizon_days,target_cents," +
-                            "risk_mode,holdings_shares,cost_basis_cents,price_assumption_cents,assignment_preference," +
-                            "input_hash,engine_version,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    contextId, id, 1, cleanThesis(raw.thesis()), raw.horizonDays(), raw.targetCents(),
-                    normalizeRisk(raw.riskMode()), raw.holdingsShares(), raw.costBasisCents(),
-                    raw.priceAssumptionCents(), assignmentPreference, hash, CONTEXT_ENGINE_VERSION, now);
-            Db.execOn(c, "UPDATE plans SET active_context_rev=1 WHERE id=?", id);
-            recordRequestOn(c, ownerId, requestId, createHash, id, now);
-            return id;
-        });
-        Plan.View out = get(userId, createdId);
-        announce(out);
-        return out;
+        }
+        return selectViewOn(c, createdId, userId, false);
     }
 
     public Plan.View get(String userId, String planId) {
@@ -162,7 +180,7 @@ public final class PlanService {
                     assumption, assignmentPreference, hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
             Db.execOn(c, "UPDATE plans SET active_context_rev=?,furthest_stage=?,version=version+1,updated_at=? WHERE id=?",
-                    nextRev, current.intent() == null ? Plan.Stage.UNDERSTAND.name() : Plan.Stage.STRATEGY.name(),
+                    nextRev, declaredStage(current.intent(), thesis, horizon, risk).name(),
                     now, planId);
             return selectViewOn(c, planId, userId, false);
         });
@@ -198,9 +216,10 @@ public final class PlanService {
                     old.riskMode(), old.holdingsShares(), old.costBasisCents(), old.priceAssumptionCents(),
                     old.assignmentPreference(), hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
-            Db.execOn(c, "UPDATE plans SET intent=?, furthest_stage='STRATEGY', active_context_rev=?, "
+            Db.execOn(c, "UPDATE plans SET intent=?, furthest_stage=?, active_context_rev=?, "
                             + "version=version+1, updated_at=? WHERE id=?",
-                    intent, nextRev, now, planId);
+                    intent, declaredStage(intent, old.thesis(), old.horizonDays(), old.riskMode()).name(),
+                    nextRev, now, planId);
             return selectViewOn(c, planId, userId, false);
         });
         announce(changed);
@@ -366,7 +385,8 @@ public final class PlanService {
     }
 
     private static void markDependentsStale(java.sql.Connection c, String planId) throws java.sql.SQLException {
-        for (String table : List.of("plan_evidence", "plan_ensemble", "plan_strategy_run", "plan_candidate", "plan_backtest")) {
+        for (String table : List.of("plan_evidence", "plan_ensemble", "plan_strategy_run", "plan_candidate",
+                "plan_outcome_run", "plan_outcome_comparison", "plan_backtest")) {
             Db.execOn(c, "UPDATE " + table + " SET state='STALE' WHERE plan_id=? AND state='CURRENT'", planId);
         }
     }
@@ -388,6 +408,10 @@ public final class PlanService {
                 "user", owner));
     }
 
+    void announceCommitted(List<Plan.View> views) {
+        if (views != null) views.forEach(this::announce);
+    }
+
     private void announceDeleted(String userId, DeletedPlan plan) {
         if (events == null || plan == null) return;
         events.publish("plan.updated", Map.of("id", plan.id(), "version", 0,
@@ -402,7 +426,7 @@ public final class PlanService {
                 "OR EXISTS (SELECT 1 FROM plan_review WHERE plan_id=?) " +
                 "OR EXISTS (SELECT 1 FROM sim_replay_source WHERE plan_id=?) " +
                 "OR EXISTS (SELECT 1 FROM plan_link WHERE (plan_id=? OR related_plan_id=?) " +
-                "AND role IN ('ENTRY','ADJUST','ROLL','PARTIAL_CLOSE','CLOSE','REHEARSAL','EXTERNAL')) " +
+                "AND role IN ('ENTRY','ADJUST','ROLL','PARTIAL_CLOSE','CLOSE','REHEARSAL')) " +
                 "OR EXISTS (SELECT 1 FROM plans WHERE origin_plan_id=?)";
         return !Db.queryOn(c, sql, r -> r.intv("ok"), planId, planId, planId, planId,
                 planId, planId, planId).isEmpty();
@@ -427,12 +451,14 @@ public final class PlanService {
         }
     }
 
-    private static String createInputHash(String contextHash, String origin, String title, String accountId) {
+    private static String createInputHash(String contextHash, String origin, String title, String accountId,
+                                          String positionOwnerKey) {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("contextHash", contextHash);
         values.put("originPlanId", origin);
         values.put("title", title);
         values.put("accountId", accountId);
+        values.put("positionOwnerKey", positionOwnerKey);
         return sha256(values);
     }
 
@@ -443,7 +469,7 @@ public final class PlanService {
      */
     private static String activeIdentityHash(String symbol, String intent, Plan.MarketKind market, String world,
             String origin, String accountId, String thesis, Integer horizon, Long target, Long shares,
-            Long costBasis, Long assumption, String assignmentPreference) {
+            Long costBasis, Long assumption, String assignmentPreference, String positionOwnerKey) {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("symbol", symbol); values.put("intent", intent); values.put("market", market.name());
         values.put("world", world); values.put("originPlanId", origin); values.put("accountId", accountId);
@@ -451,6 +477,7 @@ public final class PlanService {
         values.put("targetCents", target); values.put("holdingsShares", shares);
         values.put("costBasisCents", costBasis); values.put("priceAssumptionCents", assumption);
         values.put("assignmentPreference", assignmentPreference);
+        values.put("positionOwnerKey", positionOwnerKey);
         return sha256(values);
     }
 
@@ -480,12 +507,13 @@ public final class PlanService {
     private static List<String> activeEquivalentOn(java.sql.Connection c, String userId, String symbol,
             String intent, Plan.MarketKind market, String world, String origin, String accountId,
             String thesis, Integer horizon, Long target, Long shares, Long costBasis, Long assumption,
-            String assignmentPreference) throws java.sql.SQLException {
+            String assignmentPreference, String positionOwnerKey) throws java.sql.SQLException {
         return Db.queryOn(c, "SELECT p.id FROM plans p JOIN plan_context_revision c " +
                         "ON c.plan_id=p.id AND c.rev=p.active_context_rev WHERE " + ownerClause("p.user_id") +
                         " AND p.status='ACTIVE' AND p.symbol=? AND p.intent IS NOT DISTINCT FROM ? " +
                         "AND p.market_kind=? AND p.world_id IS NOT DISTINCT FROM ? " +
                         "AND p.origin_plan_id IS NOT DISTINCT FROM ? AND p.account_id IS NOT DISTINCT FROM ? " +
+                        "AND p.position_owner_key IS NOT DISTINCT FROM ? " +
                         "AND c.thesis IS NOT DISTINCT FROM ? AND c.horizon_days IS NOT DISTINCT FROM ? " +
                         "AND c.target_cents IS NOT DISTINCT FROM ? AND c.holdings_shares IS NOT DISTINCT FROM ? " +
                         "AND c.cost_basis_cents IS NOT DISTINCT FROM ? " +
@@ -493,6 +521,7 @@ public final class PlanService {
                         "AND c.assignment_preference IS NOT DISTINCT FROM ? " +
                         "ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 1",
                 r -> r.str("id"), OwnerScope.id(userId), symbol, intent, market.name(), world, origin, accountId,
+                positionOwnerKey,
                 cleanThesis(thesis), horizon, target, shares, costBasis, assumption, assignmentPreference);
     }
 
@@ -521,6 +550,13 @@ public final class PlanService {
         if (shares != null && shares < 0) throw new IllegalArgumentException("holdingsShares cannot be negative");
         if (costBasis != null && costBasis < 0) throw new IllegalArgumentException("costBasisCents cannot be negative");
         if (assumption != null && assumption <= 0) throw new IllegalArgumentException("priceAssumptionCents must be positive");
+    }
+
+    /** A saved goal does not mean the view has been declared; Program ONE begins at UNDERSTAND. */
+    private static Plan.Stage declaredStage(String intent, String thesis, Integer horizon, String risk) {
+        String normalizedIntent = blankToNull(intent);
+        return normalizedIntent != null && blankToNull(thesis) != null && horizon != null && horizon > 0
+                && normalizeRisk(risk) != null ? Plan.Stage.STRATEGY : Plan.Stage.UNDERSTAND;
     }
 
     /** AVOID | ACCEPT | PREFER_BELOW_BASIS | SEEK; null = no preference declared (no reweighting). */

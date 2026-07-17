@@ -34,6 +34,10 @@ final class PlanOutcomeController {
     private final SimulationEngine simEngine;
     private final OutcomeController outcomeController;
     private final io.liftandshift.strikebench.plan.AuthoredScenarioService authoredScenarios;
+    private final io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService canvasTemplates;
+    private final io.liftandshift.strikebench.position.ScenarioPositionScopeService canvasPositions;
+    private final io.liftandshift.strikebench.sim.ScenarioCanvasValuator canvasValuator =
+            new io.liftandshift.strikebench.sim.ScenarioCanvasValuator();
 
     PlanOutcomeController(PlanController root, AppConfig cfg,
                           MarketDataService market, Backtester backtester,
@@ -41,7 +45,9 @@ final class PlanOutcomeController {
                           PlanStrategyService planStrategy, PlanOutcomeService planOutcomes,
                           PathEnsembleService pathEnsembles, SimulationEngine simEngine,
                           OutcomeController outcomeController,
-                          io.liftandshift.strikebench.plan.AuthoredScenarioService authoredScenarios) {
+                          io.liftandshift.strikebench.plan.AuthoredScenarioService authoredScenarios,
+                          io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService canvasTemplates,
+                          io.liftandshift.strikebench.position.ScenarioPositionScopeService canvasPositions) {
         this.root = root;
         this.cfg = cfg;
         this.market = market;
@@ -54,12 +60,17 @@ final class PlanOutcomeController {
         this.simEngine = simEngine;
         this.outcomeController = outcomeController;
         this.authoredScenarios = authoredScenarios;
+        this.canvasTemplates = canvasTemplates;
+        this.canvasPositions = canvasPositions;
     }
 
     public record PlanEnsembleRequest(Long expectedVersion,
                                       io.liftandshift.strikebench.sim.ScenarioSpec over,
                                       io.liftandshift.strikebench.sim.IvSpec iv,
-                                      List<io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel> levels) {}
+                                      List<io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel> levels,
+                                      io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas,
+                                      io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Request template,
+                                      String researchReceiptId, String expectedFingerprint) {}
     public record PlanOutcomeRunRequest(Long expectedVersion, String basis, String ensembleId,
                                        io.liftandshift.strikebench.sim.ScenarioSpec over,
                                        io.liftandshift.strikebench.sim.IvSpec iv) {}
@@ -89,24 +100,77 @@ final class PlanOutcomeController {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
+        if (body.researchReceiptId() != null && !body.researchReceiptId().isBlank()) {
+            if (body.over() != null || body.iv() != null || body.canvas() != null || body.template() != null
+                    || body.levels() != null && !body.levels().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "researchReceiptId adopts an exact fan; generation inputs cannot be mixed into the same request");
+            }
+            promoteResearchEnsemble(ctx, plan, body.researchReceiptId(), body.expectedFingerprint());
+            return;
+        }
+        if (body.expectedFingerprint() != null && !body.expectedFingerprint().isBlank()) {
+            throw new IllegalArgumentException("expectedFingerprint requires researchReceiptId");
+        }
         var spec = planScenarioSpec(plan, body.over());
         var world = PlanController.worldParam(root.activeWorld(ctx));
         var marketVol = outcomeController.marketVol(plan.symbol(), world, spec.horizonDays());
+        var canvas = body.canvas() == null
+                ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
+                : body.canvas().sane(spec.horizonDays());
+        if (body.template() != null) {
+            double spot = pathEnsembles.anchorSpot(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
+                    plan.symbol(), world, root.analysisCtx(ctx)));
+            double atm = marketVol == null ? spec.sane().volAnnual() : marketVol.atmIv();
+            var seed = canvasTemplates.apply(plan.symbol(), world, root.analysisCtx(ctx), spot, atm,
+                    spec, canvas, body.template());
+            spec = planScenarioSpec(plan, seed.spec());
+            canvas = seed.canvas().sane(spec.horizonDays());
+            marketVol = outcomeController.marketVol(plan.symbol(), world, spec.horizonDays());
+        }
         var calibrated = spec.volAnnual() > 0 || marketVol == null ? spec : spec.withVol(marketVol.atmIv());
         double rate = market.riskFreeRateQuote(Math.max(1, calibrated.horizonDays()), world).annualRate();
         var run = simEngine.previewRun(plan.symbol(), calibrated, world, root.analysisCtx(ctx),
                 body.levels() == null ? List.of() : body.levels(), marketVol, rate);
         var iv = body.iv() == null ? defaultPlanIv(run.ensemble().spec(), marketVol) : body.iv();
         JsonNode input = Json.MAPPER.valueToTree(body);
-        var stored = planOutcomes.saveEnsemble(root.ownerId(ctx), plan, run.ensemble(), iv, rate, run.preview(), input);
+        var stored = planOutcomes.saveEnsemble(root.ownerId(ctx), plan, run.ensemble(), iv, canvas,
+                rate, run.preview(), input);
         ObjectNode preview = Json.MAPPER.valueToTree(run.preview());
         preview.put("planEnsembleId", stored.id());
         preview.put("planEnsembleFingerprint", stored.fingerprint());
         if (preview.path("receipt") instanceof ObjectNode receipt) receipt.put("fingerprint", stored.fingerprint());
         decorateScenarioCanvas(preview, run.ensemble());
+        decorateCanvasValuation(ctx, preview, plan, stored);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                         run.ensemble().waypointFill().name()), preview));
+    }
+
+    /** Exact-receipt branch of the one canonical ensemble command; deliberately no generator call. */
+    private void promoteResearchEnsemble(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan,
+                                         String researchReceiptId, String expectedFingerprint) {
+        var analysis = root.analysisCtx(ctx);
+        String world = root.activeWorld(ctx);
+        String lane = io.liftandshift.strikebench.market.MarketLane
+                .of(world, cfg.fixturesOnly(), analysis).name();
+        var promoted = planOutcomes.promoteResearchEnsemble(root.ownerId(ctx), plan,
+                researchReceiptId, expectedFingerprint,
+                new io.liftandshift.strikebench.plan.PlanOutcomeService.ResearchContext(
+                        lane, world, analysis.datasetId()));
+        var stored = promoted.ensemble();
+        ObjectNode preview = promoted.preview() instanceof ObjectNode object
+                ? object.deepCopy() : Json.MAPPER.createObjectNode();
+        preview.put("planEnsembleId", stored.id());
+        preview.put("planEnsembleFingerprint", stored.fingerprint());
+        if (preview.path("receipt") instanceof ObjectNode receipt) {
+            receipt.put("fingerprint", stored.fingerprint());
+        }
+        decorateScenarioCanvas(preview, stored.ensemble());
+        decorateCanvasValuation(ctx, preview, plan, stored);
+        ctx.json(new ApiResponses.PlanEnsemble<>(plan,
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
+                        stored.ensemble().waypointFill().name()), preview));
     }
 
     /** Repaint the stored fan for the Plan's current view — same wire shape as a fresh run. */
@@ -127,6 +191,7 @@ final class PlanOutcomeController {
         preview.put("planEnsembleId", stored.id());
         preview.put("planEnsembleFingerprint", stored.fingerprint());
         decorateScenarioCanvas(preview, stored.ensemble());
+        decorateCanvasValuation(ctx, preview, plan, stored);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                         stored.ensemble().waypointFill().name()), preview));
@@ -157,12 +222,13 @@ final class PlanOutcomeController {
         try { basis = io.liftandshift.strikebench.sim.PathEnsembleService.Basis.valueOf(basisName); }
         catch (Exception e) { throw new IllegalArgumentException("basis must be RISK_NEUTRAL, PARAMETRIC, HISTORICAL_ANALOGS, or CONDITIONAL_BOOTSTRAP"); }
         var stored = resolvePlanEnsemble(ctx, plan, body, basis);
-        var pathPosition = outcomeController.toPathPosition(ctx, position.legs());
+        var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
+                stored.ensemble().anchorDate());
         var simRequest = new OutcomeController.StrategySimRequest(plan.symbol(), pathPosition, position.qty(),
                 stored.ensemble().spec(), stored.iv(), basis, null, position.entryCostCents(),
                 outcomeController.contractExpirations(position.legs()));
         JsonNode result = Json.MAPPER.valueToTree(
-                outcomeController.simStrategyResult(ctx, simRequest, stored.ensemble()));
+                outcomeController.simStrategyResult(ctx, simRequest, stored.ensemble(), stored.canvas()));
         String interpretation = switch (basis) {
             case PARAMETRIC -> "The exact selected package is repriced on the same stored model ensemble shown in Evidence.";
             case HISTORICAL_ANALOGS -> "The exact selected package is repriced over the Plan's stored matching historical occurrences.";
@@ -225,7 +291,8 @@ final class PlanOutcomeController {
                     + (position.legs().isEmpty() ? 0 : cfg.feePerOrderCents() * 2L);
             metadata.put(id, new PlanComparisonMeta(candidate, position, qty, fees));
             try {
-                var pathPosition = outcomeController.toPathPosition(ctx, position.legs());
+                var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
+                        stored.ensemble().anchorDate());
                 simItems.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
                         id, pathPosition, position.entryCostCents(),
                         "entry fixed to the Plan proposal's captured executable package", fees, qty));
@@ -238,7 +305,7 @@ final class PlanOutcomeController {
         LinkedHashMap<String, String> refusals = new LinkedHashMap<>(earlyRefusals);
         if (!simItems.isEmpty()) {
             var compared = new io.liftandshift.strikebench.sim.ScenarioSimulator().compare(
-                    stored.ensemble(), simItems, 1, stored.iv(), stored.rateAnnual());
+                    stored.ensemble(), simItems, 1, stored.iv(), stored.canvas(), stored.rateAnnual());
             for (var outcome : compared.report().results()) results.put(outcome.key(), outcome.result());
             for (var refusal : compared.report().refused()) refusals.put(refusal.key(), refusal.reason());
         }
@@ -385,6 +452,21 @@ final class PlanOutcomeController {
         }
         out.set("spec", Json.MAPPER.valueToTree(authored.spec()));
         out.put("horizonDays", authored.spec().horizonDays());
+        var canvas = planOutcomes.canvasSpec(root.ownerId(ctx), plan.id(), authored.baseEnsembleId(),
+                authored.spec().horizonDays());
+        if (canvas != null) {
+            out.set("canvas", Json.MAPPER.valueToTree(canvas));
+            ObjectNode receipt = out.putObject("modelReceipt");
+            receipt.put("fingerprint", authored.fingerprint());
+            receipt.put("baseEnsembleFingerprint", baseFingerprint);
+            receipt.put("canvasModelVersion", io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
+            receipt.put("calendar", canvas.calendar());
+            receipt.put("surfaceDynamics", canvas.surfaceDynamics().name());
+            receipt.put("settlementPolicy", canvas.settlementPolicy().name());
+            receipt.put("exercisePolicy", canvas.exercisePolicy().name());
+            receipt.put("authoredPathMeaning", "USER_HYPOTHESIS_NOT_FORECAST");
+            if (canvas.template() != null) receipt.set("template", Json.MAPPER.valueToTree(canvas.template()));
+        }
         return out;
     }
 
@@ -515,20 +597,139 @@ final class PlanOutcomeController {
             pin.put("priceRatio", w.priceRatio());
             if (w.tolerance() != null) pin.put("tolerance", w.tolerance());
         }
-        String asOf = preview.path("receipt").path("asOf").asText(null);
-        if (asOf == null) return;
-        try {
-            java.time.LocalDate anchor = java.time.LocalDate.ofInstant(java.time.Instant.parse(asOf),
-                    io.liftandshift.strikebench.market.MarketHours.EASTERN);
-            var sessions = preview.putArray("sessionDates");
-            for (java.time.LocalDate d : io.liftandshift.strikebench.sim.ScenarioSpec.sessionDates(
-                    anchor, ensemble.spec().horizonDays())) {
-                sessions.add(d.toString());
-            }
-            preview.put("anchorSessionDate", anchor.toString());
-        } catch (RuntimeException e) {
-            // An unparseable anchor timestamp only suppresses the date table; the fan stays usable.
+        java.time.LocalDate anchor = ensemble.anchorDate();
+        var sessions = preview.putArray("sessionDates");
+        for (java.time.LocalDate d : io.liftandshift.strikebench.sim.ScenarioSpec.sessionDates(
+                anchor, ensemble.spec().horizonDays())) {
+            sessions.add(d.toString());
         }
+        preview.put("anchorSessionDate", anchor.toString());
+    }
+
+    /**
+     * One same-symbol canvas: current Practice/Tracked packages, selected proposal, and stock
+     * baseline all consume the exact stored ensemble. Refused packages stay named instead of
+     * disappearing or contaminating the rest of the comparison.
+     */
+    private void decorateCanvasValuation(Context ctx, ObjectNode preview,
+            io.liftandshift.strikebench.plan.Plan.View plan,
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored) {
+        var canvas = stored.canvas() == null
+                ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
+                : stored.canvas().sane(stored.ensemble().spec().horizonDays());
+        List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput> inputs = new ArrayList<>();
+        var refused = Json.MAPPER.createArrayNode();
+        java.time.LocalDate anchor = stored.ensemble().anchorDate();
+        try {
+            for (var scoped : canvasPositions.list(root.ownerId(ctx), root.currentAccount(ctx).id(),
+                    plan.symbol(), anchor)) {
+                try {
+                    var path = pathPosition(scoped.packageView(), anchor);
+                    inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
+                            scoped.packageView().id(), scoped.label() + " · " + scoped.accountName(),
+                            scoped.packageView().lane().name(), scoped.packageView().source().name(),
+                            path, 1, scoped.entryCostCents(), false));
+                } catch (RuntimeException e) {
+                    ObjectNode row = refused.addObject();
+                    row.put("key", scoped.packageView().id()); row.put("label", scoped.label());
+                    row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+                }
+            }
+        } catch (RuntimeException e) {
+            ObjectNode row = refused.addObject(); row.put("key", "POSITION_SCOPE");
+            row.put("label", "Same-symbol Book positions"); row.put("reason", e.getMessage());
+        }
+        ObjectNode candidate = root.selectedCandidate(ctx, plan, false);
+        if (candidate != null) {
+            try {
+                var position = planOutcomePosition(candidate);
+                inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
+                        "PROPOSED:" + candidate.path("id").asText(),
+                        candidate.path("displayName").asText(candidate.path("strategy").asText("Proposed structure")),
+                        "HYPOTHETICAL", "PLAN_PROPOSAL", outcomeController.toPathPosition(
+                                ctx, position.legs(), anchor),
+                        position.qty(), position.entryCostCents(), true));
+            } catch (RuntimeException e) {
+                ObjectNode row = refused.addObject(); row.put("key", "PROPOSED");
+                row.put("label", "Selected Plan proposal");
+                row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+            }
+        }
+        try {
+            int shares = 100;
+            var stock = new io.liftandshift.strikebench.sim.PathPosition(anchor, List.of(
+                    io.liftandshift.strikebench.model.Leg.stockShares(
+                            io.liftandshift.strikebench.model.LegAction.BUY, shares,
+                            BigDecimal.valueOf(stored.ensemble().spot()))));
+            inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
+                    "STOCK:" + plan.symbol(), "Buy and hold 100 shares", "BASELINE", "STOCK_BASELINE",
+                    stock, 1, Math.round(stored.ensemble().spot() * shares * 100), false));
+        } catch (RuntimeException e) {
+            ObjectNode row = refused.addObject(); row.put("key", "STOCK_BASELINE");
+            row.put("label", "Buy and hold"); row.put("reason", e.getMessage());
+        }
+        ObjectNode canvasJson;
+        try {
+            var report = canvasValuator.value(stored.ensemble(), stored.iv(), canvas,
+                    stored.rateAnnual(), inputs);
+            canvasJson = Json.MAPPER.valueToTree(report);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            canvasJson = Json.MAPPER.createObjectNode();
+            canvasJson.putArray("underlying");
+            canvasJson.putArray("positions");
+            canvasJson.putArray("comparison");
+            canvasJson.putArray("notes").add("The stored fan remains available, but its same-symbol "
+                    + "position comparison could not run: "
+                    + io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+            ObjectNode row = refused.addObject();
+            row.put("key", "CANVAS_VALUATION");
+            row.put("label", "Same-symbol position comparison");
+            row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+        }
+        canvasJson.set("refused", refused);
+        ObjectNode receipt = canvasJson.putObject("modelReceipt");
+        receipt.put("fingerprint", stored.fingerprint());
+        receipt.put("canvasModelVersion", io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
+        receipt.put("pathModelVersion", stored.ensemble().modelVersion());
+        receipt.put("calendar", canvas.calendar());
+        receipt.put("rateAnnual", stored.rateAnnual());
+        if (canvas.dividendYieldAnnual() == null) receipt.putNull("dividendYieldAnnual");
+        else receipt.put("dividendYieldAnnual", canvas.dividendYieldAnnual());
+        receipt.put("dividendBasis", canvas.dividendBasis());
+        receipt.put("skewVolPerLogMoneyness", canvas.skewVolPerLogMoneyness());
+        receipt.put("termVolPerSqrtYear", canvas.termVolPerSqrtYear());
+        receipt.put("surfaceDynamics", canvas.surfaceDynamics().name());
+        receipt.put("settlementPolicy", canvas.settlementPolicy().name());
+        receipt.put("exercisePolicy", canvas.exercisePolicy().name());
+        receipt.set("ivNodes", Json.MAPPER.valueToTree(canvas.ivNodes()));
+        if (canvas.template() != null) receipt.set("template", Json.MAPPER.valueToTree(canvas.template()));
+        receipt.put("anchorDate", anchor.toString());
+        receipt.put("authoredPathMeaning", "USER_HYPOTHESIS_NOT_FORECAST");
+        receipt.put("positionScopeCount", canvasJson.path("positions").size());
+        receipt.put("positionScopeAttempted", inputs.size());
+        preview.set("canvas", canvasJson);
+        preview.set("canvasModel", Json.MAPPER.valueToTree(canvas));
+    }
+
+    private static io.liftandshift.strikebench.sim.PathPosition pathPosition(
+            io.liftandshift.strikebench.position.PositionPackage packageView,
+            java.time.LocalDate anchor) {
+        List<io.liftandshift.strikebench.model.Leg> legs = new ArrayList<>();
+        for (var leg : packageView.legs()) {
+            long rawQty = leg.quantity();
+            if (rawQty > 100_000) throw new IllegalArgumentException("position leg quantity exceeds 100,000 units");
+            var action = io.liftandshift.strikebench.model.LegAction.valueOf(leg.action().toUpperCase(Locale.ROOT));
+            BigDecimal price = leg.price() == null ? BigDecimal.ZERO : leg.price();
+            if ("STOCK".equalsIgnoreCase(leg.instrumentType())) {
+                legs.add(new io.liftandshift.strikebench.model.Leg(action, null, null, null,
+                        Math.toIntExact(rawQty), price, leg.multiplier()));
+            } else {
+                legs.add(new io.liftandshift.strikebench.model.Leg(action,
+                        io.liftandshift.strikebench.model.OptionType.valueOf(leg.optionType()),
+                        leg.strike(), leg.expiration(), Math.toIntExact(rawQty), price, leg.multiplier()));
+            }
+        }
+        return new io.liftandshift.strikebench.sim.PathPosition(anchor, legs);
     }
 
     private static io.liftandshift.strikebench.sim.IvSpec defaultPlanIv(

@@ -49,6 +49,10 @@ class SignalEngineTest {
         assertThat(s.negativeHeadlines()).isEmpty();
         assertThat(s.sentimentScore()).isZero();
         assertThat(s.eventRisk()).isFalse();
+        assertThat(s.sentimentScorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
+        assertThat(s.sentimentAggregate().available()).isFalse();
+        assertThat(s.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
+        assertThat(s.headlineSentiment()).isEmpty();
         assertThat(s.rationale()).noneSatisfy(r -> assertThat(r)
                 .containsIgnoringCase("earnings/guidance-type"));
         assertThat(s.liquidityScore()).isBetween(0.0, 1.0);
@@ -61,12 +65,16 @@ class SignalEngineTest {
         assertThat(spy.negativeHeadlines()).isEmpty();
         assertThat(spy.sentimentScore()).isZero();
         assertThat(spy.eventRisk()).isFalse();
+        assertThat(spy.sentimentAggregate().available()).isFalse();
+        assertThat(spy.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
 
         SignalEngine.Signals tsla = engine.analyze("TSLA").orElseThrow();
         assertThat(tsla.positiveHeadlines()).isEmpty();
         assertThat(tsla.negativeHeadlines()).isEmpty();
         assertThat(tsla.sentimentScore()).isZero();
         assertThat(tsla.eventRisk()).isFalse();
+        assertThat(tsla.sentimentScorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
+        assertThat(tsla.sentimentAggregate().available()).isFalse();
     }
 
     @Test

@@ -60,6 +60,33 @@
     return String(intent || '').toUpperCase() === 'DIRECTIONAL' ? 'EVIDENCE' : 'STRATEGY';
   }
 
+  /** A Plan can be explored while incomplete, but nothing may rank until these facts are owned. */
+  function planContextDeclared(plan) {
+    var intent = String(plan && plan.intent || '').toUpperCase();
+    var context = plan && plan.context || {};
+    var horizon = Number(context.horizonDays);
+    var risk = String(context.riskMode || '').toLowerCase();
+    return !!intent && Number.isInteger(horizon) && horizon > 0
+      && ['conservative', 'balanced', 'aggressive'].indexOf(risk) >= 0
+      && !!String(context.thesis || '').trim();
+  }
+
+  function explicitHorizonSessions(raw) {
+    if (Number.isInteger(Number(raw)) && Number(raw) > 0) return Number(raw);
+    var value = String(raw == null ? '' : raw).trim();
+    if (!value) return null;
+    if (/^\d+d$/i.test(value)) return Math.max(1, parseInt(value, 10));
+    var key = value.toLowerCase() === '0dte' ? '0DTE' : value.toLowerCase();
+    return Product.Horizon.table[key] ? Product.Horizon.table[key].sessions : null;
+  }
+
+  function explicitHeaderRiskMode() {
+    var control = document.getElementById('risk-mode');
+    return App.state.headerRiskExplicit && control
+      && ['conservative', 'balanced', 'aggressive'].indexOf(control.value) >= 0
+      ? control.value : null;
+  }
+
   function discoveryContext() {
     return {
       world: App.state.world || 'observed',
@@ -99,67 +126,80 @@
   }
 
   async function startPlan(prefill, stage, prepare) {
+    var originHash = window.location.hash;
     prefill = Object.assign({}, prefill || {});
     var symbol = String(prefill.symbol || App.context.symbol() || '').trim().toUpperCase();
     if (!symbol) { App.navigate('#/research'); return Promise.resolve(null); }
     var owns = function (key) { return Object.prototype.hasOwnProperty.call(prefill, key); };
-    var horizon = prefill.horizon || App.context.horizon('month');
-    var days = Product.Horizon.sessions(horizon);
-    var risk = document.getElementById('risk-mode');
+    var requestedHorizon = owns('horizon') && String(prefill.horizon == null ? '' : prefill.horizon).trim()
+      ? prefill.horizon : null;
+    var days = explicitHorizonSessions(requestedHorizon);
+    if (requestedHorizon !== null && days === null) {
+      UI.toast('Choose a valid Plan horizon before continuing.', 'error');
+      return null;
+    }
+    var requestedRisk = owns('riskMode')
+      ? String(prefill.riskMode == null ? '' : prefill.riskMode).trim().toLowerCase() || null
+      : explicitHeaderRiskMode();
+    if (requestedRisk && ['conservative', 'balanced', 'aggressive'].indexOf(requestedRisk) < 0) {
+      UI.toast('Choose Cautious, Standard, or High for this Plan\'s risk posture.', 'error');
+      return null;
+    }
     var intent = owns('intent') ? prefill.intent : App.context.goal(null);
-    var destination = stage || planIntentDestination(intent);
-    var directional = String(intent || '').toUpperCase() === 'DIRECTIONAL';
-    var contextualThesis = directional ? App.context.thesis(null) : null;
+    var requestedDestination = stage || planIntentDestination(intent);
     var requestedThesis = owns('thesis')
       ? (String(prefill.thesis || '').trim() ? String(prefill.thesis).trim().toLowerCase() : null)
-      : (contextualThesis ? String(contextualThesis).trim().toLowerCase() : null);
-    // A directional Plan without a chosen view is its own honest context. It must never
-    // resume a same-symbol Plan whose thesis came from an older visit.
-    var thesisDefinesIdentity = owns('thesis') || directional;
-    var explicitContext = thesisDefinesIdentity || owns('horizon') || owns('target');
+      : null;
     var requestedTarget = owns('target') && isFinite(parseFloat(prefill.target))
       ? Math.round(parseFloat(prefill.target) * 100) : null;
     function sameContext(plan) {
       var context = plan && plan.context || {};
       var thesis = String(context.thesis || '').trim().toLowerCase() || null;
-      return (!thesisDefinesIdentity || thesis === requestedThesis)
-        && (!owns('horizon') || Number(context.horizonDays || 0) === days)
-        && (!owns('target') || Number(context.targetCents || 0) === Number(requestedTarget || 0));
+      var planHorizon = context.horizonDays == null ? null : Number(context.horizonDays);
+      var planTarget = context.targetCents == null ? null : Number(context.targetCents);
+      var planRisk = String(context.riskMode || '').trim().toLowerCase() || null;
+      // Missing facts define an honest incomplete inquiry too. Do not reopen a populated
+      // same-symbol Plan and make its older assumptions look like part of this handoff.
+      return thesis === requestedThesis && planHorizon === days && planTarget === requestedTarget
+        && planRisk === requestedRisk;
     }
     async function createPlan(originPlan) {
-      var originContext = originPlan && originPlan.context || {};
       return PlanStore.create({
         symbol: symbol, intent: intent, originPlanId: originPlan ? originPlan.id : null,
-        thesis: thesisDefinesIdentity ? requestedThesis
-          : originPlan ? originContext.thesis : App.context.thesis(null),
-        horizonDays: owns('horizon') ? days
-          : originPlan && originContext.horizonDays ? originContext.horizonDays : days,
-        targetCents: owns('target') ? requestedTarget
-          : originPlan ? originContext.targetCents : null,
-        riskMode: risk ? risk.value : 'conservative'
+        thesis: requestedThesis, horizonDays: days, targetCents: requestedTarget,
+        riskMode: requestedRisk
       });
+    }
+    function destinationFor(plan) {
+      return planContextDeclared(plan) ? requestedDestination : 'UNDERSTAND';
     }
     try {
       var matches = await PlanStore.matching(symbol, intent);
-      var exact = explicitContext ? matches.find(sameContext) : matches[0];
+      var exact = matches.find(sameContext);
       if (exact && exact.assumptionsEditable !== false) {
         var existing = exact;
         if (prepare) existing = await prepare(existing) || existing;
-        await PlanStore.focus(existing, destination);
-        toastWhenRouteReady(PlanStore.path(existing, destination),
-          'Plan opened — ' + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
+        if (window.location.hash === originHash) {
+          var existingDestination = destinationFor(existing);
+          await PlanStore.focus(existing, existingDestination);
+          toastWhenRouteReady(PlanStore.path(existing, existingDestination),
+            'Plan opened — ' + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
+        }
         return existing;
       }
       // A completed Plan or a same-symbol inquiry with different explicit assumptions is
       // historical evidence, not a mutable scratchpad. Preserve it and create one linked
       // revision instead of silently replacing its context or discarding the new handoff.
-      var origin = exact || (explicitContext && matches.length ? matches[0] : null);
+      var origin = exact || (matches.length ? matches[0] : null);
       var plan = await createPlan(origin);
       if (prepare) plan = await prepare(plan) || plan;
-      await PlanStore.focus(plan, destination);
-      toastWhenRouteReady(PlanStore.path(plan, destination),
-        (origin ? 'Linked Plan created — ' : 'Plan created — ')
-          + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
+      if (window.location.hash === originHash) {
+        var planDestination = destinationFor(plan);
+        await PlanStore.focus(plan, planDestination);
+        toastWhenRouteReady(PlanStore.path(plan, planDestination),
+          (origin ? 'Linked Plan created — ' : 'Plan created — ')
+            + symbol + ' · ' + window.ViewPlan.intentLabel(intent));
+      }
       return plan;
     } catch (e) {
       UI.toast(e.message, 'error');
@@ -322,7 +362,9 @@
           frameWelcomeProof(proofCandidate);
           try {
             localStorage.setItem('strikebench.welcomeProof', JSON.stringify(
-              Object.assign({ candidate: proofCandidate, asOf: Date.now() }, proofCtx)));
+              Object.assign({ candidate: proofCandidate, asOf: Date.now(), basis: {
+                thesis: r.thesis, horizon: r.horizon, riskMode: r.riskMode
+              } }, proofCtx)));
           } catch (e) { /* private mode */ }
         } else if (!cached) {
           liveHost.innerHTML = '';
@@ -350,7 +392,7 @@
       { level: 'beginner', title: 'Teach me', ic: 'sprout',
         blurb: 'Question-driven flows, plain language \u2014 every idea explains itself.',
         cta: 'Start as a beginner', go: '#/research',
-        toast: 'Step 1: pick a stock, then use Find proposed trades to carry it into the six-stage Plan.' },
+        toast: 'Step 1: pick a stock, then use Ready to compare to carry it into the Plan.' },
       { level: 'expert', title: 'Give me the terminal', ic: 'bolt',
         blurb: 'Dense tables, greeks, per-leg impact, inline filters.',
         cta: 'Research AAPL', go: '#/research/AAPL' }
@@ -392,7 +434,7 @@
     root.appendChild(section('WHAT MOVED WHERE', 'Familiar tools, one Plan-centered journey',
       el('dl', { class: 'moved-terms', id: 'moved-terms' }, (Learn.MOVED_TERMS || []).map(function (item) {
         return el('div', { class: 'moved-term' },
-          el('dt', {}, item.current),
+          el('dt', {}, item.infoKey ? UI.term(item.infoKey, item.current) : item.current),
           el('dd', {}, el('span', { class: 'muted' }, 'Formerly ' + item.former + '. '), item.detail));
       }))));
 
@@ -555,140 +597,82 @@
     return context;
   }
 
-  function homeCandidateRank(candidate) {
-    var verdict = window.ViewPlan.economicVerdict(candidate);
-    var band = verdict === 'FAVORABLE' ? 4 : verdict === 'MIXED' ? 3
-      : verdict === 'UNAVAILABLE' ? 2 : verdict === 'UNFAVORABLE' ? 1 : 0;
-    return band * 1000 + Number(candidate.evaluation && candidate.evaluation.decisionScore || 0);
-  }
-
   function homeIdeasSection() {
-    var ideas = new Map();
+    var candidate = null;
+    var basis = null;
     var ctx = homeDiscoveryContext();
     var body = el('div', { class: 'home-ideas-body' });
-    var feedback = el('div', { class: 'home-ideas-feedback', 'aria-live': 'polite' });
-    var refresh = el('button', { type: 'button', class: 'btn btn-sm btn-secondary' }, 'Refresh');
-    var scout = el('button', { type: 'button', class: 'btn btn-sm' }, 'Scout current market');
+    var basisLine = el('p', { class: 'muted small home-ideas-basis', id: 'home-ideas-basis' });
     var section = el('section', { class: 'card home-screened-ideas', id: 'home-screened-ideas' },
-      UI.cardHeader(el('span', {}, 'Today\u2019s screened ideas', UI.info('proposedtrades')),
-        el('div', { class: 'btn-row home-ideas-actions' }, refresh, scout)),
+      UI.cardHeader(el('span', {}, 'Today\u2019s screened idea', UI.info('proposedtrades'))),
       el('p', { class: 'muted home-ideas-intro' },
-        'One ticker per row. Each package keeps its economic verdict and exact contracts; opening one carries that package into Strategy.'),
-      body, feedback);
+        'A read-only engine teaser from one governed source. Open its ticker in Workspace to inspect the market and use the one canonical Plan handoff.'),
+      basisLine, body);
 
     function sameContext(value) {
       return value && value.world === ctx.world && value.scenario === ctx.scenario
         && (!value.universe || value.universe === ctx.universe);
     }
 
-    function add(candidate, symbol) {
-      if (!candidate || !(candidate.legs || []).length || candidate.maxLossCents == null) return;
-      symbol = String(symbol || candidate.symbol || '').toUpperCase();
+    function setIdea(next, symbol, nextBasis) {
+      if (!next || !(next.legs || []).length || next.maxLossCents == null) return;
+      symbol = String(symbol || next.symbol || '').toUpperCase();
       if (!symbol) return;
-      candidate = Object.assign({}, candidate, { symbol: symbol });
-      var prior = ideas.get(symbol);
-      if (!prior || homeCandidateRank(candidate) > homeCandidateRank(prior)) ideas.set(symbol, candidate);
+      candidate = Object.assign({}, next, { symbol: symbol });
+      basis = nextBasis;
     }
 
     function addTeaching(response) {
-      if (!response || !(response.candidates || []).length) return;
-      add(chooseScreenedCandidate(response.candidates), response.symbol || 'AAPL');
-    }
-
-    function addScout(response, horizon) {
-      (response && response.picks || []).forEach(function (pick) {
-        var result = (pick.horizons || []).find(function (item) { return item.horizon === horizon; })
-          || (pick.horizons || [])[0];
-        add(window.ViewPlan.candidateFromEvaluation(result && result.candidates && result.candidates[0]), pick.symbol);
+      if (!response || !(response.candidates || []).length || !response.thesis
+          || !response.horizon || !response.riskMode) return;
+      setIdea(chooseScreenedCandidate(response.candidates), response.symbol || 'AAPL', {
+        thesis: response.thesis, horizon: response.horizon, riskMode: response.riskMode
       });
     }
 
-    function ideaRow(candidate, rank) {
-      var verdict = window.ViewPlan.economicVerdict(candidate) || 'UNAVAILABLE';
+    function ideaRow(item) {
+      var verdict = window.ViewPlan.economicVerdict(item) || 'UNAVAILABLE';
       var open = el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
-        var button = this;
-        visibleCommand(button, async function () {
-          var plan = await window.ViewPlan.openCandidateAsPlan(candidate, candidate.symbol,
-            { destination: 'STRATEGY' });
-          if (!plan) throw new Error('This screened package could not be opened in a Plan.');
-          return plan;
-        }, 'This screened package could not be opened in a Plan.');
-      } }, verdict === 'UNFAVORABLE' ? 'Study in a Plan' : 'Use in a Plan');
-      var row = window.ViewPlan.ideaPresentation(candidate, { density: 'row', rank: rank,
-        kicker: candidate.symbol + ' · Screened idea', className: 'home-idea-row',
+        App.navigate('#/research/' + encodeURIComponent(item.symbol));
+      } }, 'Open in Workspace');
+      var row = window.ViewPlan.ideaPresentation(item, { density: 'row', rank: 1,
+        kicker: item.symbol + ' · System-authored screen', className: 'home-idea-row',
         action: open });
-      row.dataset.symbol = candidate.symbol;
+      row.dataset.symbol = item.symbol;
       row.dataset.economicVerdict = verdict;
       return row;
     }
 
     function paint() {
       body.replaceChildren();
-      var ordered = Array.from(ideas.values()).sort(function (a, b) {
-        return homeCandidateRank(b) - homeCandidateRank(a) || a.symbol.localeCompare(b.symbol);
-      }).slice(0, 4);
-      if (!ordered.length) {
+      if (!candidate) {
+        basisLine.textContent = 'System-authored basis will appear with the result; it never becomes your Plan declaration.';
         body.appendChild(el('div', { class: 'home-ideas-empty' },
-          el('b', {}, 'No warm screen is stored for this market yet.'),
-          el('span', { class: 'muted' }, 'Refresh checks one teaching screen; Scout checks the current universe only when you ask.')));
+          el('b', {}, 'No governed screen is available in this market right now.'),
+          el('span', { class: 'muted' }, 'Open Workspace to research any ticker or run the one Universe Scout there.'),
+          el('button', { type: 'button', class: 'btn btn-sm', id: 'home-open-workspace',
+            onclick: function () { App.navigate('#/research'); } }, 'Open Workspace')));
         return;
       }
-      ordered.forEach(function (candidate, index) { body.appendChild(ideaRow(candidate, index + 1)); });
+      var riskLabel = ({ conservative: 'Cautious', balanced: 'Standard', aggressive: 'High' })[basis.riskMode]
+        || basis.riskMode || 'not reported';
+      var horizonLabel = ({ week: '1 week', month: '1 month', quarter: '3 months', '0DTE': 'today' })[basis.horizon]
+        || basis.horizon || 'not reported';
+      basisLine.textContent = 'System-authored screening basis · ' + (basis.thesis || 'view not reported')
+        + ' · ' + horizonLabel + ' · ' + riskLabel
+        + '. These explain this teaser; they are not silently copied into your Plan.';
+      body.appendChild(ideaRow(candidate));
     }
-
-    function saveScout(response) {
-      try {
-        localStorage.setItem('strikebench.homeIdeas', JSON.stringify(Object.assign({
-          response: response, horizon: 'month', asOf: Date.now()
-        }, ctx)));
-      } catch (e) { /* private mode */ }
-    }
-
-    refresh.onclick = function () {
-      visibleCommand(refresh, async function () {
-        feedback.replaceChildren(UI.spinner('Refreshing one screened teaching example\u2026'));
-        var response = await API.getFresh('/api/welcome/teaching-example');
-        addTeaching(response); paint();
-        feedback.replaceChildren(UI.actionFeedback('ok', 'Screen refreshed',
-          'The current lane and economic verdict remain attached to the result.'));
-        return response;
-      }, 'The screened example could not refresh.').then(function (response) {
-        if (!response && feedback.isConnected) feedback.replaceChildren(UI.actionFeedback('danger',
-          'Screen refresh did not finish', 'The ideas already on screen were kept. Try again when the market feed is ready.'));
-      });
-    };
-    scout.onclick = function () {
-      visibleCommand(scout, async function () {
-        feedback.replaceChildren(UI.spinner('Scouting the current universe\u2026'));
-        var active = App.state.universe && App.state.universe.active;
-        var response = await API.post('/api/research/scout', {
-          universe: active && active.symbols || [], horizons: ['month'], maxPicks: 4,
-          riskMode: riskMode(), allow0dte: false, intents: ['DIRECTIONAL']
-        });
-        addScout(response, 'month'); saveScout(response); paint();
-        feedback.replaceChildren(UI.actionFeedback(response.picks && response.picks.length ? 'ok' : 'caution',
-          response.picks && response.picks.length ? 'Universe screen refreshed' : 'No ticker passed this screen',
-          response.picks && response.picks.length
-            ? 'Each ticker appears once; its leading package is ready to carry into Strategy.'
-            : (response.notes || []).join(' ') || 'Try another goal from Universe Scout in Research.'));
-        return response;
-      }, 'The universe screen could not finish.').then(function (response) {
-        if (!response && feedback.isConnected) feedback.replaceChildren(UI.actionFeedback('danger',
-          'Universe screen did not finish', 'The ideas already on screen were kept. Try again when the market feed is ready.'));
-      });
-    };
 
     var fill = (async function () {
       try {
         var proof = JSON.parse(localStorage.getItem('strikebench.welcomeProof') || 'null');
-        if (sameContext(proof) && proof.asOf && Date.now() - proof.asOf < 30 * 60 * 1000) {
-          add(proof.candidate, proof.candidate && proof.candidate.symbol || 'AAPL');
+        if (sameContext(proof) && proof.basis && proof.basis.thesis && proof.basis.horizon
+            && proof.basis.riskMode && proof.asOf
+            && Date.now() - proof.asOf < 30 * 60 * 1000) {
+          setIdea(proof.candidate, proof.candidate && proof.candidate.symbol || 'AAPL', proof.basis);
         }
-        var cachedScout = JSON.parse(localStorage.getItem('strikebench.homeIdeas') || 'null');
-        if (sameContext(cachedScout) && cachedScout.asOf && Date.now() - cachedScout.asOf < 30 * 60 * 1000) {
-          addScout(cachedScout.response, cachedScout.horizon || 'month');
-        }
-      } catch (e) { /* no prior discovery cache */ }
+      } catch (e) { /* no prior governed-source cache */ }
       paint();
       var warm = await API.prefetch('/api/welcome/teaching-example');
       if (warm) { addTeaching(warm); paint(); }
@@ -759,17 +743,13 @@
           + String(activePlan.furthestStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
         : 'Screened ideas, honest odds, worst case always known before you commit.');
     var discovery = homeIdeasSection();
-    var heroCtas = activePlan
-      ? [el('button', { class: 'btn', onclick: function () { focusPlanFrom(this, activePlan); } },
-          'Continue ' + activePlan.symbol + (activeIdentity.duplicate ? ' · ' + activeIdentity.duplicate : '') + ' \u2192')]
-      : [el('button', { class: 'btn', id: 'home-find-idea', onclick: function () {
-          var target = discovery.node.querySelector('.home-idea-row > .btn')
-            || discovery.node.querySelector('.home-ideas-actions .btn:last-child');
-          (target || discovery.node).scrollIntoView({ behavior: 'smooth', block: target ? 'center' : 'start' });
-          if (target) target.focus({ preventScroll: true });
-        } }, 'Find an idea'),
-        el('button', { class: 'btn btn-secondary', id: 'home-start-plan',
-          onclick: function () { App.navigate('#/research'); } }, 'Start a Plan')];
+    function homePlanActions(plan, identity) {
+      return plan
+        ? [el('button', { class: 'btn', onclick: function () { focusPlanFrom(this, plan); } },
+          'Continue ' + plan.symbol + (identity.duplicate ? ' · ' + identity.duplicate : '') + ' \u2192')]
+        : [];
+    }
+    var heroCtas = homePlanActions(activePlan, activeIdentity);
     // The hero owns THE single primary next action (review P5): the tour demoted to a
     // quiet entry at the bottom of the page — onboarding is not a permanent command.
     root.appendChild(heroBlock('dashboard', {
@@ -807,7 +787,8 @@
       if (account) {
         statsAnchor.appendChild(stat('Cash', fmtMoney(account.cashCents), 'Practice money available. Nothing here is real dollars.'));
         statsAnchor.appendChild(stat(UI.vocabulary('brokerReserve'), fmtMoney(account.reservedCents), 'Held to cover open obligations.'));
-        statsAnchor.appendChild(stat('Buying power', fmtMoney(account.buyingPowerCents), 'Cash minus broker reserve — what you can still put at risk.'));
+        statsAnchor.appendChild(stat(UI.vocabulary('buyingPower'), fmtMoney(account.buyingPowerCents),
+          'Cash minus broker reserve — what you can still put at risk.'));
         statsAnchor.appendChild(stat('Started with', fmtMoney(account.startingCashCents)));
       } else {
         statsAnchor.appendChild(alertBox('warn', 'Account unavailable right now', ['Retry from the Portfolio screen.']));
@@ -858,6 +839,23 @@
       if (drawerHead && drawerHead.getAttribute('aria-expanded') !== 'true') drawerHead.click();
       drawerHost.scrollIntoView({ block: 'start' });
     }
+    // PlanStore reconciliation is a data event, not a page navigation. Refresh only the
+    // Plan-owned Home components; the discovery cards, their drafts, scroll and the durable
+    // route mount remain untouched.
+    App.onEvent('plans.refreshed', function () {
+      if (!planLibrary.isConnected) return;
+      activePlan = PlanStore.active();
+      activeIdentity = activePlan && PlanStore.identity(activePlan, PlanStore.all());
+      heroSub.textContent = activePlan
+        ? activePlan.symbol + ' · ' + activeIdentity.full + ' is at '
+          + String(activePlan.furthestStage || 'UNDERSTAND').replace('_', ' ').toLowerCase() + '.'
+        : 'Screened ideas, honest odds, worst case always known before you commit.';
+      var actionHost = root.querySelector('.home-hero-ctas');
+      if (actionHost) actionHost.replaceChildren.apply(actionHost, homePlanActions(activePlan, activeIdentity));
+      fillAttentionRail().catch(function () { /* keep the last honest rail */ });
+      var full = drawerHost.querySelector('#plans-library');
+      if (full) window.ViewPlan.renderLibrary(full, { full: true, title: 'Plans' });
+    }, railToken);
 
     var colL = el('section', { class: 'home-col home-market-slot', 'aria-label': 'Market watch' });
     var colR = el('div', { class: 'home-col home-col-side' });
@@ -1107,12 +1105,14 @@
     prettyPricingMode: prettyPricingMode,
     reported: reported, activeDecisionPnl: activeDecisionPnl, closedDecisionPnl: closedDecisionPnl,
     positiveInteger: positiveInteger, startPlan: startPlan, legLabel: legLabel,
+    planContextDeclared: planContextDeclared,
     stripZeros: stripZeros,
     fmtBreakeven: fmtBreakeven, isYoungTrade: isYoungTrade, intentBadge: intentBadge
   });
 
   window.Views = {
     home: home,
+    learn: function (root) { return window.ViewLearn.route(root); },
     research: function (root, params) { return window.ViewResearch.route(root, params); },
     plans: function (root) { return window.ViewPlan.plansHome(root); },
     plan: function (root, params) { return window.ViewPlan.planWorkspace(root, params); },

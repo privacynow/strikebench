@@ -32,6 +32,7 @@ final class OutcomeController {
     private final io.liftandshift.strikebench.sim.SimulationEngine simEngine;
     private final io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles;
     private final io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility;
+    private final io.liftandshift.strikebench.plan.PlanOutcomeService planOutcomes;
     private final Function<Context, String> activeWorld;
     private final Function<Context, String> ownerId;
     private final Function<Context, AnalysisContext> analysisContext;
@@ -41,6 +42,7 @@ final class OutcomeController {
                       io.liftandshift.strikebench.sim.SimulationEngine simEngine,
                       io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles,
                       io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility,
+                      io.liftandshift.strikebench.plan.PlanOutcomeService planOutcomes,
                       Function<Context, String> activeWorld,
                       Function<Context, String> ownerId,
                       Function<Context, AnalysisContext> analysisContext,
@@ -51,6 +53,7 @@ final class OutcomeController {
         this.simEngine = simEngine;
         this.pathEnsembles = pathEnsembles;
         this.marketVolatility = marketVolatility;
+        this.planOutcomes = planOutcomes;
         this.activeWorld = activeWorld;
         this.ownerId = ownerId;
         this.analysisContext = analysisContext;
@@ -249,6 +252,12 @@ final class OutcomeController {
 
     Object simStrategyResult(Context ctx, StrategySimRequest b,
                                      io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble fixedEnsemble) {
+        return simStrategyResult(ctx, b, fixedEnsemble, null);
+    }
+
+    Object simStrategyResult(Context ctx, StrategySimRequest b,
+            io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble fixedEnsemble,
+            io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         if (b.position() == null) throw new IllegalArgumentException("position is required");
         String sym = b.symbol() == null ? "" : b.symbol().trim().toUpperCase(Locale.ROOT);
@@ -331,7 +340,7 @@ final class OutcomeController {
                 throw new IllegalArgumentException("the supplied position must use the stored ensemble's path basis");
             }
             var result = simulator.runOnPaths(fixedEnsemble.paths(), positionToRun, qty,
-                    fixedEnsemble.spec(), iv, r, entryCost, entryNote,
+                    fixedEnsemble.spec(), iv, canvas, r, entryCost, entryNote,
                     scenarioRoundTripFees(positionToRun, qty));
             evaluated = new io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun(fixedEnsemble, result);
         } else {
@@ -558,7 +567,25 @@ final class OutcomeController {
                             new io.liftandshift.strikebench.sim.SimulationEngine.DecisionLevel(
                                     l.key(), l.price() == null ? Double.NaN : l.price().doubleValue())).toList();
                 var run = simScenarioRun(ctx, new ScenarioRequest(symbol, requireOutcomeSpec(request.over()), levels));
-                var pathResult = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(run.preview());
+                String outcomeWorld = activeWorld.apply(ctx);
+                var analysis = analysisContext.apply(ctx);
+                double rate = market.riskFreeRateQuote(
+                        Math.max(1, run.ensemble().spec().horizonDays()), worldParam(outcomeWorld)).annualRate();
+                var iv = request.iv() == null
+                        ? io.liftandshift.strikebench.sim.IvSpec.flat(run.ensemble().spec().volAnnual())
+                        : request.iv();
+                var publicReceipt = planOutcomes.saveResearchEnsemble(ownerId.apply(ctx),
+                        new io.liftandshift.strikebench.plan.PlanOutcomeService.ResearchContext(
+                                String.valueOf(resolved.get("marketLane")),
+                                String.valueOf(resolved.get("worldId")),
+                                String.valueOf(resolved.get("datasetId"))),
+                        run.ensemble(), iv, io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults(),
+                        rate, run.preview(), Json.MAPPER.valueToTree(request));
+                var pathResult = ((com.fasterxml.jackson.databind.node.ObjectNode) publicReceipt.preview()).deepCopy();
+                pathResult.set("ensemble", Json.MAPPER.valueToTree(new ApiResponses.EnsembleRef(
+                        publicReceipt.id(), publicReceipt.fingerprint(), publicReceipt.basis(),
+                        publicReceipt.waypointFill())));
+                pathResult.put("researchReceiptExpiresAt", publicReceipt.expiresAt());
                 if (request.position() != null) {
                     var position = requireOutcomePosition(request.position());
                     var pathPosition = toPathPosition(ctx, position.legs());
@@ -567,7 +594,7 @@ final class OutcomeController {
                             io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC,
                             null, position.entryCostCents(), contractExpirations(position.legs())), run.ensemble());
                     pathResult.set("positionOutcome", Json.MAPPER.valueToTree(positionOutcome));
-                    pathResult.put("positionEnsembleFingerprint", run.preview().receipt().fingerprint());
+                    pathResult.put("positionEnsembleFingerprint", publicReceipt.fingerprint());
                 }
                 result = pathResult;
                 interpretation = "Model-generated price paths: possible futures, never a forecast or historical frequency.";
@@ -746,10 +773,18 @@ final class OutcomeController {
 
     io.liftandshift.strikebench.sim.PathPosition toPathPosition(
             Context ctx, List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs) {
-        List<Leg> out = new ArrayList<>();
         java.time.LocalDate laneToday = market.simInstant(worldParam(activeWorld.apply(ctx)))
                 .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                 .orElseGet(() -> java.time.LocalDate.now(clock));
+        return toPathPosition(ctx, legs, laneToday);
+    }
+
+    /** Re-anchor exact contracts to the immutable date of a stored path ensemble. */
+    io.liftandshift.strikebench.sim.PathPosition toPathPosition(
+            Context ctx, List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs,
+            java.time.LocalDate valuationDate) {
+        if (valuationDate == null) throw new IllegalArgumentException("valuation date is required");
+        List<Leg> out = new ArrayList<>();
         for (var leg : legs) {
             if (leg == null || leg.action() == null || leg.type() == null) {
                 throw new IllegalArgumentException("each position leg needs action and type");
@@ -786,12 +821,12 @@ final class OutcomeController {
                 expiration = java.time.LocalDate.parse(leg.expiration());
             } else if (leg.expiryDay() != null && leg.expiryDay() >= 0) {
                 expiration = io.liftandshift.strikebench.market.MarketHours
-                        .tradingDateAfter(laneToday, leg.expiryDay());
+                        .tradingDateAfter(valuationDate, leg.expiryDay());
             } else throw new IllegalArgumentException("option legs need expiration or a non-negative expiryDay");
             out.add(Leg.option(action, optionType, leg.strike(), expiration, ratio,
                     BigDecimal.ZERO, multiplier));
         }
-        return new io.liftandshift.strikebench.sim.PathPosition(laneToday, out);
+        return new io.liftandshift.strikebench.sim.PathPosition(valuationDate, out);
     }
 
     List<String> contractExpirations(

@@ -32,7 +32,7 @@
       nav.innerHTML = '';
       modes.forEach(function (mode) {
         var active = mode.key === state.mode;
-        nav.appendChild(el('button', { type: 'button', role: 'tab', id: opts.id + '-basis-' + mode.key,
+        var tab = el('button', { type: 'button', role: 'tab', id: opts.id + '-basis-' + mode.key,
           class: 'outcome-basis' + (active ? ' active' : ''),
           'data-basis': mode.key, 'aria-selected': active ? 'true' : 'false',
           'aria-controls': opts.id + '-panel', tabindex: active ? '0' : '-1',
@@ -47,7 +47,10 @@
         },
         el('span', { class: 'outcome-basis-title' }, mode.label),
         el('span', { class: 'outcome-basis-sub' }, mode.description || ''),
-        mode.available === false ? el('span', { class: 'outcome-basis-state' }, 'Setup needed') : null));
+        mode.available === false ? el('span', { class: 'outcome-basis-state' }, 'Setup needed') : null);
+        nav.appendChild(el('div', { class: 'outcome-basis-wrap', role: 'presentation',
+          'data-vocabulary': mode.info || null }, tab,
+        mode.info ? el('span', { class: 'outcome-basis-help' }, UI.info(mode.info)) : null));
       });
     }
     function render() {

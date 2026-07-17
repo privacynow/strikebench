@@ -166,6 +166,22 @@ class ApiIntegrationTest {
         assertThat(vtsax.get("optionable").asBoolean()).isFalse();
         assertThat(vtsax.get("expirations").size()).isZero();
 
+        JsonNode news = Json.parse(get("/api/research/AAPL/news").body());
+        assertThat(news.get("scorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
+        assertThat(news.get("evidence").asText()).isEqualTo("DEMO_FABRICATED");
+        assertThat(news.get("items")).isNotEmpty();
+        for (JsonNode item : news.get("items")) {
+            assertThat(item.get("classification").asText()).isEqualTo("UNAVAILABLE");
+            assertThat(item.path("score").isMissingNode() || item.path("score").isNull()).isTrue();
+            assertThat(item.get("positiveKeywords")).isEmpty();
+            assertThat(item.get("negativeKeywords")).isEmpty();
+            assertThat(item.get("eventRisk").asBoolean()).isFalse();
+        }
+        assertThat(news.at("/aggregate/available").asBoolean()).isFalse();
+        assertThat(news.at("/aggregate/trend").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(news.at("/aggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
+        assertThat(news.get("eventRisk")).isEmpty();
+
         assertThat(get("/api/research/NOPE").statusCode()).isEqualTo(404);
     }
 
@@ -207,13 +223,17 @@ class ApiIntegrationTest {
     @Order(5)
     void autoScoutReturnsPicksWithSignalsAndTargets() throws Exception {
         HttpResponse<String> res = post("/api/research/scout", """
-                {"horizons":["week","month"],"targetProfitCents":25000,"riskMode":"balanced"}""");
+                {"horizons":["week","month"],"targetProfitCents":25000,"riskMode":"balanced",
+                 "intents":["DIRECTIONAL"]}""");
         assertThat(res.statusCode()).isEqualTo(200);
         JsonNode json = Json.parse(res.body());
         assertThat(json.get("picks").size()).isGreaterThan(0);
         JsonNode pick = json.get("picks").get(0);
         assertThat(pick.at("/signals/thesis").asText()).isIn("BULLISH", "BEARISH", "NEUTRAL", "VOLATILE");
         assertThat(pick.at("/signals/rationale").size()).isGreaterThan(0);
+        assertThat(pick.at("/signals/sentimentScorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
+        assertThat(pick.at("/signals/sentimentAggregate/available").asBoolean()).isFalse();
+        assertThat(pick.at("/signals/sentimentAggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
         assertThat(pick.get("horizons").size()).isEqualTo(2);
         JsonNode candidates = pick.get("horizons").get(0).get("candidates");
         if (candidates.size() > 0) {
@@ -223,8 +243,17 @@ class ApiIntegrationTest {
             assertThat(candidates.get(0).has("decisionScore")).isFalse();
         }
         assertThat(json.get("disclaimer").asText()).containsIgnoringCase("not predictions");
-        // Empty body works with defaults too
-        assertThat(post("/api/research/scout", "").statusCode()).isEqualTo(200);
+        HttpResponse<String> missing = post("/api/research/scout", "");
+        assertThat(missing.statusCode()).isEqualTo(400);
+        assertThat(missing.body()).contains("goal (intents)", "horizon", "risk posture")
+                .contains("no decision default was substituted");
+        assertThat(post("/api/research/scout", """
+                {"horizons":["someday"],"riskMode":"mystery","intents":["DIRECTIONAL"]}
+                """).statusCode()).isEqualTo(400);
+        HttpResponse<String> missingConstruction = post("/api/optimize", "{}");
+        assertThat(missingConstruction.statusCode()).isEqualTo(400);
+        assertThat(missingConstruction.body()).contains("goal (intent)", "market view (thesis)",
+                "horizon", "risk posture", "ranking objective");
     }
 
     @Test
@@ -399,7 +428,7 @@ class ApiIntegrationTest {
     void malformedBodiesAreClientErrorsNever500() throws Exception {
         for (String path : java.util.List.of("/api/trades", "/api/trades/preview", "/api/research/scout")) {
             assertThat(post(path, "{").statusCode()).as(path + " invalid json").isEqualTo(400);
-            assertThat(post(path, "").statusCode()).as(path + " empty body").isIn(200, 400); // auto allows empty
+            assertThat(post(path, "").statusCode()).as(path + " empty body").isEqualTo(400);
         }
         assertThat(post("/api/trades", "{\"symbol\":\"AAPL\",\"qty\":\"abc\"}").statusCode()).isEqualTo(400);
     }
@@ -574,7 +603,7 @@ class ApiIntegrationTest {
 
         // The literal JSON document "null" is client error territory, never a 500
         assertThat(post("/api/positions/buy", "null").statusCode()).isEqualTo(400);
-        assertThat(post("/api/research/scout", "null").statusCode()).isEqualTo(200); // defaults, like empty
+        assertThat(post("/api/research/scout", "null").statusCode()).isEqualTo(400);
         assertThat(post("/api/trades/preview", "null").statusCode()).isEqualTo(400);
 
         // Covered call without the shares: the reason names the shortfall, not "add a wing"
@@ -651,8 +680,10 @@ class ApiIntegrationTest {
         assertThat(boundedBatch.get("truncated").asBoolean()).isTrue();
         assertThat(boundedBatch.get("limit").asInt()).isEqualTo(120);
 
-        // The scout's default scan list is the selected universe
-        JsonNode scan = Json.parse(post("/api/research/scout", "{}").body());
+        // The market scope may derive from the selected universe; decision inputs may not.
+        JsonNode scan = Json.parse(post("/api/research/scout",
+                "{\"horizons\":[\"month\"],\"riskMode\":\"balanced\","
+                        + "\"intents\":[\"DIRECTIONAL\"]}").body());
         java.util.Set<String> activeSymbols = new java.util.LinkedHashSet<>();
         u.at("/active/symbols").forEach(s -> activeSymbols.add(s.asText()));
         for (JsonNode pick : scan.get("picks")) {
@@ -674,9 +705,14 @@ class ApiIntegrationTest {
     @Test
     @Order(22)
     void strikeLaddersAreIntentNative() throws Exception {
+        HttpResponse<String> missingDeclaration = post("/api/research/AAPL/intent-ladder", "{}");
+        assertThat(missingDeclaration.statusCode()).isEqualTo(400);
+        assertThat(missingDeclaration.body()).contains("goal (intent)", "market view (thesis)",
+                "horizon", "risk posture");
         // ACQUIRE: rungs step DOWN from spot; each rung names your price with full honesty metrics
         JsonNode acq = Json.parse(post("/api/research/AAPL/intent-ladder",
-                "{\"intent\":\"acquire\",\"riskMode\":\"balanced\"}").body());
+                "{\"intent\":\"acquire\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\"}").body());
         assertThat(acq.get("intent").asText()).isEqualTo("ACQUIRE");
         assertThat(acq.get("rungs").size()).isGreaterThanOrEqualTo(4);
         assertThat(acq.at("/rungs/0/evaluation/score/components").isArray()).isTrue();
@@ -696,7 +732,8 @@ class ApiIntegrationTest {
         // The ladder is another view of the same request, not an escape hatch around its hard
         // screens. An impossible income floor excludes every rung and explains why.
         JsonNode screened = Json.parse(post("/api/research/AAPL/intent-ladder",
-                "{\"intent\":\"acquire\",\"riskMode\":\"balanced\","
+                "{\"intent\":\"acquire\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\","
                         + "\"filters\":{\"minAnnualizedYieldPct\":10000}}").body());
         assertThat(screened.get("rungs")).isEmpty();
         assertThat(screened.get("notes").toString()).contains("excluded by your selected limits")
@@ -704,14 +741,16 @@ class ApiIntegrationTest {
 
         // EXIT/HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
         JsonNode exitWithoutShares = Json.parse(post("/api/research/AAPL/intent-ladder",
-                "{\"intent\":\"exit\",\"maxLossCents\":100000}").body());
+                "{\"intent\":\"exit\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\",\"maxLossCents\":100000}").body());
         assertThat(exitWithoutShares.get("rungs")).isEmpty();
         assertThat(exitWithoutShares.get("notes").toString()).contains("starts from shares you own");
 
         // EXIT with held shares: rungs climb ABOVE spot, sized to the shares, no new cash
         assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(201);
         JsonNode exit = Json.parse(post("/api/research/AAPL/intent-ladder",
-                "{\"intent\":\"exit\"}").body());
+                "{\"intent\":\"exit\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\"}").body());
         assertThat(exit.get("rungs").size()).isGreaterThanOrEqualTo(4);
         double prevUp = 0;
         for (JsonNode r : exit.get("rungs")) {
@@ -726,7 +765,8 @@ class ApiIntegrationTest {
 
         // HEDGE: floors below spot, each rung costs its premium
         JsonNode hedge = Json.parse(post("/api/research/AAPL/intent-ladder",
-                "{\"intent\":\"hedge\",\"riskMode\":\"aggressive\",\"maxLossCents\":100000}").body());
+                "{\"intent\":\"hedge\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"aggressive\",\"maxLossCents\":100000}").body());
         assertThat(hedge.get("rungs").size()).isGreaterThanOrEqualTo(3);
         for (JsonNode r : hedge.get("rungs")) {
             assertThat(r.get("maxLossCents").asLong()).isPositive();
@@ -736,7 +776,9 @@ class ApiIntegrationTest {
         assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(200);
 
         // Directional has no ladder — clean 400, not a mystery
-        assertThat(post("/api/research/AAPL/intent-ladder", "{\"intent\":\"directional\"}").statusCode()).isEqualTo(400);
+        assertThat(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"directional\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\"}").statusCode()).isEqualTo(400);
     }
 
     @Test
@@ -1266,7 +1308,8 @@ class ApiIntegrationTest {
         JsonNode manual = planStrategies("AAPL", "DIRECTIONAL", "bullish", "balanced", "{}");
         assertThat(manual.get("riskBudgetCents").asLong()).isEqualTo(expected);
         JsonNode auto = Json.parse(post("/api/research/scout",
-                "{\"universe\":[\"AAPL\"],\"riskMode\":\"balanced\"}").body());
+                "{\"universe\":[\"AAPL\"],\"horizons\":[\"month\"],"
+                        + "\"riskMode\":\"balanced\",\"intents\":[\"DIRECTIONAL\"]}").body());
         assertThat(auto.get("riskBudgetCents").asLong()).isEqualTo(expected);
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode hz : pick.get("horizons")) {
@@ -1352,7 +1395,8 @@ class ApiIntegrationTest {
                 .containsIgnoringCase("not evidence of a live-market edge");
 
         JsonNode auto = Json.parse(post("/api/research/scout", """
-                {"universe":["SPY"],"horizons":["month"],"riskMode":"conservative"}
+                {"universe":["SPY"],"horizons":["month"],"riskMode":"conservative",
+                 "intents":["DIRECTIONAL"]}
                 """).body());
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode horizon : pick.get("horizons")) {
@@ -1691,5 +1735,29 @@ class ApiIntegrationTest {
                 .statusCode()).isEqualTo(200);
         assertThat(Json.parse(get("/api/campaigns").body()).withArray("campaigns")
                 .findValuesAsText("id")).contains(campaignId);
+
+        JsonNode closed = Json.parse(put("/api/campaigns/" + campaignId, """
+                {"status":"CLOSED","lessonNote":"Do not treat a profitable hedge as an isolated winner."}
+                """).body());
+        assertThat(closed.get("lessonNote").asText()).contains("profitable hedge");
+        assertThat(closed.get("closedAt").asText()).isNotBlank();
+        assertThat(closed.at("/review/finalReview").asBoolean()).isTrue();
+        assertThat(closed.at("/review/authoredVsRealized/available").asBoolean()).isFalse();
+        assertThat(closed.at("/review/authoredVsRealized/note").asText())
+                .contains("no confirmed Plan member");
+        assertThat(closed.at("/review/executionLanes").isArray()).isTrue();
+        String frozenClose = closed.get("closedAt").asText();
+        JsonNode lessonEdit = Json.parse(put("/api/campaigns/" + campaignId, """
+                {"lessonNote":"Price the whole package before changing one leg."}
+                """).body());
+        assertThat(lessonEdit.get("closedAt").asText()).isEqualTo(frozenClose);
+        assertThat(lessonEdit.get("lessonNote").asText()).startsWith("Price the whole package");
+
+        String tooLong = "x".repeat(4_001);
+        HttpResponse<String> rejectedLesson = put("/api/campaigns/" + campaignId,
+                Json.MAPPER.createObjectNode().put("lessonNote", tooLong).toString());
+        assertThat(rejectedLesson.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(get("/api/campaigns/" + campaignId).body()).get("lessonNote").asText())
+                .isEqualTo("Price the whole package before changing one leg.");
     }
 }

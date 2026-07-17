@@ -18,7 +18,7 @@
   var TRADE_GOALS = ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'];
   function tradeGoal(value, fallback) {
     var goal = String(value || '').toUpperCase();
-    return TRADE_GOALS.indexOf(goal) >= 0 ? goal : (fallback || 'DIRECTIONAL');
+    return TRADE_GOALS.indexOf(goal) >= 0 ? goal : (fallback || null);
   }
 
   function leg(action, type, strike, expiration, ratio) {
@@ -88,14 +88,19 @@
     var legs = wireLegs(active);
     if (!legs.length) return null;
     var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
-    var contextGoal = tradeGoal(context.goal || st.goal,
-      tradeGoal(tpl && tpl.primaryIntent, tradeGoal(App.context.goal(), 'DIRECTIONAL')));
+    var contextGoal = tradeGoal(context.goal || st.goal || App.context.goal());
+    if (!contextGoal) {
+      throw new Error('Choose the Plan goal before preparing this Builder package.');
+    }
+    var ownsContext = function (key) { return Object.prototype.hasOwnProperty.call(context, key); };
     owner.ticket = {
       world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
       customFamily: tpl && tpl.family ? tpl.family : null,
       legs: legs, qty: st.qty || 1, step: 6, intent: contextGoal,
-      thesis: context.thesis || App.context.thesis('neutral'),
-      horizon: context.horizon || App.context.horizon('month'),
+      // A Builder package may be staged while the Plan's declaration is incomplete. Preserve
+      // that absence; Strategy's declared-view gate owns the one path for choosing these facts.
+      thesis: ownsContext('thesis') ? (context.thesis || null) : App.context.thesis(null),
+      horizon: ownsContext('horizon') ? (context.horizon || null) : App.context.horizon(null),
       outcomeBasisHint: tpl ? 'history' : 'scenario'
     };
     return owner.ticket;
@@ -110,8 +115,11 @@
     var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
     var sourceLegs = ticket.legs && ticket.legs.length ? ticket.legs
       : ticket.candidate && ticket.candidate.legs || [];
-    var adoptedGoal = tradeGoal(context.goal || ticket.candidate && ticket.candidate.intent || ticket.intent,
-      tradeGoal(App.context.goal(), 'DIRECTIONAL'));
+    var adoptedGoal = tradeGoal(context.goal || ticket.candidate && ticket.candidate.intent
+      || ticket.intent || App.context.goal());
+    if (!adoptedGoal) {
+      throw new Error('Choose the Plan goal before opening this package in Builder.');
+    }
     owner.builderForm = {
       symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
       goal: adoptedGoal, templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
@@ -627,13 +635,21 @@
     try {
       await loadSymbol();
     } catch (e) {
+      async function retryMountedBuilder() {
+        // Replace only this Builder surface. The Plan Flow, URL, open band, and owner-backed
+        // draft stay mounted; a provider retry is not application navigation.
+        var busy = UI.spinner('Retrying the option book\u2026');
+        root.replaceChildren(busy);
+        try { await render(root, options); }
+        finally { if (busy.isConnected) busy.remove(); }
+      }
       // Never a dead end: say what failed, offer the universe one tap away, and retry
       if (lockedSymbol) {
         root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
           alertBox('danger', 'Could not load ' + st.symbol, [e.message,
             'This Plan keeps its symbol fixed. Restore its quote and option-chain data, then retry.']),
           el('div', { class: 'btn-row' },
-            el('button', { class: 'btn', type: 'button', onclick: function () { App.render(); } }, 'Retry'),
+            el('button', { class: 'btn', type: 'button', onclick: retryMountedBuilder }, 'Retry'),
             el('a', { class: 'btn btn-secondary', href: '#/data/overview' }, 'Check Data'))));
         return;
       }
@@ -643,7 +659,7 @@
         App.context.selectSymbol(st.symbol);
         st.legs = []; st.legIdx = 0; if (st.step > 2) st.step = st.goal ? 2 : 1;
         remember();
-        App.render();
+        return retryMountedBuilder();
       };
       var uniSyms = (App.state.universe && App.state.universe.active.symbols) || [];
       root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
@@ -1209,6 +1225,7 @@
         });
         var remove = el('button', {
           class: 'btn btn-sm btn-secondary leg-remove', type: 'button', title: 'Remove this leg',
+          'aria-label': 'Remove this leg',
           onclick: function () {
             hideLegPop();
             st.legs.splice(idx, 1);
@@ -1222,7 +1239,7 @@
             st.exposureResult = null;
             remember(); renderLegs(); renderExposureSizer(); schedulePreview();
           }
-        }, '✕');
+        }, icon('x', 14));
         row.appendChild(el('div', { class: 'leg-controls' }, onToggle, action, type, exp, strike, ratio, mkt, remove));
         var hoverT = null;
         row.addEventListener('mouseenter', function () { hoverT = setTimeout(function () { showLegPop(row, l); }, 150); });
@@ -1411,7 +1428,7 @@
           chip(UI.term('breakeven', 'Breakevens'), p.breakevens.map(function (b) { return '$' + parseFloat(b).toFixed(2); }).join(' / '))));
       }
       hostEl.appendChild(el('div', { class: 'chip-row' },
-        chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
+        chip(UI.vocabulary('buyingPower', 'Buying power after'), fmtMoney(p.buyingPowerAfterCents)),
         p.reserveCents ? chip(UI.vocabulary('brokerReserve'), fmtMoney(p.reserveCents)) : null));
       // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
       hostEl.appendChild(el('div', { class: 'muted small' },

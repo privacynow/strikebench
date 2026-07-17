@@ -12,7 +12,7 @@ package io.liftandshift.strikebench.sim;
  */
 public final class PathGenerator {
 
-    public static final String MODEL_VERSION = "paths-3";
+    public static final String MODEL_VERSION = "paths-4-calendar";
     private static final long NOISE_STREAM = 0x504154484E4F4953L;
     private static final long EVENT_STREAM = 0x5041544845564E54L;
     private static final long OHLC_STREAM = 0x4F484C4342524944L;
@@ -60,11 +60,32 @@ public final class PathGenerator {
 
     /** Paths as prices: result[pathIndex][0..totalSteps], result[*][0] == s0. */
     public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
+        double[] uniform = new double[spec.sane().totalSteps()];
+        java.util.Arrays.fill(uniform, spec.sane().dt());
+        return generate(spec, s0, historicalLogReturns, uniform);
+    }
+
+    /**
+     * Calendar-aware generation. {@code stepYears[i]} is the actual year fraction between the
+     * prior and current simulated sub-step (weekends and exchange holidays included).  The old
+     * overload stays available solely for deterministic legacy/unit callers.
+     */
+    public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns,
+                               double[] stepYears) {
         ScenarioSpec s = spec.sane();
         int steps = s.totalSteps();
-        double dt = s.dt();
+        if (stepYears == null || stepYears.length != steps) {
+            throw new IllegalArgumentException("calendar step clock must contain exactly " + steps + " year fractions");
+        }
+        double t = 0;
+        double[] elapsedYears = new double[steps + 1];
+        int elapsedAt = 1;
+        for (double dt : stepYears) {
+            if (!(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("calendar step time must be positive");
+            t += dt;
+            elapsedYears[elapsedAt++] = t;
+        }
         double sigma = s.volAnnual();
-        double t = steps * dt;                       // horizon in years
         double muTot = s.driftAnnual() * t;          // total log-drift over the horizon
         double sigmaT = sigma * Math.sqrt(Math.max(t, 1e-9));
         double amp = Math.max(Math.abs(muTot) * 0.5, sigmaT * 0.9); // valley/mountain excursion
@@ -85,7 +106,7 @@ public final class PathGenerator {
         for (int p = 0; p < s.paths(); p++) {
             RandomStreams.Cursor rng = RandomStreams.cursor(s.seed(),
                     NOISE_STREAM + s.model().ordinal(), p);
-            double[] noise = noisePath(s, sigma, dt, steps, rng, historicalLogReturns);
+            double[] noise = noisePath(s, sigma, stepYears, steps, rng, historicalLogReturns);
             if (gapStep > 0) suppressStepNoise(noise, gapStep);
             if (eventStep > 0) suppressStepNoise(noise, eventStep);
             RandomStreams.Cursor eventRng = RandomStreams.cursor(s.seed(), EVENT_STREAM, p);
@@ -94,7 +115,7 @@ public final class PathGenerator {
                 double shock = eventStep > 0 && i >= eventStep ? eventShock : 0;
                 logPath[i] = guide[i] + noise[i] + shock;
             }
-            applyWaypoints(logPath, s, steps);
+            applyWaypoints(logPath, s, steps, elapsedYears);
             for (int i = 0; i <= steps; i++) {
                 out[p][i] = s0 * Math.exp(logPath[i]);
                 if (out[p][i] <= 0 || !Double.isFinite(out[p][i])) out[p][i] = s0 * 1e-4;
@@ -123,7 +144,8 @@ public final class PathGenerator {
      * <p>For non-Gaussian models the identical arithmetic is applied to a non-Gaussian path, which
      * is honest guidance, not conditioning — callers label it {@link WaypointFill#GUIDED_INTERPOLATION}.
      */
-    private static void applyWaypoints(double[] logPath, ScenarioSpec s, int steps) {
+    private static void applyWaypoints(double[] logPath, ScenarioSpec s, int steps,
+                                       double[] elapsedYears) {
         java.util.List<ScenarioSpec.Waypoint> pins = s.waypoints();
         if (pins.isEmpty()) return;
         int spd = Math.max(1, s.stepsPerDay());
@@ -147,7 +169,11 @@ public final class PathGenerator {
             double alpha = target[j] - logPath[pinStep[j]];
             int span = pinStep[j] - prevStep;
             for (int i = prevStep + 1; i <= pinStep[j]; i++) {
-                logPath[i] += prevAlpha + (alpha - prevAlpha) * (i - prevStep) / span;
+                double clockSpan = elapsedYears[pinStep[j]] - elapsedYears[prevStep];
+                double weight = clockSpan > 0
+                        ? (elapsedYears[i] - elapsedYears[prevStep]) / clockSpan
+                        : (double) (i - prevStep) / span;
+                logPath[i] += prevAlpha + (alpha - prevAlpha) * weight;
             }
             prevStep = pinStep[j];
             prevAlpha = alpha;
@@ -197,7 +223,7 @@ public final class PathGenerator {
             12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6,
             1.5056327351493116e-7};
 
-    private double[] noisePath(ScenarioSpec s, double sigma, double dt, int steps,
+    private double[] noisePath(ScenarioSpec s, double sigma, double[] dt, int steps,
                                RandomStreams.Cursor rng, double[] hist) {
         return switch (s.model()) {
             case GBM -> gbmNoise(sigma, dt, steps, rng, GAUSSIAN);           // GBM is GAUSSIAN by definition
@@ -205,17 +231,17 @@ public final class PathGenerator {
             case JUMP_DIFFUSION -> jumpNoise(s, sigma, dt, steps, rng);
             case HESTON -> hestonNoise(s, dt, steps, rng);
             case BLOCK_BOOTSTRAP -> bootstrapNoise(sigma, dt, steps, rng, hist);
-            case BROWNIAN_BRIDGE -> pinBridge(gbmNoise(sigma, dt, steps, rng, GAUSSIAN), steps);
+            case BROWNIAN_BRIDGE -> pinBridge(gbmNoise(sigma, dt, steps, rng, GAUSSIAN), dt);
         };
     }
 
-    private static double[] gbmNoise(double sigma, double dt, int steps, RandomStreams.Cursor rng, double nu) {
+    private static double[] gbmNoise(double sigma, double[] dt, int steps, RandomStreams.Cursor rng, double nu) {
         double[] n = new double[steps + 1];
-        double sd = sigma * Math.sqrt(dt);
         boolean gaussian = nu >= 100;
-        StudentLaw law = gaussian ? null : studentLaw(nu, sd);
-        double compensator = gaussian ? 0.5 * sd * sd : law.logMgf();
         for (int i = 1; i <= steps; i++) {
+            double sd = sigma * Math.sqrt(dt[i - 1]);
+            StudentLaw law = gaussian ? null : studentLaw(nu, sd);
+            double compensator = gaussian ? 0.5 * sd * sd : law.logMgf();
             double z = gaussian ? rng.gaussian() : law.normalize(rng.studentT(nu));
             n[i] = n[i - 1] - compensator + sd * z;
         }
@@ -292,14 +318,15 @@ public final class PathGenerator {
         }
     }
 
-    private static double[] jumpNoise(ScenarioSpec s, double sigma, double dt, int steps, RandomStreams.Cursor rng) {
+    private static double[] jumpNoise(ScenarioSpec s, double sigma, double[] dt, int steps, RandomStreams.Cursor rng) {
         double[] n = new double[steps + 1];
-        double sd = sigma * Math.sqrt(dt);
-        double lambdaDt = s.jumpsPerYear() * dt;
-        // Merton compensator: diffusion drag + λ·(E[e^J]−1) so jumps don't smuggle in drift.
-        double drag = 0.5 * sigma * sigma * dt
-                + lambdaDt * (Math.exp(s.jumpMean() + 0.5 * s.jumpVol() * s.jumpVol()) - 1);
         for (int i = 1; i <= steps; i++) {
+            double stepDt = dt[i - 1];
+            double sd = sigma * Math.sqrt(stepDt);
+            double lambdaDt = s.jumpsPerYear() * stepDt;
+            // Merton compensator: diffusion drag + λ·(E[e^J]−1) so jumps don't smuggle in drift.
+            double drag = 0.5 * sigma * sigma * stepDt
+                    + lambdaDt * (Math.exp(s.jumpMean() + 0.5 * s.jumpVol() * s.jumpVol()) - 1);
             double inc = -drag + sd * rng.gaussian();
             int nj = rng.poisson(lambdaDt);
             for (int j = 0; j < nj; j++) inc += s.jumpMean() + s.jumpVol() * rng.gaussian();
@@ -308,18 +335,19 @@ public final class PathGenerator {
         return n;
     }
 
-    private static double[] hestonNoise(ScenarioSpec s, double dt, int steps, RandomStreams.Cursor rng) {
+    private static double[] hestonNoise(ScenarioSpec s, double[] dt, int steps, RandomStreams.Cursor rng) {
         ScenarioSpec.Heston h = s.heston();
         double[] n = new double[steps + 1];
         double v = Math.max(1e-8, h.v0());
-        double sqrtDt = Math.sqrt(dt);
         for (int i = 1; i <= steps; i++) {
+            double stepDt = dt[i - 1];
+            double sqrtDt = Math.sqrt(stepDt);
             double zs = rng.gaussian();
             double zi = rng.gaussian();
             double zv = h.rho() * zs + Math.sqrt(Math.max(0, 1 - h.rho() * h.rho())) * zi;
             double vPos = Math.max(0, v);                                   // full-truncation Euler
-            n[i] = n[i - 1] - 0.5 * vPos * dt + Math.sqrt(vPos * dt) * zs;  // Itô-corrected log-noise
-            v = v + h.kappa() * (h.theta() - vPos) * dt + h.xi() * Math.sqrt(vPos) * sqrtDt * zv;
+            n[i] = n[i - 1] - 0.5 * vPos * stepDt + Math.sqrt(vPos * stepDt) * zs;  // Itô-corrected log-noise
+            v = v + h.kappa() * (h.theta() - vPos) * stepDt + h.xi() * Math.sqrt(vPos) * sqrtDt * zv;
         }
         return n;
     }
@@ -329,7 +357,7 @@ public final class PathGenerator {
      * The resampled returns are RESCALED to the requested σ (the vol knob works even with history)
      * and to the step size (daily returns must not be applied verbatim per intraday step).
      */
-    private static double[] bootstrapNoise(double sigma, double dt, int steps,
+    private static double[] bootstrapNoise(double sigma, double[] dt, int steps,
                                            RandomStreams.Cursor rng, double[] hist) {
         if (hist == null || hist.length < 5) {
             // no history to bootstrap from — fall back to plain gaussian noise at the requested vol
@@ -341,45 +369,55 @@ public final class PathGenerator {
         double var = 0;
         for (double r : hist) var += (r - mean) * (r - mean);
         double histSd = Math.sqrt(Math.max(1e-12, var / Math.max(1, hist.length - 1)));
-        double targetSd = sigma * Math.sqrt(dt);          // per-STEP target
-        double scale = targetSd / histSd;
         int block = Math.max(2, Math.min(20, hist.length / 4));
-        double[] innovations = new double[hist.length];
-        for (int j = 0; j < hist.length; j++) innovations[j] = (hist[j] - mean) * scale;
-        double[] prefixCompensator = empiricalPrefixCompensators(innovations, block);
+        double[] centered = new double[hist.length];
+        for (int j = 0; j < hist.length; j++) centered[j] = hist[j] - mean;
         double[] n = new double[steps + 1];
         int i = 1;
         while (i <= steps) {
             int start = rng.nextInt(hist.length);
-            for (int k = 1; k <= block && i <= steps; k++, i++) {
+            int length = Math.min(block, steps - i + 1);
+            double[] prefixCompensator = empiricalPrefixCompensators(
+                    centered, histSd, sigma, dt, i - 1, length);
+            for (int k = 1; k <= length; k++, i++) {
                 double correction = prefixCompensator[k] - prefixCompensator[k - 1];
-                n[i] = n[i - 1] + innovations[(start + k - 1) % innovations.length] - correction;
+                double scale = sigma * Math.sqrt(dt[i - 1]) / histSd;
+                n[i] = n[i - 1] + centered[(start + k - 1) % centered.length] * scale - correction;
             }
         }
         return n;
     }
 
     /** Exact empirical log-MGF of every circular block prefix; preserves block dependence and E[e^noise]=1. */
-    private static double[] empiricalPrefixCompensators(double[] innovations, int block) {
+    private static double[] empiricalPrefixCompensators(double[] centered, double histSd, double sigma,
+                                                         double[] dt, int stepOffset, int block) {
         double[] out = new double[block + 1];
-        double[] sums = new double[innovations.length];
+        double[] sums = new double[centered.length];
         for (int len = 1; len <= block; len++) {
+            double scale = sigma * Math.sqrt(dt[stepOffset + len - 1]) / histSd;
             double max = -Double.MAX_VALUE;
-            for (int start = 0; start < innovations.length; start++) {
-                sums[start] += innovations[(start + len - 1) % innovations.length];
+            for (int start = 0; start < centered.length; start++) {
+                sums[start] += centered[(start + len - 1) % centered.length] * scale;
                 max = Math.max(max, sums[start]);
             }
             double expSum = 0;
             for (double sum : sums) expSum += Math.exp(sum - max);
-            out[len] = max + Math.log(expSum / innovations.length);
+            out[len] = max + Math.log(expSum / centered.length);
         }
         return out;
     }
 
     /** Pin a noise path to 0 at both ends (Brownian bridge) so the path hits its guide endpoints. */
-    private static double[] pinBridge(double[] n, int steps) {
+    private static double[] pinBridge(double[] n, double[] stepYears) {
+        int steps = stepYears.length;
         double end = n[steps];
-        for (int i = 0; i <= steps; i++) n[i] -= (double) i / steps * end;
+        double total = 0;
+        for (double dt : stepYears) total += dt;
+        double elapsed = 0;
+        for (int i = 0; i <= steps; i++) {
+            if (i > 0) elapsed += stepYears[i - 1];
+            n[i] -= elapsed / total * end;
+        }
         return n;
     }
 

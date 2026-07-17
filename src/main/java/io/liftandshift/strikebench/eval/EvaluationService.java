@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
@@ -35,6 +36,7 @@ public final class EvaluationService {
     private final MarketDataService market;
     private final Db db;
     private final Clock clock;
+    private final EventService events;
     private final StrategyEvaluator evaluator = new StrategyEvaluator();
     private final EvaluationStore store;
     private final CalibrationService calibration;
@@ -56,12 +58,21 @@ public final class EvaluationService {
     }
 
     public EvaluationService(MarketDataService market, Db db, Clock clock) {
+        this(market, db, clock, new EventService(market, clock));
+    }
+
+    /** Uses the platform's one canonical event calendar; production injects the shared instance. */
+    public EvaluationService(MarketDataService market, Db db, Clock clock, EventService events) {
         this.market = market;
         this.db = db;
         this.clock = clock;
+        this.events = java.util.Objects.requireNonNull(events, "events");
         this.store = new EvaluationStore(db);
         this.calibration = new CalibrationService(db, clock);
     }
+
+    /** The canonical calendar shared with Research, trade guardrails, alerts, and Scout. */
+    public EventService eventCalendar() { return events; }
 
     /** Records that an evaluation was surfaced (the calibration sample); requires it to be persisted. */
     public String recordSurfaced(String evaluationId, String userId) {
@@ -225,7 +236,11 @@ public final class EvaluationService {
         List<Candle> regimeCandles = worldId != null
                 ? market.candleSeries(symbol, today.minusDays(126), today, worldId, null).candles()
                 : market.candles(symbol, today.minusDays(126), today, actx);
-        RegimeSnapshot regime = RegimeProfiler.profile(regimeCandles, volProfile, false,
+        LocalDate eventThrough = lastExpiration(candidates);
+        if (eventThrough == null) eventThrough = today.plusDays(Math.max(1, dte));
+        EventService.EarningsProximity event = eventProximity(symbol, eventThrough, worldId);
+        RegimeSnapshot regime = RegimeProfiler.profile(regimeCandles, volProfile,
+                event.available() ? event.likelyBefore() : null, event.note(),
                 worldId != null ? "this simulated world's sessions" : "observed sessions");
         List<Double> trailingCloses = regimeCandles == null ? List.of() : regimeCandles.stream()
                 .map(candle -> candle.close() == null ? null : candle.close().doubleValue())
@@ -247,6 +262,40 @@ public final class EvaluationService {
             }
         }
         return min;
+    }
+
+    private static LocalDate lastExpiration(List<Candidate> candidates) {
+        LocalDate max = null;
+        for (Candidate c : candidates) {
+            for (LegView l : c.legs()) {
+                if (l.expiration() == null) continue;
+                try {
+                    LocalDate d = LocalDate.parse(l.expiration());
+                    if (max == null || d.isAfter(max)) max = d;
+                } catch (RuntimeException ignored) { /* skip unparseable */ }
+            }
+        }
+        return max;
+    }
+
+    /**
+     * Lane-aware access to the same canonical event evidence used by evaluation framing and Scout.
+     * Generated worlds have no issuer calendar; they must not borrow an Observed filing estimate.
+     */
+    public EventService.EarningsProximity eventProximity(String symbol, LocalDate throughDate,
+                                                          String worldId) {
+        if (worldId != null) {
+            return new EventService.EarningsProximity(false, false, null,
+                    "earnings proximity unavailable in this simulated market — issuer events from "
+                            + "Observed are not borrowed; treated as unknown");
+        }
+        try {
+            return events.earningsProximity(symbol, throughDate);
+        } catch (RuntimeException unavailable) {
+            return new EventService.EarningsProximity(false, false, null,
+                    "earnings proximity unavailable — the canonical SEC filing-cadence evidence "
+                            + "could not be read; this is not a no-event claim");
+        }
     }
 
     private Double atmIv(String symbol, long underlyingCents, LocalDate frontExp, String worldId) {

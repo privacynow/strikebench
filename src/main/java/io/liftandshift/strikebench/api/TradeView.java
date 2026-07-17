@@ -37,11 +37,7 @@ public record TradeView(
         String updatedAt,
         String intent,
         long sharesLocked,
-        String origin,
         Long proposedNetCents,
-        String executedAt,
-        String broker,
-        String orderRef,
         String dataProvenance,
         String dataAge,
         String dataSource,
@@ -59,8 +55,8 @@ public record TradeView(
                 t.breakevens(), t.popEntry(), t.feesOpenCents(), t.feesCloseCents(), t.realizedPnlCents(),
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
-                t.intent(), t.sharesLocked(), t.origin(), t.proposedNetCents(), t.executedAt(),
-                t.broker(), t.orderRef(), t.dataProvenance(), t.dataAge(), t.dataSource(), null, null);
+                t.intent(), t.sharesLocked(), t.proposedNetCents(), t.dataProvenance(),
+                t.dataAge(), t.dataSource(), null, null);
     }
 
     public TradeView withUnrealized(Long unrealized, Long decisionUnrealized) {
@@ -68,7 +64,7 @@ public record TradeView(
                 entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents,
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
-                updatedAt, intent, sharesLocked, origin, proposedNetCents, executedAt, broker,
-                orderRef, dataProvenance, dataAge, dataSource, unrealized, decisionUnrealized);
+                updatedAt, intent, sharesLocked, proposedNetCents, dataProvenance, dataAge,
+                dataSource, unrealized, decisionUnrealized);
     }
 }

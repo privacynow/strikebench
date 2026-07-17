@@ -31,6 +31,73 @@ public final class PositionArtifactStore {
         return recordNewStructureAction(c, OwnerScope.id(input.userId()), input);
     }
 
+    /**
+     * Freezes a pending-import resolution inside the caller's ledger transaction. The pending
+     * package total, exact ledger cash, authority and receipt are one database fact: a failure
+     * in any row rolls the entire resolution back.
+     */
+    public String recordImportResolution(Connection c, ImportResolutionAction input) throws SQLException {
+        if (c == null || input == null) throw new IllegalArgumentException("import resolution is required");
+        String userId = OwnerScope.id(input.userId());
+        requireExists(c, "SELECT 1 ok FROM portfolio_import_pending WHERE id=? AND user_id=? "
+                        + (input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                        ? "AND status IN ('PENDING','PROVISIONAL') " : "AND status='PENDING' ")
+                        + "AND destination_portfolio_account_id=?",
+                "pending import", input.pendingId(), userId, input.portfolioAccountId());
+        requireExists(c, "SELECT 1 ok FROM portfolio_account WHERE id=? AND user_id=? AND status='ACTIVE'",
+                "active tracked account", input.portfolioAccountId(), userId);
+        if (input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED) {
+            requireExists(c, "SELECT 1 ok FROM portfolio_transaction WHERE id=? AND portfolio_account_id=?",
+                    "tracked transaction", input.transactionId(), input.portfolioAccountId());
+        } else if (input.transactionId() != null) {
+            throw new IllegalArgumentException("a provisional allocation cannot reference a tracked transaction");
+        }
+        if (input.packageTotalCents() != input.allocatedTotalCents()) {
+            throw new IllegalArgumentException("allocated leg cash must equal the pending package total to the cent");
+        }
+        String receiptId = Ids.newId("prec");
+        String resolutionId = Ids.newId("pires");
+        String taxBasis = input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                ? "AUTHORITATIVE" : "PROVISIONAL";
+        Db.execOn(c, "INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
+                        + "portfolio_account_id,transaction_id,marks_as_of,evidence_level,model_version) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                receiptId, userId, PositionDomain.ReceiptKind.RESOLUTION.name(), input.authority().name(),
+                PositionDomain.ExecutionLane.REAL.name(),
+                input.authority() == PositionDomain.ReceiptAuthority.USER_ALLOCATED
+                        ? PositionDomain.PositionState.PENDING.name() : input.positionState().name(),
+                input.portfolioAccountId(), input.transactionId(), input.marksAsOf(),
+                input.evidenceLevel().name(), input.modelVersion());
+        if (input.receiptLegs() != null) for (ReceiptLeg leg : input.receiptLegs()) {
+            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,symbol,"
+                            + "option_type,strike,expiration,quantity,multiplier,bid,ask,mid,fill_price,price_authority) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    receiptId, "AFTER", leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
+                    leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.bid(),
+                    leg.ask(), leg.mid(), leg.fillPrice(), leg.priceAuthority().name());
+        }
+        insertCentsMetric(c, receiptId, "package_total", input.packageTotalCents());
+        insertCentsMetric(c, receiptId, "allocated_total", input.allocatedTotalCents());
+        insertTextMetric(c, receiptId, "pending_import", input.pendingId());
+        insertTextMetric(c, receiptId, "source_system", input.sourceSystem());
+        insertTextMetric(c, receiptId, "tax_basis_status", taxBasis);
+        String nextStatus = input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                ? "RESOLVED" : "PROVISIONAL";
+        int updated = Db.execOn(c, "UPDATE portfolio_import_pending SET status=?,resolved_at=? "
+                        + "WHERE id=? AND user_id=? AND "
+                        + (input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                        ? "status IN ('PENDING','PROVISIONAL')" : "status='PENDING'"),
+                nextStatus, input.marksAsOf(), input.pendingId(), userId);
+        if (updated != 1) throw new IllegalStateException("pending import changed while it was being resolved");
+        Db.execOn(c, "INSERT INTO portfolio_import_resolution(id,pending_id,portfolio_account_id,transaction_id,"
+                        + "receipt_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id,resolved_at) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                resolutionId, input.pendingId(), input.portfolioAccountId(), input.transactionId(), receiptId,
+                input.authority().name(), taxBasis, input.packageTotalCents(), input.allocatedTotalCents(),
+                userId, input.marksAsOf());
+        return receiptId;
+    }
+
     private ArtifactSet recordNewStructureAction(Connection c, String userId, NewStructureAction input)
             throws SQLException {
         requireExists(c, "SELECT 1 ok FROM plans WHERE id=? AND user_id=?", "Plan", input.planId(), userId);
@@ -48,6 +115,13 @@ public final class PositionArtifactStore {
         String revisionId = Ids.newId("psr");
         String receiptId = Ids.newId("prec");
         String actionId = Ids.newId("ppa");
+        String objectiveRevisionId = Db.queryOn(c,
+                        "SELECT r.id FROM account_objective_revision r "
+                                + "JOIN portfolio_account a ON a.id=r.portfolio_account_id "
+                                + "WHERE r.portfolio_account_id=? AND a.user_id=? "
+                                + "ORDER BY r.revision_no DESC LIMIT 1",
+                        r -> r.str("id"), input.portfolioAccountId(), userId)
+                .stream().findFirst().orElse(null);
         Db.execOn(c, "INSERT INTO portfolio_structure(id,user_id,portfolio_account_id,symbol,label,status) "
                         + "VALUES(?,?,?,?,?,'OPEN')",
                 structureId, userId, input.portfolioAccountId(), symbol(input.symbol()), trim(input.label()));
@@ -69,11 +143,12 @@ public final class PositionArtifactStore {
                 revisionId, structureId);
 
         Db.execOn(c, "INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
-                        + "plan_id,plan_context_rev,portfolio_account_id,structure_revision_id,decision_id,transaction_id,"
-                        + "marks_as_of,evidence_level,model_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        + "plan_id,plan_context_rev,account_objective_revision_id,portfolio_account_id,"
+                        + "structure_revision_id,decision_id,transaction_id,marks_as_of,evidence_level,model_version) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 receiptId, userId, input.receiptKind().name(), input.receiptAuthority().name(),
                 PositionDomain.ExecutionLane.REAL.name(), input.positionState().name(), input.planId(),
-                input.contextRevision(), input.portfolioAccountId(), revisionId, input.decisionId(),
+                input.contextRevision(), objectiveRevisionId, input.portfolioAccountId(), revisionId, input.decisionId(),
                 input.transactionId(), input.marksAsOf(), input.evidenceLevel().name(), input.modelVersion());
         if (input.receiptLegs() != null) for (ReceiptLeg leg : input.receiptLegs()) {
             Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,symbol,"
@@ -203,6 +278,32 @@ public final class PositionArtifactStore {
                              long quantity, int multiplier, BigDecimal bid, BigDecimal ask,
                              BigDecimal mid, BigDecimal fillPrice,
                              PositionDomain.PriceAuthority priceAuthority) {}
+    public record ImportResolutionAction(String userId, String pendingId, String portfolioAccountId,
+                                         String transactionId, PositionDomain.ReceiptAuthority authority,
+                                         PositionDomain.PositionState positionState,
+                                         OffsetDateTime marksAsOf, EvidenceLevel evidenceLevel,
+                                         String modelVersion, String sourceSystem,
+                                         long packageTotalCents, long allocatedTotalCents,
+                                         List<ReceiptLeg> receiptLegs) {
+        public ImportResolutionAction {
+            receiptLegs = receiptLegs == null ? List.of() : List.copyOf(receiptLegs);
+            if (pendingId == null || pendingId.isBlank() || portfolioAccountId == null
+                    || portfolioAccountId.isBlank()
+                    || authority == null || authority == PositionDomain.ReceiptAuthority.SYSTEM_ANALYSIS
+                    || positionState == null || marksAsOf == null || evidenceLevel == null
+                    || modelVersion == null || modelVersion.isBlank() || sourceSystem == null
+                    || sourceSystem.isBlank() || receiptLegs.isEmpty()) {
+                throw new IllegalArgumentException("complete import-resolution provenance is required");
+            }
+            if (authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                    && (transactionId == null || transactionId.isBlank())) {
+                throw new IllegalArgumentException("broker-reported resolution needs its canonical transaction");
+            }
+            if (authority == PositionDomain.ReceiptAuthority.USER_ALLOCATED && transactionId != null) {
+                throw new IllegalArgumentException("user allocation remains quarantined and cannot name a transaction");
+            }
+        }
+    }
     public record PracticeTransformationAction(String userId, String receiptId, String planId,
                                                Integer contextRevision, String practiceTradeId,
                                                PositionDomain.PositionState positionState,

@@ -29,6 +29,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Function;
 
 /** Owns the complete Plan HTTP journey while stage services own persisted domain behavior. */
@@ -50,6 +51,7 @@ final class PlanController {
     private final io.liftandshift.strikebench.plan.PlanAdoptionService planAdoptions;
 
     PlanController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
+                   io.liftandshift.strikebench.market.EventService events,
                    PositionsService positions,
                    TradeService trades, Backtester backtester, AutoRecommender auto,
                    EvaluationService evaluations, PlanService planSvc,
@@ -58,6 +60,7 @@ final class PlanController {
                    PlanDecisionService planDecisions, PlanManagementService planManagement,
                    io.liftandshift.strikebench.plan.PlanPromotionService planPromotions,
                    io.liftandshift.strikebench.plan.PlanAdoptionService planAdoptions,
+                   PlanAdoptionReviewService planAdoptionReviews,
                    PathEnsembleService pathEnsembles, SimulationEngine simEngine,
                    DiscoveryController discoveryController, OutcomeController outcomeController,
                    TradeController tradeController,
@@ -81,15 +84,19 @@ final class PlanController {
         this.planOutcomeController = new PlanOutcomeController(this, cfg, market, backtester,
                 planSvc, planEvidence, planStrategy, planOutcomes, pathEnsembles, simEngine,
                 outcomeController,
-                new io.liftandshift.strikebench.plan.AuthoredScenarioService(db, clock));
+                new io.liftandshift.strikebench.plan.AuthoredScenarioService(db, clock),
+                new io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService(market, events, clock),
+                new io.liftandshift.strikebench.position.ScenarioPositionScopeService(db, trades, positions));
         this.planAdoptions = planAdoptions;
         this.planDecisionController = new PlanDecisionController(this, clock, db, market, trades,
-                planSvc, planRehearsals, planDecisions, planManagement, tradeController, planPromotions);
+                planSvc, planRehearsals, planDecisions, planManagement, tradeController,
+                planPromotions, planAdoptionReviews);
     }
 
     void register(JavalinConfig config) {
         PlanRoutes.register(config, new PlanRoutes.Handlers(
-                this::plansList, this::planCreate, this::planAdopt, planDecisionController::plansPortfolio, this::planGet,
+                this::plansList, this::planCreate, this::planAdopt, this::planAdoptBatch,
+                planDecisionController::plansPortfolio, this::planGet,
                 this::planContextPut, this::planIntentPut, this::planProgressPost, this::planOpenPut,
                 this::planArchive, this::planDelete, this::planEvidenceLatest,
                 this::planEvidenceStudy, strategyController::planStrategyLatest,
@@ -126,6 +133,16 @@ final class PlanController {
                 body);
         ctx.status(201).json(new ApiResponses.PlanAdopted<>(result.plan(),
                 result.artifacts().structureId(), result.artifacts().receiptId()));
+    }
+
+    /** Atomic adopt/link/skip confirmation for a statement-sized group of tracked positions. */
+    void planAdoptBatch(Context ctx) {
+        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.PlanAdoptionService.BatchRequest.class));
+        var market = activePlanMarket(ctx);
+        ctx.status(201).json(planAdoptions.adoptBatch(ownerId(ctx), market,
+                market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
+                        ? activeWorld(ctx) : null, body));
     }
 
     String ownerId(Context ctx) { return ownerResolver.apply(ctx); }
@@ -328,11 +345,15 @@ final class PlanController {
     private void planEvidenceStudy(Context ctx) {
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
         requireActivePlanMarket(ctx, plan);
-        var request = requireBody(bodyOrNull(ctx,
-                io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest.class));
+        var body = requireBody(bodyOrNull(ctx, PlanEvidenceStudyRequest.class));
+        var request = new io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest(
+                body.key(), body.symbol(), body.from(), body.to(), body.params());
         ctx.json(planEvidence.run(ownerId(ctx), plan, request, analysisCtx(ctx),
-                worldParam(activeWorld(ctx))));
+                worldParam(activeWorld(ctx)), body.expectedStudyKey()));
     }
+
+    private record PlanEvidenceStudyRequest(String key, String symbol, String from, String to,
+                                            Map<String, Object> params, String expectedStudyKey) {}
 
     static void requirePlanVersion(io.liftandshift.strikebench.plan.Plan.View plan, Long expected) {
         if (expected == null) throw new IllegalArgumentException("expectedVersion is required");

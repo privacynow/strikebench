@@ -51,7 +51,7 @@ class AutoRecommenderTest {
 
     private static AutoRecommender.AutoRequest req(List<String> horizons, Long targetProfit, Boolean allow0dte) {
         return new AutoRecommender.AutoRequest(null, horizons, 3, targetProfit, null, null, null,
-                "balanced", allow0dte, null, null, null);
+                "balanced", allow0dte, List.of("DIRECTIONAL"), null, null);
     }
 
     @Test
@@ -71,7 +71,7 @@ class AutoRecommenderTest {
 
     @Test
     void scansUniversePicksOptionableSymbolsWithEvidence() {
-        AutoRecommender.AutoResult result = auto.run(req(null, null, false), BP);
+        AutoRecommender.AutoResult result = auto.run(req(List.of("week", "month"), null, false), BP);
 
         assertThat(result.picks()).isNotEmpty().hasSizeLessThanOrEqualTo(3);
         for (AutoRecommender.Pick pick : result.picks()) {
@@ -168,8 +168,8 @@ class AutoRecommenderTest {
     @Test
     void explicitUniverseSkipsNonOptionableWithReason() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
-                List.of("AAPL", "VTSAX", "ZZZZ"), null, 3, null, null, null, null,
-                "balanced", false, null, null, null);
+                List.of("AAPL", "VTSAX", "ZZZZ"), List.of("week", "month"), 3, null, null, null, null,
+                "balanced", false, List.of("DIRECTIONAL"), null, null);
         AutoRecommender.AutoResult result = auto.run(request, BP);
         assertThat(result.picks()).extracting(AutoRecommender.Pick::symbol).containsExactly("AAPL");
         assertThat(result.skipped()).anySatisfy(s -> assertThat(s).contains("VTSAX").contains("no listed options"));
@@ -186,7 +186,7 @@ class AutoRecommenderTest {
 
         AutoRecommender.AutoRequest spyOnly = new AutoRecommender.AutoRequest(
                 List.of("SPY"), List.of("0DTE"), 1, null, null, null, null,
-                "aggressive", true, null, null, null);
+                "aggressive", true, List.of("DIRECTIONAL"), null, null);
         AutoRecommender.AutoResult with = auto.run(spyOnly, BP);
         assertThat(with.picks()).hasSize(1);
         AutoRecommender.HorizonIdeas zeroDte = with.picks().getFirst().horizons().getFirst();
@@ -240,7 +240,7 @@ class AutoRecommenderTest {
     void respectsMaxLossBudget() {
         AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
                 null, List.of("month"), 3, null, 50_000L, null, null, "balanced", false,
-                null, null, null);
+                List.of("DIRECTIONAL"), null, null);
         AutoRecommender.AutoResult result = auto.run(request, BP);
         for (AutoRecommender.Pick p : result.picks()) {
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
@@ -328,7 +328,7 @@ class AutoRecommenderTest {
             assertThat(entry.score()).isBetween(0.0, 100.0);
             assertThat(entry.components()).extracting(CompensationView.CompensationComponent::name)
                     .contains("Annualized premium yield", "Variance risk premium", "Gap risk",
-                            "Liquidity", "Capital efficiency");
+                            "Earnings proximity", "Liquidity", "Capital efficiency");
             entry.components().forEach(component ->
                     assertThat(component.note()).as(component.name() + " explains itself").isNotBlank());
         });

@@ -65,7 +65,10 @@ class AlertCenterServiceTest {
     }
 
     @AfterEach
-    void tearDown() { if (db != null) db.close(); }
+    void tearDown() {
+        if (alerts != null) alerts.close();
+        if (db != null) db.close();
+    }
 
     private static Leg put(LegAction a, String strike, String prem, LocalDate exp) {
         return Leg.option(a, OptionType.PUT, new BigDecimal(strike), exp, 1, new BigDecimal(prem));
@@ -228,23 +231,30 @@ class AlertCenterServiceTest {
 
     @Test
     void unresolvedImportsSurfacePerSourceAccountWithACount() {
+        var destination = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Import destination", "ROTH_IRA", null, "FIFO", null, null, null, null, null));
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
-                + "external_ref,occurred_at,package_net_cents) VALUES ('pend-a1','local','VANGUARD','fp-77',"
-                + "'ref-1','2026-07-01T15:00:00Z',-5000)");
+                + "external_ref,occurred_at,package_net_cents,destination_portfolio_account_id,payload_fingerprint) "
+                + "VALUES ('pend-a1','local','VANGUARD','fp-77','ref-1','2026-07-01T15:00:00Z',-5000,?,"
+                + "'payload-pend-a1')", destination.id());
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
-                + "external_ref,occurred_at,package_net_cents) VALUES ('pend-a2','local','VANGUARD','fp-77',"
-                + "'ref-2','2026-07-02T15:00:00Z',2000)");
+                + "external_ref,occurred_at,package_net_cents,destination_portfolio_account_id,payload_fingerprint) "
+                + "VALUES ('pend-a2','local','VANGUARD','fp-77','ref-2','2026-07-02T15:00:00Z',2000,?,"
+                + "'payload-pend-a2')", destination.id());
         db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
-                + "external_ref,occurred_at,package_net_cents,status,resolved_at) VALUES ('pend-a3','local',"
-                + "'VANGUARD','fp-77','ref-3','2026-07-03T15:00:00Z',0,'RESOLVED','2026-07-04T15:00:00Z')");
+                + "external_ref,occurred_at,package_net_cents,destination_portfolio_account_id,payload_fingerprint,"
+                + "status,resolved_at) VALUES ('pend-a3','local','VANGUARD','fp-77','ref-3',"
+                + "'2026-07-03T15:00:00Z',0,?,'payload-pend-a3','REJECTED','2026-07-04T15:00:00Z')",
+                destination.id());
 
         AlertCenterService.AlertSet set = alerts.compute("local");
         List<AlertCenterService.Alert> rows = ofKind(set, "PENDING_IMPORTS");
         assertThat(rows).hasSize(1);
         AlertCenterService.Alert a = rows.getFirst();
         assertThat(a.severity()).isEqualTo("ATTENTION");
-        assertThat(a.headline()).isEqualTo("2 imported broker transactions are waiting to be resolved.");
-        assertThat(a.detail()).contains("VANGUARD …p-77").contains("exact lots");
+        assertThat(a.headline()).isEqualTo("2 imported broker packages need fills or broker attestation.");
+        assertThat(a.detail()).contains("VANGUARD …p-77").contains("User allocations remain quarantined")
+                .contains("broker-attested fills create exact lots");
         assertThat(a.deepLink()).isEqualTo("#/portfolio/book/activity");
         assertThat(a.meta().get("pendingCount")).isEqualTo(2L);
     }
@@ -285,13 +295,13 @@ class AlertCenterServiceTest {
     @Test
     void orderingIsSeverityFirstAndMaterialChangesPublishOneEventBusHint() {
         creditPutSpread(LocalDate.of(2026, 7, 10)); // expiry attention + pin attention
-        AlertCenterService.AlertSet first = alerts.compute("local");
+        AlertCenterService.AlertSet first = alerts.refreshAndPublish("local");
         assertThat(first.counts().total()).isGreaterThanOrEqualTo(2);
         long published = events.since(0).stream().filter(e -> "alerts.updated".equals(e.type())).count();
         assertThat(published).isEqualTo(1);
 
         // Unchanged state: no duplicate hint.
-        alerts.compute("local");
+        alerts.refreshAndPublish("local");
         assertThat(events.since(0).stream().filter(e -> "alerts.updated".equals(e.type())).count())
                 .isEqualTo(1);
 
@@ -300,7 +310,7 @@ class AlertCenterServiceTest {
         marks.mids.put("PUT100", new BigDecimal("6.80"));
         marks.mids.put("PUT95", new BigDecimal("1.00"));
         trades.refresh(second.id());
-        AlertCenterService.AlertSet changed = alerts.compute("local");
+        AlertCenterService.AlertSet changed = alerts.refreshAndPublish("local");
         assertThat(changed.alerts().getFirst().kind()).isEqualTo("PROTOCOL_BREACH");
         assertThat(changed.alerts().getFirst().severity()).isEqualTo("URGENT");
         List<Integer> ranks = changed.alerts().stream()
@@ -310,8 +320,34 @@ class AlertCenterServiceTest {
                 .isEqualTo(2);
         var hint = events.since(0).stream().filter(e -> "alerts.updated".equals(e.type()))
                 .reduce((a, b) -> b).orElseThrow();
-        assertThat(hint.data()).containsEntry("owner", "local");
+        assertThat(hint.data()).containsEntry("user", "local").doesNotContainKey("owner");
         assertThat((int) hint.data().get("urgent")).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void httpCurrentReadEstablishesBaselineWithoutPublishingACircularHint() {
+        creditPutSpread(LocalDate.of(2026, 7, 10));
+
+        AlertCenterService.AlertSet current = alerts.current("local");
+
+        assertThat(current.counts().total()).isPositive();
+        assertThat(events.since(0)).noneMatch(e -> "alerts.updated".equals(e.type()));
+        alerts.refreshAndPublish("local");
+        assertThat(events.since(0)).noneMatch(e -> "alerts.updated".equals(e.type()));
+    }
+
+    @Test
+    void committedPracticeMutationInvalidatesAndPublishesWithoutAnAlertGet() {
+        alerts.current("local"); // observe the owner and establish the quiet baseline
+        audit.setAccountChangedHook(alerts::invalidateAccount);
+
+        creditPutSpread(LocalDate.of(2026, 7, 10));
+
+        await(() -> events.since(0).stream().anyMatch(e -> "alerts.updated".equals(e.type())));
+        EventBus.Event hint = events.since(0).stream()
+                .filter(e -> "alerts.updated".equals(e.type())).findFirst().orElseThrow();
+        assertThat(hint.data()).containsEntry("user", "local");
+        assertThat((int) hint.data().get("total")).isPositive();
     }
 
     @Test
@@ -333,5 +369,14 @@ class AlertCenterServiceTest {
         // Quiet inside the thresholds; no marks -> no profit/loss opinion.
         assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, 1000L, 44))).isEmpty();
         assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, null, 44))).isEmpty();
+    }
+
+    private static void await(java.util.function.BooleanSupplier condition) {
+        long deadline = System.currentTimeMillis() + 2_000;
+        while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+            try { Thread.sleep(10); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+        }
+        assertThat(condition.getAsBoolean()).isTrue();
     }
 }

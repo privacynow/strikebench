@@ -9,7 +9,6 @@ public final class DiscoveryRoutes {
             Handler teachingExample,
             Handler scout,
             Handler intentLadder,
-            Handler opportunities,
             Handler optimize
     ) {}
 
@@ -19,7 +18,6 @@ public final class DiscoveryRoutes {
         config.routes.get("/api/welcome/teaching-example", handlers.teachingExample());
         config.routes.post("/api/research/scout", handlers.scout());
         config.routes.post("/api/research/{symbol}/intent-ladder", handlers.intentLadder());
-        config.routes.post("/api/opportunities", handlers.opportunities());
         config.routes.post("/api/optimize", handlers.optimize());
     }
 }

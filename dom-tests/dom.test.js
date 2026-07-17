@@ -62,9 +62,18 @@ async function go(hash) {
     if (window.location.hash === h) return App.render();
     window.location.hash = h;
   }, hash);
-  await page.waitForFunction(expected => window.location.hash === expected
-    && App._lastRenderedRoute === expected
-    && document.getElementById('app').getAttribute('data-ready') === 'true', hash);
+  const renderedRoute = /^#\/research\/[^?]+\?view=/.test(hash) ? hash.split('?')[0] : hash;
+  await page.waitForFunction(expected => window.location.hash === expected.hash
+    && App._lastRenderedRoute === expected.renderedRoute
+    && document.getElementById('app').getAttribute('data-ready') === 'true',
+  { hash, renderedRoute }).catch(async error => {
+      const state = await page.evaluate(() => ({ hash: location.hash,
+        rendered: App._lastRenderedRoute, ready: document.getElementById('app')?.dataset.ready,
+        route: document.getElementById('app')?.dataset.route,
+        error: document.getElementById('route-error')?.textContent || null }));
+      throw new Error('navigation did not settle for ' + hash + ': ' + JSON.stringify(state)
+        + ' :: ' + error.message);
+    });
 }
 
 async function captureSettled(name) {
@@ -75,6 +84,26 @@ async function captureSettled(name) {
   });
   await page.waitForTimeout(250); // keep production motion enabled and capture its settled state
   await page.screenshot({ path: path.join(__dirname, 'shots', name), fullPage: true });
+}
+
+/** Make a risk posture a real user-owned declaration through the visible canonical picker. */
+async function chooseHeaderRisk(value) {
+  const current = await page.locator('#risk-mode').evaluate(control => ({
+    value: control.value, explicit: App.state.headerRiskExplicit
+  }));
+  if (current.value === value && current.explicit) return;
+  // A test may deliberately clear declaration ownership while the presentation still shows
+  // the prior value. Clicking an already-selected chip is correctly a no-op, so exercise a
+  // different visible choice first and then the requested one. This keeps the declaration a
+  // real user interaction instead of dispatching a synthetic change event.
+  if (current.value === value && !current.explicit) {
+    const alternate = value === 'balanced' ? 'conservative' : 'balanced';
+    await page.click('#risk-mode');
+    await page.locator(`#risk-mode-popover .choice-option[data-value="${alternate}"]`).click();
+  }
+  await page.click('#risk-mode');
+  await page.locator(`#risk-mode-popover .choice-option[data-value="${value}"]`).click();
+  await page.waitForFunction(() => App.state.headerRiskExplicit === true);
 }
 
 async function ensureExpanded(head) {
@@ -146,19 +175,17 @@ async function assertNoInternalChrome(scope = '#app') {
 }
 
 async function openPlan(symbol, stage = 'understand', intentOverride, thesisOverride, horizonOverride) {
-  const context = await page.evaluate(() => ({
-    goal: App.context.goal('DIRECTIONAL'),
-    thesis: App.context.thesis('bullish'),
-    horizon: App.context.horizon('month')
-  }));
-  const horizon = horizonOverride || context.horizon;
+  // Test Plans must not inherit whichever durable Plan happens to be active from an
+  // earlier case. Keep the fixture declaration deterministic; tests exercising a
+  // different declaration pass it explicitly below.
+  const horizon = horizonOverride || 'month';
   const horizonDays = horizon === '0DTE' ? 1 : horizon === 'week' ? 7
     : horizon === 'quarter' ? 63 : /^\d+d$/.test(horizon || '')
       ? parseInt(horizon, 10) : 30;
   const response = await fetch(BASE + '/api/plans', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientRequestId: 'dom-plan-' + (++planSequence), symbol,
-      intent: intentOverride || 'DIRECTIONAL', thesis: thesisOverride || context.thesis, horizonDays, riskMode: 'conservative' })
+      intent: intentOverride || 'DIRECTIONAL', thesis: thesisOverride || 'bullish', horizonDays, riskMode: 'conservative' })
   });
   const body = await response.text();
   assert.ok(response.ok, 'test Plan creation failed: ' + body);
@@ -172,15 +199,18 @@ async function openPlan(symbol, stage = 'understand', intentOverride, thesisOver
 }
 
 async function openResearchTab(key) {
-  if (await page.locator('.research-local-tabs').count()) {
+  if (await page.locator('#research-flow').count()) {
     const view = key === 'view' ? 'evidence' : key === 'options' ? 'options' : 'overview';
-    const button = page.locator('.research-local-tabs [data-research-view="' + view + '"]');
-    assert.equal(await button.count(), 1, 'public Research tab ' + view + ' exists');
-    await button.click();
+    const band = page.locator('#research-flow > .flow-band[data-band="' + view + '"]');
+    assert.equal(await band.count(), 1, 'public Research band ' + view + ' exists');
+    if ((await band.getAttribute('data-posture')) !== 'active') {
+      await band.locator('.flow-band-invitation, .flow-band-conclusion').click();
+    }
     await page.waitForFunction(expected => {
       const query = new URLSearchParams((location.hash.split('?')[1] || ''));
       const active = query.get('view') || 'overview';
       return active === expected
+        && document.querySelector('#research-flow > [data-band="' + expected + '"]')?.dataset.posture === 'active'
         && document.getElementById('app').getAttribute('data-route') === 'research'
         && document.getElementById('app').getAttribute('data-ready') === 'true';
     }, view);
@@ -286,7 +316,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     assert.match(await page.textContent('#welcome-proof-caption'), /counterexample, not an endorsement/i,
       'an adverse teaching case cannot sit under recommendation-shaped welcome framing');
   }
-  assert.equal(await page.locator('#moved-terms .moved-term').count(), 8,
+  assert.equal(await page.locator('#moved-terms .moved-term').count(), 7,
     'the tour anchors every familiar capability renamed by the Plan journey');
   assert.match(await page.textContent('#moved-terms'), /Formerly Trade.*Formerly Ideas.*Formerly Scan/s,
     'the mapping names the old nouns instead of making users rediscover them');
@@ -302,7 +332,7 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     { timeout: 15000 });
   page.off('request', scoutProbe);
   assert.equal(automaticScoutPosts, 0,
-    'Home reads warm/cached discovery only; a universe Scout runs only after an explicit click');
+    'Home reads its governed teaching source only; Universe Scout belongs to Workspace');
   assert.equal(await page.locator('.home-market-grid .spark-slot .evidence-badge').count(), 0,
     'the Demo lane does not repeat the same fabricated label twice on every card');
   assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll('.home-market-grid .sym-card')).some(card => {
@@ -326,22 +356,27 @@ test('boots to the welcome page, then the dashboard with markets and the tape', 
     'home-screened-ideas', 'screened ideas are first in reading order after the desk hero');
   assert.ok(await page.locator('#home-first-steps').isVisible(),
     'Beginner gets a concise first-steps strip without losing any discovery control');
-  assert.equal(await page.getByRole('button', { name: 'Find an idea', exact: true }).count(), 1,
-    'the cold desk leads with one explicit discovery action');
+  assert.equal(await page.getByRole('button', { name: 'Find an idea', exact: true }).count(), 0,
+    'the cold desk does not duplicate the teaser\'s Workspace entry');
   assert.equal(await page.locator('#home-plan-library').count(), 0,
     'a fresh desk does not spend a full-width card repeating the hero and Continue start action');
   assert.equal(await page.locator('#next-up').count(), 0,
     'Continue is absent until there is a real Plan to resume');
-  assert.equal(await page.getByRole('button', { name: 'Start a Plan' }).count(), 1,
-    'the hero owns the one empty-desk Plan action');
+  assert.equal(await page.getByRole('button', { name: 'Start a Plan' }).count(), 0,
+    'the empty hero does not create a second Plan entry journey');
+  assert.equal(await page.getByRole('button', { name: 'Open in Workspace' }).count(), 1,
+    'the read-only teaser owns the one Workspace entry');
   await captureSettled('trader-own-p15-home-cold-desktop.png');
   await page.setViewportSize({ width: 390, height: 844 });
   await captureSettled('trader-own-p15-home-cold-mobile.png');
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.click('#home-find-idea');
-  await page.waitForFunction(() => /Use in a Plan|Study in a Plan/.test(document.activeElement?.textContent || ''));
-  assert.match(await page.evaluate(() => document.activeElement.textContent), /Use in a Plan|Study in a Plan/,
-    'Find an idea moves focus to the actual package action, not a remote header control');
+  const planCountBeforeTeaser = await page.evaluate(() => PlanStore.all().length);
+  await page.getByRole('button', { name: 'Open in Workspace' }).click();
+  await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
+  assert.match(await page.evaluate(() => location.hash), /^#\/research\//,
+    'the teaser opens its ticker in the canonical Workspace');
+  assert.equal(await page.evaluate(() => PlanStore.all().length), planCountBeforeTeaser,
+    'opening a read-only teaser does not create a Plan');
   await page.evaluate(() => window.scrollTo(0, 0));
   const footer = await page.textContent('#disclaimer');
   assert.match(footer, /not financial advice/i);
@@ -406,9 +441,10 @@ test('first contact resolves Welcome before any dashboard paint', async () => {
   await go('#/home');
 });
 
-test('Home discovery is governed, distinct by ticker, and carries an exact package into Strategy', async () => {
+test('Home teaser uses one governed source and one read-only Workspace entry', async () => {
   await page.evaluate(() => {
     Learn.setLevel('beginner');
+    localStorage.setItem('strikebench.welcomed', '1');
     localStorage.removeItem('strikebench.homeIdeas');
   });
   let scoutPosts = 0;
@@ -417,7 +453,7 @@ test('Home discovery is governed, distinct by ticker, and carries an exact packa
   };
   page.on('request', observeScout);
   await go('#/home');
-  await page.waitForSelector('#home-screened-ideas');
+  await page.waitForSelector('#home-screened-ideas .home-idea-row', { timeout: 20000 });
   assert.equal(scoutPosts, 0, 'a Home render never spends the universe Scout provider budget');
   assert.ok(await page.locator('#home-first-steps').isVisible(), 'Beginner gets first-step guidance');
   await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
@@ -427,65 +463,136 @@ test('Home discovery is governed, distinct by ticker, and carries an exact packa
   assert.ok(await page.locator('#home-screened-ideas').isVisible(), 'Expert retains discovery capability');
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
   await page.waitForSelector('#home-first-steps');
-
-  await page.click('#home-screened-ideas button:has-text("Scout current market")');
-  await page.waitForFunction(() => /Universe screen refreshed|No ticker passed/.test(
-    document.querySelector('.home-ideas-feedback')?.textContent || ''), null, { timeout: 30000 });
   page.off('request', observeScout);
-  assert.equal(scoutPosts, 1, 'the universe Scout runs exactly once after the explicit command');
+  assert.equal(scoutPosts, 0, 'Home never runs the separate Universe Scout journey');
+  assert.equal(await page.locator('#home-screened-ideas').getByRole('button', { name: /Scout|Refresh/i }).count(), 0,
+    'the teaser has no Scout or refresh entry point');
+  assert.match(await page.textContent('#home-ideas-basis'),
+    /System-authored screening basis.*not silently copied into your Plan/i,
+    'the teaser discloses its exact system-owned basis and its boundary');
   const symbols = await page.locator('#home-screened-ideas .home-idea-row').evaluateAll(rows =>
     rows.map(row => row.getAttribute('data-symbol')));
-  assert.ok(symbols.length >= 1, 'the governed screen yields at least one package in Demo');
-  assert.equal(new Set(symbols).size, symbols.length,
-    'Home shows one leading package per ticker, never repeated ticker cards: ' + JSON.stringify(symbols));
+  assert.equal(symbols.length, 1, 'Home shows one teaser, not a second discovery catalog');
 
   const first = page.locator('#home-screened-ideas .home-idea-row').first();
-  assert.equal(await first.locator(':scope > .btn').count(), 1,
+  assert.equal(await first.getByRole('button', { name: 'Open in Workspace' }).count(), 1,
     'a read-only discovery row has one destination action; editing stays in Plan Strategy');
   const symbol = await first.getAttribute('data-symbol');
-  await first.getByRole('button', { name: /Use in a Plan|Study in a Plan/ }).click();
-  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]', { timeout: 30000 });
-  assert.match(await page.evaluate(() => location.hash), /\/strategy$/,
-    'the Home idea lands inside the Plan Strategy stage');
-  const selected = await page.evaluate(async () => {
-    const plan = PlanStore.active();
-    const latest = await API.getFresh('/api/plans/' + plan.id + '/strategy/latest');
-    return { symbol: plan.symbol, selected: latest.selected };
-  });
-  assert.equal(selected.symbol, symbol);
-  assert.ok(selected.selected && selected.selected.legs && selected.selected.legs.length,
-    'the exact screened contracts become the selected Plan package');
+  const before = await page.evaluate(() => PlanStore.all().length);
+  await first.getByRole('button', { name: 'Open in Workspace' }).click();
+  await page.waitForSelector('#app[data-route="research"][data-ready="true"]', { timeout: 30000 });
+  assert.equal(await page.evaluate(() => App.context.symbol()), symbol);
+  assert.equal(await page.evaluate(() => PlanStore.all().length), before,
+    'the teaser does not bypass Ready to compare or create a Plan');
 });
 
-test('Research reaches a fresh ranked field in one goal choice and one command', async () => {
+test('Universe Scout requires explicit canonical choices at 2560px and mobile', async () => {
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await go('#/research');
+  await page.waitForSelector('#research-plan-scout');
+  await page.evaluate(() => { window.__universeScoutRoot = document.getElementById('research-plan-scout'); });
+  assert.equal(await page.locator('#workspace-plan-strip').count(), 0,
+    'Research index does not duplicate the Plan library');
+  assert.equal(await page.locator('#research-plan-scout select').count(), 0,
+    'Universe Scout uses canonical choice controls, never bare selects');
+  assert.equal(await page.locator('#research-plan-scout .choice-field').count(), 3,
+    'goal, horizon, and risk posture are the three visible decisions');
+  assert.equal(await page.locator('#research-plan-scout .choice-option.active').count(), 0,
+    'a fresh Scout declaration starts blank');
+  assert.equal(await page.locator('#universe-scout-run').isDisabled(), true);
+  assert.match(await page.textContent('#universe-scout-readiness'), /goal.*horizon.*risk posture/i,
+    'readiness names every missing decision-bearing input');
+  const desktop = await page.evaluate(() => ({
+    columns: getComputedStyle(document.querySelector('.universe-scout-controls')).gridTemplateColumns.split(' ').length,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+  }));
+  assert.equal(desktop.columns, 3, 'wide desktop uses the comparison space for all three controls');
+  assert.ok(desktop.overflow <= 1, 'the 2560px surface has no horizontal overflow');
+
+  await page.click('#universe-scout-intent .choice-option[data-value="INCOME"]');
+  await page.click('#universe-scout-horizon .choice-option[data-value="month"]');
+  await page.click('#universe-scout-risk .choice-option[data-value="balanced"]');
+  assert.equal(await page.locator('#universe-scout-run').isEnabled(), true);
+  assert.match(await page.textContent('#universe-scout-readiness'), /exact goal, horizon, and risk posture/i);
+  assert.match(await page.textContent('#universe-scout-horizon .control-consequence'), /21 trading sessions/i);
+  let requestBody;
+  await page.route('**/api/research/scout', async route => {
+    requestBody = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      picks: [], notes: ['Focused rendered test.'], compensation: []
+    }) });
+  });
+  await page.click('#universe-scout-run');
+  await page.waitForSelector('#universe-scout-results .empty');
+  assert.deepEqual({ horizons: requestBody.horizons, riskMode: requestBody.riskMode, intents: requestBody.intents },
+    { horizons: ['month'], riskMode: 'balanced', intents: ['INCOME'] },
+    'the request carries the exact visible declaration');
+  await page.unroute('**/api/research/scout');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = await page.evaluate(() => ({
+    sameRoot: window.__universeScoutRoot === document.getElementById('research-plan-scout'),
+    columns: getComputedStyle(document.querySelector('.universe-scout-controls')).gridTemplateColumns.split(' ').length,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    actionVisible: !!document.querySelector('#universe-scout-run')?.offsetParent
+  }));
+  assert.deepEqual(mobile, { sameRoot: true, columns: 1, overflow: 0, actionVisible: true },
+    'mobile reflows the same mounted controls and action without overflow');
+  await page.click('#universe-scout-horizon .choice-option[data-value="week"]');
+  assert.match(await page.textContent('#universe-scout-readiness'), /exact goal, horizon, and risk posture/i,
+    'mobile retains the same consequence/readiness contract');
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test('Research creates an honest incomplete Plan, then the same Your view unlocks ranking', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
+  await page.evaluate(() => {
+    localStorage.removeItem('strikebench.riskMode');
+    App.state.headerRiskExplicit = false;
+    App.context.update({ symbol: 'QQQ', goal: null, thesis: null, horizon: null });
+  });
   await go('#/research/QQQ');
   await page.waitForSelector('#symbol-proposed-trades');
-  assert.equal(await page.locator('#symbol-proposed-goal option').count(), 5,
+  assert.equal(await page.locator('#symbol-proposed-goal .choice-option').count(), 5,
     'the compact Research front door retains every goal');
   await captureSettled('trader-own-p15-research-symbol-desktop.png');
   await page.setViewportSize({ width: 390, height: 844 });
   await captureSettled('trader-own-p15-research-symbol-mobile.png');
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.selectOption('#symbol-proposed-goal', 'INCOME');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="INCOME"]');
+  assert.equal((await page.textContent('#symbol-find-proposed')).trim(), 'Continue to Your view');
+  assert.match(await page.textContent('.symbol-proposed-missing'), /horizon.*risk posture/i,
+    'Research names every missing assumption instead of filling a month or risk posture');
   await page.click('#symbol-find-proposed');
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]', { timeout: 30000 });
-  assert.match(await page.evaluate(() => location.hash), /\/strategy$/);
-  const field = await page.evaluate(async () => {
+  assert.match(await page.evaluate(() => location.hash), /\/understand$/);
+  const incomplete = await page.evaluate(() => {
     const plan = PlanStore.active();
-    const latest = await API.getFresh('/api/plans/' + plan.id + '/strategy/latest');
-    return { id: plan.id, symbol: plan.symbol,
-      candidates: latest.strategy && latest.strategy.result && latest.strategy.result.candidates || [] };
+    return { id: plan.id, symbol: plan.symbol, intent: plan.intent,
+      thesis: plan.context.thesis, horizonDays: plan.context.horizonDays, riskMode: plan.context.riskMode };
   });
-  assert.equal(field.symbol, 'QQQ');
-  assert.ok(field.candidates.length > 0, 'the destination already contains the ranked field');
-  assert.ok(await page.locator('#plan-strategy-panel-compare:not([hidden])').count() === 1,
-    'the ranked comparison is the strategy band itself, not a tab to find');
+  assert.deepEqual(incomplete, { id: incomplete.id, symbol: 'QQQ', intent: 'INCOME',
+    thesis: null, horizonDays: null, riskMode: null });
+  assert.equal(await page.getAttribute('[data-band="strategy"]', 'data-posture'), 'locked',
+    'Strategy remains visibly locked while the Plan declaration is incomplete');
 
-  await go('#/home');
-  await page.waitForSelector('#home-context-line');
-  assert.match(await page.textContent('#home-context-line'), /QQQ.*ranked trades ready in Strategy/i,
-    'Home signs the warm one-click continuation instead of saying only “is at strategy”');
+  await page.waitForSelector('[data-band="view"] #plan-declare-view');
+  await page.locator('[data-band="view"] .choice-field').filter({ hasText: 'Over the next' })
+    .locator('.choice-option[data-value="21"]').click();
+  await page.locator('#plan-thesis .choice-option[data-value="neutral"]').click();
+  await page.locator('[data-band="view"] .choice-field').filter({ hasText: 'Risk budget' })
+    .locator('.choice-option[data-value="conservative"]').click();
+  await page.click('#plan-declare-view');
+  await page.waitForSelector('[data-band="strategy"] .flow-band-invitation');
+  await page.click('[data-band="strategy"] .flow-band-invitation');
+  await page.waitForSelector('#plan-run-strategy');
+  await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-ranked-field .ranked-idea-hero', { timeout: 30000 });
+  const field = await page.evaluate(async id => {
+    const latest = await API.getFresh('/api/plans/' + id + '/strategy/latest');
+    return latest.strategy && latest.strategy.result && latest.strategy.result.candidates || [];
+  }, incomplete.id);
+  assert.ok(field.length > 0, 'the exact same Plan ranks only after its missing declaration is saved');
 });
 
 test('Trade a view requires an explicit thesis and context revisions preserve the evidence protocol', async () => {
@@ -493,21 +600,34 @@ test('Trade a view requires an explicit thesis and context revisions preserve th
   await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'bearish');
   await go('#/research/TSLA');
   await page.waitForSelector('#symbol-proposed-trades');
-  await page.selectOption('#symbol-proposed-goal', 'DIRECTIONAL');
-  assert.equal((await page.locator('#symbol-find-proposed').textContent()).trim(), 'Choose a view for TSLA',
-    'a new symbol cannot inherit the active Plan’s directional thesis');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="DIRECTIONAL"]');
+  assert.equal((await page.locator('#symbol-find-proposed').textContent()).trim(), 'Continue to Your view',
+    'a new symbol cannot inherit the active Plan’s directional thesis, horizon, or risk posture');
   await page.click('#symbol-find-proposed');
-  await page.waitForFunction(() => /\/plan\/plan_[^/]+\/evidence$/.test(location.hash)
+  await page.waitForFunction(() => /\/plan\/plan_[^/]+\/understand$/.test(location.hash)
     && document.getElementById('app').getAttribute('data-ready') === 'true');
-  await page.waitForSelector('#tv-view');
+  await page.waitForSelector('#plan-thesis');
   const created = await page.evaluate(() => {
     const plan = PlanStore.active();
-    return { id: plan.id, symbol: plan.symbol, intent: plan.intent, thesis: plan.context.thesis };
+    return { id: plan.id, symbol: plan.symbol, intent: plan.intent, thesis: plan.context.thesis,
+      horizonDays: plan.context.horizonDays, riskMode: plan.context.riskMode };
   });
-  assert.deepEqual(created, { id: created.id, symbol: 'TSLA', intent: 'DIRECTIONAL', thesis: null },
-    'Trade a view records “not chosen” honestly instead of silently writing neutral');
-  assert.equal(await page.locator('#tv-view .choice-option.active').count(), 0,
-    'Evidence opens at the explicit view chooser with nothing preselected');
+  assert.deepEqual(created, { id: created.id, symbol: 'TSLA', intent: 'DIRECTIONAL', thesis: null,
+    horizonDays: null, riskMode: null },
+  'Trade a view records every unchosen fact honestly instead of silently writing defaults');
+  assert.equal(await page.locator('#plan-thesis .choice-option.active').count(), 0,
+    'Your view opens with no directional assumption preselected');
+
+  await page.evaluate(async planId => {
+    let live = await PlanStore.get(planId, true);
+    live = await PlanStore.updateContext(live, {
+      thesis: 'bearish', horizonDays: 21, riskMode: 'balanced'
+    });
+    await PlanStore.focus(live, 'EVIDENCE');
+  }, created.id);
+  await page.waitForFunction(() => /\/evidence$/.test(location.hash)
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  await page.waitForSelector('#test-your-view');
 
   const preserved = await page.evaluate(async planId => {
     const ui = PlanStore.ui(planId);
@@ -520,6 +640,7 @@ test('Trade a view requires an explicit thesis and context revisions preserve th
       planEnsembleId: 'stale-ensemble'
     };
     const live = await PlanStore.get(planId, true);
+    ui.contextRev = live.context.rev;
     await PlanStore.updateContext(live, { horizonDays: Number(live.context.horizonDays) + 1 });
     await App.render();
     const evidence = PlanStore.ui(planId).evidence;
@@ -563,6 +684,8 @@ test('Outcomes distinguishes a stale selection and reprices the same legs', asyn
 });
 
 test('plan foundation promotes once, survives reload, versions assumptions, and closes only the tab', async () => {
+  await chooseHeaderRisk('balanced');
+  await page.evaluate(() => App.context.update({ symbol: 'AAPL', goal: null, thesis: 'neutral', horizon: '21d' }));
   await go('#/research/AAPL');
   await page.waitForSelector('#symbol-proposed-trades');
   await page.waitForSelector('#research-hero .quote-hero');
@@ -582,7 +705,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
     'Demo headlines are explicitly teaching prompts rather than apparent company news');
   assert.equal(await page.locator('#news-overview-card a.news-headline').count(), 0,
     'fabricated Demo catalysts never link to an apparent external article');
-  await page.selectOption('#symbol-proposed-goal', 'INCOME');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="INCOME"]');
   await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash));
   await page.waitForSelector('#plan-header, #route-error');
@@ -640,7 +763,8 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.waitForFunction(() => /45 trading sessions/.test(document.getElementById('plan-header')?.textContent || ''));
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
-  assert.equal(await page.evaluate(() => location.hash), planHash.replace('/strategy', '/evidence'));
+  assert.equal(await page.evaluate(() => location.hash), planHash.replace('/strategy', '/understand'),
+    'editing the declaration owns the truthful Understand deep link after reload');
   assert.match(await page.textContent('#plan-header'), /45 trading sessions/);
   assert.match(await page.textContent('#plan-header'), /AAPL.*Earn income/s);
 
@@ -669,7 +793,9 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
 
   // The 45-day edit above proves context persistence. Use a short evidence window for the
   // event-study assertion so the fixture has enough independent signal episodes to evaluate.
-  await page.click('#plan-edit-context');
+  if (await page.locator('[data-band="view"] #plan-declare-view').count() === 0) {
+    await page.click('#plan-edit-context');
+  }
   await page.waitForSelector('[data-band="view"] #plan-declare-view');
   await page.locator('[data-band="view"] .choice-segmented .choice-option').filter({ hasText: 'Custom' }).click();
   await page.fill('#plan-horizon-days', '10');
@@ -678,6 +804,7 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
 
   await go(planHash.replace('/strategy', '/evidence'));
   await page.waitForSelector('#test-your-view');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   await page.click('#study-run');
   await page.waitForSelector('#study-results .alert', { timeout: 20000 });
@@ -704,8 +831,18 @@ test('plan foundation promotes once, survives reload, versions assumptions, and 
   await page.waitForTimeout(4200);
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p2-evidence.png'), fullPage: true });
 
+  const evidencePresentation = await page.evaluate(id => Workspace.snapshot().planPresentation[id], planHash.split('/')[2]);
+  assert.equal(evidencePresentation.evidenceSetup, 'pullback_rebound',
+    'workspace continuity remembers the explicit historical trigger needed to reconstruct Evidence');
+  assert.doesNotMatch(JSON.stringify(evidencePresentation), /results|ensemble|fingerprint|preview/i,
+    'the presentation snapshot never duplicates study results or priced Evidence artifacts');
+
   await page.reload();
   await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
+  await page.waitForSelector('#research-outcomes-basis-futures');
+  if (await page.getAttribute('#research-outcomes-basis-futures', 'aria-pressed') !== 'true') {
+    await page.click('#research-outcomes-basis-futures');
+  }
   await page.waitForSelector('#tv-futures', { timeout: 15000 });
   assert.match(await page.evaluate(() => location.hash), /\/evidence$/,
     'reload returns to the durable Evidence stage');
@@ -769,12 +906,14 @@ test('primary Plan navigation fails visibly and restores its command', async () 
 test('a pre-decision Plan can change goal and returns to Strategy without forking', async () => {
   const created = await page.evaluate(async () => {
     const plan = await PlanStore.create({ symbol: 'SPY', intent: 'INCOME', thesis: 'neutral',
-      horizonDays: 30, riskMode: 'conservative', title: 'Editable goal check' });
+      horizonDays: 53, riskMode: 'conservative', title: 'Editable goal check' });
     await PlanStore.focus(plan, 'UNDERSTAND');
     return { id: plan.id };
   });
+  await page.waitForSelector('#app[data-route="plan"][data-ready="true"]');
   await page.waitForSelector('#plan-header');
-  await page.click('#plan-edit-context');
+  if (await page.locator('#plan-change-goal').count() === 0) await page.click('#plan-edit-context');
+  await page.waitForSelector('#plan-change-goal');
   await page.click('#plan-change-goal');
   await page.locator('.plan-fork-intents .choice-card').filter({ hasText: 'Protect my shares' }).click();
   await page.waitForSelector('#modal-confirm');
@@ -798,7 +937,7 @@ test('a pre-decision Plan can change goal and returns to Strategy without forkin
 
 test('Plan flow orients both levels without hiding capabilities or stealing the journey', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('TSLA', 'understand', 'DIRECTIONAL', 'bullish');
+  const plan = await openPlan('TSLA', 'evidence', 'DIRECTIONAL', 'bullish', '30d');
   await page.waitForSelector('#plan-flow');
   assert.equal(await page.locator('#plan-flow > .flow-band').count(), 6,
     'the whole journey stays visible as bands');
@@ -966,6 +1105,57 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
   }
   assert.ok(await page.locator('#plan-ranked-field .ranked-runner-list .ranked-idea:visible').count() <= 2,
     'the default comparison keeps attention on the hero and two closest alternatives');
+  const responsiveLayouts = [];
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 2048, height: 900 },
+    { width: 1920, height: 900 }, { width: 1440, height: 900 }, { width: 1280, height: 800 },
+    { width: 1000, height: 900 }, { width: 390, height: 844 }, { width: 375, height: 812 },
+    { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const layout = await page.evaluate(() => {
+      const box = selector => document.querySelector(selector)?.getBoundingClientRect();
+      const app = box('#app'), controls = box('.plan-strategy-controls');
+      const controlsHead = box('.plan-strategy-controls > .card-head');
+      const filters = box('#plan-strategy-filters');
+      const field = box('#plan-ranked-field'), hero = box('#plan-ranked-field > .ranked-idea-hero');
+      return { viewport: innerWidth, appWidth: app?.width || 0,
+        documentWidth: document.documentElement.scrollWidth,
+        controlsWidth: controls?.width || 0, controlsDisplay: controls ? getComputedStyle(document.querySelector('.plan-strategy-controls')).display : '',
+        controlsHeadTop: controlsHead?.top || 0, filtersTop: filters?.top || 0,
+        fieldWidth: field?.width || 0, heroWidth: hero?.width || 0, heroHeight: hero?.height || 0,
+        tools: document.querySelectorAll('.plan-tool').length,
+        limits: document.querySelectorAll('#plan-strategy-filters input').length };
+    });
+    responsiveLayouts.push(layout);
+    assert.ok(layout.documentWidth <= viewport.width + 2,
+      'Strategy remains page-contained at ' + viewport.width + 'px: ' + JSON.stringify(layout));
+    assert.ok(layout.appWidth >= viewport.width * .88,
+      'the workspace spends the available width at ' + viewport.width + 'px: ' + JSON.stringify(layout));
+    assert.deepEqual([layout.tools, layout.limits], [4, 5],
+      'responsive composition preserves every Strategy capability at ' + viewport.width + 'px');
+    assert.ok(layout.heroWidth <= layout.fieldWidth + 2 && layout.controlsWidth <= layout.appWidth + 2,
+      'controls and ranked answer stay inside their owners at ' + viewport.width + 'px');
+    if (viewport.width >= 1500) {
+      assert.ok(layout.heroWidth >= layout.fieldWidth * .96,
+        'wide Strategy does not reserve an empty runner track beside the hero: ' + JSON.stringify(layout));
+      assert.ok(Math.abs(layout.controlsHeadTop - layout.filtersTop) < 16,
+        'question, limits, and consequence begin together on wide Strategy: ' + JSON.stringify(layout));
+    }
+    if (viewport.width === 2560) {
+      await page.screenshot({
+        path: path.join(__dirname, 'shots/program-one-plan-strategy-2560.png'), fullPage: false
+      });
+    }
+    if (viewport.width === 390) {
+      await page.screenshot({
+        path: path.join(__dirname, 'shots/program-one-plan-strategy-mobile.png'), fullPage: false
+      });
+    }
+  }
+  const ownerLayout = responsiveLayouts[0];
+  assert.ok(ownerLayout.appWidth >= 2400 && ownerLayout.heroHeight < 2200,
+    '2560×1440 uses the owner’s logical 5K workspace and removes the prior 2,700px hero tower: '
+      + JSON.stringify(ownerLayout));
+  await page.setViewportSize({ width: 1280, height: 800 });
   const payoffDebug = await page.evaluate(() => ({
     svg: document.querySelectorAll('#plan-ranked-field .ranked-idea-payoff svg.chart').length,
     shape: document.querySelectorAll('#plan-ranked-field .ranked-time-spread-shape').length,
@@ -1137,7 +1327,7 @@ test('Plan Strategy preserves intent-native ladders, income capital, and Expert 
     Learn.setLevel('beginner');
     App.context.update({ goal: 'ACQUIRE', thesis: 'neutral', horizon: 'month' });
   });
-  await openPlan('QQQ', 'strategy', 'ACQUIRE');
+  await openPlan('QQQ', 'strategy', 'ACQUIRE', 'neutral', 'month');
   await page.waitForSelector('#plan-intent-ladder', { timeout: 30000 }).catch(async error => {
     throw new Error('Intent ladder did not render: ' + (await page.locator('#app').textContent()) + '\n' + error.message);
   });
@@ -1298,6 +1488,63 @@ test('Plan Builder preserves the Beginner walkthrough and Expert exact-contract 
   await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
 });
 
+test('Plan Builder retries its provider locally without remounting Flow or losing the draft', async () => {
+  await page.evaluate(() => Learn.setLevel('expert'));
+  const plan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish');
+  await page.evaluate(id => {
+    const ui = PlanStore.ui(id);
+    ui.buildState = { builderForm: {
+      symbol: 'AAPL', goal: 'DIRECTIONAL', qty: 3, step: 2,
+      templateKey: null, legIdx: 0, legs: [], excluded: {}, limits: {}
+    } };
+    API.flushCache();
+  }, plan.id);
+
+  let attempts = 0;
+  const failOnce = async route => {
+    if (attempts++ === 0) {
+      await route.fulfill({ status: 503, contentType: 'application/json',
+        body: JSON.stringify({ error: 'forced option-book interruption' }) });
+    } else {
+      await route.continue();
+    }
+  };
+  await page.route('**/api/research/AAPL', failOnce);
+  try {
+    await page.locator('.plan-tool[data-strategy-tool="builder"]').click();
+    await page.waitForSelector('#builder-load-error');
+    await page.evaluate(() => {
+      window.__builderRetryFlow = document.getElementById('plan-flow');
+      window.__builderRetryPanel = document.getElementById('plan-strategy-panel-builder');
+    });
+    await page.click('#builder-load-error button:has-text("Retry")');
+    await page.waitForSelector('#builder-template', { timeout: 20000 });
+    const result = await page.evaluate(id => ({
+      sameFlow: window.__builderRetryFlow === document.getElementById('plan-flow'),
+      samePanel: window.__builderRetryPanel === document.getElementById('plan-strategy-panel-builder'),
+      hash: location.hash,
+      qty: PlanStore.ui(id).buildState.builderForm.qty,
+      step: PlanStore.ui(id).buildState.builderForm.step,
+      errorGone: !document.getElementById('builder-load-error')
+    }), plan.id);
+    assert.deepEqual(result, {
+      sameFlow: true,
+      samePanel: true,
+      hash: '#/plan/' + plan.id + '/strategy',
+      qty: 3,
+      step: 2,
+      errorGone: true
+    }, 'retry repaints only the mounted Builder root and keeps its Plan-owned draft');
+  } finally {
+    await page.unroute('**/api/research/AAPL', failOnce);
+    await page.evaluate(() => {
+      delete window.__builderRetryFlow;
+      delete window.__builderRetryPanel;
+      Learn.setLevel('beginner');
+    });
+  }
+});
+
 test('Plan Builder loads every option leg from its own expiration and option-side book', async () => {
   const firstExpiry = '2026-08-14';
   const secondExpiry = '2026-09-18';
@@ -1429,8 +1676,10 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     Learn.setLevel('beginner');
     App.context.update({ symbol: 'QQQ', goal: 'DIRECTIONAL', thesis: 'bullish', horizon: '45d' });
   });
-  const plan = await openPlan('QQQ', 'evidence', 'DIRECTIONAL', 'bullish');
+  const plan = await openPlan('QQQ', 'evidence', 'DIRECTIONAL', 'bullish', '45d');
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
+  await page.waitForSelector('#research-outcomes-basis-futures');
   await page.click('#research-outcomes-basis-futures');
   await page.waitForSelector('#whatif-card');
   await page.click('#whatif-run');
@@ -1635,7 +1884,8 @@ test('Plan Outcomes reuses Evidence paths for one exact selected package', async
     'a saved replay survives restart with a visible Plan-owned history and no legacy page');
 });
 
-test('the scenario canvas authors waypoints on the outcomes fan with an honest fill label', async () => {
+test('the scenario canvas authors waypoints on the outcomes fan with an honest fill label', async t => {
+  await page.setViewportSize({ width: 2560, height: 1400 });
   await page.evaluate(() => Learn.setLevel('beginner'));
   const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish');
   // A selected structure unlocks the outcomes band's model lens; seed it the way the app does.
@@ -1656,6 +1906,31 @@ test('the scenario canvas authors waypoints on the outcomes fan with an honest f
   await page.waitForSelector('#plan-outcomes');
   await page.click('#plan-outcomes-basis-model');
   await page.waitForSelector('#plan-scenario-canvas [data-canvas-fan] svg', { timeout: 20000 });
+  assert.match(await page.textContent('#plan-scenario-canvas'), /Your hypothesis, never a forecast/,
+    'the canvas never presents an authored path as a prediction');
+  assert.equal(await page.locator('#plan-scenario-canvas .scenario-template-card').count(), 4,
+    'earnings, target, sector, and historical inputs are one template surface on the same canvas');
+  assert.ok(await page.locator('#plan-scenario-canvas .scenario-compare-card').count() >= 1,
+    'the selected proposal or stock baseline is repriced on the canvas without a second journey');
+  assert.match(await page.textContent('#plan-scenario-canvas .scenario-model-receipt'),
+    /Calendar.*Risk-free rate.*Dividend.*Surface.*Settlement.*Exercise/s,
+    'calendar, rates, dividends, surface, settlement, and exercise stay visible in one receipt');
+  const wideCanvas = await page.evaluate(() => {
+    const canvas = document.getElementById('plan-scenario-canvas').getBoundingClientRect();
+    const templates = Array.from(document.querySelectorAll('.scenario-template-card')).map(node => node.getBoundingClientRect());
+    const deck = Array.from(document.querySelectorAll('.scenario-control-deck > .scenario-canvas-section'))
+      .map(node => node.getBoundingClientRect());
+    return { width: canvas.width, templateRows: new Set(templates.map(r => Math.round(r.top))).size,
+      deckSideBySide: deck.length === 2 && Math.abs(deck[0].top - deck[1].top) <= 2,
+      overflow: document.documentElement.scrollWidth - innerWidth };
+  });
+  assert.ok(wideCanvas.width > 2000,
+    'the 2560px workspace spends the desktop canvas instead of preserving an article-width gutter: ' + JSON.stringify(wideCanvas));
+  assert.equal(wideCanvas.templateRows, 1,
+    'the four compact template jobs share one wide-desktop row: ' + JSON.stringify(wideCanvas));
+  assert.equal(wideCanvas.deckSideBySide, true,
+    'day-by-day inputs and pricing assumptions remain co-visible at 2560px: ' + JSON.stringify(wideCanvas));
+  assert.ok(wideCanvas.overflow <= 1, 'the wide canvas never creates page-level horizontal overflow');
   assert.equal(await page.getAttribute('#plan-scenario-canvas', 'data-waypoint-fill'), 'NONE',
     'an unpinned fan is honestly labeled plain Monte Carlo');
   assert.match(await page.textContent('#plan-scenario-canvas .canvas-fill-label'),
@@ -1689,7 +1964,185 @@ test('the scenario canvas authors waypoints on the outcomes fan with an honest f
   assert.match(await page.textContent('.authored-scenario-card'),
     /Touches the level midway.*Exact conditional.*1 waypoint/s,
     'the saved scenario card names the belief, its honesty label, and its waypoint count');
+
+  // A real-input template extends the same fan and carries its own provenance receipt.
+  const targetInput = page.locator('#plan-scenario-canvas input[id^="scenario-template-target-"]');
+  await targetInput.fill('270');
+  await page.getByRole('button', { name: 'Use target' }).click();
+  await page.waitForSelector('#plan-scenario-canvas .scenario-template-receipt', { timeout: 30000 });
+  assert.match(await page.textContent('#plan-scenario-canvas .scenario-template-receipt'),
+    /DRIFT TO TARGET.*user's hypothesis.*no-hindsight boundary enforced/is,
+    'the target template remains a hypothesis and freezes its input boundary');
+  assert.equal(await page.evaluate(planId =>
+    PlanStore.ui(planId).canvas.canvasModel.template.kind, plan.id), 'DRIFT_TO_TARGET',
+  'the template receipt lives on the same Plan-owned canvas model');
+
+  // Beginner gets a guide and the identical exact per-session IV controls used by Expert.
+  await page.getByRole('button', { name: 'Fades slowly' }).click();
+  await page.waitForFunction(planId => (PlanStore.ui(planId).canvas.canvasModel.ivNodes || []).length === 2,
+    plan.id, { timeout: 30000 });
+  const exactEditor = page.getByRole('button', { name: 'Edit the exact price and volatility for every session' });
+  await exactEditor.click();
+  await page.waitForSelector('#plan-scenario-canvas .scenario-day-table');
+  const firstIv = page.locator('#plan-scenario-canvas input[id^="scenario-day-iv-"]').first();
+  await firstIv.fill('37.5');
+  await firstIv.press('Enter');
+  await page.waitForFunction(planId => (PlanStore.ui(planId).canvas.canvasModel.ivNodes || [])
+    .some(node => node.dayIndex === 0 && Math.abs(node.atmIv - .375) < 1e-9), plan.id, { timeout: 30000 });
+  await page.waitForFunction(planId => {
+    const canvas = PlanStore.ui(planId).canvas;
+    const receipt = canvas.preview && canvas.preview.canvas && canvas.preview.canvas.modelReceipt;
+    return receipt && (receipt.ivNodes || [])
+      .some(node => node.dayIndex === 0 && Math.abs(node.atmIv - .375) < 1e-9);
+  }, plan.id, { timeout: 30000 });
   await assertNamedControls('#plan-scenario-canvas');
+  assert.match(await page.textContent('#plan-scenario-canvas .scenario-receipt-notes'),
+    /P&L bands use every stored path.*representative path/is,
+    'the receipt tells the reader which values are distributions and which Greeks follow one coherent trace');
+
+  const responsiveBaseline = await page.evaluate(planId => {
+    const canvas = PlanStore.ui(planId).canvas;
+    const report = canvas.preview.canvas;
+    const controls = Array.from(document.querySelectorAll('#plan-scenario-canvas input, #plan-scenario-canvas select, #plan-scenario-canvas button'));
+    return {
+      fingerprint: report.modelReceipt.fingerprint,
+      canvasModel: JSON.stringify(canvas.canvasModel),
+      underlying: JSON.stringify(report.underlying),
+      positions: JSON.stringify((report.positions || []).map(position => position.key)),
+      controlSignature: controls.map(node => node.id || node.getAttribute('aria-label')
+        || (node.textContent || '').trim()).join('|'),
+      controlCount: controls.length,
+      dayRows: document.querySelectorAll('#plan-scenario-canvas .scenario-day-table tbody tr').length
+    };
+  }, plan.id);
+  assert.ok(responsiveBaseline.fingerprint && responsiveBaseline.dayRows > 1,
+    'the responsive audit begins from one exact stored Canvas and its complete day table');
+
+  let responsiveEnsembleRuns = 0;
+  const observeResponsiveEnsemble = request => {
+    if (request.method() === 'POST' && /\/api\/plans\/[^/]+\/outcomes\/ensemble(?:\?|$)/.test(request.url())) {
+      responsiveEnsembleRuns++;
+    }
+  };
+  page.on('request', observeResponsiveEnsemble);
+  t.after(() => page.off('request', observeResponsiveEnsemble));
+
+  const widths = [
+    { width: 2560, templateRows: 1, canvasRows: 1, deckRows: 1, receiptColumns: 4 },
+    { width: 1920, templateRows: 1, canvasRows: 1, deckRows: 1, receiptColumns: 4 },
+    { width: 1440, templateRows: 1, canvasRows: 1, deckRows: 1, receiptColumns: 4 },
+    { width: 1000, templateRows: 2, canvasRows: 2, deckRows: 2, receiptColumns: 4 },
+    { width: 390, templateRows: 4, canvasRows: 2, deckRows: 2, receiptColumns: 1 },
+    { width: 375, templateRows: 4, canvasRows: 2, deckRows: 2, receiptColumns: 1 },
+    { width: 320, templateRows: 4, canvasRows: 2, deckRows: 2, receiptColumns: 1 }
+  ];
+  for (const expected of widths) {
+    const mobile = expected.width <= 390;
+    await page.setViewportSize({ width: expected.width, height: mobile ? 844 : 1100 });
+    const geometry = await page.evaluate(planId => {
+      const root = document.getElementById('plan-scenario-canvas');
+      const rootBox = root.getBoundingClientRect();
+      const rows = selector => new Set(Array.from(document.querySelectorAll(selector))
+        .filter(node => node.offsetParent !== null)
+        .map(node => Math.round(node.getBoundingClientRect().top))).size;
+      const columns = selector => getComputedStyle(document.querySelector(selector)).gridTemplateColumns
+        .split(/\s+/).filter(Boolean).length;
+      const allControls = Array.from(root.querySelectorAll('input,select,button'));
+      const visibleControls = allControls.filter(node => node.offsetParent !== null);
+      const freeControls = visibleControls.filter(node => !node.closest('.scenario-day-table-wrap,.scenario-position-table-wrap,.scenario-leg-table-wrap'));
+      const primaryControls = Array.from(root.querySelectorAll(
+        '.scenario-template-card input,.scenario-template-card button,.scenario-assumption-grid input,'
+        + '.scenario-assumption-grid select,.scenario-iv-presets button,.scenario-canvas-save input,'
+        + '.scenario-canvas-save button,.scenario-canvas-comparisons > .choice-field .choice-option'))
+        .filter(node => node.offsetParent !== null);
+      const wrappers = Array.from(root.querySelectorAll(
+        '.scenario-day-table-wrap,.scenario-position-table-wrap,.scenario-leg-table-wrap'))
+        .filter(node => node.offsetParent !== null);
+      const templateCopy = Array.from(root.querySelectorAll('.scenario-template-card p,.scenario-template-card label'));
+      const canvas = PlanStore.ui(planId).canvas;
+      const report = canvas.preview.canvas;
+      const rootChildrenOutside = Array.from(root.children).filter(node => node.offsetParent !== null).some(node => {
+        const box = node.getBoundingClientRect();
+        return box.left < rootBox.left - 1 || box.right > rootBox.right + 1;
+      });
+      return {
+        viewport: innerWidth,
+        pageOverflow: document.documentElement.scrollWidth - innerWidth,
+        rootLeft: rootBox.left, rootRight: rootBox.right, rootWidth: rootBox.width,
+        rootChildrenOutside,
+        templateRows: rows('.scenario-template-card'),
+        canvasRows: rows('.scenario-canvas-cols > *'),
+        deckRows: rows('.scenario-control-deck > .scenario-canvas-section'),
+        receiptColumns: columns('.scenario-receipt-grid'),
+        comparisonModeRows: rows('.scenario-canvas-comparisons > .choice-field .choice-option'),
+        fanWidth: root.querySelector('[data-canvas-fan] svg').getBoundingClientRect().width,
+        freeControlOutside: freeControls.some(node => {
+          const box = node.getBoundingClientRect();
+          return box.left < rootBox.left - 1 || box.right > rootBox.right + 1;
+        }),
+        primaryMinHeight: Math.min(...primaryControls.map(node => node.getBoundingClientRect().height)),
+        localScrollContained: wrappers.every(node => {
+          const box = node.getBoundingClientRect();
+          const overflow = getComputedStyle(node).overflowX;
+          return box.left >= rootBox.left - 1 && box.right <= rootBox.right + 1
+            && (overflow === 'auto' || overflow === 'scroll');
+        }),
+        minTemplateFont: Math.min(...templateCopy.map(node => parseFloat(getComputedStyle(node).fontSize))),
+        clippedTemplateCopy: templateCopy.some(node => node.scrollWidth > node.clientWidth + 1),
+        visibleTemplates: root.querySelectorAll('.scenario-template-card').length,
+        comparisonModes: root.querySelectorAll('.scenario-canvas-comparisons > .choice-field .choice-option').length,
+        fingerprint: report.modelReceipt.fingerprint,
+        canvasModel: JSON.stringify(canvas.canvasModel),
+        underlying: JSON.stringify(report.underlying),
+        positions: JSON.stringify((report.positions || []).map(position => position.key)),
+        controlSignature: allControls.map(node => node.id || node.getAttribute('aria-label')
+          || (node.textContent || '').trim()).join('|'),
+        controlCount: allControls.length,
+        dayRows: root.querySelectorAll('.scenario-day-table tbody tr').length
+      };
+    }, plan.id);
+    assert.ok(geometry.pageOverflow <= 1 && geometry.rootLeft >= 0
+      && geometry.rootRight <= geometry.viewport + 1 && !geometry.rootChildrenOutside,
+    expected.width + 'px keeps the full Canvas inside the page: ' + JSON.stringify(geometry));
+    assert.deepEqual({ templateRows: geometry.templateRows, canvasRows: geometry.canvasRows,
+      deckRows: geometry.deckRows, receiptColumns: geometry.receiptColumns },
+    { templateRows: expected.templateRows, canvasRows: expected.canvasRows,
+      deckRows: expected.deckRows, receiptColumns: expected.receiptColumns },
+    expected.width + 'px uses the intended information composition');
+    assert.equal(geometry.visibleTemplates, 4, expected.width + 'px preserves every real-input template');
+    assert.equal(geometry.comparisonModes, 3, expected.width + 'px preserves every comparison question');
+    assert.equal(geometry.freeControlOutside, false,
+      expected.width + 'px keeps every non-table control directly reachable');
+    assert.equal(geometry.localScrollContained, true,
+      expected.width + 'px contains dense day and Greek tables in local scroll regions');
+    assert.ok(geometry.minTemplateFont >= 11 && !geometry.clippedTemplateCopy,
+      expected.width + 'px keeps template guidance legible and uncut: ' + JSON.stringify(geometry));
+    assert.ok(geometry.primaryMinHeight >= (mobile ? 38 : 30),
+      expected.width + 'px keeps primary controls usable: ' + JSON.stringify(geometry));
+    if (mobile) {
+      assert.equal(geometry.comparisonModeRows, 2,
+        expected.width + 'px comparison modes form a deliberate 2+1 grid');
+      assert.ok(geometry.fanWidth >= expected.width - 70,
+        expected.width + 'px gives the price-path instrument the available phone width');
+    }
+    assert.equal(geometry.fingerprint, responsiveBaseline.fingerprint,
+      expected.width + 'px still renders the identical immutable ensemble receipt');
+    assert.equal(geometry.canvasModel, responsiveBaseline.canvasModel,
+      expected.width + 'px changes presentation only, never Canvas assumptions');
+    assert.equal(geometry.underlying, responsiveBaseline.underlying,
+      expected.width + 'px keeps the identical stored path bands and IV series');
+    assert.equal(geometry.positions, responsiveBaseline.positions,
+      expected.width + 'px keeps the identical same-symbol position scope');
+    assert.equal(geometry.controlSignature, responsiveBaseline.controlSignature,
+      expected.width + 'px preserves control identity and reading order');
+    assert.equal(geometry.controlCount, responsiveBaseline.controlCount,
+      expected.width + 'px removes no capability');
+    assert.equal(geometry.dayRows, responsiveBaseline.dayRows,
+      expected.width + 'px preserves every exact day input');
+  }
+  assert.equal(responsiveEnsembleRuns, 0,
+    'responsive presentation never regenerates or reruns the stored ensemble');
+  await page.setViewportSize({ width: 1280, height: 720 });
 });
 
 test('a selected Plan future becomes one exact managed rehearsal with a durable receipt', async () => {
@@ -1698,6 +2151,8 @@ test('a selected Plan future becomes one exact managed rehearsal with a durable 
   // default-context AAPL plan, and creation dedupe would hand us its authored ensemble.
   const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish', '38d');
   await page.waitForSelector('#test-your-view', { timeout: 15000 });
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
+  await page.waitForSelector('#research-outcomes-basis-futures');
   await page.click('#research-outcomes-basis-futures');
   await page.waitForSelector('#whatif-card');
   await page.click('#whatif-run');
@@ -1996,7 +2451,9 @@ test('equivalent Plan retries collapse while materially different Plans survive 
   await page.setViewportSize({ width: 390, height: 844 });
   const survivorRow = page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.one + '"]');
   await survivorRow.waitFor({ state: 'visible' });
-  assert.equal(await survivorRow.locator('.home-plan-compact-actions .btn').first().isVisible(), true,
+  const survivorAction = survivorRow.locator('.home-plan-compact-actions .btn').first();
+  await survivorAction.waitFor({ state: 'visible' });
+  assert.equal(await survivorAction.isVisible(), true,
     'the surviving Plan keeps a usable desk row at the mobile viewport');
   assert.match(await survivorRow.locator('.home-plan-compact-meta').textContent(), /View bullish/);
   const heroContinue = page.locator('.home-hero-ctas button').filter({ hasText: /^Continue AAPL/ });
@@ -2112,15 +2569,18 @@ test('Home discards stale in-memory Plans after server-side lifecycle changes', 
 
 test('Plan Decide freezes one server-owned package and opens the linked paper position atomically', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('AAPL', 'strategy');
+  const plan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '28d');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
   const selectedQty = await page.evaluate(async planId => {
     const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    const listed = await API.getFresh('/api/research/AAPL/expirations');
+    const lastListed = (listed.expirations || []).slice().sort().at(-1);
     const candidate = latest.strategy.result.candidates.find(item => {
       const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK').map(leg => leg.expiration));
-      return expirations.size === 1;
+      return expirations.size === 1 && Array.from(expirations)[0] < lastListed;
     });
+    if (!candidate) throw new Error('fixture ranking did not produce a single-expiration package with a later listed roll date');
     const live = await PlanStore.get(planId, true);
     await PlanStore.selectCandidate(live, candidate.id);
     await App.render();
@@ -2222,12 +2682,19 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1,
     'Beginner can inspect the same per-leg Greek rows');
 
-  await page.evaluate(async () => { Learn.setLevel('expert'); await App.render(); });
-  await page.waitForSelector('#greeks-card');
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'expert'
+    && document.getElementById('app')?.dataset.ready === 'true'
+    && !App._rendering);
+  await page.waitForSelector('#greeks-card tbody tr');
   assert.match(await page.textContent('#greeks-card'), /Net delta.*Theta \/ day/s,
     'Expert retains aggregate and per-leg position Greeks in Plan management');
   assert.ok(await page.locator('#greeks-card tbody tr').count() >= 1, 'per-leg Greek rows remain auditable');
-  await page.evaluate(async () => { Learn.setLevel('beginner'); await App.render(); });
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'beginner'
+    && document.getElementById('app')?.dataset.ready === 'true'
+    && !App._rendering
+    && /How this position reacts/.test(document.getElementById('greeks-card')?.textContent || ''));
 
   await go('#/plan/' + plan.id + '/decide');
   // A frozen decision collapses the commit band to its conclusion; reopening it is one tap.
@@ -2246,7 +2713,14 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
   await page.click('#roll-btn');
   await page.waitForSelector('.position-roll-workbench:not([hidden]) .position-editor');
   await page.click('.position-roll-workbench [data-position-command="analyze"]');
-  await page.waitForSelector('#apply-roll-btn', { timeout: 30000 });
+  await page.waitForSelector('#apply-roll-btn', { timeout: 30000 }).catch(async error => {
+    const debug = await page.evaluate(async id => ({
+      workbench: document.querySelector('.position-roll-workbench')?.textContent || null,
+      toast: document.getElementById('toast-region')?.textContent || null,
+      plan: await API.getFresh('/api/plans/' + id)
+    }), plan.id);
+    throw new Error('Roll review did not become applicable: ' + JSON.stringify(debug) + '\n' + error.message);
+  });
   const rollApplyResponse = page.waitForResponse(response => response.url().endsWith('/api/position-transformations/apply')
     && response.request().method() === 'POST');
   await page.click('#apply-roll-btn');
@@ -2296,14 +2770,14 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
 
   await go('#/portfolio');
   await page.waitForSelector('#pf-sec-positions.active');
-  assert.equal((await page.locator('#app > h1').textContent()).trim(), 'Book');
+  assert.equal((await page.locator('#app > .route-mount > h1').textContent()).trim(), 'Book');
   assert.equal(await page.locator('#pf-sec-plans').count(), 0,
     'Portfolio owns money and positions without a second Plan library');
 });
 
 test('the third decision outcome records a broker placement into the tracked book', async () => {
   await page.evaluate(() => Learn.setLevel('beginner'));
-  const plan = await openPlan('AAPL', 'strategy');
+  const plan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '56d');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
   await page.evaluate(async planId => {
@@ -2363,14 +2837,22 @@ test('the third decision outcome records a broker placement into the tracked boo
   assert.equal(frozen.plan.status, 'POSITION_OPEN');
   assert.ok(!frozen.decision.tradeId, 'a broker placement opens no practice trade');
 
-  await page.click('#plan-open-book');
-  await page.waitForFunction(() => location.hash.startsWith('#/portfolio/book'));
-  await page.waitForSelector('#app[data-ready="true"]');
+  const bookNavigationCommit = await page.locator('#plan-open-book').evaluate(button => {
+    button.click();
+    return { hash: location.hash,
+      ready: document.getElementById('app')?.getAttribute('data-ready') };
+  });
+  assert.deepEqual(bookNavigationCommit,
+    { hash: '#/portfolio/book/overview', ready: 'false' },
+    'the URL and readiness marker commit together, so the outgoing Plan cannot masquerade as the Book');
+  await page.waitForFunction(() => location.hash === '#/portfolio/book/overview'
+    && App._lastRenderedRoute === '#/portfolio/book/overview'
+    && document.getElementById('app')?.getAttribute('data-ready') === 'true');
   // The Book's account sections fill asynchronously after the route shell is ready —
   // wait for the tracked account to paint rather than sampling between fills.
-  await page.waitForFunction(() => /Real brokerage/.test(document.getElementById('app')?.textContent || ''),
+  await page.waitForFunction(() => /Real brokerage/.test(document.getElementById('portfolio-mode-panel')?.textContent || ''),
     null, { timeout: 15000 });
-  assert.match(await page.textContent('#app'), /Real brokerage/,
+  assert.match(await page.textContent('#portfolio-mode-panel'), /Real brokerage/,
     'the live strip hands off to the one accounting surface instead of duplicating it');
 });
 
@@ -2762,8 +3244,37 @@ test('Plan Manage keeps assigned shares visible when no option leg survives', as
   assert.equal(result.currentIdentity, 'Long shares');
   assert.equal(result.currentLegs.length, 1);
   assert.equal(result.currentLegs[0].instrumentType, 'STOCK');
+
+  // Hold the small, post-ready Strategy-conclusion enrichment. It must update only that
+  // folded conclusion; it cannot repaint the later Live band or steal keyboard focus.
+  let releaseStrategyLatest;
+  let markStrategyLatestStarted;
+  const strategyLatestGate = new Promise(resolve => { releaseStrategyLatest = resolve; });
+  const strategyLatestStarted = new Promise(resolve => { markStrategyLatestStarted = resolve; });
+  const holdStrategyLatest = async route => {
+    markStrategyLatestStarted();
+    await strategyLatestGate;
+    await route.continue();
+  };
+  await page.route(`**/api/plans/${result.planId}/strategy/latest`, holdStrategyLatest);
   await go('#/plan/' + result.planId + '/manage-review');
   await page.waitForSelector('.plan-current-receipt-position');
+  await Promise.race([strategyLatestStarted,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Strategy conclusion enrichment did not start')), 5000))]);
+  await page.evaluate(() => {
+    window.__managedReceiptNode = document.querySelector('.plan-current-receipt-position');
+    window.__strategyConclusionButton = document.querySelector('[data-band="strategy"] .flow-band-conclusion');
+    window.__strategyConclusionButton.focus({ preventScroll: true });
+  });
+  releaseStrategyLatest();
+  await page.waitForFunction(() => /Selected structure:/.test(
+    document.querySelector('[data-band="strategy"] .flow-band-conclusion-body')?.textContent || ''));
+  assert.equal(await page.evaluate(() => window.__managedReceiptNode
+    === document.querySelector('.plan-current-receipt-position')), true,
+  'enriching the folded Strategy conclusion preserves the exact mounted Manage receipt');
+  assert.equal(await page.evaluate(() => document.activeElement === window.__strategyConclusionButton), true,
+    'conclusion enrichment preserves keyboard focus on the same button');
+  await page.unroute(`**/api/plans/${result.planId}/strategy/latest`, holdStrategyLatest);
   const text = await page.textContent('#app');
   assert.match(text, /Current Plan position.*Long shares.*Account shares.*ASSIGNMENT/s);
   assert.doesNotMatch(text, /linked position is unavailable/i);
@@ -2798,12 +3309,12 @@ test('financial formatters and mixed packages fail closed instead of rendering N
     const activePlanGoal = App.context.goal();
     const covered = Builder.TEMPLATES.find(t => t.family === 'COVERED_CALL');
     var owner = { builderForm: {
-      symbol: 'AAPL', qty: 1, goal: 'BROWSE', templateKey: covered.key,
+      symbol: 'AAPL', qty: 1, goal: 'INCOME', templateKey: covered.key,
       legs: [{ action: 'BUY', type: 'STOCK', strike: null, expiration: null, ratio: 1 },
         { action: 'SELL', type: 'CALL', strike: '260', expiration: '2026-08-21', ratio: 1 }],
       excluded: {}
     } };
-    const ticket = Builder.prepareTicket(owner, { goal: 'BROWSE', thesis: 'neutral', horizon: 'month' });
+    const ticket = Builder.prepareTicket(owner, { goal: 'INCOME', thesis: 'neutral', horizon: 'month' });
     return { cleared, activePlanGoalBefore, activePlanGoal,
       templateIntent: covered.primaryIntent, ticketIntent: ticket.intent };
   });
@@ -2811,7 +3322,7 @@ test('financial formatters and mixed packages fail closed instead of rendering N
   assert.equal(contextContract.activePlanGoal, contextContract.activePlanGoalBefore,
     'editing provisional discovery context never rewrites the Plan currently on screen');
   assert.equal(contextContract.templateIntent, 'INCOME', 'server catalog supplies the structure intent');
-  assert.equal(contextContract.ticketIntent, 'INCOME', 'Browse all infers intent from the chosen structure');
+  assert.equal(contextContract.ticketIntent, 'INCOME', 'the explicit Plan goal survives Builder normalization');
   assert.equal(await page.evaluate(() => UI.maxProfitLabel('DIAGONAL_CALL', 'time', null, true)),
     'No single dollar ceiling', 'a multi-expiration package names the missing scalar without model jargon or fake infinity');
   const tieContract = await page.evaluate(() => {
@@ -2916,10 +3427,13 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   // Coming up: expirations (and any earnings/filing signals) as dated chips
   await page.waitForSelector('#events-card .event-timeline-item');
   assert.match(await page.textContent('#events-card'), /OPTION EXPIRY/i);
-  assert.equal(await page.locator('.research-local-tabs [role="tab"]').count(), 3,
-    'read-only Research owns one compact Overview, Evidence and Options workspace');
+  assert.equal(await page.locator('.research-local-tabs [role="tab"]').count(), 0,
+    'read-only Research no longer hides its work behind a local tab set');
+  assert.equal(await page.locator('#research-flow > .flow-band').count(), 3,
+    'understanding, evidence, and option inspection are bands in one mounted document');
   assert.equal(await page.locator('#plan-flow').count(), 0,
     'inspecting a symbol never mints a Plan or borrows the Plan journey flow');
+  await page.evaluate(() => { window.__publicResearchFlow = document.getElementById('research-flow'); });
   await page.waitForSelector('#news-overview-card .news-tile');
   assert.ok(await page.locator('#news-overview-card .news-tile').count() >= 1,
     'latest news remains part of the market overview');
@@ -2935,6 +3449,8 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
   assert.equal(await page.locator('.quote-hero .badge:has-text("DEMO DATA")').count(), 0,
     'the hero does not repeat the page-level Demo evidence label');
   await openResearchTab('options');
+  assert.equal(await page.evaluate(() => window.__publicResearchFlow === document.getElementById('research-flow')), true,
+    'moving between public Research bands updates the mounted document in place');
   await page.waitForSelector('#expiration-select');
   await page.waitForSelector('.tbl tbody tr.atm'); // ATM row highlighted
   const focused = await page.locator('.tbl tbody tr').count();
@@ -2950,12 +3466,99 @@ test('research AAPL: hero quote, events, news, focused chain, show-all toggle', 
     'Overview, news and option-chain inspection remain read-only until an explicit Plan action');
 });
 
+test('Research renders versioned keyword sentiment and typed event risk without pretending it read articles', async () => {
+  const news = {
+    symbol: 'AAPL', scorerVersion: 'sentiment-keyword-v1', evidence: 'OBSERVED',
+    note: 'Keyword-derived headline classification; open the source before treating a headline as evidence.',
+    aggregate: { available: true, trend: 'POSITIVE', score: 0.5, totalHeadlines: 3, scoredHeadlines: 2,
+      positiveHeadlines: 1, negativeHeadlines: 0, mixedHeadlines: 1, neutralHeadlines: 1,
+      coverageRatio: 0.67, eventRisk: true, eventRiskHeadlines: 1, eventRiskFlags: ['EARNINGS'],
+      basis: 'KEYWORD_DERIVED', scorerVersion: 'sentiment-keyword-v1',
+      note: 'Keyword-derived headline classification; open the source before treating a headline as evidence.' },
+    items: [
+      { symbol: 'AAPL', headline: 'AAPL beats estimates as growth accelerates', source: 'Observed Wire',
+        url: 'https://example.invalid/positive', publishedEpochMs: Date.now(), classification: 'POSITIVE', score: 1,
+        basis: 'KEYWORD_DERIVED', positiveKeywords: ['beat', 'growth', 'accelerat'], negativeKeywords: [],
+        eventRisk: true, eventRiskFlags: ['EARNINGS'], scorerVersion: 'sentiment-keyword-v1' },
+      { symbol: 'AAPL', headline: 'AAPL outlook mixes growth with warning', source: 'Observed Wire',
+        url: 'https://example.invalid/mixed', publishedEpochMs: Date.now() - 1000, classification: 'MIXED', score: 0,
+        basis: 'KEYWORD_DERIVED', positiveKeywords: ['growth'], negativeKeywords: ['warning'],
+        eventRisk: false, eventRiskFlags: [], scorerVersion: 'sentiment-keyword-v1' },
+      { symbol: 'AAPL', headline: 'AAPL schedules investor presentation', source: 'Observed Wire',
+        url: 'https://example.invalid/neutral', publishedEpochMs: Date.now() - 2000, classification: 'NEUTRAL', score: 0,
+        basis: 'KEYWORD_DERIVED', positiveKeywords: [], negativeKeywords: [], eventRisk: false,
+        eventRiskFlags: [], scorerVersion: 'sentiment-keyword-v1' }
+    ]
+  };
+  news.eventRisk = [news.items[0]];
+  const prior = await page.evaluate(() => ({
+    world: App.state.world, level: Learn.currentLevel(), universe: App.state.universe,
+    revision: App.state.worldRevision || 0, epoch: App.state.worldRevisionEpoch || null
+  }));
+  const observedUniverse = JSON.parse(JSON.stringify(prior.universe));
+  observedUniverse.lane = 'OBSERVED';
+  observedUniverse.active = Object.assign({}, observedUniverse.active, {
+    label: 'Observed sentiment fixture', symbols: Array.from(new Set([
+      'AAPL', ...((observedUniverse.active && observedUniverse.active.symbols) || [])
+    ]))
+  });
+  let mockedWorld = prior.world;
+  const worldRoute = async route => {
+    if (route.request().method() === 'PUT') mockedWorld = route.request().postDataJSON().world;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      world: mockedWorld,
+      universe: mockedWorld === 'observed' ? observedUniverse : prior.universe,
+      revision: prior.revision,
+      epoch: prior.epoch
+    }) });
+  };
+  // The fixture jar deliberately refuses an Observed lane. Mock the complete selector
+  // contract for this presentation test so App.switchWorld still moves the authoritative
+  // response, App state, MarketStore, and universe together; never mutate lane owners by hand.
+  await page.route('**/api/world', worldRoute);
+  await page.route('**/api/research/AAPL/news', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(news)
+  }));
+  try {
+    const switched = await page.evaluate(async () => {
+      API.flushCache();
+      Learn.setLevel('beginner');
+      return App.state.world === 'observed' || await App.switchWorld('observed');
+    });
+    assert.equal(switched, true, 'the sentiment fixture enters Observed through the canonical world transition');
+    await go('#/research/AAPL');
+    await page.waitForSelector('#news-sentiment-summary');
+    const summary = await page.textContent('#news-sentiment-summary');
+    assert.match(summary, /Positive keyword trend.*2 of 3 headlines matched.*67% coverage/is);
+    assert.match(summary, /1 event-risk headline.*Earnings/is,
+      'the aggregate exposes the typed event-risk feed beside coverage');
+    assert.equal(await page.locator('#news-overview-card .news-tile .news-sentiment-positive').count(), 1,
+      'each matching headline carries its colored but explicitly keyword-derived classification');
+    assert.match(await page.textContent('#news-overview-card .news-tile .news-sentiment-positive'), /Positive.*keyword-derived/i);
+    assert.match(await page.getAttribute('#news-overview-card .news-tile .news-sentiment-positive', 'title'), /positive: beat, growth, accelerat/i,
+      'the inspectable matched-keyword basis is available without claiming article understanding');
+    await page.click('#level-switch button[data-level="expert"]');
+    await page.waitForFunction(() => /Scorer sentiment-keyword-v1/.test(
+      document.getElementById('news-sentiment-summary')?.textContent || ''));
+    assert.match(await page.textContent('#news-sentiment-summary'), /aggregate score 0\.50/i,
+      'Expert sees the exact persisted scorer identity and aggregate value');
+  } finally {
+    await page.evaluate(async priorState => {
+      API.flushCache();
+      Learn.setLevel(priorState.level);
+      if (App.state.world !== priorState.world) await App.switchWorld(priorState.world);
+    }, prior);
+    await page.unroute('**/api/research/AAPL/news');
+    await page.unroute('**/api/world', worldRoute);
+  }
+});
+
 test('research keeps non-optionable funds useful without inventing an options Plan or company catalyst', async () => {
   await go('#/research/VTSAX');
   await page.waitForSelector('#symbol-proposed-trades');
   assert.match(await page.textContent('#symbol-proposed-trades'), /no listed options/i);
   assert.ok(await page.locator('#history-card').count(), 'stock history remains available without an options Plan');
-  assert.equal(await page.locator('#symbol-proposed-goal option').count(), 5,
+  assert.equal(await page.locator('#symbol-proposed-goal .choice-option').count(), 5,
     'all goals remain visible even when the market cannot price an option package');
   assert.equal(await page.locator('#symbol-find-proposed').isDisabled(), true,
     'one explicit command blocks creation of an unpriceable options Plan');
@@ -2972,7 +3575,11 @@ test('research keeps non-optionable funds useful without inventing an options Pl
 
 test('Research entry and destination cards are purposeful, readable, and collision-free', async () => {
   await page.click('#level-switch button[data-level="beginner"]');
-  await page.evaluate(() => App.context.selectThesis(null));
+  await page.evaluate(() => {
+    localStorage.removeItem('strikebench.riskMode');
+    App.state.headerRiskExplicit = false;
+    App.context.update({ goal: null, thesis: null, horizon: null });
+  });
   await go('#/research');
   await page.waitForSelector('#sector-grid .sym-card[data-sym="AAPL"] .spark-svg', { timeout: 15000 });
   const geometry = await page.evaluate(() => {
@@ -3004,14 +3611,22 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   await page.waitForSelector('#symbol-proposed-trades');
   assert.doesNotMatch(await page.textContent('#research-hero'), /building history/i,
     'Research never presents an inert IV-rank progress placeholder');
-  assert.match(await page.textContent('#symbol-proposed-trades'), /Find proposed trades for AAPL/);
+  assert.equal(await page.locator('#research-hero #plan-understand-next').count(), 0,
+    'public Research keeps Evidence in its named Flow band and does not duplicate that entry inside the quote hero');
+  assert.match(await page.textContent('#symbol-proposed-trades'), /Choose the job, then continue/);
+  assert.equal(await page.locator('.symbol-proposed-starting').count(), 0,
+    'a fresh Research handoff has no invented starting assumptions');
+  assert.match(await page.textContent('.symbol-proposed-missing'), /goal.*horizon.*risk posture/i,
+    'the compact handoff names every fact that still belongs in Your view');
+  assert.equal(await page.locator('#symbol-find-proposed').isDisabled(), true,
+    'the action is unavailable until a goal is actually chosen');
   const intentChoices = await page.evaluate(() => {
     const card = document.querySelector('#symbol-proposed-trades');
     const select = document.querySelector('#symbol-proposed-goal');
     const action = document.querySelector('#symbol-find-proposed');
     const cardBox = card.getBoundingClientRect();
     return {
-      goals: select.options.length,
+      goals: select.querySelectorAll('.choice-option').length,
       selectInside: select.getBoundingClientRect().left >= cardBox.left
         && select.getBoundingClientRect().right <= cardBox.right,
       actionInside: action.getBoundingClientRect().left >= cardBox.left
@@ -3022,29 +3637,203 @@ test('Research entry and destination cards are purposeful, readable, and collisi
   assert.equal(intentChoices.goals, 5, 'every Plan goal remains available before commitment');
   assert.ok(intentChoices.selectInside && intentChoices.actionInside && intentChoices.actionVisible,
     'the compact goal and action remain fully visible inside the discovery card: ' + JSON.stringify(intentChoices));
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const desktopCommand = await page.evaluate(() => {
+    const app = document.getElementById('app').getBoundingClientRect();
+    const row = document.querySelector('.research-decision-row');
+    const card = document.getElementById('symbol-proposed-trades').getBoundingClientRect();
+    const copy = document.querySelector('.symbol-proposed-copy').getBoundingClientRect();
+    const action = document.querySelector('.symbol-proposed-action').getBoundingClientRect();
+    const select = document.getElementById('symbol-proposed-goal').getBoundingClientRect();
+    const button = document.getElementById('symbol-find-proposed').getBoundingClientRect();
+    return { appWidth: app.width, cardWidth: card.width, cardHeight: card.height,
+      rowDisplay: getComputedStyle(row).display, copyTop: copy.top, actionTop: action.top,
+      selectBottom: select.bottom, buttonBottom: button.bottom };
+  });
+  assert.equal(desktopCommand.rowDisplay, 'block',
+    'wide desktop keeps quote context above the command instead of stretching two false peer cards');
+  assert.ok(desktopCommand.cardWidth > desktopCommand.appWidth * .90 && desktopCommand.cardHeight < 180,
+    'Ready to compare uses the desktop width as a compact action strip: ' + JSON.stringify(desktopCommand));
+  assert.ok(Math.abs(desktopCommand.copyTop - desktopCommand.actionTop) < 12
+      && Math.abs(desktopCommand.selectBottom - desktopCommand.buttonBottom) < 3,
+    'copy and controls start together; the command aligns with its field rather than floating mid-card: '
+      + JSON.stringify(desktopCommand));
+  await page.locator('.research-decision-row').screenshot({
+    path: path.join(__dirname, 'shots/program-one-research-ready-desktop.png')
+  });
+  await page.evaluate(() => { window.__responsiveResearchFlow = document.getElementById('research-flow'); });
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 2048, height: 1000 },
+    { width: 1920, height: 900 }, { width: 1440, height: 900 }, { width: 1280, height: 800 },
+    { width: 1000, height: 900 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const responsive = await page.evaluate(() => {
+      const app = document.getElementById('app').getBoundingClientRect();
+      const ready = document.getElementById('symbol-proposed-trades').getBoundingClientRect();
+      const bar = document.querySelector('.plan-bar-inner')?.getBoundingClientRect();
+      return { viewport: innerWidth, appWidth: app.width, readyWidth: ready.width, readyHeight: ready.height,
+        planBarWidth: bar?.width || 0,
+        documentWidth: document.documentElement.scrollWidth,
+        goals: document.querySelectorAll('#symbol-proposed-goal .choice-option').length,
+        sameFlow: window.__responsiveResearchFlow === document.getElementById('research-flow') };
+    });
+    assert.ok(responsive.documentWidth <= viewport.width + 2,
+      'Research remains page-contained at ' + viewport.width + 'px: ' + JSON.stringify(responsive));
+    assert.equal(responsive.goals, 5,
+      'mobile and logical-5K layouts retain every Plan goal at ' + viewport.width + 'px');
+    assert.equal(responsive.sameFlow, true,
+      'responsive CSS never remounts the public Research SPA document');
+    assert.ok(responsive.readyWidth <= responsive.appWidth + 2,
+      'Ready to compare remains inside the Research workspace at ' + viewport.width + 'px');
+    assert.ok(responsive.appWidth >= viewport.width * .88,
+      'Research spends the available canvas at ' + viewport.width + 'px: ' + JSON.stringify(responsive));
+    if (viewport.width === 2560) {
+      assert.ok(responsive.appWidth >= 2400 && responsive.readyWidth >= responsive.appWidth * .90
+          && responsive.readyHeight < 180,
+        '2560×1440 spends the logical 5K canvas on a compact working command: ' + JSON.stringify(responsive));
+      if (responsive.planBarWidth) assert.ok(responsive.planBarWidth >= responsive.appWidth * .98,
+        'the persistent Plan context bar aligns with the widened Research document: ' + JSON.stringify(responsive));
+      await page.click('#symbol-proposed-goal .choice-option[data-value="INCOME"]');
+      assert.equal(await page.locator('#symbol-find-proposed').isDisabled(), false,
+        'the actual 2560px goal control enables the canonical continuation');
+      assert.equal((await page.textContent('#symbol-find-proposed')).trim(), 'Continue to Your view');
+      assert.match(await page.textContent('.symbol-proposed-missing'), /horizon.*risk posture/i,
+        'the 2560px command immediately removes the chosen goal from its visible missing facts');
+      await page.screenshot({ path: path.join(__dirname, 'shots/program-one-research-ready-2560.png'), fullPage: false });
+    }
+    if (viewport.width === 390) {
+      await page.click('#symbol-proposed-goal .choice-option[data-value="DIRECTIONAL"]');
+      assert.equal(await page.locator('#symbol-find-proposed').isDisabled(), false,
+        'the same mobile goal control enables the same canonical continuation');
+      assert.equal((await page.textContent('#symbol-find-proposed')).trim(), 'Continue to Your view');
+      assert.match(await page.textContent('.symbol-proposed-missing'), /view.*horizon.*risk posture/i,
+        'mobile names the directional facts that still belong in Your view');
+      await page.screenshot({ path: path.join(__dirname, 'shots/program-one-research-ready-mobile.png'), fullPage: false });
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.click('#symbol-proposed-goal .choice-option[data-value="INCOME"]');
+  assert.equal((await page.locator('#symbol-find-proposed').textContent()).trim(), 'Continue to Your view',
+    'a non-directional goal still requires an explicit horizon and risk posture');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="DIRECTIONAL"]');
+  assert.equal((await page.locator('#symbol-find-proposed').textContent()).trim(), 'Continue to Your view',
+    'the same canonical command routes a directional Plan through all missing declarations');
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   const plansBeforeEvidence = await page.evaluate(() => PlanStore.all().length);
   await openResearchTab('view');
   await page.waitForSelector('#tv-view');
-  assert.equal(await page.getByLabel('Your market view').count(), 1,
-    'the public Research view control is associated with its visible label');
-  assert.equal(await page.getByLabel('Historical condition to examine').count(), 1,
-    'the historical-condition control is associated with its visible label');
-  assert.equal(await page.getByLabel('Over how many trading days?').count(), 1,
+  assert.equal(await page.getByLabel('2 · What do you expect next?').count(), 1,
+    'the forward outcome control follows the trigger and is associated with its visible label');
+  assert.equal(await page.getByLabel('1 · What just happened?').count(), 1,
+    'the historical trigger is asked first and is associated with its visible label');
+  assert.equal(await page.getByLabel('3 · Over how many trading days?').count(), 1,
     'the public Research horizon control is associated with its visible label');
+  const evidenceOrder = await page.evaluate(() => Array.from(document.querySelectorAll(
+    '#test-your-view #tv-setup, #test-your-view #tv-view, #test-your-view #tv-horizon'
+  )).map(node => node.id));
+  assert.deepEqual(evidenceOrder, ['tv-setup', 'tv-view', 'tv-horizon'],
+    'the evidence question reads in time order: trigger, expected outcome, then horizon');
+  assert.equal(await page.locator('#tv-setup .info-trigger[data-term="historicalsetup"], #tv-view .info-trigger[data-term="thesis"], .tv-horizon-field .info-trigger[data-term="horizon"]').count(), 3,
+    'all three technical labels use the same registry-backed explanation system');
+  await page.evaluate(() => { window.__researchLensFlow = document.getElementById('research-flow'); });
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'expert' && document.querySelector('#tv-setup'));
+  assert.equal(await page.evaluate(() => window.__researchLensFlow === document.getElementById('research-flow')), true,
+    'Beginner/Expert changes the mounted Research lens without remounting the destination');
+  await page.hover('#tv-setup .info-trigger[data-term="historicalsetup"]');
+  await page.waitForSelector('#info-pop');
+  assert.match(await page.textContent('#info-pop'), /ResearchQuestionEngine catalog key.*forward-outcome claim/is,
+    'Expert hover opens the registry-backed technical definition instead of losing earlier explanations');
+  await page.keyboard.press('Escape');
+  await page.click('#level-switch button[data-level="beginner"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'beginner' && document.querySelector('#tv-setup'));
   assert.equal(await page.locator('#tv-view .choice-option.active').count(), 0,
     'read-only Research never displays an implicit bullish default');
-  assert.match(await page.textContent('#test-your-view'), /Choose the view you want to test/);
+  assert.equal(await page.locator('#tv-setup .choice-option.active').count(), 0,
+    'read-only Research never displays an implicit historical trigger');
+  assert.equal(await page.inputValue('#tv-horizon'), '',
+    'read-only Research never displays an implicit horizon');
+  assert.match(await page.textContent('#test-your-view'), /Complete the question to test it/);
   assert.equal(await page.locator('#research-outcomes').count(), 0,
     'statistical lenses do not run under an assumption the user has not selected');
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 2048, height: 1000 },
+    { width: 1920, height: 900 }, { width: 1440, height: 900 }, { width: 1280, height: 800 },
+    { width: 1000, height: 900 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const evidenceLayout = await page.evaluate(() => {
+      const app = document.getElementById('app').getBoundingClientRect();
+      const setup = document.getElementById('tv-setup');
+      const view = document.getElementById('tv-view');
+      const horizon = document.querySelector('.tv-horizon-field');
+      const columns = node => getComputedStyle(node.querySelector('.choice-group'))
+        .gridTemplateColumns.split(' ').filter(Boolean).length;
+      return {
+        viewport: innerWidth,
+        appWidth: app.width,
+        documentWidth: document.documentElement.scrollWidth,
+        setupTop: setup.getBoundingClientRect().top,
+        viewTop: view.getBoundingClientRect().top,
+        horizonTop: horizon.getBoundingClientRect().top,
+        setupChoices: setup.querySelectorAll('.choice-option').length,
+        viewChoices: view.querySelectorAll('.choice-option').length,
+        setupColumns: columns(setup),
+        viewColumns: columns(view),
+        horizonInside: horizon.getBoundingClientRect().right <= app.right + 2,
+        sameFlow: window.__researchLensFlow === document.getElementById('research-flow')
+      };
+    });
+    assert.ok(evidenceLayout.documentWidth <= viewport.width + 2,
+      'Evidence remains page-contained at ' + viewport.width + 'px: ' + JSON.stringify(evidenceLayout));
+    assert.equal(evidenceLayout.sameFlow, true,
+      'responsive Evidence composition never remounts the public Research SPA document');
+    assert.equal(evidenceLayout.setupChoices, 5,
+      'every historical trigger remains available at ' + viewport.width + 'px');
+    assert.equal(evidenceLayout.viewChoices, 4,
+      'every forward expectation remains available at ' + viewport.width + 'px');
+    assert.ok(evidenceLayout.horizonInside,
+      'the horizon control remains inside the workspace at ' + viewport.width + 'px');
+    assert.ok(evidenceLayout.appWidth >= viewport.width * .88,
+      'Evidence spends the available canvas at ' + viewport.width + 'px: ' + JSON.stringify(evidenceLayout));
+    if (viewport.width === 2560) {
+      assert.ok(evidenceLayout.appWidth >= 2400,
+        'Evidence spends the 2560×1440 logical 5K workspace: ' + JSON.stringify(evidenceLayout));
+      assert.ok(Math.max(evidenceLayout.setupTop, evidenceLayout.viewTop, evidenceLayout.horizonTop)
+          - Math.min(evidenceLayout.setupTop, evidenceLayout.viewTop, evidenceLayout.horizonTop) < 16,
+      'trigger, expectation, and horizon begin on one causal row at 2560px: '
+          + JSON.stringify(evidenceLayout));
+      assert.deepEqual([evidenceLayout.setupColumns, evidenceLayout.viewColumns], [5, 4],
+        'wide Evidence uses natural five- and four-choice grids instead of stretched vertical controls');
+      await page.screenshot({
+        path: path.join(__dirname, 'shots/program-one-research-evidence-2560.png'), fullPage: false
+      });
+    }
+    if (viewport.width === 390) {
+      await page.screenshot({
+        path: path.join(__dirname, 'shots/program-one-research-evidence-mobile.png'), fullPage: false
+      });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   await page.click('#tv-view .choice-option[data-value="bullish"]');
-  await page.waitForSelector('#research-outcomes');
   await page.fill('#tv-horizon', '20');
   await page.dispatchEvent('#tv-horizon', 'change');
+  await page.waitForSelector('#research-outcomes');
+  assert.match(await page.textContent('#tv-question-summary'), /After AAPL pulls back.*\d+ trading days.*support your view.*finish higher/i,
+    'the chosen controls compose one readable cause-and-outcome question');
+  assert.match(await page.textContent('#test-your-view'), /Sideways is what you expect next.*More- or less-volatile is the backdrop.*does not pretend to know whether the path was choppy/is,
+    'the UI distinguishes a sideways thesis from measured volatility and does not mislabel volatility as choppiness');
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(__dirname, 'shots/program-one-research-evidence-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await chooseHeaderRisk('balanced');
   assert.equal(await page.evaluate(() => PlanStore.all().length), plansBeforeEvidence,
     'selecting and testing a public view does not silently create a Plan');
   await openResearchTab('overview');
-  await page.selectOption('#symbol-proposed-goal', 'ACQUIRE');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="ACQUIRE"]');
   await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => document.querySelector('#plan-header')?.textContent.includes('Buy at a discount')
     && location.hash.endsWith('/strategy'), null, { timeout: 15000 });
@@ -3062,8 +3851,79 @@ test('Research entry and destination cards are purposeful, readable, and collisi
     'symbol identity is immutable in the Plan header rather than recaptured in the stage');
 });
 
+test('Sector Explorer changes the observed universe without remounting the Research SPA', async () => {
+  const prior = await page.evaluate(() => ({
+    world: App.state.world,
+    universe: App.state.universe,
+    explorerSector: App.state.explorerSector
+  }));
+  let activeKey = 'TECH';
+  const universe = () => ({
+    active: activeKey === 'INDEX'
+      ? { sectorKey: 'INDEX', label: 'Indexes', symbols: ['SPY'] }
+      : { sectorKey: 'TECH', label: 'Technology', symbols: ['AAPL'] },
+    sectors: [
+      { key: 'TECH', label: 'Technology', symbols: ['AAPL'] },
+      { key: 'INDEX', label: 'Indexes', symbols: ['SPY'] }
+    ],
+    lane: 'OBSERVED', note: 'SPA identity regression fixture'
+  });
+  const universeRoute = async route => {
+    if (route.request().method() === 'PUT') {
+      activeKey = route.request().postDataJSON().sector;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(universe()) });
+  };
+  await page.route('**/api/universe', universeRoute);
+  try {
+    await page.evaluate(async fake => {
+      App.state.world = 'observed';
+      App.state.universe = fake;
+      App.state.explorerSector = 'INDEX';
+      history.replaceState(null, '', '#/research');
+      await App.render();
+    }, universe());
+    await page.waitForSelector('#set-universe-btn');
+    await page.waitForSelector('#sector-grid .sym-card[data-sym="SPY"]');
+    await page.evaluate(() => {
+      window.__sectorExplorerIdentity = document.getElementById('sector-explorer');
+      window.__sectorGridIdentity = document.getElementById('sector-grid');
+    });
+    await page.click('#set-universe-btn');
+    await page.waitForSelector('#active-universe-status');
+    const result = await page.evaluate(() => ({
+      sameExplorer: window.__sectorExplorerIdentity === document.getElementById('sector-explorer'),
+      sameGrid: window.__sectorGridIdentity === document.getElementById('sector-grid'),
+      focused: document.activeElement && document.activeElement.id,
+      activeUniverse: document.getElementById('sector-explorer').dataset.activeUniverse,
+      hash: location.hash,
+      symbolStillMounted: !!document.querySelector('#sector-grid .sym-card[data-sym="SPY"]')
+    }));
+    assert.deepEqual(result, {
+      sameExplorer: true,
+      sameGrid: true,
+      focused: 'active-universe-status',
+      activeUniverse: 'INDEX',
+      hash: '#/research',
+      symbolStillMounted: true
+    }, 'persisting market scope updates the mounted Explorer and focus in place');
+  } finally {
+    await page.unroute('**/api/universe', universeRoute);
+    await page.evaluate(async restore => {
+      delete window.__sectorExplorerIdentity;
+      delete window.__sectorGridIdentity;
+      App.state.world = restore.world;
+      App.state.universe = restore.universe;
+      App.state.explorerSector = restore.explorerSector;
+      history.replaceState(null, '', '#/home');
+      await App.render();
+    }, prior);
+  }
+});
+
 test('navigation is NEVER trapped behind a slow route (Research does not block moving away)', async () => {
-  // Gate /api/research/AAPL so it hangs; the shell must still paint AND we must be able to leave.
+  // Gate the active public-Research producer itself so it hangs; the mounted shell must paint
+  // AND a different destination must supersede it without waiting for the provider.
   let release;
   const gate = new Promise(r => { release = r; });
   await page.route('**/api/research/AAPL', async route => {
@@ -3074,8 +3934,8 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
     await page.evaluate(() => { API.flushCache(); window.location.hash = '#/home'; });
     await page.waitForFunction(() => document.getElementById('app').getAttribute('data-route') === 'home');
     await page.evaluate(() => API.flushCache());
-    await openPlan('AAPL');
-    await page.waitForSelector('#plan-flow', { timeout: 4000 }); // the flow shell paints before the gated fetch
+    await page.evaluate(() => { window.location.hash = '#/research/AAPL'; });
+    await page.waitForSelector('#research-flow', { timeout: 4000 });
     // Now leave immediately — with the old serialized render this hung until the fetch resolved.
     await page.evaluate(() => { window.location.hash = '#/portfolio'; });
     await page.waitForFunction(
@@ -3163,6 +4023,9 @@ test('returning Home paints a stable desk while durable Plans reconcile', async 
 /** The futures stage lives inside Test your view now — select its pill before using #whatif-card. */
 async function openFutures() {
   await openResearchTab('view');
+  if (await page.locator('#tv-setup .choice-option.active').count() === 0) {
+    await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
+  }
   await page.waitForSelector('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
   await page.click('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
   await page.waitForSelector('#tv-futures', { timeout: 15000 });
@@ -3296,7 +4159,7 @@ test('Evidence remains structure-less until Strategy selects a position', async 
   await page.evaluate(() => {
     App.context.update({ symbol: 'AAPL', goal: 'DIRECTIONAL', horizon: 'week', thesis: 'neutral' });
   });
-  await openPlan('AAPL');
+  await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'neutral', 'week');
   await page.evaluate(() => {
     Object.assign(PlanStore.ui(App.state.activePlanId).scenarioForm = {},
       { shape: 'CHOP', horizon: 5, mag: 'typical', seed: 55119 });
@@ -3409,10 +4272,12 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   await page.evaluate(() => App.context.update({
     symbol: 'AAPL', goal: 'ACQUIRE', horizon: 'quarter', thesis: 'neutral'
   }));
-  const plan = await openPlan('AAPL', 'understand', 'ACQUIRE', 'neutral');
+  const plan = await openPlan('AAPL', 'understand', 'ACQUIRE', 'neutral', 'quarter');
   await page.waitForSelector('#plan-flow');
   const durablePlanRoute = await page.evaluate(() => location.hash);
-  await page.click('#plan-edit-context');
+  if (!await page.locator('[data-band="view"] #plan-declare-view').isVisible()) {
+    await page.click('#plan-edit-context');
+  }
   await page.waitForSelector('[data-band="view"] #plan-declare-view');
   await page.locator('[data-band="view"] .choice-segmented .choice-option').filter({ hasText: 'Custom' }).click();
   await page.fill('#plan-horizon-days', '63');
@@ -3627,7 +4492,7 @@ test('every scenario story runs at both levels (the Big-news-shock crash class)'
   // Run EVERY beginner story card end-to-end, then every expert shape via the select.
   await page.click('#level-switch button[data-level="beginner"]');
   await page.evaluate(() => App.context.update({ symbol: 'AAPL', thesis: 'neutral', horizon: 'month' }));
-  await openPlan('AAPL');
+  await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'neutral', 'month');
   await openFutures();
   await page.waitForSelector('#whatif-card #sc-shapes .sc-card');
   await assertNamedControls('#whatif-card');
@@ -3659,6 +4524,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
     'the flow leaves the market chart to the public research page — evidence inherits without duplicating');
   await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   // The stage selection PERSISTS by design — pick Past evidence explicitly for this walk.
   await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   // Evidence is its own Plan stage: it inherits the symbol without duplicating Understand's chart.
@@ -3741,6 +4607,7 @@ test('research symbol page: ONE Test-your-view section — thesis-driven, symbol
   await openPlan('QQQ');
   await openResearchTab('view');
   await page.waitForSelector('#test-your-view');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
   assert.equal(await page.locator('#study-results .alert').count(), 0,
@@ -3839,8 +4706,9 @@ test('universe Scout starts distinct Plans from the current Research market', as
   await page.setViewportSize({ width: 390, height: 844 });
   await captureSettled('trader-own-p15-research-scout-mobile.png');
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.selectOption('#universe-scout-intent', 'DIRECTIONAL');
-  await page.selectOption('#universe-scout-horizon', 'month');
+  await page.click('#universe-scout-intent .choice-option[data-value="DIRECTIONAL"]');
+  await page.click('#universe-scout-horizon .choice-option[data-value="month"]');
+  await page.click('#universe-scout-risk .choice-option[data-value="balanced"]');
   await page.click('#universe-scout-run');
   await page.waitForSelector('#universe-scout-results .universe-scout-pick', { timeout: 30000 });
   const picks = await page.locator('#universe-scout-results .universe-scout-pick').count();
@@ -4048,6 +4916,11 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
 
   await page.getByRole('tab', { name: 'Overview', exact: true }).focus();
   await page.keyboard.press('ArrowRight');
+  await page.waitForURL(/#\/portfolio\/book\/risk$/);
+  assert.equal(await page.getByRole('tab', { name: 'Book risk', exact: true }).getAttribute('aria-selected'), 'true',
+    'the Book sections use the shared roving keyboard contract');
+  await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+  await page.waitForSelector('.book-activity-tabs');
   await page.getByRole('tab', { name: 'Record activity', exact: true }).click();
   await page.waitForSelector('.book-record-card');
   assert.equal(await page.getByRole('tab', { name: 'Activity', exact: true }).getAttribute('aria-selected'), 'true',
@@ -4239,6 +5112,291 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.locator('.book-import-result button').filter({ hasText: 'Review quarantined rows' }).click();
   assert.match(await page.textContent('.book-import-rejects'), /Line 3[\s\S]*dom-import-bad[\s\S]*quantity must be an integer/,
     'the rejected row keeps its line, transaction reference, and reason');
+
+  const brokerFixtures = await page.evaluate(async () => {
+    const secondBook = await API.post('/api/portfolio/accounts', {
+      name: 'Tracked retirement destination', accountType: 'TRADITIONAL_IRA', broker: 'Example broker',
+      lotMethod: 'FIFO', openingCashCents: 2500000
+    });
+    const archivedBook = await API.post('/api/portfolio/accounts', {
+      name: 'Archived mapping decoy', accountType: 'TAXABLE', broker: 'Old broker',
+      lotMethod: 'FIFO', openingCashCents: 100000
+    });
+    await API.del('/api/portfolio/accounts/' + archivedBook.id);
+    const observedTarget = await API.post('/api/plans', {
+      clientRequestId: 'dom-broker-observed-target-' + Date.now(), symbol: 'QQQ',
+      intent: 'DIRECTIONAL', title: 'Observed broker-link target', thesis: 'bullish',
+      horizonDays: 91, riskMode: 'conservative'
+    });
+    const observedArchived = await API.post('/api/plans', {
+      clientRequestId: 'dom-broker-observed-archived-' + Date.now(), symbol: 'QQQ',
+      intent: 'DIRECTIONAL', title: 'Observed archived Plan decoy', thesis: 'neutral',
+      horizonDays: 92, riskMode: 'conservative'
+    });
+    const demoTrap = await API.post('/api/plans', {
+      clientRequestId: 'dom-broker-demo-trap-' + Date.now(), symbol: 'QQQ',
+      intent: 'DIRECTIONAL', title: 'Demo broker-link trap', thesis: 'bearish',
+      horizonDays: 93, riskMode: 'conservative'
+    });
+    return { secondBook, archivedBook, observedTarget, observedArchived, demoTrap };
+  });
+  // The fixture browser cannot enter the Observed lane. Seed the two library rows directly so
+  // this presentation test can prove the wizard's server-market filters; the service/API tests
+  // exercise the real OBSERVED-only commit boundary.
+  pg.sql("UPDATE plans SET market_kind='OBSERVED',world_id=NULL WHERE id='"
+    + brokerFixtures.observedTarget.id + "'; UPDATE plans SET market_kind='OBSERVED',world_id=NULL,"
+    + "status='ARCHIVED',is_open=0 WHERE id='" + brokerFixtures.observedArchived.id + "'");
+  await go('#/portfolio/book/activity');
+  await page.getByRole('tab', { name: 'Import history', exact: true }).click();
+
+  const brokerTime = await page.evaluate(() => new Date(Date.now() - 500).toISOString());
+  const brokerPaste = 'confirmation_number,account,executed_at,symbol,type,action,position,quantity,multiplier,price,net_amount,fees,leg,market_price,as_of\n'
+    + 'DOM-BROKER-EXACT,IRA ending 7788,' + brokerTime + ',AAPL,stock,buy,open,1,1,10,-10,0,0,11,' + brokerTime + '\n'
+    + 'DOM-BROKER-USER,IRA ending 7788,' + brokerTime + ',MSFT,stock,buy,open,1,1,,-20,0,0,21,' + brokerTime + '\n'
+    + 'DOM-BROKER-AUTH,IRA ending 7788,' + brokerTime + ',NVDA,stock,buy,open,1,1,,-30,0,0,31,' + brokerTime + '\n'
+    + 'DOM-BROKER-EXACT-2,IRA ending 8899,' + brokerTime + ',QQQ,stock,buy,open,1,1,12,-12,0,0,13,' + brokerTime + '\n';
+  await page.getByRole('combobox', { name: 'Broker export', exact: true }).selectOption('VANGUARD');
+  await page.getByLabel('Source account label / last four', { exact: true }).fill('Statement envelope 2026-07');
+  await page.getByLabel('Broker text', { exact: true }).fill(brokerPaste);
+  await page.getByRole('button', { name: 'Preview broker facts', exact: true }).click();
+  await page.waitForSelector('.broker-import-group');
+  assert.match(await page.textContent('.broker-import-preview'),
+    /4 packages ready for explicit verification[\s\S]*EXACT FILLS[\s\S]*PACKAGE NET — PENDING/,
+    'one preview separates exact fills from package-net-only groups before any write');
+  assert.match(await page.textContent('.broker-import-preview'),
+    /Pasted snapshot[\s\S]*(Observed re-mark|No eligible Observed current mark)/,
+    'pasted statement marks stay visibly stale beside a provenance-qualified independent re-mark');
+  const mappingControls = page.locator('.broker-account-mapping select');
+  assert.equal(await mappingControls.count(), 2,
+    'one statement-wide preview exposes one explicit destination for each source-account fingerprint');
+  const mappingOptions = (await mappingControls.allTextContents()).join('\n');
+  assert.match(mappingOptions, /Tracked taxable test[\s\S]*Tracked retirement destination/,
+    'every active destination Book is available to the statement-wide mapper');
+  assert.doesNotMatch(mappingOptions, /Archived mapping decoy/,
+    'archived Books are never offered as broker destinations');
+  for (const destination of await mappingControls.all()) {
+    assert.equal(await destination.inputValue(), '', 'the currently open Book is never a silent destination default');
+  }
+  const sourceAccounts = await page.locator('.broker-import-group').evaluateAll(groups => groups.map(group => ({
+    externalRef: group.querySelector('.broker-import-reference > b')?.textContent.trim(),
+    fingerprint: (group.textContent.match(/acct-[a-f0-9]{24}/) || [])[0]
+  })));
+  const destinationByFingerprint = new Map();
+  sourceAccounts.forEach(group => destinationByFingerprint.set(group.fingerprint,
+    group.externalRef === 'DOM-BROKER-EXACT-2' ? brokerFixtures.secondBook.id : trackedId));
+  for (const [fingerprint, destinationId] of destinationByFingerprint.entries()) {
+    await page.locator('.broker-account-mapping .field').filter({ hasText: fingerprint })
+      .locator('select').selectOption(destinationId);
+  }
+  const brokerStatePrivacy = await page.evaluate(rawValues => {
+    const state = JSON.stringify(App.state);
+    return { hasRawBrokerStore: Object.prototype.hasOwnProperty.call(App.state, 'portfolioBrokerImports'),
+      leaked: rawValues.filter(value => state.includes(value)) };
+  }, ['Statement envelope 2026-07', 'IRA ending 7788', 'IRA ending 8899', 'DOM-BROKER-EXACT']);
+  assert.deepEqual(brokerStatePrivacy, { hasRawBrokerStore: false, leaked: [] },
+    'raw statement text, source labels, and references remain in the mounted form closure, never App.state');
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const importGeometry = await page.locator('.broker-import-preview').evaluate(preview => {
+      const box = preview.getBoundingClientRect();
+      const controls = Array.from(preview.querySelectorAll('input,select,button')).map(node => {
+        const rect = node.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width };
+      });
+      const firstEditor = preview.querySelector('.broker-import-editor-grid');
+      const editorColumns = firstEditor ? getComputedStyle(firstEditor).gridTemplateColumns.split(' ').length : 0;
+      return { page: document.documentElement.scrollWidth, viewport: innerWidth,
+        left: box.left, right: box.right, width: box.width, controls: controls, editorColumns: editorColumns };
+    });
+    assert.ok(importGeometry.page <= importGeometry.viewport + 1
+      && importGeometry.left >= 0 && importGeometry.right <= importGeometry.viewport + 1,
+    viewport.width + 'px broker preview remains bounded to the viewport: ' + JSON.stringify(importGeometry));
+    assert.equal(importGeometry.controls.some(control => control.left < 0
+      || control.right > importGeometry.viewport + 1 || control.width < 1), false,
+    viewport.width + 'px broker controls stay visible and operable: ' + JSON.stringify(importGeometry));
+    if (viewport.width === 2560) assert.ok(importGeometry.editorColumns >= 5,
+      '2560px uses a dense verification workbench instead of vertically stretching every field');
+    if (viewport.width === 320) assert.equal(importGeometry.editorColumns, 1,
+      '320px stacks the verification fields into one readable mobile column');
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+  assert.equal(await page.locator('.broker-import-group input[type="checkbox"]:checked').count(), 0,
+    'no broker group is silently selected for confirmation');
+  for (const checkbox of await page.locator('.broker-import-group input[type="checkbox"]').all()) {
+    await checkbox.check();
+  }
+  const pendingQueueRequests = [];
+  const rememberPendingQueueRequest = request => {
+    if (request.url().includes('/api/portfolio/broker-imports?')) pendingQueueRequests.push(request.url());
+  };
+  page.on('request', rememberPendingQueueRequest);
+  await page.getByRole('button', { name: 'Confirm selected facts', exact: true }).click();
+  await page.waitForSelector('.broker-batch-adoption');
+  assert.match(await page.textContent('.broker-import-confirm'),
+    /2 exact transactions recorded; 2 packages quarantined pending per-leg fills/,
+    'one atomic statement confirmation writes exact facts into both mapped Books and quarantines unresolved cash');
+  assert.equal(await page.locator('.broker-batch-adoption').count(), 1,
+    'mixed source accounts lead to one statement-wide adoption wizard, not duplicate account journeys');
+  assert.equal(await page.locator('.broker-batch-row').count(), 2,
+    'both exact positions remain together for the second explicit Plan decision');
+  assert.match(await page.textContent('.broker-batch-adoption'),
+    /Tracked taxable test[\s\S]*Tracked retirement destination|Tracked retirement destination[\s\S]*Tracked taxable test/,
+    'every adoption row names the destination Book inside the one atomic wizard');
+
+  const ibmBatchRow = page.locator('.broker-batch-row').filter({ hasText: 'DOM-BROKER-EXACT-2' });
+  const aaplBatchRow = page.locator('.broker-batch-row').filter({ hasText: 'DOM-BROKER-EXACT' }).filter({ hasNotText: 'EXACT-2' });
+  await aaplBatchRow.getByRole('combobox', { name: 'Plan choice', exact: true }).selectOption('ADOPT');
+  await ibmBatchRow.getByRole('combobox', { name: 'Plan choice', exact: true }).selectOption('LINK');
+  const planChoices = await ibmBatchRow.getByRole('combobox', { name: 'Existing Plan', exact: true }).allTextContents();
+  assert.match(planChoices.join('\n'), /Observed broker-link target/,
+    'an active Observed Plan for the imported symbol is available to LINK');
+  assert.doesNotMatch(planChoices.join('\n'), /Demo broker-link trap|Observed archived Plan decoy/,
+    'cross-market and archived Plans never appear as valid LINK destinations');
+  await ibmBatchRow.getByRole('combobox', { name: 'Existing Plan', exact: true })
+    .selectOption(brokerFixtures.observedTarget.id);
+
+  const batchAdoptionRequests = [];
+  let batchAdoptionAttempt = 0;
+  await page.route('**/api/plans/adopt-batch', async route => {
+    const request = route.request().postDataJSON();
+    batchAdoptionRequests.push(request);
+    batchAdoptionAttempt += 1;
+    const replay = batchAdoptionAttempt > 1;
+    const observedTarget = { ...brokerFixtures.observedTarget, marketKind: 'OBSERVED', worldId: null };
+    const adoptedPlan = { ...observedTarget, id: 'plan_dom_broker_atomic', symbol: 'AAPL',
+      title: 'AAPL imported broker position' };
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({
+      items: request.items.map(item => ({ action: item.action,
+        plan: item.action === 'LINK' ? observedTarget : adoptedPlan, artifacts: null, replayed: replay })),
+      adopted: replay ? 0 : 1, linked: replay ? 0 : 1, skipped: 0, replayed: replay ? 2 : 0,
+      note: 'The confirmed batch is atomic.'
+    }) });
+  });
+  // The fixture build intentionally cannot switch to Observed. Set only the presentation owner
+  // while the adopt endpoint is stubbed; PlanAdoptionBatchTest pins the real server-side lane gate.
+  await page.evaluate(() => {
+    App.state.world = 'observed';
+    if (App.Market) App.Market.world = 'observed';
+  });
+  await page.getByRole('button', { name: 'Confirm batch adoption', exact: true }).click();
+  await page.waitForSelector('.broker-batch-adoption:has-text("Batch adoption committed")');
+  assert.match(await page.textContent('.broker-batch-adoption'), /1 new Plan, 1 linked, 0 skipped/,
+    'one POST commits the mixed-account ADOPT and LINK choices as a statement-wide batch');
+  assert.equal(batchAdoptionRequests.length, 1, 'the statement-wide confirmation sends one batch command');
+  assert.deepEqual(batchAdoptionRequests[0].items.map(item => item.portfolioAccountId).sort(),
+    [trackedId, brokerFixtures.secondBook.id].sort(),
+  'the atomic batch carries both explicit destination Books');
+  assert.deepEqual(batchAdoptionRequests[0].items.map(item => item.action).sort(), ['ADOPT', 'LINK'],
+    'the batch preserves each row\'s deliberate action');
+  await page.getByRole('button', { name: 'Confirm batch adoption', exact: true }).click();
+  await page.waitForFunction(() => /2 unchanged replays/.test(document.querySelector('.broker-batch-adoption')?.textContent || ''));
+  assert.match(await page.textContent('.broker-batch-adoption'), /0 new Plans, 0 linked, 0 skipped, 2 unchanged replays/,
+    'a byte-equivalent retry reports unchanged replays instead of claiming duplicate Plan work');
+  assert.deepEqual(batchAdoptionRequests[1], batchAdoptionRequests[0],
+    'the replay sends the same stable client request IDs and allocations');
+
+  await page.waitForSelector('.broker-pending-card:has-text("DOM-BROKER-AUTH")');
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const brokerGeometry = await page.locator('.book-import-card').evaluate(card => {
+      const controls = Array.from(card.querySelectorAll('input,select,textarea,button')).filter(node => {
+        const style = getComputedStyle(node), box = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
+      }).map(node => {
+        const rect = node.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width };
+      });
+      const batch = card.querySelector('.broker-batch-row');
+      const queue = card.querySelector('.broker-pending-queue');
+      return { page: document.documentElement.scrollWidth, viewport: innerWidth,
+        controls, batchColumns: batch ? getComputedStyle(batch).gridTemplateColumns.split(' ').length : 0,
+        queueColumns: queue ? getComputedStyle(queue).gridTemplateColumns.split(' ').length : 0 };
+    });
+    assert.ok(brokerGeometry.page <= brokerGeometry.viewport + 1,
+      viewport.width + 'px statement-wide broker journey has no horizontal overflow: ' + JSON.stringify(brokerGeometry));
+    assert.equal(brokerGeometry.controls.some(control => control.left < 0
+      || control.right > brokerGeometry.viewport + 1 || control.width < 1), false,
+    viewport.width + 'px batch and queue controls remain visible and operable: ' + JSON.stringify(brokerGeometry));
+    if (viewport.width === 2560) {
+      assert.ok(brokerGeometry.batchColumns >= 3 && brokerGeometry.queueColumns >= 2,
+        '2560px uses the desktop real estate for a three-column decision row and two-column queue');
+    } else {
+      assert.equal(brokerGeometry.batchColumns, 1, viewport.width + 'px stacks each batch decision coherently');
+      assert.equal(brokerGeometry.queueColumns, 1, viewport.width + 'px keeps the resolution queue in one mobile column');
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  const rejectCard = page.locator('.broker-pending-card').filter({ hasText: 'DOM-BROKER-AUTH' });
+  await rejectCard.getByRole('button', { name: 'Reject pending import', exact: true }).click();
+  await page.waitForSelector('#modal-root [role="dialog"]');
+  assert.match(await page.textContent('#modal-root [role="dialog"]'),
+    /Remove DOM-BROKER-AUTH from the active resolution queue[\s\S]*identity and resolution history remain intact[\s\S]*reopen/i,
+    'reject is a deliberate, explained, recoverable command');
+  const stillOpenBeforeReject = await page.evaluate(async id => (await API.getFresh(
+    '/api/portfolio/broker-imports?status=OPEN&limit=100&offset=0&portfolioAccountId=' + encodeURIComponent(id)))
+    .imports.some(row => row.externalRef === 'DOM-BROKER-AUTH'), trackedId);
+  assert.equal(stillOpenBeforeReject, true, 'opening the confirmation does not mutate the pending import');
+  await page.click('#modal-confirm');
+  await page.waitForSelector('#modal-root [role="dialog"]', { state: 'detached' });
+  await page.waitForSelector('.broker-rejected-history:has-text("DOM-BROKER-AUTH")');
+  assert.equal(await page.locator('.broker-pending-card').filter({ hasText: 'DOM-BROKER-AUTH' }).count(), 0,
+    'confirmed rejection removes the package from the active queue');
+  const rejectedHistory = page.locator('.broker-rejected-row').filter({ hasText: 'DOM-BROKER-AUTH' });
+  await rejectedHistory.getByRole('button', { name: 'Reopen', exact: true }).click();
+  await page.waitForSelector('.broker-pending-card:has-text("DOM-BROKER-AUTH")');
+  const listQueries = pendingQueueRequests.map(url => new URL(url).searchParams);
+  assert.ok(listQueries.some(query => query.get('status') === 'OPEN' && query.get('limit') === '100'
+      && query.get('offset') === '0' && query.get('portfolioAccountId') === trackedId)
+    && listQueries.some(query => query.get('status') === 'REJECTED' && query.get('limit') === '50'
+      && query.get('offset') === '0' && query.get('portfolioAccountId') === trackedId),
+  'the active queue and reversible history use separate bounded, account-scoped pages');
+  page.off('request', rememberPendingQueueRequest);
+
+  const provisionalCard = page.locator('.broker-pending-card').filter({ hasText: 'DOM-BROKER-USER' });
+  await provisionalCard.getByRole('spinbutton', { name: 'Per-leg fill', exact: true }).fill('20');
+  await provisionalCard.getByRole('combobox', { name: 'Where did these per-leg prices come from?', exact: true })
+    .selectOption('USER_ALLOCATED');
+  await provisionalCard.getByRole('button', { name: 'Record package resolution', exact: true }).click();
+  await page.waitForSelector('#broker-pending-queue:has-text("Package resolution recorded · PROVISIONAL")');
+  assert.match(await page.textContent('#broker-pending-queue'),
+    /created no tracked transaction, lot, wash-sale basis, or export row/i,
+    'a user allocation is immutable provisional history without contaminating tracked accounting');
+
+  const attestationCard = page.locator('.broker-pending-card').filter({ hasText: 'DOM-BROKER-USER' });
+  await attestationCard.getByRole('combobox', { name: 'Where did these per-leg prices come from?', exact: true })
+    .selectOption('BROKER_REPORTED');
+  await attestationCard.getByRole('button', { name: 'Attest with broker fills', exact: true }).click();
+  await page.waitForSelector('#broker-pending-queue:has-text("Broker fills attested")');
+
+  const authoritativeCard = page.locator('.broker-pending-card').filter({ hasText: 'DOM-BROKER-AUTH' });
+  await authoritativeCard.getByRole('spinbutton', { name: 'Per-leg fill', exact: true }).fill('30');
+  await authoritativeCard.getByRole('combobox', { name: 'Where did these per-leg prices come from?', exact: true })
+    .selectOption('BROKER_REPORTED');
+  await authoritativeCard.getByRole('button', { name: 'Record package resolution', exact: true }).click();
+  await page.waitForSelector('#broker-pending-queue:has-text("Package resolution recorded · AUTHORITATIVE")');
+  assert.match(await page.textContent('#broker-pending-queue'), /eligible for tracked tax basis/i,
+    'broker-confirmed leg fills visibly create authoritative basis provenance');
+  const resolvedImports = await page.evaluate(async () => API.getFresh('/api/portfolio/broker-imports?status=RESOLVED'));
+  assert.deepEqual(resolvedImports.imports.map(row => row.resolution.taxBasisStatus).sort(),
+    ['AUTHORITATIVE', 'AUTHORITATIVE'], 'only broker-attested packages become resolved tracked facts');
+  const resolvedDetails = await page.evaluate(async rows => Promise.all(rows.map(row =>
+    API.getFresh('/api/portfolio/broker-imports/' + encodeURIComponent(row.id)))), resolvedImports.imports);
+  assert.deepEqual(resolvedDetails.map(row => row.resolution.taxBasisStatus).sort(),
+    ['AUTHORITATIVE', 'AUTHORITATIVE'], 'authoritative status survives round-trip through detail APIs');
+  const attestedDetail = resolvedDetails.find(row => row.externalRef === 'DOM-BROKER-USER');
+  assert.deepEqual(attestedDetail.resolutionHistory.map(event => event.authority),
+    ['USER_ALLOCATED', 'BROKER_REPORTED'],
+  'later broker attestation appends to, rather than overwrites, provisional resolution history');
+  await page.unroute('**/api/plans/adopt-batch');
+  await page.evaluate(async () => {
+    App.state.world = 'demo';
+    if (App.Market) App.Market.world = 'demo';
+    API.flushCache();
+    await PlanStore.load(true);
+  });
   await page.getByRole('tab', { name: 'History', exact: true }).click();
   await assertNoInternalChrome('#app');
   await captureSettled('p110-accounting-activity-desktop.png');
@@ -4308,7 +5466,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     const record = (externalRef, action, effect, price) => API.post('/api/portfolio/accounts/' + id + '/transactions', {
       occurredAt, eventType: 'TRADE', fillNature: 'EXECUTED', cashAmountCents: null, feesCents: 0, taxCategory: null,
       source: 'MANUAL', externalRef, notes: 'Unreviewed-year wash disclosure control', legs: [{
-        instrumentType: 'STOCK', action, positionEffect: effect, symbol: 'MSFT', optionType: null,
+        instrumentType: 'STOCK', action, positionEffect: effect, symbol: 'META', optionType: null,
         strike: null, expiration: null, quantity: 1, multiplier: 1, price, section1256: false
       }]
     });
@@ -4349,7 +5507,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     'open tax lots expose their exact remaining basis in the product, not only in exports');
   assert.equal(await page.locator('.book-realized-lot-row').count(), 2,
     'Beginner gets a readable exact realized-lot row instead of an eleven-column ledger');
-  assert.match(await page.textContent('.book-realized'), /MSFT[\s\S]*Wash rule not applied — 2026 rules unreviewed/,
+  assert.match(await page.textContent('.book-realized'), /META[\s\S]*Wash rule not applied — 2026 rules unreviewed/,
     'an unreviewed-year loss states that the wash rule was not applied instead of showing a decorative $0.00');
   assert.equal(await page.locator('.book-realized .tbl-wrap').count(), 0,
     'the dense realized-lot table is reserved for Expert');
@@ -4386,7 +5544,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('button', { name: 'Restore account', exact: true }).click();
   await page.waitForSelector('.book-account-status:has-text("Open")');
 
-  for (const width of [390, 320]) {
+  for (const width of [390, 375, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await go('#/portfolio/book/activity');
     await page.getByRole('tab', { name: 'History', exact: true }).click();
@@ -4402,7 +5560,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
     });
     assert.ok(geometry.body <= geometry.viewport, width + 'px tracked activity has no page overflow: ' + JSON.stringify(geometry));
     assert.equal(geometry.clipped, false, width + 'px account tabs remain fully visible');
-    assert.ok(geometry.rows >= 3, width + 'px account navigation uses a readable grid instead of a clipped rail');
+    assert.equal(geometry.rows, 3, width + 'px tracked-account navigation is the exact 2x3 grid');
     assert.equal(geometry.activityWrapped, false,
       width + 'px Activity tabs keep complete labels on one visible line');
     if (width === 390) {
@@ -4526,6 +5684,172 @@ test('TRADER/OWN R4.4: the Book account declares what it is FOR and keeps an imm
   await captureSettled('book-account-objective.png');
 });
 
+test('campaign close review keeps one responsive Beginner/Expert journey and saves only the lesson locally', async t => {
+  const fixture = await page.evaluate(async () => {
+    const account = await API.post('/api/portfolio/accounts', {
+      name: 'Journey E review book', accountType: 'TAXABLE', broker: 'Review fixture',
+      lotMethod: 'FIFO', openingCashCents: 1000000
+    });
+    localStorage.setItem('strikebench.portfolioBookAccount', account.id);
+    App.state.portfolioBookAccountId = account.id;
+    const campaign = await API.post('/api/campaigns', {
+      title: 'Journey E close review', symbol: 'AAPL'
+    });
+    return { accountId: account.id, campaignId: campaign.id };
+  });
+
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await go('#/portfolio/book/overview');
+  const campaign = page.locator('.campaign-row').filter({ hasText: 'Journey E close review' });
+  await campaign.getByRole('button', { name: 'Close campaign & review', exact: true }).click();
+  let review = page.locator('[data-campaign-review="' + fixture.campaignId + '"]');
+  await review.waitFor();
+
+  // The service tests pin how this typed review is derived from persisted decisions, marks,
+  // and Canvas receipts. Here, make those exact API fields deterministic so the browser suite
+  // exercises the available chart and the important withheld-cost presentation as well.
+  const campaignPayload = await page.evaluate(async id => {
+    const campaigns = (await API.getFresh('/api/campaigns')).campaigns || [];
+    return campaigns.find(campaign => campaign.id === id);
+  }, fixture.campaignId);
+  campaignPayload.review.authoredVsRealized = {
+    available: true, planId: 'plan-journey-e-ui', planTitle: 'AAPL income Plan',
+    scenarioId: 'scenario-journey-e-ui', scenarioTitle: 'Dip then recover',
+    authoredAt: '2026-07-01T14:00:00Z', contextRevision: 3,
+    baseEnsembleId: 'ensemble-journey-e-ui',
+    scenarioFingerprint: '1133557799aacceeff00112233445566778899aa',
+    baseEnsembleFingerprint: '22446688aacceeff00112233445566778899aabb',
+    waypointFill: 'EXACT_CONDITIONAL', anchorDate: '2026-07-01', anchorSpotCents: 10000,
+    anchorSource: 'stooq', anchorFreshness: 'FRESH', marketLane: 'OBSERVED',
+    realizedSource: 'stooq', realizedDataset: 'observed', adjusted: false,
+    authored: [
+      { tradingDay: 0, date: '2026-07-01', priceCents: 10000 },
+      { tradingDay: 5, date: '2026-07-08', priceCents: 10800 },
+      { tradingDay: 10, date: '2026-07-15', priceCents: 10300 }
+    ],
+    realized: [
+      { tradingDay: 0, date: '2026-07-01', priceCents: 10000 },
+      { tradingDay: 4, date: '2026-07-07', priceCents: 10400 },
+      { tradingDay: 10, date: '2026-07-15', priceCents: 10100 }
+    ],
+    note: 'Authored 2026-07-01T14:00:00Z; exact saved pins, not a forecast. Realized closes are one coherent observed series.'
+  };
+  campaignPayload.review.protocolAdherence = [{
+    planId: 'plan-journey-e-ui', decisionId: 'decision-target-ui', executionLane: 'PRACTICE',
+    rule: 'TAKE_PROFIT', triggerPnlCents: 5000, triggerDaysToExpiry: null,
+    ruleSummary: 'Take profit when the exact package reaches 50% of its opening credit.',
+    status: 'OVERRIDDEN', triggeredAt: '2026-07-08T14:00:00Z',
+    observedPnlAtTriggerCents: 5200, responseKind: 'PARTIAL_CLOSE',
+    responseAt: '2026-07-10T14:00:00Z', responseResultCents: 1800,
+    overrideSignedCostCents: null,
+    note: 'Override recorded. Signed cost withheld because a partial close does not share the same whole-package quantity/basis.'
+  }, {
+    planId: 'plan-journey-e-ui', decisionId: 'decision-time-ui', executionLane: 'PRACTICE',
+    rule: 'TIME_EXIT', triggerPnlCents: null, triggerDaysToExpiry: 21,
+    ruleSummary: 'Review or roll the package at 21 days to expiry.', status: 'RESPECTED',
+    triggeredAt: '2026-07-09T14:00:00Z', observedPnlAtTriggerCents: 2100,
+    responseKind: 'ROLL', responseAt: '2026-07-09T14:05:00Z', responseResultCents: 2100,
+    overrideSignedCostCents: null, note: 'The recorded roll respected the frozen time line.'
+  }];
+  const campaignListMatcher = url => url.pathname === '/api/campaigns';
+  const campaignListRoute = async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    return route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ campaigns: [campaignPayload] }) });
+  };
+  await page.route(campaignListMatcher, campaignListRoute);
+  t.after(async () => page.unroute(campaignListMatcher, campaignListRoute));
+  await go('#/portfolio/book/overview');
+  review = page.locator('[data-campaign-review="' + fixture.campaignId + '"]');
+  await review.waitFor();
+  assert.match(await review.innerText(),
+    /final review[\s\S]*Authored vs realized path[\s\S]*Your saved pins[\s\S]*Protocol adherence[\s\S]*Final campaign accounting[\s\S]*Recorded at broker[\s\S]*Practice[\s\S]*Cross-campaign pattern[\s\S]*Lesson note/i,
+    'one close review contains authored-vs-realized, protocol, separated accounting lanes, patterns, and lesson');
+  assert.match(await review.innerText(), /never numerically combined/i,
+    'real and practice results carry the visible no-netting contract');
+  assert.equal(await review.locator('.campaign-lane-result').count(), 2,
+    'the two economic lanes are presented side by side instead of pooled');
+  assert.equal(await review.locator('.campaign-review-chart .campaign-authored-line').count(), 1,
+    'the available overlay draws the exact authored pins');
+  assert.equal(await review.locator('.campaign-review-chart .campaign-realized-line').count(), 1,
+    'the available overlay draws the coherent realized closes independently');
+  assert.equal(await review.locator('.campaign-review-chart .campaign-authored-pin').count(), 3,
+    'only the three exact saved pins receive authored markers');
+  assert.match(await review.locator('.campaign-chart-legend').innerText(),
+    /Your saved pins[\s\S]*Observed closes · stooq/,
+    'the two paths remain visually and semantically labeled');
+  assert.equal(await review.locator('.campaign-protocol-row').count(), 2,
+    'the review renders each frozen mechanical rule once');
+  assert.match(await review.locator('.campaign-protocol-row').first().innerText(),
+    /overridden[\s\S]*partial close[\s\S]*Signed cost withheld[\s\S]*same whole-package quantity\/basis/i,
+    'partial-package response is an override but never receives a fabricated comparable cost');
+  assert.doesNotMatch(await review.locator('.campaign-protocol-row').first().innerText(),
+    /Signed override cost/i,
+    'the signed-cost metric is absent when the service withholds it for basis mismatch');
+  assert.equal(await review.getByRole('textbox', { name: 'Lesson note', exact: true }).count(), 1,
+    'Beginner owns the same editable lesson control');
+
+  const desktopGeometry = await review.evaluate(node => {
+    const grid = node.querySelector('.campaign-review-grid');
+    const pane = node.querySelector('.campaign-review-pane');
+    return {
+      columns: getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length,
+      gridWidth: grid.getBoundingClientRect().width,
+      paneWidth: pane.getBoundingClientRect().width,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+    };
+  });
+  assert.equal(desktopGeometry.columns, 3, '2560px uses three readable review columns');
+  assert.ok(desktopGeometry.gridWidth > 1500 && desktopGeometry.paneWidth > 400,
+    'the review uses desktop real estate instead of leaving a narrow centered island: '
+      + JSON.stringify(desktopGeometry));
+  assert.ok(desktopGeometry.overflow <= 1, 'desktop review does not overflow horizontally');
+  await captureSettled('journey-e-campaign-review-2560.png');
+
+  const lesson = review.getByRole('textbox', { name: 'Lesson note', exact: true });
+  await lesson.fill('Close when the frozen target fires; do not rewrite the thesis after the outcome.');
+  await review.evaluate(node => { window.__journeyEReviewNode = node; });
+  await review.getByRole('button', { name: 'Save lesson', exact: true }).click();
+  await review.getByRole('status').filter({ hasText: 'Lesson saved' }).waitFor();
+  assert.equal(await page.evaluate(id => {
+    const current = document.querySelector('[data-campaign-review="' + id + '"]');
+    return window.__journeyEReviewNode === current && current.isConnected;
+  }, fixture.campaignId), true,
+  'saving the lesson updates the component in place instead of repainting the SPA');
+  campaignPayload.lessonNote = 'Close when the frozen target fires; do not rewrite the thesis after the outcome.';
+  campaignPayload.review.lessonNote = campaignPayload.lessonNote;
+
+  await page.click('#level-switch button[data-level="expert"]');
+  await page.waitForFunction(() => Learn.currentLevel() === 'expert'
+    && document.getElementById('app').getAttribute('data-ready') === 'true');
+  const expertReview = page.locator('[data-campaign-review="' + fixture.campaignId + '"]');
+  await expertReview.waitFor();
+  assert.equal(await expertReview.locator('.campaign-lane-result').count(), 2,
+    'Expert reads the same two result lanes');
+  assert.equal(await expertReview.getByRole('textbox', { name: 'Lesson note', exact: true }).inputValue(),
+    'Close when the frozen target fires; do not rewrite the thesis after the outcome.',
+    'the owner-scoped lesson survives the presentation-level change');
+  assert.equal(await expertReview.getByRole('button', { name: 'Save lesson', exact: true }).count(), 1,
+    'Expert has the same control, not a duplicate journey');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileGeometry = await expertReview.evaluate(node => ({
+    columns: getComputedStyle(node.querySelector('.campaign-review-grid')).gridTemplateColumns
+      .split(' ').filter(Boolean).length,
+    laneColumns: getComputedStyle(node.querySelector('.campaign-lane-results')).gridTemplateColumns
+      .split(' ').filter(Boolean).length,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+  }));
+  assert.equal(mobileGeometry.columns, 1, 'mobile review becomes one followable column');
+  assert.equal(mobileGeometry.laneColumns, 1, 'mobile stacks the still-distinct lane cards');
+  assert.ok(mobileGeometry.overflow <= 1,
+    '390px review has no horizontal overflow: ' + JSON.stringify(mobileGeometry));
+  assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio',
+    'the review remains inside the canonical SPA Portfolio route');
+  await captureSettled('journey-e-campaign-review-390.png');
+});
+
 test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disclosure state survive levels', async () => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.evaluate(() => Learn.setLevel('beginner'));
@@ -4534,6 +5858,8 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     Object.entries(Learn.VOCABULARY).map(([key, value]) => [key, value.label])));
   assert.deepEqual(vocabulary, {
     assignmentCapital: 'Assignment capital', brokerReserve: 'Broker reserve',
+    buyingPower: 'Buying power', netDelta: 'Net delta', gamma: 'Gamma',
+    thetaPerDay: 'Theta / day', vegaPerVolPoint: 'Vega / vol pt',
     economicExposure: 'Economic exposure', theoreticalMaxLoss: 'Theoretical max loss',
     theoreticalMaxProfit: 'Theoretical max profit',
     scenarioLoss: 'Scenario loss', hypothetical: 'Hypothetical', practice: 'Practice',
@@ -4542,8 +5868,17 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
     campaignNetCredit: 'Campaign net credit', realizedVsHeadline: 'Realized vs headline yield',
     peakCommittedCapital: 'Peak committed capital', accumulationLedger: 'Accumulation ledger',
     counterfactualBenchmark: 'Counterfactual benchmark', churnCost: 'Churn round-trip cost',
+    campaignReview: 'Close review', authoredVsRealized: 'Authored vs realized path',
+    protocolAdherence: 'Protocol adherence', campaignPattern: 'Cross-campaign pattern',
+    lessonNote: 'Lesson note',
     accountObjective: 'Account objective', coherenceVerdict: 'Coherence verdict',
-    assignmentFit: 'Assignment fit', targetExposure: 'Target exposure'
+    assignmentFit: 'Assignment fit', alertCenter: 'Needs attention', protocolBreach: 'Protocol trigger',
+    pinRisk: 'Pin risk', extrinsicValue: 'Time value left', targetExposure: 'Target exposure',
+    bookRisk: 'Book risk', betaWeightedDelta: 'Beta-weighted dollar delta',
+    symbolConcentration: 'Symbol concentration',
+    stressedAssignment: 'Stressed assignment capital', expiryCluster: 'Expiry cluster',
+    themeConcentration: 'Theme concentration', pendingImport: 'Pending import',
+    resolutionAuthority: 'Resolution authority', accountFingerprint: 'Source account fingerprint'
   }, 'one registry owns every capital, provenance, and basis term');
   const vocabularyHelp = await page.evaluate(() => Object.entries(Learn.VOCABULARY).map(([key, item]) => ({
     key, hasInfo: !!Learn.INFO[item.infoKey], short: Learn.INFO[item.infoKey]?.short || '',
@@ -4997,7 +6332,7 @@ test('explanation system: visible triggers, registry-backed bubbles, both levels
   const preTerms = await page.evaluate(() => (window.__usedInfoTerms || []).slice());
   assert.ok(preTerms.includes('scenario'), 'sim workbench wires info(scenario)');
   assert.ok(preTerms.includes('speed'), 'sim workbench wires info(speed)');
-  const plan = await openPlan('AAPL', 'strategy');
+  const plan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '57d');
   await page.waitForSelector('#plan-run-strategy');
   await page.click('#plan-run-strategy');
   await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
@@ -5557,10 +6892,14 @@ test('interactive charts, range pills, universe picker, and the tape', async () 
     'the destination card records the explorer position before navigation; got ' + storedExplorerY);
   await openResearchTab('view');
   await page.waitForSelector('#tv-view');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   await page.click('#tv-view .choice-option[data-value="bearish"]');
+  await page.fill('#tv-horizon', '20');
+  await page.dispatchEvent('#tv-horizon', 'change');
   await page.waitForSelector('#research-outcomes');
   await openResearchTab('overview');
-  await page.selectOption('#symbol-proposed-goal', 'DIRECTIONAL');
+  await chooseHeaderRisk('balanced');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="DIRECTIONAL"]');
   await page.click('#symbol-find-proposed');
   await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash)
     && document.getElementById('app').getAttribute('data-ready') === 'true', null, { timeout: 15000 });
@@ -6094,16 +7433,70 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
 
   // Portfolio construction is a Portfolio job. It allocates across evaluated ideas but
   // cannot place anything; each chosen package must enter the canonical Plan workflow.
+  await page.evaluate(() => {
+    delete App.state.portfolioConstruct;
+    App.state.headerRiskExplicit = false;
+    const risk = document.getElementById('risk-mode');
+    risk.value = '';
+  });
   await go('#/portfolio/construct');
   await page.waitForSelector('#portfolio-construct');
   await assertNamedControls('#app');
   assert.equal(await page.locator('#pf-sec-construct.active').count(), 1, 'Construct is a first-class Portfolio section');
   await page.waitForSelector('#portfolio-build', { timeout: 25000 });
   assert.equal(await page.locator('#portfolio-objective').count(), 1, 'Expert sees the full objective controls inline');
+  assert.equal(await page.locator('.portfolio-construct select').count(), 0,
+    'decision-bearing construction controls are purpose-built choices, never bare selects');
+  assert.equal(await page.locator('#portfolio-construct .choice-option.active').count(), 1,
+    'only the explicitly named active-universe scope mechanic starts selected');
+  assert.equal(await page.locator('#portfolio-build').isDisabled(), true,
+    'Build starts disabled instead of inventing a decision declaration');
+  assert.match(await page.textContent('#portfolio-construct-readiness'),
+    /Missing facts: goal, market view, horizon, ranking objective, risk posture/,
+    'the exact absent decision facts are visible');
+  assert.equal(await page.locator('#portfolio-choose-risk').count(), 1,
+    'missing risk points to the one header picker instead of duplicating it in Construct');
+
+  let optimizePosts = [];
+  const captureOptimize = async route => {
+    if (route.request().method() === 'POST') optimizePosts.push(route.request().postDataJSON());
+    await route.continue();
+  };
+  await page.route('**/api/optimize', captureOptimize);
+  await page.locator('#portfolio-build').evaluate(button => button.click());
+  assert.equal(optimizePosts.length, 0, 'a forced click cannot submit an undeclared construction');
+
+  let routeMount = await page.locator('#app > .route-mount').elementHandle();
+  await page.click('#portfolio-goal .choice-option[data-value="DIRECTIONAL"]');
+  await page.click('#portfolio-thesis .choice-option[data-value="neutral"]');
+  await page.click('#portfolio-horizon .choice-option[data-value="month"]');
+  await page.click('#portfolio-objective .choice-option[data-value="DECISION"]');
+  assert.match(await page.textContent('#portfolio-construct-readiness'), /Missing facts: risk posture/,
+    'each owned choice removes only itself from the missing receipt');
+  await page.click('#portfolio-choose-risk');
+  assert.equal(await page.locator('#risk-mode-popover').isVisible(), true,
+    'the Construct risk action opens the existing header picker');
+  const priorRiskChoice = await page.locator('#risk-mode-popover .choice-option.active').getAttribute('data-value').catch(() => null);
+  let constructRisk = priorRiskChoice === 'balanced' ? 'conservative' : 'balanced';
+  await page.click(`#risk-mode-popover .choice-option[data-value="${constructRisk}"]`);
+  assert.equal(await page.locator('#portfolio-build').isEnabled(), true,
+    'Build enables only after the exact five decision facts are owned');
+  assert.match(await page.textContent('#portfolio-construct-readiness'),
+    new RegExp(`Declaration complete.*Risk: ${constructRisk === 'balanced' ? 'Standard' : 'Cautious'} from the one header picker`, 's'));
+
+  const controlsDisclosure = page.locator('#portfolio-construct .xp > .xp-head').first();
+  await ensureExpanded(controlsDisclosure);
+  await page.fill('#portfolio-max-position', '12345');
   // Diagnostic mode guarantees a funded (least-bad) set on the fixture universe, LABELED not-a-recommendation.
   await page.check('#portfolio-diagnostics');
   await page.click('#portfolio-build');
   await page.waitForSelector('#portfolio-summary', { timeout: 20000 });
+  assert.equal(optimizePosts.length, 1, 'one explicit Build creates one optimizer request');
+  assert.deepEqual({ intent: optimizePosts[0].intent, thesis: optimizePosts[0].thesis,
+    horizon: optimizePosts[0].horizon, objective: optimizePosts[0].objective,
+    riskMode: optimizePosts[0].riskMode },
+  { intent: 'DIRECTIONAL', thesis: 'neutral', horizon: 'month', objective: 'DECISION', riskMode: constructRisk },
+  'the optimizer receives exactly the visible declaration');
   assert.ok((await page.locator('.allocation-bar .allocation-segment').count()) >= 1, 'composition bar segments');
   assert.ok((await page.locator('.portfolio-construct table tbody tr').count()) >= 1, 'allocations table rows');
   const allocationSymbols = await page.locator('.portfolio-construct table tbody tr td:first-child').allTextContents();
@@ -6112,6 +7505,55 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   assert.ok((await page.locator('#portfolio-output .alert-caution').count()) >= 1, 'diagnostic set labeled not-a-recommendation');
   assert.match(await page.textContent('.portfolio-construct table thead'), /Verdict|Market EV|History EV/,
     'expert construction keeps both EV lanes and economic placement visible');
+
+  // Header risk is the sole owner. Changing it repaints only Construct's local receipt/output:
+  // route mount, focus, numeric draft, disclosure and every explicit choice remain in place.
+  await page.focus('#portfolio-max-position');
+  const nextRisk = constructRisk === 'balanced' ? 'aggressive' : 'balanced';
+  await page.evaluate(value => {
+    const risk = document.getElementById('risk-mode');
+    App.state.headerRiskExplicit = true;
+    risk.value = value;
+    risk.dispatchEvent(new Event('change', { bubbles: true }));
+  }, nextRisk);
+  constructRisk = nextRisk;
+  assert.equal(await page.evaluate(node => node === document.querySelector('#app > .route-mount'), routeMount), true,
+    'header risk does not remount the Book destination');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'portfolio-max-position',
+    'local risk reconciliation preserves focus');
+  assert.equal(await page.inputValue('#portfolio-max-position'), '12345', 'local risk reconciliation preserves the numeric draft');
+  assert.equal(await page.locator('#portfolio-summary').count(), 0, 'changing a declared fact invalidates the stale result immediately');
+  assert.equal(optimizePosts.length, 1, 'invalidation never silently reruns the optimizer');
+  assert.equal(await page.locator('#portfolio-build').isEnabled(), true, 'the new explicit header risk keeps readiness complete');
+  await page.click('#portfolio-build');
+  await page.waitForSelector('#portfolio-summary', { timeout: 20000 });
+  assert.equal(optimizePosts.length, 2, 'the revised exact declaration runs only on the next visible Build');
+  assert.equal(optimizePosts[1].riskMode, constructRisk, 'the rebuilt field carries the revised header risk exactly');
+  assert.match(await page.textContent('#portfolio-construction-receipt'),
+    /Your decision.*Trade a view.*Stay near here.*About 1 month.*Decision score.*Source field.*Practice account.*Buying power at build/s,
+    'the result humanizes and freezes both the decision declaration and its mechanical source context');
+
+  // A result belongs to the exact source field too. Change the active universe while the
+  // component is detached: returning must refuse the old result rather than displaying it
+  // under the new market scope. Restore the fixture universe, then rebuild explicitly.
+  const sourceSymbols = await page.evaluate(() => App.state.universe.active.symbols.slice());
+  await go('#/portfolio/positions');
+  await page.evaluate(() => {
+    App.state.universe.active.symbols = App.state.universe.active.symbols.concat('CONTEXT_PROBE');
+  });
+  await go('#/portfolio/construct');
+  await page.waitForSelector('#portfolio-construct');
+  assert.equal(await page.locator('#portfolio-summary').count(), 0,
+    'a detached active-universe change invalidates the old construction receipt');
+  await page.evaluate(symbols => { App.state.universe.active.symbols = symbols; }, sourceSymbols);
+  assert.equal(await page.locator('#portfolio-build').isEnabled(), true,
+    'explicit decision choices survive while the changed source result does not');
+  await page.click('#portfolio-build');
+  await page.waitForSelector('#portfolio-summary', { timeout: 20000 });
+  assert.equal(optimizePosts.length, 3, 'restoring source context still requires one visible rebuild');
+  routeMount = await page.locator('#app > .route-mount').elementHandle();
+  await page.unroute('**/api/optimize', captureOptimize);
+
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300); // capture after the real card-in transition, never by disabling motion
   const arrivalMotion = await page.locator('#portfolio-construct').evaluate(node => ({
@@ -6124,33 +7566,134 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
 
   // Beginner keeps the same levers and result, but progressive disclosure and visual
   // allocation cards replace the expert table.
+  const constructGenerationBeforeLens = await page.evaluate(() => App.state.portfolioConstruct.componentGeneration);
   await page.click('#level-switch button[data-level="beginner"]');
-  await page.waitForSelector('#portfolio-construct');
+  await page.waitForFunction(before => Learn.currentLevel() === 'beginner'
+    && App.state.portfolioConstruct.componentGeneration > before
+    && document.getElementById('app').getAttribute('data-ready') === 'true', constructGenerationBeforeLens);
   assert.equal(await page.locator('#portfolio-objective').count(), 1,
     'Beginner uses the available desktop width for the same construction controls');
+  assert.equal(await page.locator('#portfolio-goal .choice-option[data-value="DIRECTIONAL"].active').count(), 1,
+    'level is a lens: the explicit goal survives');
+  assert.equal(await page.locator('#portfolio-thesis .choice-option[data-value="neutral"].active').count(), 1,
+    'level is a lens: the explicit view survives');
+  assert.equal(await page.inputValue('#portfolio-max-position'), '12345',
+    'level is a lens: the numeric constraint draft survives');
+  const beginnerConstructionReceipt = await page.textContent('#portfolio-construction-receipt');
+  assert.match(beginnerConstructionReceipt,
+    /Your decision.*Trade a view.*Stay near here.*About 1 month.*Decision score.*Market.*(?:Observed market|Built-in demo market|Active simulated market|Scenario dataset)/s,
+    'Beginner sees the human declaration and market label');
+  assert.doesNotMatch(beginnerConstructionReceipt, /Declaration keys|Source keys/,
+    'Beginner never sees internal declaration, world, dataset, or account IDs');
+  assert.equal(await page.evaluate(node => node === document.querySelector('#app > .route-mount'), routeMount), true,
+    'level refresh keeps the same mounted Book destination');
   assert.ok((await page.locator('.portfolio-allocation-card').count()) >= 1, 'Beginner receives visual allocation cards');
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(__dirname, 'shots/portfolio-construct-beginner.png'), fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => App.render());
-  await page.waitForSelector('#portfolio-construct');
-  assert.equal(await page.locator('#portfolio-objective').count(), 0,
-    'the same secondary controls begin collapsed on mobile');
-  await page.locator('#portfolio-construct .xp > .xp-head').first().click();
-  assert.equal(await page.locator('#portfolio-objective').count(), 1, 'mobile keeps every construction control reachable');
+  for (const width of [2560, 1280, 390, 375, 320]) {
+    await page.setViewportSize({ width, height: width >= 1000 ? 900 : 844 });
+    const geometry = await page.locator('#portfolio-construct').evaluate(node => {
+      const box = node.getBoundingClientRect();
+      const app = document.getElementById('app').getBoundingClientRect();
+      const choices = Array.from(node.querySelectorAll('#portfolio-goal .choice-option'));
+      const measure = element => {
+        if (!element) return null;
+        const edge = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return { left: Math.round(edge.left), right: Math.round(edge.right), width: Math.round(edge.width),
+          scrollWidth: element.scrollWidth, overflowX: style.overflowX, display: style.display };
+      };
+      const isClipped = element => {
+        for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+          if (/hidden|clip/.test(getComputedStyle(parent).overflowX)) return true;
+        }
+        return false;
+      };
+      return { inner: innerWidth, doc: document.documentElement.scrollWidth,
+        left: box.left, right: box.right, width: box.width, appWidth: app.width,
+        roots: { html: measure(document.documentElement), body: measure(document.body),
+          topbar: measure(document.querySelector('.topbar')), tape: measure(document.querySelector('.tape')),
+          tapeScroll: measure(document.querySelector('.tape-scroll')), app: measure(document.getElementById('app')) },
+        unclippedOffenders: Array.from(document.querySelectorAll('body *')).filter(element => {
+          if (!element.offsetParent || isClipped(element)) return false;
+          const edge = element.getBoundingClientRect();
+          return edge.left < -1 || edge.right > innerWidth + 1;
+        }).slice(0, 12).map(element => {
+          const edge = element.getBoundingClientRect();
+          return `${element.id || element.className || element.tagName}@${Math.round(edge.left)}..${Math.round(edge.right)}(sw:${element.scrollWidth})`;
+        }),
+        offenders: Array.from(document.querySelectorAll('body *')).filter(element => {
+          if (!element.offsetParent) return false;
+          const edge = element.getBoundingClientRect();
+          return edge.left >= -1 && edge.right > innerWidth + 1 && edge.width < innerWidth * 1.8;
+        }).slice(0, 12).map(element => {
+          const edge = element.getBoundingClientRect();
+          return `${element.id || element.className || element.tagName}@${Math.round(edge.left)}..${Math.round(edge.right)}`;
+        }),
+        choices: choices.length, visibleChoices: choices.filter(choice => {
+          const r = choice.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.left >= -0.5 && r.right <= innerWidth + 0.5;
+        }).length };
+    });
+    assert.ok(geometry.doc <= geometry.inner + 1, `Construct has no ${width}px horizontal overflow: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.left >= -0.5 && geometry.right <= geometry.inner + 0.5,
+      `Construct stays within the ${width}px viewport`);
+    assert.equal(geometry.visibleChoices, geometry.choices, `all goals remain reachable at ${width}px`);
+    if (width === 2560) {
+      assert.ok(geometry.appWidth >= 2400,
+        `Construct uses the wide comparison canvas at 2560px: ${geometry.appWidth}`);
+      assert.ok(geometry.width >= 2350,
+        `the three-column declaration/result composition, not empty gutters, owns the field: ${geometry.width}`);
+    }
+    if (width <= 390) assert.ok(geometry.width >= width - 40,
+      `Construct uses the mobile canvas at ${width}px: ${geometry.width}`);
+    if (width === 2560 || width === 390) {
+      await page.screenshot({ path: path.join(__dirname, 'shots', `portfolio-construct-${width}.png`), fullPage: true });
+    }
+  }
+  // The OS motion preference changes ticker behavior, never page containment. Reduced motion
+  // exposes the static strip through its own scroll viewport; the outer page frame stays fixed.
+  for (const reducedMotion of ['reduce', 'no-preference']) {
+    await page.emulateMedia({ reducedMotion });
+    await page.setViewportSize({ width: 320, height: 844 });
+    const tapeGeometry = await page.evaluate(() => {
+      const tape = document.querySelector('.tape');
+      const scroll = document.querySelector('.tape-scroll');
+      return { inner: innerWidth, doc: document.documentElement.scrollWidth,
+        tapeOverflow: getComputedStyle(tape).overflowX,
+        scrollOverflow: getComputedStyle(scroll).overflowX,
+        tapeRight: tape.getBoundingClientRect().right, scrollRight: scroll.getBoundingClientRect().right };
+    });
+    assert.ok(tapeGeometry.doc <= tapeGeometry.inner + 1,
+      `${reducedMotion} motion keeps the ticker inside 320px: ${JSON.stringify(tapeGeometry)}`);
+    assert.equal(tapeGeometry.tapeOverflow, 'hidden',
+      `${reducedMotion} motion keeps the outer ticker frame clipped`);
+    assert.ok(tapeGeometry.tapeRight <= 320.5 && tapeGeometry.scrollRight <= 320.5,
+      `${reducedMotion} motion keeps both ticker frames inside the viewport: ${JSON.stringify(tapeGeometry)}`);
+    assert.equal(tapeGeometry.scrollOverflow, reducedMotion === 'reduce' ? 'auto' : 'hidden',
+      `${reducedMotion} motion uses the intended inner ticker behavior`);
+  }
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.evaluate(() => App.render());
-  await page.waitForSelector('#portfolio-construct');
+  await page.waitForTimeout(50);
   let pendingPlanPosts = 0;
+  let planCreateBody = null;
+  let customBody = null;
   const delayPlanCreate = async route => {
     if (route.request().method() === 'POST') {
       pendingPlanPosts++;
+      planCreateBody = route.request().postDataJSON();
       await new Promise(resolve => setTimeout(resolve, 400));
     }
     await route.continue();
   };
+  const captureCustom = async route => {
+    if (route.request().method() === 'POST') customBody = route.request().postDataJSON();
+    await route.continue();
+  };
   await page.route('**/api/plans', delayPlanCreate);
+  await page.route('**/api/plans/*/strategy/custom', captureCustom);
   const reviewPlan = page.locator('.portfolio-allocation-card button:has-text("Review in a new Plan")').first();
   await reviewPlan.click();
   assert.equal(await reviewPlan.isDisabled(), true, 'Plan creation disables its initiating command immediately');
@@ -6159,8 +7702,19 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   await page.waitForSelector('.plan-selected-structure', { timeout: 15000 });
   const handoffText = await page.textContent('.plan-selected-structure');
   await page.unroute('**/api/plans', delayPlanCreate);
+  await page.unroute('**/api/plans/*/strategy/custom', captureCustom);
   assert.equal(pendingPlanPosts, 1,
     'a second click during the pending state cannot double-submit Plan creation or custom strategy save');
+  assert.deepEqual({ intent: planCreateBody.intent, thesis: planCreateBody.thesis,
+    horizonDays: planCreateBody.horizonDays, riskMode: planCreateBody.riskMode },
+  { intent: 'DIRECTIONAL', thesis: 'neutral', horizonDays: 21, riskMode: constructRisk },
+  'allocation Plan creation carries the exact optimizer declaration with no fallback');
+  assert.ok(customBody && customBody.position && customBody.position.strategy !== 'CUSTOM',
+    'the exact evaluated package, never a generic fallback, enters Strategy');
+  assert.deepEqual({ intent: customBody.position.intent, thesis: customBody.position.thesis,
+    horizon: customBody.position.horizon, riskMode: customBody.position.riskMode },
+  { intent: 'DIRECTIONAL', thesis: 'neutral', horizon: 'month', riskMode: constructRisk },
+  'the saved exact package repeats the same declaration');
   assert.equal(await page.locator('#app[data-route="plan"]').count(), 1, 'allocation opens in the canonical Plan journey');
   assert.match(handoffText, /selected structure|selected package|working structure|plan owned/i,
     'the exact optimizer package survives the handoff: ' + handoffText.slice(0, 120));
@@ -6175,6 +7729,10 @@ test('portfolio sizing and research tools live in their natural workflows', asyn
   // The study itself (run on a SYMBOL page) is baseline-relative with resolved design tokens.
   await openPlan('AAPL');
   await openResearchTab('view');
+  // The causal trigger is a user-owned fact. Evidence lenses mount only after it is explicit;
+  // this check must never resurrect the retired implicit pullback default just to reach Past.
+  await page.waitForSelector('#tv-setup .choice-option[data-value="pullback_rebound"]');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   await page.waitForSelector('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   await page.click('#research-outcomes-nav .outcome-basis[data-basis="past"]');
   await page.waitForSelector('#study-run:not([disabled])', { timeout: 15000 });
@@ -6210,7 +7768,8 @@ test('cache: read-only compute POST (/api/evaluate) keeps the GET cache warm', a
       await API.get('/api/config');           // warm (or already cached from boot)
       const before = n;
       await App.evaluateOutcome('DECISION', 'DECISION_POLICY', 'AAPL', {
-        decision: { symbol: 'AAPL', thesis: 'bullish', horizon: 'month', riskMode: 'balanced' }
+        decision: { symbol: 'AAPL', intent: 'DIRECTIONAL', thesis: 'bullish',
+          horizon: 'month', riskMode: 'balanced' }
       });
       await API.get('/api/config');           // must be served from cache — the compute POST must not flush it
       return { added: n - before };
@@ -6510,6 +8069,7 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   assert.ok(ovBottom <= 780, 'Data Overview remains a compact desktop dashboard (bottom=' + ovBottom + ')');
   const fixtureMode = await page.evaluate(() => App.config.fixturesOnly);
   if (fixtureMode) {
+    await page.waitForSelector('#dc-engine:has-text("Static Demo")', { timeout: 15000 });
     assert.match(await page.textContent('#dc-mode'), /Demo market.*fabricated teaching data/is,
       'the active-lane card names Demo plainly');
     const engineText = await page.textContent('#dc-engine');
@@ -6570,6 +8130,40 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
   assert.equal(await page.locator('#dc-health > .dc-detail-toggle').getAttribute('aria-expanded'), 'true');
   await page.click('#dc-health');
   assert.equal(await page.locator('#dc-detail .dc-detail-card').count(), 0, 'second click closes the drawer');
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const dataGeometry = await page.evaluate(() => {
+      const app = document.getElementById('app').getBoundingClientRect();
+      const grid = document.querySelector('.dc-grid').getBoundingClientRect();
+      const cards = Array.from(document.querySelectorAll('.dc-grid > .card')).map(card => card.getBoundingClientRect());
+      const tabs = Array.from(document.querySelectorAll('#data-tabs [role="tab"]'))
+        .filter(tab => tab.offsetParent).map(tab => tab.getBoundingClientRect());
+      return {
+        viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, appWidth: app.width,
+        gridColumns: getComputedStyle(document.querySelector('.dc-grid')).gridTemplateColumns.split(' ').length,
+        gridTop: grid.top, gridBottom: grid.bottom,
+        tabsRows: new Set(tabs.map(box => Math.round(box.top))).size,
+        clipped: cards.concat(tabs).some(box => box.left < -.5 || box.right > innerWidth + .5)
+      };
+    });
+    assert.ok(dataGeometry.documentWidth <= dataGeometry.viewport + 1 && !dataGeometry.clipped,
+      `Data Overview stays contained at ${viewport.width}px: ${JSON.stringify(dataGeometry)}`);
+    if (viewport.width === 2560) {
+      assert.ok(dataGeometry.appWidth >= 1700,
+        `the bounded operational canvas remains substantial at 2560px: ${JSON.stringify(dataGeometry)}`);
+      assert.equal(dataGeometry.gridColumns, 4,
+        `all four status peers stay co-visible at 2560px: ${JSON.stringify(dataGeometry)}`);
+      assert.ok(dataGeometry.gridTop < 300 && dataGeometry.gridBottom < 900,
+        `the complete status decision fits high in the first desktop viewport: ${JSON.stringify(dataGeometry)}`);
+    } else {
+      assert.equal(dataGeometry.gridColumns, 1,
+        `${viewport.width}px keeps one readable Data-card sequence: ${JSON.stringify(dataGeometry)}`);
+      assert.equal(dataGeometry.tabsRows, 2,
+        `${viewport.width}px keeps every Data destination in a compact two-row grid: ${JSON.stringify(dataGeometry)}`);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.unroute('**/api/data/overview');
   // Home: exactly ONE 'Find an idea' doorway (review #9) and no marketing hero.
   await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1')); // dashboard, not the tour
@@ -6619,14 +8213,58 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     'Home cannot widen the document: ' + JSON.stringify(homeContainment));
   assert.ok(homeContainment.pulse <= homeContainment.side + 2 && homeContainment.pulse <= homeContainment.app + 2,
     'the full sector rail stays inside the right column: ' + JSON.stringify(homeContainment));
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 390, height: 844 },
+    { width: 375, height: 812 }, { width: 320, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const deskGeometry = await page.evaluate(() => {
+      const app = document.getElementById('app').getBoundingClientRect();
+      const hero = document.querySelector('.home-hero').getBoundingClientRect();
+      const ideas = document.getElementById('home-screened-ideas').getBoundingClientRect();
+      const cols = document.querySelector('.home-cols');
+      return {
+        viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, appWidth: app.width,
+        heroTop: hero.top, heroBottom: hero.bottom, ideasBottom: ideas.bottom,
+        columns: getComputedStyle(cols).gridTemplateColumns.split(' ').length,
+        colsRight: cols.getBoundingClientRect().right
+      };
+    });
+    assert.ok(deskGeometry.documentWidth <= deskGeometry.viewport + 1
+      && deskGeometry.colsRight <= deskGeometry.viewport + .5,
+    `Desk stays contained at ${viewport.width}px: ${JSON.stringify(deskGeometry)}`);
+    if (viewport.width === 2560) {
+      assert.ok(deskGeometry.appWidth >= 1700,
+        `the bounded Desk canvas remains substantial at 2560px: ${JSON.stringify(deskGeometry)}`);
+      assert.equal(deskGeometry.columns, 2,
+        `market context and next actions remain co-visible at 2560px: ${JSON.stringify(deskGeometry)}`);
+      assert.ok(deskGeometry.heroTop < 260 && deskGeometry.ideasBottom < 1000,
+        `the Desk context and governed idea stay inside the first desktop viewport: ${JSON.stringify(deskGeometry)}`);
+    } else {
+      assert.equal(deskGeometry.columns, 1,
+        `${viewport.width}px keeps one understandable Desk sequence: ${JSON.stringify(deskGeometry)}`);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => {
     App.state.universe = window.__homeUniverseRestore;
     delete window.__homeUniverseRestore;
   });
+  // Geometry is asserted in the settled state while production entrance/hover motion stays
+  // enabled. The preceding responsive sweep can leave the fixed Playwright pointer over a
+  // card at one of the intermediate layouts, and cards may still be inside their 180ms rise.
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(250);
   const sparseMarketRows = await page.evaluate(() => {
     const cards = Array.from(document.querySelectorAll('.home-market-grid .sym-card'));
     const ys = cards.map(c => Math.round(c.getBoundingClientRect().top));
-    return { count: cards.length, rows: [...new Set(ys)].map(y => ys.filter(v => v === y).length) };
+    const rowTops = [];
+    ys.forEach(y => {
+      const row = rowTops.find(entry => Math.abs(entry.top - y) <= 2);
+      if (row) row.count += 1; else rowTops.push({ top: y, count: 1 });
+    });
+    return { count: cards.length, rows: rowTops.map(row => row.count),
+      cards: cards.map(c => ({ symbol: c.dataset.sym,
+        child: Array.prototype.indexOf.call(c.parentElement.children, c) + 1,
+        top: Math.round(c.getBoundingClientRect().top), column: getComputedStyle(c).gridColumn })) };
   });
   if (sparseMarketRows.count === 5) assert.deepEqual(sparseMarketRows.rows, [3, 2],
     'a five-symbol market uses a balanced 3+2 desktop grid: ' + JSON.stringify(sparseMarketRows));
@@ -6708,6 +8346,28 @@ test('Program ONE R0: rails, choice controls, and flow bands honor their contrac
     out.noListbox = !host.querySelector('select');
     out.radiogroup = !!host.querySelector('[role="radiogroup"]');
 
+    function blankChoice(id) {
+      const node = UI.segmented({ id, label: 'Blank keyboard test',
+        options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }],
+        value: '' });
+      host.appendChild(node);
+      return node;
+    }
+    const blankRight = blankChoice('r0-blank-right');
+    blankRight.querySelectorAll('.choice-option')[0].focus();
+    blankRight.querySelectorAll('.choice-option')[0].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    out.blankRight = { value: blankRight.value(), focus: document.activeElement.dataset.value };
+    const blankLeft = blankChoice('r0-blank-left');
+    blankLeft.querySelectorAll('.choice-option')[0].focus();
+    blankLeft.querySelectorAll('.choice-option')[0].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
+    out.blankLeft = { value: blankLeft.value(), focus: document.activeElement.dataset.value };
+    const blankPointer = blankChoice('r0-blank-pointer');
+    blankPointer.querySelectorAll('.choice-option')[2].dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }));
+    out.blankPointer = { value: blankPointer.value(), focus: document.activeElement.dataset.value };
+
     const fhost = document.createElement('div'); document.body.appendChild(fhost);
     const ctx = { declared: false, tested: false };
     const flow = Flow.render({ id: 'r0-flow', stateKey: 'flow:r0test', ctx, sections: [
@@ -6745,6 +8405,12 @@ test('Program ONE R0: rails, choice controls, and flow bands honor their contrac
   assert.deepEqual([r.value, r.changed], ['strict', ['strict']], 'choice controls round-trip their value');
   assert.equal(r.noListbox, true, 'the control language never renders a bare listbox');
   assert.equal(r.radiogroup, true, 'choice controls are accessible radiogroups');
+  assert.deepEqual(r.blankRight, { value: 'b', focus: 'b' },
+    'ArrowRight begins at the focused option when an explicit choice is still blank');
+  assert.deepEqual(r.blankLeft, { value: 'c', focus: 'c' },
+    'ArrowLeft wraps from the focused first option when an explicit choice is still blank');
+  assert.deepEqual(r.blankPointer, { value: 'c', focus: 'c' },
+    'pointer selection restores focus to the selected button after the control repaints');
   assert.deepEqual(r.posturesBefore, ['active', 'locked'], 'the first incomplete band is active; successors lock');
   assert.equal(r.lockedReason, 'Declare your view first.', 'locked bands state their reason');
   assert.equal(r.lockedVisible, true, 'locked bands stay visible — never hidden');
@@ -6765,10 +8431,8 @@ test('Program ONE R0: rails, choice controls, and flow bands honor their contrac
 test('Program ONE R0: visible labels are registry-covered or reviewed plain language', async () => {
   const allowPath = path.join(__dirname, 'label-allowlist.json');
   const allow = new Set(JSON.parse(fs.readFileSync(allowPath, 'utf8')));
-  const routes = ['#/home', '#/research', '#/portfolio/positions', '#/data/overview'];
   const uncovered = new Map();
-  for (const route of routes) {
-    await go(route);
+  async function collect(route) {
     const labels = await page.evaluate(() => {
       // House label carriers, verified against ui.js markup: stat -> .label, fact -> .f-label,
       // chip -> .chip-label, field -> label[for], plus the R0 choice controls and lens titles.
@@ -6776,13 +8440,101 @@ test('Program ONE R0: visible labels are registry-covered or reviewed plain lang
         + '.field-label, .choice-option-label, .outcome-basis-title';
       const covered = node => node.querySelector('.term[data-term], .info-trigger, [data-vocabulary]')
         || node.closest('[data-vocabulary]');
-      return Array.from(document.querySelectorAll(sel))
+      const ordinaryCarriers = Array.from(document.querySelectorAll(sel))
         .filter(n => n.offsetParent !== null && !covered(n))
-        .map(n => (n.textContent || '').trim().replace(/\s+/g, ' '))
-        .filter(t => t && t.length >= 3 && t.length <= 64);
+        .map(n => ({ text: (n.textContent || '').trim().replace(/\s+/g, ' '),
+          carrier: n.outerHTML.slice(0, 220) }))
+        .filter(row => row.text && row.text.length >= 3 && row.text.length <= 64);
+      // Headings, table columns, tabs, and disclosure buttons do not use the house metric
+      // classes above. Audit technical language on those carriers without forcing every
+      // ordinary action verb into the plain-language allowlist.
+      const technical = /(?:\bbuying power\b|\b(?:net |dollar |beta-weighted )?delta\b|\bgamma\b|\btheta\b|\bvega\b|\bgreeks?\b|\bPOP\b|\bbreakevens?\b|\bMonte Carlo\b|\bmarket odds\b|\bpast analogs?\b|\brule replay\b|\bimplied volatility\b|\bIV(?: rank)?\b|\bCVaR\b|\bassignment capital\b|\bbroker reserve\b|\beconomic exposure\b|\btheoretical max (?:loss|profit)\b|\bscenario loss\b|\bskew\b|\bterm slope\b|\bsettlement\b|\bexercise\b)/i;
+      const technicalCarriers = Array.from(document.querySelectorAll(
+        '.card-head > h2, th, dt, [role="tab"], .xp-head'))
+        .filter(n => n.offsetParent !== null && !covered(n))
+        .map(n => ({ text: (n.textContent || '').trim().replace(/\s+/g, ' '),
+          carrier: n.outerHTML.slice(0, 220) }))
+        .filter(row => row.text && row.text.length <= 96 && technical.test(row.text));
+      return ordinaryCarriers.concat(technicalCarriers);
     });
-    labels.forEach(t => { if (!allow.has(t) && !uncovered.has(t)) uncovered.set(t, route); });
+    labels.forEach(row => {
+      if (!allow.has(row.text) && !uncovered.has(row.text)) uncovered.set(row.text,
+        { route, carrier: row.carrier });
+    });
   }
+  async function auditRoute(route, afterOpen) {
+    await go(route);
+    if (afterOpen) await afterOpen();
+    await collect(route);
+  }
+
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  for (const route of ['#/home', '#/research', '#/portfolio/positions', '#/data/overview']) {
+    await auditRoute(route);
+  }
+
+  // Scenario 18 is not satisfied by auditing only generic route shells. Exercise a declared
+  // Plan's ranked Strategy field and its exact selected-package Canvas, then both guarded Book
+  // import and aggregate-risk workspaces. Every producer still reports into this one gate.
+  const labelPlan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '47d');
+  await page.waitForSelector('#plan-strategy-body', { timeout: 30000 });
+  if (await page.locator('#plan-run-strategy').isVisible()) await page.click('#plan-run-strategy');
+  await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
+  await collect('#/plan/{declared}/strategy');
+
+  await page.evaluate(async planId => {
+    const latest = await PlanStore.latestStrategy(planId, true);
+    const candidate = latest.strategy.result.candidates[0];
+    let live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    live = await PlanStore.get(planId, true);
+    await PlanStore.runEnsemble(live, { over: {
+      model: 'GBM', shape: 'CHOP', horizonDays: 47, stepsPerDay: 1,
+      driftAnnual: 0, volAnnual: 0.25, jumpsPerYear: 0, jumpMean: 0,
+      jumpVol: 0, tailNu: 6, heston: null, seed: 1818, paths: 80
+    } });
+  }, labelPlan.id);
+  await auditRoute('#/plan/' + labelPlan.id + '/outcomes', async () => {
+    await page.waitForSelector('#plan-outcomes-basis-model');
+    await page.click('#plan-outcomes-basis-model');
+    await page.waitForSelector('#plan-scenario-canvas [data-canvas-fan] svg', { timeout: 30000 });
+  });
+
+  await page.evaluate(async () => {
+    const listed = await API.getFresh('/api/portfolio/accounts');
+    let account = (listed.accounts || []).find(row => row.status === 'ACTIVE');
+    if (!account) account = await API.post('/api/portfolio/accounts', {
+      name: 'Label audit brokerage', accountType: 'TAXABLE', lotMethod: 'FIFO', openingCashCents: 1000000
+    });
+    App.state.portfolioBookAccountId = account.id;
+  });
+  await auditRoute('#/portfolio/book/activity', async () => {
+    await page.getByRole('tab', { name: 'Import history', exact: true }).click();
+    await page.waitForSelector('.book-import-card');
+  });
+  await auditRoute('#/portfolio/book/risk', async () => {
+    await page.waitForSelector('.book-risk-intro', { timeout: 30000 });
+  });
+
+  // The experience switch changes explanation depth, not the owned workflow. Revisit the
+  // same declared artifacts in Expert so dense labels cannot evade the rendered gate.
+  await page.evaluate(() => Learn.setLevel('expert'));
+  await auditRoute('#/plan/' + labelPlan.id + '/strategy', async () => {
+    await page.waitForSelector('#plan-strategy-results .ranked-idea-hero', { timeout: 30000 });
+  });
+  await auditRoute('#/plan/' + labelPlan.id + '/outcomes', async () => {
+    await page.waitForSelector('#plan-outcomes-basis-model');
+    await page.click('#plan-outcomes-basis-model');
+    await page.waitForSelector('#plan-scenario-canvas [data-canvas-fan] svg', { timeout: 30000 });
+  });
+  await auditRoute('#/portfolio/book/activity', async () => {
+    await page.getByRole('tab', { name: 'Import history', exact: true }).click();
+    await page.waitForSelector('.book-import-card');
+  });
+  await auditRoute('#/portfolio/book/risk', async () => {
+    await page.waitForSelector('.book-risk-intro', { timeout: 30000 });
+  });
+
   if (process.env.LABEL_ALLOWLIST_SEED === '1' && uncovered.size) {
     fs.writeFileSync(allowPath,
       JSON.stringify([...new Set([...allow, ...uncovered.keys()])].sort(), null, 2) + '\n');
@@ -6790,14 +8542,14 @@ test('Program ONE R0: visible labels are registry-covered or reviewed plain lang
   }
   assert.deepEqual([...uncovered.keys()], [],
     'labels lacking registry coverage or allowlist review: '
-      + [...uncovered].map(([t, route]) => `"${t}" (${route})`).join(', '));
+      + [...uncovered].map(([t, detail]) => `"${t}" (${detail.route}; ${detail.carrier})`).join(', '));
 });
 
 test('Program ONE: the workspace flow is a dense attention document, not a wall', async () => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => Learn.setLevel('beginner'));
   // A unique horizon guarantees a genuinely fresh plan — creation dedupes on matching context.
-  await openPlan('AAPL', 'understand', 'DIRECTIONAL', 'bullish', '37d');
+  await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '37d');
   await page.waitForSelector('#plan-flow');
   await page.waitForSelector('#plan-strategy-body', { timeout: 30000 }).catch(async error => {
     const diag = await page.evaluate(() => ({
@@ -6820,11 +8572,391 @@ test('Program ONE: the workspace flow is a dense attention document, not a wall'
     'every non-active band is a compact row (title + one line)');
 });
 
+test('Program ONE: explicit Understand and same-hash band actions keep truthful SPA state', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  const plan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '52d');
+  await go('#/plan/' + plan.id + '/understand');
+  await page.waitForSelector('[data-band="view"][data-posture="active"]');
+  await page.evaluate(() => { window.__understandFlow = document.getElementById('plan-flow'); });
+  await page.click('#plan-edit-context');
+  await page.waitForSelector('[data-band="view"][data-posture="done"]');
+  await page.click('#plan-edit-context');
+  await page.waitForSelector('[data-band="view"][data-posture="active"]');
+  assert.equal(await page.evaluate(() => location.hash), '#/plan/' + plan.id + '/understand');
+  assert.equal(await page.evaluate(() => window.__understandFlow === document.getElementById('plan-flow')), true,
+    'a same-hash band action reopens locally instead of remounting the Plan');
+});
+
+test('Program ONE: canonical routes preserve one mounted document and retire stale refreshes', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const plan = await openPlan('QQQ', 'strategy', 'DIRECTIONAL', 'bearish', '54d');
+  await page.evaluate(() => {
+    window.__canonicalFlow = document.getElementById('plan-flow');
+    window.__canonicalToken = App.navToken;
+  });
+  await go('#/plan/' + plan.id + '/evidence');
+  assert.equal(await page.evaluate(() => window.__canonicalFlow === document.getElementById('plan-flow')), true,
+    'stage URLs move attention inside one mounted Plan document');
+  assert.equal(await page.evaluate(() => window.__canonicalToken === App.navToken), true,
+    'same-Plan stage navigation does not retire the document lifetime or its subscriptions');
+
+  const riskState = await page.evaluate(() => {
+    const control = document.getElementById('risk-mode');
+    return { before: control.value, next: control.value === 'balanced' ? 'conservative' : 'balanced',
+      planRisk: PlanStore.active().context.riskMode };
+  });
+  await page.focus('#risk-mode');
+  await page.click('#risk-mode');
+  await page.locator('#risk-mode-popover .choice-option[data-value="' + riskState.next + '"]').click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(() => window.__canonicalFlow === document.getElementById('plan-flow')), true,
+    'changing the next-Plan risk default does not remount the current Plan Workspace');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'risk-mode',
+    'the header risk control keeps focus after its targeted update');
+  assert.equal(await page.evaluate(() => PlanStore.active().context.riskMode), riskState.planRisk,
+    'the header default never rewrites the existing Plan risk fact');
+  if (riskState.before) {
+    await page.click('#risk-mode');
+    await page.locator('#risk-mode-popover .choice-option[data-value="' + riskState.before + '"]').click();
+  }
+
+  await page.evaluate(id => { location.hash = '#/plan/' + id + '/not-a-stage'; }, plan.id);
+  await page.waitForFunction(() => location.hash === '#/home'
+    && document.getElementById('app').dataset.route === 'home'
+    && document.getElementById('app').dataset.ready === 'true');
+  assert.equal(await page.locator('#plan-flow').count(), 0,
+    'an invalid Plan stage canonicalizes to Home instead of masquerading as Understand');
+
+  await go('#/research/AAPL');
+  await page.evaluate(() => {
+    window.__canonicalResearchFlow = document.getElementById('research-flow');
+    window.__canonicalResearchToken = App.navToken;
+    location.hash = '#/research/AAPL?view=not-a-band';
+  });
+  await page.waitForFunction(() => location.hash === '#/research/AAPL'
+    && document.getElementById('app').dataset.ready === 'true');
+  assert.equal(await page.evaluate(() => window.__canonicalResearchFlow === document.getElementById('research-flow')), true,
+    'rejecting an invalid Research query keeps the already-mounted canonical document');
+  assert.equal(await page.evaluate(() => window.__canonicalResearchToken === App.navToken), true,
+    'query canonicalization does not retire live Research context');
+
+  // A lens refresh that loses ownership must never mark or refocus its successor route.
+  await page.evaluate(() => {
+    window.__resolveOldLens = null;
+    App._flowSeam = null;
+    const mounted = App._researchSeam;
+    mounted.refreshLens = () => new Promise(resolve => { window.__resolveOldLens = resolve; });
+    window.__oldLensRefresh = App.refreshLens();
+    App.navigate('#/home');
+  });
+  await page.waitForFunction(() => location.hash === '#/home'
+    && document.getElementById('app').dataset.route === 'home'
+    && document.getElementById('app').dataset.ready === 'true');
+  await page.evaluate(async () => {
+    window.__resolveOldLens();
+    await window.__oldLensRefresh;
+  });
+  assert.equal(await page.locator('#app[data-route="home"][data-ready="true"]').count(), 1,
+    'a superseded mounted refresh cannot unset or falsely complete the new route');
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.closest('#research-flow') !== null), false,
+    'a superseded mounted refresh cannot restore focus into its detached Research document');
+});
+
+test('Program ONE: a slow canonical Plan preparation cannot steal the route back', async () => {
+  await go('#/home');
+  await chooseHeaderRisk('balanced');
+  await page.evaluate(() => {
+    App.state.researchHandoffBySymbol = {};
+    App.context.update({ symbol: 'SPY', goal: null, thesis: 'neutral', horizon: '21d' });
+  });
+  await go('#/research/SPY');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="INCOME"]');
+
+  let releasePrepare;
+  let markStarted;
+  const prepareGate = new Promise(resolve => { releasePrepare = resolve; });
+  const prepareStarted = new Promise(resolve => { markStarted = resolve; });
+  const holdRanking = async route => {
+    if (route.request().method() === 'POST') {
+      markStarted();
+      await prepareGate;
+    }
+    await route.continue();
+  };
+  await page.route('**/api/plans/*/strategy/run', holdRanking);
+  const rankingResponse = page.waitForResponse(response =>
+    response.request().method() === 'POST' && /\/api\/plans\/[^/]+\/strategy\/run$/.test(response.url()));
+  await page.click('#symbol-find-proposed');
+  await prepareStarted;
+  await go('#/home');
+  releasePrepare();
+  await rankingResponse;
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => location.hash), '#/home',
+    'the mutation may finish and save, but it cannot focus a Plan after the user leaves');
+  assert.equal(await page.locator('#app[data-route="home"][data-ready="true"]').count(), 1,
+    'the successor destination remains fully owned after the slow preparation settles');
+  await page.unroute('**/api/plans/*/strategy/run', holdRanking);
+});
+
+test('Program ONE: public Evidence stages one assumption-safe handoff and creates exactly one Plan', async () => {
+  await go('#/home');
+  await page.evaluate(() => Learn.setLevel('beginner'));
+  await chooseHeaderRisk('balanced');
+  const seed = await page.evaluate(async () => {
+    const all = (await API.getFresh('/api/plans?scope=all&openOnly=false')).plans || [];
+    const used = new Set(all.filter(plan => plan.symbol === 'TSLA' && plan.intent === 'DIRECTIONAL'
+      && plan.context && plan.context.thesis === 'bearish')
+      .map(plan => Number(plan.context.horizonDays)));
+    const horizonDays = [23, 24, 25, 26, 27, 28, 29, 31, 32, 33, 34, 36].find(days => !used.has(days));
+    if (!horizonDays) throw new Error('No free TSLA horizon for the canonical handoff regression');
+    App.state.researchEvidenceBySymbol = App.state.researchEvidenceBySymbol || {};
+    App.state.researchHandoffBySymbol = App.state.researchHandoffBySymbol || {};
+    App.state.researchEvidenceBySymbol = {};
+    App.state.researchHandoffBySymbol = {};
+    App.context.update({ symbol: 'TSLA', goal: null, thesis: null, horizon: null });
+    return { before: all.length, horizonDays };
+  });
+
+  await go('#/research/TSLA?view=evidence');
+  await page.waitForSelector('#tv-setup');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
+  await page.click('#tv-view .choice-option[data-value="volatile"]');
+  await page.fill('#tv-horizon', String(seed.horizonDays));
+  await page.dispatchEvent('#tv-horizon', 'change');
+  await page.waitForSelector('#research-outcomes-basis-futures');
+  await page.click('#research-outcomes-basis-futures');
+  await page.waitForSelector('#whatif-run:not([disabled])');
+  await page.fill('#whatif-target', '300');
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-act', { timeout: 30000 });
+  assert.equal(await page.locator('#whatif-plan-goal').count(), 0,
+    'Evidence has no second Plan-goal control or competing creation journey');
+  await page.click('#whatif-act');
+  await page.waitForFunction(() => location.hash === '#/research/TSLA'
+    && document.getElementById('app').dataset.ready === 'true');
+  assert.match(await page.textContent('#symbol-proposed-trades .symbol-proposed-carry'), /Possible-futures scenario/,
+    'the result returns immediately to the one Ready-to-compare handoff');
+  assert.equal(await page.evaluate(async () =>
+    ((await API.getFresh('/api/plans?scope=all&openOnly=false')).plans || []).length), seed.before,
+  'carrying public Evidence does not create a Plan by itself');
+
+  // A symbol detour may clear the global provisional context; the symbol-owned staged
+  // receipt remains the authoritative handoff when the user returns.
+  await go('#/research/AAPL');
+  await go('#/research/TSLA');
+  const restoredHorizon = page.locator('#symbol-proposed-trades .symbol-proposed-starting .chip')
+    .filter({ has: page.locator('.chip-label', { hasText: 'Horizon' }) }).locator('b');
+  assert.equal((await restoredHorizon.textContent()).trim(), seed.horizonDays + ' sessions',
+    'a ticker round-trip restores the staged receipt horizon instead of a default month');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="DIRECTIONAL"]');
+  assert.equal((await page.textContent('#symbol-find-proposed')).trim(), 'Compare proposed trades',
+    'a ticker round-trip restores the staged directional thesis instead of asking for it again');
+
+  const laneOwner = await page.evaluate(() => ({ world: App.state.world,
+    dataset: App.config && App.config.activeDataset }));
+  await page.evaluate(async () => {
+    App.state.world = 'simulated-owner-probe';
+    await App.render();
+  });
+  await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
+  assert.equal(await page.locator('#symbol-proposed-trades .symbol-proposed-carry').count(), 0,
+    'a same-symbol receipt from the prior economic lane cannot appear in a simulated world');
+  await page.evaluate(async prior => {
+    App.state.world = prior.world;
+    await App.render();
+    window.__datasetOwnerFlow = document.getElementById('research-flow');
+  }, laneOwner);
+  const fakeDatasetConfig = async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.activeDataset = 'dataset-owner-probe';
+    body.activeDatasetName = 'Remote dataset owner probe';
+    body.scenarioMode = true;
+    await route.fulfill({ response, json: body });
+  };
+  await page.route('**/api/config', fakeDatasetConfig);
+  await page.evaluate(() => App.emitEvent('dataset.selected', { datasetId: 'dataset-owner-probe' }));
+  await page.waitForFunction(() => App.config.activeDataset === 'dataset-owner-probe'
+    && document.getElementById('app').dataset.ready === 'true'
+    && document.getElementById('symbol-proposed-trades')
+    && !document.querySelector('#symbol-proposed-trades .symbol-proposed-carry'));
+  assert.equal(await page.locator('#symbol-proposed-trades .symbol-proposed-carry').count(), 0,
+    'a same-symbol receipt from another analysis dataset cannot be applied');
+  assert.equal(await page.evaluate(() => window.__datasetOwnerFlow === document.getElementById('research-flow')), true,
+    'a remote dataset selection refreshes the mounted Evidence owner without remounting Research');
+  await page.unroute('**/api/config', fakeDatasetConfig);
+  await page.evaluate(() => App.emitEvent('dataset.selected', { datasetId: 'observed' }));
+  await page.waitForFunction(expected => (App.config.activeDataset || null) === (expected || null)
+    && document.getElementById('app').dataset.ready === 'true', laneOwner.dataset);
+  await page.waitForSelector('#symbol-proposed-trades .symbol-proposed-carry');
+  assert.match(await page.textContent('#symbol-proposed-trades .symbol-proposed-carry'), /Possible-futures scenario/,
+    'returning to the original lane and dataset restores only its own staged receipt');
+
+  // Changing any causal assumption retires both the staged receipt and its rendered result.
+  await openResearchTab('view');
+  await page.fill('#tv-horizon', '');
+  await page.dispatchEvent('#tv-horizon', 'change');
+  assert.equal(await page.evaluate(() => Object.keys(App.state.researchHandoffBySymbol || {}).length > 0), false,
+    'making the causal question incomplete also retires a receipt authored under its old horizon');
+  await page.click('#tv-view .choice-option[data-value="bearish"]');
+  await page.fill('#tv-horizon', String(seed.horizonDays));
+  await page.dispatchEvent('#tv-horizon', 'change');
+  assert.equal(await page.evaluate(() => Object.keys(App.state.researchHandoffBySymbol || {}).length > 0), false,
+    'a receipt authored under the prior thesis cannot merge into the new question');
+  assert.equal(await page.locator('#symbol-proposed-trades .symbol-proposed-carry').count(), 0,
+    'the folded Overview card does not advertise a stale incompatible receipt');
+  await page.click('#research-outcomes-basis-futures');
+  await page.waitForSelector('#whatif-run:not([disabled])');
+  assert.equal(await page.locator('#whatif-act').count(), 0,
+    'the old fan is not relabeled under the changed thesis');
+  await page.click('#whatif-run');
+  await page.waitForSelector('#whatif-act', { timeout: 30000 });
+  const publicFan = await page.evaluate(() => {
+    const owned = Object.values(App.state.researchEvidenceBySymbol || {});
+    for (const state of owned) {
+      const evidence = state && (state.evidence || state);
+      const run = evidence && evidence.whatifResults && evidence.whatifResults.TSLA;
+      if (run && run.ensemble) return {
+        id: run.ensemble.id,
+        fingerprint: run.ensemble.fingerprint
+      };
+    }
+    return null;
+  });
+  assert.ok(publicFan && /^rer_/.test(publicFan.id) && /^[a-f0-9]{64}$/.test(publicFan.fingerprint),
+    'public Possible Futures exposes the opaque server receipt and exact artifact fingerprint');
+  await page.click('#whatif-act');
+  await page.waitForFunction(() => location.hash === '#/research/TSLA'
+    && document.getElementById('app').dataset.ready === 'true');
+  const stagedFan = await page.evaluate(() => {
+    const staged = Object.values(App.state.researchHandoffBySymbol || {})
+      .find(value => value && value.scenario);
+    return staged && staged.scenario;
+  });
+  assert.deepEqual(stagedFan, { researchReceiptId: publicFan.id, fingerprint: publicFan.fingerprint },
+    'the Ready-to-compare handoff carries only the exact opaque receipt identity');
+  await page.click('#symbol-proposed-goal .choice-option[data-value="DIRECTIONAL"]');
+
+  let failedAdoptionBody = null;
+  const failEnsemble = async route => {
+    if (route.request().method() === 'POST') {
+      failedAdoptionBody = route.request().postDataJSON();
+      await route.fulfill({ status: 503, contentType: 'application/json',
+        body: JSON.stringify({ error: 'forced staged-receipt failure' }) });
+    } else await route.continue();
+  };
+  await page.route('**/api/plans/*/outcomes/ensemble', failEnsemble);
+  await page.click('#symbol-find-proposed');
+  await page.waitForFunction(() => /^#\/plan\/plan_[^/]+\/strategy$/.test(location.hash)
+    && document.getElementById('app').dataset.ready === 'true', null, { timeout: 30000 });
+  const createdPlanId = await page.evaluate(() => location.hash.split('/')[2]);
+  assert.equal(await page.evaluate(() => PlanStore.active().context.targetCents), 30000,
+    'the staged decision target survives the ticker round-trip and canonical handoff exactly');
+  const afterFailure = await page.evaluate(async () =>
+    ((await API.getFresh('/api/plans?scope=all&openOnly=false')).plans || []).length);
+  assert.equal(afterFailure, seed.before + 1,
+    'the canonical handoff creates exactly one durable Plan even when a receipt save fails');
+  assert.match(await page.textContent('#plan-strategy-body'), /Some Evidence did not finish carrying/,
+    'partial commit is named on the arrival screen while the failed receipt remains retryable');
+  assert.equal(await page.evaluate(() => Object.keys(App.state.researchHandoffBySymbol || {}).length > 0), true,
+    'the failed receipt remains staged for an idempotent retry');
+  assert.deepEqual(failedAdoptionBody, {
+    expectedVersion: failedAdoptionBody && failedAdoptionBody.expectedVersion,
+    researchReceiptId: publicFan.id,
+    expectedFingerprint: publicFan.fingerprint
+  }, 'the canonical Plan endpoint receives no alternate spec, IV, levels, or regeneration inputs');
+  const firstStrategyRunId = await page.evaluate(async id => {
+    const latest = await PlanStore.latestStrategy(id, true);
+    return latest && latest.strategy && latest.strategy.result && latest.strategy.result.strategyRunId;
+  }, createdPlanId);
+  assert.ok(firstStrategyRunId, 'the first handoff completed one durable ranking receipt');
+  await page.unroute('**/api/plans/*/outcomes/ensemble', failEnsemble);
+
+  let successfulAdoptionBody = null;
+  const captureEnsemble = async route => {
+    if (route.request().method() === 'POST') successfulAdoptionBody = route.request().postDataJSON();
+    await route.continue();
+  };
+  await page.route('**/api/plans/*/outcomes/ensemble', captureEnsemble);
+  await go('#/research/TSLA');
+  await page.waitForSelector('#symbol-proposed-trades .symbol-proposed-carry');
+  assert.equal(await page.textContent('#symbol-find-proposed'), 'Retry Evidence carry',
+    'a partial carry resumes its exact durable Plan instead of asking for the goal again');
+  assert.match(await page.textContent('#symbol-proposed-goal'), /Existing Plan[\s\S]*Trade a view/i,
+    'the retry names the already-declared Plan target and exposes no alternate destination');
+  assert.equal(await page.isEnabled('#symbol-find-proposed'), true,
+    'the exact retry remains actionable without recreating the Plan declaration');
+  await page.click('#symbol-find-proposed');
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/strategy'
+    && document.getElementById('app').dataset.ready === 'true', createdPlanId, { timeout: 30000 });
+  assert.equal(await page.evaluate(async () =>
+    ((await API.getFresh('/api/plans?scope=all&openOnly=false')).plans || []).length), afterFailure,
+  'retry reuses the same Plan instead of duplicating the journey');
+  assert.equal(await page.evaluate(async id => {
+    const latest = await PlanStore.latestStrategy(id, true);
+    return latest && latest.strategy && latest.strategy.result && latest.strategy.result.strategyRunId;
+  }, createdPlanId), firstStrategyRunId,
+  'an Evidence-only retry preserves the already-successful ranking receipt');
+  assert.equal(await page.evaluate(() => Object.keys(App.state.researchHandoffBySymbol || {}).length > 0), false,
+    'a successful retry consumes the staged receipt');
+  assert.equal(await page.locator('#plan-strategy-body .alert:has-text("Some Evidence did not finish")').count(), 0,
+    'the partial-commit warning clears after the receipt is saved');
+  await page.unroute('**/api/plans/*/outcomes/ensemble', captureEnsemble);
+  assert.deepEqual(successfulAdoptionBody, {
+    expectedVersion: successfulAdoptionBody && successfulAdoptionBody.expectedVersion,
+    researchReceiptId: publicFan.id,
+    expectedFingerprint: publicFan.fingerprint
+  }, 'the successful retry promotes the same receipt through the same canonical endpoint');
+  const ensembleReceipt = await page.evaluate(async id => {
+    const saved = await API.getFresh('/api/plans/' + id + '/outcomes/ensemble/latest');
+    return { id: saved && saved.ensemble && saved.ensemble.id,
+      fingerprint: saved && saved.ensemble && saved.ensemble.fingerprint };
+  }, createdPlanId);
+  assert.ok(ensembleReceipt.id && ensembleReceipt.id !== publicFan.id,
+    'the public receipt is promoted into a durable Plan-owned ensemble identity');
+  assert.equal(ensembleReceipt.fingerprint, publicFan.fingerprint,
+    'the reused Plan durably owns the exact fan shown in public Evidence, never a rerun');
+
+  // The other Evidence lens uses the same handoff and augments this same Plan, rather than
+  // exposing its own Plan creator.
+  await go('#/research/TSLA?view=evidence');
+  await page.click('#research-outcomes-basis-past');
+  await page.waitForSelector('#study-run:not([disabled])');
+  await page.click('#study-run');
+  await page.waitForSelector('#study-results .alert', { timeout: 30000 });
+  await page.waitForSelector('#tv-test-analogs', { timeout: 15000 });
+  await page.click('#tv-test-analogs');
+  await page.waitForFunction(() => location.hash === '#/research/TSLA'
+    && document.getElementById('app').dataset.ready === 'true');
+  assert.match(await page.textContent('#symbol-proposed-trades .symbol-proposed-carry'), /Historical study/,
+    'the analog study returns to the same Ready-to-compare handoff');
+  await page.click('#symbol-find-proposed');
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/strategy'
+    && document.getElementById('app').dataset.ready === 'true', createdPlanId, { timeout: 30000 });
+  assert.equal(await page.evaluate(async () =>
+    ((await API.getFresh('/api/plans?scope=all&openOnly=false')).plans || []).length), afterFailure,
+  'the analog receipt also reuses the exact same Plan');
+  const analogReceipt = await page.evaluate(async id => {
+    const saved = await API.getFresh('/api/plans/' + id + '/evidence/latest');
+    return { hasRequest: !!(saved && saved.evidence && saved.evidence.request),
+      studyKey: saved && saved.evidence && saved.evidence.result && saved.evidence.result.studyKey,
+      selection: PlanStore.ui(id).evidence && PlanStore.ui(id).evidence.analogSelection };
+  }, createdPlanId);
+  assert.ok(analogReceipt.hasRequest && analogReceipt.studyKey
+    && analogReceipt.selection && analogReceipt.selection.studyKey,
+  'the exact historical-study request, result, and selected analog receipt remain attached');
+  assert.equal(analogReceipt.studyKey, analogReceipt.selection.studyKey,
+    'the durable Plan study is the exact content-keyed result shown in public Evidence');
+});
+
 test('Program ONE: the evidence fan survives attention moves without re-rendering', async () => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.evaluate(() => Learn.setLevel('beginner'));
   // A unique horizon guarantees a genuinely fresh plan — creation dedupes on matching context.
   const plan = await openPlan('AAPL', 'evidence', 'DIRECTIONAL', 'bullish', '41d');
+  await page.click('#tv-setup .choice-option[data-value="pullback_rebound"]');
   await page.waitForSelector('#research-outcomes-basis-futures');
   await page.click('#research-outcomes-basis-futures');
   await page.waitForSelector('#whatif-run');
@@ -6844,6 +8976,10 @@ test('Program ONE: the evidence fan survives attention moves without re-renderin
   // Reopening is one tap and greets the user with the SAME canvas — zero re-render.
   await page.click('[data-band="evidence"] .flow-band-invitation');
   await page.waitForSelector('[data-band="evidence"]:not(.is-folded)');
+  assert.equal(await page.evaluate(() => location.hash), '#/plan/' + plan.id + '/evidence',
+    'opening a Plan band updates the truthful deep link and browser history');
+  assert.equal(await page.evaluate(() => window.__flowNode === document.getElementById('plan-flow')), true,
+    'the routed invitation still moves inside the same mounted Plan document');
   assert.equal(await page.evaluate(() =>
     window.__fanCanvas === document.querySelector('#whatif-out svg')), true,
     'the same canvas node survives fold and reopen');

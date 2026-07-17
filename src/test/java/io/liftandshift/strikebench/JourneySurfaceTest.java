@@ -57,11 +57,14 @@ class JourneySurfaceTest {
                 "async function sectorExplorer(root, context)", "function verdictPanel(",
                 "var THESIS_BADGE", "await research(root, [symbol])",
                 "symbolProposedTradesCard(symbol)", "window.ViewPlan.openCandidateAsPlan(candidate",
-                "function researchLocalNav(symbol, active)",
-                "overview: { label: 'Overview'", "evidence: { label: 'Evidence & scenarios'",
-                "options: { label: 'Options'",
+                "async function publicResearchWorkspace(root, symbol)",
+                "Flow.render({ id: 'research-flow'", "stateKey: 'research:' + symbol + ':flow'",
+                "overview: { label: 'Understand the market'", "evidence: { label: 'Test a view'",
+                "options: { label: 'Inspect the option market'", "await flow.whenReady()",
+                "App._researchSeam = { key: 'research:' + symbol",
                 "missingSparkCopy: missingSparkCopy", "stripZeros = S.stripZeros",
                 "window.ViewResearch = Object.freeze({")
+                .doesNotContain("function researchLocalNav(symbol, active)")
                 .doesNotContain("window.ViewPlan.provisionalStage(root, symbol)")
                 .doesNotContain("async function home(root, params)");
         assertThat(plan).contains("startPlan = S.startPlan", "await startPlan(handoff, planIntentDestination(intent))")
@@ -195,6 +198,7 @@ class JourneySurfaceTest {
                 "routes.post(\"/api/recommend\"",
                 "routes.post(\"/api/recommend/auto\"",
                 "routes.post(\"/api/recommend/ladder\"",
+                "routes.post(\"/api/opportunities\"",
                 "routes.get(\"/api/backtests/{id}\"");
         assertThat(surface).contains(
                 "routes.post(\"/api/research/scout\"",
@@ -602,7 +606,10 @@ class JourneySurfaceTest {
                         "App.marketStreamHealthy = marketStreamHealthy", "msg.kind === 'health'")
                 .doesNotContain("setInterval(refreshTape, 45 * 1000)");
         assertThat(workspace).contains("if (document.hidden) return;", "function reconcile()",
-                "return adoptRemote(remote, false);", "if (json === lastRemoteJson) return;");
+                "var adoptedBeforeVisibility = adoptedWhileHidden;",
+                "return adoptRemote(remote, false) || adoptedBeforeVisibility;",
+                "if (document.hidden) adoptRemote(r, true);",
+                "if (json === lastRemoteJson) return;");
     }
 
     @Test void canonicalOwnersRetainTheFullDecisionAndLearningToolset() throws Exception {

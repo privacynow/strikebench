@@ -8,8 +8,9 @@ import java.util.function.Function;
 
 /**
  * The alert center's HTTP surface: one GET computing the user's current attention list
- * (alerts + counts by severity). Material changes ride the existing /api/events stream
- * as {@code alerts.updated} hints — there is no separate SSE channel.
+ * (alerts + counts by severity). The GET establishes the caller's current baseline without
+ * publishing a circular notification; mutation-driven material changes ride the existing
+ * /api/events stream as {@code alerts.updated} hints — there is no separate SSE channel.
  */
 public final class AlertController {
 
@@ -22,6 +23,6 @@ public final class AlertController {
     }
 
     public void register(JavalinConfig config) {
-        config.routes.get("/api/alerts", ctx -> ctx.json(alerts.compute(ownerId.apply(ctx))));
+        config.routes.get("/api/alerts", ctx -> ctx.json(alerts.current(ownerId.apply(ctx))));
     }
 }

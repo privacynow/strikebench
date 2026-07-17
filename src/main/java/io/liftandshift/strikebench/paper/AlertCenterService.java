@@ -24,6 +24,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The alert center (spec 10.1): one computed attention list per user across lanes — protocol
@@ -33,10 +36,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * sourced dividend calendar the surface says "unavailable" — never a guessed date (§3.15).
  *
  * <p>Home's needs-attention ordering is driven by this list (severity first, then recency). The
- * service publishes an {@code alerts.updated} EventBus hint when a user's computed set materially
- * changes so /api/events subscribers refresh; there is no separate SSE channel.</p>
+ * mutation/market invalidations recompute through this same service and publish an
+ * {@code alerts.updated} EventBus hint when a user's set materially changes; GET remains a pure
+ * authoritative read and there is no separate SSE channel.</p>
  */
-public final class AlertCenterService {
+public final class AlertCenterService implements AutoCloseable {
 
     /** Severity ladder, strongest first. Labels are the product wording at both levels. */
     public static final String URGENT = "URGENT";
@@ -81,6 +85,10 @@ public final class AlertCenterService {
     private final EventBus events;
     private final long feePerContractCents;
     private final Map<String, String> lastFingerprint = new ConcurrentHashMap<>();
+    private final java.util.Set<String> knownOwners = ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> pendingOwners = ConcurrentHashMap.newKeySet();
+    private final ScheduledExecutorService refreshes;
+    private final Runnable unsubscribeEvents;
 
     public AlertCenterService(Db db, Clock clock, TradeService trades, MarksSource marks,
                               EarningsSource earnings, EventBus events, long feePerContractCents) {
@@ -91,9 +99,15 @@ public final class AlertCenterService {
         this.earnings = earnings;
         this.events = events;
         this.feePerContractCents = Math.max(0, feePerContractCents);
+        this.refreshes = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "alert-center-refresh");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.unsubscribeEvents = events == null ? () -> {} : events.subscribe(this::onEvent);
     }
 
-    /** Computes the current alert set for one user, ordered severity-first then recency. */
+    /** Computes the current alert set for one user, ordered severity-first then recency. Pure read. */
     public AlertSet compute(String ownerId) {
         String owner = OwnerScope.id(ownerId);
         LocalDate today = LocalDate.now(clock);
@@ -117,9 +131,65 @@ public final class AlertCenterService {
             else info++;
         }
         Counts counts = new Counts(urgent, attention, info, out.size());
-        publishIfChanged(owner, out, counts);
         return new AlertSet(List.copyOf(out), counts, new ExDividendNote(false, EX_DIVIDEND_NOTE),
                 clock.instant().toString());
+    }
+
+    /** HTTP read path: establishes a comparison baseline without emitting a circular SSE hint. */
+    public AlertSet current(String ownerId) {
+        String owner = OwnerScope.id(ownerId);
+        AlertSet set = compute(owner);
+        knownOwners.add(owner);
+        lastFingerprint.put(owner, fingerprint(set.alerts()));
+        return set;
+    }
+
+    /** Recomputes after a mutation/clock event and publishes only a material change. */
+    public AlertSet refreshAndPublish(String ownerId) {
+        String owner = OwnerScope.id(ownerId);
+        AlertSet set = compute(owner);
+        knownOwners.add(owner);
+        publishIfChanged(owner, set.alerts(), set.counts());
+        return set;
+    }
+
+    /** Debounced, non-blocking invalidation seam for owner-scoped mutations. */
+    public void invalidateOwner(String ownerId) {
+        String owner = OwnerScope.id(ownerId);
+        knownOwners.add(owner);
+        if (!pendingOwners.add(owner)) return;
+        refreshes.schedule(() -> {
+            try {
+                refreshAndPublish(owner);
+            } catch (RuntimeException ignored) {
+                // An attention hint is best-effort; the durable GET remains authoritative.
+            } finally {
+                pendingOwners.remove(owner);
+            }
+        }, 20, TimeUnit.MILLISECONDS);
+    }
+
+    /** Resolves a practice/demo account to its persistence owner, then invalidates that owner. */
+    public void invalidateAccount(String accountId) {
+        if (accountId == null || accountId.isBlank()) return;
+        String owner = db.query("SELECT COALESCE(user_id,'local') user_id FROM accounts WHERE id=?",
+                        r -> r.str("user_id"), accountId)
+                .stream().findFirst().orElse(null);
+        invalidateOwner(owner);
+    }
+
+    private void onEvent(EventBus.Event event) {
+        if (!switch (event.type()) {
+            case "world.tick", "world.control", "world.selected", "dataset.selected", "plan.updated" -> true;
+            default -> false;
+        }) return;
+        Object owner = event.data().get("user");
+        if (owner != null) {
+            invalidateOwner(String.valueOf(owner));
+        } else {
+            // Deliberately global system transitions refresh only owners that have used the surface.
+            for (String known : knownOwners) invalidateOwner(known);
+        }
     }
 
     // ---- Practice lane: open trades, marked by the exact services the Manage band uses ----
@@ -131,7 +201,6 @@ public final class AlertCenterService {
                 r -> new AccountRow(r.str("id"), r.str("name"), r.str("type")), owner);
         for (AccountRow account : accounts) {
             for (TradeRecord t : trades.list(account.id(), TradeRecord.ACTIVE, 0, 500).trades()) {
-                if (t.external()) continue; // the external persistence path is being deleted (§3.2)
                 String planId = planForTrade(t.id());
                 String deepLink = planId != null ? "#/plan/" + planId + "/manage-review"
                         : "#/portfolio/trade/" + t.id();
@@ -352,7 +421,7 @@ public final class AlertCenterService {
         record PendingGroup(String sourceSystem, String fingerprint, long count, String latest) {}
         List<PendingGroup> groups = db.query(
                 "SELECT source_system, source_account_fingerprint, COUNT(*) n, MAX(occurred_at)::text latest "
-                        + "FROM portfolio_import_pending WHERE user_id=? AND status='PENDING' "
+                        + "FROM portfolio_import_pending WHERE user_id=? AND status IN ('PENDING','PROVISIONAL') "
                         + "GROUP BY source_system, source_account_fingerprint ORDER BY latest DESC",
                 r -> new PendingGroup(r.str("source_system"), r.str("source_account_fingerprint"),
                         r.lng("n"), r.str("latest")), owner);
@@ -363,10 +432,10 @@ public final class AlertCenterService {
             out.add(new Alert("imports:" + g.sourceSystem() + ":" + g.fingerprint(),
                     "PENDING_IMPORTS", ATTENTION, severityLabel(ATTENTION),
                     g.count() == 1
-                            ? "1 imported broker transaction is waiting to be resolved."
-                            : g.count() + " imported broker transactions are waiting to be resolved.",
-                    "From " + accountLabel + ". Until you resolve each package into exact lots, its "
-                            + "campaign holds tax figures and the tracked book stays incomplete.",
+                            ? "1 imported broker package needs fills or broker attestation."
+                            : g.count() + " imported broker packages need fills or broker attestation.",
+                    "From " + accountLabel + ". User allocations remain quarantined; only broker-attested "
+                            + "fills create exact lots and complete the tracked book.",
                     null, "TRACKED", "IMPORTS", null, null, null, null, accountLabel,
                     "#/portfolio/book/activity", g.latest(),
                     Map.of("pendingCount", g.count())));
@@ -470,16 +539,27 @@ public final class AlertCenterService {
 
     /** Publishes the material-change hint. Fingerprint = ids + severities, order-independent. */
     private void publishIfChanged(String owner, List<Alert> alerts, Counts counts) {
-        String fingerprint = alerts.stream()
-                .map(a -> a.id() + "=" + a.severity())
-                .sorted()
-                .reduce("", (a, b) -> a + "|" + b);
+        String fingerprint = fingerprint(alerts);
         String prior = lastFingerprint.put(owner, fingerprint);
         if (prior != null && prior.equals(fingerprint)) return;
         if (events == null) return;
-        events.publish("alerts.updated", Map.of("owner", owner,
+        // Every owner-scoped EventBus hint uses the mandatory `user` field.  The authenticated
+        // SSE transport deliberately rejects malformed alerts.updated hints that omit it, so a
+        // future producer typo cannot turn private attention counts into a global event.
+        events.publish("alerts.updated", Map.of("user", owner,
                 "urgent", counts.urgent(), "attention", counts.attention(),
                 "info", counts.info(), "total", counts.total()));
+    }
+
+    private static String fingerprint(List<Alert> alerts) {
+        return alerts.stream().map(a -> a.id() + "=" + a.severity()).sorted()
+                .reduce("", (a, b) -> a + "|" + b);
+    }
+
+    @Override
+    public void close() {
+        unsubscribeEvents.run();
+        refreshes.shutdownNow();
     }
 
     private record AccountRow(String id, String name, String type) {}

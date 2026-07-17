@@ -62,11 +62,11 @@ public final class TradeService {
 
     /**
      * THE canonical OrderPackage: every entry path — recommendations, builder, guided ticket,
-     * broker integration, external-fill recording — produces exactly this typed package, and the
+     * broker integration and tracked-book imports — produces exactly this typed package, and the
      * one evaluation pipeline consumes it. Package-level extras: {@code proposedNetCents} (signed:
      * + credit received / − debit paid; null = price at executable sides), {@code feesOverrideCents}
-     * (null = platform default; a paper ticket treats this as the fee per side, while a recorded
-     * fill treats it as the actual entry fee), {@code source} (RECOMMENDATION | BUILDER | TICKET |
+     * (null = platform default; a Practice ticket treats this as the fee per side),
+     * {@code source} (RECOMMENDATION | BUILDER | TICKET |
      * IMPORT | BROKER).
      */
     public record OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
@@ -784,138 +784,6 @@ public final class TradeService {
         };
     }
 
-    /**
-     * Records a REAL trade executed at a brokerage: identical evaluation (the plan runs at the
-     * ACTUAL fill via proposedNetCents), identical marks/plans/resolution — but paper cash, the
-     * ledger and reserves are NEVER touched. This is the learning loop's missing import path:
-     * the MU condor left zero trace because only paper placements existed.
-     */
-    /** Execution identity for the real-fill lane: when it happened, where, and the order id. */
-    public record ExternalMeta(String executedAt, String broker, String orderRef, boolean historical) {}
-
-    public TradeRecord createExternal(OpenRequest req) {
-        return createExternal(req, new ExternalMeta(null, null, null, false));
-    }
-
-    public TradeRecord createExternal(OpenRequest req, ExternalMeta meta) {
-        Plan p;
-        if (meta != null && meta.historical()) {
-            // HISTORICAL fills: the contracts may be dead and the books gone — the user's own
-            // per-leg fills ARE the record. No live validation is possible; evidence says so.
-            p = planFromUserFills(req);
-        } else {
-            if (req.proposedNetCents() == null) {
-                throw new IllegalArgumentException("recording a broker trade requires proposedNetCents — the actual net fill");
-            }
-            p = computePlan(req, true);
-            // A real fill is a FACT to record, not an order to risk-screen (CP-9/R6): entry-quality
-            // blocks (undefined risk, too-good-to-be-true quotes) become loud warnings here — the
-            // riskiest real trades are the ones the learning loop most needs to see. Structural
-            // problems (unknown symbol, no market at all) still reject.
-            List<String> hardBlocks = new ArrayList<>();
-            List<String> softened = new ArrayList<>();
-            for (String b : p.blocks()) {
-                if (b.startsWith("Undefined (unlimited) risk") || b.startsWith("Computed max loss is $0.00")) {
-                    softened.add("RECORDED WITH UNSCREENED RISK: " + b);
-                } else {
-                    hardBlocks.add(b);
-                }
-            }
-            if (!softened.isEmpty() && hardBlocks.isEmpty()) {
-                List<String> warns = new ArrayList<>(p.warnings());
-                warns.addAll(softened);
-                p = new Plan(p.filledLegs(), p.entryNet(), p.fees(), 0, p.maxLoss(), p.maxProfit(),
-                        p.breakevens(), p.pop(), p.ev(), p.underlyingCents(), p.freshness(),
-                        List.of(), warns, p.snapshotJson(), p.sharesToLock(), p.legDetails(),
-                        p.assignmentProb(), p.payoff(), p.analytics());
-            }
-        }
-        if (!p.blocks().isEmpty()) reject(req, p.blocks());
-        String tradeId = Ids.trade();
-        String now = now();
-        java.time.OffsetDateTime executedAt = parseExecutedAt(meta == null ? null : meta.executedAt());
-        db.exec("""
-                INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
-                  entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
-                  pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
-                  is_live,created_at,closed_at,updated_at,intent,shares_locked,origin,
-                  proposed_net_cents,executed_at,broker,order_ref,data_provenance,data_age,data_source)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,0,'EXTERNAL',?,?,?,?,?,?,?)""",
-                tradeId, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT),
-                req.strategy(), TradeRecord.ACTIVE, req.qty(), Json.write(p.filledLegs()),
-                req.thesis(), req.horizon(), req.riskMode(),
-                p.underlyingCents(), p.entryNet(), p.maxLoss(), p.maxProfit(), Json.write(p.breakevens()),
-                p.pop(), p.fees(), p.snapshotJson(), now, now,
-                req.intent() == null || req.intent().isBlank() ? null
-                        : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
-                req.proposedNetCents(), executedAt,
-                meta == null ? null : meta.broker(), meta == null ? null : meta.orderRef(),
-                "BROKER", io.liftandshift.strikebench.model.DataEvidence.of("broker", p.freshness()).age().name(),
-                meta == null || meta.broker() == null ? "external fill" : meta.broker());
-        auditSafe(req.accountId(), tradeId, "EXTERNAL_TRADE_RECORDED", "INFO", Map.of(
-                "symbol", req.symbol(), "strategy", req.strategy(), "qty", req.qty(),
-                "fillNetCents", p.entryNet(), "feesCents", p.fees()));
-        return get(tradeId);
-    }
-
-    private static java.time.OffsetDateTime parseExecutedAt(String s) {
-        if (s == null || s.isBlank()) return null;
-        try { return java.time.OffsetDateTime.parse(s); } catch (RuntimeException ignored) { }
-        try { return LocalDate.parse(s.trim()).atTime(16, 0).atOffset(java.time.ZoneOffset.UTC); }
-        catch (RuntimeException e) { throw new IllegalArgumentException("executedAt must be an ISO date or datetime"); }
-    }
-
-    /**
-     * A plan built ENTIRELY from user-supplied per-leg fills — the honest path for recording a
-     * trade whose contracts have since expired. No live marks, no POP/EV (no vol), evidence
-     * MISSING; undefined-risk reality is RECORDED with a loud warning, never blocked (it already
-     * happened at the broker).
-     */
-    private Plan planFromUserFills(OpenRequest req) {
-        List<String> blocks = new ArrayList<>();
-        List<String> warnings = new ArrayList<>();
-        if (req.qty() < 1 || req.qty() > 100) blocks.add("Quantity must be 1..100");
-        if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
-        List<Leg> filled = new ArrayList<>();
-        for (Leg leg : req.legs() == null ? List.<Leg>of() : req.legs()) {
-            if (!leg.isStock() && (leg.entryPrice() == null || leg.entryPrice().signum() <= 0)) {
-                blocks.add("Historical recording requires YOUR fill price on every option leg (" + legDesc(leg) + ")");
-                continue;
-            }
-            filled.add(leg);
-        }
-        if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
-                Freshness.MISSING, blocks, warnings, "{}");
-        long netAdjust = 0;
-        PayoffCurve curve = PayoffCurve.of(filled, req.qty());
-        long entryNet = curve.entryNetPremiumCents();
-        if (req.proposedNetCents() != null && req.proposedNetCents() != entryNet) {
-            netAdjust = req.proposedNetCents() - entryNet;
-            curve = PayoffCurve.of(filled, req.qty(), netAdjust);
-            entryNet = curve.entryNetPremiumCents();
-            warnings.add("Package net " + Money.fmt(entryNet) + " taken from your stated total; per-leg fills sum to "
-                    + Money.fmt(entryNet - netAdjust));
-        }
-        long maxLoss;
-        Long maxProfit = curve.maxProfitUnbounded() ? null : curve.maxProfitCents();
-        if (curve.maxLossUnbounded()) {
-            maxLoss = 0;
-            warnings.add("UNDEFINED RISK recorded as-is: this real position can lose more than any figure shown — "
-                    + "max loss is stored as $0 because no cap exists");
-        } else {
-            maxLoss = curve.maxLossCents();
-        }
-        long fees = req.feesOverrideCents() != null ? Math.max(0, req.feesOverrideCents()) : feesFor(filled, req.qty());
-        warnings.add("Recorded from YOUR fills — contracts were not validated against a live book (historical entry)");
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        snapshot.put("freshness", Freshness.MISSING.name());
-        snapshot.put("asOf", now());
-        snapshot.put("basis", "user-supplied historical fills");
-        return new Plan(filled, entryNet, fees, 0, maxLoss, maxProfit,
-                curve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
-                null, null, 0, Freshness.MISSING, blocks, warnings, Json.write(snapshot));
-    }
-
     /** Opens the trade or throws TradeRejectedException (audit row only, zero mutation). */
     public TradeRecord create(OpenRequest req) {
         return create(req, null);
@@ -1535,23 +1403,6 @@ public final class TradeService {
             }
 
             String nowTs = now();
-            if (t.external()) {
-                // Real-trade lane: cash-settle the OUTCOME onto the trade row only — the paper
-                // ledger never held this money, and physical assignment belongs to the broker.
-                long actionRealized = Math.addExact(
-                        Math.subtractExact(t.entryNetPremiumCents(), t.feesOpenCents()), settleValue);
-                long realizedToDate = Math.addExact(t.realizedPnlCents() == null ? 0 : t.realizedPnlCents(),
-                        actionRealized);
-                long decisionToDate = Math.addExact(t.decisionPnlCents() == null ? 0 : t.decisionPnlCents(),
-                        actionRealized);
-                Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                        TradeRecord.EXPIRED, "SETTLED (external)" + memoSuffix, realizedToDate,
-                        decisionToDate, nowTs, nowTs, t.id());
-                CloseResult closed = new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
-                if (hook != null) hook.afterMutation(c, closed.trade(),
-                        closed.actionRealizedPnlCents(), closed.realizedPnlCents());
-                return closed;
-            }
             long cash = acct.cashCents(), reserved = acct.reservedCents();
             cash += settleValue;
             ledgerRow(c, acct.id(), t.id(), nowTs, "SETTLEMENT", settleValue, cash, reserved,
@@ -1737,12 +1588,7 @@ public final class TradeService {
      * loss or becoming a stock position in StrikeBench's settlement model.
      */
     public Map<String, Object> portfolioHeat(String accountId) {
-        List<TradeRecord> all = activeTrades(accountId);
-        // EXTERNAL trades are excluded from paper-CASH arithmetic (their money lives at the
-        // broker — same identity as openPositionsValue); they are counted separately so the
-        // strip can label them instead of silently bending paper buying power (review P2).
-        List<TradeRecord> active = all.stream().filter(t -> !t.external()).toList();
-        long externalCount = all.size() - active.size();
+        List<TradeRecord> active = activeTrades(accountId);
         Account acct = db.with(c -> AccountService.get(c, accountId));
         Map<String, Long> reserveByTrade = new java.util.HashMap<>();
         for (Map.Entry<String, Long> e : db.query(
@@ -1789,7 +1635,6 @@ public final class TradeService {
         out.put("assignmentReserveReleasedCents", assignmentReserveReleased);
         out.put("postPhysicalAssignmentBuyingPowerCents",
                 acct.buyingPowerCents() - physicalAssignmentCash + assignmentReserveReleased);
-        out.put("externalTrades", externalCount); // marked/judged elsewhere; never in paper cash math
         return out;
     }
 
@@ -1919,10 +1764,7 @@ public final class TradeService {
                                      long unrealizedCents, boolean complete, String freshness) {}
 
     public OpenPositionsValue openPositionsValue(String accountId) {
-        // EXTERNAL trades are excluded from paper-money math: their cash lives at the broker,
-        // so including their close value would break totalValue = cash + shares + open closes.
-        List<TradeRecord> active = activeTrades(accountId).stream()
-                .filter(t -> !t.external()).toList();
+        List<TradeRecord> active = activeTrades(accountId);
         Map<String, MarkView> snap = accountMarkSnapshot(accountId); // ONE atomic snapshot for all consumers
         long value = 0, unrealized = 0;
         int counted = 0;
@@ -1989,7 +1831,7 @@ public final class TradeService {
                                                      String excludedTradeId) {
         List<TradeRecord> active = activeTrades(accountId).stream()
                 .filter(trade -> excludedTradeId == null || !excludedTradeId.equals(trade.id()))
-                .filter(trade -> !trade.external()).toList();
+                .toList();
         Map<String, MarkView> marksByTrade = accountMarkSnapshot(accountId);
         long gross = 0, net = 0, focusGross = 0;
         boolean complete = true;
@@ -2740,13 +2582,6 @@ public final class TradeService {
         long decisionPnlToDate = Math.addExact(t.decisionPnlCents() == null ? 0 : t.decisionPnlCents(),
                 actionDecisionPnl);
         long closeFeesToDate = Math.addExact(t.feesCloseCents(), feesClose);
-        if (t.external()) {
-            // A REAL trade recorded for the learning loop: the paper account never held its cash,
-            // so closing writes the outcome to the trade row ONLY — no ledger, no reserve, no cash.
-            Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
-                    newStatus, closeReason, closeFeesToDate, realizedToDate, decisionPnlToDate, now, now, t.id());
-            return new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
-        }
         long cash = acct.cashCents(), reserved = acct.reservedCents();
 
         cash += closeValue;
@@ -2810,10 +2645,8 @@ public final class TradeService {
     }
 
     private long closeFeesFor(TradeRecord t, int quantity) {
-        if (!t.external()) {
-            Long override = entrySnapshotLong(t, "feeOverridePerSideCents");
-            if (override != null) return Math.max(0, allocatedPrefix(override, t.qty(), quantity));
-        }
+        Long override = entrySnapshotLong(t, "feeOverridePerSideCents");
+        if (override != null) return Math.max(0, allocatedPrefix(override, t.qty(), quantity));
         return feesFor(t.legs(), quantity);
     }
 
@@ -2860,10 +2693,7 @@ public final class TradeService {
     }
 
     private static void requirePracticeTransformation(TradeRecord trade) {
-        if (trade.external()) {
-            throw new IllegalArgumentException(
-                    "Broker-recorded positions belong to the tracked book and cannot mutate Practice cash or collateral");
-        }
+        // This service owns Practice trades only; tracked broker positions use portfolio structures.
     }
 
     private SettlementReference settlementReference(TradeRecord trade, Leg leg,
@@ -3460,8 +3290,7 @@ public final class TradeService {
                 r.lngOrNull("realized_pnl_cents"), r.lngOrNull("decision_pnl_cents"),
                 r.str("close_reason"), r.str("entry_snapshot_json"),
                 r.bool("is_live"), r.str("created_at"), r.str("closed_at"), r.str("updated_at"),
-                r.str("intent"), r.lng("shares_locked"), r.str("origin"),
-                r.lngOrNull("proposed_net_cents"), r.str("executed_at"), r.str("broker"), r.str("order_ref"),
+                r.str("intent"), r.lng("shares_locked"), r.lngOrNull("proposed_net_cents"),
                 r.str("data_provenance"), r.str("data_age"), r.str("data_source"));
     }
 

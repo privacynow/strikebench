@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.plan.PlanStrategyService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.recommend.SignalEngine;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
@@ -114,17 +115,8 @@ final class PlanStrategyController {
 
     private static RecommendationEngine.Request planStrategyRequest(
             io.liftandshift.strikebench.plan.Plan.View plan, PlanStrategyRunRequest controls) {
+        requireDeclaredView(plan);
         var c = plan.context();
-        // The view is user-declared, never imposed: ranking a direction-dependent goal against
-        // an unstated view would silently substitute one. INCOME and HEDGE rank on their declared
-        // objective — direction there is genuinely optional (a shares-agnostic income stance is
-        // a coherent declared view, not a missing one).
-        boolean directionRequired = plan.intent() == null
-                || !java.util.Set.of("INCOME", "HEDGE").contains(plan.intent());
-        if (directionRequired && (c.thesis() == null || c.thesis().isBlank())) {
-            throw new IllegalArgumentException(
-                    "Declare the Plan's view (direction and horizon) before ranking the field.");
-        }
         RecommendationEngine.Holdings holdings = c.holdingsShares() == null && c.costBasisCents() == null
                 && c.targetCents() == null ? null
                 : new RecommendationEngine.Holdings(c.holdingsShares() == null ? null
@@ -135,6 +127,23 @@ final class PlanStrategyController {
                 controls == null ? null : controls.allowedStrategies(), true,
                 controls != null && Boolean.TRUE.equals(controls.allow0dte()), plan.intent(), holdings,
                 controls == null ? null : controls.filters());
+    }
+
+    /** No ranking or structure analysis may manufacture an absent Plan assumption. */
+    static void requireDeclaredView(io.liftandshift.strikebench.plan.Plan.View plan) {
+        var missing = new ArrayList<String>();
+        String intent = plan.intent() == null ? null : plan.intent().trim().toUpperCase(Locale.ROOT);
+        var context = plan.context();
+        if (intent == null || intent.isBlank()) missing.add("goal");
+        if (context.thesis() == null || context.thesis().isBlank()) {
+            missing.add("direction");
+        }
+        if (context.horizonDays() == null || context.horizonDays() <= 0) missing.add("horizon");
+        if (context.riskMode() == null || context.riskMode().isBlank()) missing.add("risk posture");
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException("Declare this Plan's view before ranking or analyzing a structure. Missing: "
+                    + String.join(", ", missing) + ".");
+        }
     }
 
     void planStrategySelect(Context ctx) {
@@ -168,6 +177,7 @@ final class PlanStrategyController {
         }
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
+        requireDeclaredView(plan);
         if (plan.intent() == null || plan.intent().isBlank()) {
             throw new IllegalStateException("Choose what this plan should do before saving a structure");
         }
@@ -235,6 +245,7 @@ final class PlanStrategyController {
         }
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
+        requireDeclaredView(plan);
         List<String> scanUniverse;
         if (cfg.fixturesOnly()) {
             scanUniverse = io.liftandshift.strikebench.market.Universes.SECTORS.get("DEMO").symbols().stream()
@@ -283,6 +294,7 @@ final class PlanStrategyController {
         result.put("riskMode", plan.context().riskMode());
         result.put("intent", plan.intent()); result.put("riskBudgetCents", raw.riskBudgetCents());
         result.put("disclaimer", raw.disclaimer());
+        result.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
         ArrayNode candidates = result.putArray("candidates");
         int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
         boolean anyEconomicAssessment = false, anyComparableAssessment = false;

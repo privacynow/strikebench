@@ -35,12 +35,14 @@ final class PlanDecisionController {
     private final PlanManagementService planManagement;
     private final TradeController tradeController;
     private final io.liftandshift.strikebench.plan.PlanPromotionService promotions;
+    private final PlanAdoptionReviewService adoptionReviews;
 
     PlanDecisionController(PlanController root, Clock clock, Db db, MarketDataService market,
                            TradeService trades, PlanService planSvc,
                            PlanRehearsalService planRehearsals, PlanDecisionService planDecisions,
                            PlanManagementService planManagement, TradeController tradeController,
-                           io.liftandshift.strikebench.plan.PlanPromotionService promotions) {
+                           io.liftandshift.strikebench.plan.PlanPromotionService promotions,
+                           PlanAdoptionReviewService adoptionReviews) {
         this.root = root;
         this.clock = clock;
         this.db = db;
@@ -52,6 +54,7 @@ final class PlanDecisionController {
         this.planManagement = planManagement;
         this.tradeController = tradeController;
         this.promotions = promotions;
+        this.adoptionReviews = adoptionReviews;
     }
 
     public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
@@ -275,7 +278,8 @@ final class PlanDecisionController {
             }
         }
         ctx.json(new ApiResponses.PlanWorkspace<>(plan, planDecisions.latest(root.ownerId(ctx), plan.id()),
-                management, tradeId == null ? null : tradeController.detailData(tradeId)));
+                management, tradeId == null ? null : tradeController.detailData(tradeId),
+                adoptionReviews.reviews(root.ownerId(ctx), plan.id())));
     }
 
     void plansPortfolio(Context ctx) {

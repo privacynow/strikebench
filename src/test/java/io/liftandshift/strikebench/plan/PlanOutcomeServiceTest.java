@@ -11,7 +11,9 @@ import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.sim.IvSpec;
 import io.liftandshift.strikebench.sim.PathEnsembleService;
+import io.liftandshift.strikebench.sim.ScenarioCanvasSpec;
 import io.liftandshift.strikebench.sim.ScenarioSpec;
+import io.liftandshift.strikebench.sim.SimulationEngine;
 import io.liftandshift.strikebench.support.TestDb;
 import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PlanOutcomeServiceTest {
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC);
     private Db db;
     private PlanService plans;
     private PlanStrategyService strategies;
@@ -35,13 +39,157 @@ class PlanOutcomeServiceTest {
 
     @BeforeEach void setUp() {
         db = TestDb.fresh();
-        Clock clock = Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC);
-        plans = new PlanService(db, clock);
-        strategies = new PlanStrategyService(db, clock);
-        outcomes = new PlanOutcomeService(db, clock);
+        plans = new PlanService(db, CLOCK);
+        strategies = new PlanStrategyService(db, CLOCK);
+        outcomes = new PlanOutcomeService(db, CLOCK);
     }
 
     @AfterEach void close() { if (db != null) db.close(); }
+
+    @Test void publicFanReceiptPromotesExactArtifactAndBothSaveAndRetryAreIdempotent() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("public-fan-adopt", "AAPL", "DIRECTIONAL", null, null,
+                        "one exact fan", 2, null, "conservative", null, null, null, null));
+        ScenarioSpec spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 2, .27, 9077L, 3);
+        double[][] paths = {{100, 101, 103}, {100, 99, 97}, {100, 100.5, 101}};
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo", AnalysisContext.OBSERVED),
+                100, spec, paths, null, "paths-public-test", LocalDate.of(2026, 7, 10));
+        IvSpec iv = IvSpec.flat(.31);
+        var preview = preview(ensemble);
+        ObjectNode input = (ObjectNode) Json.parse("{\"operation\":\"PATHS\",\"seed\":9077}");
+        var context = new PlanOutcomeService.ResearchContext("DEMO", "demo", "observed");
+
+        var receipt = outcomes.saveResearchEnsemble(null, context, ensemble, iv,
+                ScenarioCanvasSpec.defaults(), .04, preview, input);
+        var duplicateReceipt = outcomes.saveResearchEnsemble(null, context, ensemble, iv,
+                ScenarioCanvasSpec.defaults(), .04, preview, input);
+        assertThat(duplicateReceipt.id()).isEqualTo(receipt.id());
+        assertThat(duplicateReceipt.fingerprint()).isEqualTo(receipt.fingerprint());
+
+        var first = outcomes.promoteResearchEnsemble(null, plan, receipt.id(), receipt.fingerprint(), context);
+        var retried = outcomes.promoteResearchEnsemble(null, plan, receipt.id(), receipt.fingerprint(), context);
+        assertThat(retried.ensemble().id()).isEqualTo(first.ensemble().id());
+        assertThat(first.ensemble().fingerprint()).isEqualTo(receipt.fingerprint());
+        assertThat(first.ensemble().ensemble().paths()).isDeepEqualTo(paths);
+        assertThat(db.query("SELECT state || ':' || adopted_plan_id || ':' || adopted_ensemble_id value " +
+                        "FROM research_ensemble_receipt WHERE id=?", r -> r.str("value"), receipt.id()))
+                .containsExactly("ADOPTED:" + plan.id() + ":" + first.ensemble().id());
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_ensemble WHERE plan_id=?",
+                r -> r.lng("n"), plan.id())).containsExactly(1L);
+        assertThat(db.query("SELECT COUNT(*) n FROM ensemble_artifact",
+                r -> r.lng("n"))).containsExactly(1L);
+
+        // The ordinary Plan save command obeys the same retry contract.
+        var savedAgain = outcomes.saveEnsemble(null, plan, ensemble, iv,
+                ScenarioCanvasSpec.defaults(), .04, preview, input);
+        var savedRetry = outcomes.saveEnsemble(null, plan, ensemble, iv,
+                ScenarioCanvasSpec.defaults(), .04, preview, input);
+        assertThat(savedRetry.id()).isEqualTo(savedAgain.id());
+    }
+
+    @Test void scenarioDatasetReceiptKeepsObservedExecutionOwnershipAndExactDataset() {
+        db.exec("INSERT INTO dataset(id,name,kind,symbol,seed,spec,user_id) " +
+                        "VALUES('ds-public-scenario','Scenario AAPL','SYNTHETIC_PURE','AAPL',19,'{}'::jsonb,'local')");
+        var analysis = new AnalysisContext(null, "ds-public-scenario");
+        Plan.View plan = plans.create(null, Plan.MarketKind.OBSERVED, null, null,
+                new Plan.CreateRequest("public-scenario-lane", "AAPL", "DIRECTIONAL", null, null,
+                        "scenario lane", 2, null, "conservative", null, null, null, null));
+        ScenarioSpec spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 2, .25, 1901L, 2);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", null, analysis), 100, spec,
+                new double[][]{{100, 101, 102}, {100, 98, 99}}, null,
+                "paths-scenario-test", LocalDate.of(2026, 7, 10));
+        var context = new PlanOutcomeService.ResearchContext(
+                "SCENARIO", "observed", "ds-public-scenario");
+        var receipt = outcomes.saveResearchEnsemble(null, context, ensemble, IvSpec.flat(.25),
+                ScenarioCanvasSpec.defaults(), .04, preview(ensemble),
+                Json.parse("{\"operation\":\"PATHS\",\"datasetId\":\"ds-public-scenario\"}"));
+        assertThat(db.query("SELECT market_kind || ':' || market_lane || ':' || dataset_id value " +
+                        "FROM research_ensemble_receipt WHERE id=?", r -> r.str("value"), receipt.id()))
+                .containsExactly("OBSERVED:SCENARIO:ds-public-scenario");
+        var promoted = outcomes.promoteResearchEnsemble(null, plan, receipt.id(), receipt.fingerprint(), context);
+        assertThat(promoted.ensemble().datasetId()).isEqualTo("ds-public-scenario");
+        assertThat(db.query("SELECT dataset_id FROM plan_ensemble WHERE id=?",
+                r -> r.str("dataset_id"), promoted.ensemble().id()))
+                .containsExactly("ds-public-scenario");
+    }
+
+    @Test void previewOnlyMarketLensChangeCreatesANewReceiptAndPromotesWhatWasDisplayed() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("public-preview-identity", "AAPL", "DIRECTIONAL", null, null,
+                        "preview identity", 2, null, "conservative", null, null, null, null));
+        ScenarioSpec spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 2, .27, 9917L, 2);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo", AnalysisContext.OBSERVED), 100, spec,
+                new double[][]{{100, 101, 103}, {100, 99, 98}}, null,
+                "paths-preview-test", LocalDate.of(2026, 7, 10));
+        var base = preview(ensemble);
+        var changed = previewWithMarketLens(base, "2026-07-12T16:05:00Z", .44);
+        ObjectNode input = (ObjectNode) Json.parse("{\"operation\":\"PATHS\",\"seed\":9917}");
+        var context = new PlanOutcomeService.ResearchContext("DEMO", "demo", "observed");
+        var first = outcomes.saveResearchEnsemble(null, context, ensemble, IvSpec.flat(.27),
+                ScenarioCanvasSpec.defaults(), .04, base, input);
+        var second = outcomes.saveResearchEnsemble(null, context, ensemble, IvSpec.flat(.27),
+                ScenarioCanvasSpec.defaults(), .04, changed, input);
+        assertThat(second.fingerprint()).isEqualTo(first.fingerprint());
+        assertThat(second.id()).isNotEqualTo(first.id());
+
+        var promoted = outcomes.promoteResearchEnsemble(null, plan, second.id(), second.fingerprint(), context);
+        assertThat(promoted.preview().at("/marketImplied/atmIv").asDouble()).isEqualTo(.44);
+        assertThat(promoted.preview().at("/receipt/asOf").asText()).isEqualTo("2026-07-12T16:05:00Z");
+        assertThat(promoted.preview().at("/bands")).isEqualTo(second.preview().at("/bands"));
+        assertThat(promoted.preview().at("/samples")).isEqualTo(second.preview().at("/samples"));
+    }
+
+    @Test void canvasSurfaceTemplateAndCalendarAnchorRoundTripInFingerprint() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("canvas-receipt-roundtrip", "AAPL", "DIRECTIONAL", null, null,
+                        "neutral", 2, null, "conservative", null, null, null, null));
+        LocalDate anchor = LocalDate.of(2026, 7, 2);
+        ScenarioSpec spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 2, .30, 812L, 2);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo", AnalysisContext.OBSERVED), 100, spec,
+                new double[][]{{100, 98, 102}, {100, 101, 104}}, null,
+                "paths-calendar-test", anchor);
+        var template = new ScenarioCanvasSpec.TemplateReceipt(
+                ScenarioCanvasSpec.TemplateKind.HISTORICAL_REPLAY, "owned daily CSV", "OBSERVED",
+                anchor, LocalDate.of(2025, 4, 1), LocalDate.of(2025, 4, 3), 3,
+                true, true, "Observed underlying closes; modeled option leg-days.",
+                "Completed window with no look-ahead.", "").signed();
+        var canvas = new ScenarioCanvasSpec("NYSE", .012, "user-entered dividend", -.25, .08,
+                ScenarioCanvasSpec.SurfaceDynamics.STICKY_STRIKE,
+                ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM,
+                ScenarioCanvasSpec.ExercisePolicy.EXTRINSIC_THRESHOLD,
+                List.of(new ScenarioCanvasSpec.IvNode(0, .42),
+                        new ScenarioCanvasSpec.IvNode(2, .24)), template);
+
+        var stored = outcomes.saveEnsemble(null, plan, ensemble, IvSpec.flat(.30), canvas, .041,
+                null, Json.parse("{\"journey\":\"canvas\"}"));
+        var restored = outcomes.loadEnsemble(null, plan.id(), stored.id());
+
+        assertThat(restored.ensemble().anchorDate()).isEqualTo(anchor);
+        assertThat(restored.canvas()).isEqualTo(canvas.sane(2));
+        assertThat(restored.canvas().template().validFingerprint()).isTrue();
+        assertThat(outcomes.canvasSpec(null, plan.id(), stored.id(), 2)).isEqualTo(restored.canvas());
+        assertThat(db.query("SELECT anchor_date::text d FROM plan_ensemble_canvas WHERE ensemble_id=?",
+                r -> r.str("d"), stored.id())).containsExactly("2026-07-02");
+        assertThat(db.query("SELECT day_index FROM plan_ensemble_canvas_iv_node WHERE ensemble_id=? ORDER BY day_index",
+                r -> r.intv("day_index"), stored.id())).containsExactly(0, 2);
+
+        var changedSurface = new ScenarioCanvasSpec("NYSE", .012, "user-entered dividend", -.25, .09,
+                canvas.surfaceDynamics(), canvas.settlementPolicy(), canvas.exercisePolicy(),
+                canvas.ivNodes(), template);
+        var changed = outcomes.saveEnsemble(null, plan, ensemble, IvSpec.flat(.30), changedSurface, .041,
+                null, Json.parse("{\"journey\":\"canvas\"}"));
+        assertThat(changed.fingerprint()).isNotEqualTo(stored.fingerprint());
+
+        var nextAnchor = new PathEnsembleService.Ensemble(ensemble.basis(), ensemble.scope(), ensemble.spot(),
+                ensemble.spec(), ensemble.paths(), ensemble.study(), ensemble.modelVersion(), anchor.plusDays(1));
+        var movedClock = outcomes.saveEnsemble(null, plan, nextAnchor, IvSpec.flat(.30), canvas, .041,
+                null, Json.parse("{\"journey\":\"canvas\"}"));
+        assertThat(movedClock.fingerprint()).isNotEqualTo(stored.fingerprint());
+    }
 
     @Test void currentOutcomeArtifactsCannotCrossPlanRevisionsOrAnalysisDatasets() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
@@ -274,6 +422,38 @@ class PlanOutcomeServiceTest {
         assertThat(db.query("SELECT ea.pinned FROM ensemble_artifact ea JOIN plan_ensemble pe " +
                         "ON pe.fingerprint=ea.fingerprint WHERE pe.id=?", row -> row.bool("pinned"), stored.id()))
                 .containsExactly(true);
+    }
+
+    private static SimulationEngine.Preview preview(PathEnsembleService.Ensemble ensemble) {
+        var terminal = new SimulationEngine.TerminalDistribution(97, 98, 101, 102, 103,
+                100.5, 2.0, 1.0);
+        var level = new SimulationEngine.LevelOdds("target", 102, "ABOVE",
+                .4, .6, .4, .5, .2, .8, 1.0);
+        var decisionMap = new SimulationEngine.DecisionMap(terminal, List.of(level), .15);
+        var receipt = new SimulationEngine.EnsembleReceipt("path-preview", ensemble.scope().symbol(),
+                ensemble.scope().worldId(), ensemble.scope().analysis().datasetId(), CLOCK.instant().toString(),
+                ensemble.spot(), "fixture", "FIXTURE", false, "fixture path", ensemble.modelVersion(),
+                ensemble.spec());
+        return new SimulationEngine.Preview(ensemble.scope().symbol(), ensemble.spot(),
+                ensemble.paths().length, ensemble.spec().horizonDays(), ensemble.modelVersion(),
+                List.of(new SimulationEngine.PreviewBand(0, ensemble.spot(), ensemble.spot(), ensemble.spot()),
+                        new SimulationEngine.PreviewBand(ensemble.spec().horizonDays(), 97, 101, 103)),
+                List.of(List.of(ensemble.spot(), ensemble.paths()[0][ensemble.paths()[0].length - 1])),
+                97, 101, 103, decisionMap, null, receipt, List.of("Possible futures, not a forecast"));
+    }
+
+    private static SimulationEngine.Preview previewWithMarketLens(SimulationEngine.Preview base,
+                                                                  String asOf, double atmIv) {
+        var old = base.receipt();
+        var receipt = new SimulationEngine.EnsembleReceipt(old.fingerprint(), old.symbol(), old.worldId(),
+                old.datasetId(), asOf, old.anchorSpot(), old.anchorSource(), old.anchorFreshness(),
+                old.anchorExecutable(), old.anchorLimitation(), old.modelVersion(), old.spec());
+        var market = new SimulationEngine.MarketImpliedRange(atmIv, "2026-08-21",
+                base.horizonDays(), 40, 92, 100, 108,
+                "Risk-neutral listed-options lens; not a forecast");
+        return new SimulationEngine.Preview(base.symbol(), base.spot(), base.paths(), base.horizonDays(),
+                base.pathModelVersion(), base.bands(), base.samples(), base.endP10(), base.endP50(),
+                base.endP90(), base.decisionMap(), market, receipt, base.notes());
     }
 
     private void insertBacktest(ObjectNode report, String createdAt) {

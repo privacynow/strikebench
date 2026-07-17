@@ -1955,7 +1955,15 @@
             'Reset', async function () {
               if ((conf.value || '').trim().toUpperCase() !== 'RESET') throw new Error('Type RESET to confirm.');
               await API.post('/api/data/reset', { tier: tier, confirm: true });
-              App.render();
+              // The reset card owns this command. Keep the Data destination, selected tab,
+              // scroll and any neighboring form drafts mounted; fresh reads happen naturally
+              // when their owner is opened again.
+              renderReset(true);
+              resetCard.insertBefore(alertBox('ok', 'Reset complete', [
+                (choices.find(function (x) { return x.key === tier; }) || {}).label + ' was cleared.'
+              ]), resetCard.children[1] || null);
+              if (App.refreshRiskBudget) App.refreshRiskBudget();
+              UI.toast('Data reset complete', 'ok');
             }, true);
         } }, 'Reset…')));
       resetCard.appendChild(blurb);

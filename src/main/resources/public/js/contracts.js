@@ -15,16 +15,19 @@
       var key = String(raw || '').trim();
       if (key.toLowerCase() === '0dte') key = '0DTE';
       var row = this.table[key];
-      return row ? row.sessions : (fallback == null ? this.table.month.sessions : fallback);
+      // An absent/unknown user declaration is not "month". Callers that intentionally want
+      // month already say sessions('month'); an explicit fallback remains available for parsing.
+      return row ? row.sessions : (arguments.length > 1 ? fallback : null);
     },
-    expiryDays: function (raw) {
+    expiryDays: function (raw, fallback) {
       var key = String(raw || '').trim();
       if (key.toLowerCase() === '0dte') key = '0DTE';
-      var row = this.table[key] || this.table.month;
-      return row.expiryDays;
+      var row = this.table[key];
+      return row ? row.expiryDays : (arguments.length > 1 ? fallback : null);
     },
     keyForSessions: function (days) {
       days = Number(days);
+      if (!Number.isFinite(days) || days <= 0) return null;
       return days <= 1 ? '0DTE' : days <= 10 ? 'week' : days <= 45 ? 'month' : 'quarter';
     }
   };
@@ -39,6 +42,7 @@
       if (name === 'home') return !args.length || (args.length === 1 && args[0] === 'tour');
       if (name === 'research') return !args.length
         || (args.length === 1 && /^[A-Z0-9._-]+$/i.test(args[0]));
+      if (name === 'learn') return !args.length;
       // '#/plan/<id>' is the workspace's default arrival (the flow decides which band is
       // active); a stage suffix is a deep-link. Rejecting the bare form silently dumped
       // users on Home with no cue — a navigation must never discard its destination.

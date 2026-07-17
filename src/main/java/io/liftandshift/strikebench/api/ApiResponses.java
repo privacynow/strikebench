@@ -99,7 +99,8 @@ public final class ApiResponses {
     public record PlanManagement<T, U>(T plan, U management) {}
     public record PlanMark<T, U, V>(T plan, U mark, V management) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PlanWorkspace<T, U, V, W>(T plan, U decision, V management, W trade) {}
+    public record PlanWorkspace<T, U, V, W, X>(T plan, U decision, V management, W trade,
+                                               X adoptionReviews) {}
     public record PlanRows<T>(T plans, String market) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanOutcomesLatest<T, U, V, W, X>(T outcomes, U comparisons, V backtests, W selected,
@@ -149,12 +150,13 @@ public final class ApiResponses {
     /** The lane's trailing regime as one wire object; headline pre-composed server-side. */
     public record Regime(String trend, Double trendReturnPct, Integer trendSessions,
                          Double drawdownPct, Double varianceRiskPremium, Double ivRankPct,
-                         String headline, String basis) {
+                         Boolean eventSoon, String eventBasis, String headline, String basis) {
         public static Regime of(io.liftandshift.strikebench.eval.RegimeSnapshot snapshot) {
             if (snapshot == null) return null;
             return new Regime(snapshot.trend() == null ? null : snapshot.trend().name(),
                     snapshot.trendReturnPct(), snapshot.trendSessions(), snapshot.drawdownPct(),
-                    snapshot.varianceRiskPremium(), snapshot.ivRankPct(),
+                    snapshot.varianceRiskPremium(), snapshot.ivRankPct(), snapshot.eventSoon(),
+                    snapshot.eventBasis(),
                     snapshot.headline(), snapshot.basis());
         }
     }
@@ -162,11 +164,9 @@ public final class ApiResponses {
                                 String freshness, String barBasis, String priceBasis,
                                 U evidence, Object coverage) {}
     public record Sparklines<T>(String range, T sparklines, int totalRequested, String world) {}
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record SymbolItems<T>(String symbol, T items, String evidence, String note) {}
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Opportunities<T, U>(T ranked, U notes, int scanned,
-                                      Object compensation, String compensationBasis) {}
+    /** Existing Research news route, enriched by the one versioned deterministic scorer. */
+    public record ResearchNews<T, U>(String symbol, String scorerVersion, T items, U aggregate,
+                                     T eventRisk, String evidence, String note) {}
     public record Optimization<T, U>(T optimization, int scanned, U scanNotes) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionBaseline(String key, Long evCents, Long maxLossCents,

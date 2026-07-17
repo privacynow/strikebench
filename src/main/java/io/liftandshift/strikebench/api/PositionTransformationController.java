@@ -269,10 +269,6 @@ final class PositionTransformationController {
         }
         tradeController.ensureOwnedTrade(ctx, request.sourceId());
         TradeRecord trade = trades.get(request.sourceId());
-        if (trade.external()) {
-            throw new IllegalArgumentException(
-                    "This endpoint transforms Practice positions only; use the tracked-account position workflow for broker records");
-        }
         Plan.View plan = requirePlanContext(ctx, request, trade);
         boolean lifecycleAction = lifecycleAction(request.action());
         if (request.action() == PositionTransformation.Action.PARTIAL_CLOSE) {

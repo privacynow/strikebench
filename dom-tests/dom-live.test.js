@@ -298,6 +298,12 @@ test('live: universe Scout scans and reports with evidence within budget', async
   const researchReadiness = await page.evaluate(async () => API.getFresh('/api/research/AAPL'));
   await go('#/research');
   await page.waitForSelector('#universe-scout-run');
+  // Live mode follows the same no-silent-default contract as Demo: the Scout cannot invent
+  // its goal, horizon, or risk posture merely because providers are available.
+  await page.click('#universe-scout-intent .choice-option[data-value="DIRECTIONAL"]');
+  await page.click('#universe-scout-horizon .choice-option[data-value="month"]');
+  await page.click('#universe-scout-risk .choice-option[data-value="conservative"]');
+  await page.waitForSelector('#universe-scout-run:not([disabled])');
   const t0 = Date.now();
   await page.click('#universe-scout-run');
   await page.waitForSelector('#universe-scout-results .universe-scout-pick, #universe-scout-results .empty',
@@ -343,7 +349,14 @@ test('live: Plan Decide places and Manage unwinds a paper trade at real marks', 
   }
   await page.click('#plan-place-trade');
   await page.waitForSelector('#refresh-btn', { timeout: 60000 }); // detail landmark
-  assert.match(await page.textContent('#app'), /ACTIVE/);
+  const openPosition = await page.evaluate(async id => {
+    const data = await API.getFresh('/api/plans/' + id + '/manage');
+    return { status: data.trade && data.trade.trade && data.trade.trade.status,
+      visible: document.querySelector('.quote-hero')?.textContent || '' };
+  }, plan.id);
+  assert.equal(openPosition.status, 'ACTIVE', 'the canonical trade record is active');
+  assert.match(openPosition.visible, /Open/i,
+    'the visible status uses readable product language instead of leaking the backend enum');
 
   await page.click('#refresh-btn');
   await page.waitForSelector('text=Marks history', { timeout: 30000 });

@@ -60,6 +60,16 @@ public final class Explainer {
         // warnings only, never a re-rank. Down markets widen discounts and fatten call premium;
         // strong up markets make capped, low-participation income structures lag holding shares.
         RegimeSnapshot regime = ctx.regime();
+        if (regime != null && regime.eventBasis() != null && !regime.eventBasis().isBlank()) {
+            if (Boolean.TRUE.equals(regime.eventSoon())) {
+                failureModes.add("Event proximity: " + regime.eventBasis()
+                        + ". A gap can overwhelm premium or defined strikes; this is framing, not a forecast.");
+            } else {
+                // A sourced outside-window estimate and an unavailable estimate are both useful
+                // assumptions, but neither is a reason to invent a warning or claim "no event".
+                assumptions.add("Event proximity: " + regime.eventBasis() + ".");
+            }
+        }
         if (regime != null && regime.trendKnown()) {
             boolean acquiresViaShortPuts = c.legs() != null && c.legs().stream().anyMatch(l ->
                     "PUT".equalsIgnoreCase(l.type()) && "SELL".equalsIgnoreCase(l.action()));

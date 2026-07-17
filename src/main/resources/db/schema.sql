@@ -42,19 +42,37 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM portfolio_import_resolution x
     JOIN portfolio_import_pending p ON p.id=x.pending_id
-    JOIN portfolio_transaction t ON t.id=x.transaction_id
     JOIN position_receipt r ON r.id=x.receipt_id
+    LEFT JOIN portfolio_transaction t ON t.id=x.transaction_id
     WHERE x.package_total_cents IS DISTINCT FROM p.package_net_cents
-       OR x.allocated_total_cents IS DISTINCT FROM t.cash_effect_cents
-       OR x.portfolio_account_id IS DISTINCT FROM t.portfolio_account_id
-       OR p.status<>'RESOLVED' OR p.resolved_at IS NULL
+       OR x.allocated_total_cents IS DISTINCT FROM p.package_net_cents
+       OR x.portfolio_account_id IS DISTINCT FROM p.destination_portfolio_account_id
        OR r.kind<>'RESOLUTION'
        OR r.authority IS DISTINCT FROM x.authority
        OR r.execution_lane<>'REAL'
        OR r.portfolio_account_id IS DISTINCT FROM x.portfolio_account_id
        OR r.transaction_id IS DISTINCT FROM x.transaction_id
+       OR (x.authority='USER_ALLOCATED' AND
+           (x.tax_basis_status<>'PROVISIONAL' OR x.transaction_id IS NOT NULL
+            OR r.position_state<>'PENDING' OR p.status NOT IN ('PROVISIONAL','RESOLVED','REJECTED')))
+       OR (x.authority='BROKER_REPORTED' AND
+           (x.tax_basis_status<>'AUTHORITATIVE' OR x.transaction_id IS NULL
+            OR t.cash_effect_cents IS DISTINCT FROM x.allocated_total_cents
+            OR t.portfolio_account_id IS DISTINCT FROM x.portfolio_account_id
+            OR p.status<>'RESOLVED'))
   ) THEN
     RAISE EXCEPTION 'pending import resolution does not reconcile to its package, transaction, and receipt';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM portfolio_import_pending p
+    WHERE (p.status='PROVISIONAL' AND NOT EXISTS (
+             SELECT 1 FROM portfolio_import_resolution x
+             WHERE x.pending_id=p.id AND x.authority='USER_ALLOCATED'))
+       OR (p.status='RESOLVED' AND NOT EXISTS (
+             SELECT 1 FROM portfolio_import_resolution x
+             WHERE x.pending_id=p.id AND x.authority='BROKER_REPORTED'))
+  ) THEN
+    RAISE EXCEPTION 'pending import status lacks its matching immutable resolution event';
   END IF;
   RETURN NULL;
 END;
@@ -334,6 +352,18 @@ CREATE TABLE public.backtests (
 
 
 --
+-- Name: broker_import_fingerprint_key; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.broker_import_fingerprint_key (
+    user_id text NOT NULL,
+    secret text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT broker_import_fingerprint_key_secret_check CHECK ((btrim(secret) <> ''::text))
+);
+
+
+--
 -- Name: campaign; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -344,9 +374,13 @@ CREATE TABLE public.campaign (
     title text NOT NULL,
     status text NOT NULL,
     account_objective_revision_id text,
+    lesson_note text,
+    closed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT campaign_lesson_note_check CHECK (((lesson_note IS NULL) OR (char_length(lesson_note) <= 4000))),
     CONSTRAINT campaign_status_check CHECK ((status = ANY (ARRAY['ACTIVE'::text, 'CLOSED'::text, 'ARCHIVED'::text]))),
+    CONSTRAINT campaign_status_closed_at_check CHECK ((((status = ANY (ARRAY['CLOSED'::text, 'ARCHIVED'::text])) AND (closed_at IS NOT NULL)) OR ((status = 'ACTIVE'::text) AND (closed_at IS NULL)))),
     CONSTRAINT campaign_title_check CHECK ((btrim(title) <> ''::text))
 );
 
@@ -555,6 +589,50 @@ CREATE TABLE public.ensemble_artifact (
     CONSTRAINT ensemble_artifact_pinned_check CHECK ((pinned = ANY (ARRAY[0, 1]))),
     CONSTRAINT ensemble_artifact_raw_bytes_check CHECK ((raw_bytes > 0)),
     CONSTRAINT ensemble_artifact_step_seconds_check CHECK ((step_seconds > (0)::double precision))
+);
+
+
+--
+-- Name: research_ensemble_receipt; Type: TABLE; Schema: public; Owner: -
+-- A short-lived, owner-scoped claim on an immutable path artifact created before a Plan exists.
+-- Ready-to-compare promotes this exact receipt into plan_ensemble; it never regenerates the fan.
+--
+
+CREATE TABLE public.research_ensemble_receipt (
+    id text NOT NULL,
+    user_id text NOT NULL,
+    fingerprint text NOT NULL,
+    symbol text NOT NULL,
+    market_kind text NOT NULL,
+    market_lane text NOT NULL,
+    world_id text NOT NULL,
+    dataset_id text NOT NULL,
+    model_version text NOT NULL,
+    anchor_spot_cents bigint NOT NULL,
+    anchor_date date NOT NULL,
+    anchor_source text NOT NULL,
+    anchor_freshness text NOT NULL,
+    as_of timestamp with time zone NOT NULL,
+    input_hash text NOT NULL,
+    preview_hash text NOT NULL,
+    spec jsonb NOT NULL,
+    iv jsonb NOT NULL,
+    canvas jsonb NOT NULL,
+    input jsonb NOT NULL,
+    preview jsonb NOT NULL,
+    state text DEFAULT 'AVAILABLE'::text NOT NULL,
+    adopted_plan_id text,
+    adopted_ensemble_id text,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT research_ensemble_receipt_market_kind_check CHECK ((market_kind = ANY (ARRAY['OBSERVED'::text, 'DEMO'::text, 'SIMULATED'::text]))),
+    CONSTRAINT research_ensemble_receipt_market_lane_check CHECK ((market_lane = ANY (ARRAY['OBSERVED'::text, 'DEMO'::text, 'SIMULATED'::text, 'SCENARIO'::text]))),
+    CONSTRAINT research_ensemble_receipt_state_check CHECK ((state = ANY (ARRAY['AVAILABLE'::text, 'ADOPTED'::text]))),
+    CONSTRAINT research_ensemble_receipt_spec_object CHECK ((jsonb_typeof(spec) = 'object'::text)),
+    CONSTRAINT research_ensemble_receipt_iv_object CHECK ((jsonb_typeof(iv) = 'object'::text)),
+    CONSTRAINT research_ensemble_receipt_canvas_object CHECK ((jsonb_typeof(canvas) = 'object'::text)),
+    CONSTRAINT research_ensemble_receipt_input_object CHECK ((jsonb_typeof(input) = 'object'::text)),
+    CONSTRAINT research_ensemble_receipt_preview_object CHECK ((jsonb_typeof(preview) = 'object'::text))
 );
 
 
@@ -1031,6 +1109,59 @@ CREATE TABLE public.plan_ensemble_waypoint (
 
 
 --
+-- Name: plan_ensemble_canvas; Type: TABLE; Schema: public; Owner: -
+-- Typed, immutable model receipt for the unified Scenario Canvas. Absence means a pre-canvas
+-- ensemble using the legacy flat/single-path IvSpec recipe.
+--
+
+CREATE TABLE public.plan_ensemble_canvas (
+    ensemble_id text PRIMARY KEY,
+    model_version text NOT NULL,
+    anchor_date date NOT NULL,
+    calendar text NOT NULL,
+    dividend_yield_annual double precision,
+    dividend_basis text NOT NULL,
+    skew_vol_per_log_moneyness double precision NOT NULL,
+    term_vol_per_sqrt_year double precision NOT NULL,
+    surface_dynamics text NOT NULL,
+    settlement_policy text NOT NULL,
+    exercise_policy text NOT NULL,
+    template_kind text,
+    template_source text,
+    template_provenance text,
+    template_input_as_of date,
+    template_window_from date,
+    template_window_to date,
+    template_observations integer,
+    template_observed integer,
+    template_no_hindsight integer,
+    template_leg_day_provenance text,
+    template_note text,
+    template_fingerprint text,
+    CONSTRAINT plan_ensemble_canvas_calendar_check CHECK ((calendar = 'NYSE'::text)),
+    CONSTRAINT plan_ensemble_canvas_surface_dynamics_check CHECK ((surface_dynamics = ANY (ARRAY['STICKY_MONEYNESS'::text, 'STICKY_STRIKE'::text]))),
+    CONSTRAINT plan_ensemble_canvas_settlement_policy_check CHECK ((settlement_policy = ANY (ARRAY['CASH_INTRINSIC'::text, 'PHYSICAL_IF_ITM'::text]))),
+    CONSTRAINT plan_ensemble_canvas_exercise_policy_check CHECK ((exercise_policy = ANY (ARRAY['EXPIRATION_ONLY'::text, 'EXTRINSIC_THRESHOLD'::text]))),
+    CONSTRAINT plan_ensemble_canvas_dividend_yield_check CHECK (((dividend_yield_annual IS NULL) OR ((dividend_yield_annual >= '-0.25'::double precision) AND (dividend_yield_annual <= '1'::double precision)))),
+    CONSTRAINT plan_ensemble_canvas_template_check CHECK ((((template_kind IS NULL) AND (template_fingerprint IS NULL)) OR ((template_kind IS NOT NULL) AND (template_source IS NOT NULL) AND (template_provenance IS NOT NULL) AND (template_input_as_of IS NOT NULL) AND (template_observations >= 0) AND (template_observed = ANY (ARRAY[0, 1])) AND (template_no_hindsight = ANY (ARRAY[0, 1])) AND (template_fingerprint IS NOT NULL))))
+);
+
+
+--
+-- Name: plan_ensemble_canvas_iv_node; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plan_ensemble_canvas_iv_node (
+    ensemble_id text NOT NULL REFERENCES public.plan_ensemble_canvas(ensemble_id) ON DELETE CASCADE,
+    day_index integer NOT NULL,
+    atm_iv double precision NOT NULL,
+    PRIMARY KEY (ensemble_id, day_index),
+    CONSTRAINT plan_ensemble_canvas_iv_node_day_check CHECK ((day_index >= 0)),
+    CONSTRAINT plan_ensemble_canvas_iv_node_iv_check CHECK (((atm_iv >= '0.01'::double precision) AND (atm_iv <= '4'::double precision)))
+);
+
+
+--
 -- Name: plan_evidence; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1214,8 +1345,8 @@ CREATE TABLE public.plan_link (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     decision_id text,
     CONSTRAINT plan_link_check CHECK (((((((trade_id IS NOT NULL))::integer + ((recommendation_id IS NOT NULL))::integer) + ((sim_session_id IS NOT NULL))::integer) + ((related_plan_id IS NOT NULL))::integer) = 1)),
-    CONSTRAINT plan_link_check1 CHECK ((((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text, 'EXTERNAL'::text])) AND (trade_id IS NOT NULL)) OR ((role = 'RECOMMENDATION'::text) AND (recommendation_id IS NOT NULL)) OR ((role = 'REHEARSAL'::text) AND (sim_session_id IS NOT NULL)) OR ((role = ANY (ARRAY['PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])) AND (related_plan_id IS NOT NULL)))),
-    CONSTRAINT plan_link_role_check CHECK ((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text, 'REHEARSAL'::text, 'EXTERNAL'::text, 'RECOMMENDATION'::text, 'PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])))
+    CONSTRAINT plan_link_check1 CHECK ((((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text])) AND (trade_id IS NOT NULL)) OR ((role = 'RECOMMENDATION'::text) AND (recommendation_id IS NOT NULL)) OR ((role = 'REHEARSAL'::text) AND (sim_session_id IS NOT NULL)) OR ((role = ANY (ARRAY['PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])) AND (related_plan_id IS NOT NULL)))),
+    CONSTRAINT plan_link_role_check CHECK ((role = ANY (ARRAY['ENTRY'::text, 'ADJUST'::text, 'ROLL'::text, 'PARTIAL_CLOSE'::text, 'CLOSE'::text, 'ASSIGNMENT'::text, 'EXERCISE'::text, 'EXPIRATION'::text, 'REHEARSAL'::text, 'RECOMMENDATION'::text, 'PEER'::text, 'ALTERNATIVE'::text, 'HEDGE'::text, 'COMPARISON'::text])))
 );
 
 
@@ -1490,11 +1621,13 @@ CREATE TABLE public.plan_strategy_run (
     disclaimer text,
     input_hash text NOT NULL,
     engine_version text NOT NULL,
+    sentiment_scorer_version text,
     state text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     request_snapshot jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT plan_strategy_run_request_snapshot_object CHECK ((jsonb_typeof(request_snapshot) = 'object'::text)),
     CONSTRAINT plan_strategy_run_run_kind_check CHECK ((run_kind = ANY (ARRAY['COMPETITION'::text, 'SCOUT'::text, 'CUSTOM'::text]))),
+    CONSTRAINT plan_strategy_run_sentiment_scorer_check CHECK ((((run_kind = 'SCOUT'::text) AND (sentiment_scorer_version IS NOT NULL)) OR ((run_kind <> 'SCOUT'::text) AND (sentiment_scorer_version IS NULL)))),
     CONSTRAINT plan_strategy_run_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['PLAN'::text, 'UNIVERSE'::text, 'PEERS'::text, 'ALTERNATIVES'::text, 'HEDGES'::text]))),
     CONSTRAINT plan_strategy_run_state_check CHECK ((state = ANY (ARRAY['CURRENT'::text, 'STALE'::text, 'BLOCKED'::text])))
 );
@@ -1513,6 +1646,7 @@ CREATE TABLE public.plans (
     market_kind text NOT NULL,
     world_id text,
     account_id text,
+    position_owner_key text,
     custom_title text,
     status text NOT NULL,
     furthest_stage text DEFAULT 'UNDERSTAND'::text NOT NULL,
@@ -1555,6 +1689,27 @@ CREATE TABLE public.portfolio_account (
 
 
 --
+-- Name: portfolio_adoption_request; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.portfolio_adoption_request (
+    user_id text NOT NULL,
+    client_request_id text NOT NULL,
+    input_hash text NOT NULL,
+    action text NOT NULL,
+    plan_id text NOT NULL,
+    structure_id text NOT NULL,
+    structure_revision_id text NOT NULL,
+    receipt_id text NOT NULL,
+    plan_action_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT portfolio_adoption_request_action_check CHECK ((action = ANY (ARRAY['ADOPT'::text, 'LINK'::text]))),
+    CONSTRAINT portfolio_adoption_request_client_request_id_check CHECK ((btrim(client_request_id) <> ''::text)),
+    CONSTRAINT portfolio_adoption_request_input_hash_check CHECK ((btrim(input_hash) <> ''::text))
+);
+
+
+--
 -- Name: portfolio_import_pending; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1568,16 +1723,19 @@ CREATE TABLE public.portfolio_import_pending (
     occurred_at timestamp with time zone NOT NULL,
     package_net_cents bigint NOT NULL,
     fees_cents bigint DEFAULT 0 NOT NULL,
+    destination_portfolio_account_id text NOT NULL,
+    payload_fingerprint text NOT NULL,
     plan_id text,
     status text DEFAULT 'PENDING'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     resolved_at timestamp with time zone,
-    CONSTRAINT portfolio_import_pending_check CHECK ((((status = 'PENDING'::text) AND (resolved_at IS NULL)) OR ((status = ANY (ARRAY['RESOLVED'::text, 'REJECTED'::text])) AND (resolved_at IS NOT NULL)))),
+    CONSTRAINT portfolio_import_pending_check CHECK ((((status = 'PENDING'::text) AND (resolved_at IS NULL)) OR ((status = ANY (ARRAY['PROVISIONAL'::text, 'RESOLVED'::text, 'REJECTED'::text])) AND (resolved_at IS NOT NULL)))),
     CONSTRAINT portfolio_import_pending_external_ref_check CHECK ((btrim(external_ref) <> ''::text)),
     CONSTRAINT portfolio_import_pending_fees_cents_check CHECK ((fees_cents >= 0)),
+    CONSTRAINT portfolio_import_pending_payload_fingerprint_check CHECK ((btrim(payload_fingerprint) <> ''::text)),
     CONSTRAINT portfolio_import_pending_source_account_fingerprint_check CHECK ((btrim(source_account_fingerprint) <> ''::text)),
     CONSTRAINT portfolio_import_pending_source_system_check CHECK ((btrim(source_system) <> ''::text)),
-    CONSTRAINT portfolio_import_pending_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'RESOLVED'::text, 'REJECTED'::text])))
+    CONSTRAINT portfolio_import_pending_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'PROVISIONAL'::text, 'RESOLVED'::text, 'REJECTED'::text])))
 );
 
 
@@ -1618,9 +1776,10 @@ CREATE TABLE public.portfolio_import_pending_leg (
 --
 
 CREATE TABLE public.portfolio_import_resolution (
+    id text NOT NULL,
     pending_id text NOT NULL,
     portfolio_account_id text NOT NULL,
-    transaction_id text NOT NULL,
+    transaction_id text,
     receipt_id text NOT NULL,
     authority text NOT NULL,
     tax_basis_status text NOT NULL,
@@ -1840,6 +1999,7 @@ CREATE TABLE public.portfolio_transaction (
     tax_category text,
     source text DEFAULT 'MANUAL'::text NOT NULL,
     external_ref text,
+    import_payload_fingerprint text,
     notes text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     record_seq bigint NOT NULL,
@@ -2291,11 +2451,7 @@ CREATE TABLE public.trades (
     created_at timestamp with time zone NOT NULL,
     closed_at timestamp with time zone,
     updated_at timestamp with time zone NOT NULL,
-    origin text DEFAULT 'PAPER'::text NOT NULL,
     proposed_net_cents bigint,
-    executed_at timestamp with time zone,
-    broker text,
-    order_ref text,
     data_provenance text DEFAULT 'UNKNOWN'::text NOT NULL,
     data_age text,
     data_source text,
@@ -2461,6 +2617,14 @@ ALTER TABLE ONLY public.backtests
 
 
 --
+-- Name: broker_import_fingerprint_key broker_import_fingerprint_key_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.broker_import_fingerprint_key
+    ADD CONSTRAINT broker_import_fingerprint_key_pkey PRIMARY KEY (user_id);
+
+
+--
 -- Name: campaign_pending_member campaign_pending_member_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2562,6 +2726,14 @@ ALTER TABLE ONLY public.dataset
 
 ALTER TABLE ONLY public.ensemble_artifact
     ADD CONSTRAINT ensemble_artifact_pkey PRIMARY KEY (fingerprint);
+
+
+--
+-- Name: research_ensemble_receipt research_ensemble_receipt_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_ensemble_receipt
+    ADD CONSTRAINT research_ensemble_receipt_pkey PRIMARY KEY (id);
 
 
 --
@@ -2993,7 +3165,15 @@ ALTER TABLE ONLY public.portfolio_import_pending
 --
 
 ALTER TABLE ONLY public.portfolio_import_resolution
-    ADD CONSTRAINT portfolio_import_resolution_pkey PRIMARY KEY (pending_id);
+    ADD CONSTRAINT portfolio_import_resolution_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: portfolio_import_resolution portfolio_import_resolution_pending_authority_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.portfolio_import_resolution
+    ADD CONSTRAINT portfolio_import_resolution_pending_authority_key UNIQUE (pending_id, authority);
 
 
 --
@@ -3010,6 +3190,14 @@ ALTER TABLE ONLY public.portfolio_import_resolution
 
 ALTER TABLE ONLY public.portfolio_import_resolution
     ADD CONSTRAINT portfolio_import_resolution_transaction_id_key UNIQUE (transaction_id);
+
+
+--
+-- Name: portfolio_adoption_request portfolio_adoption_request_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_pkey PRIMARY KEY (user_id, client_request_id);
 
 
 --
@@ -3414,6 +3602,20 @@ CREATE INDEX idx_dataset_created ON public.dataset USING btree (created_at DESC)
 --
 
 CREATE INDEX idx_ensemble_artifact_retention ON public.ensemble_artifact USING btree (created_at) WHERE (pinned = 0);
+
+
+--
+-- Name: idx_research_ensemble_receipt_owner; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_research_ensemble_receipt_owner ON public.research_ensemble_receipt USING btree (user_id, created_at DESC);
+
+
+--
+-- Name: idx_research_ensemble_receipt_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_research_ensemble_receipt_expiry ON public.research_ensemble_receipt USING btree (expires_at) WHERE (state = 'AVAILABLE'::text);
 
 
 --
@@ -4002,6 +4204,14 @@ ALTER TABLE ONLY public.backtests
 
 
 --
+-- Name: broker_import_fingerprint_key broker_import_fingerprint_key_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.broker_import_fingerprint_key
+    ADD CONSTRAINT broker_import_fingerprint_key_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: campaign campaign_account_objective_revision_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4434,6 +4644,14 @@ ALTER TABLE ONLY public.plan_ensemble
 
 
 --
+-- Name: plan_ensemble_canvas plan_ensemble_canvas_ensemble_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_ensemble_canvas
+    ADD CONSTRAINT plan_ensemble_canvas_ensemble_id_fkey FOREIGN KEY (ensemble_id) REFERENCES public.plan_ensemble(id) ON DELETE CASCADE;
+
+
+--
 -- Name: plan_ensemble_quantile plan_ensemble_quantile_ensemble_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4447,6 +4665,38 @@ ALTER TABLE ONLY public.plan_ensemble_quantile
 
 ALTER TABLE ONLY public.plan_ensemble_waypoint
     ADD CONSTRAINT plan_ensemble_waypoint_ensemble_id_fkey FOREIGN KEY (ensemble_id) REFERENCES public.plan_ensemble(id) ON DELETE CASCADE;
+
+
+--
+-- Name: research_ensemble_receipt research_ensemble_receipt_fingerprint_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_ensemble_receipt
+    ADD CONSTRAINT research_ensemble_receipt_fingerprint_fkey FOREIGN KEY (fingerprint) REFERENCES public.ensemble_artifact(fingerprint) ON DELETE CASCADE;
+
+
+--
+-- Name: research_ensemble_receipt research_ensemble_receipt_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_ensemble_receipt
+    ADD CONSTRAINT research_ensemble_receipt_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: research_ensemble_receipt research_ensemble_receipt_adopted_plan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_ensemble_receipt
+    ADD CONSTRAINT research_ensemble_receipt_adopted_plan_id_fkey FOREIGN KEY (adopted_plan_id) REFERENCES public.plans(id) ON DELETE SET NULL;
+
+
+--
+-- Name: research_ensemble_receipt research_ensemble_receipt_adopted_ensemble_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_ensemble_receipt
+    ADD CONSTRAINT research_ensemble_receipt_adopted_ensemble_id_fkey FOREIGN KEY (adopted_ensemble_id) REFERENCES public.plan_ensemble(id) ON DELETE SET NULL;
 
 
 --
@@ -4842,6 +5092,14 @@ ALTER TABLE ONLY public.portfolio_import_pending
 
 
 --
+-- Name: portfolio_import_pending portfolio_import_pending_destination_portfolio_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.portfolio_import_pending
+    ADD CONSTRAINT portfolio_import_pending_destination_portfolio_account_id_fkey FOREIGN KEY (destination_portfolio_account_id) REFERENCES public.portfolio_account(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: portfolio_import_pending portfolio_import_pending_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4887,6 +5145,29 @@ ALTER TABLE ONLY public.portfolio_import_resolution
 
 ALTER TABLE ONLY public.portfolio_import_resolution
     ADD CONSTRAINT portfolio_import_resolution_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.portfolio_transaction(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: portfolio_adoption_request portfolio_adoption_request_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.plans(id) ON DELETE RESTRICT;
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_structure_id_fkey FOREIGN KEY (structure_id) REFERENCES public.portfolio_structure(id) ON DELETE RESTRICT;
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_structure_revision_id_fkey FOREIGN KEY (structure_revision_id) REFERENCES public.portfolio_structure_revision(id) ON DELETE RESTRICT;
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES public.position_receipt(id) ON DELETE RESTRICT;
+
+ALTER TABLE ONLY public.portfolio_adoption_request
+    ADD CONSTRAINT portfolio_adoption_request_plan_action_id_fkey FOREIGN KEY (plan_action_id) REFERENCES public.plan_portfolio_action(id) ON DELETE RESTRICT;
 
 
 --

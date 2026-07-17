@@ -33,9 +33,17 @@ public final class PathEnsembleService {
 
     public record Ensemble(Basis basis, Scope scope, double spot, ScenarioSpec spec,
                            double[][] paths, ResearchQuestionEngine.QuestionResult study,
-                           String modelVersion) {
+                           String modelVersion, LocalDate anchorDate) {
         public Ensemble {
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
+            anchorDate = anchorDate == null ? LocalDate.of(1970, 1, 1) : anchorDate;
+        }
+
+        /** Pre-calendar constructor kept for tests and restored legacy artifacts. */
+        public Ensemble(Basis basis, Scope scope, double spot, ScenarioSpec spec,
+                        double[][] paths, ResearchQuestionEngine.QuestionResult study,
+                        String modelVersion) {
+            this(basis, scope, spot, spec, paths, study, modelVersion, LocalDate.of(1970, 1, 1));
         }
 
         /**
@@ -84,9 +92,11 @@ public final class PathEnsembleService {
         if (spec == null) throw new IllegalArgumentException("scenario specification is required");
 
         if (basis == Basis.PARAMETRIC) {
+            LocalDate anchor = anchorDate(scope);
             return new Ensemble(basis, scope, spot, spec,
-                    generator.generate(spec, spot, historicalLogReturns(scope)), null,
-                    PathGenerator.MODEL_VERSION);
+                    generator.generate(spec, spot, historicalLogReturns(scope),
+                            spec.calendarStepYears(anchor)), null,
+                    PathGenerator.MODEL_VERSION, anchor);
         }
         if (studyRequest == null) {
             throw new IllegalArgumentException(basis + " requires a historical study request");
@@ -127,7 +137,14 @@ public final class PathEnsembleService {
         }
         String version = basis == Basis.HISTORICAL_ANALOGS
                 ? "historical-analogs-1" : "conditional-bootstrap-1";
-        return new Ensemble(basis, scope, spot, empiricalSpec, absolute, study, version);
+        return new Ensemble(basis, scope, spot, empiricalSpec, absolute, study, version, anchorDate(scope));
+    }
+
+    /** Lane date used by generation, valuation, session labels, and the immutable receipt. */
+    private LocalDate anchorDate(Scope scope) {
+        return market.simInstant(scope.worldId())
+                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
+                .orElseGet(() -> LocalDate.now(clock));
     }
 
     /** Lane- and dataset-aware inputs for the block-bootstrap path model. */

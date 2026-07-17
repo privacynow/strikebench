@@ -87,10 +87,14 @@ after(async () => {
 
 const ROUTES = ['#/home', '#/home/tour', '#/research', '#/research/AAPL',
   '#/research/AAPL?view=evidence', '#/research/AAPL?view=options',
+  '#/learn',
   '#/portfolio', '#/portfolio/construct', '#/portfolio/positions', '#/portfolio/activity',
   '#/portfolio/record', '#/portfolio/account', '#/data/overview',
   '#/data/simulation', '#/data/datasets', '#/data/sources', '#/data/admin'];
-const WIDTHS = [2048, 1920, 1440, 1280, 1000, 390, 375, 320];
+const VIEWPORTS = [
+  { width: 2560, height: 1440 },
+  ...[2048, 1920, 1440, 1280, 1000, 390, 375, 320].map(width => ({ width, height: 900 }))
+];
 
 // Sanctioned control heights: --ctl-h (38), --ctl-h-sm / --ctl-h-xs (30), plus the
 // tape/level-switch micro scale (<=28) which is exempted by selector below.
@@ -226,9 +230,10 @@ function auditInPage() {
   return out;
 }
 
-for (const width of WIDTHS) {
-  test(`design audit at ${width}px: no overflow, no emoji, one control scale`, async () => {
-    await page.setViewportSize({ width, height: 900 });
+for (const viewport of VIEWPORTS) {
+  const { width, height } = viewport;
+  test(`design audit at ${width}x${height}: no overflow, no emoji, one control scale`, async () => {
+    await page.setViewportSize(viewport);
     await page.evaluate(([a, t]) => { window.__allowedHeights = a; window.__tolerance = t; },
       [ALLOWED_HEIGHTS, TOLERANCE]);
     const failures = [];

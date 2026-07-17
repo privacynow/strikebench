@@ -90,7 +90,8 @@ public final class ArtifactRetentionService implements AutoCloseable {
     public CleanupResult runOnce() {
         OffsetDateTime staleCutoff = cutoff(policy.stalePlanDays());
         OffsetDateTime orphanCutoff = cutoff(policy.orphanEnsembleDays());
-        return db.tx(c -> cleanup(c, staleCutoff, orphanCutoff));
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        return db.tx(c -> cleanup(c, staleCutoff, orphanCutoff, now));
     }
 
     private OffsetDateTime cutoff(int days) {
@@ -98,7 +99,7 @@ public final class ArtifactRetentionService implements AutoCloseable {
     }
 
     private static CleanupResult cleanup(Connection c, OffsetDateTime staleCutoff,
-                                         OffsetDateTime orphanCutoff) throws SQLException {
+                                         OffsetDateTime orphanCutoff, OffsetDateTime now) throws SQLException {
         // Comparisons/runs must go before their candidate and ensemble parents. A selected decision
         // or a replay source protects the whole decision-bearing package even if its state is stale.
         int comparisons = Db.execOn(c, "DELETE FROM plan_outcome_comparison poc USING plans p "
@@ -149,8 +150,10 @@ public final class ArtifactRetentionService implements AutoCloseable {
         int artifacts = Db.execOn(c, "DELETE FROM ensemble_artifact ea WHERE ea.pinned=0 "
                 + "AND ea.created_at < ? "
                 + "AND NOT EXISTS (SELECT 1 FROM plan_ensemble pe WHERE pe.fingerprint=ea.fingerprint) "
+                + "AND NOT EXISTS (SELECT 1 FROM research_ensemble_receipt rr "
+                + "WHERE rr.fingerprint=ea.fingerprint AND rr.state='AVAILABLE' AND rr.expires_at>?) "
                 + "AND NOT EXISTS (SELECT 1 FROM sim_replay_source s WHERE s.fingerprint=ea.fingerprint)",
-                orphanCutoff);
+                orphanCutoff, now);
 
         return new CleanupResult(evidence, strategies, outcomes, comparisons, backtests, ensembles,
                 artifacts);

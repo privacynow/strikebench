@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
 import io.liftandshift.strikebench.recommend.OpportunityScanner;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
@@ -82,7 +83,7 @@ final class DiscoveryController {
     void register(JavalinConfig config) {
         DiscoveryRoutes.register(config, new DiscoveryRoutes.Handlers(
                 this::welcomeTeachingExample, this::researchScout,
-                this::researchIntentLadder, this::opportunities, this::optimize));
+                this::researchIntentLadder, this::optimize));
     }
 
     private static String worldParam(String world) {
@@ -264,13 +265,11 @@ final class DiscoveryController {
     }
 
     RecommendationEngine.Result resolveAndRecommend(Context ctx, RecommendationEngine.Request req) {
-        if (req == null || req.symbol() == null || req.symbol().isBlank()) {
-            throw new IllegalArgumentException("symbol is required");
-        }
+        StrategyIntent intent = DecisionDeclarationPolicy.requireRecommendation(
+                "Strategy recommendation", req, true);
         Account acct = accountResolver.apply(ctx);
         // Hold-based intents read the account's real position when the caller didn't supply
         // one: free shares + average basis feed strike selection and the intent framing.
-        StrategyIntent intent = StrategyIntent.parse(req.intent());
         // ACQUIRE is excluded: holdings.sharesOwned means "shares I WANT" there, and injecting
         // the existing position would silently size new purchases to what is already owned.
         if (req.holdings() == null && intent != StrategyIntent.DIRECTIONAL && intent != StrategyIntent.ACQUIRE) {
@@ -297,37 +296,6 @@ final class DiscoveryController {
     }
 
 
-    public record OpportunitiesRequest(List<String> universe, String thesis, String horizon,
-                                       String riskMode, String intent, Integer topN) {}
-
-    /**
-     * Universe-scale competition: scans a universe (the active one by default), keeps each symbol's
-     * best viable idea, and ranks them cross-symbol so the strongest opportunities surface first.
-     */
-    private void opportunities(Context ctx) {
-        OpportunitiesRequest req = ApiRequest.bodyOrNull(ctx, OpportunitiesRequest.class);
-        if (req == null) req = new OpportunitiesRequest(null, null, null, null, null, null);
-        String world = worldParam(activeWorldResolver.apply(ctx));
-        // Inside a simulated session the scan covers the WORLD's symbols through the world-routed
-        // engine — an observed-universe scan sized with sim capital was a cross-lane blend (P1).
-        List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
-                ? req.universe()
-                : world != null
-                        ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
-                        : universe.active().symbols();
-        Account acct = accountResolver.apply(ctx);
-        String ownerId = ownerResolver.apply(ctx);
-        int topN = req.topN() != null ? req.topN() : 8;
-        var rcScan = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
-        var result = opportunityScanner.scan(symbols, req.intent(),
-                req.thesis() != null ? req.thesis() : "neutral",
-                req.horizon() != null ? req.horizon() : "month",
-                req.riskMode() != null ? req.riskMode() : "balanced",
-                acct.buyingPowerCents(), world != null ? null : ownerId, topN, world, rcScan.riskCapitalCents());
-        ctx.json(new ApiResponses.Opportunities<>(result.ranked(), result.notes(), result.scanned(),
-                result.compensation(), result.compensationBasis()));
-    }
-
     public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
                                   String intent, Long totalCapitalCents, Long maxPerPositionCents,
                                   Integer maxPositions, Double maxSymbolPct, String objective, Boolean diagnostic) {}
@@ -335,7 +303,10 @@ final class DiscoveryController {
     /** Portfolio construction: scan a universe, then allocate a budget across the winners. */
     private void optimize(Context ctx) {
         OptimizeRequest req = ApiRequest.bodyOrNull(ctx, OptimizeRequest.class);
-        if (req == null) req = new OptimizeRequest(null, null, null, null, null, null, null, null, null, null, null);
+        DecisionDeclarationPolicy.requireConstruction("Portfolio construction",
+                req == null ? null : req.intent(), req == null ? null : req.thesis(),
+                req == null ? null : req.horizon(), req == null ? null : req.riskMode(),
+                req == null ? null : req.objective());
         String optWorld = worldParam(activeWorldResolver.apply(ctx));
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
                 ? req.universe()
@@ -345,10 +316,7 @@ final class DiscoveryController {
         Account acct = accountResolver.apply(ctx);
         String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
-        var scan = opportunityScanner.scan(symbols, req.intent(),
-                req.thesis() != null ? req.thesis() : "neutral",
-                req.horizon() != null ? req.horizon() : "month",
-                req.riskMode() != null ? req.riskMode() : "balanced",
+        var scan = opportunityScanner.scan(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
                 acct.buyingPowerCents(), optWorld != null ? null : ownerId, Math.max(1, symbols.size()),
                 optWorld, rcOpt.riskCapitalCents());
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
@@ -362,20 +330,15 @@ final class DiscoveryController {
     private void researchIntentLadder(Context ctx) {
         String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
         RecommendationEngine.Request req = ApiRequest.bodyOrNull(ctx, RecommendationEngine.Request.class);
-        if (req == null) {
-            req = new RecommendationEngine.Request(symbol, null, "month", null, null, null, null,
-                    null, true, false, null, null, null);
-        } else {
-            if (req.symbol() != null && !req.symbol().isBlank()
-                    && !symbol.equalsIgnoreCase(req.symbol())) {
-                throw new IllegalArgumentException("The ladder symbol must match the Research workspace");
-            }
-            req = new RecommendationEngine.Request(symbol, req.thesis(), req.horizon(), req.riskMode(),
-                    req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
-                    req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
+        StrategyIntent intent = DecisionDeclarationPolicy.requireLadder("Strike ladder", req);
+        if (req.symbol() != null && !req.symbol().isBlank()
+                && !symbol.equalsIgnoreCase(req.symbol())) {
+            throw new IllegalArgumentException("The ladder symbol must match the Research workspace");
         }
+        req = new RecommendationEngine.Request(symbol, req.thesis(), req.horizon(), req.riskMode(),
+                req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
+                req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         Account acct = accountResolver.apply(ctx);
-        StrategyIntent intent = StrategyIntent.parse(req.intent());
         if (req.holdings() == null && intent != StrategyIntent.DIRECTIONAL && intent != StrategyIntent.ACQUIRE) {
             try {
                 PositionsService.PositionView pos = positions.get(acct.id(), req.symbol());
@@ -442,9 +405,7 @@ final class DiscoveryController {
 
     private void researchScout(Context ctx) {
         AutoRecommender.AutoRequest req = ApiRequest.bodyOrNull(ctx, AutoRecommender.AutoRequest.class);
-        if (req == null) { // absent body (or the literal document "null") means defaults
-            req = new AutoRecommender.AutoRequest(null, null, null, null, null, null, null, null, null, null, null, null);
-        }
+        DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         String world = activeWorldResolver.apply(ctx);
         if (req.universe() == null || req.universe().isEmpty()) {
             // Default scan list: the selected universe — or, inside a simulated session, the
