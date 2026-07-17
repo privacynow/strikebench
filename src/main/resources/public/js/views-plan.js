@@ -1653,16 +1653,27 @@
           el('h3', {}, heroHeading)),
         el('span', { class: 'muted small' }, 'Ranked, not guaranteed')));
       field.appendChild(rankingSeparation(candidates));
+      // DESKTOP MASTER-DETAIL: the ranked MENU (every choice) sits BESIDE the selected structure's
+      // full DETAIL, so the desk is read ACROSS and reached WITHOUT scrolling — instead of scrolling
+      // past a tall hero to find the alternatives. Collapses to one column on narrow screens and for
+      // the expert full-width table.
+      var isExpert = Learn.currentLevel() === 'expert';
+      var layout = el('div', { class: 'ranked-layout' + (isExpert ? ' ranked-layout-expert' : '') });
+      var menuCol = el('div', { class: 'ranked-menu' });
+      var detailCol = el('div', { class: 'ranked-detail' });
+      layout.appendChild(menuCol);
+      layout.appendChild(detailCol);
+      field.appendChild(layout);
       if (!heroViable) {
         var heroMech = heroCandidate.evaluation && heroCandidate.evaluation.assessment
           && heroCandidate.evaluation.assessment.mechanics;
-        field.appendChild(alertBox('caution',
+        detailCol.appendChild(alertBox('caution',
           'Not a tradeable setup at current prices — shown as a teaching example, not a recommendation',
           (heroMech && heroMech.reasons && heroMech.reasons.length) ? heroMech.reasons
             : ['No structure that fits this Plan clears the mechanical and economic checks required to trade it. '
               + 'Change the view, horizon, or limits — or study the shape below.']));
       }
-      field.appendChild(ideaPresentation(heroCandidate, { density: 'hero', rank: heroRank,
+      detailCol.appendChild(ideaPresentation(heroCandidate, { density: 'hero', rank: heroRank,
         kicker: heroViable ? undefined : 'NOT A VIABLE TRADE',
         spot: planRef.result && planRef.result.spotCents != null ? planRef.result.spotCents / 100 : null,
         action: planCandidateActions(planRef, heroCandidate, ui, repaint) }));
@@ -1681,10 +1692,12 @@
       }
 
       var alternatives = candidates.filter(function (candidate) { return candidate.id !== heroCandidate.id; });
-      if (Learn.currentLevel() === 'expert') {
-        field.appendChild(el('div', { class: 'plan-other-ranked-title' },
+      if (isExpert) {
+        // Expert keeps the full-width sortable table; the layout stacks (detail on top, table below)
+        // so every column stays legible — the wide plan route gives the table the room it wanted.
+        menuCol.appendChild(el('div', { class: 'plan-other-ranked-title' },
           el('h3', {}, 'Full ranked field'), el('p', { class: 'muted' }, 'Sort any column; review a row in the decision hero above.')));
-        field.appendChild(comparisonTable(candidates, {
+        menuCol.appendChild(comparisonTable(candidates, {
           withUse: false,
           actionLabel: function (c) { return c.selected ? 'Continue' : 'Select + continue'; },
           actionDisabled: function () { return false; },
@@ -1698,18 +1711,22 @@
         return;
       }
 
-      if (!alternatives.length) return;
-      field.appendChild(el('div', { class: 'plan-other-ranked-title' },
-        el('h3', {}, selected ? 'Compare another structure' : 'Two other structures worth comparing'),
-        el('p', { class: 'muted' }, 'These stay compact until you ask to review one.')));
+      if (!alternatives.length) { layout.classList.add('ranked-layout-solo'); return; }
+      menuCol.appendChild(el('div', { class: 'plan-other-ranked-title' },
+        el('h3', {}, selected ? 'The rest of the ranked field' : 'Every structure StrikeBench ranked'),
+        el('p', { class: 'muted' }, 'Pick one to see its full detail beside the menu.')));
       var list = el('div', { class: 'ranked-runner-list' });
+      // Desktop reads across, so the menu shows the whole field at once (no scroll to find a choice);
+      // only the phone stack keeps it short behind a "see all".
+      var narrow = typeof window !== 'undefined' && window.matchMedia
+        && window.matchMedia('(max-width: 1099px)').matches;
       alternatives.forEach(function (candidate, index) {
-        list.appendChild(compactAlternative(candidate, candidates.indexOf(candidate) + 1, index >= 2));
+        list.appendChild(compactAlternative(candidate, candidates.indexOf(candidate) + 1, narrow && index >= 2));
       });
-      field.appendChild(list);
-      if (alternatives.length > 2) {
+      menuCol.appendChild(list);
+      if (narrow && alternatives.length > 2) {
         var expanded = false;
-        field.appendChild(el('button', { type: 'button', class: 'btn btn-secondary ranked-show-all',
+        menuCol.appendChild(el('button', { type: 'button', class: 'btn btn-secondary ranked-show-all',
           'aria-expanded': 'false', onclick: function () {
             expanded = !expanded;
             list.querySelectorAll('.ranked-idea[hidden]').forEach(function (node) { node.hidden = !expanded; });
