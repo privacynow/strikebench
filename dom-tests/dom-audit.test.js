@@ -75,7 +75,7 @@ before(async () => {
     body: JSON.stringify({ name: 'Responsive audit', accountType: 'TAXABLE', lotMethod: 'FIFO', openingCashCents: 10000000 }) });
   const trackedBody = await tracked.text();
   assert.ok(tracked.ok, 'tracked-account audit setup failed: ' + trackedBody);
-  ROUTES.push(...['overview', 'activity', 'performance', 'tax', 'settings']
+  ROUTES.push(...['overview', 'risk', 'activity', 'performance', 'tax', 'settings']
     .map(section => `#/portfolio/book/${section}`));
 });
 

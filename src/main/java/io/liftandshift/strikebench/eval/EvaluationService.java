@@ -216,8 +216,23 @@ public final class EvaluationService {
 
         var rate = market.riskFreeRateQuote(Math.max(1, dte), worldId);
 
-        return new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol, ivHistory, buyingPowerCents, open,
-                feePerContractCents, feePerOrderCents, rate.annualRate(), rate.evidence(), portfolioExposure, declared);
+        // Regime is a framing lens over the SAME lane's history: vol profile from this
+        // context's own inputs, trend/drawdown from this lane's candles (folded Phase 10.3).
+        EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol,
+                ivHistory, buyingPowerCents, open, feePerContractCents, feePerOrderCents,
+                rate.annualRate(), rate.evidence(), portfolioExposure, declared);
+        VolatilityProfile volProfile = new VolatilityProfiler().profile(preRegime);
+        List<Candle> regimeCandles = worldId != null
+                ? market.candleSeries(symbol, today.minusDays(126), today, worldId, null).candles()
+                : market.candles(symbol, today.minusDays(126), today, actx);
+        RegimeSnapshot regime = RegimeProfiler.profile(regimeCandles, volProfile, false,
+                worldId != null ? "this simulated world's sessions" : "observed sessions");
+        List<Double> trailingCloses = regimeCandles == null ? List.of() : regimeCandles.stream()
+                .map(candle -> candle.close() == null ? null : candle.close().doubleValue())
+                .filter(java.util.Objects::nonNull).toList();
+        return new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol, ivHistory,
+                buyingPowerCents, open, feePerContractCents, feePerOrderCents, rate.annualRate(),
+                rate.evidence(), portfolioExposure, declared, regime, trailingCloses);
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {
@@ -283,6 +298,31 @@ public final class EvaluationService {
                   AND underlying IS NOT NULL AND abs(strike - underlying) <= underlying * 0.05
                 GROUP BY CAST(asof AS date) ORDER BY CAST(asof AS date) DESC LIMIT 90
                 """, r -> r.dbl("iv"), symbol);
+    }
+
+    /**
+     * Fraction of sessions opening with a gap of more than 2% from the prior close, over the
+     * trailing ~90 sessions of the lane's own candles. Null when the history is too thin —
+     * a missing gap record is honest, a zero would be a claim.
+     */
+    public Double gapFrequency(String symbol, String worldId) {
+        LocalDate today = LocalDate.ofInstant(
+                market.simInstant(worldId).orElseGet(() -> Instant.now(clock)), MarketHours.EASTERN);
+        List<Candle> candles = worldId != null
+                ? market.candleSeries(symbol, today.minusDays(180), today, worldId, null).candles()
+                : market.candles(symbol, today.minusDays(180), today,
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        if (candles == null || candles.size() < 30) return null;
+        int gaps = 0, measured = 0;
+        for (int i = 1; i < candles.size(); i++) {
+            var prev = candles.get(i - 1).close();
+            var open = candles.get(i).open();
+            if (prev == null || open == null || prev.signum() <= 0) continue;
+            measured++;
+            double gap = Math.abs(open.doubleValue() / prev.doubleValue() - 1.0);
+            if (gap > 0.02) gaps++;
+        }
+        return measured < 30 ? null : (double) gaps / measured;
     }
 
     /** Stored option history changed or was wiped; no cached IV statistic may survive it. */

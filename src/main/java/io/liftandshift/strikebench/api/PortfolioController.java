@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
+import io.liftandshift.strikebench.paper.BookRiskService;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.PortfolioCsvImport;
 import io.liftandshift.strikebench.paper.PortfolioExportService;
@@ -30,19 +31,21 @@ final class PortfolioController {
     private final TradeService trades;
     private final io.liftandshift.strikebench.eval.EvaluationService evaluations;
     private final AccountObjectiveService objectives;
+    private final BookRiskService bookRisk;
     private final Function<Context, String> ownerId;
     private final Function<Context, Account> currentAccount;
 
     PortfolioController(Db db, Clock clock, PortfolioAccountingService books,
                         PortfolioExportService exports, PositionsService positions,
                         TradeService trades, io.liftandshift.strikebench.eval.EvaluationService evaluations,
-                        AccountObjectiveService objectives,
+                        AccountObjectiveService objectives, BookRiskService bookRisk,
                         Function<Context, String> ownerId,
                         Function<Context, Account> currentAccount) {
         this.db = db;
         this.clock = clock;
         this.books = books;
         this.objectives = objectives;
+        this.bookRisk = bookRisk;
         this.exports = exports;
         this.positions = positions;
         this.trades = trades;
@@ -59,6 +62,7 @@ final class PortfolioController {
                 this::updateRiskContext,
                 this::riskBudget,
                 ctx -> ctx.json(trades.portfolioGreeks(currentAccount.apply(ctx).id())),
+                ctx -> ctx.json(bookRisk.lane(ownerId.apply(ctx), currentAccount.apply(ctx).id())),
                 ctx -> ctx.json(new ApiResponses.Accounts<>(books.accounts(ownerId.apply(ctx)))),
                 this::createAccount,
                 ctx -> ctx.json(books.account(ownerId.apply(ctx), ctx.pathParam("id"))),

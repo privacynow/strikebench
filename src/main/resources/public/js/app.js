@@ -1169,6 +1169,7 @@
     initRealtimeCoordination();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
+    App.refreshAlerts().catch(function () { /* the Desk fetch will retry; no badge is honest */ });
     setInterval(function () {
       if (document.visibilityState === 'visible' && !marketStreamHealthy()) refreshTape();
     }, 45 * 1000);
@@ -1633,8 +1634,35 @@
     if (type === 'plan.updated' && window.PlanStore) {
       PlanStore.refresh().catch(function () { /* next route retries */ });
     }
+    if (type === 'alerts.updated') {
+      App.refreshAlerts().catch(function () { /* the badge keeps its last honest count */ });
+    }
     dispatchAppEvent(type, data);
   }
+
+  /**
+   * The alert center's nav badge: the count of open attention items on the Desk nav entry
+   * (topbar + bottom nav share the same badge class). The GET is the source of truth; the
+   * alerts.updated SSE hint only tells us to refetch. Screens that render the rail read
+   * App.state.alertData (same fetch) so the Desk and the badge can never disagree.
+   */
+  function paintAlertBadge(counts) {
+    var total = counts && counts.total || 0;
+    var severity = counts && counts.urgent ? 'urgent' : counts && counts.attention ? 'attention' : 'info';
+    document.querySelectorAll('.nav-alert-badge').forEach(function (badge) {
+      if (!total) { badge.hidden = true; badge.textContent = ''; return; }
+      badge.hidden = false;
+      badge.textContent = total > 99 ? '99+' : String(total);
+      badge.setAttribute('data-severity', severity);
+      badge.setAttribute('aria-label', total + (total === 1 ? ' item needs' : ' items need') + ' attention');
+    });
+  }
+  App.refreshAlerts = async function () {
+    var data = await API.getFresh('/api/alerts');
+    App.state.alertData = data;
+    paintAlertBadge(data && data.counts);
+    return data;
+  };
 
   function subscribeEvents() {
     initRealtimeCoordination();
@@ -1644,7 +1672,7 @@
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
     ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'plan.updated',
-      'world.tick', 'world.selected', 'world.control']
+      'world.tick', 'world.selected', 'world.control', 'alerts.updated']
       .forEach(function (type) {
         es.addEventListener(type, function (ev) {
           var data = null;

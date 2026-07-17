@@ -148,6 +148,17 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 }
 .nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--accent-soft); color: var(--accent); }
+/* Alert-center count on the Desk nav item; the strongest outstanding severity colors it. */
+.nav-alert-badge {
+  display: inline-flex; align-items: center; justify-content: center; margin-left: 6px;
+  min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; vertical-align: middle;
+  font-size: 10.5px; font-weight: 800; line-height: 1; color: #fff;
+  background: var(--risk-danger-solid);
+}
+.nav-alert-badge[data-severity="attention"] { background: var(--risk-warn); }
+.nav-alert-badge[data-severity="info"] { background: var(--accent); }
+.bottom-nav .bn-ico { position: relative; }
+.bottom-nav .nav-alert-badge { position: absolute; top: -6px; right: -12px; margin-left: 0; }
 .topbar-controls { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 12px; min-width: 0; }
 #lane-chip { white-space: nowrap; letter-spacing: .04em; }
 .risk-select { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
@@ -2321,6 +2332,28 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .home-plan-compact-meta { margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .home-plan-compact-state { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .home-plan-compact-note { margin: 9px 0 0; text-align: right; }
+/* Needs-attention rail: alert rows and per-plan alert lines share one visual language.
+   Density over width — this is a rail, not a table (desktop-first, 5K included). The
+   .home-plan-compact-list descendant selectors outrank every width-specific row reset. */
+.home-plan-compact-list .home-plan-compact-row[data-alert-severity] {
+  border-left-width: 3px; border-left-style: solid; padding-left: 10px; }
+.home-plan-compact-list .home-plan-compact-row[data-alert-severity="urgent"] { border-left-color: var(--risk-danger); }
+.home-plan-compact-list .home-plan-compact-row[data-alert-severity="attention"] { border-left-color: var(--risk-warn); }
+.home-plan-compact-list .home-plan-compact-row[data-alert-severity="info"] { border-left-color: var(--accent); }
+.home-alert-headline {
+  display: inline; padding: 0; border: 0; background: none; cursor: pointer; text-align: left;
+  font: inherit; font-weight: 650; color: var(--text);
+}
+.home-alert-headline:hover { color: var(--accent); text-decoration: underline; }
+.home-alert-line { margin-top: 3px; display: flex; align-items: baseline; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.home-alert-line .home-alert-headline { font-weight: 600; font-size: 12.5px; }
+.home-alert-detail { margin: 3px 0 0; }
+@media (max-width: 1100px) {
+  .home-plan-compact-list { grid-template-columns: minmax(0, 1fr); }
+  .home-plan-compact-row, .home-plan-compact-row:first-child, .home-plan-compact-row:last-child {
+    padding: 9px 0; border-left: 0; border-top: 1px solid var(--border); }
+  .home-plan-compact-row:first-child { border-top: 0; padding-top: 0; }
+}
 .plan-progress-context { margin: -2px 0 8px; }
 .plan-progress { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
 .plan-progress-step { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 7px 8px;
@@ -3441,3 +3474,42 @@ body:has(#app[data-route="plan"]) .plan-bar-inner { max-width: 2200px; }
   display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .authored-scenario-card.stale { border-style: dashed; }
 .scenario-canvas-status:empty { display: none; }
+
+/* ---- Book risk lane (§10.2): per-account aggregate risk, desktop-first ---- */
+.book-risk-intro p { margin: 0; }
+.book-risk-intro p + p { margin-top: 6px; }
+.book-risk-account, .book-risk-cross, .book-risk-practice { min-width: 0; }
+.book-risk-selected { border-color: var(--accent); }
+.book-risk-greek-stats { margin-bottom: 6px; }
+.book-risk-unit { font-weight: 400; }
+.book-risk-coverage { margin: 4px 0 8px; }
+.book-risk-blocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.book-risk-blocks > section { min-width: 0; }
+.book-risk-blocks h3, .book-risk-stress h3 { margin: 0 0 6px; font-size: 15px; }
+.book-risk-stress-sentence { margin: 0 0 8px; }
+.book-risk-expiry-rows { display: grid; gap: 0; }
+.book-risk-expiry-row { display: grid; grid-template-columns: minmax(112px, 150px) minmax(120px, 1fr);
+  align-items: center; gap: 4px 12px; margin-top: 10px; }
+.book-risk-expiry-date { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+.book-risk-expiry-row.flagged .allocation-track span { background: var(--risk-caution); }
+.book-risk-expiry-money { grid-column: 2; font-size: 12px; }
+.book-risk-theme-rows { display: grid; gap: 0; }
+.book-risk-theme-row { grid-template-columns: minmax(0, 1fr) 90px; }
+.book-risk-theme-row .allocation-label { grid-column: 1 / -1; flex-wrap: wrap; justify-content: flex-start; }
+.book-risk-theme-money { grid-column: 1 / -1; font-size: 12px; }
+.book-risk-churn-row { margin-top: 8px; }
+.book-risk-contradictions:empty { display: none; }
+.book-risk-contradictions .chip-row { margin-top: 8px; }
+.book-risk-lanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;
+  align-items: start; margin-top: 2px; }
+.book-risk-lanes > section { min-width: 0; }
+.book-risk-lanes > section:only-child { grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .book-risk-blocks { grid-template-columns: minmax(0, 1fr); }
+  .book-risk-lanes { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .book-risk-expiry-row { grid-template-columns: minmax(0, 1fr); }
+  .book-risk-expiry-money { grid-column: 1; }
+}

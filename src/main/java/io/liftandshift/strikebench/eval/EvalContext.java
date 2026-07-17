@@ -24,12 +24,15 @@ public record EvalContext(
         double riskFreeRate,      // annualized r used by the shared risk-neutral approximation
         DataEvidence rateEvidence,
         PortfolioExposureContext portfolioExposure,
-        DeclaredObjective declared    // what the user SAID this is for; null = undeclared
+        DeclaredObjective declared,   // what the user SAID this is for; null = undeclared
+        RegimeSnapshot regime,        // the lane's trailing regime; null = not computed
+        List<Double> trailingCloses   // chronological lane closes for history-fit; empty = none
 ) {
     public EvalContext {
         if (asOfDate == null) throw new IllegalArgumentException("evaluation date is required");
         ivHistory = ivHistory == null ? List.of() : List.copyOf(ivHistory);
         rateEvidence = rateEvidence == null ? DataEvidence.missing("rate input") : rateEvidence;
+        trailingCloses = trailingCloses == null ? List.of() : List.copyOf(trailingCloses);
     }
 
     /** Undeclared-context constructor: existing callers keep their shape. */
@@ -40,6 +43,17 @@ public record EvalContext(
                        PortfolioExposureContext portfolioExposure) {
         this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
-                rateEvidence, portfolioExposure, null);
+                rateEvidence, portfolioExposure, null, null, null);
+    }
+
+    /** Declared-but-regimeless constructor: pre-regime callers keep their shape. */
+    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
+                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
+                       long buyingPowerCents, boolean marketOpen, long feePerContractCents,
+                       long feePerOrderCents, double riskFreeRate, DataEvidence rateEvidence,
+                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared) {
+        this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
+                buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
+                rateEvidence, portfolioExposure, declared, null, null);
     }
 }

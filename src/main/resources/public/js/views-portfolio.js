@@ -1071,7 +1071,7 @@
   }
 
   function portfolioBookTabs(section) {
-    var tabs = [['overview', 'Overview'], ['activity', 'Activity'], ['performance', 'Performance'],
+    var tabs = [['overview', 'Overview'], ['risk', 'Book risk'], ['activity', 'Activity'], ['performance', 'Performance'],
       ['tax', Learn.currentLevel() === 'beginner' ? 'Records & export' : 'Taxes & export'], ['settings', 'Settings']];
     var list = el('div', { class: 'tabs portfolio-book-tabs', role: 'tablist', 'aria-label': 'Tracked account sections' },
       tabs.map(function (tab) { return el('button', { type: 'button', role: 'tab',
@@ -2801,8 +2801,241 @@
         el('p', { class: 'muted small' }, 'Recorded same-instrument wash-sale deferrals and identified Section 1256 60/40 treatment are included. Qualified-covered-call rules, straddles, loss limits and carryovers, state-specific rules, return-of-capital basis allocation, and filing elections still require reconciliation against broker tax forms and a qualified tax professional.')));
   }
 
+  // ---- Book risk: the aggregate-risk destination (§10.2). Computed from lots directly ----
+
+  function bookRiskUnitValue(cents, unit) {
+    if (cents === null || cents === undefined) return el('span', { class: 'muted' }, 'Unavailable');
+    return el('span', {}, fmtMoney(cents, { plus: true }),
+      unit ? el('span', { class: 'muted small book-risk-unit' }, ' ' + unit) : null);
+  }
+
+  function bookRiskGreeksBlock(greeks, beginner) {
+    var body = el('div', { class: 'book-risk-greeks' });
+    body.appendChild(el('div', { class: 'grid grid-4 book-risk-greek-stats' },
+      stat(UI.vocabulary('betaWeightedDelta'), bookRiskUnitValue(greeks.betaWeightedDollarDeltaCents),
+        beginner ? 'How many market-adjusted dollars this options book gains if its names rise 1-for-1 with a $1 move. Positive leans long, negative leans short.' : greeks.betaCoverage),
+      stat('Net dollar delta (unweighted)', bookRiskUnitValue(greeks.netDollarDeltaCents),
+        beginner ? 'The same lean before market-sensitivity weighting. Raw per-share delta is never summed across different stocks.' : 'Σ Δ × units × observed spot, unweighted. Raw share delta is not additive across names and is not shown.'),
+      stat('Vega', bookRiskUnitValue(greeks.vegaPerPointCents, '/ vol pt'),
+        beginner ? 'Dollars gained or lost if implied volatility moves one point across the book.' : 'Dollars per implied-volatility point at current observed marks.'),
+      stat('Gamma', bookRiskUnitValue(greeks.gammaPer1PctCents, '/ 1% move'),
+        beginner ? 'How many dollars the lean itself changes when the stocks move 1%. Big gamma means the book’s direction can flip fast.' : 'Dollar delta change for a 1% underlying move at current observed marks.')));
+    body.appendChild(el('p', { class: (greeks.unmarkedOptionLots > 0 ? 'small loss' : 'muted small') + ' book-risk-coverage' },
+      greeks.greekCoverage + ' ' + greeks.betaCoverage));
+    if ((greeks.betas || []).length) {
+      body.appendChild(UI.expandable('Betas per symbol', function () {
+        return table(['Symbol', 'Beta vs SPY', 'Observed sessions', 'Weighting'],
+          greeks.betas.map(function (b) {
+            return el('tr', {}, el('td', {}, el('b', {}, b.symbol)),
+              el('td', {}, b.beta === null || b.beta === undefined ? '—' : Number(b.beta).toFixed(2)),
+              el('td', {}, b.sessions + ' sessions'),
+              el('td', {}, b.weighted ? 'beta-weighted' : el('span', { class: 'badge badge-caution' }, 'unweighted — no history')));
+          }));
+      }, { stateKey: 'book-risk-betas' }));
+    }
+    if (!beginner) body.appendChild(el('p', { class: 'muted small' }, greeks.basis));
+    return body;
+  }
+
+  function bookRiskStressBlock(stress, beginner) {
+    var block = el('section', { class: 'book-risk-stress' },
+      el('h3', {}, UI.vocabulary('stressedAssignment')),
+      el('p', { class: 'book-risk-stress-sentence' }, stress.sentence),
+      el('div', { class: 'chip-row' },
+        chip('Obligation under −' + stress.shockPct + '%', fmtMoney(stress.obligationCents)),
+        chip('Short-put contracts obligated', String(stress.contracts) + ' contracts'),
+        chip('Recorded cash', fmtMoney(stress.cashCents)),
+        stress.unmarkedLots > 0 ? chip('Unstressable (no observed mark)', fmtMoney(stress.unmarkedObligationCents)) : null));
+    block.appendChild(el('p', { class: 'muted small' }, beginner
+      ? 'A what-if with one downside shock applied to every stock at once — a labeled heuristic, not a forecast or a broker margin number.'
+      : stress.basis));
+    return block;
+  }
+
+  function bookRiskExpiryBlock(expiries, beginner) {
+    var rows = expiries.rows || [];
+    var block = el('section', { class: 'book-risk-expiries' },
+      el('h3', {}, UI.vocabulary('expiryCluster', 'Expiry calendar')));
+    if (!rows.length) {
+      block.appendChild(el('p', { class: 'muted small' }, 'No option expirations on the calendar — nothing expires.'));
+      return block;
+    }
+    if (expiries.clusterNote) block.appendChild(alertBox('caution', 'Expiry cluster', [expiries.clusterNote]));
+    var max = rows.reduce(function (m, r) { return Math.max(m, r.notionalCents); }, 1);
+    var list = el('div', { class: 'book-risk-expiry-rows' });
+    rows.forEach(function (r) {
+      list.appendChild(el('div', { class: 'book-risk-expiry-row' + (r.flagged ? ' flagged' : '') },
+        el('div', { class: 'book-risk-expiry-date' }, r.date,
+          r.flagged ? el('span', { class: 'badge badge-caution' }, 'CLUSTER') : null),
+        el('div', { class: 'allocation-track book-risk-expiry-track', role: 'img',
+          'aria-label': fmtMoney(r.notionalCents) + ' notional expires ' + r.date },
+          el('span', { style: 'width:' + Math.max(2, Math.round(r.notionalCents * 100 / max)) + '%' })),
+        el('div', { class: 'book-risk-expiry-money' },
+          el('b', {}, fmtMoney(r.notionalCents)), ' notional · ' + r.lots + ' lot' + (r.lots === 1 ? '' : 's'),
+          r.shortPutObligationCents ? el('span', { class: 'muted' }, ' · ' + fmtMoney(r.shortPutObligationCents) + ' short-put obligation') : null)));
+    });
+    block.appendChild(list);
+    block.appendChild(el('p', { class: 'muted small' }, beginner
+      ? 'Dollars of strike value landing on each expiration date. Many obligations on one date settle together — one bad session decides all of them at once.'
+      : expiries.basis));
+    return block;
+  }
+
+  function bookRiskThemeBlock(themes, beginner) {
+    var block = el('section', { class: 'book-risk-themes' },
+      el('h3', {}, UI.vocabulary('themeConcentration')));
+    var rows = themes.rows || [];
+    if (themes.concentrationCallout) block.appendChild(alertBox('caution', 'Concentration', [themes.concentrationCallout]));
+    if (!rows.length) block.appendChild(el('p', { class: 'muted small' }, 'No open lots to classify.'));
+    else {
+      var list = el('div', { class: 'book-risk-theme-rows' });
+      rows.forEach(function (t) {
+        list.appendChild(el('div', { class: 'allocation-row book-risk-theme-row' },
+          el('div', { class: 'allocation-label' }, el('b', {}, t.label),
+            el('span', { class: 'muted small' }, (t.share === null || t.share === undefined ? '' : fmtPct(t.share) + ' of recorded exposure · ') + t.positions + ' position' + (t.positions === 1 ? '' : 's') + ' · ' + t.symbols.join(', '))),
+          el('div', { class: 'allocation-track', role: 'img',
+            'aria-label': t.label + ' ' + (t.share === null || t.share === undefined ? '' : fmtPct(t.share)) },
+            el('span', { style: 'width:' + Math.max(1, Math.round((t.share || 0) * 100)) + '%' })),
+          el('div', { class: 'book-risk-theme-money' },
+            el('b', {}, fmtMoney(t.notionalCents)), ' notional',
+            t.netDollarDeltaCents === null || t.netDollarDeltaCents === undefined
+              ? el('span', { class: 'muted' }, ' · net $ delta unavailable (missing marks)')
+              : el('span', {}, ' · net $ delta ', pnlSpan(t.netDollarDeltaCents)),
+            t.bothSides ? el('span', { class: 'badge badge-caution', style: 'margin-left:6px' }, 'BOTH DIRECTIONS') : null,
+            t.basisValuedPositions ? el('span', { class: 'muted small' }, ' · ' + t.basisValuedPositions + ' valued at recorded basis (no observed mark)') : null)));
+      });
+      block.appendChild(list);
+    }
+    block.appendChild(el('p', { class: 'muted small book-risk-classification' }, themes.classificationLabel));
+    return block;
+  }
+
+  function bookRiskContradictions(contradictions, collisions) {
+    var host = el('div', { class: 'book-risk-contradictions' });
+    (contradictions || []).forEach(function (c) {
+      var detail = el('div', { class: 'chip-row' },
+        (c.longVia || []).map(function (v) { return chip('Long via', v); }),
+        (c.shortVia || []).map(function (v) { return chip('Short via', v); }));
+      var box = alertBox('caution', 'Intra-theme contradiction — ' + c.theme, [c.message]);
+      box.appendChild(detail);
+      host.appendChild(box);
+    });
+    (collisions || []).forEach(function (message) {
+      host.appendChild(alertBox('caution', 'Strategy collision', [message]));
+    });
+    return host;
+  }
+
+  function bookRiskChurnBlock(churn, beginner) {
+    var block = el('section', { class: 'book-risk-churn' },
+      el('h3', {}, UI.vocabulary('churnCost', 'Churn / whipsaw')));
+    var pairs = churn.pairs || [];
+    if (!pairs.length) {
+      block.appendChild(el('p', { class: 'muted small' }, 'No same-symbol sell-then-rebuy round trips inside the pairing window.'));
+      return block;
+    }
+    pairs.forEach(function (p) {
+      block.appendChild(el('div', { class: 'book-risk-churn-row' },
+        el('span', { class: p.costCents > 0 ? 'loss' : 'gain' }, p.message),
+        el('span', { class: 'muted small' }, ' (' + p.exitAt + ' → ' + p.reentryAt + ')')));
+    });
+    block.appendChild(el('div', { class: 'chip-row' },
+      chip('Total round-trip cost', pnlSpan(-churn.totalCostCents))));
+    block.appendChild(el('p', { class: 'muted small' }, beginner
+      ? 'Selling shares and buying them back higher is a real cost even though no statement line says so. Pairs are matched within 30 days of the exit — a labeled heuristic window.'
+      : churn.basis));
+    return block;
+  }
+
+  function bookRiskAccountCard(a, beginner, isSelected) {
+    var objectiveBadge = a.objective
+      ? el('span', { class: 'badge badge-dim' },
+          'Objective: ' + a.objective.objective.toLowerCase().replaceAll('_', ' ')
+          + (a.objective.direction ? ' · ' + a.objective.direction.toLowerCase().replaceAll('_', ' ') : '')
+          + ' · rev ' + a.objective.revisionNo)
+      : el('span', { class: 'badge badge-dim' }, 'No declared objective');
+    var card = el('section', { class: 'card book-risk-account' + (isSelected ? ' book-risk-selected' : '') },
+      UI.cardHeader(a.name + ' · ' + portfolioAccountTypeLabel(a.accountType), objectiveBadge));
+    if (!a.greeks.optionLots && !(a.themes.rows || []).length && !(a.churn.pairs || []).length) {
+      card.appendChild(UI.emptyState('No open lots recorded',
+        'Record activity on this account and its aggregate risk appears here, computed from the lots themselves.'));
+      card.appendChild(el('p', { class: 'muted small' }, 'Recorded cash: ' + fmtMoney(a.cashCents)));
+      return card;
+    }
+    card.appendChild(bookRiskGreeksBlock(a.greeks, beginner));
+    card.appendChild(bookRiskContradictions(a.contradictions, a.collisions));
+    card.appendChild(el('div', { class: 'book-risk-blocks' },
+      bookRiskStressBlock(a.stress, beginner),
+      bookRiskExpiryBlock(a.expiries, beginner)));
+    card.appendChild(el('div', { class: 'book-risk-blocks' },
+      bookRiskThemeBlock(a.themes, beginner),
+      bookRiskChurnBlock(a.churn, beginner)));
+    return card;
+  }
+
+  function bookRiskCrossCard(cross, beginner) {
+    var card = el('section', { class: 'card book-risk-cross' },
+      UI.cardHeader('All tracked accounts', el('span', { class: 'badge badge-dim' }, cross.accounts + ' accounts')));
+    card.appendChild(bookRiskGreeksBlock(cross.greeks, beginner));
+    card.appendChild(el('section', { class: 'book-risk-stress' },
+      el('h3', {}, 'Stressed obligations across accounts'),
+      el('p', {}, cross.stressNote)));
+    card.appendChild(bookRiskExpiryBlock(cross.expiries, beginner));
+    card.appendChild(bookRiskThemeBlock(cross.themes, beginner));
+    card.appendChild(el('p', { class: 'muted small' }, cross.basis));
+    return card;
+  }
+
+  function bookRiskPracticeCard(practice) {
+    var card = el('section', { class: 'card book-risk-practice' },
+      UI.cardHeader(UI.vocabularyText('practice') + ' account — side by side',
+        el('span', { class: 'badge badge-dim' }, 'never netted')));
+    card.appendChild(el('div', { class: 'grid grid-4' },
+      stat('Dollar delta (net)', bookRiskUnitValue(practice.dollarDeltaNetCents),
+        'Practice marks in the practice lane; never combined with tracked accounts.'),
+      stat('Delta', practice.deltaShares === null || practice.deltaShares === undefined
+        ? el('span', { class: 'muted' }, 'Unavailable')
+        : el('span', {}, fmtNum(practice.deltaShares, 2), el('span', { class: 'muted small book-risk-unit' }, ' share-equiv')),
+        'Share-equivalent delta of the practice book.'),
+      stat('Vega', practice.vegaPerPoint === null || practice.vegaPerPoint === undefined
+        ? el('span', { class: 'muted' }, 'Unavailable')
+        : el('span', {}, '$' + fmtNum(practice.vegaPerPoint, 2), el('span', { class: 'muted small book-risk-unit' }, ' / vol pt')),
+        'Dollars per implied-volatility point.'),
+      stat('Theta', practice.thetaPerDay === null || practice.thetaPerDay === undefined
+        ? el('span', { class: 'muted' }, 'Unavailable')
+        : el('span', {}, '$' + fmtNum(practice.thetaPerDay, 2), el('span', { class: 'muted small book-risk-unit' }, ' / day')),
+        'Dollars collected or bled per day from time passing.')));
+    if (!practice.complete) card.appendChild(el('p', { class: 'small loss' }, 'PARTIAL — at least one practice position lacks a defensible mark and was excluded, never fabricated.'));
+    card.appendChild(el('p', { class: 'muted small' }, practice.basis));
+    return card;
+  }
+
+  async function renderPortfolioBookRisk(root, account) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var data = await API.getFresh('/api/portfolio/book-risk');
+    root.appendChild(el('div', { class: 'card card-slim book-risk-intro' },
+      el('p', {}, UI.vocabulary('bookRisk'), beginner
+        ? ' — every account added up from its recorded lots: the direction it actually leans, what a drop would force you to buy, which dates its obligations land on, and where many positions are secretly one bet.'
+        : ' — aggregate exposure computed from open lots directly (never structure groupings), per account first, cross-account subtotals after, Practice side-by-side and never netted.'),
+      beginner ? null : el('p', { class: 'muted small' }, data.basis)));
+    var accounts = (data.accounts || []).slice().sort(function (x, y) {
+      return (y.accountId === account.id ? 1 : 0) - (x.accountId === account.id ? 1 : 0);
+    });
+    if (!accounts.length) {
+      root.appendChild(UI.emptyState('No active tracked accounts', 'Create a tracked account and record activity; its aggregate risk renders here.'));
+      return;
+    }
+    accounts.forEach(function (a) {
+      root.appendChild(bookRiskAccountCard(a, beginner, a.accountId === account.id));
+    });
+    var side = el('div', { class: 'book-risk-lanes' });
+    if (data.crossAccount) side.appendChild(bookRiskCrossCard(data.crossAccount, beginner));
+    if (data.practice) side.appendChild(bookRiskPracticeCard(data.practice));
+    if (side.childNodes.length) root.appendChild(side);
+  }
+
   async function portfolioBook(root, params) {
-    var section = ['overview', 'activity', 'performance', 'tax', 'settings'].includes(params[0]) ? params[0] : 'overview';
+    var section = ['overview', 'risk', 'activity', 'performance', 'tax', 'settings'].includes(params[0]) ? params[0] : 'overview';
     var data = await API.getFresh('/api/portfolio/accounts');
     var accounts = data.accounts || [];
     if (!accounts.length) {
@@ -2845,6 +3078,7 @@
         await renderPortfolioBookOverview(root, account, summary);
         return;
       }
+      if (section === 'risk') return await renderPortfolioBookRisk(root, account);
       if (section === 'activity') return await renderPortfolioBookActivity(root, account);
       if (section === 'performance') return await renderPortfolioBookPerformance(root, account);
       if (section === 'tax') return await renderPortfolioBookTax(root, account);

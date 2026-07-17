@@ -416,6 +416,109 @@
     try { return window.localStorage.getItem('strikebench.welcomed') === '1'; } catch (e) { return true; }
   }
 
+  /**
+   * The assignment-acceptance helper (spec 10.1): a TEACHING PREVIEW for an early-assignment
+   * alert — campaign-adjusted economic basis when a campaign exists, the concentration effect
+   * on the owning account, and the next-step preview. "Accept assignment" records NOTHING;
+   * assignment happens at the broker (or the practice ledger) when it actually occurs.
+   */
+  async function assignmentAcceptanceHelper(alert) {
+    var beginner = Learn.currentLevel() === 'beginner';
+    var meta = alert.meta || {};
+    var isPut = String(meta.optionType || 'PUT').toUpperCase() !== 'CALL';
+    var contracts = Number(meta.quantity || 1);
+    var multiplier = Number(meta.multiplier || 100);
+    var shares = contracts * multiplier;
+    var strikeCents = Number(meta.strikeCents || 0);
+    var obligationCents = strikeCents * shares;
+    var body = el('div', { class: 'assignment-helper' },
+      el('p', {}, beginner
+        ? 'Assignment means the option is used against you. Nothing here places an order — this is a rehearsal of what would happen.'
+        : 'Preview of the assignment economics. No order, ledger entry, or receipt is created.'),
+      el('div', { class: 'fact-row' }, el('span', {},
+        el('b', {}, 'What happens: '),
+        isPut
+          ? 'you buy ' + shares + ' shares of ' + alert.symbol + ' at ' + fmtMoney(strikeCents)
+            + ' per share — ' + fmtMoney(obligationCents) + ' total.'
+          : 'you deliver ' + shares + ' shares of ' + alert.symbol + ' at ' + fmtMoney(strikeCents)
+            + ' per share — you receive ' + fmtMoney(obligationCents) + '.')));
+    var basisSlot = el('div', { class: 'fact-row' }, el('span', { class: 'muted' },
+      'Checking for a linked campaign…'));
+    var concentrationSlot = el('div', { class: 'fact-row' }, el('span', { class: 'muted' },
+      'Computing the concentration effect…'));
+    body.appendChild(basisSlot);
+    body.appendChild(concentrationSlot);
+    body.appendChild(el('div', { class: 'fact-row' }, el('span', {},
+      el('b', {}, 'Next step: '),
+      isPut
+        ? 'once you own the shares, the usual continuations are: hold them, sell covered calls against them (the wheel), or sell them. Each shows up as its own decision — nothing is automatic.'
+        : 'once the shares are delivered you keep the premium plus the sale proceeds. The usual continuations are: stay out, re-enter with shares, or sell a cash-secured put to re-acquire lower.')));
+    body.appendChild(el('p', { class: 'muted small' },
+      (alert.detail && alert.detail.indexOf('Ex-dividend') >= 0
+        ? 'Ex-dividend dates: unavailable — no sourced dividend calendar is connected. '
+        : '') + 'The trigger is a labeled heuristic, not a prediction.'));
+
+    var modal = UI.confirmModal(
+      beginner ? 'If you accept assignment' : 'Assignment acceptance preview',
+      body,
+      'Accept assignment (preview only)',
+      function () {
+        UI.toast('Nothing was recorded. Assignment happens at settlement; this preview only rehearsed the economics.');
+      });
+
+    // Progressive fills: campaign-adjusted basis (campaigns own that math) and concentration.
+    (async function fillBasis() {
+      try {
+        var campaigns = (await API.get('/api/campaigns')).campaigns || [];
+        var match = (campaigns || []).filter(function (c) {
+          return c.symbol === alert.symbol && c.economicBasis && c.economicBasis.available;
+        })[0];
+        basisSlot.replaceChildren(el('span', {},
+          UI.vocabulary('campaignEconomicBasis'), ': ',
+          match
+            ? el('span', {}, el('b', {}, fmtMoney(match.economicBasis.perShareCents)),
+                ' per share across the "' + (match.title || alert.symbol) + '" campaign ('
+                  + match.economicBasis.sharesHeld + ' shares held). Assignment at '
+                  + fmtMoney(strikeCents) + ' continues that campaign.')
+            : el('span', { class: 'muted' }, 'No campaign is linked to ' + alert.symbol
+                + ' yet, so there is no campaign-adjusted number. The raw arithmetic: the strike '
+                + (isPut ? 'minus' : 'plus') + ' the premium you collected is your effective '
+                + (isPut ? 'purchase' : 'sale') + ' price per share.')));
+      } catch (e) {
+        basisSlot.replaceChildren(el('span', { class: 'muted' },
+          'Campaign figures are unavailable right now; the assignment mechanics above still hold.'));
+      }
+    })();
+    (async function fillConcentration() {
+      try {
+        var totalCents = null, denominatorLabel = 'account value';
+        if (alert.lane === 'TRACKED' && alert.accountId) {
+          var tracked = await API.get('/api/portfolio/accounts/' + encodeURIComponent(alert.accountId) + '/summary');
+          if (tracked.totalValueCents != null) totalCents = tracked.totalValueCents;
+          else { totalCents = tracked.bookCashCents; denominatorLabel = 'account cash (marks incomplete)'; }
+        } else {
+          var practice = await API.get('/api/portfolio/summary');
+          totalCents = practice.totalValueCents;
+          denominatorLabel = 'practice account value';
+        }
+        var pct = totalCents > 0 ? (obligationCents / totalCents) * 100 : null;
+        concentrationSlot.replaceChildren(el('span', {},
+          el('b', {}, 'Concentration: '),
+          pct == null
+            ? 'the owning account’s value is unavailable, so no honest percentage can be shown.'
+            : 'the ' + fmtMoney(obligationCents) + (isPut ? ' purchase' : ' delivery')
+              + ' is ≈' + fmtNum(pct, 1) + '% of ' + denominatorLabel + ' ('
+              + fmtMoney(totalCents) + ').'
+              + (isPut && pct != null && pct >= 25
+                ? ' That is a concentrated single-name position — worth deciding deliberately.' : '')));
+      } catch (e) {
+        concentrationSlot.replaceChildren(el('span', { class: 'muted' },
+          'The concentration effect could not be computed right now.'));
+      }
+    })();
+    return modal;
+  }
+
   function legLabel(leg) {
     if (leg.type === 'STOCK') return leg.action + ' ' + (leg.ratio * 100) + ' shares';
     return leg.action + ' ' + leg.ratio + 'x ' + stripZeros(leg.strike) + leg.type.charAt(0) + ' ' + leg.expiration;
@@ -712,13 +815,35 @@
     });
 
     // The Desk owns the plan journeys: a compact resume lens (the hero already owns the
-    // active Plan) plus the full library as an archive drawer — no separate route.
+    // active Plan) plus the full library as an archive drawer — no separate route. The alert
+    // center drives its needs-attention ordering: alert rows merge into the same rail —
+    // enriching a Plan's row where one exists, standing alone where none does.
     var planLibrary = el('section', { class: 'card home-plan-library', id: 'home-plan-library' });
     root.appendChild(planLibrary);
-    var planLibraryFill = window.ViewPlan.renderLibrary(planLibrary, {
-      title: activePlan ? 'Other Plans' : 'Plans', removeWhenEmpty: true,
-      compact: true, excludePlanId: activePlan && activePlan.id
-    });
+    var railToken = App.navToken;
+    async function fillAttentionRail() {
+      var alertData = App.state.alertData || null;
+      try { alertData = await App.refreshAlerts(); }
+      catch (e) { /* the last honest fetch (or none) still renders */ }
+      if (!App.alive(railToken) || !planLibrary.isConnected) return;
+      var alertRows = alertData && alertData.alerts || [];
+      await window.ViewPlan.renderLibrary(planLibrary, {
+        title: alertRows.length
+          ? el('span', {}, 'Needs attention', UI.info('alertcenter'))
+          : (activePlan ? 'Other Plans' : 'Plans'),
+        removeWhenEmpty: !alertRows.length,
+        compact: true, excludePlanId: activePlan && activePlan.id,
+        alerts: alertRows,
+        onAlertOpen: function (alert) {
+          if (alert.kind === 'ASSIGNMENT') { assignmentAcceptanceHelper(alert); return; }
+          if (alert.deepLink) App.navigate(alert.deepLink);
+        }
+      });
+    }
+    var planLibraryFill = fillAttentionRail();
+    App.onEvent('alerts.updated', function () {
+      fillAttentionRail().catch(function () { /* the rail keeps its last honest state */ });
+    }, railToken);
     var drawerHost = el('section', { class: 'card home-plan-drawer', id: 'home-plan-drawer' });
     var drawer = UI.expandable('Plan library — every market, archive included', function () {
       var full = el('div', { id: 'plans-library' });

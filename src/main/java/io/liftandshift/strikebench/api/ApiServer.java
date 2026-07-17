@@ -82,7 +82,9 @@ public final class ApiServer {
     io.liftandshift.strikebench.plan.PlanManagementService planManagement;
     private io.liftandshift.strikebench.paper.PortfolioAccountingService portfolioBooks;
     private io.liftandshift.strikebench.paper.PortfolioExportService portfolioExports;
+    private io.liftandshift.strikebench.paper.MarksSource portfolioMarks; // shared with BookRiskService
     private io.liftandshift.strikebench.paper.CampaignService campaigns;
+    private io.liftandshift.strikebench.paper.AlertCenterService alertCenter;
     private Javalin app;
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
@@ -217,7 +219,13 @@ public final class ApiServer {
         server.db = db;
         server.portfolioBooks = new io.liftandshift.strikebench.paper.PortfolioAccountingService(db, clock, marksSource);
         server.portfolioExports = new io.liftandshift.strikebench.paper.PortfolioExportService(server.portfolioBooks);
+        server.portfolioMarks = marksSource;
         server.campaigns = new io.liftandshift.strikebench.paper.CampaignService(db, clock);
+        // The alert center reuses the trade/marks services the Manage band uses — one trigger
+        // evaluator, no second math — and announces material changes on the existing event bus.
+        server.alertCenter = new io.liftandshift.strikebench.paper.AlertCenterService(db, clock,
+                trades, marksSource, server.eventCalendar::nextEarnings, server.events,
+                cfg.feePerContractCents());
         server.simSessions.attachDb(db);
         // Data Center services (need db, which is set above; reuse the constructor-built engine).
         var backfill = new io.liftandshift.strikebench.db.UnderlyingBackfill(market, db, clock);
@@ -299,9 +307,12 @@ public final class ApiServer {
 
     public Javalin start(int port) {
         accounts.getOrCreateDefault();
+        var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
+        var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
+                db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, evaluations,
-                new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock),
+                accountObjectives, bookRisk,
                 this::ownerId, this::currentAccount);
         CampaignController campaignController = new CampaignController(campaigns, this::ownerId);
         tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
@@ -448,6 +459,9 @@ public final class ApiServer {
 
             // Campaigns: the Book's interpretation layer over recorded activity.
             campaignController.register(c);
+
+            // The alert center: the Desk's needs-attention list, computed from real state.
+            new AlertController(alertCenter, this::ownerId).register(c);
 
             // Historical replays are Plan-owned. The report id remains readable so a Plan can
             // restore its full normalized summary plus the existing detailed replay artifact.

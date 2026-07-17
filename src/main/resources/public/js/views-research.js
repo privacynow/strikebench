@@ -380,6 +380,10 @@
               ? el('a', { href: '#/data/sources' }, String(r.hvHistoryDays || 0) + '/'
                 + String(r.hvRequiredDays || 20) + ' daily closes · add history')
               : 'needs 20 daily closes in this market')),
+      // Regime line (folded Phase 10.3): one plain sentence framing every structure below —
+      // trend, drawdown, and whether option premium is rich or thin vs delivered movement.
+      r.regime && r.regime.headline ? el('p', { class: 'muted regime-line', title: r.regime.basis || '' },
+        r.regime.headline) : null,
       secondaryMarketDetail);
     if (section === 'understand') heroCard.replaceWith(hero);
 
@@ -616,6 +620,31 @@
           grid.appendChild(card);
         });
         results.appendChild(grid);
+        // The compensation view (folded Phase 10.3): premium per unit of realized risk,
+        // BESIDE the decision-ordered picks above — a second lens, never a replacement.
+        if (response.compensation && response.compensation.length) {
+          results.appendChild(UI.expandable('Compensation view — premium per unit of realized risk', function () {
+            var wrap = el('div', { class: 'scout-compensation' },
+              el('p', { class: 'muted small' }, response.compensationBasis || ''));
+            var tbody = el('tbody');
+            response.compensation.forEach(function (entry, index) {
+              var componentNotes = (entry.components || []).map(function (component) {
+                return component.name + ': ' + component.note;
+              }).join(' \u00b7 ');
+              tbody.appendChild(el('tr', { title: componentNotes },
+                el('td', {}, String(index + 1)),
+                el('td', {}, entry.symbol),
+                el('td', {}, el('span', { class: 'mono' }, entry.label || entry.strategy)),
+                el('td', {}, String(entry.score)),
+                el('td', { class: 'muted small' }, componentNotes)));
+            });
+            wrap.appendChild(el('div', { class: 'tbl-wrap' }, el('table', { class: 'tbl' },
+              el('thead', {}, el('tr', {}, ['#', 'Symbol', 'Structure', 'Compensation score', 'Why'].map(function (h) {
+                return el('th', {}, h);
+              }))), tbody)));
+            return wrap;
+          }, { stateKey: 'scout-compensation' }));
+        }
         if (response.notes && response.notes.length) results.appendChild(UI.expandable('Scout notes', function () {
           return el('ul', { class: 'rationale' }, response.notes.map(function (note) { return el('li', {}, note); }));
         }));

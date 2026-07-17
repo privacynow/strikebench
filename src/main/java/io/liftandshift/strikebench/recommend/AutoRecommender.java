@@ -64,7 +64,15 @@ public final class AutoRecommender {
                        List<HorizonIdeas> horizons, String intent) {}
 
     public record AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
-                             long riskBudgetCents, String disclaimer) {}
+                             long riskBudgetCents, String disclaimer,
+                             List<CompensationView.CompensationEntry> compensation,
+                             String compensationBasis) {
+        /** Pre-compensation-view constructor keeps existing callers' shape. */
+        public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
+                          long riskBudgetCents, String disclaimer) {
+            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null);
+        }
+    }
 
     private final SignalEngine signals;
     private final RecommendationEngine engine;
@@ -188,7 +196,15 @@ public final class AutoRecommender {
         if (req.targetProfitCents() != null && req.targetProfitCents() > 0) {
             notes.add("Profit targets are aspirations, not predictions: a structure whose max profit covers the target still has to be right");
         }
-        return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER);
+        // The compensation view ranks every premium-collecting idea the Scout surfaced,
+        // across picks and horizons, BESIDE the per-pick decision ordering (Phase 10.3).
+        List<StrategyEvaluation> surfaced = picks.stream()
+                .flatMap(pick -> pick.horizons().stream())
+                .flatMap(h -> h.candidates().stream())
+                .map(ScoredCandidate::evaluation)
+                .toList();
+        return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER,
+                CompensationView.compute(surfaced, evaluations, worldId), CompensationView.BASIS);
     }
 
     /** Runs the engine per horizon for one symbol under one intent. */
