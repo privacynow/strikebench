@@ -626,6 +626,32 @@ class PlanApiIntegrationTest {
                 .isEqualTo(reselected.at("/selection/candidateId").asText());
     }
 
+    @Test void storedEnsembleRestoresByteCompatiblyForTheCurrentContext() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"ensemble-restore-plan","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Stored fan restore plan","thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        assertThat(get("/api/plans/" + id + "/outcomes/ensemble/latest").statusCode()).isEqualTo(404);
+
+        JsonNode ran = json(post("/api/plans/" + id + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"levels":[{"key":"floor","price":240},{"key":"target","price":280}]}
+                """.formatted(plan.get("version").asLong())));
+        HttpResponse<String> restoredResponse = get("/api/plans/" + id + "/outcomes/ensemble/latest");
+        assertThat(restoredResponse.statusCode()).isEqualTo(200);
+        JsonNode restored = Json.parse(restoredResponse.body());
+
+        assertThat(restored.at("/ensemble/id").asText()).isEqualTo(ran.at("/ensemble/id").asText());
+        assertThat(restored.at("/ensemble/fingerprint").asText())
+                .isEqualTo(ran.at("/ensemble/fingerprint").asText());
+        assertThat(restored.at("/preview/planEnsembleFingerprint").asText())
+                .isEqualTo(ran.at("/preview/planEnsembleFingerprint").asText());
+        assertThat(restored.at("/preview/receipt/fingerprint").asText())
+                .isEqualTo(ran.at("/ensemble/fingerprint").asText());
+        assertThat(restored.at("/preview/decisionMap/levels")).hasSize(2);
+        assertJsonEquivalent(restored.get("preview"), ran.get("preview"));
+    }
+
     @Test void exactPlanEnsembleCreatesAReplayableLinkedRehearsalAndReview() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"rehearsal-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Rehearsal plan",

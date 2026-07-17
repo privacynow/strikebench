@@ -1437,13 +1437,30 @@
           // The button promises strategies, so the strategy band must DELIVER them on arrival:
           // the handoff carries the fan's identity and an auto-run intent, and the origin-hash
           // guard keeps a slow advance from yanking a user who already moved on (anti-steal).
+          action.disabled = true;
+          action.setAttribute('aria-busy', 'true');
+          action.textContent = 'Ranking structures…';
+          var storedRun = ownedState.whatifResults && ownedState.whatifResults[symbol] || null;
+          var storedFan = storedRun && storedRun.ensemble || null;
+          if (storedRun) storedRun.sentToStrategy = true; // the trail survives repaints with the run
           var handoffUi = PlanStore.ui(plan.id);
-          handoffUi.strategyAutoRun = { from: 'evidence',
-            ensemble: (ownedState.whatifResults && ownedState.whatifResults[symbol] || {}).ensemble || null };
+          handoffUi.strategyAutoRun = { from: 'evidence', ensemble: storedFan };
+          // The trail: the evidence band keeps a running-text receipt of where its result went.
+          var trailHost = document.getElementById('whatif-out');
+          if (trailHost && !trailHost.querySelector('.flow-trail')) {
+            trailHost.appendChild(el('p', { class: 'flow-trail' },
+              '→ Sent to strategy ranking' + (storedFan && storedFan.fingerprint
+                ? ' · #' + String(storedFan.fingerprint).slice(0, 6) : '') + ' · just now'));
+          }
           var origin = window.location.hash;
           var moved = await PlanStore.advance(plan, 'STRATEGY');
           if (window.location.hash === origin) App.navigate(PlanStore.path(moved, 'STRATEGY'));
-        } catch (e) { UI.toast(e.message, 'error'); }
+        } catch (e) {
+          action.disabled = false;
+          action.removeAttribute('aria-busy');
+          action.textContent = labels[goal] || labels.DIRECTIONAL;
+          UI.toast(e.message, 'error');
+        }
       });
       var goalSelect = publicMode ? el('select', { id: 'whatif-plan-goal', 'aria-label': 'Plan goal' },
         (Learn.INTENTS || []).map(function (meta) {
@@ -1606,6 +1623,12 @@
       out.appendChild(goalAction(p, spec));
       var rehearsalActions = practiceAction(p, spec);
       if (rehearsalActions) out.appendChild(rehearsalActions);
+      var storedTrail = ownedState.whatifResults && ownedState.whatifResults[symbol];
+      if (storedTrail && storedTrail.sentToStrategy) {
+        out.appendChild(el('p', { class: 'flow-trail' },
+          '→ Sent to strategy ranking' + (ensembleRef && ensembleRef.fingerprint
+            ? ' · #' + String(ensembleRef.fingerprint).slice(0, 6) : '')));
+      }
       reroll.style.display = '';
     }
     run.addEventListener('click', function () { analyze(false); });
@@ -1615,6 +1638,20 @@
     var storedRun = ownedState.whatifResults && ownedState.whatifResults[symbol];
     if (storedRun && storedRun.preview) {
       paintResult(storedRun.preview, storedRun.ensemble || null, storedRun.spec, true);
+    } else if (!publicMode && plan) {
+      // Session cache missed (a reload) but the fan is a persisted receipt: restore the
+      // stored simulation from the server rather than greeting the user with amnesia.
+      API.get('/api/plans/' + plan.id + '/outcomes/ensemble/latest').then(function (restored) {
+        if (!restored || !restored.preview) return;
+        if (latest) return; // the user already ran a fresh scenario while this loaded
+        ownedState.planEnsembleId = restored.ensemble && restored.ensemble.id;
+        ownedState.planEnsembleFingerprint = restored.ensemble && restored.ensemble.fingerprint;
+        ownedState.whatifResults = ownedState.whatifResults || {};
+        ownedState.whatifResults[symbol] = { preview: restored.preview,
+          ensemble: restored.ensemble || null, spec: f.getSpec() };
+        out.innerHTML = '';
+        paintResult(restored.preview, restored.ensemble || null, f.getSpec(), true);
+      }).catch(function () { /* no stored fan is the normal first-run state */ });
     }
     return card;
   }

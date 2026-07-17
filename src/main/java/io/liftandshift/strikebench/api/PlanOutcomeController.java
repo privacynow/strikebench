@@ -104,6 +104,27 @@ final class PlanOutcomeController {
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis()), preview));
     }
 
+    /** Repaint the stored fan for the Plan's current view — same wire shape as a fresh run. */
+    void planEnsembleLatest(Context ctx) {
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        var stored = planOutcomes.latestEnsemble(root.ownerId(ctx), plan,
+                io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC.name(), root.analysisCtx(ctx));
+        if (stored == null) {
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                    "No current stored simulation for this Plan's view — run the scenario to create one.");
+        }
+        String world = PlanController.worldParam(stored.ensemble().scope().worldId());
+        int horizon = stored.ensemble().spec().horizonDays();
+        var marketVol = outcomeController.marketVol(plan.symbol(), world, horizon);
+        double rate = market.riskFreeRateQuote(Math.max(1, horizon), world).annualRate();
+        ObjectNode preview = Json.MAPPER.valueToTree(simEngine.previewFromStored(
+                stored, planOutcomes.levelOdds(stored.id()), marketVol, rate));
+        preview.put("planEnsembleId", stored.id());
+        preview.put("planEnsembleFingerprint", stored.fingerprint());
+        ctx.json(new ApiResponses.PlanEnsemble<>(plan,
+                new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis()), preview));
+    }
+
     void planOutcomeRun(Context ctx) {
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanOutcomeRunRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));

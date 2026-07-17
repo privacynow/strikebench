@@ -9,6 +9,12 @@
     window.history.scrollRestoration = 'manual';
   }
 
+  /** Parses '#/plan/<id>(/<stage>)?' into {id, stage} — null for any other route. */
+  function planStageOf(hash) {
+    var match = /^#\/plan\/([^/]+)(?:\/([^/]+))?/.exec(String(hash || '').split('?')[0]);
+    return match ? { id: match[1], stage: match[2] || 'understand' } : null;
+  }
+
   function workspaceRoute(hash) {
     var path = String(hash || '#/').split('?')[0];
     var plan = /^#\/plan\/([^/]+)(?:\/([^/]+))?/.exec(path);
@@ -212,12 +218,46 @@
 
     _renderOnce: async function () {
       var root = document.getElementById('app');
+      var hash = window.location.hash || '#/home';
+      var parts = hash.replace(/^#\//, '').split('?')[0].split('/').filter(function (p) { return p.length; });
+      var route = parts[0] || 'home';
+      var params = parts.slice(1);
+
+      // ---- The flow seam: moving between stages of ONE plan is a position change inside
+      // the same live document, not a new screen. The mounted workspace registered a handle;
+      // apply it in place — no route generation bump (subscriptions and async refinements
+      // stay alive), no teardown, no skeleton. Anything unexpected falls through to the
+      // full render, which is always correct.
+      var seamFrom = planStageOf(App._lastRenderedRoute);
+      var seamTo = planStageOf('#/' + [route].concat(params).join('/'));
+      if (App._flowSeam && seamFrom && seamTo && seamFrom.id === seamTo.id
+          && seamFrom.stage !== seamTo.stage && App._flowSeam.key === 'plan:' + seamTo.id
+          && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow')) {
+        root.setAttribute('data-ready', 'false');
+        try {
+          await App._flowSeam.apply(seamTo.stage);
+          var seamRouteKey = '#/' + [route].concat(params).join('/');
+          App._lastRenderedRoute = seamRouteKey;
+          App._lastAnnouncedRoute = seamRouteKey;
+          var announcer = document.getElementById('route-announcer');
+          if (announcer) announcer.textContent = seamTo.stage.replace(/-/g, ' ');
+          root.setAttribute('data-ready', 'true');
+          if (window.Workspace) Workspace.save();
+          prefetchForRoute(route, params); // same idle warm-up the full render performs
+          return;
+        } catch (seamError) {
+          // Fall through to the full render below — it rebuilds from scratch and is
+          // always correct; the seam is an optimization, never a correctness owner.
+        }
+      }
+
       // Every render is a new route generation. A slow view returns after painting its shell
       // and fills the rest from a detached block guarded by App.alive(token); a later
       // navigation bumps the token so that stale fill bails instead of painting the wrong screen.
       var token = ++App.navToken;
       // Route-owned live refresh hooks must never survive into the next screen.
       App.refreshWorkflowContext = null;
+      App._flowSeam = null;
       // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
       // async, and anything watching data-ready (tests, tooling) must never catch the
       // outgoing screen still claiming to be ready for the new route.
@@ -226,10 +266,6 @@
       // route change lands here, so trades/resets/world switches re-price the label (review P1).
       if (App.refreshRiskBudget) App.refreshRiskBudget();
 
-      var hash = window.location.hash || '#/home';
-      var parts = hash.replace(/^#\//, '').split('?')[0].split('/').filter(function (p) { return p.length; });
-      var route = parts[0] || 'home';
-      var params = parts.slice(1);
       // Routes are canonical product nouns. Internal aliases only obscure ownership and make
       // navigation tests prove redirects instead of the real screen contract.
       var view = Product.Routes.valid(route, params) && window.Views[route];

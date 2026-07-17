@@ -14,6 +14,15 @@
   --accent: #2f6bde;
   --accent-soft: #e5edfc;
   --accent-fg: #ffffff;
+  --card: var(--surface); /* card fill: was referenced unset (transparent); indirection follows dark */
+  --muted: var(--text-dim); /* was referenced unset 15+ times (those colors silently no-opped) */
+
+  /* Motion: one vocabulary, zeroed under reduced-motion and html[data-motion="off"] */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-arrive: 240ms;
+  --ease-out: cubic-bezier(.2, 0, 0, 1);
+  --ease-in: cubic-bezier(.3, 0, 1, .7);
 
   /* Risk palette (accessible fg/bg pairs) */
   --risk-danger: #c93c3c;
@@ -2998,29 +3007,74 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .control-consequence { font-size: .82em; margin-top: 5px; min-height: 1.2em; }
 .control-consequence.pending { opacity: .5; }
 
-/* Flow bands: a document of bands — done collapses to its CONCLUSION, locked stays visible with its reason. */
-.flow { display: flex; flex-direction: column; gap: 14px; }
-.flow-band { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--card); }
+/* Flow bands: a document of bands — done collapses to its CONCLUSION, locked stays visible with its reason.
+   The flow carries a spine (one vertical line) with a posture glyph per band riding it. */
+.flow { display: flex; flex-direction: column; gap: 12px; position: relative; padding-left: 28px; }
+.flow::before { content: ''; position: absolute; left: 13px; top: 0; bottom: 0; width: 2px;
+  background: var(--border-strong, var(--border)); }
+.flow-band { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+  background: var(--card); position: relative; }
 .flow-band[data-posture="locked"] { opacity: .72; }
-.flow-band[data-posture="active"] { border-color: var(--accent); }
-.flow-band-title { font-size: 1.02em; margin: 0 0 6px; display: flex; align-items: center; gap: 6px; }
-.flow-band-locked { margin: 2px 0 0; font-size: .86em; }
-.flow-band-conclusion { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px;
+/* Active = accent edge, not a full accent frame. 3px inline-start border, padding gives back 2px. */
+.flow-band[data-posture="active"] { border-inline-start: 3px solid var(--accent); padding-inline-start: 14px; }
+/* Posture glyph: a 12px disc centered on the spine, on the title line. */
+.flow-band::before { content: ''; position: absolute; left: -21px; top: 21px; width: 12px; height: 12px;
+  border-radius: 50%; border: 2px solid var(--accent); background: var(--surface);
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), transform var(--motion-fast); }
+.flow-band[data-posture="active"]::before { left: -23px; transform: scale(1.15); } /* -2px: the 3px border shifts the padding box */
+.flow-band[data-posture="done"]::before { background: var(--accent); }
+.flow-band[data-posture="ready"]::before { background: var(--accent-soft); }
+.flow-band[data-posture="locked"]::before { border: 1.5px solid var(--muted, var(--text-dim)); }
+/* Compact postures sit their glyph on the shallower title line. */
+.flow-band[data-posture="done"]::before,
+.flow-band[data-posture="ready"]::before,
+.flow-band[data-posture="locked"]::before { top: 15px; }
+/* Type inversion: the band title is the h2 of the region; interior card headers demote (see .band-flat). */
+.flow-band-title { font-size: 1.15em; font-weight: 600; margin: 0 0 6px; display: flex; align-items: center; gap: 6px;
+  scroll-margin-top: calc(var(--sticky-stack-h, 54px) + 16px); } /* JS keeps --sticky-stack-h at the real header stack */
+/* Row postures: done/ready/locked are single compact rows, never tall empty frames. */
+.flow-band[data-posture="ready"],
+.flow-band[data-posture="locked"],
+.flow-band[data-posture="done"] { padding-block: 8px; }
+/* Locked: reason on the SAME visual row as the title; long reasons wrap under it. */
+.flow-band[data-posture="locked"] { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; }
+.flow-band[data-posture="locked"] .flow-band-head { flex: 0 1 auto; min-width: 0; }
+.flow-band[data-posture="locked"] .flow-band-title { margin: 0; }
+.flow-band-locked { margin: 0; font-size: .86em; flex: 1 1 240px; min-width: 0; }
+.flow-band-conclusion { display: grid; width: 100%; grid-template-columns: 1fr auto; align-items: center;
+  gap: 10px; min-height: 40px;
   background: none; border: 0; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
-.flow-band-conclusion-body { flex: 1 1 auto; }
+.flow-band-conclusion-body { min-width: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .flow-band-revisit { font-size: .78em; white-space: nowrap; }
 /* Ready-but-unfocused: a one-line invitation naming what the band holds — never a second
    open toolset stacked beneath the band the user is working in. */
 .flow-band[data-posture="ready"] { border-style: dashed; }
-.flow-band-invitation { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px;
+.flow-band-invitation { display: grid; width: 100%; grid-template-columns: 1fr auto; align-items: center;
+  gap: 10px; min-height: 40px;
   background: none; border: 0; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
-.flow-band-invitation-body { flex: 1 1 auto; }
+.flow-band-invitation-body { min-width: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .flow-band-open { font-size: .78em; white-space: nowrap; }
 .flow-band-fold { background: none; border: 0; padding: 0 0 8px; font: inherit; font-size: .8em; cursor: pointer; color: var(--muted); }
 .flow-band-body { display: block; }
 
 /* Simulation lineage chip: names the ONE stored ensemble every band quotes. */
 .lineage-chip b { font-family: var(--mono, monospace); font-weight: 600; }
+
+/* Compose your own: a quiet disclosure row under the proposals — composers and pickers,
+   never sibling tabs competing with the ranked field. */
+.plan-compose-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); min-height: 48px; }
+.plan-compose-label { margin-right: 4px; font-size: .92em; }
+#plan-strategy-panel-chain, #plan-strategy-panel-scout {
+  background: var(--surface-2, var(--bg)); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; max-height: 480px; overflow: auto; }
+
+/* Stage dek: one quiet purpose line + one carried-context line under the band title. */
+.plan-stage-heading { margin: 0 0 10px; }
+.plan-stage-dek { margin: 0 0 2px; font-size: .92em; }
+.plan-stage-heading .plan-stage-carry { font-size: .82em; color: var(--muted, var(--text-dim)); }
 
 /* Arrival ribbon: a handoff (e.g. Evidence → Strategy) names what it carried and why the
    content below is already answering it. One-shot, quiet, never a toast. */
@@ -3033,3 +3087,61 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 .study-trigger-group { padding-left: 12px; border-left: 2px solid var(--border); }
 .study-trigger-group > .form-grid { margin-top: 4px; }
 .study-custom-dates { margin-top: -4px; }
+
+/* ===== Program ONE R1: flow identity — band interiors, aperture, arrival, ghosts ===== */
+/* Two-column active band: controls rail | result canvas. */
+.band-cols { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; }
+@media (max-width: 1100px) { .band-cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* Interior flattening: inside a band, cards stop being boxes-in-a-box — groups separate by
+   hairlines and rhythm. Their headers demote to eyebrows (the band title owns the h2 weight).
+   band-flat sits on the band (or directly on its body). */
+.band-flat .card { background: transparent; border: 0; border-radius: 0; box-shadow: none;
+  padding: 0; margin-bottom: 0; }
+.band-flat .card-head { margin-bottom: 8px; }
+.band-flat .card-head h2 { font-size: 12.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted, var(--text-dim)); }
+.band-flat .flow-band-body > * + *,
+.flow-band-body.band-flat > * + *,
+.plan-stage-content.band-flat > * + * { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 16px; }
+/* Instruments (tables, charts) keep a well: content this dense earns its own surface. */
+.band-well { background: var(--surface-2, var(--bg)); border: 1px solid var(--border);
+  border-radius: 8px; overflow: auto; }
+.figure-caption { font-size: .82em; color: var(--muted, var(--text-dim));
+  display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+/* Evidence trail: one quiet line naming what this band's output rests on. */
+.flow-trail { font-size: .85em; color: var(--muted, var(--text-dim)); margin-top: 8px; }
+
+/* Aperture fold: a band's body opens/closes by animating the grid row, never display toggling. */
+.flow-aperture { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--motion-base) var(--ease-out); }
+.flow-aperture-inner { min-height: 0; overflow: hidden; }
+.flow-band.is-folded .flow-aperture { grid-template-rows: 0fr; }
+.flow-band.is-folded .flow-aperture-inner { visibility: hidden; transition: visibility 0s var(--motion-base); }
+
+/* Arrival: content earns its place by settling in, staggered — only once the flow has settled
+   (the class gates first paint from animating). */
+@keyframes band-arrive { from { opacity: 0; transform: translateY(8px); } }
+.flow--settled .is-arriving { animation: band-arrive var(--motion-arrive) var(--ease-out); }
+.is-arriving + .is-arriving { animation-delay: 60ms; }
+
+/* Ghost rows: loading placeholders that hold layout and sweep until real rows land. */
+.ghost-row { height: 56px; border-radius: 8px;
+  background: linear-gradient(100deg, var(--surface) 40%, var(--accent-soft) 50%, var(--surface) 60%);
+  background-size: 200% 100%; animation: ghost-sweep 1.2s linear infinite; }
+.ghost-row + .ghost-row { margin-top: 10px; }
+@keyframes ghost-sweep { to { background-position: -200% 0; } }
+
+/* Motion off: OS preference and the DOM-test hook zero the same tokens. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-fast: 0ms; --motion-base: 0ms; --motion-arrive: 0ms; }
+  .ghost-row { animation: none; }
+}
+html[data-motion="off"] { --motion-fast: 0ms; --motion-base: 0ms; --motion-arrive: 0ms; }
+html[data-motion="off"] .ghost-row { animation: none; }
+
+/* Mobile: the spine rail is desktop furniture — 28px is real estate at 390px wide.
+   Posture stays legible through the band borders and posture rows. */
+@media (max-width: 720px) {
+  .flow { padding-left: 0; }
+  .flow::before, .flow-band::before { display: none; }
+}

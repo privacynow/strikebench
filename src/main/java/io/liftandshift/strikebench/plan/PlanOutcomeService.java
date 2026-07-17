@@ -218,6 +218,18 @@ public final class PlanOutcomeService {
         return id == null ? null : loadEnsemble(userId, plan.id(), id);
     }
 
+    /** The decision levels captured with a stored fan, verbatim as persisted. */
+    public List<SimulationEngine.LevelOdds> levelOdds(String ensembleId) {
+        return db.with(c -> Db.queryOn(c, "SELECT level_key,price_cents,direction,end_above_probability," +
+                        "end_below_probability,end_beyond_probability,touch_probability,touch_ci_low," +
+                        "touch_ci_high,median_first_touch_day FROM plan_level_odds WHERE ensemble_id=? " +
+                        "ORDER BY level_key",
+                r -> new SimulationEngine.LevelOdds(r.str("level_key"), r.lng("price_cents") / 100.0,
+                        r.str("direction"), r.dbl("end_above_probability"), r.dbl("end_below_probability"),
+                        r.dbl("end_beyond_probability"), r.dbl("touch_probability"), r.dbl("touch_ci_low"),
+                        r.dbl("touch_ci_high"), r.dblOrNull("median_first_touch_day")), ensembleId));
+    }
+
     public SavedOutcome savePathOutcome(String userId, Plan.View plan, long expectedVersion,
                                         String candidateId, StoredEnsemble stored,
                                         JsonNode result, JsonNode input, String interpretation) {
