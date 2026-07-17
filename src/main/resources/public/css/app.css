@@ -3224,3 +3224,70 @@ html[data-motion="off"] .ghost-row { animation: none; }
 /* Context-change notices are one quiet line, not a banner. */
 .plan-stage-content .alert.alert-info { padding: 8px 12px; }
 .plan-stage-content .alert.alert-info p { margin: 0; display: inline; }
+
+/* ===== Width remnants sweep: every route gets the canvas its decisions need ===== */
+/* Non-plan routes leave the 1060px reading measure behind. They cap at 1760px — not 2200 —
+   because their unit of work is a ROW (a position, a strike, a dataset): rows wider than
+   ~1700px scatter one thought across a scan-length. The Plan workspace keeps 2200 (its unit
+   is a two-column composition: hero|field, rail|results). max-width only — inert below cap. */
+#app[data-route="home"]:not(:has(.welcome-page)), #app[data-route="research"], #app[data-route="plans"],
+#app[data-route="portfolio"], #app[data-route="data"] { max-width: 1760px; }
+/* The plan bar frames the workspace below it — its edges must match that workspace,
+   not the retired 1060 measure. */
+.plan-bar-inner { max-width: 1760px; }
+body:has(#app[data-route="plan"]) .plan-bar-inner { max-width: 2200px; }
+/* Option-chain surface: each row mirrors call ↔ strike ↔ put around a centered pivot.
+   Past ~1700px the mirror halves drift apart and vertical strike-scanning degrades,
+   so this one card caps below its route. */
+.plan-strategy-market { max-width: 1720px; }
+
+/* Wide desktops: co-visibility upgrades. Every rule sits behind min-width so nothing
+   below 1500px changes. Grids widen ONLY where the items are true peers being compared. */
+@media (min-width: 1500px) {
+  /* Goal choice: all five intents are one competing set — one band, one glance. */
+  .plan-intent-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  /* Plan library tiles and compact rows are peers: which journey do I resume? */
+  .home-plan-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .home-plan-compact-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* Sector explorer tiles: more peers per row at the tile's natural ~340px proportion. */
+  .tile-row { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  /* Headline tiles are homogeneous scan items. */
+  .news-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Scout picks and proposal results are direct competitors — compare across, not down. */
+  .plan-scout-results, .universe-scout-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .plan-proposal-card-grid { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+  /* Data overview: four status peers become one glance-row — "is anything wrong?" */
+  .dc-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* Datasets: the switcher beside what it governs (stored coverage). */
+  #data-tab-panel[data-tab="datasets"] { display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; align-items: start; }
+  /* Sources: the acquire workflow keeps its results (source health, running jobs) beside it. */
+  #data-tab-panel[data-tab="sources"] { display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(380px, 1fr); gap: 0 16px; align-items: start; }
+  #data-tab-panel[data-tab="sources"] > #dc-history-sync { grid-column: 1; grid-row: 1 / span 2; }
+  /* Builder: the live "where you stand" consequence panel earns a larger instrument. */
+  .builder-cols { grid-template-columns: minmax(0, 1fr) 460px; }
+  /* Home hero: the four account stats stop crowding at 140px apiece. */
+  .home-hero-top #home-stats { max-width: 720px; }
+  /* Welcome keeps prose measure in each column; the two-column pitch gains proof space. */
+
+  /* Expert ranked field: the comparison TABLE is the decision instrument — it spans the
+     full field width instead of squeezing into the runner column beside the hero. */
+  .plan-ranked-field > #compare-table { grid-column: 1 / -1; }
+  /* In-field hero: the evidence receipts are peers — two-across halves the tower without
+     stealing width from the case/payoff judgment above them. */
+  .plan-ranked-field .ranked-idea-hero > .ranked-idea-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+
+  /* Selected-structure hero (full-width, outside the field): the commit decision reads as
+     three zones — rationale | instrument (payoff + facts + outcomes) | receipts. Receipts
+     take the narrowest track: supporting evidence, not the main event. */
+  .ranked-idea-hero.plan-selected-structure { display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 1fr) minmax(300px, .62fr);
+    gap: 14px 18px; align-items: start; }
+  .ranked-idea-hero.plan-selected-structure > .ranked-idea-head,
+  .ranked-idea-hero.plan-selected-structure > .plan-selection-command,
+  .ranked-idea-hero.plan-selected-structure > .alert { grid-column: 1 / -1; }
+  .ranked-idea-hero.plan-selected-structure > .ranked-idea-grid { display: contents; }
+  .ranked-idea-hero.plan-selected-structure > .ranked-idea-secondary { grid-column: 3; margin-top: 0; }
+}

@@ -66,7 +66,7 @@
     root.appendChild(dataTabsWrap);
     requestAnimationFrame(syncDataTabsEdge);
     var dataPanel = el('section', { id: 'data-tab-panel', role: 'tabpanel',
-      'aria-labelledby': 'data-tab-' + tab });
+      'data-tab': tab, 'aria-labelledby': 'data-tab-' + tab });
     root.appendChild(dataPanel);
     root = dataPanel;
     function setTabBadge(key, text, cls) {
