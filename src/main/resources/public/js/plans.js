@@ -48,7 +48,6 @@
       : items.length ? items[0].id : null;
     App.state.activePlanId = active;
     App.state.activePlanByMarket[key] = active;
-    renderBar();
   }
 
   function rememberActive(plan) {
@@ -211,7 +210,6 @@
       }));
     } else replace(plan);
     rememberActive(plan);
-    renderBar();
     App.navigate(path(plan, stage));
     if (window.Workspace) Workspace.save();
     return plan;
@@ -545,59 +543,6 @@
       full: (duplicate ? duplicate + ' · ' : '') + title };
   }
 
-  function renderBar() {
-    var host = document.getElementById('plan-bar-root');
-    if (!host || !window.UI || !window.App) return;
-    host.innerHTML = '';
-    if (!items.length && !(window.location.hash || '').startsWith('#/plan/')) {
-      host.hidden = true; return;
-    }
-    host.hidden = false;
-    var inner = UI.el('div', { class: 'plan-bar-inner' });
-    var desktop = UI.el('div', { class: 'plan-bar-desktop' },
-      UI.el('span', { class: 'plan-bar-label' }, 'Plans'));
-    var ordered = items.slice();
-    var activeIndex = ordered.findIndex(function (plan) { return plan.id === App.state.activePlanId; });
-    if (activeIndex > 0) ordered.unshift(ordered.splice(activeIndex, 1)[0]);
-    var shown = ordered.slice(0, 2);
-    shown.forEach(function (plan) {
-      var planIdentity = identity(plan, items);
-      var planLabel = (planIdentity.duplicate ? planIdentity.duplicate + ' · ' : '') + planIdentity.title
-        + (plan.context && plan.context.horizonDays ? ' · ' + plan.context.horizonDays + ' trading sessions' : '');
-      var chip = UI.el('div', { class: 'plan-chip' + (plan.id === App.state.activePlanId ? ' active' : ''),
-        'data-plan-id': plan.id },
-        UI.el('button', { type: 'button', class: 'plan-chip-main', 'aria-label': 'Open ' + plan.symbol + ' · ' + planLabel,
-          onclick: function () { focus(plan).catch(function (e) { UI.toast(e.message, 'error'); }); } },
-          UI.el('span', { class: 'plan-chip-symbol' }, plan.symbol),
-          UI.el('span', { class: 'plan-chip-title' }, planLabel)),
-          UI.el('button', { type: 'button', class: 'plan-chip-close', 'aria-label': 'Close ' + plan.title + ' tab',
-          onclick: function (event) {
-            event.stopPropagation(); closeChip(plan).catch(function (e) { UI.toast(e.message, 'error'); });
-          } }, '×'));
-      desktop.appendChild(chip);
-    });
-    if (items.length > shown.length) desktop.appendChild(UI.el('a', {
-      class: 'btn btn-sm btn-secondary plan-more-link', href: '#/plans',
-      'aria-label': 'Open all ' + items.length + ' Plans'
-    }, '+' + (items.length - shown.length) + ' more'));
-    desktop.appendChild(UI.el('button', { type: 'button', class: 'plan-new-btn',
-      onclick: function () { App.navigate('#/research'); } }, '+ New plan'));
-    var picker = UI.el('select', { class: 'plan-picker', id: 'plan-picker', 'aria-label': 'Open Plan',
-      onchange: function () {
-        var plan = items.find(function (p) { return p.id === picker.value; });
-        if (plan) focus(plan).catch(function (e) { UI.toast(e.message, 'error'); });
-      } }, items.map(function (plan) {
-        var label = identity(plan, items);
-        return UI.el('option', { value: plan.id, selected: plan.id === App.state.activePlanId ? 'selected' : null },
-          plan.symbol + ' · ' + label.full);
-      }));
-    var mobile = UI.el('div', { class: 'plan-bar-mobile' }, picker,
-      UI.el('button', { type: 'button', class: 'plan-new-btn', 'aria-label': 'Start a new Plan',
-        onclick: function () { App.navigate('#/research'); } }, '+ New'));
-    inner.appendChild(desktop);
-    inner.appendChild(mobile);
-    host.appendChild(inner);
-  }
 
   window.PlanStore = {
     init: function () { return load(true); }, load: load, refresh: refresh, library: library,
@@ -614,7 +559,7 @@
     tradeDecision: tradeDecision, cashDecision: cashDecision, brokerDecision: brokerDecision,
     adoptPosition: adoptPosition,
     latestManagement: latestManagement, manage: manage, reviewCash: reviewCash,
-    marketChanged: marketChanged, renderBar: renderBar, ui: ui, matching: matching, identity: identity,
+    marketChanged: marketChanged, ui: ui, matching: matching, identity: identity,
     archive: archive, deleteDraft: deleteDraft,
     all: function () { return items.slice(); }, allMarkets: function () { return libraryItems.slice(); },
     currentMarketKey: currentMarketKey, marketKey: planMarketKey,

@@ -3392,7 +3392,6 @@
     App.state.activePlanByMarket[PlanStore.marketKey(plan)] = plan.id;
     App.state.activePlanId = plan.id;
     if (window.Workspace) Workspace.save();
-    PlanStore.renderBar();
 
     var ctx = { plan: plan };
     // "Edit view & limits" is a toggle: it opens the view band, and a second press returns
@@ -3600,7 +3599,7 @@
     host.appendChild(UI.cardHeader(options.title || 'Plans',
       el('div', { class: 'btn-row plan-library-commands' },
         countLabel,
-        !full ? el('a', { class: 'btn btn-sm btn-secondary', href: '#/plans' }, 'View all') : null,
+        !full ? el('a', { class: 'btn btn-sm btn-secondary', href: '#/home' }, 'View all') : null,
         !compact ? el('button', { type: 'button', class: 'btn btn-sm', onclick: function () {
           App.navigate('#/research');
         } }, '+ New Plan') : null)));
@@ -3765,7 +3764,7 @@
       if (compactOrdered.length > compactShown.length) {
         host.appendChild(el('p', { class: 'muted small home-plan-compact-note' },
           (compactOrdered.length - compactShown.length) + ' more in ',
-          el('a', { href: '#/plans' }, 'the Plan library'), '.'));
+          el('a', { href: '#/home', onclick: function () { App.state.openPlanDrawer = true; } }, 'the Plan library'), '.'));
       }
       return;
     }
@@ -3834,23 +3833,11 @@
     }, { stateKey: 'plans-closed-tabs' }));
   }
 
-  async function plansHome(root) {
-    try { await PlanStore.load(true); }
-    catch (e) { /* The library renders the visible failure. */ }
-    root.appendChild(el('div', { class: 'page-heading plan-library-heading' },
-      el('div', {}, el('div', { class: 'eyebrow' }, 'YOUR WORK'),
-        el('div', { class: 'heading-info-row' }, el('h1', {}, 'Plans'), UI.info('plans')),
-        el('p', { class: 'muted page-intro' },
-          'One place for every saved market view, structure, outcome test, decision, and review.'))));
-    var library = el('section', { class: 'card home-plan-library plan-library-page', id: 'plans-library' });
-    root.appendChild(library);
-    await renderPlanLibrary(library, { full: true, title: 'Plan library' });
-  }
 
   window.ViewPlan = Object.freeze({
     stages: PLAN_STAGES,
     planWorkspace: planWorkspace,
-    plansHome: plansHome,
+    
     renderLibrary: renderPlanLibrary,
     planStartCard: planStartCard,
     outcomeWorkspace: planOutcomeWorkspace,

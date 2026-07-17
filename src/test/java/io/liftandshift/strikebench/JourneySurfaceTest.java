@@ -151,14 +151,16 @@ class JourneySurfaceTest {
         String workspace = source("js/workspace.js");
         String contracts = source("js/contracts.js");
 
-        // Program ONE nav: four destinations; the Workspace item owns research, plans and plan
-        // routes as a token list. Every route keeps exactly one visible nav owner.
-        for (String owner : List.of("data-route=\"home\"", "data-route=\"research plans plan\"",
+        // Program ONE nav (R3): four destinations — Desk, Workspace, Book, Data. The Workspace
+        // item owns research and the plan journeys; the plans route and chip bar are retired
+        // (the library lives in the Desk drawer). Every route keeps exactly one visible owner.
+        for (String owner : List.of("data-route=\"home\"", "data-route=\"research plan\"",
                 "data-route=\"portfolio\"", "data-route=\"data\"")) {
             assertThat(html).contains(owner);
         }
+        assertThat(html).contains(">Desk<", ">Book<");
         assertThat(html).doesNotContain("data-route=\"trade\"", "data-route=\"plans\"",
-                ">Plans<", ">Research<");
+                ">Plans<", ">Research<", "plan-bar-root");
         assertThat(views).doesNotContain("async function trade(", "trade: trade", "#/trade/");
         assertThat(views).doesNotContain("#/plan/new", "id === 'new'");
         assertThat(app).doesNotContain("#/plan/new");

@@ -3340,3 +3340,20 @@ body:has(#app[data-route="plan"]) .plan-bar-inner { max-width: 2200px; }
 .band-col-results { min-width: 0; }
 .band-col-results svg { max-width: 100%; height: auto; }
 #plan-backtest-result svg { max-width: 100%; height: auto; }
+
+/* Very wide desktops (the owner works at 5K): the IN-FIELD hero earns the same three-zone
+   interior once the field ratio gives it real room — case | instrument | receipts, with the
+   runner-ups still beside it. Below 2000px it keeps its tower proportions (the payoff never
+   shrinks to make room for secondary receipts). */
+@media (min-width: 2000px) {
+  .plan-ranked-field { grid-template-columns: minmax(0, 1.8fr) minmax(380px, 1fr); }
+  .plan-ranked-field > .ranked-idea-hero { display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, .62fr);
+    gap: 0 18px; align-items: start; }
+  .plan-ranked-field > .ranked-idea-hero > .ranked-idea-head,
+  .plan-ranked-field > .ranked-idea-hero > .plan-selection-command,
+  .plan-ranked-field > .ranked-idea-hero > .alert { grid-column: 1 / -1; }
+  .plan-ranked-field > .ranked-idea-hero > .ranked-idea-grid { display: contents; }
+  .plan-ranked-field > .ranked-idea-hero > .ranked-idea-secondary { grid-column: 3; margin-top: 0;
+    grid-template-columns: minmax(0, 1fr); }
+}

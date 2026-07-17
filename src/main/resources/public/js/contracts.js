@@ -39,7 +39,6 @@
       if (name === 'home') return !args.length || (args.length === 1 && args[0] === 'tour');
       if (name === 'research') return !args.length
         || (args.length === 1 && /^[A-Z0-9._-]+$/i.test(args[0]));
-      if (name === 'plans') return !args.length;
       // '#/plan/<id>' is the workspace's default arrival (the flow decides which band is
       // active); a stage suffix is a deep-link. Rejecting the bare form silently dumped
       // users on Home with no cue — a navigation must never discard its destination.
@@ -60,7 +59,8 @@
       return this.valid(parts[0] || 'home', parts.slice(1)) ? hash : '#/home';
     },
     navOwner: function (name, args) {
-      return name === 'plan' || name === 'plans' ? 'plans' : name;
+      // The Workspace nav item owns research and the plan journeys.
+      return name === 'plan' ? 'plan' : name;
     }
   };
 
