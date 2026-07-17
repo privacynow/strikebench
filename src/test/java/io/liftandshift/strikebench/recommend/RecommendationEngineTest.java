@@ -423,4 +423,50 @@ class RecommendationEngineTest {
                 .forEach(c -> assertThat(c.usesHeldShares())
                         .as(c.strategy() + " rides the held shares").isTrue());
     }
+
+    private java.util.List<String> incomeFan(String view) {
+        return engine.recommend(new RecommendationEngine.Request("AAPL", view, "month", "balanced",
+                        null, null, null, null, true, false, "INCOME", null, null), BP)
+                .candidates().stream().map(Candidate::strategy).toList();
+    }
+
+    @Test
+    void anExplicitViewTiltsIncomeRankingButNeverGatesTheCatalog() {
+        // REGRESSION (owner report): "earn income · bearish" surfaced a SINGLE bear call spread while
+        // "neutral" showed a full fan. The market view is a ranking tilt for objective flows, never a
+        // catalog gate, so the income catalog must be identical across declared views — and never one trade.
+        var bearish = incomeFan("bearish");
+        var neutral = incomeFan("neutral");
+        var bullish = incomeFan("bullish");
+        assertThat(bearish).as("a bearish income view must still return a diverse fan, not one trade")
+                .hasSizeGreaterThan(1);
+        assertThat(bearish).as("view must not change WHICH income structures are offered")
+                .containsExactlyInAnyOrderElementsOf(neutral);
+        assertThat(bullish).containsExactlyInAnyOrderElementsOf(neutral);
+    }
+
+    @Test
+    void noIncomeCandidateContradictsEarningIncome() {
+        // Objective-coherence gate: nothing offered under INCOME may pay to be held (a pure-option,
+        // single-expiration income structure must COLLECT a credit), no diagonal may sit on the income
+        // menu, and no bounded structure that cannot profit may be offered.
+        for (String view : List.of("bearish", "bullish", "neutral")) {
+            var candidates = engine.recommend(new RecommendationEngine.Request("AAPL", view, "month", "balanced",
+                    null, null, null, null, true, false, "INCOME", null, null), BP).candidates();
+            assertThat(candidates).as(view + " income fan is non-empty").isNotEmpty();
+            for (Candidate c : candidates) {
+                StrategyFamily fam = StrategyFamily.valueOf(c.strategy());
+                assertThat(c.strategy()).as("no diagonal on the income menu").doesNotContain("DIAGONAL");
+                if (!fam.multiExpiration() && !fam.needsStock()) {
+                    assertThat(c.entryNetPremiumCents())
+                            .as(view + " income " + c.strategy() + " must collect a credit, not pay a debit")
+                            .isPositive();
+                }
+                if (c.maxProfitCents() != null) {
+                    assertThat(c.maxProfitCents())
+                            .as(c.strategy() + " must be able to profit at executable prices").isPositive();
+                }
+            }
+        }
+    }
 }

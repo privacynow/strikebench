@@ -151,7 +151,6 @@ public final class RecommendationEngine {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         RiskMode mode = RiskMode.parse(req.riskMode());
         StrategyIntent intent = StrategyIntent.parse(req.intent());
-        boolean thesisExplicit = req.thesis() != null && !req.thesis().isBlank();
         StrategyFamily.Thesis thesis = parseThesis(req.thesis());
         Holdings holdings = req.holdings();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
@@ -203,33 +202,30 @@ public final class RecommendationEngine {
         }
 
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
-        LocalDate near = pickExpiration(expirations, req.horizon(), today, allow0dte, laneNow, notes);
-        if (near == null) {
-            notes.add("No expiration matches the requested horizon");
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
+        // DYNAMIC EXPIRY (engine remediation): the horizon is an ANCHOR, not a rigid bucket. Gather
+        // the liquid, executable-chain expirations near it and let each family pick the one where it
+        // is most profitable — instead of forcing one quantized date whose chain may be empty/thin,
+        // which silently produced NOTHING for ~half of observed symbols.
+        int anchorDays = horizonAnchorCalendarDays(req.horizon());
+        if (anchorDays == 0 && !allow0dte) {
+            notes.add("0DTE horizon requested but same-day expiration is disabled (allow0dte=false); using the nearest expiration instead");
         }
-        OptionChain chain = market.chain(symbol, near, worldId).orElse(null);
-        if (chain == null || chain.isEmpty()) {
-            notes.add("Option chain unavailable for " + symbol + " " + near);
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
-        }
-        if (!chain.evidence().executableIn(lane)) {
-            notes.add("The " + lane + " market has no executable option chain for " + symbol + " " + near
-                    + "; refusing " + chain.evidence().provenance() + " data from " + chain.evidence().source());
+        List<ExpiryCtx> contexts = expiryContexts(symbol, worldId, expirations, anchorDays, today, laneNow, lane,
+                allow0dte, MAX_EXPIRY_CANDIDATES);
+        if (contexts.isEmpty()) {
+            notes.add("The " + lane + " market has no liquid, executable option chain for " + symbol
+                    + " near a " + anchorDays + "-day horizon — nearby expirations were empty or not two-sided.");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
                     null, List.of(), rejected, notes, DISCLAIMER);
         }
-        // Far expiration for calendars/diagonals: ~4 weekly slots beyond the near one
-        int nearIdx = expirations.indexOf(near);
-        LocalDate far = nearIdx >= 0 && nearIdx + 4 < expirations.size() ? expirations.get(nearIdx + 4)
-                : expirations.getLast().isAfter(near) ? expirations.getLast() : null;
-        OptionChain farChain = far == null ? null : market.chain(symbol, far, worldId).orElse(null);
-        if (farChain != null && !farChain.evidence().executableIn(lane)) farChain = null;
-
-        var rateQuote = market.riskFreeRateQuote((int) Math.max(1, ChronoUnit.DAYS.between(today, near)), worldId);
-        double riskFreeRate = rateQuote.annualRate();
-
-        BigDecimal spot = chain.underlyingPrice();
+        // The anchor context drives the expiry-independent setup (spot, teaching examples, notes);
+        // the family loop searches the full candidate set for the most profitable expiry per family.
+        ExpiryCtx anchorCtx = contexts.get(0);
+        OptionChain chain = anchorCtx.chain();
+        OptionChain farChain = anchorCtx.farChain();
+        double riskFreeRate = anchorCtx.riskFreeRate();
+        LocalDate near = anchorCtx.near();
+        BigDecimal spot = anchorCtx.spot();
         // Generated-lane catalyst copy is UI teaching material, not market evidence. Only
         // observed headlines may add an event advisory or affect candidate ranking.
         boolean earningsSoon = lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
@@ -256,12 +252,19 @@ public final class RecommendationEngine {
 
         for (StrategyFamily family : StrategyFamily.values()) {
             if (intent == StrategyIntent.DIRECTIONAL) {
+                // A directional bet IS a thesis, so the declared view hard-selects the structure side.
                 if (!family.fits(thesis)) continue;
             } else {
-                // Intent flows pick families by purpose; an explicit thesis narrows further.
+                // OBJECTIVE FLOWS (income / acquire / exit / hedge): pick families by PURPOSE. The
+                // market view is a RANKING TILT and a per-candidate teaching note here, NEVER a
+                // catalog gate — matching the product contract that the view is "only meaningful for
+                // directional or hedging objectives" and "conditions ranking." Hard-filtering an
+                // objective flow on an explicit view collapsed the educational fan to a single trade
+                // (e.g. "earn income · bearish" surfaced ONLY a bear call spread, hiding the condor,
+                // butterfly, calendars and the credit put spread). Offer every intent-serving family;
+                // the coherence gate below keeps each offered structure honest to the objective.
                 if (!family.servesIntent(intent) && !family.blockedByDefault()) continue;
                 if (family.blockedByDefault() && !family.servesIntent(intent)) continue;
-                if (thesisExplicit && !family.fits(thesis)) continue;
             }
             // RISK MODE IS A BUDGET, NOT A COMPLEXITY LADDER (risk/experience decoupling): every
             // mode sees the SAME defined-risk catalog — the actual position's max loss, EV, tail,
@@ -272,54 +275,73 @@ public final class RecommendationEngine {
                 continue;
             }
 
-            StrategyBuilder.Built built = StrategyBuilder.build(family, chain, farChain, spot, hints);
-            if (built == null) continue;
+            // DYNAMIC EXPIRY: build and screen this family across every liquid candidate expiration,
+            // and keep the instance with the best modeled edge ("where we make the most money"). The
+            // first (anchor-nearest) rejection reason is retained for teaching when none is viable.
             boolean builtOnHeldShares = sharesHeld && family.needsStock();
+            Candidate bestCandidate = null;
+            double bestEdge = Double.NEGATIVE_INFINITY;
+            Rejection firstRejection = null;
+            for (ExpiryCtx ctx : contexts) {
+                StrategyBuilder.Built built = StrategyBuilder.build(family, ctx.chain(), ctx.farChain(), ctx.spot(), hints);
+                if (built == null) continue;
 
-            // A structure whose computed worst case is <= $0 is a quote-integrity failure,
-            // never an opportunity — surface it as rejected with the real reason.
-            if (!family.multiExpiration()) {
-                PayoffCurve integrity = PayoffCurve.of(built.legs(), 1);
-                if (!integrity.maxLossUnbounded() && integrity.maxLossCents() <= 0) {
-                    rejected.add(new Rejection(family.name(), family.display(),
-                            List.of("Priced as risk-free by the current quotes — impossible; stale or crossed data, skipped")));
+                // A structure whose computed worst case is <= $0 is a quote-integrity failure.
+                if (!family.multiExpiration()) {
+                    PayoffCurve integrity = PayoffCurve.of(built.legs(), 1);
+                    if (!integrity.maxLossUnbounded() && integrity.maxLossCents() <= 0) {
+                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
+                                List.of("Priced as risk-free by the current quotes — impossible; stale or crossed data, skipped"));
+                        continue;
+                    }
+                }
+
+                long coverSharesPerUnit = builtOnHeldShares
+                        ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
+                        : 0;
+                Verdict verdict = Guardrails.check(new Guardrails.Proposal(
+                        family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
+                        buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
+                if (verdict.blocked()) {
+                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), verdict.blockReasons());
                     continue;
                 }
-            }
 
-            long coverSharesPerUnit = builtOnHeldShares
-                    ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
-                    : 0;
-            Verdict verdict = Guardrails.check(new Guardrails.Proposal(
-                    family, built.legs(), 1, built.quotes(), spot, chain.freshness(), today,
-                    buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
-            if (verdict.blocked()) {
-                rejected.add(new Rejection(family.name(), family.display(), verdict.blockReasons()));
-                continue;
+                CandidateProbe probe = new CandidateProbe();
+                Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, budget, buyingPowerCents,
+                        ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
+                        builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
+                        quote, ctx.riskFreeRate(), probe);
+                if (candidate == null) {
+                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
+                            List.of(probe.reason != null ? probe.reason
+                                    : "The current option book cannot produce an executable one-lot package"));
+                    continue;
+                }
+                // OBJECTIVE-COHERENCE GATE: a structure whose economics contradict the declared intent
+                // is never a viable recommendation for it — the engine must not offer a "pay-to-earn-
+                // income" debit or a can't-profit package. (This is the offer-time enforcement of the
+                // same carry/coherence idea the eval layer already annotates on a selected position.)
+                String incoherence = intentIncoherence(intent, family, candidate);
+                if (incoherence != null) {
+                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(incoherence));
+                    continue;
+                }
+                if (candidate.confidence() < minConfidence) {
+                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
+                            List.of(String.format("Confidence %.2f is below your minimum %.2f", candidate.confidence(), minConfidence)));
+                    continue;
+                }
+                String filterReason = failsFilter(candidate, filters);
+                if (filterReason != null) {
+                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(filterReason));
+                    continue;
+                }
+                double edge = modeledEdge(candidate);
+                if (edge > bestEdge) { bestEdge = edge; bestCandidate = candidate; }
             }
-
-            CandidateProbe probe = new CandidateProbe();
-            Candidate candidate = toCandidate(family, built, verdict, spot, today, budget, buyingPowerCents,
-                    chain.freshness(), avoidEarnings, thesis, intent, holdings,
-                    builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
-                    quote, riskFreeRate, probe);
-            if (candidate == null) {
-                rejected.add(new Rejection(family.name(), family.display(),
-                        List.of(probe.reason != null ? probe.reason
-                                : "The current option book cannot produce an executable one-lot package")));
-                continue;
-            }
-            if (candidate.confidence() < minConfidence) {
-                rejected.add(new Rejection(family.name(), family.display(),
-                        List.of(String.format("Confidence %.2f is below your minimum %.2f", candidate.confidence(), minConfidence))));
-                continue;
-            }
-            String filterReason = failsFilter(candidate, filters);
-            if (filterReason != null) {
-                rejected.add(new Rejection(family.name(), family.display(), List.of(filterReason)));
-                continue;
-            }
-            candidates.add(candidate);
+            if (bestCandidate != null) candidates.add(bestCandidate);
+            else if (firstRejection != null) rejected.add(firstRejection);
         }
 
         // Always show a blocked undefined-risk example for education, even if not requested
@@ -968,6 +990,105 @@ public final class RecommendationEngine {
         if (s == null) return StrategyFamily.Thesis.NEUTRAL;
         try { return StrategyFamily.Thesis.valueOf(s.trim().toUpperCase(Locale.ROOT)); }
         catch (IllegalArgumentException e) { return StrategyFamily.Thesis.NEUTRAL; }
+    }
+
+    /** How many liquid expirations the dynamic search evaluates per family, nearest-anchor first. */
+    private static final int MAX_EXPIRY_CANDIDATES = 4;
+    /** A tradeable chain needs at least this many two-sided strikes bracketing spot; below it, an
+     *  expiration is a mirage that can never produce a fillable structure and is skipped. */
+    private static final int MIN_LIQUID_STRIKES = 6;
+
+    /** One expiration's fully-resolved build context for the dynamic-expiry search. */
+    private record ExpiryCtx(LocalDate near, OptionChain chain, OptionChain farChain, BigDecimal spot,
+                             double riskFreeRate) {}
+
+    /** Exact horizon → calendar days. "Nd" sessions convert at 7/5; the named buckets fall back to
+     *  their calendar span. This is only the ANCHOR — the search spans liquid expirations around it. */
+    private static int horizonAnchorCalendarDays(String horizon) {
+        if (horizon != null && horizon.matches("(?i)\\d+d")) {
+            int sessions = Integer.parseInt(horizon.substring(0, horizon.length() - 1));
+            return Math.max(1, Math.round(sessions * 7f / 5f));
+        }
+        return io.liftandshift.strikebench.model.Horizon.parse(horizon).expiryCalendarDays();
+    }
+
+    /** The liquid, executable-chain expirations nearest the horizon anchor, nearest first, up to
+     *  maxCount. Each carries its own spot, far chain (for calendars/diagonals) and risk-free rate. */
+    private List<ExpiryCtx> expiryContexts(String symbol, String worldId, List<LocalDate> expirations,
+            int anchorDays, LocalDate today, java.time.Instant now,
+            io.liftandshift.strikebench.market.MarketLane lane, boolean allow0dte, int maxCount) {
+        List<LocalDate> usable = expirations.stream()
+                .filter(d -> !d.isBefore(today))
+                .filter(d -> !MarketHours.contractDead(d, now))
+                .filter(d -> allow0dte || !d.equals(today))
+                .sorted(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - anchorDays)))
+                .toList();
+        List<ExpiryCtx> ctxs = new ArrayList<>();
+        for (LocalDate exp : usable) {
+            if (ctxs.size() >= maxCount) break;
+            OptionChain chain = market.chain(symbol, exp, worldId).orElse(null);
+            if (chain == null || chain.isEmpty() || !chain.evidence().executableIn(lane)) continue;
+            BigDecimal spot = chain.underlyingPrice();
+            if (spot == null || spot.signum() <= 0 || executableStrikesNearSpot(chain, spot) < MIN_LIQUID_STRIKES) continue;
+            int idx = expirations.indexOf(exp);
+            LocalDate far = idx >= 0 && idx + 4 < expirations.size() ? expirations.get(idx + 4)
+                    : expirations.getLast().isAfter(exp) ? expirations.getLast() : null;
+            OptionChain farChain = far == null ? null : market.chain(symbol, far, worldId).orElse(null);
+            if (farChain != null && !farChain.evidence().executableIn(lane)) farChain = null;
+            double rfr = market.riskFreeRateQuote((int) Math.max(1, ChronoUnit.DAYS.between(today, exp)), worldId).annualRate();
+            ctxs.add(new ExpiryCtx(exp, chain, farChain, spot, rfr));
+        }
+        return ctxs;
+    }
+
+    /** Strikes within ±15% of spot with a two-sided executable CALL quote — a liquidity proxy: a
+     *  thin or one-sided expiration can never build a fillable structure and must not be chosen. */
+    private static int executableStrikesNearSpot(OptionChain chain, BigDecimal spot) {
+        double s = spot.doubleValue(), lo = s * 0.85, hi = s * 1.15;
+        return (int) chain.calls().stream()
+                .filter(q -> q.strike() != null && q.strike().doubleValue() >= lo && q.strike().doubleValue() <= hi)
+                .filter(q -> q.bid() != null && q.ask() != null && q.bid().signum() > 0 && q.ask().signum() > 0
+                        && q.ask().compareTo(q.bid()) >= 0)
+                .count();
+    }
+
+    /** Modeled edge for choosing the most profitable expiry for a family: positive risk-neutral EV
+     *  per unit of risk ranks highest, then probability of profit, then reward:risk. Bands are offset
+     *  so a real EV always beats a POP-only or geometry-only comparison. */
+    /**
+     * OBJECTIVE-COHERENCE GATE (offer time). Rejects any structure whose economics contradict the
+     * declared intent, so the engine never presents an outcome incompatible with the objective:
+     *   - DOMINATED (any intent): a bounded structure whose max profit is <= 0 can never make money.
+     *   - INCOME must COLLECT premium: a single-expiration, pure-option income structure that pays a
+     *     net debit is a "pay-to-earn-income" contradiction. Stock-backed families (covered call /
+     *     cash-secured put / collar) are excluded from the debit test — their entry nets the share
+     *     cost, while the income is the option credit — and multi-expiration calendars are exempt
+     *     because their income is theta collected over rolls, not an entry credit.
+     * Returns a human reason to reject, or null when the structure is coherent with the intent.
+     */
+    private static String intentIncoherence(StrategyIntent intent, StrategyFamily family, Candidate c) {
+        if (c.maxProfitCents() != null && c.maxProfitCents() <= 0) {
+            return "At executable prices this structure cannot profit under any outcome (max profit "
+                    + Money.fmt(c.maxProfitCents()) + ") — not a usable trade.";
+        }
+        if (intent == StrategyIntent.INCOME && !family.multiExpiration() && !family.needsStock()
+                && c.entryNetPremiumCents() <= 0) {
+            return "Earning income means COLLECTING premium, but this structure pays a net debit of "
+                    + Money.fmt(-c.entryNetPremiumCents())
+                    + " at entry — it costs money to hold rather than paying you to wait.";
+        }
+        return null;
+    }
+
+    private static double modeledEdge(Candidate c) {
+        if (c.expectedValueCents() != null && c.maxLossCents() > 0) {
+            return (double) c.expectedValueCents() / c.maxLossCents();
+        }
+        if (c.pop() != null) return c.pop() - 2.0;
+        if (c.maxProfitCents() != null && c.maxLossCents() > 0) {
+            return (double) c.maxProfitCents() / c.maxLossCents() - 5.0;
+        }
+        return -10.0;
     }
 
     private static LocalDate pickExpiration(List<LocalDate> expirations, String horizon, LocalDate today,

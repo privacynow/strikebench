@@ -35,6 +35,20 @@ class StrategyCatalogTest {
     }
 
     @Test
+    void diagonalsAreDirectionalWhileCalendarsStayIncome() {
+        // A diagonal is a wide, net-DEBIT DIRECTIONAL play (long deep-ITM anchor financed by a short
+        // near leg) — it is NOT premium income and must never reach the INCOME menu, though it stays
+        // fully available under the directional flow. Calendars are neutral theta-income and stay.
+        for (StrategyFamily d : List.of(StrategyFamily.DIAGONAL_CALL, StrategyFamily.DIAGONAL_PUT)) {
+            assertThat(d.servesIntent(StrategyIntent.INCOME)).as(d + " must not serve INCOME").isFalse();
+            assertThat(d.servesIntent(StrategyIntent.DIRECTIONAL)).as(d + " still serves DIRECTIONAL").isTrue();
+        }
+        for (StrategyFamily c : List.of(StrategyFamily.CALENDAR_CALL, StrategyFamily.CALENDAR_PUT)) {
+            assertThat(c.servesIntent(StrategyIntent.INCOME)).as(c + " remains neutral theta income").isTrue();
+        }
+    }
+
+    @Test
     void concreteTemplatesAreUniqueAndNeverInventAnEngineFamily() {
         var keys = new HashSet<String>();
         Set<String> families = new HashSet<>();
