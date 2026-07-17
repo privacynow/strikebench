@@ -51,22 +51,22 @@ public final class StrategyBuilder {
                 case NAKED_PUT -> single(chain, OptionType.PUT, LegAction.SELL, 0.30);
                 case DEBIT_CALL_SPREAD -> vertical(chain, OptionType.CALL, LegAction.BUY, 0.50, +2);
                 case DEBIT_PUT_SPREAD -> vertical(chain, OptionType.PUT, LegAction.BUY, 0.50, -2);
-                case CREDIT_CALL_SPREAD -> vertical(chain, OptionType.CALL, LegAction.SELL, 0.27, +1);
-                case CREDIT_PUT_SPREAD -> vertical(chain, OptionType.PUT, LegAction.SELL, 0.27, -1);
-                case IRON_CONDOR -> combine(vertical(chain, OptionType.PUT, LegAction.SELL, 0.25, -1),
-                        vertical(chain, OptionType.CALL, LegAction.SELL, 0.25, +1));
+                case CREDIT_CALL_SPREAD -> creditVertical(chain, OptionType.CALL, spot);
+                case CREDIT_PUT_SPREAD -> creditVertical(chain, OptionType.PUT, spot);
+                case IRON_CONDOR -> combine(creditVertical(chain, OptionType.PUT, spot),
+                        creditVertical(chain, OptionType.CALL, spot));
                 case IRON_BUTTERFLY -> ironButterfly(chain, spot);
                 case LONG_CALL_BUTTERFLY -> butterfly(chain, OptionType.CALL, spot);
                 case LONG_PUT_BUTTERFLY -> butterfly(chain, OptionType.PUT, spot);
                 case CALENDAR_CALL -> calendar(chain, farChain, OptionType.CALL, spot);
                 case CALENDAR_PUT -> calendar(chain, farChain, OptionType.PUT, spot);
-                case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL);
-                case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT);
+                case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL, spot);
+                case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT, spot);
                 case COVERED_CALL -> coveredCall(chain, spot, hints);
                 case COVERED_STRANGLE -> coveredStrangle(chain, spot, hints);
                 case COVERED_CALL_PUT_SPREAD -> coveredCallPutSpread(chain, spot, hints);
                 case COVERED_CALL_CALL_OVERLAY -> coveredCallCallOverlay(chain, spot, hints);
-                case CASH_SECURED_PUT -> cashSecuredPut(chain, hints);
+                case CASH_SECURED_PUT -> cashSecuredPut(chain, spot, hints);
                 case PROTECTIVE_COLLAR -> collar(chain, spot, hints);
                 case PROTECTIVE_PUT -> protectivePut(chain, spot, hints);
                 case SHORT_STRADDLE, SHORT_STRANGLE -> null; // never built, never recommended
@@ -81,6 +81,54 @@ public final class StrategyBuilder {
         if (q == null) return null;
         return new Built(List.of(leg(action, q)), List.of(q),
                 action + " " + strikeLabel(q) + " " + chain.expiration());
+    }
+
+    /**
+     * EXECUTABLE-AWARE credit vertical (engine remediation). The old delta-target + one-strike-step
+     * selection degenerated at high IV: it sold a far-OTM (~0.27-delta) strike whose tiny theoretical
+     * credit was destroyed by the bid/ask, so the "credit spread" debited at executable prices (the
+     * AMD 547.5/550 case). Instead, SEARCH the book: among short strikes on the OTM side and long
+     * wings a sensible %-of-spot away, pick the pair with the best EXECUTABLE return-on-risk
+     * (sell the short at its BID, buy the wing at its ASK), requiring the credit to be a meaningful
+     * fraction of the width. This naturally lands near the money where the premium is real and the
+     * book is tight — and returns null (honest) only when nothing earns a genuine credit.
+     */
+    private static Built creditVertical(OptionChain chain, OptionType type, BigDecimal spot) {
+        if (spot == null || spot.signum() <= 0) return null;
+        double s = spot.doubleValue();
+        List<OptionQuote> side = (type == OptionType.CALL ? chain.calls() : chain.puts()).stream()
+                .filter(q -> q.strike() != null && q.bid() != null && q.ask() != null
+                        && q.bid().signum() > 0 && q.ask().signum() > 0 && q.ask().compareTo(q.bid()) >= 0)
+                .sorted(Comparator.comparing(OptionQuote::strike))
+                .toList();
+        if (side.size() < 2) return null;
+        double minWidth = s * 0.02, maxWidth = s * 0.12;   // spread width band: 2%–12% of spot
+        OptionQuote bestShort = null, bestLong = null;
+        double bestScore = -1;
+        for (OptionQuote shortLeg : side) {
+            double ks = shortLeg.strike().doubleValue();
+            boolean shortOtm = type == OptionType.CALL ? ks >= s * 0.98 : ks <= s * 1.02;
+            if (!shortOtm) continue;
+            for (OptionQuote longLeg : side) {
+                double kl = longLeg.strike().doubleValue();
+                boolean farther = type == OptionType.CALL ? kl > ks : kl < ks;
+                if (!farther) continue;
+                double width = Math.abs(kl - ks);
+                if (width < minWidth || width > maxWidth) continue;
+                // Executable credit: sell the short at its BID, buy the wing at its ASK.
+                double credit = shortLeg.bid().doubleValue() - longLeg.ask().doubleValue();
+                double maxLoss = width - credit;
+                if (credit <= 0 || maxLoss <= 0) continue;
+                // A meaningful credit vs the width is what rejects far-OTM crumbs that slippage eats.
+                if (credit < 0.20 * width) continue;
+                double ror = credit / maxLoss; // executable return on risk
+                if (ror > bestScore) { bestScore = ror; bestShort = shortLeg; bestLong = longLeg; }
+            }
+        }
+        if (bestShort == null) return null;
+        return new Built(List.of(leg(LegAction.SELL, bestShort), leg(LegAction.BUY, bestLong)),
+                List.of(bestShort, bestLong),
+                "SELL " + strikeLabel(bestShort) + " / BUY " + strikeLabel(bestLong) + " " + chain.expiration());
     }
 
     private static Built vertical(OptionChain chain, OptionType type, LegAction anchorAction, double targetDelta, int hedgeSteps) {
@@ -161,10 +209,10 @@ public final class StrategyBuilder {
                 "SELL " + strikeLabel(nearQ) + " " + near.expiration() + " / BUY " + strikeLabel(farQ) + " " + far.expiration());
     }
 
-    private static Built diagonal(OptionChain near, OptionChain far, OptionType type) {
+    private static Built diagonal(OptionChain near, OptionChain far, OptionType type, BigDecimal spot) {
         if (far == null) return null;
         OptionQuote longQ = byDelta(far, type, 0.60);
-        OptionQuote shortQ = byDelta(near, type, 0.30);
+        OptionQuote shortQ = shortStrike(near, type, spot, 0.30); // cap the short near-leg (far-OTM at high IV)
         if (longQ == null || shortQ == null || longQ.strike().compareTo(shortQ.strike()) == 0) return null;
         return new Built(List.of(leg(LegAction.BUY, longQ), leg(LegAction.SELL, shortQ)), List.of(longQ, shortQ),
                 "BUY " + strikeLabel(longQ) + " " + far.expiration() + " / SELL " + strikeLabel(shortQ) + " " + near.expiration());
@@ -173,8 +221,8 @@ public final class StrategyBuilder {
     private static Built coveredCall(OptionChain chain, BigDecimal spot, BuildHints hints) {
         OptionQuote call = hints.targetPrice() != null
                 ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : byDelta(chain, OptionType.CALL, 0.30);
-        if (call == null) call = byDelta(chain, OptionType.CALL, 0.30);
+                : shortStrike(chain, OptionType.CALL, spot, 0.30);
+        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
         if (call == null) return null;
         if (hints.sharesHeld()) {
             return new Built(List.of(leg(LegAction.SELL, call)), listOf(call),
@@ -191,9 +239,9 @@ public final class StrategyBuilder {
     private static Built coveredStrangle(OptionChain chain, BigDecimal spot, BuildHints hints) {
         OptionQuote call = hints.targetPrice() != null
                 ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : byDelta(chain, OptionType.CALL, 0.30);
-        if (call == null) call = byDelta(chain, OptionType.CALL, 0.30);
-        OptionQuote put = byDelta(chain, OptionType.PUT, 0.25);
+                : shortStrike(chain, OptionType.CALL, spot, 0.30);
+        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
+        OptionQuote put = shortStrike(chain, OptionType.PUT, spot, 0.25);
         if (call == null || put == null) return null;
         if (put.strike().compareTo(call.strike()) >= 0) return null; // degenerate — the strikes must bracket the price
         String label = "SELL " + strikeLabel(call) + " / SELL " + strikeLabel(put) + " " + chain.expiration();
@@ -216,8 +264,8 @@ public final class StrategyBuilder {
     private static Built coveredCallPutSpread(OptionChain chain, BigDecimal spot, BuildHints hints) {
         OptionQuote call = hints.targetPrice() != null
                 ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : byDelta(chain, OptionType.CALL, 0.30);
-        if (call == null) call = byDelta(chain, OptionType.CALL, 0.30);
+                : shortStrike(chain, OptionType.CALL, spot, 0.30);
+        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
         OptionQuote floorPut = byDelta(chain, OptionType.PUT, 0.30);
         OptionQuote fundingPut = floorPut == null ? null : stepAway(chain, OptionType.PUT, floorPut.strike(), -2);
         if (call == null || floorPut == null || fundingPut == null) return null;
@@ -247,8 +295,8 @@ public final class StrategyBuilder {
     private static Built coveredCallCallOverlay(OptionChain chain, BigDecimal spot, BuildHints hints) {
         OptionQuote shortCall = hints.targetPrice() != null
                 ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : byDelta(chain, OptionType.CALL, 0.35);
-        if (shortCall == null) shortCall = byDelta(chain, OptionType.CALL, 0.35);
+                : shortStrike(chain, OptionType.CALL, spot, 0.35);
+        if (shortCall == null) shortCall = shortStrike(chain, OptionType.CALL, spot, 0.35);
         OptionQuote overlay = shortCall == null ? null : stepAway(chain, OptionType.CALL, shortCall.strike(), +2);
         if (shortCall == null || overlay == null) return null;
         if (overlay.strike().compareTo(shortCall.strike()) <= 0) return null;
@@ -269,11 +317,11 @@ public final class StrategyBuilder {
         return new Built(legs, quotes, "BUY 100 shares / " + label);
     }
 
-    private static Built cashSecuredPut(OptionChain chain, BuildHints hints) {
+    private static Built cashSecuredPut(OptionChain chain, BigDecimal spot, BuildHints hints) {
         OptionQuote put = hints.targetPrice() != null
                 ? strikeAtOrBelow(chain, OptionType.PUT, hints.targetPrice())
-                : byDelta(chain, OptionType.PUT, 0.30);
-        if (put == null) put = byDelta(chain, OptionType.PUT, 0.30);
+                : shortStrike(chain, OptionType.PUT, spot, 0.30);
+        if (put == null) put = shortStrike(chain, OptionType.PUT, spot, 0.30);
         if (put == null) return null;
         return new Built(List.of(leg(LegAction.SELL, put)), listOf(put),
                 "SELL " + strikeLabel(put) + " " + chain.expiration());
@@ -297,11 +345,11 @@ public final class StrategyBuilder {
     }
 
     private static Built collar(OptionChain chain, BigDecimal spot, BuildHints hints) {
-        OptionQuote put = byDelta(chain, OptionType.PUT, 0.25);
+        OptionQuote put = byDelta(chain, OptionType.PUT, 0.25); // bought protection — its distance sets the floor
         OptionQuote call = hints.targetPrice() != null
                 ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : byDelta(chain, OptionType.CALL, 0.25);
-        if (call == null) call = byDelta(chain, OptionType.CALL, 0.25);
+                : shortStrike(chain, OptionType.CALL, spot, 0.25);
+        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.25);
         if (put == null || call == null) return null;
         if (put.strike().compareTo(call.strike()) >= 0) return null; // degenerate collar
         if (hints.sharesHeld()) {
@@ -362,6 +410,41 @@ public final class StrategyBuilder {
                 .filter(q -> q.hasMark() && q.delta() != null)
                 .min(Comparator.comparingDouble(q -> Math.abs(Math.abs(q.delta()) - targetAbsDelta)))
                 .orElse(null);
+    }
+
+    /** Default moneyness cap for a short premium leg: a fixed delta target degenerates far OTM at high IV. */
+    private static final double MAX_SHORT_OTM_FRACTION = 0.12;
+
+    /**
+     * EXECUTABLE-AWARE short strike (engine remediation). A fixed delta target degenerates at high IV:
+     * a 0.30-delta short call/put can land 15–20% OTM (the AMD 96%-IV covered-strangle case), where the
+     * premium collected is a thin crumb. Start from the delta target, but cap how far OTM the short leg
+     * may sit; when the delta strike is beyond the cap (or missing), snap to the EXECUTABLE strike (real
+     * bid) nearest the moneyness cap, where the premium is meaningful. At normal IV the delta strike is
+     * already inside the cap, so this is a no-op — it only reins in the high-IV far-OTM degeneration.
+     */
+    private static OptionQuote shortStrike(OptionChain chain, OptionType type, BigDecimal spot,
+                                           double targetDelta, double maxOtmFraction) {
+        OptionQuote byD = byDelta(chain, type, targetDelta);
+        if (spot == null || spot.signum() <= 0) return byD;
+        double s = spot.doubleValue();
+        if (byD != null && byD.strike() != null) {
+            double k = byD.strike().doubleValue();
+            double otm = type == OptionType.CALL ? (k - s) / s : (s - k) / s;
+            if (otm <= maxOtmFraction) return byD; // within the cap — honor the delta target
+        }
+        double cap = type == OptionType.CALL ? s * (1 + maxOtmFraction) : s * (1 - maxOtmFraction);
+        OptionQuote capped = (type == OptionType.CALL ? chain.calls() : chain.puts()).stream()
+                .filter(q -> q.hasMark() && q.strike() != null && q.bid() != null && q.bid().signum() > 0)
+                .filter(q -> type == OptionType.CALL // keep the short leg OTM
+                        ? q.strike().doubleValue() >= s : q.strike().doubleValue() <= s)
+                .min(Comparator.comparingDouble(q -> Math.abs(q.strike().doubleValue() - cap)))
+                .orElse(null);
+        return capped != null ? capped : byD;
+    }
+
+    private static OptionQuote shortStrike(OptionChain chain, OptionType type, BigDecimal spot, double targetDelta) {
+        return shortStrike(chain, type, spot, targetDelta, MAX_SHORT_OTM_FRACTION);
     }
 
     public static OptionQuote at(OptionChain chain, OptionType type, BigDecimal strike) {

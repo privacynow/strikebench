@@ -35,10 +35,14 @@ public record LegView(
         return new LegView(
                 leg.action().name(),
                 leg.isStock() ? "STOCK" : leg.type().name(),
-                leg.isStock() ? null : leg.strike().toPlainString(),
+                // Canonical decimal formatting (strip trailing zeros) so a candidate's legs round-trip
+                // byte-identically through the custom-builder store, which persists + re-emits via the
+                // same stripped form. Without this, "13.20" (engine) vs "13.2" (store) broke exact-leg
+                // equality whenever a strip-sensitive price surfaced at candidates[0].
+                leg.isStock() ? null : leg.strike().stripTrailingZeros().toPlainString(),
                 leg.isStock() ? null : leg.expiration().toString(),
                 leg.ratio(),
-                leg.entryPrice().toPlainString(),
+                leg.entryPrice().stripTrailingZeros().toPlainString(),
                 leg.multiplier(),
                 "OPEN");
     }

@@ -44,10 +44,14 @@ public enum StrategyFamily {
             INCOME, Set.of(INCOME, DIRECTIONAL)),
     CALENDAR_PUT("Put calendar spread", Set.of(Thesis.NEUTRAL), true, false, false, true, 3,
             INCOME, Set.of(INCOME, DIRECTIONAL)),
+    // Diagonals are wide, net-DEBIT DIRECTIONAL plays (a long deep-ITM anchor financed by a nearer
+    // short leg). They are NOT income: "earn income" means collecting premium / positive carry, and a
+    // diagonal pays a large debit up front. They stay in the catalog under the DIRECTIONAL flow (where
+    // fits(thesis) selects them) but never appear on the INCOME menu again.
     DIAGONAL_CALL("Call diagonal spread", Set.of(Thesis.BULLISH), true, false, false, true, 4,
-            INCOME, Set.of(INCOME, DIRECTIONAL)),
+            DIRECTIONAL, Set.of(DIRECTIONAL)),
     DIAGONAL_PUT("Put diagonal spread", Set.of(Thesis.BEARISH), true, false, false, true, 4,
-            INCOME, Set.of(INCOME, DIRECTIONAL)),
+            DIRECTIONAL, Set.of(DIRECTIONAL)),
     COVERED_CALL("Covered call", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, true, false, 1,
             INCOME, Set.of(INCOME, EXIT)),
     CASH_SECURED_PUT("Cash-secured put", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, false, false, 2,
