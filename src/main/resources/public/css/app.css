@@ -2729,8 +2729,8 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 @media (max-width: 760px) {
   .plan-bar-inner { padding: 5px 10px; }
   .plan-bar-label { display: none; }
-  .plan-header { grid-template-columns: minmax(0, 1fr); align-items: start; padding: 14px; }
-  .plan-header > .btn { justify-self: start; }
+  .plan-header { grid-template-columns: minmax(0, 1fr); align-items: start; padding: 10px 14px; }
+  .plan-header-actions { justify-content: flex-start; }
   .plan-rail { overflow: hidden; }
   .plan-rail ol { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .plan-rail li:nth-child(2n) { border-right: 0; }
@@ -3145,3 +3145,82 @@ html[data-motion="off"] .ghost-row { animation: none; }
   .flow { padding-left: 0; }
   .flow::before, .flow-band::before { display: none; }
 }
+
+/* ===== Vertical rescue: desktop reads ACROSS, not down ===== */
+/* In-band two-column workspaces: controls own a rail; results land beside them. */
+.band-cols { grid-template-columns: minmax(340px, 400px) minmax(0, 1fr); align-items: start; }
+.band-col-controls > * + * { margin-top: 12px; }
+#study-results:empty::before, #whatif-out:empty::before {
+  content: 'Results land here — set the controls and run.';
+  display: block; padding: 18px 16px; color: var(--muted, var(--text-dim));
+  border: 1px dashed var(--border); border-radius: 8px; font-size: .9em; }
+/* The study's four protocol controls pack two-across on desktop — each was designed for
+   ~450px; stacking them full-width was half a viewport of air. */
+@media (min-width: 900px) {
+  .study-protocol-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; align-items: start; }
+}
+
+/* Plan header: one dense strip, not a hero block. */
+.plan-header { padding: 10px 14px; }
+.plan-header h1 { margin: 0 0 4px; font-size: 19px; }
+.plan-header-receipt { margin-top: 4px; }
+
+/* The legal line is a footer sentence, not a card. */
+.disclaimer { padding-top: 8px; padding-bottom: 10px; font-size: .78em; line-height: 1.35;
+  border: 0; background: none; }
+.disclaimer p { margin: 2px 0; display: inline; }
+.disclaimer p + p::before { content: ' \00b7 '; }
+
+/* Analysis-source: a single quiet row above the tools. */
+.plan-analysis-source { padding: 8px 12px; }
+.plan-analysis-source .card-head { margin-bottom: 2px; }
+.plan-analysis-source-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.plan-analysis-source-detail { margin-top: 2px; }
+
+/* ===== Responsive alignment: a right-aligned cluster is only right-aligned while it
+   shares the row it was designed for. Once it wraps, it reflows LEFT as its own row. ===== */
+@media (max-width: 1099px) {
+  .topbar-controls { flex-basis: 100%; width: 100%; margin-left: 0;
+    justify-content: flex-start; gap: 6px 10px; }
+}
+@media (max-width: 1000px) {
+  .plan-header-actions { justify-content: flex-start; }
+  .builder-bar-end { margin-left: 0; }
+  .sim-session-actions, .ranked-idea-badges, .symbol-context-actions { justify-content: flex-start; }
+}
+@media (max-width: 640px) {
+  .plan-book-badges { justify-content: flex-start; }
+  .score-wrap { margin-left: 0; }
+  .home-plan-badges, .home-plan-actions { justify-content: flex-start; }
+  .plan-stage-carry-receipt, .leg-info, .home-plan-closed-tabs .btn-row { margin-left: 0; }
+}
+@media (max-width: 720px) {
+  .workflow-clear { margin-left: 0; }
+}
+
+/* The workspace is a working document, not an article: give it the desktop it's on —
+   authored for high-resolution screens, degrading gracefully. Reading routes keep prose width. */
+#app[data-route="plan"] { max-width: 2200px; }
+#whatif-card .band-cols { grid-template-columns: minmax(380px, 520px) minmax(0, 1fr); }
+/* Story cards two-across inside the scenario rail. */
+.band-col-controls #sc-shapes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* Wide desktops: the four study controls form ONE row; the ranked field splits hero | runners. */
+@media (min-width: 1500px) {
+  .study-protocol-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .plan-ranked-field { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(340px, 1fr);
+    gap: 14px; align-items: start; grid-auto-flow: row dense; }
+  .plan-ranked-field > .ranked-idea-hero { grid-column: 1; grid-row: 1 / span 6; }
+  .plan-ranked-field > * { grid-column: 2; }
+  .plan-ranked-field > .plan-proposal-show-all, .plan-ranked-field > .plan-rejected-teaching { grid-column: 1 / -1; }
+  .plan-decision-review-grid { grid-template-columns: minmax(0, 1.6fr) minmax(360px, 1fr); }
+}
+
+/* Instruments breathe but never balloon: the fan keeps chart proportions, facts go one-row wide. */
+.band-col-results .fan-chart, .band-col-results .fan-chart svg { max-width: 980px; }
+@media (min-width: 1500px) {
+  .band-col-results .scenario-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+}
+/* Context-change notices are one quiet line, not a banner. */
+.plan-stage-content .alert.alert-info { padding: 8px 12px; }
+.plan-stage-content .alert.alert-info p { margin: 0; display: inline; }

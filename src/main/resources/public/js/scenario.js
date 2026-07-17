@@ -185,8 +185,15 @@
       sync();
     } else {
       // Expert terminal — everything inline, math on demand.
-      var model = sel('sc-model', MODELS, f.model || shapeOf(f.shape).model, function (v) { f.model = v; onchange(); });
-      var shapeSel = sel('sc-shape', SHAPES.map(function (s) { return { v: s.key, label: s.label }; }), f.shape, function (v) { f.shape = v; onchange(); });
+      // Model and shape are decisions, not data pickers — purpose-built controls, no listbox.
+      var model = UI.segmented({ id: 'sc-model',
+        options: MODELS.map(function (i) { return { value: i.v, label: i.label }; }),
+        value: f.model || shapeOf(f.shape).model,
+        onChange: function (v) { f.model = v; onchange(); updateRelevance(); } });
+      var shapeSel = UI.chipSet({ id: 'sc-shape',
+        options: SHAPES.map(function (s) { return { value: s.key, label: s.label }; }),
+        value: f.shape,
+        onChange: function (v) { f.shape = v; onchange(); } });
       var horizon = num('sc-days', f.horizon, 1, 756, function (v) { f.horizon = v; onchange(); });
       var vol = num('sc-vol', f.vol != null ? f.vol : 30, 1, 500, function (v) { f.vol = v; onchange(); });
       var drift = num('sc-drift', f.drift != null ? f.drift : Math.round(shapeOf(f.shape).drift * 100), -200, 200, function (v) { f.drift = v; onchange(); });
@@ -203,18 +210,20 @@
       var hXi = num('sc-hxi', f.hXi != null ? f.hXi : 0.5, 0.01, 3, function (v) { f.hXi = v; onchange(); });
       var hRho = num('sc-hrho', f.hRho != null ? f.hRho : -0.6, -0.99, 0.99, function (v) { f.hRho = v; onchange(); });
       expertInputs = { model: model, seed: seed };
+      box.appendChild(fld('Model', model));
+      box.appendChild(fld('Shape guide', shapeSel));
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
-        fld('Model', model), fld('Shape guide', shapeSel), fld('Days', horizon), fld('Steps/day', spd),
+        fld('Horizon (trading days)', horizon), fld('Steps/day', spd),
         fld('Volatility σ (%/yr)', vol), fld('Drift μ (%/yr)', drift),
         fld('Jump frequency (/yr)', jumps), fld('Jump size (%)', jumpSize), fld('Tail ν', tailNu)));
       box.appendChild(el('div', { class: 'form-grid compact-filters' },
         fld('Heston κ', hKappa), fld('Heston ξ', hXi), fld('Heston ρ', hRho),
-        fld('IV start %', ivStart), fld('Event day', ivEvent, 'eventday'), fld('IV change %', ivShock, 'ivchange'),
+        fld('IV start %', ivStart), fld('Event on trading day #', ivEvent, 'eventday'), fld('IV change %', ivShock, 'ivchange'),
         fld('Seed', seed), fld('Paths', paths)));
       // Only the selected model's knobs are live — a control that silently does nothing teaches
       // the wrong lesson. Irrelevant fields disable with an honest tooltip.
       function updateRelevance() {
-        var m = model.value;
+        var m = model.value();
         var offNote = 'Not used by ' + (MODELS.find(function (x) { return x.v === m; }) || { label: m }).label;
         [[jumps, m === 'JUMP_DIFFUSION'], [jumpSize, m === 'JUMP_DIFFUSION'],
          [tailNu, m === 'STUDENT_T'],
@@ -224,7 +233,6 @@
           pair[0].title = pair[1] ? '' : offNote;
         });
       }
-      model.addEventListener('change', updateRelevance);
       updateRelevance();
       box.appendChild(UI.expandable('The math', function () {
         return el('div', { class: 'sc-math' },

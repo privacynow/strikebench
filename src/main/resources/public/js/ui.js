@@ -1572,6 +1572,7 @@
         var active = option.value === current;
         group.appendChild(el('button', { type: 'button', role: 'radio',
           class: 'choice-option' + (active ? ' active' : ''),
+          'data-value': String(option.value),
           'aria-checked': active ? 'true' : 'false', tabindex: active ? '0' : '-1',
           onclick: function () { select(option.value); },
           onkeydown: function (e) {

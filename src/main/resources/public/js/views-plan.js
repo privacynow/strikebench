@@ -889,23 +889,26 @@
   function planContextEditor(plan) {
     var c = plan.context || {};
     var canRewriteGoal = plan.assumptionsEditable === true;
-    var thesis = el('select', { id: 'plan-thesis' },
-      ['', 'bullish', 'bearish', 'neutral', 'volatile'].map(function (v) {
-        return el('option', { value: v, selected: (c.thesis || '') === v ? 'selected' : null }, v || 'Not set');
-      }));
+    var thesis = UI.chipSet({ id: 'plan-thesis',
+      options: [{ value: '', label: 'Not set' }].concat(THESIS_CHOICES.map(function (t) {
+        return { value: t.value, label: t.label };
+      })),
+      value: c.thesis || '' });
     var horizon = el('input', { id: 'plan-horizon-days', type: 'number', min: '1', max: '730', value: c.horizonDays || Product.Horizon.sessions('month') });
     var target = el('input', { id: 'plan-target-price', type: 'number', min: '0.01', step: '0.01',
       value: c.targetCents ? (c.targetCents / 100).toFixed(2) : '' });
-    var risk = el('select', { id: 'plan-risk-mode' }, ['conservative', 'balanced', 'aggressive'].map(function (v) {
-      return el('option', { value: v, selected: (c.riskMode || 'conservative') === v ? 'selected' : null },
-        v === 'conservative' ? 'Cautious' : v === 'balanced' ? 'Standard' : 'High');
-    }));
+    var risk = UI.segmented({ id: 'plan-risk-mode',
+      options: [
+        { value: 'conservative', label: 'Cautious' },
+        { value: 'balanced', label: 'Standard' },
+        { value: 'aggressive', label: 'High' }],
+      value: c.riskMode || 'conservative' });
     function editorValues(nextIntent) {
       return {
         originPlanId: plan.id, symbol: plan.symbol, intent: nextIntent,
-        thesis: thesis.value || null, horizonDays: Number(horizon.value),
+        thesis: thesis.value() || null, horizonDays: Number(horizon.value),
         targetCents: target.value ? Math.round(Number(target.value) * 100) : null,
-        riskMode: risk.value, holdingsShares: c.holdingsShares, costBasisCents: c.costBasisCents,
+        riskMode: risk.value(), holdingsShares: c.holdingsShares, costBasisCents: c.costBasisCents,
         priceAssumptionCents: c.priceAssumptionCents
       };
     }
@@ -923,12 +926,12 @@
           return;
         }
         var clears = [];
-        if (!thesis.value) clears.push('thesis');
+        if (!thesis.value()) clears.push('thesis');
         if (!target.value) clears.push('targetCents');
         var updated = await PlanStore.updateContext(plan, {
-          thesis: thesis.value || null, horizonDays: Number(horizon.value),
+          thesis: thesis.value() || null, horizonDays: Number(horizon.value),
           targetCents: target.value ? Math.round(Number(target.value) * 100) : null,
-          riskMode: risk.value, clear: clears
+          riskMode: risk.value(), clear: clears
         });
         App.context.update({ symbol: updated.symbol, goal: updated.intent,
           thesis: updated.context.thesis, horizon: updated.context.horizonDays + 'd' });
@@ -981,7 +984,7 @@
           : '. Its decision is frozen; a linked revision preserves that history.'),
       el('div', { class: 'form-grid plan-context-fields' },
         planField('View', thesis), planField('Horizon (trading sessions)', horizon),
-        planField('Target price', target), planField('Risk budget', risk)),
+        planField('Target price $', target), planField('Risk budget', risk)),
       el('div', { class: 'btn-row' }, save, changeGoal, changeStructure), goalChoices);
   }
 
@@ -2481,9 +2484,11 @@
       var fromDefault = new Date(today.getTime() - 365 * 86400000).toISOString().slice(0, 10);
       var from = el('input', { id: 'plan-replay-from', type: 'date', value: form.from || fromDefault });
       var to = el('input', { id: 'plan-replay-to', type: 'date', value: form.to || toDefault });
-      var engine = el('select', { id: 'plan-replay-engine' }, el('option', { value: 'single' }, 'One trade at a time'),
-        el('option', { value: 'portfolio' }, 'A book of overlapping trades'));
-      engine.value = form.engine || 'single';
+      var engine = UI.segmented({ id: 'plan-replay-engine',
+        options: [
+          { value: 'single', label: 'One trade at a time' },
+          { value: 'portfolio', label: 'A book of overlapping trades' }],
+        value: form.engine || 'single' });
       var planSessions = planRef.plan.context.horizonDays || Product.Horizon.sessions('month');
       var defaultDte = Product.Horizon.expiryDays(Product.Horizon.keyForSessions(planSessions));
       var dte = el('input', { id: 'plan-replay-dte', type: 'number', min: '1', max: '365', value: form.targetDte || defaultDte });
@@ -2492,7 +2497,7 @@
       var cash = el('input', { id: 'plan-replay-cash', type: 'number', min: '1', step: '1000', value: form.startingCash || 100000 });
       var slip = el('input', { id: 'plan-replay-slippage', type: 'number', min: '0', max: '10', step: '0.1', value: form.slippagePct == null ? 0.5 : form.slippagePct });
       function rememberForm() {
-        form.from=from.value; form.to=to.value; form.engine=engine.value; form.targetDte=dte.value;
+        form.from=from.value; form.to=to.value; form.engine=engine.value(); form.targetDte=dte.value;
         form.qty=qty.value; form.entryEveryDays=every.value; form.startingCash=cash.value; form.slippagePct=slip.value;
       }
       [from,to,engine,dte,qty,every,cash,slip].forEach(function (input) { input.addEventListener('change', function () {
@@ -2564,7 +2569,7 @@
           this.disabled=true; this.setAttribute('aria-busy','true'); results.innerHTML=''; results.appendChild(UI.spinner('Replaying without look-ahead…'));
           try {
             var live=await PlanStore.get(planRef.plan.id,true); planRef.plan=live;
-            var out=await PlanStore.runBacktest(live,{engine:engine.value,from:from.value,to:to.value,
+            var out=await PlanStore.runBacktest(live,{engine:engine.value(),from:from.value,to:to.value,
               targetDte:positiveInteger(dte.value,'Target DTE',365),entryEveryDays:positiveInteger(every.value,'Entry spacing',60),
               qty:positiveInteger(qty.value,'Quantity',100),slippagePct:Math.max(0,Number(slip.value))/100,
               startingCashCents:Math.round(Number(cash.value)*100),maxConcurrent:4,shortDelta:0.30,widthPct:0.05,
