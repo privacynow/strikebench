@@ -1092,19 +1092,14 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     'the ranked answer and primary action arrive together inside one desktop viewport: ' + JSON.stringify(heroArrival));
   assert.match(await page.textContent('#plan-budget-receipt'), /\$[\d,.]+ = 1% of \$[\d,.]+ current buying power/,
     'the per-idea budget explains its live dollar basis on the face of the screen');
-  const initialRankedCount = await page.locator('#plan-ranked-field .ranked-idea:visible').count();
   const servedRankedCount = Number((await page.textContent('.plan-strategy-summary .badge')).match(/\d+/)?.[0] || 0);
-  assert.ok(initialRankedCount <= 3 && initialRankedCount <= servedRankedCount,
-    'Beginner starts with one full decision hero and no more than two compact alternatives');
-  if (servedRankedCount > initialRankedCount) {
-    assert.ok(await page.locator('.ranked-show-all').isVisible(), 'the complete ranking remains one explicit action away');
-    await page.click('.ranked-show-all');
-    assert.equal(await page.locator('#plan-ranked-field .ranked-idea:visible').count(), servedRankedCount,
-      'See all restores every ranked structure as compact comparisons without a card wall');
-    await page.click('.ranked-show-all');
-  }
-  assert.ok(await page.locator('#plan-ranked-field .ranked-runner-list .ranked-idea:visible').count() <= 2,
-    'the default comparison keeps attention on the hero and two closest alternatives');
+  // Desktop master-detail: the selected structure fills the DETAIL column while the ranked MENU lists
+  // every OTHER structure at once beside it — reached without scrolling, no "see all" card wall.
+  assert.equal(await page.locator('.ranked-layout .ranked-detail .ranked-idea-hero').count(), 1,
+    'the selected structure fills the detail column');
+  const menuVisible = await page.locator('.ranked-menu .ranked-runner-list .ranked-idea:visible').count();
+  assert.equal(menuVisible, servedRankedCount - 1,
+    'the ranked menu shows every other structure at once (' + menuVisible + ' of ' + (servedRankedCount - 1) + ')');
   const responsiveLayouts = [];
   for (const viewport of [{ width: 2560, height: 1440 }, { width: 2048, height: 900 },
     { width: 1920, height: 900 }, { width: 1440, height: 900 }, { width: 1280, height: 800 },
@@ -1116,11 +1111,13 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
       const app = box('#app'), controls = box('.plan-strategy-controls');
       const controlsHead = box('.plan-strategy-controls > .card-head');
       const filters = box('#plan-strategy-filters');
-      const field = box('#plan-ranked-field'), hero = box('#plan-ranked-field > .ranked-idea-hero');
+      const field = box('#plan-ranked-field'), hero = box('#plan-ranked-field .ranked-idea-hero');
+      const menu = box('.ranked-menu');
       return { viewport: innerWidth, appWidth: app?.width || 0,
         documentWidth: document.documentElement.scrollWidth,
         controlsWidth: controls?.width || 0, controlsDisplay: controls ? getComputedStyle(document.querySelector('.plan-strategy-controls')).display : '',
         controlsHeadTop: controlsHead?.top || 0, filtersTop: filters?.top || 0,
+        menuWidth: menu?.width || 0,
         fieldWidth: field?.width || 0, heroWidth: hero?.width || 0, heroHeight: hero?.height || 0,
         tools: document.querySelectorAll('.plan-tool').length,
         limits: document.querySelectorAll('#plan-strategy-filters input').length };
@@ -1135,8 +1132,11 @@ test('Plan Strategy owns the ranked field, exact Builder, and chain without rout
     assert.ok(layout.heroWidth <= layout.fieldWidth + 2 && layout.controlsWidth <= layout.appWidth + 2,
       'controls and ranked answer stay inside their owners at ' + viewport.width + 'px');
     if (viewport.width >= 1500) {
-      assert.ok(layout.heroWidth >= layout.fieldWidth * .96,
-        'wide Strategy does not reserve an empty runner track beside the hero: ' + JSON.stringify(layout));
+      // Master-detail: the ranked menu rail sits beside a majority-width detail — the width is spent
+      // reading ACROSS, not on an empty runner track (the prior problem) nor one tall single hero.
+      assert.ok(layout.menuWidth > 0 && layout.heroWidth >= layout.fieldWidth * .55
+        && layout.heroWidth <= layout.fieldWidth * .8,
+        'wide Strategy reads across: ranked menu beside a majority-width detail: ' + JSON.stringify(layout));
       assert.ok(Math.abs(layout.controlsHeadTop - layout.filtersTop) < 16,
         'question, limits, and consequence begin together on wide Strategy: ' + JSON.stringify(layout));
     }

@@ -2540,6 +2540,27 @@ body.in-demo-world #world-band { background: color-mix(in srgb, var(--risk-warn)
 /* A1: a no-viable-trade heading must not read as a positive recommendation. */
 .plan-proposed-heading.plan-no-viable-trade .eyebrow { color: var(--risk-caution-text, #d89a3a); }
 .plan-other-ranked-title { padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* ---- Desktop master-detail: the plan desk reads ACROSS and is reached WITHOUT scrolling ---------
+   The plan route already owns the width; the ranked field now spends it as two columns — the whole
+   ranked MENU as a sticky rail on the left, the selected structure's full DETAIL on the right — so
+   every choice and its consequences are visible at once instead of a tall single column. */
+.ranked-layout { display: grid; grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.42fr);
+  gap: 22px; align-items: start; }
+.ranked-layout > .ranked-menu { min-width: 0; position: sticky; top: 12px;
+  max-height: calc(100vh - 24px); overflow: auto; padding-right: 4px; }
+.ranked-layout > .ranked-detail { min-width: 0; }
+.ranked-menu .ranked-runner-list { display: flex; flex-direction: column; gap: 8px; }
+.ranked-menu .plan-other-ranked-title { border-top: 0; padding-top: 0; }
+/* Solo (no alternatives) and expert (full-width sortable table) both collapse to one column. */
+.ranked-layout-solo, .ranked-layout-expert { grid-template-columns: minmax(0, 1fr); }
+.ranked-layout-expert > .ranked-menu, .ranked-layout-solo > .ranked-menu { position: static; order: 1; max-height: none; }
+.ranked-layout-expert > .ranked-detail, .ranked-layout-solo > .ranked-detail { order: 0; }
+@media (max-width: 1099px) {
+  .ranked-layout { grid-template-columns: minmax(0, 1fr); }
+  .ranked-layout > .ranked-menu { position: static; order: 1; max-height: none; overflow: visible; }
+  .ranked-layout > .ranked-detail { order: 0; }
+}
 .plan-intent-ladder .ladder-sentences { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .plan-intent-ladder .ladder-row { grid-template-columns: minmax(0, 1fr); align-content: start; align-items: center; height: 100%; }
 .plan-intent-ladder .ladder-row-badges, .plan-intent-ladder .ladder-row > .xp { grid-column: 1 / -1; }
