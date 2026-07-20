@@ -1,0 +1,366 @@
+/* StrikeBench — shared design system. One source of truth for tokens, resets, and base
+   primitives. Every surface links this; change here and it applies everywhere. */
+:root{
+  --ground:#080B11; --panel:#10151E; --panel-2:#0C111A; --setup:#0A0F17; --nav:#070A0F;
+  --line:#1F2836; --line-soft:#161D28;
+  --text:#EDF1F8; --dim:#8C97A9; --faint:#5B6577;
+  --accent:#39C7D4; --accent-2:#1c5c63; --accent-wash:rgba(57,199,212,.10);
+  --profit:#41C892; --loss:#F35D64; --caution:#E7AC44; --violet:#9B8CFF;
+  --profit-wash:rgba(65,200,146,.15); --loss-wash:rgba(243,93,100,.15); --caution-wash:rgba(231,172,68,.12); --violet-wash:rgba(155,140,255,.16);
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --fs:1;
+  --f-2xs:calc(9px*var(--fs)); --f-xs:calc(9.5px*var(--fs)); --f-sm:calc(11px*var(--fs)); --f-base:calc(12.5px*var(--fs));
+  --f-md:calc(13.5px*var(--fs)); --f-lg:calc(15px*var(--fs)); --f-xl:calc(16.5px*var(--fs));
+  --f-num:calc(12.5px*var(--fs));
+  /* ---- §0 consolidation tokens (added) ---- */
+  /* surfaces */
+  --panel-detail:linear-gradient(180deg,#0E141D,#0A0F17);  /* 10 hardcoded copies: .detail/.idea-detail/.analysis/.right/.ivcard/.simcard/.dock/.drawer/.b-right */
+  --grad-top:linear-gradient(#0C121B,#0A0F17);              /* .top bar */
+  --raise:linear-gradient(180deg,var(--panel),var(--panel-2)); /* the "raised card" fill */
+  --raise-sheen:inset 0 1px 0 rgba(255,255,255,.02);
+  /* interaction */
+  --row-hover:#101823;         /* kills the #101821 vs #101823 split across ~10 row types */
+  --sel-wash:linear-gradient(90deg,var(--accent-wash),transparent 70%);
+  --sel-bar:inset 2px 0 0 var(--accent);
+  /* floating surfaces */
+  --pop-surface:#0e141d;       /* popover / toast body */
+  --tip-surface:#161d29;       /* tooltip body */
+  --pop-shadow:0 14px 34px #000b;
+  --tip-shadow:0 6px 18px #0008;
+  /* focus (single app-wide rule) */
+  --focus-ring:0 0 0 3px var(--accent-wash);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--ground);color:var(--text);font-family:var(--sans);font-size:var(--f-base);line-height:1.42;-webkit-font-smoothing:antialiased;overflow:hidden}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.2px}
+.pos{color:var(--profit)} .neg{color:var(--loss)} .warn{color:var(--caution)} .dim{color:var(--dim)}
+.lbl{font-size:var(--f-xs);letter-spacing:.11em;text-transform:uppercase;color:var(--dim);font-weight:600}
+button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;border:0;appearance:none;-webkit-appearance:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:3px}
+::-webkit-scrollbar{width:9px;height:9px} ::-webkit-scrollbar-thumb{background:#242e3d;border-radius:5px;border:2px solid var(--ground)}
+
+/* buttons + segmented control — one canonical definition (was drifting per file) */
+.btn{border:1px solid var(--line);background:#131a24;color:var(--text);padding:9px 15px;border-radius:6px;font-weight:600;font-size:var(--f-base)}
+.btn:hover{border-color:#3a4a60}
+.btn.pri{background:linear-gradient(180deg,var(--accent),#1fa1ae);color:#052227;border-color:transparent;box-shadow:0 6px 18px -8px rgba(57,199,212,.55)}
+.btn.pri:hover{filter:brightness(1.06)}
+.seg{display:flex;gap:3px}
+.seg button{position:relative;border:1px solid var(--line);background:#0e141d;color:var(--dim);border-radius:5px;padding:5px 11px;font-size:var(--f-sm);font-weight:600}
+.seg button.on{border-color:var(--accent-2);background:#0f1c22;color:var(--text)}
+/* seg tooltip reconciled (#39): appearance now inherits from base .tip / .tip.sm;
+   only the seg-anchored positioning + hover reveal stay scoped here.
+   (seg tooltip markup should carry class="tip sm" to pick up the small variant.) */
+.seg button .tip{left:50%;top:calc(100% + 6px);transform:translateX(-50%)}
+.seg button:hover .tip{opacity:1}
+
+/* =====================================================================
+   CANONICAL COMPONENT LIBRARY  (numbers map to _plan.md #1–#46)
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   SHELL (#1–#10)
+   --------------------------------------------------------------------- */
+
+/* #1 .top — top-bar frame */
+.top{display:flex;align-items:stretch;height:44px;background:var(--grad-top);border-bottom:1px solid var(--line)}
+.top>div{display:flex;align-items:center}
+
+/* #2 .brand — wordmark */
+.brand{display:flex;align-items:center;gap:8px;padding:0 13px;border-right:1px solid var(--line-soft)}
+.brand .mk{width:20px;height:20px;border-radius:5px;background:conic-gradient(from 210deg,var(--accent),#237e86 55%,#123a3f)}
+.brand b{font-weight:700;font-size:var(--f-md)}
+
+/* #3 .rail + .nav — nav rail (hoisted verbatim from home.html; .nav .tip flyout POSITIONING
+   stays per-file per §6, only shared tooltip appearance lives in base .tip #39) */
+.rail{background:var(--nav);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:3px}
+.nav{position:relative;width:40px;height:40px;border:0;background:0;border-radius:8px;color:var(--dim);display:flex;align-items:center;justify-content:center}
+.nav svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7}
+.nav:hover{background:#101823;color:var(--text)}
+.nav.on{background:var(--accent-wash);color:var(--accent)}
+.nav.on::before{content:"";position:absolute;left:-8px;top:9px;bottom:9px;width:3px;border-radius:2px;background:var(--accent)}
+.rail .gap{flex:1}
+.rail a.nav{text-decoration:none;color:var(--dim)}
+.rail a.nav.on{color:var(--accent)}
+@media (max-width:980px){
+  .rail{flex-direction:row;height:48px;width:auto;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto;padding:6px 8px;gap:4px}
+  .rail .gap{display:none} .nav{flex:none}
+}
+
+/* #4 .fields — editable-field strip container */
+.fields{display:flex;flex:1;overflow:hidden}
+
+/* #5 .fld — editable field (button-reset folded in so it serves button + div) */
+.fld{display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 13px;cursor:pointer;position:relative;background:0;border:0;border-right:1px solid var(--line-soft);text-align:left}
+.fld .k{font-family:var(--sans);font-size:var(--f-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);padding:0;background:0}   /* fully self-styled: neutralizes both the tile-cell .k (padding/bg) and the span.k (mono) bleeds */
+.fld .v{display:flex;align-items:center;gap:5px;font-weight:600;font-size:var(--f-base)}
+.fld .v .car{color:var(--dim);font-size:var(--f-2xs)}
+
+/* #6 .tkr — ticker block */
+.tkr{display:flex;align-items:center;gap:9px;padding:0 13px;border-right:1px solid var(--line-soft)}
+.tkr .spark{width:52px;height:20px}
+
+/* #7 .acct — account block */
+.acct{display:flex;align-items:center;gap:14px;padding:0 13px;border-left:1px solid var(--line-soft)}
+.acct .m{text-align:right}
+.acct .m .v{font-family:var(--mono);font-weight:600;font-size:var(--f-base)}
+
+/* #8 .scale — density control (shared .scale button/:hover transcribed from home.html) */
+.scale{display:flex;align-items:center;border-left:1px solid var(--line-soft);padding-right:4px}
+.scale button{border:0;background:0;color:var(--dim);width:32px;height:100%;font-size:var(--f-lg);font-weight:600}
+.scale button:hover{background:#0f1620;color:var(--accent)}
+.scale .a{font-size:var(--f-xs);color:var(--faint)}
+
+/* #9 .mtog — mobile toggle hook */
+.mtog{display:none}
+
+/* #10 .nscope — borderless scope toggle */
+.nscope{display:flex;gap:3px;margin-left:auto}
+.nscope button{border:1px solid transparent;background:0;color:var(--faint);padding:2px 7px;font-size:var(--f-2xs);font-weight:700;border-radius:4px}
+.nscope button.on{background:var(--accent-wash);color:var(--accent);border-color:var(--accent-2)}
+
+/* ---------------------------------------------------------------------
+   CONTAINERS (#11–#19)
+   --------------------------------------------------------------------- */
+
+/* #11 .pane */
+.pane{min-height:0;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+
+/* #12 .ph — pane header (distinct from .ch2 — false-twin) */
+.ph{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);flex:none}
+.ph h2{margin:0;font-size:var(--f-md);font-weight:700;letter-spacing:.01em}
+.ph .r{margin-left:auto;color:var(--dim);font-size:var(--f-sm)}
+
+/* #13 .ch2 — inner card/band header (distinct from .ph and .mh) */
+.ch2{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--line);flex:none}
+.ch2 .lbl{color:var(--dim)}
+.ch2 .scope{margin-left:auto;color:var(--faint);font-size:var(--f-2xs);letter-spacing:.02em;text-align:right}
+.ch2 .scope b{color:var(--dim)}
+
+/* #14 .mh — map/chart header (no border, floats over SVG) */
+.mh{display:flex;align-items:center;gap:8px;padding:7px 13px;flex:none}
+.mh .lbl{color:var(--dim)}
+.mh .leg{margin-left:auto}
+
+/* #15 .sec — labeled section band (.sec .hint retired → use bare .hint #41) */
+.sec{padding:11px 13px;border-bottom:1px solid var(--line-soft)}
+.sec>.lbl{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+.sec.tight>.lbl{margin-bottom:6px}   /* optional: preserve compose .bsec tighter inner gap */
+
+/* #16 .pane-setup / .pane-center — side-pane wrappers (added as helper classes) */
+.pane-setup{background:var(--setup);border-right:1px solid var(--line)}
+.pane-center{background:var(--panel-2);border-left:1px solid var(--line)}
+
+/* #17 .box — card with hairline header (base flat; lift via .raised) */
+.box{border:1px solid var(--line);border-radius:7px;background:var(--panel);overflow:hidden}
+.box>.bh{display:flex;align-items:center;gap:7px;padding:7px 11px;border-bottom:1px solid var(--line-soft)}
+.box>.bh .r{margin-left:auto}
+.box.raised{background:var(--raise);box-shadow:var(--raise-sheen)}
+
+/* #18 .dcols — detail column grid */
+.dcols{flex:1;min-height:0;display:grid;overflow:auto}
+.dc{padding:11px;display:flex;flex-direction:column;gap:10px}
+.dc-pay{border-right:1px solid var(--line-soft)}
+
+/* #19 .dhead — detail-column header wrapper (+.compact for single-row) */
+.dhead{padding:9px 13px;border-bottom:1px solid var(--line-soft);display:flex;flex-direction:column;gap:9px;flex:none}
+.dhead.compact{gap:0}
+
+/* ---------------------------------------------------------------------
+   CONTROLS (#20–#23)
+   --------------------------------------------------------------------- */
+
+/* #20 .lvl .lseg — Beginner/Expert level toggle (canonical weight 700, accent-wash .on) */
+.lvl{display:flex;align-items:center;gap:0;border-left:1px solid var(--line-soft);padding:0 8px}
+.lvl .lseg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.lvl .lseg button{border:0;background:#0e141d;color:var(--dim);padding:5px 10px;font-size:var(--f-sm);font-weight:700;border-right:1px solid var(--line-soft)}
+.lvl .lseg button:last-child{border-right:0}
+.lvl .lseg button.on{background:var(--accent-wash);color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent)}
+
+/* #21 .dial — joined equal-width 3-way selector (unscoped) */
+.dial{display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.dial button{padding:8px 0;background:var(--panel-2);font-weight:600;border-right:1px solid var(--line)}
+.dial button:last-child{border-right:0}
+.dial button.on{background:var(--accent-wash);color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent)}
+
+/* #22 .slider — range slider (hoisted verbatim from plan-desk .setup .slider, de-scoped;
+   ::-moz-range-thumb added to match ::-webkit-slider-thumb) */
+.slider{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:2px;background:var(--line);margin:2px 0}
+.slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--ground);cursor:pointer}
+.slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--ground);cursor:pointer}
+
+/* #23 .stepper — numeric +/- stepper (hoisted verbatim from data .seedbox, renamed) */
+.stepper{display:flex;align-items:center;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#0d131c}
+.stepper .lb{padding:0 8px;font-size:var(--f-2xs);letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border-right:1px solid var(--line-soft);align-self:stretch;display:flex;align-items:center}
+.stepper input{width:60px;background:0;border:0;color:var(--text);font-family:var(--mono);font-size:var(--f-sm);text-align:center;padding:5px 2px}
+.stepper input:focus{outline:0}
+.stepper button{border:0;background:0;color:var(--accent);width:24px;height:28px;font-size:var(--f-md)}
+.stepper button:hover{background:#122029}
+
+/* ---------------------------------------------------------------------
+   CHIPS / BADGES (#24–#28)
+   --------------------------------------------------------------------- */
+
+/* #24 .chip — selectable filter/scope chip (base radius 20; modifiers override radius) */
+.chip{border:1px solid var(--line);background:#0d131c;color:var(--dim);border-radius:6px;padding:4px 10px;font-size:var(--f-sm);font-weight:600;cursor:pointer}
+.chip.on{border-color:var(--accent-2);background:var(--accent-wash);color:var(--accent)}
+.chip.mono{font-family:var(--mono);border-radius:5px}   /* data .symchip ticker chips */
+.chip.rm{padding:2px 4px 2px 8px}                        /* plan-desk .cmpchip removable token */
+
+/* #25 .chip.regime — market-regime marker */
+.chip.regime{font-size:var(--f-xs);font-weight:600;padding:3px 8px;border-radius:3px;border:1px solid var(--accent-2);color:var(--accent);background:var(--accent-wash);cursor:default}
+
+/* #26 .badge — status/context pill (base = accent outline; .ok/.warn/.bad = filled) */
+.badge{font-size:var(--f-2xs);letter-spacing:.06em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent-2);padding:2px 8px;border-radius:5px;white-space:nowrap}
+.badge.ok  {color:var(--profit); background:var(--profit-wash);  border-color:var(--profit)}
+.badge.warn{color:var(--caution);background:var(--caution-wash); border-color:var(--caution)}
+.badge.bad {color:var(--loss);   background:var(--loss-wash);    border-color:var(--loss)}
+.badge.num {font-family:var(--mono)}
+
+/* #27 .atag — alert severity micro-tag (bg set inline via JS TAGBG[]) */
+.atag{font-size:var(--f-2xs);letter-spacing:.05em;text-transform:uppercase;font-weight:700;padding:1.5px 5px;border-radius:3px}
+
+/* #28 .eyebrow — accent micro-label (renamed from .tag to kill collision) */
+.eyebrow{font-size:var(--f-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:700}
+
+/* ---------------------------------------------------------------------
+   TABLES / ROWS (#29–#33)
+   --------------------------------------------------------------------- */
+
+/* #29 table.mx — dense sortable table (core from plan-desk td 6px 8px / th 7px 8px;
+   modifiers tr.dis/.grp/td.attn + wide header tooltip from portfolio; stray 2nd
+   position:sticky removed; hover→--row-hover, selection→--sel-wash/--sel-bar) */
+table.mx{width:100%;border-collapse:collapse;font-size:var(--f-base)}
+table.mx thead th{position:sticky;top:0;z-index:2;background:#0a0f16;text-align:right;padding:7px 8px;font-size:var(--f-2xs);letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:700;border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap}
+table.mx thead th.l{text-align:left}
+table.mx thead th:hover{color:var(--dim)}
+table.mx thead th.srt{color:var(--accent)}
+table.mx tbody tr{border-bottom:1px solid var(--line-soft);cursor:pointer}
+table.mx tbody tr:hover, table.mx tbody tr.hot{background:var(--row-hover)}
+table.mx tbody tr.sel{background:var(--sel-wash);box-shadow:var(--sel-bar)}
+table.mx tbody tr.dis{opacity:.34}
+table.mx tbody tr.grp td{background:#0a0f16;color:var(--faint);font-size:var(--f-2xs);letter-spacing:.06em;text-transform:uppercase;font-weight:700;padding:5px 8px;cursor:default}
+table.mx td{padding:6px 8px;text-align:right;white-space:nowrap}
+table.mx td.l{text-align:left}
+table.mx td.attn{position:relative}
+/* wide header-cell tooltip: appearance from base .tip + .tip.wide (#39); anchor + th-context
+   typography reset stay with the table (folds portfolio .thtip → .tip.wide) */
+table.mx thead th .thi{position:relative}
+table.mx thead th .tip.wide{left:0;top:calc(100% + 5px);font-weight:500;letter-spacing:0;text-transform:none}
+table.mx thead th:hover .tip.wide{opacity:1}
+
+/* #30 .snm / .slg — ticker + sub-label cell helpers (slg keeps 10px to preserve pixels) */
+.snm{font-weight:600}
+.slg{color:var(--faint);font-family:var(--mono);font-size:var(--f-xs)}
+
+/* #31 .is-sel — shared selected-row grammar (sourced from same tokens as table tr.sel) */
+.is-sel{background:var(--sel-wash);box-shadow:var(--sel-bar)}
+
+/* #32 .nitem — feed/news/alert row (canonical from home; dot settled at 6px) */
+.nitem{display:grid;grid-template-columns:auto 1fr;gap:9px;padding:8px 12px;border-bottom:1px solid var(--line-soft)}
+.nitem:hover{background:var(--row-hover)}
+.nitem.wide{grid-template-columns:auto 1fr auto}   /* data 3-col */
+.sdot{width:6px;height:6px;border-radius:50%}
+/* feed-row content sub-labels (structure transcribed from home; content-category colors stay file-local) */
+.nitem .scp{display:inline-block;font-size:var(--f-2xs);letter-spacing:.05em;text-transform:uppercase;font-weight:700;padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:1.5px}
+.nitem .ht{font-size:var(--f-sm);line-height:1.36;color:var(--text)}
+.nitem .mt{margin-top:3px;font-size:var(--f-xs);color:var(--faint)}
+
+/* #33 .kv — label:value readout row (+.ruled) */
+.kv{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:var(--f-sm);color:var(--dim)}
+.kv .num{font-family:var(--mono);color:var(--text);font-weight:500}
+.kv .num.pos{color:var(--profit)} .kv .num.neg{color:var(--loss)} .kv .num.warn{color:var(--caution)}   /* P/L semantics must survive .kv .num text-color */
+.kv.ruled{border-top:1px solid var(--line-soft)}   /* portfolio .trow tax rows */
+
+/* ---------------------------------------------------------------------
+   TILES (#34–#36)
+   --------------------------------------------------------------------- */
+
+/* #34 .kgrid + .k — KPI/stat tile grid (column count stays inline; .lg opt-in for f-lg) */
+.kgrid{display:grid;gap:1px;background:var(--line-soft)}
+.kgrid.boxed{border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.kgrid.inset{border-bottom:1px solid var(--line)}
+.kgrid.setup .k{background:var(--setup)}          /* absorbs .dgrid; home uses border-top override */
+.k{background:var(--panel);padding:8px 10px}
+.k .lbl{margin-bottom:3px}
+.k .v{font-family:var(--mono);font-size:var(--f-md);font-weight:600;letter-spacing:-.3px}
+.k .v small{font-size:var(--f-xs);color:var(--dim);font-family:var(--sans)}
+.k .v.na{color:var(--caution)}
+.kgrid.lg .v{font-size:var(--f-lg)}
+/* inline formula/value highlight — <span class="k"> in card text. Same class as the tile cell
+   but an inline SPAN, so it must NOT inherit the tile's block padding/background. */
+span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
+
+/* #35 .greeks — centered greeks readout (+.dense 6-col from portfolio) */
+.greeks{display:grid;gap:1px;background:var(--line-soft);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.greeks .g{background:var(--panel);padding:7px 8px;text-align:center}
+.greeks .g .v{font-family:var(--mono);font-weight:600;font-size:var(--f-base)}
+.greeks.dense .g{padding:6px 6px}
+.greeks.dense .g .lbl{margin-bottom:2px;font-size:var(--f-2xs)}
+.greeks.dense .g .v{font-size:var(--f-sm)}
+
+/* #36 .kt — cockpit stat cell = .k + interactive. FILE-LOCAL (portfolio): the shared
+   skeleton is the .k cell plus the two lines below; the .cap/.xtra/.on/.hero/.armed
+   state modifiers + the .kt .v f-lg override stay in portfolio.html. */
+.kt{cursor:pointer;position:relative}
+
+/* ---------------------------------------------------------------------
+   INPUTS (#37–#38)
+   --------------------------------------------------------------------- */
+
+/* #37 .searchbox — icon + bare input (symsearch gets the focus glow via .sm, no .flush) */
+.searchbox{display:flex;align-items:center;gap:7px;background:#0b1017;border:1px solid var(--line);border-radius:8px;padding:0 10px}
+.searchbox:focus-within{border-color:var(--accent-2);box-shadow:var(--focus-ring)}
+.searchbox svg{color:var(--faint)}
+.searchbox:focus-within svg{color:var(--accent)}
+.searchbox input{flex:1;background:0;border:0;color:var(--text)}
+.searchbox.sm{height:30px}
+
+/* #38 .input / .textarea — text fields (same accent-wash focus glow as .searchbox) */
+.input,.textarea{background:#0d131c;border:1px solid var(--line);border-radius:7px;color:var(--text);font-family:var(--mono)}
+.input{padding:9px 12px;font-size:var(--f-sm)}
+.textarea{padding:10px 12px;font-size:var(--f-xs);resize:vertical}
+.input:focus,.textarea:focus{border-color:var(--accent-2);box-shadow:var(--focus-ring)}
+.input.formula{color:var(--accent)}   /* compose .syn order-string field */
+
+/* ---------------------------------------------------------------------
+   OVERLAYS / FEEDBACK (#39–#46)
+   --------------------------------------------------------------------- */
+
+/* #39 .tip — tooltip (base appearance only; anchor positioning stays parent-scoped:
+   .nav .tip / .seg button .tip / table.mx thead th .tip.wide). Order: base → .sm → .wide */
+.tip{position:absolute;background:var(--tip-surface);border:1px solid var(--line);color:var(--text);font-size:var(--f-sm);white-space:nowrap;padding:4px 9px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:60;box-shadow:var(--tip-shadow)}
+.tip.sm{font-size:var(--f-xs);padding:3px 8px;border-radius:5px;color:var(--dim);box-shadow:none}   /* was .seg button .tip */
+.tip.wide{white-space:normal;width:180px}                                                    /* was .thtip */
+
+/* #40 .callout — left-stripe explanatory note (+.caution/.solid) */
+.callout{background:var(--panel-2);border:1px solid var(--line-soft);border-left:2px solid var(--accent-2);border-radius:5px;padding:7px 9px;font-size:var(--f-xs);line-height:1.45;color:var(--dim)}
+.callout.caution{border-left-color:var(--caution)}
+.callout.solid{border:1px solid var(--accent-2);background:var(--accent-wash);border-radius:7px}  /* portfolio .yline, .decide .e.lead surface */
+
+/* #41 .hint — always-visible inline helper text (distinct from .tip — false-twin) */
+.hint{font-weight:500;text-transform:none;letter-spacing:0;color:var(--faint);font-size:var(--f-xs)}
+
+/* #42 .dh — detail/drawer title row (+.dh.sm). Trailing slot holds .badge (#26) or .close (#43) */
+.dh{display:flex;align-items:flex-start;gap:8px}
+.dh .nm{font-size:var(--f-xl);font-weight:700}
+.dh .lg{font-family:var(--mono);color:var(--dim);font-size:var(--f-sm);margin-top:2px}
+.dh.sm .nm{font-size:var(--f-lg)}   /* home .idt */
+
+/* #43 .dh .close — small ghost button (hoisted verbatim from portfolio) */
+.dh .close{margin-left:auto;border:1px solid var(--line);background:#0e141d;color:var(--dim);border-radius:6px;padding:3px 9px;font-size:var(--f-sm);font-weight:600}
+.dh .close:hover{border-color:var(--accent);color:var(--accent)}
+
+/* #44 .toast — staged-confirm banner (hoisted from data; body/shadow tokenized to §0) */
+.toast{position:fixed;left:50%;bottom:74px;transform:translateX(-50%) translateY(14px);background:var(--pop-surface);border:1px solid var(--accent-2);color:var(--text);padding:9px 15px;border-radius:8px;font-size:var(--f-sm);box-shadow:var(--pop-shadow);opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:90;max-width:80vw}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast b{color:var(--accent)}
+
+/* #45 .empty — empty states (+.box/.hero) */
+.empty{text-align:center;color:var(--faint)}
+.empty.box{border:1px dashed var(--line);border-radius:7px;padding:14px 10px;font-size:var(--f-sm);line-height:1.5}   /* compose .legempty */
+.empty.hero{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:26px}  /* data .empty-ans */
+
+/* #46 .info — info-dot trigger (hoisted from portfolio .brow .info, de-scoped; pairs with base .tip) */
+.info{width:13px;height:13px;border-radius:50%;background:#1c2735;color:var(--dim);font-size:var(--f-2xs);display:inline-flex;align-items:center;justify-content:center;margin-left:4px}

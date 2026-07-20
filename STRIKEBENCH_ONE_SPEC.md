@@ -354,3 +354,153 @@ specification scenarios 17–22. The strongest focused traces are:
 The full command sequence and the detailed scenario-by-scenario evidence map are maintained in
 `PROGRAM_ONE_HANDOFF.md`. Deployment is the remaining operational action and does not change the
 Program ONE product contract.
+
+## Appendix B — Desk prototype convergence contract (2026-07-19)
+
+### B.1 Integration decision
+
+`desk.html` is the signed-off interaction and visual-behavior reference, not a second application.
+Its cockpit, position bloom, Decide workbench, animation vocabulary, and summoned lenses move into
+the existing long-lived SPA shell. The existing router, market store, workspace state, API client,
+SSE/tab reconciliation, and world-transition transaction remain mounted. A route change or bloom
+changes SPA state; it does not navigate to another HTML document, mount an iframe, or start a
+parallel client runtime.
+
+The prototype's local option pricing, IV construction, candidate generation/ranking, POP, Greeks,
+capital/risk, payoff, scenario valuation, Monte Carlo, synthetic market, and mutation routines are
+design scaffolding. They do not become production calculation owners. Production renderers consume
+the canonical server contracts below, and every mutation continues through its present service and
+receipt boundary.
+
+### B.2 Surface-to-owner map
+
+| Prototype surface | Canonical read owner | Canonical action owner |
+|---|---|---|
+| Desk P/L, positions, capital, Greeks | `/api/portfolio/summary`, `/api/portfolio/greeks`, `/api/plans/portfolio` | existing Plan/Book routes only |
+| Attention strip | `/api/alerts` plus the referenced Plan/package | the referenced Plan manage, import, or review command |
+| Risk map and Book Governor | `/api/portfolio/heat`, `/api/portfolio/book-risk` (`BookRiskService`) | position transformation or Plan creation; no risk-card mutation API |
+| Observed chain, candles, universe, research/news | `/api/research/{symbol}`, `/history`, `/expirations`, `/chain`, `/news`; Research scout where requested | Plan declaration/creation and existing research-note commands |
+| Position bloom | canonical Plan manage view, trade detail/refresh, portfolio Greeks, Campaign view | `/api/plans/{id}/manage/*`, `/api/position-transformations/{preview,apply}`, and canonical trade close/refresh routes |
+| Payoff and exact economics | `POST /api/evaluate` and `OutcomeContract`; selected package/fill receipt | canonical trade or Plan decision preview/commit |
+| Strategy fan, recommendation, custom build | `/api/plans/{id}/strategy/*`, `StrategyCatalog`, Scout, and the shared builder exposure contract | Plan selection/custom-fit commands; no client-side ranker |
+| Scenario spectrum and Monte Carlo | `/api/plans/{id}/outcomes/ensemble`, latest ensemble, outcome run/compare, `PathEnsembleService`, `ScenarioSimulator` | saved Scenario Canvas, rehearsal, backtest, and review commands |
+| Authored paths and animated position trace | saved Plan scenario plus `ScenarioCanvasValuator` timeline | existing scenario/rehearsal commands |
+| Import lens | `/api/portfolio/broker-imports*` and account/package reads | broker-import preview/confirm/command and adoption routes |
+| Observed/simulated controls | `/api/world`, `/api/sim/market*`, current universe bootstrap | the existing atomic `App.switchWorld`/`WorldTransitionService` path |
+| Learn | the existing registry-backed Learn data and explanation controls | presentation state only |
+
+The map is additive: Desk composes existing owners into one cockpit. It does not copy their logic,
+invent alternate endpoints for the same job, or create another entry journey. For example, the
+cluster signal may focus Book Governor, but Book Governor remains the single hedge-entry owner;
+the resulting hedge is still a Plan/Strategy/Decision flow.
+
+### B.3 Client state contract
+
+The integrated Desk keeps four deliberately separate layers:
+
+1. **Server facts** — world/dataset identity, account/Plan/package versions, marks and provenance,
+   strategies, ensemble references/fingerprints, valuations, receipts, alerts, and unavailable
+   reasons. These are immutable render inputs until a canonical refresh replaces them.
+2. **Declarations and drafts** — Plan view/objective, scenario assumptions, exact legs, order draft,
+   acknowledgments, and pending import/transform commands. Their existing durable owners survive
+   every bloom, level flip, route reconciliation, and background refresh.
+3. **Presentation state** — focused symbol/position, selected risk facet, hover, pinned scenario,
+   animation time, expanded teaching, and panel geometry. This layer may be local because it changes
+   presentation, never financial truth.
+4. **Operation state** — request generation, pending/error/stale status, abort handle, optimistic
+   visual affordance, and returned version. A superseded read is discarded; a mutation is never
+   canceled merely because the user changed focus.
+
+Every artifact cache key includes the identities that can change its meaning: user/account, world
+and dataset, Plan and context revision, package/selection version, ensemble fingerprint, and model
+version. A cache hit with a mismatched identity is a miss, not a best-effort display.
+
+### B.4 Backend-derived animation contract
+
+“Every frame benefits from the engines” does **not** mean one server request per animation frame.
+It means every financial path, value, Greek, risk band, and event the animation can reveal comes
+from one versioned server artifact, while the browser performs only time interpolation and drawing.
+
+- The backend computes authoritative knots: ensemble paths/distribution bands, session dates,
+  position P/L and Greeks, event/transformation markers, payoff points, and exact scenario results.
+  `PathEnsembleService` supplies the one fingerprinted path artifact; `ScenarioCanvasValuator`
+  supplies coherent daily position traces over it.
+- The client keeps the last complete artifact visible while a changed input requests a new one.
+  It marks the view updating/stale, aborts superseded reads, and swaps artifacts only after identity
+  and version validation. It never mixes knots from two fingerprints.
+- `requestAnimationFrame` advances a presentation clock and interpolates between adjacent server
+  knots. It patches SVG transforms, paths, markers, and numeric text in place. It does not rebuild
+  the whole payoff/scenario DOM, rerun Black–Scholes, resample paths, recompute Greeks, or call an
+  API on every frame.
+- Discrete server events—expiry, assignment, a roll, a scenario waypoint, a market-session boundary—
+  are exact frame boundaries. Interpolation may make movement fluid between them; it may not invent
+  an intermediate transaction, probability result, or receipt.
+- Pointer motion uses a cached projection of the current server artifact. A strike/waypoint drag
+  updates its visual ghost at frame rate, then debounces one canonical preview request. The returned
+  artifact settles the chart; the ghost is never presented as an executable result.
+- Reduced-motion changes temporal presentation only. It jumps between the same backend knots and
+  preserves the same values, warnings, lineage, and controls.
+
+This contract retains the prototype's fluid shared-element blooms and scenario playback while
+removing its expensive full-render-per-frame behavior. The first performance target is a stable
+60 Hz presentation on the 2560 cockpit with no long task over 50 ms during playback; correctness
+tests assert exact equality at every server knot, not merely visual similarity.
+
+### B.5 Economic and market invariants
+
+- `OBSERVED`, `DEMO`, `SIMULATED`, and `SCENARIO` never mix silently. The active world and source
+  provenance remain visible; unavailable observed inputs remain unavailable.
+- A Plan remains bound to its owning world/dataset. World changes use the existing atomic transition,
+  preserving route/focus only after server, app state, market store, account, and universe agree.
+- Practice and tracked books never net together. Tracked P/L uses observed or broker-executable
+  marks only; modeled/demo values cannot become tracked economic fact.
+- Captured entry/fill economics, quantities, fees, and cash baseline remain frozen. Live marks may
+  refresh a view; they may not rewrite the decision receipt.
+- POP, EV, payoff, Greeks, capital, scenario outcomes, ranking, and hedge effects come from their
+  canonical server owners. Missing is rendered as missing with its named reason, never zero.
+- Proposal/custom/cash comparison and every animated repricing use one ensemble fingerprint.
+  Changing a relevant declaration mints or selects a new artifact explicitly.
+- All writes carry the existing expected version/idempotency/preview contracts. Smooth UI feedback
+  never weakens a guardrail, archive boundary, broker gate, or receipt.
+
+### B.6 Performance and API shape
+
+The current `API` client remains the transport owner: navigation-scoped cancellation, bounded TTL/LRU
+read caching, targeted invalidation, speculative prefetch, stale-runtime blocking, and mutation-safe
+semantics are reused. The SPA's mounted refresh and SSE/tab reconciliation update affected regions;
+they do not wholesale-repaint the cockpit.
+
+New backend work is permitted only where profiling proves that composition—not domain capability—is
+missing. The acceptable shapes are a read-only Desk snapshot that atomically composes already-owned
+summaries, a server-owned risk-map projection of `BookRiskService`, an orchestration response that
+creates/focuses a canonical hedge Plan, or an aggregated universe/sector snapshot. Such a response
+must quote its component versions/provenance and must call the existing services. It may not become
+a second chain, candle, news, strategy, payoff, Monte Carlo, scenario, trade, import, or world API.
+
+### B.7 Additive convergence sequence
+
+1. **Contract and parity harness.** Freeze the prototype's signed-off geometry/interaction states;
+   inventory every visible mock value/action against the owner map; add tests that reject a local
+   financial calculator or unowned mutation in the production Desk modules.
+2. **Real read-only Desk.** Mount the cockpit inside the SPA and feed its Home bands from real
+   portfolio, Plan, alert, Book Risk, research, and world stores. Preserve current destinations while
+   each prototype band becomes a view of the same state, not a competing route.
+3. **Real position bloom.** Replace mock positions, payoff, Greeks, research, scenarios, Campaign
+   context, and management status with the joined Plan/Book artifacts. Keep preview/apply/close on
+   their canonical commands.
+4. **Real Strategy and Outcomes.** Drive the fan, custom build, payoff hero, scenario spectrum,
+   Monte Carlo, and authored playback from one selected Plan and ensemble fingerprint. Remove the
+   prototype pricing/simulation routines as each server-backed vertical slice lands.
+5. **Mutation convergence.** Wire decision preview/confirm, practice/cash/broker outcomes, import,
+   transformations, rehearsal, and review with existing version/receipt boundaries and one visible
+   journey per job.
+6. **World and capability reconciliation.** Exercise Observed, Demo, Simulated, and authored replay;
+   reconcile Research, Backtest, Learn, Campaign, accounting/tax, Data controls, and every Beginner/
+   Expert capability against the anti-loss inventory.
+7. **Cutover gate.** Make the new Desk the sole presentation only after parity, economic invariants,
+   browser performance, responsive geometry, focus/back-forward restoration, and the full release
+   matrix pass together. Remove the replaced renderer entry points, not their capabilities.
+
+The integration is complete only when the prototype contains no authoritative mock economics in the
+shipping path, every visible result can name its backend owner and provenance, and the new experience
+is still as fluid at real data volume as the signed-off design.
