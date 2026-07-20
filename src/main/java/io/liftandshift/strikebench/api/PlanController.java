@@ -106,6 +106,7 @@ final class PlanController {
                 strategyController::planScoutLatest, strategyController::planScoutRun,
                 strategyController::planScoutSpawn, planOutcomeController::planOutcomesLatest,
                 planOutcomeController::planEnsembleLatest,
+                planOutcomeController::planScenarioPaths,
                 planOutcomeController::planEnsembleRun, planOutcomeController::planOutcomeRun,
                 planOutcomeController::planOutcomeCompare, planOutcomeController::planScenarioSave,
                 planOutcomeController::planScenariosList, planOutcomeController::planScenarioGet,

@@ -96,6 +96,17 @@ class ScenarioCanvasTest {
         assertThat(report.comparison()).extracting(ScenarioCanvasValuator.ComparisonRow::key)
                 .containsExactlyInAnyOrder("ours", "stock");
         assertThat(report.underlying()).hasSize(5);
+
+        var focused = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.30), canvas, .04,
+                List.of(new ScenarioCanvasValuator.PositionInput("ours", "Calendar front", "REAL",
+                        "TRACKED_STRUCTURE", call, 1, 500L, false)), 2);
+        assertThat(focused.focusSourcePathIndex()).isEqualTo(2);
+        assertThat(focused.underlying().get(1).focusPrice()).isEqualTo(98);
+        var focusDay = focused.positions().getFirst().days().get(1);
+        var focusLegDay = focused.positions().getFirst().legs().getFirst().days().get(1);
+        assertThat(focusDay.focusValueCents()).isEqualTo(focusLegDay.valueCents());
+        assertThat(focusDay.focusPnlCents()).isEqualTo(focusDay.focusValueCents() - 500L);
+        assertThat(focusDay.greeks()).isEqualTo(focusLegDay.greeks());
     }
 
     @Test void storedEnsembleAnchorDrivesBothCanvasDistributionAndDailyValuationClock() {

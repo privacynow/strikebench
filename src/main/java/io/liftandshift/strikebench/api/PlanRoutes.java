@@ -31,6 +31,7 @@ public final class PlanRoutes {
             Handler spawnScoutPlan,
             Handler latestOutcomes,
             Handler latestEnsemble,
+            Handler scenarioPaths,
             Handler runEnsemble,
             Handler runOutcome,
             Handler compareOutcomes,
@@ -79,6 +80,8 @@ public final class PlanRoutes {
         config.routes.post("/api/plans/{id}/scout/spawn", h.spawnScoutPlan());
         config.routes.get("/api/plans/{id}/outcomes/latest", h.latestOutcomes());
         config.routes.get("/api/plans/{id}/outcomes/ensemble/latest", h.latestEnsemble());
+        config.routes.get("/api/plans/{id}/outcomes/ensemble/paths", h.scenarioPaths());
+        config.routes.post("/api/plans/{id}/outcomes/ensemble/paths", h.scenarioPaths());
         config.routes.post("/api/plans/{id}/outcomes/ensemble", h.runEnsemble());
         config.routes.post("/api/plans/{id}/outcomes/run", h.runOutcome());
         config.routes.post("/api/plans/{id}/outcomes/compare", h.compareOutcomes());

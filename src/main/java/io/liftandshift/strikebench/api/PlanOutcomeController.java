@@ -78,6 +78,12 @@ final class PlanOutcomeController {
                                             List<String> candidateIds,
                                             io.liftandshift.strikebench.sim.ScenarioSpec over,
                                             io.liftandshift.strikebench.sim.IvSpec iv) {}
+    /** Non-mutating animation query; inline pins are evaluated against an already-stored fan. */
+    public record PlanScenarioPathsRequest(String ensembleId, String scenarioId,
+                                           List<io.liftandshift.strikebench.sim.ScenarioSpec.Waypoint> waypoints,
+                                           io.liftandshift.strikebench.sim.IvSpec iv,
+                                           io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas,
+                                           Integer limit) {}
     public record PlanBacktestRequest(Long expectedVersion, String engine, String from, String to,
                                       Integer targetDte, Integer entryEveryDays, Integer maxConcurrent,
                                       Integer qty, Double slippagePct, Long startingCashCents,
@@ -92,6 +98,110 @@ final class PlanOutcomeController {
         ctx.json(new ApiResponses.PlanOutcomesLatest<>(out.path("outcomes"), out.path("comparisons"),
                 out.path("backtests"), selected, selected != null ? "CURRENT" : prior != null ? "STALE" : "NONE",
                 prior));
+    }
+
+    /**
+     * Bounded animation data for the Desk.  This projects the exact stored fan; an authored
+     * scenario selects paths closest to its frozen waypoints and never invokes a second simulator.
+     */
+    void planScenarioPaths(Context ctx) {
+        boolean typedAnimationRequest = ctx.method() == io.javalin.http.HandlerType.POST;
+        PlanScenarioPathsRequest body = typedAnimationRequest
+                ? ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanScenarioPathsRequest.class))
+                : null;
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        if (typedAnimationRequest) root.requireActivePlanMarket(ctx, plan);
+        String requestedEnsembleId = body == null ? ctx.queryParam("ensembleId") : body.ensembleId();
+        String scenarioId = body == null ? ctx.queryParam("scenarioId") : body.scenarioId();
+        List<io.liftandshift.strikebench.sim.ScenarioSpec.Waypoint> inlineWaypoints =
+                body == null || body.waypoints() == null ? List.of() : List.copyOf(body.waypoints());
+        if (scenarioId != null && !scenarioId.isBlank() && !inlineWaypoints.isEmpty()) {
+            throw new IllegalArgumentException("scenarioId and inline waypoints are alternative scenario sources");
+        }
+        int limit = body == null || body.limit() == null
+                ? parseDisplayPathLimit(ctx.queryParam("limit")) : body.limit();
+        io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored;
+        ApiResponses.ScenarioPathRef scenarioRef = null;
+        io.liftandshift.strikebench.sim.ScenarioSpec scenarioSpec = null;
+        if (scenarioId != null && !scenarioId.isBlank()) {
+            var authored = authoredScenarios.load(root.ownerId(ctx), plan.id(), scenarioId);
+            if (requestedEnsembleId != null && !requestedEnsembleId.isBlank()
+                    && !requestedEnsembleId.equals(authored.baseEnsembleId())) {
+                throw new IllegalArgumentException("The named scenario can only display paths from its stored base fan.");
+            }
+            stored = typedAnimationRequest
+                    ? planOutcomes.loadCurrentEnsemble(root.ownerId(ctx), plan, authored.baseEnsembleId(),
+                        root.analysisCtx(ctx))
+                    : planOutcomes.loadEnsemble(root.ownerId(ctx), plan.id(), authored.baseEnsembleId());
+            scenarioSpec = authored.spec();
+            scenarioRef = new ApiResponses.ScenarioPathRef(authored.id(), authored.fingerprint(), authored.title(),
+                    authored.contextRev() == plan.context().rev(), authored.waypointFill(), authored.baseEnsembleId());
+        } else if (requestedEnsembleId != null && !requestedEnsembleId.isBlank()) {
+            stored = planOutcomes.loadCurrentEnsemble(root.ownerId(ctx), plan, requestedEnsembleId,
+                    root.analysisCtx(ctx));
+        } else {
+            stored = planOutcomes.latestEnsemble(root.ownerId(ctx), plan,
+                    PathEnsembleService.Basis.PARAMETRIC.name(), root.analysisCtx(ctx));
+            if (stored == null) {
+                throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                        "Run the possible-futures fan before requesting display paths.");
+            }
+        }
+        if (!inlineWaypoints.isEmpty()) {
+            scenarioSpec = stored.ensemble().spec().withWaypoints(inlineWaypoints).sane();
+        }
+        if (typedAnimationRequest
+                && !java.util.Objects.equals(root.activeWorld(ctx), stored.ensemble().scope().worldId())) {
+            throw new IllegalStateException("This path set belongs to another market world. Open its market before animating it.");
+        }
+        var projection = pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit);
+        var ensembleRef = new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
+                stored.ensemble().waypointFill().name());
+        if (!typedAnimationRequest) {
+            ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection));
+            return;
+        }
+
+        ObjectNode selected = root.selectedCandidate(ctx, plan, true);
+        int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
+        var effectiveIv = body.iv() == null ? stored.iv() : body.iv().sane();
+        var effectiveCanvas = (body.canvas() == null
+                ? stored.canvas() == null
+                    ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults() : stored.canvas()
+                : body.canvas()).sane(stored.ensemble().spec().horizonDays());
+        ObjectNode checkpointHolder = Json.MAPPER.createObjectNode();
+        ObjectNode checkpoints = decorateCanvasValuation(ctx, checkpointHolder, plan, stored,
+                focusSourcePathIndex, effectiveIv, effectiveCanvas);
+        String selectedCandidateId = selected.path("id").asText();
+        boolean selectedPositionPresent = false;
+        for (JsonNode position : checkpoints.path("positions")) {
+            if (("PROPOSED:" + selectedCandidateId).equals(position.path("key").asText())) {
+                selectedPositionPresent = true;
+                break;
+            }
+        }
+        if (!selectedPositionPresent) {
+            throw new IllegalStateException("The selected package could not be repriced on this stored ensemble; inspect the named canvas refusal.");
+        }
+        String valuationFingerprint = checkpoints.at("/modelReceipt/valuationFingerprint").asText();
+        var receipt = new ApiResponses.ScenarioAnimationReceipt(
+                "scenario-animation-1", stored.id(), stored.fingerprint(), stored.basis(),
+                stored.ensemble().modelVersion(), stored.ensemble().scope().symbol(),
+                stored.ensemble().scope().worldId(), stored.ensemble().scope().analysis().datasetId(),
+                stored.contextRev(), stored.state(), stored.ensemble().spot(),
+                stored.ensemble().anchorDate().toString(), stored.anchorSource(), stored.anchorFreshness(),
+                stored.asOf(), stored.stepSeconds(), stored.ensemble().paths().length,
+                stored.ensemble().spec().totalSteps(), stored.ensemble().waypointFill().name(),
+                stored.ensemble().spec(), scenarioSpec, effectiveIv, effectiveCanvas, stored.rateAnnual(),
+                selectedCandidateId, valuationFingerprint);
+        ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection,
+                receipt, checkpoints));
+    }
+
+    private static int parseDisplayPathLimit(String raw) {
+        if (raw == null || raw.isBlank()) return 8;
+        try { return Integer.parseInt(raw); }
+        catch (NumberFormatException e) { throw new IllegalArgumentException("limit must be a whole number"); }
     }
 
     /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */
@@ -614,9 +724,19 @@ final class PlanOutcomeController {
     private void decorateCanvasValuation(Context ctx, ObjectNode preview,
             io.liftandshift.strikebench.plan.Plan.View plan,
             io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored) {
-        var canvas = stored.canvas() == null
+        decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas());
+    }
+
+    private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
+            io.liftandshift.strikebench.plan.Plan.View plan,
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored,
+            Integer focusSourcePathIndex,
+            io.liftandshift.strikebench.sim.IvSpec valuationIv,
+            io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationCanvas) {
+        var canvas = valuationCanvas == null
                 ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
-                : stored.canvas().sane(stored.ensemble().spec().horizonDays());
+                : valuationCanvas.sane(stored.ensemble().spec().horizonDays());
+        var iv = valuationIv == null ? stored.iv() : valuationIv.sane();
         List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput> inputs = new ArrayList<>();
         var refused = Json.MAPPER.createArrayNode();
         java.time.LocalDate anchor = stored.ensemble().anchorDate();
@@ -670,8 +790,11 @@ final class PlanOutcomeController {
         }
         ObjectNode canvasJson;
         try {
-            var report = canvasValuator.value(stored.ensemble(), stored.iv(), canvas,
-                    stored.rateAnnual(), inputs);
+            var report = focusSourcePathIndex == null
+                    ? canvasValuator.value(stored.ensemble(), iv, canvas,
+                        stored.rateAnnual(), inputs)
+                    : canvasValuator.value(stored.ensemble(), iv, canvas,
+                        stored.rateAnnual(), inputs, focusSourcePathIndex);
             canvasJson = Json.MAPPER.valueToTree(report);
         } catch (IllegalArgumentException | IllegalStateException e) {
             canvasJson = Json.MAPPER.createObjectNode();
@@ -689,6 +812,7 @@ final class PlanOutcomeController {
         canvasJson.set("refused", refused);
         ObjectNode receipt = canvasJson.putObject("modelReceipt");
         receipt.put("fingerprint", stored.fingerprint());
+        receipt.put("ensembleFingerprint", stored.fingerprint());
         receipt.put("canvasModelVersion", io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
         receipt.put("pathModelVersion", stored.ensemble().modelVersion());
         receipt.put("calendar", canvas.calendar());
@@ -701,14 +825,51 @@ final class PlanOutcomeController {
         receipt.put("surfaceDynamics", canvas.surfaceDynamics().name());
         receipt.put("settlementPolicy", canvas.settlementPolicy().name());
         receipt.put("exercisePolicy", canvas.exercisePolicy().name());
+        receipt.set("ivAssumptions", Json.MAPPER.valueToTree(iv));
         receipt.set("ivNodes", Json.MAPPER.valueToTree(canvas.ivNodes()));
         if (canvas.template() != null) receipt.set("template", Json.MAPPER.valueToTree(canvas.template()));
         receipt.put("anchorDate", anchor.toString());
         receipt.put("authoredPathMeaning", "USER_HYPOTHESIS_NOT_FORECAST");
         receipt.put("positionScopeCount", canvasJson.path("positions").size());
         receipt.put("positionScopeAttempted", inputs.size());
+        int actualFocusPath = canvasJson.path("focusSourcePathIndex").asInt(
+                focusSourcePathIndex == null ? -1 : focusSourcePathIndex);
+        receipt.put("focusSourcePathIndex", actualFocusPath);
+        String selectedCandidateId = candidate == null ? null : candidate.path("id").asText(null);
+        if (selectedCandidateId != null) {
+            receipt.put("selectedCandidateId", selectedCandidateId);
+            receipt.put("selectedCandidateFingerprint", sha256(candidate));
+        }
+        ObjectNode valuationIdentity = Json.MAPPER.createObjectNode();
+        valuationIdentity.put("contractVersion", "scenario-animation-valuation-1");
+        valuationIdentity.put("ensembleFingerprint", stored.fingerprint());
+        valuationIdentity.put("canvasModelVersion",
+                io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
+        valuationIdentity.put("pathModelVersion", stored.ensemble().modelVersion());
+        valuationIdentity.put("focusSourcePathIndex", actualFocusPath);
+        valuationIdentity.put("rateAnnual", stored.rateAnnual());
+        valuationIdentity.set("ivAssumptions", Json.MAPPER.valueToTree(iv));
+        valuationIdentity.set("canvasAssumptions", Json.MAPPER.valueToTree(canvas));
+        valuationIdentity.set("positionPackages", Json.MAPPER.valueToTree(inputs));
+        if (selectedCandidateId != null) {
+            valuationIdentity.put("selectedCandidateId", selectedCandidateId);
+            valuationIdentity.put("selectedCandidateFingerprint", sha256(candidate));
+        }
+        receipt.put("valuationContractVersion", "scenario-animation-valuation-1");
+        receipt.put("valuationFingerprint", sha256(valuationIdentity));
         preview.set("canvas", canvasJson);
         preview.set("canvasModel", Json.MAPPER.valueToTree(canvas));
+        return canvasJson;
+    }
+
+    private static String sha256(JsonNode node) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(Json.canonical(node).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     private static io.liftandshift.strikebench.sim.PathPosition pathPosition(

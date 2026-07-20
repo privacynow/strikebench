@@ -892,6 +892,22 @@ class PlanApiIntegrationTest {
         assertThat(savedScenario.at("/scenario/baseEnsembleFingerprint").asText()).isEqualTo(pinnedFingerprint);
         assertThat(savedScenario.at("/scenario/fingerprint").asText()).hasSize(64);
 
+        // The Desk receives a bounded projection of the exact stored fan.  This is selection over
+        // the base artifact, not a second local simulator or a newly generated visual-only path set.
+        JsonNode displayPaths = json(get("/api/plans/" + id + "/outcomes/ensemble/paths?scenarioId="
+                + scenarioId + "&limit=6"));
+        assertThat(displayPaths.at("/ensemble/id").asText()).isEqualTo(pinnedEnsembleId);
+        assertThat(displayPaths.at("/ensemble/fingerprint").asText()).isEqualTo(pinnedFingerprint);
+        assertThat(displayPaths.at("/scenario/fingerprint").asText())
+                .isEqualTo(savedScenario.at("/scenario/fingerprint").asText());
+        assertThat(displayPaths.at("/paths/selection").asText()).isEqualTo("NEAREST_AUTHORED_WAYPOINTS");
+        assertThat(displayPaths.at("/paths/totalPathCount").asInt()).isEqualTo(60);
+        assertThat(displayPaths.at("/paths/paths")).hasSize(6);
+        assertThat(displayPaths.at("/paths/paths/0/role").asText()).isEqualTo("FOCUS");
+        assertThat(displayPaths.at("/paths/paths/0/prices")).hasSize(31);
+        assertThat(displayPaths.at("/paths/paths/0/prices/12").asDouble() / spot)
+                .isCloseTo(1.06, org.assertj.core.data.Offset.offset(0.002));
+
         // Saving without a single waypoint is refused: the canvas is for authored paths.
         HttpResponse<String> unpinned = post("/api/plans/" + id + "/scenarios",
                 "{\"expectedVersion\":" + version + ",\"over\":"
@@ -929,6 +945,58 @@ class PlanApiIntegrationTest {
         assertThat(restoredRun).isNotNull();
         assertThat(restoredRun.path("waypointFill").asText()).isEqualTo("GUIDED_INTERPOLATION");
 
+        // The production animation query is non-mutating: inline pins and IV/canvas assumptions
+        // select and value one coherent source path without changing the stored fan fingerprint.
+        String animationRequest = """
+                {"ensembleId":"%s","limit":6,
+                 "waypoints":[{"dayIndex":10,"priceRatio":0.97,"tolerance":0.03}],
+                 "iv":{"startIv":0.55,"driftPerYear":-0.1,"meanRevertSpeed":2,
+                   "longRunIv":0.32,"eventDay":-1,"eventShockPct":0,"minIv":0.03,"maxIv":4.0},
+                 "canvas":{"calendar":"NYSE","skewVolPerLogMoneyness":-0.2,
+                   "termVolPerSqrtYear":0.04,"surfaceDynamics":"STICKY_MONEYNESS",
+                   "settlementPolicy":"CASH_INTRINSIC","exercisePolicy":"EXPIRATION_ONLY",
+                   "ivNodes":[{"dayIndex":0,"atmIv":0.55},{"dayIndex":30,"atmIv":0.30}]}}
+                """.formatted(guidedEnsembleId);
+        JsonNode animation = json(post("/api/plans/" + id + "/outcomes/ensemble/paths", animationRequest));
+        assertThat(animation.at("/ensemble/id").asText()).isEqualTo(guidedEnsembleId);
+        assertThat(animation.at("/ensemble/fingerprint").asText())
+                .isEqualTo(guided.at("/ensemble/fingerprint").asText());
+        assertThat(animation.at("/receipt/contractVersion").asText()).isEqualTo("scenario-animation-1");
+        assertThat(animation.at("/receipt/pathModelVersion").asText()).isNotBlank();
+        assertThat(animation.at("/receipt/worldId").asText()).isEqualTo("demo");
+        assertThat(animation.at("/receipt/datasetId").asText()).isEqualTo("observed");
+        assertThat(animation.at("/receipt/pathAssumptions").isObject()).isTrue();
+        assertThat(animation.at("/receipt/conditioningAssumptions/waypoints")).hasSize(1);
+        assertThat(animation.at("/receipt/ivAssumptions/startIv").asDouble()).isEqualTo(.55);
+        assertThat(animation.at("/receipt/valuationAssumptions/ivNodes")).hasSize(2);
+        assertThat(animation.at("/paths/receipt/version").asText())
+                .isEqualTo(io.liftandshift.strikebench.sim.PathEnsembleService.DISPLAY_SELECTION_VERSION);
+        assertThat(animation.at("/paths/receipt/withinToleranceCount").asInt())
+                .isGreaterThanOrEqualTo(animation.at("/paths/receipt/selectedWithinToleranceCount").asInt());
+        int focusIndex = animation.at("/paths/receipt/focusSourcePathIndex").asInt();
+        assertThat(animation.at("/checkpoints/focusSourcePathIndex").asInt()).isEqualTo(focusIndex);
+        assertThat(animation.at("/checkpoints/underlying/10/focusPrice").asDouble())
+                .isEqualTo(animation.at("/paths/paths/0/prices/10").asDouble());
+        assertThat(animation.at("/checkpoints/positions").toString())
+                .contains("PROPOSED:" + candidate.get("id").asText());
+        assertThat(animation.at("/checkpoints/positions/0/days/0").has("focusValueCents")).isTrue();
+        assertThat(animation.at("/checkpoints/positions/0/legs/0/days/0").has("state")).isTrue();
+        assertThat(animation.at("/checkpoints/modelReceipt/selectedCandidateId").asText())
+                .isEqualTo(candidate.get("id").asText());
+        assertThat(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText()).hasSize(64);
+        assertThat(animation.at("/receipt/valuationFingerprint").asText())
+                .isEqualTo(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText());
+
+        JsonNode changedAnimation = json(post("/api/plans/" + id + "/outcomes/ensemble/paths",
+                animationRequest.replace("\"startIv\":0.55", "\"startIv\":0.65")));
+        assertThat(changedAnimation.at("/ensemble/fingerprint").asText())
+                .isEqualTo(animation.at("/ensemble/fingerprint").asText());
+        assertThat(changedAnimation.at("/receipt/valuationFingerprint").asText())
+                .isNotEqualTo(animation.at("/receipt/valuationFingerprint").asText());
+        JsonNode afterTransientAnimation = json(get("/api/plans/" + id + "/outcomes/ensemble/latest"));
+        assertThat(afterTransientAnimation.at("/preview/waypoints")).hasSize(2);
+        assertThat(afterTransientAnimation.at("/preview/canvasModel/ivNodes")).isEmpty();
+
         // 8) Context drift: saving against the old fan is refused with the reason, and the
         //    already-authored scenario stays listed with an explicit staleness explanation.
         JsonNode revised = json(put("/api/plans/" + id + "/context",
@@ -940,6 +1008,11 @@ class PlanApiIntegrationTest {
         assertThat(drifted.statusCode()).isEqualTo(409);
         assertThat(Json.parse(drifted.body()).get("detail").asText())
                 .contains("does not belong to the current Plan assumptions");
+        HttpResponse<String> staleAnimation = post("/api/plans/" + id + "/outcomes/ensemble/paths",
+                "{\"scenarioId\":\"" + scenarioId + "\",\"limit\":4}");
+        assertThat(staleAnimation.statusCode()).isEqualTo(409);
+        assertThat(Json.parse(staleAnimation.body()).path("detail").asText())
+                .contains("earlier Plan assumptions");
         JsonNode listedAfterDrift = json(get("/api/plans/" + id + "/scenarios"));
         assertThat(listedAfterDrift.get("scenarios")).hasSize(1);
         assertThat(listedAfterDrift.at("/scenarios/0/currentContext").asBoolean()).isFalse();
@@ -1087,11 +1160,31 @@ class PlanApiIntegrationTest {
         assertThat(preview.at("/order/proposedNetCents").isNumber()).isTrue();
         assertThat(preview.at("/preview/entryNetPremiumCents").asLong())
                 .isEqualTo(preview.at("/order/proposedNetCents").asLong());
+        assertThat(preview.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
+        assertThat(preview.at("/order/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
+        assertThat(preview.at("/order/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(preview.at("/order/presentlyExecutable").asBoolean()).isTrue();
+
+        long naturalNet = preview.at("/order/proposedNetCents").asLong();
+        JsonNode marketableLimit = json(post("/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
+                        + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet - 1000) + "}}"));
+        assertThat(marketableLimit.at("/order/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(marketableLimit.at("/preview/entryNetPremiumCents").asLong()).isEqualTo(naturalNet);
+        assertThat(marketableLimit.at("/order/orderInstruction/limitNetCents").asLong())
+                .isEqualTo(naturalNet - 1000);
+
+        JsonNode restingLimit = json(post("/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
+                        + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet + 1000) + "}}"));
+        assertThat(restingLimit.at("/order/executability").asText()).isEqualTo("RESTING");
+        assertThat(restingLimit.at("/order/presentlyExecutable").asBoolean()).isFalse();
+        assertThat(restingLimit.at("/preview/ok").asBoolean()).isFalse();
 
         var tradeRequest = Json.MAPPER.createObjectNode();
         tradeRequest.put("expectedVersion", version);
         tradeRequest.put("qty", 1);
-        tradeRequest.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        tradeRequest.set("orderInstruction", preview.at("/order/orderInstruction"));
         if (preview.has("ackToken")) tradeRequest.put("ackToken", preview.get("ackToken").asText());
         var acknowledgments = tradeRequest.putArray("acknowledgedRisks");
         for (JsonNode ack : preview.withArray("requiredAcks")) acknowledgments.add(ack.get("id").asText());
@@ -1104,6 +1197,9 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/legs")).hasSize(candidate.withArray("legs").size());
         assertThat(opened.at("/decision/proposedNetCents").asLong())
                 .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
+        assertThat(opened.at("/decision/orderInstruction/type").asText()).isEqualTo("MARKET");
+        assertThat(opened.at("/decision/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(opened.at("/decision/presentlyExecutable").asBoolean()).isTrue();
         assertThat(opened.at("/decision/accountNlvCents").asLong()).isEqualTo(1_930_000L);
         assertThat(opened.at("/decision/riskCapitalCents").asLong()).isEqualTo(193_000L);
 

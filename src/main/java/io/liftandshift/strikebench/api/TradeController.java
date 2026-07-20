@@ -543,7 +543,7 @@ final class TradeController {
                 body.riskMode(), body.intent(), body.useHeldShares(), body.proposedNetCents(),
                 body.feesOverrideCents(),
                 body.source(),
-                body.fillNature());
+                body.fillNature(), body.orderInstruction());
     }
 
     Long riskCapCents(Context ctx) {
@@ -667,7 +667,11 @@ final class TradeController {
                     pricedNet += leg.action() == io.liftandshift.strikebench.model.LegAction.SELL
                             ? cents : -cents;
                 }
-                adjustment = request.proposedNetCents() - pricedNet;
+                // An executable limit receives the natural package price. Only a resting limit
+                // is analyzed at its requested economics; an actual recorded fill remains fact.
+                if (request.executedFill() || request.proposedNetCents() > pricedNet) {
+                    adjustment = request.proposedNetCents() - pricedNet;
+                }
             }
             PayoffCurve curve = PayoffCurve.of(priced, request.qty(), adjustment);
             if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
@@ -803,6 +807,7 @@ final class TradeController {
             String payload = request.symbol() + "|" + request.strategy() + "|" + request.qty()
                     + "|" + io.liftandshift.strikebench.util.Json.canonical(request.legs())
                     + "|" + request.proposedNetCents() + "|" + request.feesOverrideCents()
+                    + "|" + io.liftandshift.strikebench.util.Json.canonical(request.orderInstruction())
                     + "|" + request.accountId() + "|" + timestamp;
             return java.util.HexFormat.of().formatHex(mac.doFinal(
                     payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)));

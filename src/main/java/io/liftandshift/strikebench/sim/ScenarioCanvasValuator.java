@@ -32,7 +32,7 @@ public final class ScenarioCanvasValuator {
     }
 
     public record UnderlyingDay(int day, String sessionDate, double p10, double p50, double p90,
-                                double atmIv) {}
+                                double focusPrice, double atmIv) {}
     public record Greeks(double deltaShares, double gammaSharesPerDollar,
                          double thetaCentsPerDay, double vegaCentsPerPoint) {}
     public record LegDay(int day, long valueCents, long optionPriceCents, Greeks greeks, String state) {}
@@ -41,6 +41,7 @@ public final class ScenarioCanvasValuator {
     public record PositionDay(int day, String sessionDate,
                               long valueP10Cents, long valueP50Cents, long valueP90Cents,
                               Long pnlP10Cents, Long pnlP50Cents, Long pnlP90Cents,
+                              long focusValueCents, Long focusPnlCents,
                               Greeks greeks) {}
     public record Transformation(int day, String sessionDate, int legNo, String leg,
                                  String settlementPolicy, String exercisePolicy, String note) {}
@@ -51,14 +52,34 @@ public final class ScenarioCanvasValuator {
                                 Long entryCostCents, long horizonP5Cents, long horizonP50Cents,
                                 long horizonP95Cents, long expectedHorizonCents,
                                 double chanceOfGainPct, Long versusStockP50Cents) {}
-    public record Report(List<UnderlyingDay> underlying, List<PositionPath> positions,
-                         List<ComparisonRow> comparison, List<String> notes) {}
+    public record Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
+                         List<PositionPath> positions, List<ComparisonRow> comparison,
+                         List<String> notes) {}
 
     public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
                         ScenarioCanvasSpec rawCanvas, double annualRate,
                         List<PositionInput> rawPositions) {
+        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null);
+    }
+
+    /**
+     * Reprice the canvas with daily detail pinned to one source row from the immutable ensemble.
+     * Probability bands still use the full matrix; this overload only chooses the coherent trace
+     * used by focus prices, Greeks, leg states, and transformation events.
+     */
+    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
+                        ScenarioCanvasSpec rawCanvas, double annualRate,
+                        List<PositionInput> rawPositions, int sourcePathIndex) {
+        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
+                Integer.valueOf(sourcePathIndex));
+    }
+
+    private Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
+                         ScenarioCanvasSpec rawCanvas, double annualRate,
+                         List<PositionInput> rawPositions, Integer sourcePathIndex) {
         try (AutoCloseable permit = SimBudget.acquire()) {
-            return valuePermitted(ensemble, legacyIv, rawCanvas, annualRate, rawPositions);
+            return valuePermitted(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
+                    sourcePathIndex);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -68,12 +89,16 @@ public final class ScenarioCanvasValuator {
 
     private Report valuePermitted(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
                                   ScenarioCanvasSpec rawCanvas, double annualRate,
-                                  List<PositionInput> rawPositions) {
+                                  List<PositionInput> rawPositions, Integer requestedSourcePathIndex) {
         if (ensemble == null) throw new IllegalArgumentException("canvas ensemble is required");
+        double[][] paths = ensemble.paths();
         if (rawPositions == null || rawPositions.isEmpty()) {
-            return new Report(underlying(ensemble.paths(), ensemble,
+            int representativePath = representativePath(paths, ensemble.spec().totalSteps(),
+                    requestedSourcePathIndex);
+            return new Report(representativePath, underlying(paths, ensemble,
                     (legacyIv == null ? IvSpec.flat(ensemble.spec().volAnnual()) : legacyIv).sane(),
-                    rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas.sane(ensemble.spec().horizonDays())),
+                    rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas.sane(ensemble.spec().horizonDays()),
+                    representativePath),
                     List.of(), List.of(), List.of("No same-symbol positions were available to reprice."));
         }
         if (rawPositions.size() > 32) throw new IllegalArgumentException("at most 32 positions can share one canvas");
@@ -88,22 +113,22 @@ public final class ScenarioCanvasValuator {
                     + " leg-steps > " + MAX_CANVAS_VALUATION_WORK
                     + ") — compare fewer same-symbol positions or reduce paths and horizon.");
         }
+        int representativePath = representativePath(paths, spec.totalSteps(), requestedSourcePathIndex);
         IvSpec iv = (legacyIv == null ? IvSpec.flat(spec.volAnnual()) : legacyIv).sane();
         double[] stepYears = spec.calendarStepYears(ensemble.anchorDate());
         double[] elapsed = PathValuationKernel.elapsed(stepYears);
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
         double[] legacyPath = iv.path(steps, sum(stepYears) / steps, spd);
         List<LocalDate> sessionDates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
-        double[][] paths = ensemble.paths();
         List<UnderlyingDay> underlying = new ArrayList<>();
-        int representativePath = rank(paths, steps).indexAt(0.50);
         for (int day = 0; day <= days; day++) {
             int step = Math.min(steps, day * spd);
             Ranked ranked = rank(paths, step);
             double atm = canvas.atmIv(day, days, legacyPath[step]);
             underlying.add(new UnderlyingDay(day, date(day, ensemble.anchorDate(), sessionDates),
                     round2(ranked.valueAt(0.10)), round2(ranked.valueAt(0.50)),
-                    round2(ranked.valueAt(0.90)), round4(atm)));
+                    round2(ranked.valueAt(0.90)), paths[representativePath][step],
+                    round4(atm)));
         }
 
         List<PositionPath> positionPaths = new ArrayList<>();
@@ -137,10 +162,13 @@ public final class ScenarioCanvasValuator {
         List<String> notes = new ArrayList<>();
         notes.add("Authored paths are the user's hypothesis, never a forecast. Every position is repriced on one identical stored ensemble.");
         notes.add("Option values and Greeks are MODELED from the declared per-day IV surface; underlying bands come from the stored path matrix.");
-        notes.add("P&L bands use every stored path. Daily Greeks, leg detail, and transformation events follow one representative path whose horizon price is the ensemble median, so they remain a coherent trace rather than a probability band.");
+        notes.add(requestedSourcePathIndex == null
+                ? "P&L bands use every stored path. Daily Greeks, focus value, leg detail, and transformation events follow one representative path whose horizon price is the ensemble median, so they remain a coherent trace rather than a probability band."
+                : "P&L bands use every stored path. Daily Greeks, focus value, leg detail, and transformation events follow stored source path "
+                    + representativePath + ", selected by the animation projection, so they remain one coherent trace rather than a probability band.");
         notes.add(canvas.dividendBasis());
         if (canvas.template() != null) notes.add(canvas.template().legDayProvenance());
-        return new Report(List.copyOf(underlying), List.copyOf(positionPaths),
+        return new Report(representativePath, List.copyOf(underlying), List.copyOf(positionPaths),
                 List.copyOf(comparisons), List.copyOf(notes));
     }
 
@@ -157,8 +185,9 @@ public final class ScenarioCanvasValuator {
                     paths[p], steps, spd, elapsed, legacyPath, canvas, annualRate);
         }
         long entry = input.entryCostCents() == null
-                ? cents(PathValuationKernel.valueCanvas(input.position(), paths[0], 0, steps, spd,
-                    elapsed, legacyPath, canvas, annualRate, resolvedTransformations[0]) * input.qty())
+                ? cents(PathValuationKernel.valueCanvas(input.position(), paths[representativePath], 0, steps, spd,
+                    elapsed, legacyPath, canvas, annualRate,
+                    resolvedTransformations[representativePath]) * input.qty())
                 : input.entryCostCents();
         List<PositionDay> timeline = new ArrayList<>();
         List<List<LegDay>> legDays = new ArrayList<>();
@@ -173,6 +202,7 @@ public final class ScenarioCanvasValuator {
                         resolvedTransformations[p]) * input.qty());
             }
             long[] sorted = values.clone(); Arrays.sort(sorted);
+            long focusValue = values[representativePath];
             if (day == days) for (int p = 0; p < paths.length; p++) terminal[p] = values[p] - entry;
             double dd = 0, gg = 0, tt = 0, vv = 0;
             double[] median = paths[representativePath];
@@ -192,6 +222,7 @@ public final class ScenarioCanvasValuator {
             timeline.add(new PositionDay(day, date(day, ensemble.anchorDate(), sessionDates),
                     pct(sorted, 0.10), pct(sorted, 0.50), pct(sorted, 0.90),
                     pct(sorted, 0.10) - entry, pct(sorted, 0.50) - entry, pct(sorted, 0.90) - entry,
+                    focusValue, focusValue - entry,
                     new Greeks(round4(dd), round4(gg), cents(tt), cents(vv))));
         }
         List<LegPath> legs = new ArrayList<>();
@@ -240,8 +271,22 @@ public final class ScenarioCanvasValuator {
         return new Ranked(pairs);
     }
 
+    private static int representativePath(double[][] paths, int terminalStep, Integer requested) {
+        int index = requested == null ? rank(paths, terminalStep).indexAt(0.50) : requested;
+        if (index < 0 || index >= paths.length) {
+            throw new IllegalArgumentException("focus source path index " + index
+                    + " is outside the stored ensemble of " + paths.length + " paths");
+        }
+        if (paths[index] == null || paths[index].length <= terminalStep) {
+            throw new IllegalArgumentException("focus source path " + index
+                    + " does not contain the stored ensemble horizon");
+        }
+        return index;
+    }
+
     private static List<UnderlyingDay> underlying(double[][] paths, PathEnsembleService.Ensemble ensemble,
-                                                   IvSpec iv, ScenarioCanvasSpec canvas) {
+                                                   IvSpec iv, ScenarioCanvasSpec canvas,
+                                                   int representativePath) {
         int days = ensemble.spec().horizonDays(), spd = ensemble.spec().stepsPerDay();
         double[] stepYears = ensemble.spec().calendarStepYears(ensemble.anchorDate());
         double[] legacy = iv.path(ensemble.spec().totalSteps(), sum(stepYears) / stepYears.length, spd);
@@ -251,7 +296,9 @@ public final class ScenarioCanvasValuator {
             int step = Math.min(ensemble.spec().totalSteps(), day * spd);
             Ranked r = rank(paths, step);
             out.add(new UnderlyingDay(day, date(day, ensemble.anchorDate(), dates), round2(r.valueAt(.1)),
-                    round2(r.valueAt(.5)), round2(r.valueAt(.9)), round4(canvas.atmIv(day, days, legacy[step]))));
+                    round2(r.valueAt(.5)), round2(r.valueAt(.9)),
+                    paths[representativePath][step],
+                    round4(canvas.atmIv(day, days, legacy[step]))));
         }
         return out;
     }

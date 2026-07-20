@@ -63,8 +63,10 @@ public final class TradeService {
     /**
      * THE canonical OrderPackage: every entry path — recommendations, builder, guided ticket,
      * broker integration and tracked-book imports — produces exactly this typed package, and the
-     * one evaluation pipeline consumes it. Package-level extras: {@code proposedNetCents} (signed:
-     * + credit received / − debit paid; null = price at executable sides), {@code feesOverrideCents}
+     * one evaluation pipeline consumes it. Package-level extras: {@code orderInstruction} carries
+     * MARKET/LIMIT and its signed package limit (+ credit received / − debit paid), while the
+     * former {@code proposedNetCents} remains a compatibility/provenance alias for that limit;
+     * {@code feesOverrideCents}
      * (null = platform default; a Practice ticket treats this as the fee per side),
      * {@code source} (RECOMMENDATION | BUILDER | TICKET |
      * IMPORT | BROKER).
@@ -73,10 +75,34 @@ public final class TradeService {
                               String thesis, String horizon, String riskMode,
                               String intent, Boolean useHeldShares,
                               Long proposedNetCents, Long feesOverrideCents, String source,
-                              String fillNature) {
+                              String fillNature, OrderInstruction orderInstruction) {
         /** Jackson and every internal caller bind one complete position contract. */
         @com.fasterxml.jackson.annotation.JsonCreator
-        public OpenRequest {}
+        public OpenRequest {
+            if (orderInstruction == null) {
+                orderInstruction = OrderInstruction.fromLegacy(proposedNetCents);
+            } else if (orderInstruction.type() == OrderInstruction.Type.MARKET) {
+                if (proposedNetCents != null) {
+                    throw new IllegalArgumentException("MARKET orders cannot carry proposedNetCents; use LIMIT with a signed limitNetCents");
+                }
+            } else {
+                if (proposedNetCents != null
+                        && !proposedNetCents.equals(orderInstruction.limitNetCents())) {
+                    throw new IllegalArgumentException("proposedNetCents must match orderInstruction.limitNetCents");
+                }
+                proposedNetCents = orderInstruction.limitNetCents();
+            }
+        }
+
+        /** Source compatibility for the established canonical package constructor. */
+        public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
+                           String thesis, String horizon, String riskMode,
+                           String intent, Boolean useHeldShares,
+                           Long proposedNetCents, Long feesOverrideCents, String source,
+                           String fillNature) {
+            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, intent,
+                    useHeldShares, proposedNetCents, feesOverrideCents, source, fillNature, null);
+        }
         public boolean heldShares() { return Boolean.TRUE.equals(useHeldShares); }
         public boolean explicitFillMeaning() {
             return "PROPOSED".equalsIgnoreCase(fillNature) || "EXECUTED".equalsIgnoreCase(fillNature);
@@ -791,6 +817,8 @@ public final class TradeService {
 
     /** Opens the trade and an owning workflow record in one database transaction. */
     public TradeRecord create(OpenRequest req, TransactionHook hook) {
+        // A create path still checks an entered fill against the current executable package.
+        // Broker/tracked-book promotion has its own atomic fact-recording boundary.
         Plan p = computePlan(req);
         if (!p.blocks.isEmpty()) {
             reject(req, p.blocks);
@@ -1984,7 +2012,13 @@ public final class TradeService {
         if (req.qty() > 1_000_000) blocks.add("Quantity exceeds the analysis arithmetic limit");
         else if (req.qty() > 100 && !analysisOnly) blocks.add("Quantity exceeds the 100-contract practice cap");
         if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
-        if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, Freshness.MISSING, blocks, warnings, "{}");
+        if (!blocks.isEmpty()) {
+            Map<String, Object> analytics = new LinkedHashMap<>();
+            annotateExecution(analytics, req.orderInstruction(),
+                    OrderInstruction.Executability.UNAVAILABLE, null, 0);
+            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+                    Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), analytics);
+        }
 
         String world = worldWasSupplied ? selectedWorld : worldOf(req.accountId());
         var lane = requiredLane == null ? laneFor(world) : requiredLane;
@@ -2011,7 +2045,13 @@ public final class TradeService {
                         + "you cannot open a position in a dead contract");
             }
         }
-        if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, Freshness.MISSING, blocks, warnings, "{}");
+        if (!blocks.isEmpty()) {
+            Map<String, Object> analytics = new LinkedHashMap<>();
+            annotateExecution(analytics, req.orderInstruction(),
+                    OrderInstruction.Executability.UNAVAILABLE, null, 0);
+            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+                    Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), analytics);
+        }
         if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(nowInstant)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
@@ -2019,6 +2059,7 @@ public final class TradeService {
         List<Leg> filled = new ArrayList<>();
         List<Leg> marketFilled = new ArrayList<>();
         List<Map<String, Object>> snapshotLegs = new ArrayList<>();
+        boolean executableBook = true;
         Freshness worst = Freshness.REALTIME;
         if (underlyingEvidence != null) worst = worse(worst, freshnessOf(underlyingEvidence));
         List<Double> ivs = new ArrayList<>();
@@ -2030,6 +2071,7 @@ public final class TradeService {
                     && leg.entryPrice() != null && leg.entryPrice().signum() > 0;
             var mark = marks.legMark(req.symbol(), leg, world).orElse(null);
             if (mark == null || mark.mid() == null) {
+                executableBook = false;
                 if (suppliedEntryPrice) {
                     suppliedEntryPrices++;
                     Leg filledLeg = new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(),
@@ -2062,6 +2104,7 @@ public final class TradeService {
                 continue;
             }
             if (!mark.evidence().executableIn(lane)) {
+                executableBook = false;
                 String unavailable = "Cannot execute " + legDesc(leg) + " in the " + lane + " market using "
                         + mark.evidence().provenance() + " data (" + mark.evidence().source() + ", "
                         + mark.evidence().age() + ").";
@@ -2077,6 +2120,7 @@ public final class TradeService {
             BigDecimal executableFill = mark.executable(leg.action());
             BigDecimal marketPrice = executableFill;
             if (marketPrice == null) {
+                executableBook = false;
                 if (analysisOnly) {
                     marketPrice = mark.mid();
                     modeledEntryPrices++;
@@ -2150,12 +2194,14 @@ public final class TradeService {
             snap.put("source", mark.evidence().source());
             snapshotLegs.add(snap);
         }
-        if (!blocks.isEmpty()) return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0, worst, blocks, warnings, "{}");
-
-        if (suppliedEntryPrices > 0) {
-            warnings.add(suppliedEntryPrices + " entered leg price" + (suppliedEntryPrices == 1 ? "" : "s")
-                    + " preserved exactly; blank legs use separately labeled market/model evidence.");
+        if (!blocks.isEmpty()) {
+            Map<String, Object> analytics = new LinkedHashMap<>();
+            annotateExecution(analytics, req.orderInstruction(),
+                    OrderInstruction.Executability.UNAVAILABLE, null, 0);
+            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+                    worst, blocks, warnings, "{}", 0, List.of(), null, List.of(), analytics);
         }
+
         if (modeledEntryPrices > 0) {
             warnings.add(modeledEntryPrices + " leg" + (modeledEntryPrices == 1 ? "" : "s")
                     + " lack an executable side; these are analysis inputs, not executable fill claims.");
@@ -2183,33 +2229,74 @@ public final class TradeService {
 
         PayoffCurve curve = PayoffCurve.of(filled, req.qty());
         long entryNet = curve.entryNetPremiumCents();
-        long executableNet = marketFilled.size() == filled.size()
-                ? PayoffCurve.of(marketFilled, req.qty()).entryNetPremiumCents()
-                : entryNet;                                  // unavailable markets fall back only for comparison copy
+        executableBook = executableBook && marketFilled.size() == filled.size();
+        Long naturalExecutableNet = executableBook
+                ? PayoffCurve.of(marketFilled, req.qty()).entryNetPremiumCents() : null;
+        long executableNet = naturalExecutableNet == null ? entryNet : naturalExecutableNet;
+        OrderInstruction.Executability executability = recordedFill
+                ? OrderInstruction.Executability.IMMEDIATE
+                : req.orderInstruction().executability(naturalExecutableNet, executableBook);
         Long packageMid = packageMidCents(snapshotLegs, req.qty());
-        // YOUR price, not the model's: a proposed limit (pre-trade) or an actual fill (evaluation)
-        // reprices the whole package — max loss, breakevens, POP, EV all follow the real number.
+
+        // MARKET and marketable LIMIT orders transact at the current natural package, never at a
+        // worse user bound or stale per-leg proposal. A resting limit is still useful analysis,
+        // but remains blocked until the market can satisfy it. Recorded fills remain exact facts.
         long netAdjust = 0;
-        if (req.proposedNetCents() != null && filled.stream().anyMatch(l -> !l.isStock())) {
-            // R5: judge the SAME legs at YOUR price via a package-level curve adjustment — legs
-            // keep their REAL quotes (no fabricated per-leg fill ever persists).
+        boolean optionPackage = filled.stream().anyMatch(l -> !l.isStock());
+        if (!recordedFill && !req.executedFill() && !analysisOnly
+                && executability == OrderInstruction.Executability.IMMEDIATE
+                && naturalExecutableNet != null) {
+            filled = new ArrayList<>(marketFilled);
+            curve = PayoffCurve.of(filled, req.qty());
+            entryNet = curve.entryNetPremiumCents();
+            for (int i = 0; i < snapshotLegs.size() && i < filled.size(); i++) {
+                Map<String, Object> snap = snapshotLegs.get(i);
+                Object requested = snap.get("fill");
+                String natural = filled.get(i).entryPrice().toPlainString();
+                if (requested != null && !natural.equals(String.valueOf(requested))) {
+                    snap.put("requestedLegPrice", requested);
+                }
+                snap.put("fill", natural);
+                snap.put("fillBasis", "EXECUTABLE_BOOK");
+            }
+            if (req.orderInstruction().type() == OrderInstruction.Type.LIMIT) {
+                warnings.add("Limit " + Money.fmt(req.orderInstruction().limitNetCents())
+                        + " is marketable; the package is valued at the better natural executable net "
+                        + Money.fmt(entryNet) + ".");
+            }
+        } else if (req.proposedNetCents() != null && optionPackage) {
+            // Exact recorded fills and nonmarketable limits reprice the package without fabricating
+            // per-leg allocations. Max loss, breakevens, POP, and EV follow the signed package net.
             netAdjust = req.proposedNetCents() - entryNet;
             if (netAdjust != 0) {
                 curve = PayoffCurve.of(filled, req.qty(), netAdjust);
                 entryNet = curve.entryNetPremiumCents();
             }
-            warnings.add("Priced at YOUR net price " + Money.fmt(req.proposedNetCents())
-                    + " — the executable sides right now say " + Money.fmt(executableNet)
+            warnings.add((recordedFill ? "Priced at YOUR net price (recorded executed net) " : "Analyzed at your resting limit ")
+                    + Money.fmt(req.proposedNetCents()) + " — the executable sides right now say "
+                    + (naturalExecutableNet == null ? "unavailable" : Money.fmt(naturalExecutableNet))
                     + (packageMid != null ? ", midpoint " + Money.fmt(packageMid) : ""));
             if (packageMid != null && req.proposedNetCents() > packageMid) {
                 warnings.add("Your price is MORE favorable than the midpoint — resting there may never fill");
             }
-            if (!recordedFill && req.proposedNetCents() > executableNet) {
+            if (!recordedFill && executability == OrderInstruction.Executability.RESTING) {
                 blocks.add("Your limit " + Money.fmt(req.proposedNetCents())
                         + " is more favorable than the executable market " + Money.fmt(executableNet)
-                        + ". StrikeBench does not model resting limit orders, so it cannot claim this paper order filled. "
+                        + ". StrikeBench does not model resting limit orders, so it cannot claim this paper "
+                        + "order filled. The order is RESTING and is not presently executable. "
                         + "Re-price at or below the executable net, or record the fill after it actually occurs.");
             }
+        }
+        if (suppliedEntryPrices > 0 && (analysisOnly || recordedFill
+                || executability != OrderInstruction.Executability.IMMEDIATE)) {
+            warnings.add(suppliedEntryPrices + " entered leg price" + (suppliedEntryPrices == 1 ? "" : "s")
+                    + " preserved exactly; blank legs use separately labeled market/model evidence.");
+        }
+        if (!recordedFill && executability == OrderInstruction.Executability.UNAVAILABLE) {
+            String message = req.orderInstruction().type() + " order is UNAVAILABLE because the complete "
+                    + "package has no executable natural market.";
+            if (analysisOnly) warnings.add(message + " The labeled analysis can still be inspected.");
+            else blocks.add(message + " Refresh the quote before placing it.");
         }
 
         LocalDate laneToday = java.time.LocalDate.ofInstant(nowInstant,
@@ -2320,6 +2407,8 @@ public final class TradeService {
                     snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
                     0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
+            annotateExecution(analyticsBlocked, req.orderInstruction(), executability,
+                    naturalExecutableNet, entryNet);
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked);
         }
@@ -2345,6 +2434,8 @@ public final class TradeService {
         snapshot.put("freshness", worst.name());
         snapshot.put("rateEvidence", rateEvidence);
         snapshot.put("asOf", now());
+        snapshot.put("orderInstruction", req.orderInstruction());
+        snapshot.put("executability", executability.name());
         // DUAL TIMESTAMPS for world trades: wall time above, the SIMULATED clock here — a session
         // report must place each decision on the lane's own clock (weekend-handoff M9).
         if (world != null) snapshot.put("laneTime", java.time.LocalDateTime.ofInstant(
@@ -2361,6 +2452,8 @@ public final class TradeService {
                 snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
                 fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
+        annotateExecution(analytics, req.orderInstruction(), executability,
+                naturalExecutableNet, entryNet);
         if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
@@ -2419,6 +2512,33 @@ public final class TradeService {
             throw new IllegalStateException("Current leg receipt is missing a valid " + key + ".");
         }
         return number.intValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void annotateExecution(Map<String, Object> analytics,
+                                          OrderInstruction instruction,
+                                          OrderInstruction.Executability executability,
+                                          Long executableNetCents,
+                                          long fillNetCents) {
+        if (analytics == null) return;
+        Object value = analytics.get("executionQuality");
+        Map<String, Object> execution;
+        if (value instanceof Map<?, ?> existing) {
+            execution = (Map<String, Object>) existing;
+        } else {
+            execution = new LinkedHashMap<>();
+            analytics.put("executionQuality", execution);
+        }
+        execution.put("orderType", instruction.type().name());
+        execution.put("timeInForce", instruction.timeInForce().name());
+        if (instruction.limitNetCents() != null) {
+            execution.put("limitNetCents", instruction.limitNetCents());
+        }
+        execution.put("executability", executability.name());
+        execution.put("presentlyExecutable", executability == OrderInstruction.Executability.IMMEDIATE);
+        execution.put("executableNetCents", executableNetCents);
+        execution.put("fillNetCents", fillNetCents);
+        execution.put("economicSide", fillNetCents > 0 ? "CREDIT" : fillNetCents < 0 ? "DEBIT" : "FLAT");
     }
 
 
