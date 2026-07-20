@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.recommend.Rejection;
 
@@ -84,6 +85,46 @@ public final class ApiResponses {
     public record PlanEnsemble<T, U>(T plan, EnsembleRef ensemble, U preview) {}
     public record PlanScenario<T, U>(T plan, U scenario) {}
     public record PlanScenarios<T, U>(T plan, U scenarios) {}
+    /** A named scenario's immutable receipt alongside a display-only subset of its base fan. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ScenarioPathRef(String id, String fingerprint, String title, boolean currentContext,
+                                  String waypointFill, String baseEnsembleId) {}
+    /** Complete immutable lineage for a non-mutating scenario-animation projection. */
+    public record ScenarioAnimationReceipt(
+            String contractVersion,
+            String ensembleId,
+            String ensembleFingerprint,
+            String basis,
+            String pathModelVersion,
+            String symbol,
+            String worldId,
+            String datasetId,
+            int contextRev,
+            String state,
+            double anchorSpot,
+            String anchorDate,
+            String anchorSource,
+            String anchorFreshness,
+            String asOf,
+            double stepSeconds,
+            int sourcePathCount,
+            int sourceStepCount,
+            String waypointFill,
+            io.liftandshift.strikebench.sim.ScenarioSpec pathAssumptions,
+            io.liftandshift.strikebench.sim.ScenarioSpec conditioningAssumptions,
+            io.liftandshift.strikebench.sim.IvSpec ivAssumptions,
+            io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationAssumptions,
+            double rateAnnual,
+            String selectedCandidateId,
+            String valuationFingerprint) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record PlanScenarioPaths<T, U, V, W>(T plan, EnsembleRef ensemble,
+                                                ScenarioPathRef scenario, U paths,
+                                                V receipt, W checkpoints) {
+        public PlanScenarioPaths(T plan, EnsembleRef ensemble, ScenarioPathRef scenario, U paths) {
+            this(plan, ensemble, scenario, paths, null, null);
+        }
+    }
     public record PlanOutcome<T, U>(T plan, U outcome) {}
     public record PlanOutcomeWithEnsemble<T, U>(T plan, U outcome, EnsembleRef ensemble) {}
     public record PlanComparison<T, U>(T plan, U comparison, EnsembleRef ensemble) {}
@@ -251,7 +292,10 @@ public final class ApiResponses {
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit,
                                        io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
-    public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents) {}
+    public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents,
+                               OrderInstruction orderInstruction,
+                               OrderInstruction.Executability executability,
+                               boolean presentlyExecutable, Long executableNetCents) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
                                              Guardrails guardrails,

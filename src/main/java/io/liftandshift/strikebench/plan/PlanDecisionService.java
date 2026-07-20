@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
+import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
@@ -28,12 +29,21 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Freezes one Plan decision and links its execution atomically to the owning Plan. */
 public final class PlanDecisionService {
-    public static final String MODEL_VERSION = "plan-decision-1";
+    public static final String MODEL_VERSION = "plan-decision-2";
 
     public record Input(String userId, Plan.View plan, long expectedVersion, String candidateId,
                         Account account, TradePreview preview, EconomicAssessment economics,
                         AccountRiskContext riskContext, Integer requestedQty,
-                        List<String> acknowledgedRisks, String note, AnalysisContext analysis) {}
+                        List<String> acknowledgedRisks, String note, AnalysisContext analysis,
+                        OrderInstruction orderInstruction) {
+        public Input(String userId, Plan.View plan, long expectedVersion, String candidateId,
+                     Account account, TradePreview preview, EconomicAssessment economics,
+                     AccountRiskContext riskContext, Integer requestedQty,
+                     List<String> acknowledgedRisks, String note, AnalysisContext analysis) {
+            this(userId, plan, expectedVersion, candidateId, account, preview, economics,
+                    riskContext, requestedQty, acknowledgedRisks, note, analysis, null);
+        }
+    }
 
     public record PreparedTradeDecision(String id, TradeService.TransactionHook hook) {}
     public record PortfolioDecision(ObjectNode decision, String activeTradeId) {}
@@ -132,6 +142,19 @@ public final class PlanDecisionService {
                         else if (metric.cents() != null) metrics.put(metric.key(), metric.cents());
                         else metrics.put(metric.key(), metric.text());
                     });
+            String orderType = metrics.path("orderType").asText(null);
+            if (orderType != null) {
+                ObjectNode instruction = out.putObject("orderInstruction");
+                instruction.put("type", orderType);
+                instruction.put("timeInForce", metrics.path("orderTimeInForce").asText("DAY"));
+                if (metrics.has("orderLimitNetCents")) {
+                    instruction.put("limitNetCents", metrics.path("orderLimitNetCents").asLong());
+                }
+                put(out, "executability", metrics.path("orderExecutability").asText(null));
+                if (metrics.has("orderPresentlyExecutable")) {
+                    out.put("presentlyExecutable", metrics.path("orderPresentlyExecutable").asDouble() != 0.0);
+                }
+            }
             return out;
         });
     }
@@ -235,6 +258,22 @@ public final class PlanDecisionService {
         if (rate != null) metricNumber(connection, id, "riskFreeRateAnnual", rate);
         metric(connection, id, "economicPlacement", economics.placement(), false);
         metric(connection, id, "economicSummary", economics.summary(), false);
+        if (input.orderInstruction() != null) {
+            metric(connection, id, "orderType", input.orderInstruction().type().name(), false);
+            metric(connection, id, "orderTimeInForce", input.orderInstruction().timeInForce().name(), false);
+            if (input.orderInstruction().limitNetCents() != null) {
+                metric(connection, id, "orderLimitNetCents", input.orderInstruction().limitNetCents(), true);
+            }
+            Object execution = preview.analytics() == null ? null : preview.analytics().get("executionQuality");
+            if (execution instanceof Map<?, ?> quality) {
+                Object executability = quality.get("executability");
+                if (executability != null) metric(connection, id, "orderExecutability", executability, false);
+                Object presentlyExecutable = quality.get("presentlyExecutable");
+                if (presentlyExecutable instanceof Boolean value) {
+                    metricNumber(connection, id, "orderPresentlyExecutable", value ? 1 : 0);
+                }
+            }
+        }
         if (input.note() != null && !input.note().isBlank()) metric(connection, id, "decisionNote", input.note().trim(), false);
         if (trade != null) {
             String role = nextTradeRole(connection, input.plan().id());

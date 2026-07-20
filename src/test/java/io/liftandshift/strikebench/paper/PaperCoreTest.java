@@ -250,6 +250,71 @@ class PaperCoreTest {
     }
 
     @Test
+    void typedMarketAndLimitInstructionsUseSignedPackageEconomics() {
+        Account acct = accounts.getOrCreateDefault();
+        List<Leg> enteredLegs = List.of(
+                put(LegAction.SELL, "100", "4.25"), put(LegAction.BUY, "95", "1.20"));
+
+        TradeService.OpenRequest market = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
+                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.market());
+        TradePreview marketPreview = trades.preview(market);
+        assertThat(marketPreview.entryNetPremiumCents())
+                .as("MARKET ignores entered proposal prices and fills the natural package")
+                .isEqualTo(180_00L);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> marketExecution =
+                (Map<String, Object>) marketPreview.analytics().get("executionQuality");
+        assertThat(marketExecution).containsEntry("orderType", "MARKET")
+                .containsEntry("executability", "IMMEDIATE")
+                .containsEntry("presentlyExecutable", true)
+                .containsEntry("economicSide", "CREDIT")
+                .containsEntry("fillNetCents", 180_00L);
+
+        TradeService.OpenRequest marketableLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
+                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(160_00L));
+        TradePreview improved = trades.preview(marketableLimit);
+        assertThat(improved.ok()).isTrue();
+        assertThat(improved.entryNetPremiumCents())
+                .as("a marketable limit receives the better natural executable price")
+                .isEqualTo(180_00L);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> improvedExecution =
+                (Map<String, Object>) improved.analytics().get("executionQuality");
+        assertThat(improvedExecution).containsEntry("orderType", "LIMIT")
+                .containsEntry("limitNetCents", 160_00L)
+                .containsEntry("executability", "IMMEDIATE")
+                .containsEntry("fillNetCents", 180_00L);
+
+        TradeService.OpenRequest restingLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
+                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(200_00L));
+        TradePreview resting = trades.preview(restingLimit);
+        assertThat(resting.ok()).isFalse();
+        assertThat(resting.entryNetPremiumCents()).isEqualTo(200_00L);
+        assertThat(resting.blockReasons()).anySatisfy(reason ->
+                assertThat(reason).contains("RESTING").contains("not presently executable"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> restingExecution =
+                (Map<String, Object>) resting.analytics().get("executionQuality");
+        assertThat(restingExecution).containsEntry("executability", "RESTING")
+                .containsEntry("presentlyExecutable", false)
+                .containsEntry("economicSide", "CREDIT");
+        assertThatThrownBy(() -> trades.create(restingLimit))
+                .isInstanceOf(TradeRejectedException.class);
+
+        assertThat(OrderInstruction.limit(-300_00L).executability(-250_00L, true))
+                .as("a debit limit willing to pay more is marketable")
+                .isEqualTo(OrderInstruction.Executability.IMMEDIATE);
+        assertThat(OrderInstruction.limit(-200_00L).executability(-250_00L, true))
+                .as("a more favorable debit limit rests")
+                .isEqualTo(OrderInstruction.Executability.RESTING);
+        assertThatThrownBy(() -> new OrderInstruction(OrderInstruction.Type.MARKET, 1L, null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot carry");
+    }
+
+    @Test
     void analysisPreservesEnteredLegPricesAndLabelsBlankLegEvidenceIndependently() {
         Account acct = accounts.getOrCreateDefault();
         TradeService.OpenRequest mixed = new TradeService.OpenRequest(acct.id(), "AAPL",

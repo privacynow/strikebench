@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.plan.PlanDecisionService;
 import io.liftandshift.strikebench.plan.PlanManagementService;
@@ -59,7 +60,15 @@ final class PlanDecisionController {
 
     public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
                                       Long feesOverrideCents, List<String> acknowledgedRisks,
-                                      String ackToken, String note) {}
+                                      String ackToken, String note,
+                                      OrderInstruction orderInstruction) {
+        public PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
+                                   Long feesOverrideCents, List<String> acknowledgedRisks,
+                                   String ackToken, String note) {
+            this(expectedVersion, qty, proposedNetCents, feesOverrideCents, acknowledgedRisks,
+                    ackToken, note, null);
+        }
+    }
     public record PlanManageRequest(Long expectedVersion) {}
     public record BrokerFill(Integer legIndex, String fillPrice) {}
     public record PlanBrokerRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
@@ -99,17 +108,9 @@ final class PlanDecisionController {
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
-        var first = payload.preview();
-        if (order.proposedNetCents() == null) {
-            body = new PlanDecisionRequest(body.expectedVersion(), body.qty(), first.entryNetPremiumCents(),
-                    body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note());
-            order = planDecisionOrder(plan, candidate, body, false);
-            payload = tradeController.previewPayload(ctx, order);
-        }
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
-                plan, candidate, new ApiResponses.OrderSummary(order.qty(), order.proposedNetCents(),
-                order.feesOverrideCents() == null ? 0L : order.feesOverrideCents())));
+                plan, candidate, orderSummary(order, payload.preview())));
     }
 
     void planDecisionTrade(Context ctx) {
@@ -118,9 +119,10 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
+        body = normalizeLegacyMarketRoundTrip(ctx, plan, candidate, body);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
-        var prepared = planDecisions.prepareTrade(planDecisionInput(ctx, plan, body, candidate, payload));
+        var prepared = planDecisions.prepareTrade(planDecisionInput(ctx, plan, body, candidate, payload, order));
         TradeController.CreatedTrade created = tradeController.execute(ctx, order, prepared.hook());
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanPlacedTrade<>(updated, TradeView.of(created.trade()),
@@ -137,7 +139,7 @@ final class PlanDecisionController {
         // preserve proposed per-leg prices without claiming that those prices were executable.
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, true);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
-        ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload));
+        ObjectNode decision = planDecisions.chooseCash(planDecisionInput(ctx, plan, body, candidate, payload, null));
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanDecision<>(updated, decision));
     }
@@ -163,10 +165,11 @@ final class PlanDecisionController {
         // the acknowledgment token, which the preview minted without an override).
         PlanDecisionRequest decisionBody = new PlanDecisionRequest(body.expectedVersion(), body.qty(),
                 body.proposedNetCents(), null, body.acknowledgedRisks(), body.ackToken(), body.note());
+        decisionBody = normalizeLegacyMarketRoundTrip(ctx, plan, candidate, decisionBody);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, decisionBody, true);
         tradeController.requireRecordedPlacementApproval(ctx, order);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
-        var input = planDecisionInput(ctx, plan, decisionBody, candidate, payload);
+        var input = planDecisionInput(ctx, plan, decisionBody, candidate, payload, order);
         int qty = decisionBody.qty() == null ? candidate.path("qty").asInt() : decisionBody.qty();
         String label = candidate.path("displayName").asText(null);
         if (label == null || label.isBlank()) label = candidate.path("strategy").asText(null);
@@ -246,7 +249,42 @@ final class PlanDecisionController {
                 plan.context().riskMode(), plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
                 candidate.path("recommendationId").asText(null), body.proposedNetCents(), body.feesOverrideCents(),
                 freezeAnalyzedPackage ? "ANALYZE" : "PLAN",
-                body.acknowledgedRisks(), body.ackToken(), "PROPOSED");
+                body.acknowledgedRisks(), body.ackToken(), "PROPOSED", body.orderInstruction());
+    }
+
+    private PlanDecisionRequest normalizeLegacyMarketRoundTrip(
+            Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, ObjectNode candidate,
+            PlanDecisionRequest body) {
+        if (body.orderInstruction() != null || body.proposedNetCents() == null) return body;
+        PlanDecisionRequest marketBody = new PlanDecisionRequest(body.expectedVersion(), body.qty(), null,
+                body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note(),
+                OrderInstruction.market());
+        TradeOpenRequest marketOrder = planDecisionOrder(plan, candidate, marketBody, false);
+        var marketPreview = tradeController.previewPayload(ctx, marketOrder).preview();
+        // Older Plan clients echoed the preview's natural net in proposedNetCents. Preserve that
+        // round trip as MARKET without turning the server's former second-pass default into LIMIT.
+        return body.proposedNetCents() == marketPreview.entryNetPremiumCents() ? marketBody : body;
+    }
+
+    private static ApiResponses.OrderSummary orderSummary(TradeOpenRequest order,
+                                                           io.liftandshift.strikebench.paper.TradePreview preview) {
+        OrderInstruction instruction = order.orderInstruction() == null
+                ? OrderInstruction.fromLegacy(order.proposedNetCents()) : order.orderInstruction();
+        Map<?, ?> quality = preview.analytics() == null ? Map.of()
+                : preview.analytics().get("executionQuality") instanceof Map<?, ?> map ? map : Map.of();
+        OrderInstruction.Executability executability;
+        try {
+            Object rawExecutability = quality.get("executability");
+            executability = OrderInstruction.Executability.valueOf(
+                    rawExecutability == null ? "UNAVAILABLE" : String.valueOf(rawExecutability));
+        } catch (IllegalArgumentException e) {
+            executability = OrderInstruction.Executability.UNAVAILABLE;
+        }
+        Long executableNet = quality.get("executableNetCents") instanceof Number number
+                ? number.longValue() : null;
+        return new ApiResponses.OrderSummary(order.qty(), preview.entryNetPremiumCents(),
+                order.feesOverrideCents() == null ? 0L : order.feesOverrideCents(), instruction,
+                executability, executability == OrderInstruction.Executability.IMMEDIATE, executableNet);
     }
 
     private static String requiredCandidateText(ObjectNode candidate, String field) {
@@ -257,13 +295,15 @@ final class PlanDecisionController {
 
     private PlanDecisionService.Input planDecisionInput(
             Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanDecisionRequest body,
-            ObjectNode candidate, ApiResponses.TradePreviewResponse payload) {
+            ObjectNode candidate, ApiResponses.TradePreviewResponse payload, TradeOpenRequest order) {
         return new PlanDecisionService.Input(root.ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), root.currentAccount(ctx), payload.preview(),
                 payload.evaluation().assessment().economics(),
                 io.liftandshift.strikebench.paper.AccountRiskContext.load(db, root.ownerId(ctx)),
                 body.qty() == null ? candidate.path("qty").asInt() : body.qty(),
-                body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(), root.analysisCtx(ctx));
+                body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(),
+                root.analysisCtx(ctx), order == null ? null
+                        : TradeController.toOpenRequest(order, root.currentAccount(ctx).id()).orderInstruction());
     }
 
     void planManageGet(Context ctx) {
