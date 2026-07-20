@@ -328,6 +328,17 @@
     return out;
   }
 
+  function latestEnsemble(planId, force) {
+    var path = '/api/plans/' + planId + '/outcomes/ensemble/latest';
+    return force ? API.getFresh(path) : API.get(path);
+  }
+
+  /** Pure projection of a stored fan for scenario playback. It never persists assumptions or
+   *  creates paths; the response carries the authoritative valuation checkpoints to interpolate. */
+  function scenarioAnimation(plan, request) {
+    return API.post('/api/plans/' + plan.id + '/outcomes/ensemble/paths', request || {});
+  }
+
   async function adoptResearchEnsemble(plan, receipt) {
     receipt = receipt || {};
     var out = await API.post('/api/plans/' + plan.id + '/outcomes/ensemble', {
@@ -578,6 +589,7 @@
     selectCandidate: selectCandidate, clearCandidate: clearCandidate, saveCustom: saveCustom,
     latestScout: latestScout, runScout: runScout, spawnScoutedPlan: spawnScoutedPlan,
     latestOutcomes: latestOutcomes, runEnsemble: runEnsemble,
+    latestEnsemble: latestEnsemble, scenarioAnimation: scenarioAnimation,
     adoptResearchEnsemble: adoptResearchEnsemble,
     runOutcome: runOutcome, compareOutcomes: compareOutcomes, runBacktest: runBacktest,
     rehearsals: rehearsals, createRehearsal: createRehearsal,

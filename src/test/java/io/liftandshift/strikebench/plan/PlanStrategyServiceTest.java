@@ -75,10 +75,12 @@ class PlanStrategyServiceTest {
         PlanStrategyService.SavedRun saved = strategies.saveCompetition(null, plan,
                 Json.parse("{\"filters\":{\"minPop\":0.55}}"), result);
         assertThat(saved.state()).isEqualTo("CURRENT");
+        assertThat(saved.inputHash()).hasSize(64);
         String candidateId = saved.result().at("/candidates/0/id").asText();
         assertThat(candidateId).startsWith("pcand_");
 
         PlanStrategyService.SavedRun restored = strategies.latestCompetition(null, plan.id());
+        assertThat(restored.inputHash()).isEqualTo(saved.inputHash());
         assertThat(restored.result().at("/candidates/0/legs")).isEqualTo(saved.result().at("/candidates/0/legs"));
         assertThat(saved.result().at("/candidates/0/breakevens/0").isTextual()).isTrue();
         assertThat(restored.result().at("/candidates/0/breakevens/0").decimalValue())
@@ -160,6 +162,23 @@ class PlanStrategyServiceTest {
         Plan.View afterSelection = plans.get(null, plan.id());
         long selectedVersion = afterSelection.version();
         String selectedId = selected.get("id").asText();
+
+        ObjectNode refreshedField = Json.MAPPER.createObjectNode();
+        refreshedField.put("symbol", "AAPL");
+        refreshedField.put("thesis", "bullish");
+        refreshedField.put("horizon", "month");
+        refreshedField.put("riskMode", "balanced");
+        refreshedField.put("intent", "DIRECTIONAL");
+        refreshedField.putArray("candidates").add(candidate.deepCopy());
+        PlanStrategyService.SavedRun refreshed = strategies.saveCompetition(null, afterSelection,
+                Json.parse("{\"filters\":{\"minPop\":0.45}}"), refreshedField);
+
+        assertThat(strategies.latestCompetition(null, plan.id()).inputHash()).isEqualTo(refreshed.inputHash());
+        assertThat(strategies.selectedCandidate(null, plan.id()).at("/id").asText()).isEqualTo(selectedId);
+        assertThat(db.query("SELECT state FROM plan_candidate WHERE id=?", r -> r.str("state"), selectedId))
+                .containsExactly("CURRENT");
+        assertThat(plans.get(null, plan.id()).version()).isEqualTo(selectedVersion);
+
         ObjectNode constrained = candidate.deepCopy();
         constrained.remove("id");
         constrained.put("label", "Analyzed but mechanically constrained");

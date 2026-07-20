@@ -25,6 +25,42 @@ The non-trading end-to-end probe then exercised the canonical Plan path before t
 - no trade or broker order was placed. The successful receipts are in
   `/private/var/folders/fj/6zb38k1n2l73djm42fkdm03c0000gn/T/strikebench-live-desk-flow-20260720-185204`.
 
+The packaged convergence build was probed again at 12:11 America/Phoenix. NVDA returned 11 ranked
+candidates, a new 500-path stored ensemble with fingerprint
+`5898875f3b13f65004debb007ffc9bc6dfe7cfab6828ec533841721bc54ec006`, and an executable observed /
+delayed preview. A transient -4% one-session hypothesis selected nine original source paths from
+that exact ensemble, focused source row 128, and returned the proposal plus stock-baseline valuation
+checkpoints under child valuation fingerprint
+`ab5b125b6c5fe972192acd8ac4eb289b12ca51dc70b6a0703a83880e65f782c4`.
+MARKET and marketable LIMIT previews were immediate; a more favorable signed debit limit was
+`RESTING`, non-executable, and left the ensemble fingerprint unchanged. No trade was submitted.
+Receipts are in
+`/private/var/folders/fj/6zb38k1n2l73djm42fkdm03c0000gn/T/strikebench-live-desk-flow-20260720-191154`.
+
+A final bounded receipt at 19:47Z captured AMD and NVDA quotes, same-day near-the-money chain
+slices, available expirations, and sourced headlines while `/api/config` still reported the
+observed market open. Quotes and chains were `OBSERVED` / Cboe / `DELAYED`; requested AMD history
+remained honestly unavailable. The engineering-only note is
+`.tmp/market-session-2026-07-20-1947z.md`; it is deliberately untracked and is not a runtime cache.
+StrikeBench already persists eligible observed quote snapshots and daily bars through its canonical
+stores. News remains provider-refetched with a short in-memory cache, so this receipt does not
+introduce a second storage owner.
+
+After the close, the fresh packaged build was restarted in non-fixture `OBSERVED` mode. It reported
+`marketOpen:false`, restored its canonical quote snapshots, and returned NVDA 203.31 / 203.33 from
+Cboe as `DELAYED`, 23 currently available expirations, and 63 calls plus 63 puts for the first
+available 2026-07-22 expiration. The expired 2026-07-20 chain remained unavailable instead of being
+fabricated. This closed-session check verifies honest continuity, not a live executable market.
+
+The same fresh package then completed a non-trading two-session NVDA flow: 10 backend candidates,
+one exact selection, a 500-path ensemble
+`5ee5e8e4a058ac0aada2fb1f77a6fe34a8dafffab6d034e18b7ac4b4ee57a371`, an outcome evaluation, and
+an eligible `OBSERVED` / `DELAYED` Practice preview. A -3% conditioned display selected nine original
+ensemble rows. Each returned 25 stochastic price points plus 25 synchronized underlying, package,
+and per-leg valuation checkpoints; the focus path had non-linear interior movement and all eight
+context paths retained distinct terminals. No trade was submitted. Receipts are in
+`/private/var/folders/fj/6zb38k1n2l73djm42fkdm03c0000gn/T/strikebench-live-desk-flow-20260720-201910`.
+
 This proves the quote/expiration/chain seam while the market is open. It does not prove order
 placement, fill state, historical coverage, or that every contract is executable. Those retain
 their existing gates.
@@ -75,10 +111,10 @@ their existing gates.
 ## Layout decision for New Idea
 
 Keep the current visual language. Move the exact leg editor adjacent to the Ideas selection in the
-reading order and stack them as full-width panels. This remains legible for condors and larger
-packages and collapses naturally on mobile. The risk map becomes a supporting panel beside another
-compact decision panel when width permits, then stacks below. Panel-local scrolling is acceptable
-for a grown leg set or dense Expert columns; whole-page horizontal scrolling is not.
+reading order and stack Ideas, exact Legs, and the supporting risk map as full-width panels. This
+remains legible for condors and larger packages and collapses naturally on mobile. Panel-local
+horizontal scrolling is acceptable for a grown desktop leg set; whole-page horizontal scrolling is
+not. The map retains useful height instead of becoming a tiny sidecar on wide screens.
 
 ## Implemented convergence increment
 
@@ -91,6 +127,17 @@ for a grown leg set or dense Expert columns; whole-page horizontal scrolling is 
 - Conditioning is nearest-path selection over the immutable stored fan. It does not claim to
   sample a new conditional posterior. Full-fan probability bands remain context; the focus trace
   and neighboring paths show the selected hypothesis's journey.
+- Default Plan ensembles now retain a generator-owned intraday grid: 12 steps per session for one-
+  and two-session decisions, six through one week, three through 45 sessions, and one thereafter.
+  A one-session default therefore stores 13 stochastic checkpoints rather than drawing straight
+  open-to-close rays. Default parametric fans calibrate volatility from the active option-market IV
+  receipt before the scenario fallback can replace the calibration sentinel. Explicit user/model
+  volatility and resolution remain authored.
+- `ScenarioCanvasValuator` keeps its daily probability bands and now additively returns focus-path
+  underlying, package P/L/value/Greeks, and per-leg value/Greeks/state for every stored simulation
+  step. Every checkpoint is produced through `PathValuationKernel`; the Desk follows those step
+  values while the highlighted stochastic path advances, so a noisy one-session trajectory cannot
+  drive a straight-line payoff or risk-map animation.
 - Plan decision preview accepts
   `orderInstruction: {type: MARKET|LIMIT, limitNetCents?, timeInForce: DAY}`. Preview responses name
   `IMMEDIATE`, `RESTING`, or `UNAVAILABLE`, retain the natural executable signed net, derive
@@ -103,6 +150,42 @@ for a grown leg set or dense Expert columns; whole-page horizontal scrolling is 
 - Candidate/leg/risk composition now reads Ideas → exact Legs → supporting map. Four-plus-leg
   packages use a panel-local rail on desktop and full-width stacked legs on narrow layouts; position
   risk marks expose identity through focus/hover instead of printing ticker text over every dot.
+- Backend rank remains visible and unmodified. Desk Pick is a separate candidate identity and is
+  shown only for a mechanically usable `COHERENT` backend assessment; if no such candidate exists,
+  the Desk does not invent an endorsement. Screened alternatives keep readable names and verdicts
+  while secondary metrics remain visually quiet. Authoritative candidates are no longer re-screened
+  by browser-only caps, eliminating the contradictory “Desk Pick / screened” state and the mass
+  dimming seen in the interim review.
+- Ranked and restored candidates now carry `StrategyCatalog.PositionIdentity`, including the
+  canonical defined-risk classification. Nullable or model-dependent maximum-profit fields no
+  longer force the browser to guess a structure's risk class. If catalog classification is
+  unavailable, the Desk says `unknown` rather than coloring the package as defined risk.
+- Strategy competition runs now expose a server-owned canonical `inputHash`. The Desk pairs the
+  exact `runId` and `inputHash` with its declaration, control, quote, chain, world, and dataset
+  fingerprint before reusing a competition. A required refresh reads `/strategy/latest` after the
+  write, so an independently selected exact CUSTOM/Scout package remains selected while only the
+  ranked competition is replaced; clearing tab-local receipts forces a safe refresh rather than a
+  stale reuse.
+- Stored fans are repainted only when their immutable receipt still matches the active symbol,
+  world, dataset, quote anchor/source/freshness/time, and the current backend-resolved ATM IV.
+  A quote or volatility-surface change creates a new canonical ensemble and rebinds the selected
+  outcome; the browser never rescales an old fan to make it appear current. Fresh generation also
+  re-reads the exact loaded chain receipt and canonical quote/IV surface identity before accepting
+  the fan, so even a same-clock simulated volatility shift during the multi-request flow is refused
+  instead of mixing snapshots.
+- Selection and outcome responses must echo the requested candidate, ensemble id, ensemble
+  fingerprint, and valuation identity before replacing visible state. The strategy-select endpoint's
+  intentionally thin `{candidateId, planVersion}` mutation receipt is validated while the full
+  server-loaded candidate remains the rendering/evaluation object. Pending candidate changes and
+  decision commits serialize competing Plan mutations. Decision review and confirmation honor
+  `preview.ok`, backend guardrails, account fit, required acknowledgments, and present executability.
+  MARKET/LIMIT preview facts stay inside the execution surface and no longer overwrite the
+  candidate/outcome payoff.
+- The current HTTP Book/Position surface is still a labeled visual fixture and does not yet call the
+  Desk bridge. A persistent compact position context strip prevents quote/event/news orientation
+  from disappearing during Mechanics/Book pane changes or leg adjustment, but authoritative Book
+  wiring must use the existing portfolio, Plan, trade, research, history, news, and book-risk routes
+  rather than promoting those staged values.
 
 ## Non-negotiable verification
 

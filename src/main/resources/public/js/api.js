@@ -88,7 +88,7 @@
 
   // POSTs that change NO server state — never touch the cache (the builder previews on every
   // keystroke; Research event studies and Trade shaping tools are pure compute).
-  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|strategies\/identify$)/;
+  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|strategies\/identify$|plans\/[^/]+\/(outcomes\/ensemble\/paths|decision\/preview)$)/;
   // Writes that only persist UI state — flushing market/account caches for them would defeat
   // the cache entirely (the workspace autosaves every few seconds).
   var STATE_WRITER = /^\/api\/workspace$/;

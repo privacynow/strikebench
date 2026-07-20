@@ -236,6 +236,12 @@ public record ScenarioSpec(
                 jumpsPerYear, jumpMean, jumpVol, tailNu, heston, seed, n, waypoints);
     }
 
+    /** Same scenario at a denser stored time grid; paths remain generator-owned and fingerprinted. */
+    public ScenarioSpec withStepsPerDay(int n) {
+        return new ScenarioSpec(model, shape, horizonDays, n, driftAnnual, volAnnual,
+                jumpsPerYear, jumpMean, jumpVol, tailNu, heston, seed, paths, waypoints);
+    }
+
     /** Same scenario, authored pins — the scenario canvas's entry point. */
     public ScenarioSpec withWaypoints(List<Waypoint> pins) {
         return new ScenarioSpec(model, shape, horizonDays, stepsPerDay, driftAnnual, volAnnual,

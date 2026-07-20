@@ -109,6 +109,65 @@ class ScenarioCanvasTest {
         assertThat(focusDay.greeks()).isEqualTo(focusLegDay.greeks());
     }
 
+    @Test void focusPathCheckpointsRepriceEveryStoredSimulationStepWithoutReplacingDailyBands() {
+        LocalDate anchor = LocalDate.of(2026, 7, 2);
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                2, 3, 0, .30, 0, 0, 0, 6, null, 142, 3);
+        double[][] paths = {
+                {100, 101, 102, 103, 104, 105, 106},
+                {100, 100, 101, 100, 102, 101, 103},
+                {100,  98, 102,  97, 103,  99, 105}
+        };
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
+        var call = new PathPosition(anchor, List.of(Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), MarketHours.tradingDateAfter(anchor, 10), 1,
+                BigDecimal.ZERO)));
+        var iv = IvSpec.flat(.30);
+        var canvas = ScenarioCanvasSpec.defaults();
+
+        var report = new ScenarioCanvasValuator().value(ensemble, iv, canvas, .04,
+                List.of(new ScenarioCanvasValuator.PositionInput("call", "Two calls", "PLAN",
+                        "PROPOSAL", call, 2, 900L, true)), 2);
+
+        assertThat(report.underlying()).hasSize(3);
+        assertThat(report.underlyingSteps()).hasSize(7);
+        assertThat(report.underlyingSteps())
+                .extracting(ScenarioCanvasValuator.UnderlyingStep::focusPrice)
+                .containsExactly(100.0, 98.0, 102.0, 97.0, 103.0, 99.0, 105.0);
+        assertThat(report.underlyingSteps())
+                .extracting(ScenarioCanvasValuator.UnderlyingStep::sessionProgress)
+                .containsExactly(0.0, .3333, .6667, 1.0, 1.3333, 1.6667, 2.0);
+        assertThat(report.underlying().get(1).focusPrice())
+                .isEqualTo(report.underlyingSteps().get(3).focusPrice());
+
+        var position = report.positions().getFirst();
+        assertThat(position.days()).hasSize(3);
+        assertThat(position.steps()).hasSize(7);
+        assertThat(position.legs().getFirst().days()).hasSize(3);
+        assertThat(position.legs().getFirst().steps()).hasSize(7);
+        assertThat(position.days().get(1).focusValueCents())
+                .isEqualTo(position.steps().get(3).focusValueCents());
+        assertThat(position.legs().getFirst().days().get(1).valueCents())
+                .isEqualTo(position.legs().getFirst().steps().get(3).valueCents());
+
+        double[] elapsed = PathValuationKernel.elapsed(spec.calendarStepYears(anchor));
+        double[] ivPath = iv.path(spec.totalSteps(), elapsed[spec.totalSteps()] / spec.totalSteps(),
+                spec.stepsPerDay());
+        int[] transformations = PathValuationKernel.transformationSteps(call, paths[2],
+                spec.totalSteps(), spec.stepsPerDay(), elapsed, ivPath, canvas, .04);
+        long expectedStepTwo = Math.round(PathValuationKernel.valueCanvas(call, paths[2], 2,
+                spec.totalSteps(), spec.stepsPerDay(), elapsed, ivPath, canvas, .04,
+                transformations) * 2 * 100);
+        assertThat(position.steps().get(2).focusValueCents()).isEqualTo(expectedStepTwo);
+        assertThat(position.steps().get(2).focusValueCents())
+                .isEqualTo(position.legs().getFirst().steps().get(2).valueCents());
+        assertThat(position.steps().get(2).focusPnlCents()).isEqualTo(expectedStepTwo - 900L);
+        assertThat(position.steps().get(2).greeks())
+                .isEqualTo(position.legs().getFirst().steps().get(2).greeks());
+    }
+
     @Test void storedEnsembleAnchorDrivesBothCanvasDistributionAndDailyValuationClock() {
         LocalDate ensembleAnchor = LocalDate.of(2026, 7, 1);
         LocalDate positionAsOf = LocalDate.of(2026, 7, 6);
