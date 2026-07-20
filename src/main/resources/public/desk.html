@@ -592,18 +592,20 @@
 .scenbox{border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);
   padding:10px 12px;height:100%;display:flex;flex-direction:column;container:scenarios / inline-size}
 .scenbox .paytitle{margin-bottom:4px}
-.smx.barmode{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:3px 0}
+.smx.barmode{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:5px 0}
 /* Terminal tile: full scenario name + move, then probability and P/L on their own readable lines.
    The selected tile remains in place while one shared control ribbon opens beneath the spectrum. */
-.srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name play" "odds odds" "pl value";
+.srow{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name name" "odds odds" "pl value";
   align-items:center;column-gap:9px;row-gap:6px;min-height:76px;padding:8px 9px;border:1px solid transparent;border-radius:7px;
-  cursor:pointer;font-size:var(--f-sm);transition:background var(--mo-quick) var(--mo-ease),border-color var(--mo-quick) var(--mo-ease),transform var(--mo-quick) var(--mo-ease)}
+  background:transparent;color:inherit;text-align:left;cursor:pointer;font-size:var(--f-sm);transition:background var(--mo-quick) var(--mo-ease),border-color var(--mo-quick) var(--mo-ease),transform var(--mo-quick) var(--mo-ease)}
 .srow:hover,.srow.hot{background:#101821}
 .srow:hover{border-color:var(--line);transform:translateY(-1px)}
 .srow .sn{grid-area:name;display:flex;align-items:center;gap:6px;min-width:0}
 .srow .sn .snm{color:var(--text);font-weight:650;white-space:normal;line-height:1.2;min-width:0}
+.srow .sn .snshort{display:none}
 .srow .sn .smv{font-family:var(--mono);font-size:var(--f-xs);line-height:1;flex:none}
 .srow .sn .cg{width:24px;height:13px;flex:none;opacity:.6;margin-left:auto}
+.srow .sdesc{display:none;grid-area:desc;color:var(--faint);font-size:var(--f-xs);line-height:1.3}
 .srow .smv.up{color:var(--profit)} .srow .smv.dn{color:var(--loss)} .srow .smv.fl{color:var(--faint)}
 .srow .slk{grid-area:odds;display:flex;align-items:center;gap:6px;min-width:0}
 .srow .slk-b{flex:1;height:4px;background:#18212e;border-radius:2px;overflow:hidden}
@@ -614,11 +616,12 @@
 .srow .sb{position:absolute;top:1px;bottom:1px;border-radius:2px}
 .srow .sb.p{left:50%;background:var(--profit)} .srow .sb.n{right:50%;background:var(--loss)}
 .srow .sv{grid-area:value;text-align:right;font-family:var(--mono);font-weight:650;min-width:62px}
-.srow .splay{grid-area:play;opacity:0;color:var(--faint);font-size:var(--f-2xs);text-align:center;transition:opacity var(--mo-quick) var(--mo-ease)}
+.srow .splay{position:absolute;right:5px;top:5px;opacity:0;color:var(--faint);font-size:var(--f-2xs);text-align:center;transition:opacity var(--mo-quick) var(--mo-ease)}
 .srow:hover .splay,.srow.pinned .splay,.srow.live .splay{opacity:1}
 .srow.pinned .splay,.srow.live .splay{color:var(--accent)}
 .srow.best{background:rgba(65,200,146,.09)} .srow.best .snm{color:var(--profit)}
 .srow.worst{background:rgba(243,93,100,.09)} .srow.worst .snm{color:var(--loss)}
+.srow.likely{border-color:rgba(70,213,181,.45);box-shadow:inset 2px 0 0 var(--accent)}
 .srow.live{background:var(--accent-wash);box-shadow:inset 2px 0 0 var(--accent)} .srow.live .snm{color:var(--accent)}
 /* selected tile marks the cause; the shared ribbon below owns playback + assumptions */
 .srow.pinned{background:var(--accent-wash);border-color:var(--accent-2);box-shadow:inset 2px 0 0 var(--accent)}
@@ -639,9 +642,11 @@
 .srow-ctl .scenplay{padding:4px 8px}
 /* greek values while a scenario animates + the projected hero P/L (glow keeps semantic colors) */
 .mgv.breath,.expv.proj-live{text-shadow:0 0 9px rgba(57,199,212,.35)}
-.scensum{display:flex;flex-wrap:wrap;gap:16px;padding:8px 2px 2px;margin-top:auto;
+.scensum{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px 18px;padding:7px 2px 1px;margin-top:auto;
   border-top:1px solid var(--line-soft);font-size:var(--f-sm)}
 .scensum .e .lbl{margin-bottom:1px} .scensum .e .v{font-family:var(--mono);font-weight:600}
+.scensum .e{display:flex;align-items:baseline;gap:7px}.scensum .range{margin-left:auto}
+.scensum .sumshort{display:none}
 .probleg{padding:8px 2px 0;font-size:var(--f-xs);color:var(--faint);line-height:1.4}
 .bloomgap{margin:6px 0 9px;padding:6px 10px;border:1px solid var(--line-soft);border-left:2px solid var(--loss);border-radius:7px;background:var(--panel-2);
   font-size:var(--f-xs);line-height:1.45;color:var(--dim)}
@@ -772,7 +777,7 @@
 .focus .card .bd-legs .legsummary{margin-top:2px}
 .posdepth{height:224px;min-height:224px;margin-top:8px;display:grid;grid-template-columns:140px minmax(0,1fr);gap:9px;min-width:0}
 .posdepth .posinspectrail{display:flex;flex-direction:column;grid-template-columns:none;gap:5px}
-.posdepth .posinspectrail .inspecttab{justify-content:flex-start;padding:7px 10px}
+.posdepth .posinspectrail .inspecttab{width:100%;padding:7px 10px}
 .posinspectwell{min-width:0;min-height:0;overflow:hidden;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
 .posinspectwell>.lens{border:0;border-radius:0;background:transparent;padding:9px 11px;gap:7px}
 .posresearch{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr);
@@ -782,7 +787,9 @@
 .posresearch>.lensnews{grid-area:news;padding-top:6px}
 .posmechanics{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);grid-template-rows:auto minmax(0,1fr);column-gap:14px;align-content:start}
 .posmechanics>.lenshd{grid-column:1/-1}.posmechanics>.mechg{grid-column:1;grid-row:2;margin-top:0}.posmechanics>.mechstats{grid-column:2;grid-row:2;margin-top:0}
-.posbook{justify-content:center}.posbook .bookbar{max-width:900px;width:100%}
+.posbook{justify-content:flex-start}.posbook .bookbar{max-width:900px;width:100%}
+.posbook .bookfacts{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:2px}
+.posbook .bookbar{margin:7px 0 4px}.posbook .corrrow{margin-top:6px}.posbook .panefoot{margin-top:5px;padding-top:5px}
 .bd-manage:empty{display:none}
 .bd-manage:not(:empty){margin-top:8px}
 /* Short desktop viewports keep the same decision-band component but use its wide, horizontal
@@ -818,7 +825,7 @@
    .decwrap is the FLIP hero (breathes from the origin control). */
 .decwrap{position:absolute;inset:0;padding:10px 15px 12px;display:grid;
   grid-template-rows:auto minmax(0,1fr) auto;gap:9px}
-.decgrid,.decdock{--dec-left:clamp(370px,17vw,430px);--dec-right:clamp(380px,18vw,455px);
+.decgrid,.decdock{--dec-left:clamp(520px,27vw,700px);--dec-right:clamp(440px,21vw,540px);
   display:grid;grid-template-columns:var(--dec-left) minmax(0,1fr) var(--dec-right);gap:13px;min-width:0}
 .decgrid{min-height:0}
 .deccol{min-height:0;min-width:0;display:flex;flex-direction:column;gap:9px;overflow:hidden}
@@ -830,6 +837,7 @@
 .tmplrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:1px 0 3px}
 .tmplrow .lbl{margin:0}
 .tmplbtn{border:1px solid var(--line);background:#0d131c;color:var(--dim);border-radius:6px;padding:3px 10px;font-size:var(--f-xs);font-weight:600;cursor:pointer;white-space:nowrap}
+.tmplbtn .tmplshort{display:none}
 .tmplbtn:hover{border-color:var(--accent-2);color:var(--text)}
 .mstp.wide{display:inline-flex;width:100%}
 .mstp.wide .mv{flex:1;text-align:left;font-size:var(--f-sm)}
@@ -857,22 +865,40 @@
 .btn.ghost:hover{border-color:var(--accent-2);color:var(--text)}
 /* CENTER — payoff is a bounded hero (was flex:1, i.e. as-tall-as-the-column); scenarios + numbers
    + legs + execute flow beneath it. Still the drag surface, just not vertically dominant. */
-.dcctop{display:flex;flex:1;min-height:0;flex-direction:column;gap:11px;align-items:stretch;margin-bottom:2px}
-.dcctop .dccpay{display:flex;flex:1;min-height:0;flex-direction:column;gap:6px;min-width:0}
-.dccenter .decpay{flex:1;min-height:230px;height:auto;width:100%;display:block;border:1px solid var(--line-soft);
+.dcctop{display:flex;min-height:0;flex-direction:column;gap:9px;align-items:stretch;margin-bottom:2px}
+.dcctop .dccpay{display:flex;flex:none;min-height:0;flex-direction:column;gap:6px;min-width:0}
+.dccenter .decpay{flex:none;height:clamp(260px,32vh,390px);min-height:230px;width:100%;display:block;border:1px solid var(--line-soft);
   border-radius:9px;background:var(--panel-2)}
 .dccenter .paytitle{margin-bottom:2px}
 .dccenter .scenpanel,.dccenter .scenbox{flex:none;height:auto}
 .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr))}
 .dccenter .numrow{flex:none}
-/* LEFT — ideas lead · risk/reward map below them (fills remaining) · compact caps at the bottom */
-.dcleft .modebar{margin:0}
+/* LEFT — ideas lead · the linked risk/reward map is always co-visible. Screens/caps is
+   summoned over this single rail instead of becoming another destination. */
+.dcleft{position:relative}
+.dcleft .modebar{margin:0;flex:none}
 .dcleft .srcpanel,.dcleft .govpanel{margin:0}
-.dcleft .pickmap{flex:0 1 clamp(220px,30vh,360px);min-height:190px;display:flex;flex-direction:column;gap:6px}
-.dcleft .decmap{flex:1;height:auto;min-height:170px}
+.dcleft .fan{flex:1;min-height:190px;overflow:auto;padding-right:2px}
+.dcleft .pickmap{flex:0 0 clamp(210px,22vh,250px);min-height:205px;display:flex;flex-direction:column;gap:4px;
+  border-top:1px solid var(--line-soft);padding-top:7px}
+.dcleft .decmap{flex:1;height:auto;min-height:145px}
 .dcleft .srchd.sub{margin:2px 0 0}
 .dcleft .srchd .gshown{margin-left:auto;font-family:var(--mono);font-size:var(--f-sm);font-weight:700;color:var(--accent)}
 .dcleft .srchd .gshown small{color:var(--faint);font-weight:600}
+@media (min-width:1900px){
+  .dcleft .fan{flex:0 1 auto;max-height:calc(100% - 300px)}
+  .dcleft .pickmap{flex:1 1 320px;min-height:250px}
+  .dcleft .decmap{min-height:210px}
+}
+@media (min-width:1900px) and (min-height:1000px){
+  .dccenter .dcctop{flex:1}
+  .dccenter .dccpay{flex:1;max-height:610px}
+  .dccenter .decpay{flex:1;height:auto;max-height:none;min-height:360px}
+  .dccenter .scenpanel{display:flex;flex:0 0 min(30vh,360px);min-height:300px;flex-direction:column}
+  .dccenter .scenpanel .smx.barmode{flex:1;grid-auto-rows:1fr}
+  .dccenter .scenpanel .srow{grid-template-areas:"name name" "desc desc" "odds odds" "pl value";align-content:center}
+  .dccenter .scenpanel .sdesc{display:block}
+}
 /* compact governor — smaller sliders, tighter rows; a control strip, not the headline */
 .dcleft .govpanel{padding:10px 12px;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2)}
 .dcleft .govhd{margin-bottom:8px}
@@ -883,6 +909,8 @@
 .dcleft .gov .slider::-moz-range-thumb{width:11px;height:11px;border-width:2px}
 .dcleft .gct{margin-bottom:5px}
 .dcleft .bpread{margin-top:8px;padding-top:8px}
+.dcleft .raildrawer.capsdrawer{position:absolute;z-index:25;inset:34px 0 0;padding:10px;overflow:auto;
+  border:1px solid var(--line);border-radius:10px;background:var(--pop-surface,#0d131c);box-shadow:0 16px 42px rgba(0,0,0,.58)}
 /* RIGHT — depth (stacked, compact) + place ticket */
 /* ---- Decide RIGHT column: Understand (mechanics + evidence/sim + book) then Execute ---- */
 .dcright{gap:12px}
@@ -890,7 +918,126 @@
 .dccenter .scenpanel{container:scenarios / inline-size}
 @container scenarios (min-width:1500px){ .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(8,minmax(0,1fr))} }
 @container scenarios (max-width:820px){
-  .focus .card .bd-right .scenbox .smx.barmode,.dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:1700px){
+  .decgrid,.decdock{--dec-left:clamp(330px,27vw,390px);--dec-right:clamp(320px,27vw,380px);gap:9px}
+  .decwrap{padding-left:10px;padding-right:10px}
+  .dccenter .decpay{height:clamp(230px,30vh,320px)}
+  .srow{padding-left:6px;padding-right:6px;column-gap:6px}
+  .srow .sn{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start}
+  .srow .sn .snfull{display:none}.srow .sn .snshort{display:inline}
+  .scensum .sumfull{display:none}.scensum .sumshort{display:inline}
+  .srow .sn .cg{display:none}
+  .tmplbtn .tmpllong{display:none}.tmplbtn .tmplshort{display:inline}
+}
+@media (max-width:1700px) and (max-height:850px){
+  .decwrap{padding-top:7px;padding-bottom:8px;gap:6px}
+  .deccol{gap:5px}.dcctop{gap:5px}
+  .dccenter .decpay{height:145px;min-height:145px}
+  .dccenter .kgrid.calm .k{padding-top:5px;padding-bottom:5px}
+  .dccenter .ksecondary{margin-top:2px;gap:10px}
+  .dccenter .scenpanel{padding:6px 8px}
+  .dccenter .scenpanel .lenshd{margin-bottom:1px}
+  .dccenter .smx.barmode{gap:3px;margin:3px 0}
+  .dccenter .srow{min-height:54px;padding:4px 6px;row-gap:2px;font-size:12px}
+  .dccenter .srow .sn{height:28px;overflow:hidden}
+  .dccenter .srow .snm{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:12px;line-height:1.15}
+  .dccenter .srow .sn .smv{font-size:10px}
+  .dccenter .srow .slk-b{height:3px}
+  .dccenter .srow .sbw{height:9px}
+  .dccenter .scensum{padding-top:4px;gap:5px 10px;font-size:var(--f-xs)}
+  .legsummary{min-height:34px;padding-top:3px;padding-bottom:3px}
+  .dccenter .tmplrow{flex-wrap:nowrap;gap:4px;margin:0}.dccenter .tmplrow .lbl{font-size:var(--f-2xs)}
+  .dccenter .tmplbtn{padding:2px 6px;font-size:11px}
+  .dccenter .leghd{margin:3px 0 2px}.dccenter .leghd .hint{display:none}
+  .dccenter .declegs{flex-wrap:nowrap;margin:0}.dccenter .declegs .lgm{display:none}
+  .dccenter .declegs .tgl{padding:1px 3px;font-size:10px}
+  .dccenter .declegs .legr{flex:1;min-width:0}.dccenter .addleg.sm{padding:4px 7px;font-size:11px;white-space:nowrap}
+  .dccenter .addleg.sm .addlong{display:none}.dccenter .addleg.sm{width:30px;padding-left:0;padding-right:0}
+  .dccenter:has(.declegs) .decpay{height:134px;min-height:134px}
+  .inspectpane{padding:8px 9px}
+  .evsimstage{min-height:190px}
+  .mcreceipt{margin-top:3px}
+  .mcreceipt span:last-child{display:none}
+  .bookimpact .lenshd{margin-bottom:4px}
+  .bookimpact .paneverdict{padding:6px 7px}.bookimpact .paneverdict span{display:none}
+  .bookimpact .bookfacts{gap:4px;margin-top:5px}
+  .bookimpact .bookfact2{padding:4px 6px}.bookimpact .bookfact2 b{margin-top:1px;font-size:var(--f-xs)}
+  .bookimpact .bookcompare,.bookimpact .bookgreeks{margin-top:5px}
+  .bookimpact .bookgreeks span{padding-top:1px;padding-bottom:1px}
+  .bookimpact .corrrow{margin-top:5px;gap:4px}.bookimpact .corrchip{font-size:var(--f-xs);padding:0 4px}
+  .bookimpact .panefoot{padding-top:5px;font-size:var(--f-2xs);line-height:1.25}
+  .inspectpane .cohpips{gap:4px;margin:2px 0 5px}.inspectpane .cohpip{padding:4px 6px}.inspectpane .cohpip .cohnote{display:none}
+  .inspectpane .cohprose{padding-top:5px;font-size:var(--f-2xs);line-height:1.3}
+  .inspectpane .tailpanel{padding:6px 7px}.inspectpane .tailpanel .lenshd{margin-bottom:1px}
+  .inspectpane .tailmain{font-size:var(--f-xs);line-height:1.3;margin:2px 0}.inspectpane .tailsub{font-size:var(--f-2xs);line-height:1.25}
+  .inspectpane .gapdial button{padding-left:6px;padding-right:6px}
+  .inspectpane .fitbudget{margin-top:5px;padding:6px 7px}
+  .inspectpane .mechg{gap:4px;margin-top:2px}.inspectpane .mgt{padding:5px 6px}.inspectpane .mgbar{margin:3px 0 2px}
+  .inspectpane .mgc{font-size:var(--f-2xs)}.inspectpane .mechstats{gap:4px 8px;margin-top:5px}
+  .inspectpane .sensitivity{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:5px;padding-top:5px}
+  .inspectpane .sensitivity>.lbl{grid-column:1/-1}
+  .inspectpane .sensrow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"lab val" "track track";gap:2px 4px;margin-top:0}
+  .inspectpane .sensrow>span{grid-area:lab;white-space:nowrap}.inspectpane .sensrow>i{grid-area:track}.inspectpane .sensrow>b{grid-area:val}
+  .inspectpane .legreceipt{margin-top:5px;padding-top:5px;gap:3px}
+  .inspectpane .ensembleresult{grid-template-rows:auto minmax(72px,1fr) auto;gap:2px}
+  .inspectpane .ensembleresult .mcfan{min-height:72px}
+  .inspectpane .ensembleresult .mcstats{grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 12px}
+  .inspectpane .ensembleresult .mcs{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:4px}
+  .inspectpane .ensembleresult .mck,.inspectpane .ensembleresult .mcv{font-size:10px}
+  .scenpanel:has(.srow-ctl) .scensum,.focus .card .scenbox:has(.srow-ctl) .scensum{display:none}
+  .scenpanel:has(.srow-ctl) .srow[data-si],.focus .card .scenbox:has(.srow-ctl) .srow[data-si]{grid-template-areas:"name name" "pl value"}
+  .scenpanel:has(.srow-ctl) .srow[data-si] .slk,.focus .card .scenbox:has(.srow-ctl) .srow[data-si] .slk{display:none}
+  .scenpanel .srow-ctl,.focus .card .scenbox .srow-ctl{grid-column:1/-1;display:grid;
+    grid-template-columns:minmax(0,.82fr) minmax(150px,1.18fr);grid-template-areas:"read play" "steps steps";gap:3px 6px;padding:4px 5px}
+  .scenpanel .srow-ctl>.srx-read,.focus .card .scenbox .srow-ctl>.srx-read{grid-area:read;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .scenpanel .srow-ctl>.scenplay,.focus .card .scenbox .srow-ctl>.scenplay{grid-area:play;padding:0 3px;gap:5px}
+  .scenpanel .srow-ctl .scenplay .playb,.focus .card .scenbox .srow-ctl .scenplay .playb{width:20px;height:20px}
+  .scenpanel .srow-ctl .scenplay .spd button,.focus .card .scenbox .srow-ctl .scenplay .spd button{padding:2px 4px}
+  .scenpanel .srow-ctl>.smstps,.focus .card .scenbox .srow-ctl>.smstps{grid-area:steps;flex-wrap:nowrap;gap:4px}
+  .scenpanel .srow-ctl .mstp button,.focus .card .scenbox .srow-ctl .mstp button,
+  .scenpanel .srow-ctl .tunit button,.focus .card .scenbox .srow-ctl .tunit button{height:19px;width:17px}
+  .scenpanel .srow-ctl .mstp .mv,.focus .card .scenbox .srow-ctl .mstp .mv{min-width:35px;font-size:10px}
+  .dccenter:has(.srow-ctl) .decpay{height:108px;min-height:108px}
+  .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:95px;min-height:95px}
+}
+@media (min-width:1001px) and (max-width:1700px) and (max-height:850px){
+  .focus .card>.cdetail{padding:7px 10px 8px;overflow:hidden}
+  .focus .card .decband{flex:none;gap:4px;padding:6px 10px;margin:0}
+  .focus .card .decrow{grid-template-columns:170px minmax(0,1fr);gap:12px}
+  .focus .card .decpl{padding-right:10px}.focus .card .decplv{font-size:calc(var(--f-xl)*1.08)}
+  .focus .card .decmain{display:grid;grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"eye acts" "read acts";column-gap:12px;row-gap:2px;align-items:center}
+  .focus .card .deceyebrow{grid-area:eye}.focus .card .decread,.focus .card .verdict{grid-area:read;font-size:13px;line-height:1.3}
+  .focus .card .decacts{grid-area:acts;margin:0;align-self:center;justify-content:flex-end;gap:5px}
+  .focus .card .decacts .btn{padding:5px 9px;font-size:var(--f-xs)}
+  .focus .card .decbridge{padding-top:3px;line-height:1.2;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .focus .card>.cdetail>.bd-cols{flex:none;display:grid;grid-template-columns:minmax(0,1.18fr) minmax(0,1fr);height:198px;min-height:198px;gap:7px;margin-top:5px}
+  .focus .card>.cdetail>.bd-cols>.bd-hero{min-height:0;height:198px;overflow:hidden}
+  .focus .card .bd-hero .paytitle{margin-bottom:3px}.focus .card .bd-hero .paywrap{flex:none;height:105px;min-height:105px}
+  .focus .card .bd-hero .kgrid.calm .k{padding-top:4px;padding-bottom:4px}
+  .focus .card .bd-hero .ksecondary{margin-top:1px;gap:9px;white-space:nowrap;overflow:hidden}
+  .focus .card .bd-right{height:198px;min-height:198px}
+  .focus .card .bd-right .scenbox{height:198px;padding:6px 7px}
+  .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin:2px 0}
+  .focus .card .bd-right .scenbox .srow{min-height:51px;padding:4px 5px;row-gap:2px;font-size:12px}
+  .focus .card .bd-right .scenbox .srow .sn{height:16px;overflow:hidden}
+  .focus .card .bd-right .scenbox .srow .snm{font-size:12px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .focus .card .bd-right .scenbox .slk-b{height:3px}.focus .card .bd-right .scenbox .sbw{height:8px}
+  .focus .card .bd-right .scenbox .scensum{padding-top:3px;margin-top:2px;gap:4px 8px;font-size:var(--f-2xs)}
+  .focus .card .bd-right .scenbox:has(.srow-ctl) .srow[data-si]{min-height:39px;padding-top:2px;padding-bottom:2px}
+  .focus .card .bd-legs .legsummary{min-height:32px;margin-top:4px;padding-top:2px;padding-bottom:2px}
+  .focus .card .posdepth{height:194px;min-height:194px;margin-top:5px}
+  .focus .card .posresearch{grid-template-columns:minmax(0,1.05fr) minmax(300px,.95fr);
+    grid-template-areas:"hd hd" "px why" "label why" "rel news" "iv news"}
+  .focus .card .posinspectwell{overflow:hidden}
+  .focus .card .posresearch>.lensnews{padding-top:3px}.focus .card .posresearch>.lenswhy .wtext{font-size:var(--f-xs);line-height:1.3}
+  .focus .card .posbook{padding:6px 8px;gap:4px}
+  .focus .card .posbook .bookfacts{gap:4px}.focus .card .posbook .bookfact2{padding:4px 6px}
+  .focus .card .posbook .bookfact2 b{margin-top:1px;font-size:var(--f-xs)}
+  .focus .card .posbook .bookbar{margin:4px 0 2px}.focus .card .posbook .corrrow{margin-top:3px;gap:4px}
+  .focus .card .posbook .panefoot{margin-top:2px;padding-top:3px;font-size:var(--f-2xs);line-height:1.25}
 }
 .execute{flex:none}
 .usechead{font-size:var(--f-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent-2);font-weight:700;margin-bottom:1px}
@@ -907,16 +1054,20 @@
 .decisionbrief .dbfact{font-size:var(--f-2xs);color:var(--faint);display:inline-flex;align-items:baseline;gap:4px}
 .decisionbrief .dbfact b{font-family:var(--mono);font-size:var(--f-xs)}
 .inspectrail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
-.inspecttab{display:flex;align-items:center;justify-content:center;gap:5px;border:1px solid var(--line-soft);border-radius:6px;
-  background:var(--panel);color:var(--faint);padding:6px 4px;font-size:var(--f-2xs);font-weight:700;cursor:pointer}
+.inspecttab{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"ico name" "ico value";align-items:center;column-gap:5px;
+  border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);color:var(--faint);padding:6px 7px;text-align:left;
+  font-size:var(--f-2xs);font-weight:700;cursor:pointer;min-width:0}
 .inspecttab:hover,.inspecttab.on{border-color:var(--accent-2);color:var(--text);background:var(--accent-wash)}
-.inspecttab svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.inspecttab svg{grid-area:ico;width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.inspecttab span{grid-area:name;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inspecttab b{grid-area:value;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inspecttab.on b{color:var(--accent)}
 .inspectwell{flex:1;height:auto;min-height:310px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);overflow:hidden}
 .inspectpane{height:100%;min-height:0;padding:10px 11px;overflow:auto}
 .inspectpane>.upanel{border:0;background:transparent;padding:0}
 .inspectpane>.upanel:only-child{height:100%;min-height:0;display:flex;flex-direction:column}
 .inspectpane .cohpanel+.tailpanel{margin-top:8px}
-.inspectpane .bookimpact{height:100%;display:flex;flex-direction:column;justify-content:center}
+.inspectpane .bookimpact{height:100%;display:flex;flex-direction:column}
 /* evidence & simulation */
 .evgrid{display:flex;flex-direction:column;gap:6px}
 .evrow{display:flex;align-items:center;gap:9px;font-size:var(--f-xs)}
@@ -952,8 +1103,8 @@
 .ensembleresult{padding:7px 9px 8px;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:4px}
 .ensembleresult .mchd{display:flex;align-items:center;justify-content:space-between;gap:7px}
 .ensembleresult .mcfan{height:auto;min-height:120px;align-self:stretch;clip-path:inset(0 100% 0 0);animation:mcreveal .9s var(--mo-ease) forwards}
-.ensembleresult .mcstats{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:0}
-.ensembleresult .mcs:nth-child(n+4){display:none}
+.ensembleresult .mcstats{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:0}
+.ensembleresult .mcs:nth-child(n+5){display:none}
 .ensembleresult .mcv{font-size:var(--f-xs)}
 @keyframes mcreveal{to{clip-path:inset(0 0 0 0)}}
 /* coherence panel — one verdict + four honest checks + plain-English why */
@@ -1001,6 +1152,65 @@
 .bklabels .bkl2{color:var(--caution);font-weight:600}
 .bkcap{display:flex;align-items:baseline;gap:6px;margin-top:7px;font-size:var(--f-xs);color:var(--faint)}
 .bkcap b{font-family:var(--mono);color:var(--text);font-weight:700}
+.paneverdict{display:flex;align-items:flex-start;gap:9px;padding:8px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
+.paneverdict i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-wash);margin-top:5px;flex:none}
+.paneverdict.warn i{background:var(--caution);box-shadow:0 0 0 4px var(--caution-wash)}
+.paneverdict b{display:block;font-size:var(--f-sm);line-height:1.25}.paneverdict span{display:block;margin-top:2px;color:var(--dim);font-size:var(--f-xs);line-height:1.35}
+.bookfacts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px}
+.bookfact2{border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);padding:7px 8px;min-width:0}
+.bookfact2 span{display:block;color:var(--faint);font-size:var(--f-2xs);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bookfact2 b{display:block;margin-top:3px;font-family:var(--mono);font-size:var(--f-sm);white-space:nowrap}.bookfact2 b.neg{color:var(--loss)}.bookfact2 b.pos{color:var(--profit)}.bookfact2 b.warn{color:var(--caution)}
+.bookcompare{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:7px;align-items:center;margin-top:8px;color:var(--faint);font-size:var(--f-2xs)}
+.bookcompare .track,.tailtrack{height:7px;border-radius:4px;background:var(--line-soft);overflow:hidden;position:relative}
+.bookcompare .track i{display:block;height:100%;background:linear-gradient(90deg,var(--accent-2),var(--caution));border-radius:4px}
+.bookgreeks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-top:8px}
+.bookgreeks span{border-left:2px solid var(--line);padding:3px 6px;color:var(--faint);font-size:var(--f-2xs)}
+.bookgreeks b{display:block;margin-top:2px;font-family:var(--mono);font-size:var(--f-xs);color:var(--text)}
+.bookcluster{display:none}
+@media (min-width:1900px) and (min-height:1100px){
+  .bookcluster{display:flex;flex:1;min-height:290px;flex-direction:column;margin:13px 0 10px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel);overflow:hidden}
+  .bchd,.bcresult{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:9px 11px;color:var(--faint);font-size:var(--f-xs)}
+  .bchd{border-bottom:1px solid var(--line-soft);text-transform:uppercase;letter-spacing:.04em}.bchd b{color:var(--text);font-family:var(--mono)}
+  .bcstage{position:relative;flex:1;min-height:220px;background:radial-gradient(circle at 56% 52%,rgba(57,199,212,.07),transparent 48%)}
+  .bcstage::before,.bcstage::after{content:"";position:absolute;inset:12% 9%;border:1px solid var(--line-soft);border-radius:50%}
+  .bcstage::after{inset:28% 26%;border-color:rgba(57,199,212,.16)}
+  .bczone{position:absolute;left:12px;top:10px;color:var(--accent-2);font-size:var(--f-2xs);letter-spacing:.08em;text-transform:uppercase}
+  .bcshock{position:absolute;left:12px;bottom:10px;display:inline-flex;align-items:center;gap:7px;color:var(--loss);font-family:var(--mono);font-size:var(--f-xs)}
+  .bcshock::before{content:"";width:28px;height:1px;background:var(--loss);box-shadow:9px -3px 0 -3px var(--loss)}
+  .bcnode{position:absolute;left:var(--x);top:var(--y);width:var(--sz);height:var(--sz);transform:translate(-50%,-50%);display:grid;place-content:center;text-align:center;border:1px solid var(--accent-2);border-radius:50%;background:rgba(57,199,212,.10);box-shadow:0 0 0 4px rgba(57,199,212,.025);z-index:1}
+  .bcnode b{font-family:var(--mono);font-size:var(--f-xs);color:var(--text)}.bcnode em{font-style:normal;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim)}
+  .bcnode.warn{border-color:var(--caution);background:var(--caution-wash)}.bcnode.bad{border-color:var(--loss);background:var(--loss-wash)}
+  .bcnode.idea{border-style:dashed;border-width:2px;border-color:var(--accent);background:var(--accent-wash);box-shadow:0 0 0 6px rgba(70,213,181,.05)}.bcnode.idea b{color:var(--accent)}
+  .bcresult{border-top:1px solid var(--line-soft)}.bcresult b{font-family:var(--mono);color:var(--loss)}.bcresult i{color:var(--faint);font-style:normal}
+  .inspectpane:has(>.cohpanel){display:grid;grid-template-rows:minmax(330px,1fr) 150px 130px;gap:12px;overflow:hidden}
+  .inspectpane:has(>.cohpanel)>.cohpanel{display:flex;min-height:0;flex-direction:column}
+  .inspectpane:has(>.cohpanel) .cohpips{flex:1;align-items:stretch;margin:8px 0 12px}
+  .inspectpane:has(>.cohpanel) .cohpip{align-content:center;padding:14px 16px;font-size:var(--f-sm)}
+  .inspectpane:has(>.cohpanel)>.tailpanel,.inspectpane:has(>.cohpanel)>.fitbudget{display:flex;flex-direction:column;justify-content:center;margin:0;padding:13px 15px}
+  .inspectpane>.upanel:only-child:has(>.mechg){display:grid;grid-template-rows:auto minmax(270px,1.25fr) auto minmax(210px,1fr) auto;gap:12px}
+  .inspectpane>.upanel:only-child:has(>.mechg)>.mechg{height:100%;margin:0}
+  .inspectpane>.upanel:only-child:has(>.mechg) .mgt{display:flex;flex-direction:column;justify-content:center;padding:14px 16px}
+  .inspectpane>.upanel:only-child:has(>.mechg) .mgbar{height:6px}
+  .inspectpane>.upanel:only-child:has(>.mechg)>.mechstats{margin:0}
+  .inspectpane>.upanel:only-child:has(>.mechg)>.sensitivity{display:grid;grid-template-rows:auto repeat(3,minmax(0,1fr));align-items:center;margin:0;padding-top:12px}
+  .inspectpane>.upanel:only-child:has(>.mechg) .sensrow{grid-template-columns:88px minmax(0,1fr) auto;margin:0}.inspectpane>.upanel:only-child:has(>.mechg) .sensrow>i{height:7px}
+  .inspectpane>.upanel:only-child:has(>.mechg)>.legreceipt{margin:0;padding-top:10px}
+}
+.panefoot{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);font-size:var(--f-xs);line-height:1.4;color:var(--dim)}
+.panefoot b{color:var(--text)}
+.fitbudget{margin-top:8px;padding:8px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
+.fitbudget .fbh{display:flex;justify-content:space-between;align-items:baseline;gap:7px;font-size:var(--f-xs);color:var(--faint)}
+.fitbudget .fbh b{font-family:var(--mono);color:var(--text)}
+.fitbudget .tailtrack{margin-top:6px}.fitbudget .tailtrack i{display:block;height:100%;border-radius:4px;background:var(--accent)}
+.sensitivity{margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.sensrow{display:grid;grid-template-columns:68px 1fr auto;gap:7px;align-items:center;margin-top:6px;font-size:var(--f-xs)}
+.sensrow>span{color:var(--faint)}.sensrow>i{height:5px;border-radius:3px;background:var(--line-soft);position:relative}
+.sensrow>i::after{content:"";position:absolute;left:var(--mark,50%);top:-2px;width:2px;height:9px;border-radius:2px;background:var(--accent)}
+.sensrow>b{font-family:var(--mono);font-size:var(--f-xs);color:var(--text)}
+.legreceipt{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.legreceipt .lsleg{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel);font-size:var(--f-2xs)}
+.legreceipt .lsleg b{font-family:var(--mono);color:var(--text)}.legreceipt .sell i{color:var(--loss)}.legreceipt .buy i{color:var(--profit)}
+.mcreceipt{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-top:5px;color:var(--faint);font-size:var(--f-2xs)}
 /* execute */
 .execbox{border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:12px 13px;margin-top:2px}
 .execgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px 12px}
@@ -1195,11 +1405,16 @@
 .ssread .sspl{font-family:var(--mono);font-weight:800}.ssread .sspl.pos{color:var(--profit)}.ssread .sspl.neg{color:var(--loss)}
 .ssread .ssrange{margin-left:auto;color:var(--faint);font-size:var(--f-2xs)}
 .scenpanel .srow-ctl{margin-top:7px}
-.legsummary{display:flex;align-items:center;gap:7px;min-height:30px;margin-top:4px;color:var(--dim);font-size:var(--f-xs)}
+.legsummary{display:flex;align-items:center;gap:7px;min-height:38px;margin:0;color:var(--dim);font-size:var(--f-xs);
+  border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);padding:5px 8px}
 .legsummary .lsleg{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel)}
 .legsummary .lsleg b{font-family:var(--mono);color:var(--text)}
 .legsummary .lsleg.sell i{color:var(--loss)}.legsummary .lsleg.buy i{color:var(--profit)}
-.legsummary .microcta{margin-left:auto}
+.legsummary .microcta,.legsummary .structedit{margin-left:auto}
+.structedit{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);
+  color:var(--accent);font-size:var(--f-xs);font-weight:700;padding:4px 8px;cursor:pointer}
+.structedit:hover{border-color:var(--accent);background:var(--accent-wash)}
+.structedit svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 /* risk/reward map (ported from plan-desk) */
 .decmap{width:100%;height:200px;display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel)}
 .mapcap{font-size:var(--f-xs);color:var(--faint);padding:7px 2px 0;line-height:1.4}
@@ -1844,14 +2059,14 @@ var FLAGS={
 /* each scenario carries editable ASSUMPTIONS: m = price move %, iv = vol-point shift (a crash
    spikes IV, a rally compresses it), d = days elapsed (how long the move takes to play out). */
 var SCEN=[
- {n:'Market crash',    m:-20,iv:14, d:5, g:'M2 5 L9 4 L15 7 L21 6 L26 15 L33 19 L42 21'},
- {n:'Gap down',        m:-9, iv:8,  d:1, g:'M2 6 L14 6 L16 15 L24 14 L32 16 L42 15'},
- {n:'Orderly pullback',m:-6, iv:4,  d:3, g:'M2 7 L10 10 L18 17 L26 18 L34 15 L42 13'},
- {n:'Choppy / sideways',m:-1,iv:1,  d:5, g:'M2 11 L8 5 L14 15 L20 7 L27 16 L34 8 L42 12'},
- {n:'Flat / range',    m:0,  iv:0,  d:7, g:'M2 11 L10 10 L18 12 L26 10 L34 12 L42 11'},
- {n:'Grind higher',    m:6,  iv:-2, d:10,g:'M2 17 L11 15 L20 12 L30 9 L42 6'},
- {n:'Strong rally',    m:13, iv:-4, d:10,g:'M2 19 L10 17 L18 13 L27 9 L35 6 L42 3'},
- {n:'Melt-up',  m:20, iv:-6, d:12,g:'M2 20 L11 18 L19 16 L27 11 L34 7 L42 2'}
+ {n:'Market crash',    dsc:'fast breach · protection defines the floor',m:-20,iv:14, d:5, g:'M2 5 L9 4 L15 7 L21 6 L26 15 L33 19 L42 21'},
+ {n:'Gap down',        dsc:'opens lower before the book can adjust',m:-9, iv:8,  d:1, g:'M2 6 L14 6 L16 15 L24 14 L32 16 L42 15'},
+ {n:'Orderly pullback',dsc:'drifts toward the downside break-even',m:-6, iv:4,  d:3, g:'M2 7 L10 10 L18 17 L26 18 L34 15 L42 13'},
+ {n:'Choppy / sideways',dsc:'whipsaws near spot while time passes',m:-1,iv:1,  d:5, g:'M2 11 L8 5 L14 15 L20 7 L27 16 L34 8 L42 12'},
+ {n:'Flat / range',    dsc:'stays inside the range as time decays',m:0,  iv:0,  d:7, g:'M2 11 L10 10 L18 12 L26 10 L34 12 L42 11'},
+ {n:'Grind higher',    dsc:'steady upside drift with softer volatility',m:6,  iv:-2, d:10,g:'M2 17 L11 15 L20 12 L30 9 L42 6'},
+ {n:'Strong rally',    dsc:'clears the expected range to the upside',m:13, iv:-4, d:10,g:'M2 19 L10 17 L18 13 L27 9 L35 6 L42 3'},
+ {n:'Melt-up',          dsc:'accelerates well beyond the expected range',m:20, iv:-6, d:12,g:'M2 20 L11 18 L19 16 L27 11 L34 7 L42 2'}
 ];
 function erf(x){var s=x<0?-1:1;x=Math.abs(x);var t=1/(1+0.3275911*x);var y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);return s*y;}
 function ncdf(x,mu,sd){return 0.5*(1+erf((x-mu)/(sd*Math.SQRT2)));}
@@ -2198,13 +2413,13 @@ function decband(p){
 
 /* the scenarios box — ACTIONABLE: click a tile to pin it as a what-if; one shared full-width
    control ribbon (readout + scrub + canonical steppers) opens under the spectrum. Shared bloom + Decide. */
-function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=daysOf(p), t=st.t, tu=tUnitOf(p);
+function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=daysOf(p), t=st.t, tu=tUnitOf(p), pin=(p.id in pinnedScen)?+pinnedScen[p.id]:0, pinProb=Math.round((scenProbs(p)[pin]||0)*100);
   var curM=mag*t, curPx=p.spot*(1+curM/100), ivsh=iv*t, dfwd=days*t, pv=scenPL(p,curPx,ivsh,dfwd);
   function stp(key,lbl,val,cls){ return '<span class="mstp"><span class="ml">'+lbl+'</span><button data-wf="'+key+'dn">−</button><span class="mv '+(cls||'')+'">'+val+'</span><button data-wf="'+key+'up">+</button></span>'; }
   var timeStp='<span class="mstp"><span class="ml">time</span><button data-wf="daysdn">−</button><span class="mv">+'+tDisp(days,tu)+'</span><button data-wf="daysup">+</button>'+
     '<span class="tunit">'+['d','h','m'].map(function(u){return '<button class="'+(tu===u?'on':'')+'" data-wf="tu-'+u+'" title="'+({d:'days',h:'hours',m:'minutes'}[u])+'">'+u+'</button>';}).join('')+'</span></span>';
   return '<div class="srow-ctl">'+
-    '<div class="srx-read"><span class="wf-main">'+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv)+'</span> <button class="microcta" data-wf="adjust" aria-label="Use these scenario assumptions" title="Use these scenario assumptions">'+deskGlyph('tune')+'</button> <button class="microcta" data-wf="unpin" aria-label="Clear the pinned scenario" title="Clear the pinned scenario">×</button></div>'+
+    '<div class="srx-read"><span class="wf-main"><b>'+pinProb+'%</b> likely · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv)+'</span> <button class="microcta" data-wf="adjust" aria-label="Use these scenario assumptions" title="Use these scenario assumptions">'+deskGlyph('tune')+'</button> <button class="microcta" data-wf="unpin" aria-label="Clear the pinned scenario" title="Clear the pinned scenario">×</button></div>'+
     '<div class="scenplay"><button class="playb'+(st.playing?' on':'')+'" data-wf="playtoggle" title="Play through the move">'+(st.playing?'❚❚':'▶')+'</button>'+
       '<span class="tk now">now</span>'+
       '<input class="scrub" type="range" min="0" max="100" value="'+Math.round(st.t*100)+'" data-wf="scrub" aria-label="scrub through the move">'+
@@ -2213,11 +2428,9 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
     '<div class="smstps">'+stp('mag','move',(mag>0?'+':'')+mag+'%',mag>=0?'pos':'neg')+stp('iv','vol',(iv>0?'+':'')+iv+' IV',iv>0?'warn':'')+timeStp+'</div>'+
   '</div>'; }
 function renderScenbox(p){
-  var ts=tailStats(p);
-  var gapLine='<div class="bloomgap">🛡 <span class="lbl">Gap risk</span> a <b class="'+(ts.gapDir==='+'?'':'neg')+'">'+ts.gapDir+ts.gapPct+'%</b> '+(ts.sector||'sector').toLowerCase()+' gap → <b class="'+(ts.gapPL<0?'neg':'pos')+'">'+money(ts.gapPL)+'</b>'+(ts.atMaxLoss?' (max loss)':'')+' · worst-5% <b class="'+(ts.es5<0?'neg':'pos')+'">'+money(ts.es5)+'</b>'+(ts.evName?' · <span class="bgev">⚑ earns '+ts.evName+'</span>':'')+'</div>';
   return '<div class="scenbox">'+
     '<div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">±'+p.em+'% · value at expiry</span></div>'+
-    gapLine+decScenSpectrum(p)+
+    decScenSpectrum(p)+
   '</div>';
 }
 
@@ -2251,18 +2464,28 @@ function depthBand(p){
     '<div class="lenswhy"><span class="lbl">Why you hold this</span><div class="wtext">'+p.why+'</div></div>'+
     '<div class="lensnews"><span class="sdot" style="background:'+newsDot(p)+'"></span><div>'+p.news+'</div></div>'+
   '</div>';
-  /* book context — compact + graphical: a concentration bar with your line highlighted + who it moves with */
-  var corr=rs.peers.filter(function(x){return x.sym!==p.sym;}).slice(0,3).map(function(x){return x.sym;});
+  /* Book context is derived from held lines, not the research universe. */
+  var ranked=POS.slice().sort(function(a,b){return b.riskPct-a.riskPct;}), rank=ranked.map(function(x){return x.id;}).indexOf(p.id)+1;
+  var sameHeld=POS.filter(function(x){return x.id!==p.id&&((univBy[x.sym]||{}).sector===rs.u.sector);});
+  var corr=sameHeld.slice(0,3).map(function(x){return x.sym;}), secRisk=POS.filter(function(x){return (univBy[x.sym]||{}).sector===rs.u.sector;}).reduce(function(n,x){return n+x.riskPct;},0);
+  var bt=bookTail();
   var book='<div class="lens booklens posbook">'+
-    '<div class="lenshd"><span class="eyebrow">Book context</span><span class="hint">'+p.riskPct+'% of book risk</span></div>'+
-    '<div class="bookbar big"><i style="width:'+Math.min(100,Math.round(p.riskPct/74*100))+'%"></i></div>'+
-    '<div class="bkmeta"><b class="'+(p.riskPct>=20?'warn':'')+'">'+ordinal(1)+' · '+p.riskPct+'%</b> of your 74% semis concentration</div>'+
-    '<div class="corrrow"><span class="lbl">Moves with</span>'+corr.map(function(s){return '<span class="corrchip">'+s+'</span>';}).join('')+'</div>'+
+    '<div class="lenshd"><span class="eyebrow">Book context</span><span class="hint">held line · live contribution</span></div>'+
+    '<div class="bookfacts">'+
+      '<div class="bookfact2"><span>Risk rank</span><b class="'+(rank===1?'warn':'')+'">'+ordinal(rank)+' of '+POS.length+'</b></div>'+
+      '<div class="bookfact2"><span>'+rs.u.sector+' cluster</span><b class="'+(secRisk>=40?'warn':'')+'">'+secRisk+'% book risk</b></div>'+
+      '<div class="bookfact2"><span>Shared gap</span><b class="neg">−'+bt.gapPct+'% → '+money(bt.gapPL)+'</b></div>'+
+      '<div class="bookfact2"><span>Worst 5%</span><b class="neg">'+money(bt.es5)+'</b></div>'+
+    '</div>'+
+    '<div class="bookbar big" title="This line contributes '+p.riskPct+'% of book risk"><i style="width:'+Math.min(100,p.riskPct/Math.max(1,ranked[0].riskPct)*100)+'%"></i></div>'+
+    '<div class="bkmeta"><b class="'+(p.riskPct>=20?'warn':'')+'">'+p.riskPct+'%</b> of book risk · scaled against the largest held line</div>'+
+    '<div class="corrrow"><span class="lbl">Held correlates</span>'+corr.map(function(s){return '<span class="corrchip">'+s+'</span>';}).join('')+'</div>'+
+    '<div class="panefoot">'+p.conc+'</div>'+
   '</div>';
   var pane=POS_PANE[p.id]||'research', panes={research:research,mechanics:mech,book:book};
   var panelId='pospane-'+p.id, selectedTabId='postab-'+p.id+'-'+pane;
-  var tabs=[['research','path','Research'],['mechanics','tune','Mechanics'],['book','book','Book']].map(function(t){
-    return '<button id="postab-'+p.id+'-'+t[0]+'" class="inspecttab'+(pane===t[0]?' on':'')+'" data-pospane="'+t[0]+'" data-posid="'+p.id+'" aria-pressed="'+(pane===t[0])+'" aria-controls="'+panelId+'">'+deskGlyph(t[1])+'<span>'+t[2]+'</span></button>';
+  var tabs=[['research','path','Research','IV '+p.ivRank+'th'],['mechanics','tune','Mechanics','Θ '+signed(p.theta)+'/d'],['book','book','Book',p.riskPct+'% risk']].map(function(t){
+    return '<button id="postab-'+p.id+'-'+t[0]+'" class="inspecttab'+(pane===t[0]?' on':'')+'" data-pospane="'+t[0]+'" data-posid="'+p.id+'" aria-pressed="'+(pane===t[0])+'" aria-controls="'+panelId+'">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';
   }).join('');
   return '<div class="depth posdepth"><div class="inspectrail posinspectrail" role="group" aria-label="Position detail">'+tabs+'</div><div id="'+panelId+'" class="posinspectwell" role="region" aria-labelledby="'+selectedTabId+'">'+(panes[pane]||research)+'</div></div>';
 }
@@ -2532,7 +2755,7 @@ function setPlayBtn(s){ var el=s.el(); if(!el)return; var b=el.querySelector('.s
 /* ONE per-frame updater: the whole position "breathes" as the scenario scrubs — readout, greeks,
    the hero P/L projection, the research-lens price, and the row the marker is passing. Shared by
    the bloom card AND the Decide surface (each just exposes a different root()). When unpinned it
-   resets everything to the at-spot baseline. Patches text/width only — never innerHTML. */
+   resets everything to the at-spot baseline. */
 function renderAtPrice(s){
   var root=(s.root?s.root():s.el()); if(!root)return;
   var p=s.obj(), st=scenSt(p.id), tgt=magOf(p), pinned=(tgt!=null), t=st.t;
@@ -2540,7 +2763,7 @@ function renderAtPrice(s){
   var ivsh=pinned?ivOf(p)*t:0, dfwd=pinned?daysOf(p)*t:0;
   var pv=pinned?scenPL(p,curPx,ivsh,dfwd):payFor(p,p.spot);   /* mark-to-market under the assumptions */
   if(pinned){
-    var m=root.querySelector('.wf-main'); if(m) m.innerHTML=scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv);
+    var m=root.querySelector('.wf-main'), psi=(p.id in pinnedScen)?+pinnedScen[p.id]:0, pp=Math.round((scenProbs(p)[psi]||0)*100); if(m) m.innerHTML='<b>'+pp+'%</b> likely · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv);
     var sc=root.querySelector('.scenplay .scrub'); if(sc && document.activeElement!==sc) sc.value=Math.round(st.t*100);
   }
   /* greeks breathe — respond to price, vol AND time; baseline+modelled-change so t=0 sits on the shown numbers */
@@ -3540,6 +3763,21 @@ function bookTail(){
   if(_bookTailCache && _bookTailCache.sig===sig) return _bookTailCache.val;
   var val=bookTailCore(POS); _bookTailCache={sig:sig, val:val}; return val;
 }
+var _bookCandidateCache={};
+function bookWithCandidate(c){
+  var sig=GAP_STANCE+'|'+POS.map(function(p){return p.id;}).join(',')+'|'+hashCand(c);
+  if(_bookCandidateCache[sig])return _bookCandidateCache[sig];
+  var val={before:bookTail(),after:bookTailCore(POS.concat([c]))};
+  _bookCandidateCache[sig]=val;
+  var keys=Object.keys(_bookCandidateCache); if(keys.length>18)delete _bookCandidateCache[keys[0]];
+  return val;
+}
+function candidateSectorRead(c){
+  var sector=(univBy[c.sym]||{}).sector||'Other';
+  var held=POS.filter(function(p){return ((univBy[p.sym]||{}).sector||'Other')===sector;});
+  var exposure=held.reduce(function(n,p){return n+(p.riskPct||0);},0);
+  return {sector:sector,held:held,exposure:exposure,diversifies:held.length===0};
+}
 /* size a protective SMH put to cap ~half the book's worst-5% tail, and measure the hedged tail. */
 function hedgeProposal(){
   var bt=bookTail(), u=univBy['SMH']; if(!u) return null;
@@ -3749,7 +3987,9 @@ function drawMCFan(){ var svg=document.getElementById('mcFan'), res=decide&&deci
   var lower=frames.slice().reverse().map(function(f,ri){var i=frames.length-1-ri;return 'L'+X(i).toFixed(1)+' '+Y(f.p10).toFixed(1);}).join(' ');
   var g='<defs><linearGradient id="mcBand" x1="0" y1="0" x2="1" y2="0"><stop stop-color="var(--accent-2)" stop-opacity=".08"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".28"/></linearGradient></defs>'+
     '<path d="'+upper+' '+lower+' Z" fill="url(#mcBand)"/>';
-  (res.paths||[]).forEach(function(p,i){g+='<path d="'+linePath(p)+'" fill="none" stroke="'+(i===3?'var(--accent)':'var(--accent-2)')+'" stroke-opacity="'+(i===3?'.88':'.25')+'" stroke-width="'+(i===3?'1.7':'.9')+'"/>';});
+  /* Representative paths are context, not semantic winners/losers. Neutral ink keeps the
+     existing palette honest while enough opacity makes the tails legible on real displays. */
+  (res.paths||[]).forEach(function(p,i){g+='<path d="'+linePath(p)+'" fill="none" stroke="'+(i===3?'var(--accent)':'var(--dim)')+'" stroke-opacity="'+(i===3?'.92':'.68')+'" stroke-width="'+(i===3?'1.8':'1.3')+'"/>';});
   if(frames.length)g+='<path d="'+linePath(frames.map(function(f){return f.p50;}))+'" fill="none" stroke="var(--accent)" stroke-width="1.9"/>';
   [0,Math.round(res.steps/2),res.steps].forEach(function(i){g+='<line x1="'+X(i).toFixed(1)+'" y1="'+padT+'" x2="'+X(i).toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line-soft)" stroke-dasharray="2 4"/>';});
   g+='<text x="'+padL+'" y="'+(H-3)+'" fill="var(--faint)" font-size="9">now</text><text x="'+(W-padR)+'" y="'+(H-3)+'" fill="var(--faint)" font-size="9" text-anchor="end">21 sessions</text>';
@@ -3921,19 +4161,13 @@ function decTop(c){
    the center hero (declegs / drag) — no duplicate editor here. "Your build" just means the
    center now shows your edited structure; tap any engine idea to load it back. */
 function leftCol(c){
-  var building=decide.mode==='build';
-  var modebar='<div class="modebar"><div class="seg" role="group" aria-label="Candidate source">'+
-    '<button class="'+(!building?'on':'')+'" data-mode="engine">Engine ideas</button>'+
-    '<button class="'+(building?'on':'')+'" data-mode="build">✎ Your build</button></div>'+
-    '<div class="railtools"><button class="railtool'+(decide.leftTool==='map'?' on':'')+'" data-dec="lefttool" data-tool="map" aria-label="Compare ideas on the risk and reward map" title="Risk / reward map">'+deskGlyph('map')+'</button>'+
-      '<button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
-  var drawer='';
-  if(decide.leftTool==='map') drawer='<div class="raildrawer"><div class="pickmap"><div class="srchd sub"><span class="lbl">Risk / reward map</span><span class="hint">size = capital</span></div>'+
+  var modebar='<div class="modebar"><span class="eyebrow">Engine ideas</span><span class="hint">ranked for this intent · '+decide.cands.length+'</span>'+
+    '<div class="railtools"><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
+  var map='<div class="pickmap"><div class="srchd sub"><span class="lbl">Risk / reward map</span><span class="hint">linked to ideas · size = capital</span></div>'+
     '<svg class="decmap" id="decMap"></svg><div class="mapcard" id="decMapCard"></div>'+
-    '<div class="fanleg"><span><i style="background:var(--profit)"></i>defined</span><span><i style="background:var(--violet)"></i>secured</span><span><i style="background:var(--loss)"></i>undefined</span></div></div></div>';
-  else if(decide.leftTool==='caps') drawer='<div class="raildrawer">'+governorsPanel()+'</div>';
-  var body=fanList()+drawer;
-  return '<div class="deccol dcleft">'+modebar+body+'</div>';
+    '<div class="fanleg"><span><i style="background:var(--profit)"></i>defined</span><span><i style="background:var(--violet)"></i>secured</span><span><i style="background:var(--loss)"></i>undefined</span></div></div>';
+  var drawer=decide.leftTool==='caps'?'<div class="raildrawer capsdrawer">'+governorsPanel()+'</div>':'';
+  return '<div class="deccol dcleft">'+modebar+fanList()+map+drawer+'</div>';
 }
 /* one-click starting structures (reclaimed from compose's templates) */
 var STRAT_TEMPLATES=[
@@ -3944,9 +4178,10 @@ var STRAT_TEMPLATES=[
  {k:'cc',n:'Covered call',f:function(s){return [{t:'s',k:s,q:300},{t:'c',k:rk(s,1.05),q:-3}];}},
  {k:'str',n:'Short strangle',f:function(s){return [{t:'p',k:rk(s,.94),q:-3},{t:'c',k:rk(s,1.06),q:-3}];}}
 ];
-function renderTemplates(){ return '<div class="tmplrow"><span class="lbl">Start from</span>'+STRAT_TEMPLATES.map(function(t){return '<button class="tmplbtn" data-tmpl="'+t.k+'">'+t.n+'</button>';}).join('')+'</div>'; }
+function renderTemplates(){ var short={bps:'Bull put',bcs:'Bear call',ic:'Condor',csp:'CSP',cc:'Covered',str:'Strangle'};
+  return '<div class="tmplrow"><span class="lbl">Start from</span>'+STRAT_TEMPLATES.map(function(t){return '<button class="tmplbtn" data-tmpl="'+t.k+'"><span class="tmpllong">'+t.n+'</span><span class="tmplshort">'+short[t.k]+'</span></button>';}).join('')+'</div>'; }
 function decLegSummary(c){
-  return legSummary(c,'<button class="microcta" data-dec="editlegs" aria-label="Edit the strategy legs" title="Edit legs">'+deskGlyph('tune')+'</button>');
+  return legSummary(c,'<button class="structedit" data-dec="editlegs" aria-label="Edit the strategy legs" title="Fork and edit these exact legs">'+deskGlyph('tune')+'<span>Edit legs</span></button>');
 }
 /* --- CENTER column: payoff hero → numbers → HOW IT REACTS (full-width, right under the payoff the
    scrubber drives) → the exact structure. Execution lives in the stable dock below the grid. --- */
@@ -3954,8 +4189,9 @@ function centerCol(c){
   var build=decide.mode==='build', legArea=build?(renderTemplates()+
     '<div class="leghd"><span class="eyebrow">Legs</span><span class="hint">edit on the chart or with the controls</span></div>'+
     '<div class="declegs">'+c.legs.map(function(l,i){return legChip(l,i,'leg','li',decide.spot);}).join('')+
-      '<button class="addleg sm" data-addleg="1">＋ Add leg</button></div>'):decLegSummary(c);
+      '<button class="addleg sm" data-addleg="1" aria-label="Add another leg">＋ <span class="addlong">Add leg</span></button></div>'):decLegSummary(c);
   return '<div class="deccol dccenter">'+
+    legArea+
     '<div class="dcctop">'+   /* causal stack, not competing side rails: payoff then its scenario spectrum */
       '<div class="dccpay">'+
         '<div class="paytitle"><span class="lbl">Candidate payoff — '+c.short+'</span>'+
@@ -3965,7 +4201,6 @@ function centerCol(c){
       '</div>'+
       '<div class="upanel scenpanel">'+decScenInner(c)+'</div>'+
     '</div>'+
-    legArea+
   '</div>';
 }
 /* --- RIGHT column: UNDERSTAND only (coherence · mechanics · evidence · gap · book) — the tall
@@ -3979,15 +4214,22 @@ function decScenInner(c){
     decScenSpectrum(c);
 }
 function decScenSpectrum(c){
-  var d=scenData(c), pin=(c.id in pinnedScen)?+pinnedScen[c.id]:null, selected=pin==null?d.ml:d.rows.filter(function(r){return r.i===pin;})[0]||d.ml;
-  var nodes=d.rows.map(function(r){ var pinned=pin===r.i, likely=r===d.ml;
-    return '<button class="srow ssnode '+(r.pl>=0?'profit':'loss')+(likely?' likely':'')+(pinned?' pinned':'')+'" data-si="'+r.i+'" title="'+r.s.n+' · '+Math.round(r.prob*100)+'% · '+money(r.pl)+'">'+
-      '<span class="ssdot"></span><span class="ssname">'+r.s.n+'</span></button>'; }).join('');
-  var read='<div class="ssread"><span class="sslead">'+(pin==null?'Most likely':'Selected')+' · '+selected.s.n+'</span>'+
-    '<span class="ssmove">'+(selected.m>0?'+':'')+selected.m+'% · '+Math.round(selected.prob*100)+'%</span>'+
-    '<span class="sspl '+(selected.pl>=0?'pos':'neg')+'">'+money(selected.pl)+'</span>'+
-    '<span class="ssrange">range '+money(d.worst.pl)+' → '+money(d.best.pl)+'</span></div>';
-  return '<div class="decspectrum">'+nodes+'</div>'+read+(pin==null?'':scenExpand(c));
+  var d=scenData(c), pin=(c.id in pinnedScen)?+pinnedScen[c.id]:null, pmax=0, maxAbs=1, ctl='';
+  var shortNames=['Crash','Gap down','Pullback','Choppy','Flat','Grind','Rally','Melt-up'];
+  d.rows.forEach(function(r){pmax=Math.max(pmax,r.prob);maxAbs=Math.max(maxAbs,Math.abs(r.pl));});
+  var tiles=d.rows.map(function(r){
+    var pinned=pin===r.i, likely=r===d.ml, width=(Math.abs(r.pl)/maxAbs*49).toFixed(1);
+    if(pinned)ctl=scenExpand(c);
+    return '<button class="srow'+(r===d.best?' best':'')+(r===d.worst?' worst':'')+(likely?' likely':'')+(pinned?' pinned':'')+'" data-si="'+r.i+'" aria-pressed="'+pinned+'" title="Pin '+r.s.n+' and inspect its path">'+
+      '<span class="sn"><span class="snm"><span class="snfull">'+r.s.n+'</span><span class="snshort">'+shortNames[r.i]+'</span></span><span class="smv '+(r.m>0?'up':r.m<0?'dn':'fl')+'">'+(r.m>0?'+':'')+r.m+'%</span>'+glyph(r.s,'var(--dim)')+'</span>'+
+      '<span class="sdesc">'+r.s.dsc+'</span>'+
+      '<span class="slk"><span class="slk-b"><i style="width:'+Math.round(r.prob/(pmax||1)*100)+'%"></i></span><span class="slk-n">'+Math.round(r.prob*100)+'%</span></span>'+
+      '<span class="sbw"><span class="sb '+(r.pl>=0?'p':'n')+'" style="width:'+width+'%"></span></span>'+
+      '<span class="sv '+(r.pl>=0?'pos':'neg')+'">'+money(r.pl)+'</span><span class="splay">'+(pinned?'❚❚':'▶')+'</span></button>';
+  }).join('');
+  var sum='<div class="scensum"><div class="e"><span class="lbl"><span class="sumfull">Most likely · '+d.ml.s.n+'</span><span class="sumshort">Likely · '+(shortNames[d.ml.i]||d.ml.s.n)+'</span></span><span class="v '+(d.ml.pl>=0?'pos':'neg')+'">'+Math.round(d.ml.prob*100)+'% · '+money(d.ml.pl)+'</span></div>'+
+    '<div class="e range"><span class="lbl"><span class="sumfull">Outcome range</span><span class="sumshort">Range</span></span><span class="v"><b class="neg">'+money(d.worst.pl)+'</b> → <b class="pos">'+money(d.best.pl)+'</b></span></div></div>';
+  return '<div class="smx barmode">'+tiles+ctl+'</div>'+sum;
 }
 function renderClose(){
   var p=byId[decide.posId]; if(!p){ exitDecide(); return; }
@@ -4125,32 +4367,60 @@ function decCoherence(c){ var co=coherence(c);
     '<div class="cohpips">'+pips+'</div>'+
     '<div class="cohprose">'+co.prose+' '+dom+'</div></div>'; }
 function decisionBrief(c){
-  var co=coherence(c), ts=tailStats(c), used=c.cap||c.maxLoss, add=Math.max(1,Math.round(used/DEC_BOOKCAP*100));
+  var co=coherence(c), ts=tailStats(c), sr=candidateSectorRead(c);
   var tone=co.verdict==='off'?'bad':(ts.atMaxLoss||ts.undef?'warn':'');
   var lead=co.verdict==='on'?'Fits the intent; tail risk is the decision.':co.verdict==='mid'?'Mostly fits; one trade-off needs attention.':'Conflicts with the stated intent.';
   return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+lead+'</b><span class="dbfit">'+co.word+'</span></div>'+
-    '<div class="dbread">'+(ts.atMaxLoss?'A characteristic '+(ts.sector||'sector').toLowerCase()+' gap reaches the defined loss. ':co.prose+' ')+
-      'The full explanation stays one selection away.</div><div class="dbfacts">'+
+    '<div class="dbread">'+(ts.atMaxLoss?'A characteristic '+(ts.sector||'sector').toLowerCase()+' gap reaches the defined loss.':'The exact package clears the core checks; compare the one remaining tension below.')+'</div><div class="dbfacts">'+
       '<span class="dbfact">tail <b class="neg">'+money(ts.es5)+'</b></span><span class="dbfact">analogs <b>'+((c.analog||'—').split(' ')[0])+'</b></span>'+
-      '<span class="dbfact">book <b class="warn">+'+add+'%</b></span></div></div>';
+      '<span class="dbfact">book <b class="'+(sr.diversifies?'pos':'warn')+'">'+(sr.diversifies?'diversifies':'adds '+sr.sector)+'</b></span></div></div>';
+}
+function bookClusterGraphic(c,sr,used,bt){
+  var pts=[[25,24],[61,20],[82,41],[42,49],[66,67],[23,74]], cap=POS.reduce(function(a,p){return a+(p.cap||0);},0), ideaPct=used/Math.max(1,cap+used)*100;
+  var nodes=POS.map(function(p,i){var xy=pts[i%pts.length],sz=30+Math.min(40,(p.riskPct||1)*1.4);return '<span class="bcnode '+(p.tone||'')+'" style="--x:'+xy[0]+'%;--y:'+xy[1]+'%;--sz:'+sz.toFixed(0)+'px"><b>'+p.sym+'</b><em>'+p.riskPct+'%</em></span>';}).join('');
+  nodes+='<span class="bcnode idea" style="--x:83%;--y:76%;--sz:42px"><b>IDEA</b><em>+'+ideaPct.toFixed(1)+'%</em></span>';
+  return '<div class="bookcluster"><div class="bchd"><span>One shared '+sr.sector+' shock</span><b>'+sr.held.length+' held + this idea</b></div><div class="bcstage"><span class="bczone">same factor · size = book risk</span>'+nodes+'<span class="bcshock">−'+bt.after.gapPct+'% shared gap</span></div><div class="bcresult"><span>Existing book <b>'+money(bt.before.gapPL)+'</b></span><i>→</i><span>With idea <b>'+money(bt.after.gapPL)+'</b></span></div></div>';
 }
 function bookImpactPanel(c){
-  var used=c.cap||c.maxLoss, add=Math.max(1,Math.round(used/DEC_BOOKCAP*100));
-  var collateral=isCollat(c)||c.undef, cap=collateral?decide.govs.bp:decide.govs.risk, room=cap-used;
-  var capRead=room>=0?'Uses '+money(used)+'; '+money(room)+' remains inside your '+money(cap)+' '+(collateral?'collateral':'defined-risk')+' cap.'
-    :'Exceeds your '+money(cap)+' '+(collateral?'collateral':'defined-risk')+' cap by '+money(-room)+'.';
+  var used=c.cap||c.maxLoss, sr=candidateSectorRead(c), bt=bookWithCandidate(c), gapDelta=bt.after.gapPL-bt.before.gapPL, tailDelta=bt.after.es5-bt.before.es5;
+  var heldNames=sr.held.slice(0,4).map(function(p){return p.sym;});
+  var verdict=sr.diversifies?'Adds a new factor to the book.':'Adds another '+sr.sector+' expression to an existing cluster.';
+  var consequence=sr.diversifies?'This package broadens the book, but its own tail still matters.':'The trade can fit on its own and still worsen a correlated '+sr.sector+' selloff.';
   return '<div class="upanel bookimpact"><div class="lenshd"><span class="eyebrow">Book impact</span><span class="hint">incremental · if placed</span></div>'+
-    '<div class="bkbar" title="Current semis concentration 74%; this idea adds '+add+' percentage point"><i class="bkexist" style="width:74%"></i><i class="bknew" style="width:'+Math.min(24,add)+'%"></i></div>'+
-    '<div class="bklabels"><span class="bkl1">74% semis now</span><span class="bkl2">'+(74+add)+'% after</span></div>'+
-    '<div class="bkcap"><span>'+capRead+'</span></div></div>';
+    '<div class="paneverdict '+(sr.diversifies?'':'warn')+'"><i></i><div><b>'+verdict+'</b><span>'+POS.length+' held lines → '+(POS.length+1)+' with this exact package.</span></div></div>'+
+    '<div class="bookfacts">'+
+      '<div class="bookfact2"><span>Capital added</span><b>'+money(used)+'</b></div>'+
+      '<div class="bookfact2"><span>'+sr.sector+' exposure now</span><b class="'+(sr.exposure>=40?'warn':'')+'">'+(sr.exposure?sr.exposure+'% across '+sr.held.length:'none')+'</b></div>'+
+      '<div class="bookfact2"><span>Correlated gap</span><b class="'+(bt.after.gapPL<0?'neg':'pos')+'">'+money(bt.before.gapPL)+' → '+money(bt.after.gapPL)+'</b></div>'+
+      '<div class="bookfact2"><span>Worst 5%</span><b class="'+(bt.after.es5<0?'neg':'pos')+'">'+money(bt.before.es5)+' → '+money(bt.after.es5)+'</b></div>'+
+    '</div>'+
+    '<div class="bookcompare"><span>tail change</span><span class="track"><i style="width:'+Math.min(100,Math.max(6,Math.abs(tailDelta)/(Math.abs(bt.before.es5)||1)*100))+'%"></i></span><b class="'+(tailDelta<=0?'neg':'pos')+'">'+signed(tailDelta)+'</b></div>'+
+    '<div class="bookgreeks"><span>Δ contribution<b>'+((c.delta||0)>=0?'+':'')+(c.delta||0).toFixed(2)+'</b></span><span>Θ / day<b class="'+((c.theta||0)>=0?'pos':'neg')+'">'+signed(c.theta||0)+'</b></span><span>Vega<b>'+Math.round(c.vega||0)+'</b></span></div>'+
+    bookClusterGraphic(c,sr,used,bt)+
+    (heldNames.length?'<div class="corrrow"><span class="lbl">Held '+sr.sector+' lines</span>'+heldNames.map(function(s){return '<span class="corrchip">'+s+'</span>';}).join('')+'</div>':'')+
+    '<div class="panefoot"><b>'+consequence+'</b> '+(gapDelta<0?'Gap loss worsens by '+money(Math.abs(gapDelta))+'.':'The shared-gap result improves by '+money(gapDelta)+'.')+'</div></div>';
+}
+function fitBudgetPanel(c){
+  var collateral=isCollat(c)||c.undef, cap=collateral?decide.govs.bp:decide.govs.risk, used=c.cap||c.maxLoss, pct=Math.min(100,used/Math.max(1,cap)*100), room=cap-used;
+  return '<div class="fitbudget"><div class="fbh"><span>'+(collateral?'Collateral':'Defined-risk')+' screen</span><b class="'+(room>=0?'pos':'neg')+'">'+money(used)+' / '+money(cap)+'</b></div>'+
+    '<div class="tailtrack"><i style="width:'+pct.toFixed(1)+'%;background:'+(room>=0?'var(--accent)':'var(--loss)')+'"></i></div><div class="tailsub" style="margin-top:5px">'+(room>=0?money(room)+' remains after this package.':'Over the stated cap by '+money(-room)+'.')+'</div></div>';
+}
+function greekInspector(c){
+  var shock=liveGreeks(c,c.spot*.94,4,3), vol=liveGreeks(c,c.spot,8,0), time=liveGreeks(c,c.spot,0,10);
+  function sens(label,val,mark,cls){return '<div class="sensrow"><span>'+label+'</span><i style="--mark:'+Math.max(4,Math.min(96,mark))+'%"></i><b class="'+(cls||'')+'">'+val+'</b></div>';}
+  var legs=c.legs.map(function(l){var side=l.q<0?'sell':'buy',body=l.t==='s'?Math.abs(l.q)+' shares':Math.abs(l.q)+'× '+Math.round(l.k)+(l.t==='c'?'C':'P');return '<span class="lsleg '+side+'"><i>'+(side==='sell'?'−':'+')+'</i><b>'+body+'</b></span>';}).join('');
+  return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Greeks</span><span class="hint">exact package · per set</span></div>'+mechGraphic(c)+
+    '<div class="sensitivity"><span class="lbl">How the mechanics move</span>'+sens('Price −6%','Δ '+(shock.delta>=0?'+':'')+shock.delta.toFixed(2),50+shock.delta*35,shock.delta>=0?'pos':'neg')+
+      sens('IV +8','Vega '+Math.round(vol.vega),50+vol.vega/35,vol.vega>=0?'pos':'warn')+sens('10 days','Θ '+signed(Math.round(time.theta)),50+time.theta/2,time.theta>=0?'pos':'neg')+'</div>'+
+    '<div class="legreceipt"><span class="lbl" style="flex-basis:100%">Exact legs</span>'+legs+'</div></div>';
 }
 function evidencePanel(c){
   var stage;
   if(decide.mcRunning){ stage='<div class="ensemblerun" role="status"><span class="runorb"></span><span class="runmsg">building 1,500 shared paths · repricing exact legs</span></div>'; }
   else if(decide.mcOn&&decide._mc){ var r=decide._mc;
-    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">Path ensemble · 21 sessions</span><span class="mchdacts"><span class="hint" title="shared '+r.fingerprint+' · exact package '+r.valuationFingerprint+'">mock · E '+r.fingerprint.slice(-4)+' · V '+r.valuationFingerprint.slice(-4)+'</span><button class="microcta" data-dec="montecarlo" aria-label="Close the path ensemble" title="Close simulation">×</button></span></div>'+
+    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">Path ensemble · 21 sessions</span><span class="mchdacts"><span class="hint" title="shared '+r.fingerprint+' · exact package '+r.valuationFingerprint+'">prototype · E '+r.fingerprint.slice(-4)+' · V '+r.valuationFingerprint.slice(-4)+'</span><button class="microcta" data-dec="montecarlo" aria-label="Close the path ensemble" title="Close simulation">×</button></span></div>'+
       '<svg class="mcfan" id="mcFan"></svg><div class="mcstats">'+mcStat('Profitable',r.pProfit+'%',r.pProfit>=60)+
-      mcStat('Median',money(r.p50),r.p50>=0)+mcStat('P10',money(r.p10),r.p10>=0)+'</div></div>';
+      mcStat('Median',money(r.p50),r.p50>=0)+mcStat('P10',money(r.p10),r.p10>=0)+mcStat('Worst 5%',money(r.es5),r.es5>=0)+'</div></div>';
   } else { stage='<button class="ensembleidle" data-dec="montecarlo" aria-label="Play the shared path ensemble" title="Play the shared path ensemble">'+
       '<svg class="mcmini" viewBox="0 0 240 90" preserveAspectRatio="none" aria-hidden="true"><path class="mczero" d="M0 46H240"/>'+
       '<path d="M0 45 C42 32 58 61 96 39 S162 22 240 15"/><path d="M0 47 C45 70 72 21 112 49 S176 78 240 63"/>'+
@@ -4158,17 +4428,18 @@ function evidencePanel(c){
       '<span class="mcplay">▶</span><span class="ensemblecap">1,500 paths · 21 sessions · exact payoff</span></button>'; }
   return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Evidence &amp; paths</span><span class="hint">same ensemble across ideas</span></div>'+
     '<div class="evgrid"><div class="evrow"><span class="evk">Past analogs</span><span class="evtxt">'+c.analog+'</span></div>'+
-    '<div class="evrow"><span class="evk">Implied vol</span><span class="evtxt">'+c.ivnote+'</span></div></div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div></div>';
+    '<div class="evrow"><span class="evk">Implied vol</span><span class="evtxt">'+c.ivnote+'</span></div></div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+
+    '<div class="mcreceipt"><span>Prototype market frame · shared ensemble</span><span>exact legs · 1,500 paths</span></div></div>';
 }
 function inspectPane(c){
-  if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+tailBlock(c)+'</div>';
-  if(decide.inspect==='mechanics') return '<div class="inspectpane"><div class="upanel"><div class="lenshd"><span class="eyebrow">Mechanics</span><span class="hint">greeks · per set</span></div>'+mechGraphic(c)+'</div></div>';
+  if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+tailBlock(c)+fitBudgetPanel(c)+'</div>';
+  if(decide.inspect==='mechanics') return '<div class="inspectpane">'+greekInspector(c)+'</div>';
   if(decide.inspect==='book') return '<div class="inspectpane">'+bookImpactPanel(c)+'</div>';
   return '<div class="inspectpane">'+evidencePanel(c)+'</div>';
 }
 function decUnderstand(c){
-  var tabs=[['paths','path','Paths'],['fit','check','Fit'],['mechanics','tune','Greeks'],['book','book','Book']];
-  var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span></button>';}).join('');
+  var co=coherence(c), sr=candidateSectorRead(c), tabs=[['paths','path','Paths',c.pop+'% profit'],['fit','check','Fit',co.word],['mechanics','tune','Greeks','Θ '+signed(c.theta||0)],['book','book','Book',sr.diversifies?'diversifies':'adds '+sr.sector]];
+  var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
 function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv '+(good?'pos':'neg')+'">'+v+'</span></div>'; }
@@ -4219,8 +4490,8 @@ function drawDecMap(){
   var svg=document.getElementById('decMap'); if(!svg)return;
   var W=Math.max(320,Math.round(svg.clientWidth||600)), H=Math.max(150,Math.round(svg.clientHeight||200));
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  var cs=decide.cands, padL=44,padB=26,padT=12,padR=14;
-  var pops=cs.map(function(c){return c.pop;}), cr=cs.map(function(c){return Math.max(300,c.credit);});
+  var cs=decide.cands, buildC=decide.mode==='build'?activeCand():null, mapSet=buildC?cs.concat([buildC]):cs, padL=44,padB=26,padT=12,padR=14;
+  var pops=mapSet.map(function(c){return c.pop;}), cr=mapSet.map(function(c){return Math.max(300,c.credit);});
   var popLo=Math.max(40,Math.floor((Math.min.apply(0,pops)-4)/5)*5), popHi=Math.min(90,Math.ceil((Math.max.apply(0,pops)+4)/5)*5);
   var cLo=Math.max(0,Math.min.apply(0,cr)-800), cHi=Math.max.apply(0,cr)+800;
   var X=function(p){return padL+(W-padL-padR)*(p-popLo)/((popHi-popLo)||1);};
@@ -4246,6 +4517,15 @@ function drawDecMap(){
     g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+rr.toFixed(1)+'" fill="'+col+'" fill-opacity="'+op+'" stroke="'+col+'" stroke-opacity="'+(gated?.4:1)+'" data-mapi="'+c.id+'" style="cursor:pointer"/>';
     if(c.undef&&!gated)g+='<text x="'+x.toFixed(1)+'" y="'+(y+3.2).toFixed(1)+'" fill="#06212a" font-size="11" font-weight="700" text-anchor="middle" style="pointer-events:none">!</text>';
   });
+  if(buildC){
+    var bx=X(buildC.pop),by=Y(Math.max(300,buildC.credit)),br=6+Math.min(8,Math.sqrt(Math.max(buildC.cap,buildC.maxLoss))/75);
+    var src=DEC_MPOS.filter(function(m){return String(m.id)===String(decide.buildSourceId);})[0];
+    if(src)g+='<path d="M'+src.x.toFixed(1)+' '+src.y.toFixed(1)+' L'+bx.toFixed(1)+' '+by.toFixed(1)+'" fill="none" stroke="var(--accent)" stroke-opacity=".58" stroke-width="1.3" stroke-dasharray="3 3"/>';
+    DEC_MPOS.push({id:'build',x:bx,y:by,r:br});
+    g+='<circle cx="'+bx.toFixed(1)+'" cy="'+by.toFixed(1)+'" r="'+br.toFixed(1)+'" fill="var(--panel)" stroke="var(--accent)" stroke-width="2" data-mapi="build" style="cursor:default"/>'+
+      '<circle cx="'+bx.toFixed(1)+'" cy="'+by.toFixed(1)+'" r="2.2" fill="var(--accent)" style="pointer-events:none"/>'+
+      '<text x="'+Math.min(W-padR,bx+br+4).toFixed(1)+'" y="'+Math.max(padT+9,by-5).toFixed(1)+'" fill="var(--accent)" font-size="10" font-family="ui-monospace" style="pointer-events:none">your build</text>';
+  }
   svg.innerHTML=g;
 }
 /* LINK: hover on a dot OR a list row lights up both + shows the hover card + (on click) loads the hero */
@@ -4261,7 +4541,7 @@ function setDecHot(id){
 function showMapCard(id){
   var card=document.getElementById('decMapCard'); if(!card)return;
   var m=DEC_MPOS.filter(function(z){return String(z.id)===String(id);})[0];
-  var c=decide.cands.filter(function(x){return String(x.id)===String(id);})[0];
+  var c=String(id)==='build'&&decide.mode==='build'?activeCand():decide.cands.filter(function(x){return String(x.id)===String(id);})[0];
   if(!m||!c){ card.classList.remove('show'); return; }
   var wasShown=card.classList.contains('show');
   var gt=candGated(c);
@@ -4335,7 +4615,12 @@ function decAction(a,el){
   if(a==='pick'){ decide.pickOpen=!decide.pickOpen; renderDecide();
     if(decide.pickOpen){ var q=document.getElementById('univq'); if(q){ q.focus(); q.setSelectionRange(q.value.length,q.value.length); } } return; }
   if(a==='userec'){ stopDecScen(); decide.mode='engine'; decide.candId=recCand().id; renderAfterDecisionChange(); return; }
-  if(a==='editlegs'){ if(!decide.buildLegs){ var eng=activeCand(); decide.buildLegs=eng.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};}); } decide.mode='build'; renderAfterDecisionChange(); return; }
+  if(a==='editlegs'){
+    /* Edit always forks the exact engine idea on screen. A prior hidden draft must never
+       reopen behind a newly selected candidate. */
+    var eng=activeCand(); decide.buildLegs=eng.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};});
+    decide.buildSourceId=eng.id; decide.mode='build'; renderAfterDecisionChange(); return;
+  }
   if(a==='montecarlo'){
     if(decide.mcOn||decide.mcRunning){ decide.mcOn=false; decide.mcRunning=false; decide._mcRunKey=++MC_RUN_SEQ; renderDecide(); return; }
     queueDecisionSimulation(); return;
@@ -4376,7 +4661,7 @@ function wireDecide(){
     var ob=t.closest('[data-obj]'); if(ob){ decide[ob.getAttribute('data-obj')]=ob.getAttribute('data-val'); renderDecide(); return; }
     var pk=t.closest('[data-pick]'); if(pk){ setUnderlying(pk.getAttribute('data-pick')); return; }
     var cd=t.closest('[data-cand]'); if(cd){ loadCand(cd.getAttribute('data-cand')); return; }
-    var mi=t.closest('[data-mapi]'); if(mi){ loadCand(mi.getAttribute('data-mapi')); return; }
+    var mi=t.closest('[data-mapi]'); if(mi){ if(mi.getAttribute('data-mapi')!=='build')loadCand(mi.getAttribute('data-mapi')); return; }
     var ot=t.closest('[data-otype]'); if(ot){ decide.order.type=ot.getAttribute('data-otype'); renderDecide(); return; }
     var ln=t.closest('[data-lane]'); if(ln){ decide.order.lane=ln.getAttribute('data-lane'); renderDecide(); return; }
     var st=t.closest('[data-step]'); if(st){ decStep(st.getAttribute('data-step'), +st.getAttribute('data-d')); return; }
