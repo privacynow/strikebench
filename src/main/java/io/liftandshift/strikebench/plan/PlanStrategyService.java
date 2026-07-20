@@ -24,7 +24,8 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 public final class PlanStrategyService {
     public static final String ENGINE_VERSION = "plan-strategy-1";
 
-    public record SavedRun(String runId, String state, JsonNode result, String createdAt) {}
+    /** inputHash identifies the canonical server-side request snapshot that produced this run. */
+    public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
     public record Selection(String candidateId, long planVersion) {}
 
     private final Db db;
@@ -47,10 +48,22 @@ public final class PlanStrategyService {
             boolean stillCurrent = current.contextRev() == plan.context().rev();
             String runState = stillCurrent ? "CURRENT" : "STALE";
             if (stillCurrent) {
-                markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
+                boolean independentSelection = !Db.queryOn(c,
+                        "SELECT pc.id FROM plan_candidate pc JOIN plan_strategy_run psr ON psr.id=pc.run_id " +
+                                "WHERE pc.plan_id=? AND pc.context_rev=? AND pc.state='CURRENT' AND pc.selected=1 " +
+                                "AND psr.run_kind<>'COMPETITION' LIMIT 1",
+                        r -> r.str("id"), plan.id(), plan.context().rev()).isEmpty();
+                if (independentSelection) {
+                    markStrategyComparisonStale(c, plan.id(), plan.context().rev());
+                } else {
+                    markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
+                }
                 Db.execOn(c, "UPDATE plan_strategy_run SET state='STALE' WHERE plan_id=? AND run_kind='COMPETITION' AND state='CURRENT'",
                         plan.id());
-                Db.execOn(c, "UPDATE plan_candidate SET state='STALE' WHERE plan_id=? AND state='CURRENT'", plan.id());
+                Db.execOn(c, "UPDATE plan_candidate pc SET state='STALE' FROM plan_strategy_run psr " +
+                                "WHERE pc.run_id=psr.id AND pc.plan_id=? AND pc.context_rev=? " +
+                                "AND pc.state='CURRENT' AND psr.run_kind='COMPETITION'",
+                        plan.id(), plan.context().rev());
             }
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,spot_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
@@ -75,7 +88,7 @@ public final class PlanStrategyService {
         });
         result.put("strategyRunId", runId);
         result.put("strategyRunState", state);
-        return new SavedRun(runId, state, result, now.toString());
+        return new SavedRun(runId, state, inputHash, result, now.toString());
     }
 
     public SavedRun latestCompetition(String userId, String planId) {
@@ -83,14 +96,15 @@ public final class PlanStrategyService {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
             List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents,spot_cents," +
                             "ranking_policy,economic_message,favorable_count,mixed_count,unfavorable_count," +
-                            "unavailable_count,disclaimer,sentiment_scorer_version,state,created_at::text created_at FROM plan_strategy_run " +
+                            "unavailable_count,disclaimer,sentiment_scorer_version,input_hash,state,created_at::text created_at FROM plan_strategy_run " +
                             "WHERE plan_id=? AND context_rev=? AND run_kind='COMPETITION' AND state='CURRENT' " +
                             "ORDER BY created_at DESC LIMIT 1",
                     r -> new RunRow(r.str("id"), r.str("thesis"), r.str("horizon"), r.str("risk_mode"),
                             r.str("intent"), r.lngOrNull("risk_budget_cents"), r.lngOrNull("spot_cents"), r.str("ranking_policy"),
                             r.str("economic_message"), r.intv("favorable_count"), r.intv("mixed_count"),
                             r.intv("unfavorable_count"), r.intv("unavailable_count"), r.str("disclaimer"),
-                            r.str("sentiment_scorer_version"), r.str("state"), r.str("created_at")), planId, plan.contextRev());
+                            r.str("sentiment_scorer_version"), r.str("input_hash"), r.str("state"), r.str("created_at")),
+                    planId, plan.contextRev());
             if (runs.isEmpty()) return null;
             RunRow run = runs.getFirst();
             ObjectNode result = Json.MAPPER.createObjectNode();
@@ -110,7 +124,7 @@ public final class PlanStrategyService {
                     PlanStrategyService::candidateRow, run.id());
             for (CandidateRow row : rows) candidates.add(loadCandidate(c, row));
             result.put("strategyRunId", run.id()); result.put("strategyRunState", run.state());
-            return new SavedRun(run.id(), run.state(), result, run.createdAt());
+            return new SavedRun(run.id(), run.state(), run.inputHash(), result, run.createdAt());
         });
     }
 
@@ -158,7 +172,7 @@ public final class PlanStrategyService {
         });
         result.put("strategyRunId", runId);
         result.put("strategyRunState", state);
-        return new SavedRun(runId, state, result, now.toString());
+        return new SavedRun(runId, state, inputHash, result, now.toString());
     }
 
     public SavedRun latestScout(String userId, String planId, String rawScope) {
@@ -167,14 +181,15 @@ public final class PlanStrategyService {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
             List<RunRow> runs = Db.queryOn(c, "SELECT id,thesis,horizon,risk_mode,intent,risk_budget_cents,spot_cents," +
                             "ranking_policy,economic_message,favorable_count,mixed_count,unfavorable_count," +
-                            "unavailable_count,disclaimer,sentiment_scorer_version,state,created_at::text created_at FROM plan_strategy_run " +
+                            "unavailable_count,disclaimer,sentiment_scorer_version,input_hash,state,created_at::text created_at FROM plan_strategy_run " +
                             "WHERE plan_id=? AND context_rev=? AND run_kind='SCOUT' AND scope_kind=? AND state='CURRENT' " +
                             "ORDER BY created_at DESC LIMIT 1",
                     r -> new RunRow(r.str("id"), r.str("thesis"), r.str("horizon"), r.str("risk_mode"),
                             r.str("intent"), r.lngOrNull("risk_budget_cents"), r.lngOrNull("spot_cents"), r.str("ranking_policy"),
                             r.str("economic_message"), r.intv("favorable_count"), r.intv("mixed_count"),
                             r.intv("unfavorable_count"), r.intv("unavailable_count"), r.str("disclaimer"),
-                            r.str("sentiment_scorer_version"), r.str("state"), r.str("created_at")), planId, plan.contextRev(), scope);
+                            r.str("sentiment_scorer_version"), r.str("input_hash"), r.str("state"), r.str("created_at")),
+                    planId, plan.contextRev(), scope);
             if (runs.isEmpty()) return null;
             RunRow run = runs.getFirst();
             ObjectNode result = Json.MAPPER.createObjectNode();
@@ -193,7 +208,7 @@ public final class PlanStrategyService {
                     PlanStrategyService::candidateRow, run.id());
             for (CandidateRow row : rows) candidates.add(loadCandidate(c, row));
             result.put("strategyRunId", run.id()); result.put("strategyRunState", run.state());
-            return new SavedRun(run.id(), run.state(), result, run.createdAt());
+            return new SavedRun(run.id(), run.state(), run.inputHash(), result, run.createdAt());
         });
     }
 
@@ -290,7 +305,7 @@ public final class PlanStrategyService {
         result.set("candidate", candidate);
         result.put("strategyRunId", runId);
         result.put("strategyRunState", "CURRENT");
-        return new SavedRun(runId, "CURRENT", result, now.toString());
+        return new SavedRun(runId, "CURRENT", inputHash, result, now.toString());
     }
 
     public JsonNode selectedCandidate(String userId, String planId) {
@@ -341,6 +356,7 @@ public final class PlanStrategyService {
     private SavedRun saveLinkedSelection(String userId, Plan.View plan, ObjectNode candidate) {
         String runId = Ids.newId("psr");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        String inputHash = sha256(candidate);
         String candidateId = db.tx(c -> {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
@@ -353,7 +369,7 @@ public final class PlanStrategyService {
                     runId, plan.id(), plan.context().rev(), "SCOUT", "PLAN", plan.context().thesis(),
                     horizonName(plan.context().horizonDays()), plan.context().riskMode(), plan.intent(), null,
                     "SCOUT_SELECTION", "Linked from " + text(candidate, "symbol"), 0, 0, 0, 0,
-                    "Exact package selected from a linked Scout run", linkedRequestSnapshot(candidate), sha256(candidate),
+                    "Exact package selected from a linked Scout run", linkedRequestSnapshot(candidate), inputHash,
                     ENGINE_VERSION, requiredText(candidate, "sentimentScorerVersion"), "CURRENT", now);
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "SCOUT");
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
@@ -363,7 +379,7 @@ public final class PlanStrategyService {
         candidate.put("id", candidateId); candidate.put("selected", true);
         ObjectNode result = Json.MAPPER.createObjectNode(); result.set("candidate", candidate);
         result.put("strategyRunId", runId); result.put("strategyRunState", "CURRENT");
-        return new SavedRun(runId, "CURRENT", result, now.toString());
+        return new SavedRun(runId, "CURRENT", inputHash, result, now.toString());
     }
 
     private static String persistCandidate(java.sql.Connection c, String runId, Plan.View plan, JsonNode n,
@@ -680,6 +696,11 @@ public final class PlanStrategyService {
     private static void markStrategyFieldDependentsStale(java.sql.Connection c, String planId, int contextRev)
             throws java.sql.SQLException {
         markSelectedPositionDependentsStale(c, planId, contextRev);
+        markStrategyComparisonStale(c, planId, contextRev);
+    }
+
+    private static void markStrategyComparisonStale(java.sql.Connection c, String planId, int contextRev)
+            throws java.sql.SQLException {
         Db.execOn(c, "UPDATE plan_outcome_comparison SET state='STALE' WHERE plan_id=? AND context_rev=? AND state='CURRENT'",
                 planId, contextRev);
     }
@@ -750,7 +771,7 @@ public final class PlanStrategyService {
     private record RunRow(String id, String thesis, String horizon, String riskMode, String intent,
                           Long riskBudgetCents, Long spotCents, String ranking, String economicMessage, int favorable,
                           int mixed, int unfavorable, int unavailable, String disclaimer,
-                          String sentimentScorerVersion, String state,
+                          String sentimentScorerVersion, String inputHash, String state,
                           String createdAt) {}
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
                           int multiplier,

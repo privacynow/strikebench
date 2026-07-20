@@ -346,6 +346,7 @@ class PlanApiIntegrationTest {
         String id = plan.get("id").asText();
         JsonNode run = json(post("/api/plans/" + id + "/strategy/run", "{}"));
         assertThat(run.at("/strategy/state").asText()).isEqualTo("CURRENT");
+        assertThat(run.at("/strategy/inputHash").asText()).hasSize(64);
         JsonNode result = run.at("/strategy/result");
         assertThat(result.get("symbol").asText()).isEqualTo("AAPL");
         assertThat(result.get("intent").asText()).isEqualTo("INCOME");
@@ -360,6 +361,7 @@ class PlanApiIntegrationTest {
         assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
 
         JsonNode latest = json(get("/api/plans/" + id + "/strategy/latest")).get("strategy");
+        assertThat(latest.at("/inputHash").asText()).isEqualTo(run.at("/strategy/inputHash").asText());
         assertThat(latest.at("/result/candidates/0/id").asText()).isEqualTo(candidate.get("id").asText());
         JsonNode restoredLegs = latest.at("/result/candidates/0/legs");
         assertThat(restoredLegs.size()).isEqualTo(candidate.get("legs").size());
@@ -439,6 +441,16 @@ class PlanApiIntegrationTest {
         assertThat(custom.at("/strategy/result/candidate/legs")).isEqualTo(source.get("legs"));
         assertThat(json(get("/api/plans/" + customId + "/strategy/latest")).at("/selected/id").asText())
                 .isEqualTo(custom.at("/strategy/result/candidate/id").asText());
+
+        String exactSelectionId = custom.at("/strategy/result/candidate/id").asText();
+        JsonNode refreshedCompetition = json(post("/api/plans/" + customId + "/strategy/run",
+                "{\"filters\":{\"minPop\":0.05}}"));
+        JsonNode restoredAfterRefresh = json(get("/api/plans/" + customId + "/strategy/latest"));
+        assertThat(refreshedCompetition.at("/strategy/inputHash").asText()).hasSize(64);
+        assertThat(restoredAfterRefresh.at("/strategy/inputHash").asText())
+                .isEqualTo(refreshedCompetition.at("/strategy/inputHash").asText());
+        assertThat(restoredAfterRefresh.at("/selected/id").asText()).isEqualTo(exactSelectionId);
+        assertThat(restoredAfterRefresh.at("/selected/sourceKind").asText()).isEqualTo("CUSTOM");
 
         JsonNode scoutPlan = json(post("/api/plans", """
                 {"clientRequestId":"scout-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Plan scout origin",
@@ -546,6 +558,72 @@ class PlanApiIntegrationTest {
         assertThat(inspectDb.query("SELECT ensemble_id || ':' || ensemble_fingerprint receipt "
                         + "FROM plan_outcome_comparison WHERE plan_id=?",
                 row -> row.str("receipt"), id)).containsExactly(ensembleId + ":" + fingerprint);
+    }
+
+    @Test void defaultOneSessionPlanFanRetainsAnIntradayStochasticJourney() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"one-session-motion-grid","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"One-session stochastic journey","thesis":"bullish","horizonDays":1,
+                 "riskMode":"balanced"}
+                """));
+        JsonNode fan = json(post("/api/plans/" + plan.get("id").asText() + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + plan.get("version").asLong() + "}"));
+
+        JsonNode path = fan.at("/preview/samples/0");
+        assertThat(fan.at("/preview/horizonDays").asInt()).isEqualTo(1);
+        assertThat(path.size()).isEqualTo(13);
+        double marketIv = fan.at("/preview/marketImplied/atmIv").asDouble();
+        assertThat(marketIv).isPositive();
+        assertThat(fan.at("/preview/receipt/spec/volAnnual").asDouble()).isEqualTo(marketIv);
+        double start = path.get(0).asDouble(), end = path.get(path.size() - 1).asDouble();
+        boolean hasStochasticInterior = false;
+        for (int i = 1; i < path.size() - 1; i++) {
+            double straightLine = start + (end - start) * i / (path.size() - 1.0);
+            if (Math.abs(path.get(i).asDouble() - straightLine) > 1e-8) {
+                hasStochasticInterior = true;
+                break;
+            }
+        }
+        assertThat(hasStochasticInterior).isTrue();
+
+        JsonNode neighbor = fan.at("/preview/samples/1");
+        boolean sourcePathsDiverge = false;
+        for (int i = 1; i < path.size() - 1; i++) {
+            if (Math.abs(path.get(i).asDouble() - neighbor.get(i).asDouble()) > 1e-8) {
+                sourcePathsDiverge = true;
+                break;
+            }
+        }
+        assertThat(sourcePathsDiverge).isTrue();
+        assertThat(fan.at("/preview/canvas/underlying")).hasSize(2);
+        assertThat(fan.at("/preview/canvas/underlyingSteps")).hasSize(13);
+        assertThat(fan.at("/preview/canvas/underlyingSteps/1/step").asInt()).isEqualTo(1);
+        assertThat(fan.at("/preview/canvas/underlyingSteps/1/sessionProgress").asDouble())
+                .isEqualTo(0.0833);
+        assertThat(fan.at("/preview/canvas/positions/0/days")).hasSize(2);
+        assertThat(fan.at("/preview/canvas/positions/0/steps")).hasSize(13);
+        assertThat(fan.at("/preview/canvas/positions/0/legs/0/days")).hasSize(2);
+        assertThat(fan.at("/preview/canvas/positions/0/legs/0/steps")).hasSize(13);
+        assertThat(fan.at("/preview/canvas/positions/0/steps/1").has("focusValueCents")).isTrue();
+        assertThat(fan.at("/preview/canvas/positions/0/steps/1").has("greeks")).isTrue();
+
+    }
+
+    @Test void explicitOneSessionResolutionAndVolatilityRemainAuthored() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"one-session-explicit-grid","symbol":"AAPL","intent":"DIRECTIONAL",
+                 "title":"Explicit one-session grid","thesis":"bullish","horizonDays":1,
+                 "riskMode":"balanced"}
+                """));
+        JsonNode fan = json(post("/api/plans/" + plan.get("id").asText() + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"over":{"model":"GBM","shape":"CHOP","horizonDays":1,
+                 "stepsPerDay":1,"driftAnnual":0.0,"volAnnual":0.41,"jumpsPerYear":0,
+                 "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":7171,"paths":50}}
+                """.formatted(plan.get("version").asLong())));
+
+        assertThat(fan.at("/preview/samples/0").size()).isEqualTo(2);
+        assertThat(fan.at("/preview/receipt/spec/stepsPerDay").asInt()).isEqualTo(1);
+        assertThat(fan.at("/preview/receipt/spec/volAnnual").asDouble()).isEqualTo(0.41);
     }
 
     @Test void customPlanAnalysisPreservesAdjustedContractMultipliersEndToEnd() throws Exception {
@@ -980,10 +1058,16 @@ class PlanApiIntegrationTest {
         assertThat(animation.at("/checkpoints/focusSourcePathIndex").asInt()).isEqualTo(focusIndex);
         assertThat(animation.at("/checkpoints/underlying/10/focusPrice").asDouble())
                 .isEqualTo(animation.at("/paths/paths/0/prices/10").asDouble());
+        assertThat(animation.at("/checkpoints/underlyingSteps"))
+                .hasSize(animation.at("/paths/paths/0/prices").size());
+        assertThat(animation.at("/checkpoints/underlyingSteps/10/focusPrice").asDouble())
+                .isEqualTo(animation.at("/paths/paths/0/prices/10").asDouble());
         assertThat(animation.at("/checkpoints/positions").toString())
                 .contains("PROPOSED:" + candidate.get("id").asText());
         assertThat(animation.at("/checkpoints/positions/0/days/0").has("focusValueCents")).isTrue();
+        assertThat(animation.at("/checkpoints/positions/0/steps/0").has("focusValueCents")).isTrue();
         assertThat(animation.at("/checkpoints/positions/0/legs/0/days/0").has("state")).isTrue();
+        assertThat(animation.at("/checkpoints/positions/0/legs/0/steps/0").has("state")).isTrue();
         assertThat(animation.at("/checkpoints/modelReceipt/selectedCandidateId").asText())
                 .isEqualTo(candidate.get("id").asText());
         assertThat(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText()).hasSize(64);

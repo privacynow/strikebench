@@ -11,6 +11,7 @@ const DESK_URL = pathToFileURL(path.resolve(
 
 const DESKTOPS = [
   { width: 1280, height: 800 },
+  { width: 1366, height: 768 },
   { width: 1440, height: 900 },
   { width: 1920, height: 1080 },
   { width: 2560, height: 1440 }
@@ -146,6 +147,30 @@ test('SMH Position keeps held legs visible and scenario motion continuous throug
     assert.equal(await workbench.locator('.legr').count(), 2,
       'the held stock and short call are both visible');
 
+    const riskIdentity = await page.locator('#focus .posriskmap').evaluate(svg => ({
+      labels: svg.querySelectorAll('.prnode text').length,
+      nodes: Array.from(svg.querySelectorAll('.prnode')).map(node => ({
+        aria: node.getAttribute('aria-label'),
+        title: node.querySelector('title')?.textContent,
+        tabIndex: node.getAttribute('tabindex')
+      }))
+    }));
+    assert.equal(riskIdentity.labels, 0,
+      'position-risk dots stay graphical instead of printing tickers inside every mark');
+    assert.equal(riskIdentity.nodes.length, 6, 'the full held book remains represented');
+    riskIdentity.nodes.forEach(node => {
+      assert.ok(node.aria && node.aria === node.title,
+        'each graphical mark retains an exact accessible hover/focus identity');
+      assert.equal(node.tabIndex, '0', 'each graphical mark is keyboard focusable');
+    });
+
+    await page.locator('#focus [data-pospane="mechanics"]').click();
+    const persistentContext = page.locator('#focus .poscontext');
+    await persistentContext.waitFor();
+    assert.match(await persistentContext.innerText(), /SMH/i);
+    assert.match(await persistentContext.innerText(), /fixture/i,
+      'staged position research is labeled honestly until Book is backend-connected');
+
     const before = await page.locator('#focus .prnode').evaluateAll(nodes =>
       nodes.map(node => node.getAttribute('transform')));
     await page.locator('#focus .srow[data-si="0"]').click();
@@ -177,6 +202,8 @@ test('SMH Position keeps held legs visible and scenario motion continuous throug
       '#focus [data-adjleg="strike"][data-ali="1"][data-d="1"]').click();
     await page.waitForSelector('#focus .pendingbar');
     assert.match(await page.locator('#focus .legspanel.editing .badge').innerText(), /Proposed/i);
+    assert.equal(await persistentContext.isVisible(), true,
+      'quote, event, and research context remain visible while an adjustment is open');
     const impact = await page.locator('#focus .pendingbar').evaluate(node => {
       const detail = document.querySelector('#focus .cdetail');
       const own = node.getBoundingClientRect();
@@ -289,5 +316,129 @@ test('New Idea retargets NVDA, retains its scenario, and bounds Review in the ex
     assert.deepEqual(errors, [], `New Idea emitted page errors: ${errors.join('\n')}`);
   } finally {
     await page.close();
+  }
+});
+
+test('New Idea keeps six exact legs readable beside ideas across desktop and mobile structures', async () => {
+  const viewports = [
+    { width: 1366, height: 768 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 },
+    { width: 1000, height: 800 },
+    { width: 390, height: 844 },
+    { width: 375, height: 812 },
+    { width: 320, height: 700 }
+  ];
+
+  for (const viewport of viewports) {
+    const { page, errors } = await openDesk(viewport);
+    const label = `${viewport.width}x${viewport.height}`;
+    try {
+      await page.locator('#threadNewIdea').evaluate(node => node.click());
+      await page.waitForSelector('#decideStage.on .decwrap');
+      await page.locator('#decideStage [data-cand="i-ic"]').click();
+      assert.equal(await page.locator('#decideStage .declegpanel .legr').count(), 4,
+        `${label} renders the complete condor package`);
+      await page.locator('#decideStage .declegpanel [data-addleg]').click();
+      await page.locator('#decideStage .declegpanel [data-addleg]').click();
+      assert.equal(await page.locator('#decideStage .declegpanel .legr').count(), 6,
+        `${label} renders the extended six-leg package`);
+      await page.waitForTimeout(420);
+
+      const layout = await page.evaluate(() => {
+        const left = document.querySelector('#decideStage .dcleft');
+        const center = document.querySelector('#decideStage .dccenter');
+        const fan = left.querySelector('.fan');
+        const panel = left.querySelector('.declegpanel');
+        const rail = panel.querySelector('.declegs');
+        const map = left.querySelector('.pickmap');
+        const wrap = document.querySelector('#decideStage .decwrap');
+        const grid = document.querySelector('#decideStage .decgrid');
+        const panelRect = panel.getBoundingClientRect();
+        const mapRect = map.getBoundingClientRect();
+        const legRects = Array.from(rail.querySelectorAll('.legr')).map(leg => {
+          const rect = leg.getBoundingClientRect();
+          return {
+            left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+            width: rect.width, contentOverflow: Math.max(0, leg.scrollWidth - leg.clientWidth)
+          };
+        });
+        return {
+          panelInLeft: panel.parentElement.classList.contains('leftsupport'),
+          panelAbsentFromCenter: !center.querySelector('.declegpanel'),
+          ideasBeforeLegs: Boolean(fan.compareDocumentPosition(panel)
+            & Node.DOCUMENT_POSITION_FOLLOWING),
+          legsBeforeMap: Boolean(panel.compareDocumentPosition(map)
+            & Node.DOCUMENT_POSITION_FOLLOWING),
+          gridDisplay: getComputedStyle(grid).display,
+          gridDirection: getComputedStyle(grid).flexDirection,
+          railDirection: getComputedStyle(rail).flexDirection,
+          railOverflowX: getComputedStyle(rail).overflowX,
+          railXOverflow: Math.max(0, rail.scrollWidth - rail.clientWidth),
+          railYOverflow: Math.max(0, rail.scrollHeight - rail.clientHeight),
+          panelXOverflow: Math.max(0, panel.scrollWidth - panel.clientWidth),
+          wrapXOverflow: Math.max(0, wrap.scrollWidth - wrap.clientWidth),
+          leftXOverflow: Math.max(0, left.scrollWidth - left.clientWidth),
+          panelRect: {
+            left: panelRect.left, top: panelRect.top,
+            right: panelRect.right, bottom: panelRect.bottom, width: panelRect.width
+          },
+          mapRect: {
+            left: mapRect.left, top: mapRect.top, right: mapRect.right,
+            bottom: mapRect.bottom, width: mapRect.width, height: mapRect.height
+          },
+          legRects
+        };
+      });
+
+      assert.equal(layout.panelInLeft, true, `${label} keeps the workbench in the idea rail`);
+      assert.equal(layout.panelAbsentFromCenter, true,
+        `${label} does not duplicate the workbench above the payoff`);
+      assert.equal(layout.ideasBeforeLegs, true, `${label} ranks ideas before their exact legs`);
+      assert.equal(layout.legsBeforeMap, true, `${label} treats the risk map as supporting context`);
+      assert.ok(layout.legRects.every(rect => rect.contentOverflow <= 1),
+        `${label} does not clip controls or per-leg economics`);
+      assert.ok(layout.panelXOverflow <= 1 && layout.wrapXOverflow <= 1 && layout.leftXOverflow <= 1,
+        `${label} contains the leg structure without widening a panel or the overlay `
+          + `(panel ${layout.panelXOverflow}px, wrap ${layout.wrapXOverflow}px, left ${layout.leftXOverflow}px)`);
+      assert.ok(layout.railYOverflow <= 1, `${label} never makes the leg rail vertically scroll`);
+
+      if (viewport.width >= 1900) {
+        assert.ok(layout.mapRect.top > layout.panelRect.bottom,
+          `${label} stacks the useful risk map below the full-width leg workbench`);
+        assert.ok(Math.abs(layout.mapRect.width - layout.panelRect.width) <= 2,
+          `${label} gives legs and risk map the same left-rail width`);
+        assert.ok(layout.mapRect.height >= 180,
+          `${label} keeps the risk map large enough to read (${layout.mapRect.height}px)`);
+      }
+
+      if (viewport.width <= 900) {
+        assert.equal(layout.gridDisplay, 'flex', `${label} structurally stacks decision areas`);
+        assert.equal(layout.gridDirection, 'column', `${label} uses a vertical mobile reading order`);
+        assert.equal(layout.railDirection, 'column', `${label} stacks each exact leg at full width`);
+        assert.ok(layout.railXOverflow <= 1, `${label} needs no sideways scrolling for six legs`);
+        layout.legRects.forEach((rect, index) => {
+          assert.ok(rect.width >= layout.panelRect.width - 18,
+            `${label} leg ${index + 1} uses the available panel width`);
+          assert.ok(rect.left >= layout.panelRect.left - 1 && rect.right <= layout.panelRect.right + 1,
+            `${label} leg ${index + 1} stays inside the workbench`);
+          if (index) assert.ok(rect.top > layout.legRects[index - 1].top,
+            `${label} leg ${index + 1} follows the preceding leg vertically`);
+        });
+      } else {
+        assert.equal(layout.gridDisplay, 'grid', `${label} retains the desktop analysis grid`);
+        assert.equal(layout.railDirection, 'row', `${label} uses the bounded desktop leg rail`);
+        assert.equal(layout.railOverflowX, 'auto', `${label} makes overflow explicit and local`);
+        assert.ok(layout.railXOverflow > 0, `${label} keeps six legs at a readable card width`);
+        assert.ok(layout.legRects.every(rect => rect.width >= 280),
+          `${label} never crushes a multi-leg card into an illegible column`);
+      }
+
+      assertNoOverflow(await overflowMetrics(page,
+        ['html', 'body', '#app', '#decideStage']), `${label} six-leg decision`);
+      assert.deepEqual(errors, [], `${label} emitted page errors: ${errors.join('\n')}`);
+    } finally {
+      await page.close();
+    }
   }
 });

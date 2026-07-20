@@ -222,6 +222,7 @@ final class PlanOutcomeController {
         if (body.expectedFingerprint() != null && !body.expectedFingerprint().isBlank()) {
             throw new IllegalArgumentException("expectedFingerprint requires researchReceiptId");
         }
+        boolean calibrateFromMarket = requestsMarketVol(body.over());
         var spec = planScenarioSpec(plan, body.over());
         var world = PlanController.worldParam(root.activeWorld(ctx));
         var marketVol = outcomeController.marketVol(plan.symbol(), world, spec.horizonDays());
@@ -237,8 +238,12 @@ final class PlanOutcomeController {
             spec = planScenarioSpec(plan, seed.spec());
             canvas = seed.canvas().sane(spec.horizonDays());
             marketVol = outcomeController.marketVol(plan.symbol(), world, spec.horizonDays());
+            // Templates receive the resolved ATM IV above and may deliberately scale it. Their
+            // returned spec is therefore explicit; do not flatten that authored transformation.
+            calibrateFromMarket = false;
         }
-        var calibrated = spec.volAnnual() > 0 || marketVol == null ? spec : spec.withVol(marketVol.atmIv());
+        var calibrated = calibrateFromMarket && marketVol != null && marketVol.atmIv() > 0
+                ? spec.withVol(marketVol.atmIv()).sane() : spec;
         double rate = market.riskFreeRateQuote(Math.max(1, calibrated.horizonDays()), world).annualRate();
         var run = simEngine.previewRun(plan.symbol(), calibrated, world, root.analysisCtx(ctx),
                 body.levels() == null ? List.of() : body.levels(), marketVol, rate);
@@ -630,6 +635,7 @@ final class PlanOutcomeController {
         var existing = planOutcomes.latestEnsemble(root.ownerId(ctx), plan, basis.name(), root.analysisCtx(ctx));
         if (existing != null && basis == io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC
                 && body.over() == null && body.iv() == null) return existing;
+        boolean calibrateFromMarket = requestsMarketVol(body.over());
         var spec = planScenarioSpec(plan, body.over());
         String world = PlanController.worldParam(root.activeWorld(ctx));
         double spot = pathEnsembles.anchorSpot(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
@@ -637,7 +643,9 @@ final class PlanOutcomeController {
         io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble ensemble;
         if (basis == io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC) {
             var marketVol = outcomeController.marketVol(plan.symbol(), world, spec.horizonDays());
-            if (spec.volAnnual() <= 0 && marketVol != null) spec = spec.withVol(marketVol.atmIv());
+            if (calibrateFromMarket && marketVol != null && marketVol.atmIv() > 0) {
+                spec = spec.withVol(marketVol.atmIv()).sane();
+            }
             ensemble = pathEnsembles.build(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
                     plan.symbol(), world, root.analysisCtx(ctx)), basis, spec, null, spot);
         } else {
@@ -683,6 +691,7 @@ final class PlanOutcomeController {
         var base = raw == null
                 ? io.liftandshift.strikebench.sim.ScenarioSpec.preset(
                     io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP, days, 0, 4242L, 500)
+                    .withStepsPerDay(defaultPlanStepsPerDay(days))
                 : raw;
         // The canonical constructor carries authored waypoints through to generation and
         // validates each pin against the Plan-owned horizon with a units-bearing message.
@@ -690,6 +699,19 @@ final class PlanOutcomeController {
                 base.stepsPerDay(), base.driftAnnual(), base.volAnnual(), base.jumpsPerYear(),
                 base.jumpMean(), base.jumpVol(), base.tailNu(), base.heston(), base.seed(), base.paths(),
                 base.waypoints()).sane();
+    }
+
+    /** Null/nonpositive volatility means “calibrate from the active option market,” before sane() applies its fallback. */
+    private static boolean requestsMarketVol(io.liftandshift.strikebench.sim.ScenarioSpec raw) {
+        return raw == null || raw.volAnnual() <= 0;
+    }
+
+    /** Short decision horizons need a genuine stochastic journey, not only open/end points. */
+    private static int defaultPlanStepsPerDay(int horizonDays) {
+        if (horizonDays <= 2) return 12;
+        if (horizonDays <= 7) return 6;
+        if (horizonDays <= 45) return 3;
+        return 1;
     }
 
     /**
@@ -799,6 +821,7 @@ final class PlanOutcomeController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             canvasJson = Json.MAPPER.createObjectNode();
             canvasJson.putArray("underlying");
+            canvasJson.putArray("underlyingSteps");
             canvasJson.putArray("positions");
             canvasJson.putArray("comparison");
             canvasJson.putArray("notes").add("The stored fan remains available, but its same-symbol "
