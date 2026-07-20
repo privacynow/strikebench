@@ -556,15 +556,19 @@ calculation owners.
   market/universe, sector/research, and news remain co-visible below. Position rows own position-
   specific attention. There is no second narrative triage strip and no duplicate hedge entry.
 - **Position.** A position blooms from its Home row through the shared-element motion. Its default
-  hierarchy is decision band; payoff hero; three primary facts—collect/cost, max loss, chance—with a
-  quiet secondary line; the shared scenario spectrum; exact-leg summary; then one bounded inspector
-  showing Research, Mechanics, or Book context one at a time. Editing and confirmation controls
-  appear only after their owning action starts.
+  hierarchy is decision band; co-visible payoff and shared scenario matrix; three primary facts—
+  collect/cost, max loss, chance—with a quiet secondary line; exact-leg summary; then one bounded
+  inspector showing Research, Mechanics, or Book context one at a time. The matrix retains full path
+  names, likelihood, payoff, and playback without becoming a second journey. Editing and confirmation
+  controls appear only after their owning action starts.
 - **New Idea.** A compact editable intent capsule anchors the composition. The left rail owns the
-  ranked field and shows deeper rationale only for the selected candidate; risk/reward map and
-  screens/caps are summoned into that same rail one at a time. The center owns exact payoff, the same
-  fact hierarchy and scenario spectrum, and exact legs/composer. The right owns one decision brief
-  and one inspector—Paths, Fit, Greeks, or Book—one pane at a time. A stable bottom transaction dock
+  ranked field and shows deeper rationale only for the selected candidate; its linked risk/reward map
+  remains co-visible on desktop, while screens/caps is summoned over that same rail. The center owns
+  exact structure, payoff, the same fact hierarchy, and a scenario matrix whose wide-screen tiles add
+  short path meaning rather than more raw numbers. Editing forks the selected candidate in place and
+  returns the custom build to the same payoff, scenario, and risk-map comparison path. The right owns
+  one decision brief and one useful inspector—Paths, Fit, Greeks, or Book—one pane at a time; compact
+  scorecards disclose each pane's live conclusion before selection. A stable bottom transaction dock
   owns order editing, review, and confirmation. These inspector choices are disclosure facets, not
   navigation or parallel journeys.
 - **Geometry.** In the signed-off 2560 fixture states, neither the document nor the center/right
