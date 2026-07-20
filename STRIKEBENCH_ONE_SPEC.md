@@ -556,23 +556,97 @@ calculation owners.
   market/universe, sector/research, and news remain co-visible below. Position rows own position-
   specific attention. There is no second narrative triage strip and no duplicate hedge entry.
 - **Position.** A position blooms from its Home row through the shared-element motion. Its default
-  hierarchy is decision band; co-visible payoff and shared scenario matrix; three primary facts—
-  collect/cost, max loss, chance—with a quiet secondary line; exact-leg summary; then one bounded
-  inspector showing Research, Mechanics, or Book context one at a time. The matrix retains full path
-  names, likelihood, payoff, and playback without becoming a second journey. Editing and confirmation
-  controls appear only after their owning action starts.
+  hierarchy is decision band; co-visible payoff, shared scenario matrix, and the whole-Book exposure
+  map under that exact scenario frame; three primary facts—collect/cost, max loss, chance—with a quiet
+  secondary line; then a persistent exact held-structure workbench. The first leg manipulation creates
+  a proposed transformation, preserves the held curve as a dotted comparison, and reveals one bounded
+  impact-and-confirmation surface; it never mutates held lots in place. Research, Mechanics, and Book
+  remain one selectable lens on narrower desktops and become co-visible analytical panels when the
+  canvas can support all three without compromising the primary row. The matrix retains full path
+  names, likelihood, payoff, and playback without becoming a second journey. During playback the same
+  frame moves the payoff marker, scenario readout, Greeks/research facts, and every affected Book-risk
+  node in place.
 - **New Idea.** A compact editable intent capsule anchors the composition. The left rail owns the
   ranked field and shows deeper rationale only for the selected candidate; its linked risk/reward map
   remains co-visible on desktop, while screens/caps is summoned over that same rail. The center owns
-  exact structure, payoff, the same fact hierarchy, and a scenario matrix whose wide-screen tiles add
-  short path meaning rather than more raw numbers. Editing forks the selected candidate in place and
-  returns the custom build to the same payoff, scenario, and risk-map comparison path. The right owns
-  one decision brief and one useful inspector—Paths, Fit, Greeks, or Book—one pane at a time; compact
-  scorecards disclose each pane's live conclusion before selection. A stable bottom transaction dock
-  owns order editing, review, and confirmation. These inspector choices are disclosure facets, not
-  navigation or parallel journeys.
-- **Geometry.** In the signed-off 2560 fixture states, neither the document nor the center/right
-  primary columns scroll, and idle, pending, result, stale, and error states retain the same bounds.
-  If real collection cardinality exceeds available space, the collection itself may own bounded
-  overflow; page-plus-column nested scrolling is not permitted. Narrower layouts reflow the same
-  content and owners rather than hiding them.
+  an always-visible exact-leg workbench, payoff, the same fact hierarchy, and a scenario matrix whose
+  wide-screen tiles add short path meaning rather than more raw numbers. Touching any leg forks the
+  selected engine package into **Your draft** in place and returns the custom build to the same payoff,
+  scenario, and risk-map comparison path. The underlying capsule opens the symbol picker in context;
+  exact-symbol entry and Enter retarget the complete idea rather than changing a cosmetic label. The
+  right owns one decision brief and one useful inspector—Paths, Fit, Greeks, or Book—one pane at a
+  time; compact scorecards disclose each pane's live conclusion before selection. A stable bottom
+  transaction dock owns order editing, a bounded review receipt, and confirmation. These inspector
+  choices are disclosure facets, not navigation or parallel journeys.
+- **Geometry and motion.** Layout and type scale continuously through normal desktop widths; named
+  1280, 1366, 1440, 1600, 1800, 1920, 2048, and 2560 fixtures are verification points rather than
+  isolated tuned compositions. In the signed-off fixtures neither the document nor the center/right
+  primary columns scroll, and idle, edited, scenario-playing, review, pending, result, stale, and error
+  states retain the same bounds. A retained scenario subtree owns playback controls, so unrelated
+  edits and inspector changes cannot destroy/recreate it or flash its animation state. If real
+  collection cardinality exceeds available space, the collection itself may own bounded overflow;
+  page-plus-column nested scrolling is not permitted. Narrower layouts reflow the same content and
+  owners rather than hiding them. Real Safari/WebKit is a release target: SVG sizing, font metrics,
+  focus, clipping, and background/foreground animation behavior are verified there, not inferred from
+  a Chromium capture. Mobile and Beginner/Expert presentation remain the same-state follow-on
+  compositions after desktop interaction sign-off; they may not fork capability or financial state.
+
+### B.9 Integration audit: existing owners and additive extensions
+
+The implementation starts by extracting this presentation into the mounted SPA, not by connecting
+the prototype's local objects to a few APIs. The current SPA already owns navigation cancellation,
+mutation-safe requests, versioned caching, stable route mounts, `MarketStore`, SSE/tab leadership,
+and atomic `App.switchWorld` reconciliation. The Desk composition reuses those mechanisms and the
+existing `position-editor.js`; the held-position workbench is extracted from the signed
+transformation preview/apply flow rather than recreated.
+
+The first integration slices require no new financial engine. The backend already owns portfolio and
+Plan rows, alerts, Book Risk, research/history/news/chains, Plan declarations, strategy competition,
+custom exact packages, trade previews, decision preview/commit, position transformations, stored
+ensembles, candidate comparison, Canvas position traces, authored scenarios, and atomic world
+transitions. The additive extensions are sequenced where the visual contract needs a fact the present
+wire model does not yet expose:
+
+1. Add the explicit child `valuationFingerprint` described in B.3 to combined outcome/Canvas receipts.
+2. Value the eight named scenario declarations as one batch through the existing ensemble and
+   valuation owners, returning probability and exact selected-package P/L without a Desk calculator.
+3. Add the current ranked candidate field to the existing Canvas position collection; the valuator's
+   existing bounded-position support remains the calculation owner.
+4. Compose whole-Book, cross-symbol trajectories with `BookRiskService` and canonical path valuation
+   for shared factor/sector shocks. Browser bubble coordinates remain presentation state over named
+   canonical axes.
+5. Extend deterministic representative-path selection from the stored matrix when the signed visual
+   needs more than the currently exposed full-resolution samples; do not resample a second fan.
+6. Extend Tracked-account transformation receipts through tracked accounting when that workbench is
+   enabled. Practice transformations never mutate Tracked lots.
+7. Add authoritative ex-dividend/calendar and simulated-issuer-news sources when available; until
+   then those inputs remain explicitly unavailable rather than inferred from observed headlines.
+
+### B.10 Market-open data activation and acceptance
+
+The keyless observed baseline is Cboe delayed quote/chain data, Google News RSS, Treasury rates, and
+the market engine. Polygon, Alpha Vantage, FRED, EDGAR, E*TRADE, Yahoo, and Stooq activate only when
+their required configuration or explicit permission is present. This is a local single-user product,
+so personal Yahoo automation may be enabled with both required consent flags; credentials and source
+rights are still facts and are never invented.
+
+The market-open acceptance boot uses `FIXTURES_ONLY=false`, `ENGINE_ENABLED=true`,
+`ENGINE_WARM_FULL_UNIVERSE=false`, and `SNAPSHOT_ENABLED=false` with the conservative Cboe request
+limits. Snapshot scheduling stays off during the acceptance session because the current 24-hour timer
+is not market-close-gated and loses originating-provider attribution; the canonical `snapshot_now`
+Data job is invoked deliberately after the close until scheduling and attribution are corrected.
+The jar is built before boot and is never replaced under the running JVM.
+
+Activation proceeds from the smallest attributable surface: verify SPY, QQQ, AMD, NVDA, MU, and SMH
+through config/status/source/overview, quote, expiration, chain, history, news, and stream receipts;
+add EDGAR; add one licensed/personal candle source at a time; add FRED; authenticate E*TRADE sandbox
+and then market data; finally exercise Simulated and Scenario transitions and return atomically to
+Observed. Keyless Cboe has no lookup implementation, so symbol discovery composes `/api/universe`
+suggestions with exact quote/research validation while `/api/lookup` remains additive when E*TRADE is
+connected. An empty lookup response must never make a valid exact symbol such as NVDA appear invalid.
+
+The acceptance trace covers real source/as-of/freshness, executable bid/ask, exact-chain editing,
+custom package preview, one stored ensemble and candidate comparison, decision receipt, Practice
+placement and mark, held-position transformation preview/apply, observed-to-simulated news honesty,
+cooldown events, and server equality at animation knots. Provider health comes from the existing
+status/Data surfaces; the Desk never hard-codes a green feed badge.
