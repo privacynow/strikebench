@@ -13,10 +13,11 @@
     "test:auth": "node --test dom-auth.test.js",
     "test:bookrisk": "node --test dom-bookrisk.test.js",
     "test:adoption": "node --test adoption-review.test.js",
+    "test:desk": "node --test desk-prototype.test.js",
     "test:learn:coverage": "node --test dom-learn-coverage.test.js",
     "test:learn": "npm run test:learn:coverage && node --test dom-learn.test.js",
     "test:live": "node --test dom-live.test.js",
-    "test:ci": "npm run test:defaults && npm run test:scenario && npm run test:spa && npm run test:fixture && npm run test:seeded && npm run test:audit && npm run test:auth && npm run test:bookrisk && npm run test:adoption && npm run test:learn"
+    "test:ci": "npm run test:defaults && npm run test:scenario && npm run test:spa && npm run test:fixture && npm run test:seeded && npm run test:audit && npm run test:auth && npm run test:bookrisk && npm run test:adoption && npm run test:desk && npm run test:learn"
   },
   "type": "commonjs",
   "devDependencies": {

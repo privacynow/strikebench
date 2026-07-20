@@ -15,7 +15,21 @@
 
 /* readability: raise the app.css type scale ~16% across the whole Desk (book, bloom, Decide),
    and one shared MOTION vocabulary (bloom DUR/EASE) used by every transition + animation. */
-:root{--fs:1.34; --mo-dur:340ms; --mo-ease:cubic-bezier(.22,.68,.28,1); --mo-quick:140ms}
+:root{
+  /* Use valid length-valued fluid tokens. A unitless multiplier cannot interpolate with vw;
+     when it did, browsers rejected the derived declarations and flattened most labels to the
+     inherited 16px size. These clamps preserve hierarchy continuously across desktop widths. */
+  --fs:1;
+  --f-2xs:clamp(10.4px,calc(8.8px + .13vw),12px);
+  --f-xs:clamp(11px,calc(9.3px + .14vw),12.9px);
+  --f-sm:clamp(12.7px,calc(10.7px + .16vw),14.8px);
+  --f-base:clamp(14.2px,calc(12.2px + .16vw),16.5px);
+  --f-md:clamp(15.5px,calc(13.2px + .19vw),18.1px);
+  --f-lg:clamp(17.2px,calc(14.4px + .22vw),20.2px);
+  --f-xl:clamp(19px,calc(15.7px + .26vw),22.3px);
+  --f-num:var(--f-base);
+  --mo-dur:340ms; --mo-ease:cubic-bezier(.22,.68,.28,1); --mo-quick:140ms
+}
 
 #app{height:100%;display:flex;flex-direction:column;overflow:hidden}
 
@@ -193,6 +207,7 @@
 .homesummary .pchip{padding:3px 7px;background:transparent}
 .homesummary .landing-acts .btn{width:32px;height:30px;padding:0;display:grid;place-items:center;font-size:0}
 .homesummary .landing-acts .btn::before{content:'↧';font-size:var(--f-lg);color:var(--accent)}
+.hshort{display:none}
 @media (max-width:2050px){
   .homesummary{grid-template-columns:minmax(0,1.5fr) minmax(680px,1fr)}
   .homesummary .pf-stats{gap:3px 11px}.homesummary .bookline{gap:9px}.homesummary .pchip .pcsub{display:none}
@@ -235,6 +250,46 @@
 @media (max-width:1700px){
   .lv-book .board{grid-template-columns:1fr 1fr;grid-template-rows:minmax(400px,auto) minmax(450px,auto) minmax(545px,auto) minmax(400px,auto);
     grid-template-areas:"map chain" "roster bookrisk" "univ sector" "news news";overflow:auto}
+}
+/* The cockpit scales continuously through normal desktop widths. The earlier two-column fallback
+   turned the same six lenses into a four-row page at 1280–1440px, hiding universe and news below
+   the fold. Keep the signed-off 12-column ownership and compact its internals instead. */
+@media (min-width:1200px) and (max-width:1700px){
+  .homesummary{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(500px,.95fr);align-items:stretch}
+  .homesummary .hfull{display:none}.homesummary .hshort{display:inline}
+  .homesummary .perfband{grid-template-columns:120px minmax(190px,1fr) auto;padding:6px 10px;gap:10px}
+  .homesummary .pf-eq{height:42px}.homesummary .pf-stats{gap:2px 7px}.homesummary .pf-stats .pfk{white-space:nowrap;font-size:var(--f-2xs)}
+  .homesummary .pf-lead .lbl{font-size:10px;line-height:1.1;white-space:nowrap}.homesummary .pf-net{font-size:16px}.homesummary .pf-day{font-size:11px;line-height:1.1}
+  .homesummary .pf-stats .pfk{font-size:9px;line-height:1.1}.homesummary .pf-stats .pfv{font-size:12px;line-height:1.2}
+  .homesummary .bookline{padding:6px 8px;gap:5px;flex-wrap:nowrap;border-top:0;border-left:1px solid var(--line-soft)}
+  .homesummary .bookline .sblock{min-width:68px}.homesummary .bookline .sblock .lbl{font-size:var(--f-2xs)}
+  .homesummary .bookline .sblock .lbl{font-size:9px;line-height:1.1;white-space:nowrap}.homesummary .bookline .sblock .sv{font-size:12px;line-height:1.2}
+  .homesummary .bookline .sneed{padding:2px 3px}.homesummary .bookline .sneed .badge{font-size:10px;padding:2px 5px}
+  .homesummary .posture{gap:2px;padding-left:5px}.homesummary .pchip{padding:2px 4px;font-size:10px}
+  .lv-book #riskMain .lenshd{gap:5px}.lv-book #riskMain .lenshd .eyebrow{white-space:nowrap;font-size:12px}.lv-book #riskMain .rkleg{gap:4px;font-size:9px}
+  .lv-book .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(290px,1.08fr) minmax(220px,.92fr);
+    grid-template-areas:
+      "roster roster roster map map map map chain chain chain chain chain"
+      "bookrisk bookrisk bookrisk univ univ univ sector sector sector news news news";
+    gap:9px;overflow:hidden}
+  .lv-book #riskMain>.rkpanel,.lv-book #bookrisk>.rkpanel,.lv-book #chainBand>.rkpanel,
+  .lv-book #univBand>.rkpanel,.lv-book #sectorBand>.rkpanel,.lv-book #newsBand>.rkpanel{padding:9px 10px}
+  .lv-book .book{gap:2px;grid-template-rows:auto repeat(var(--home-position-count,6),minmax(40px,1fr));grid-auto-rows:minmax(40px,1fr)}
+  .lv-book .book .card{padding:2px 7px}.lv-book .book .card>.cface{grid-template-rows:auto 20px}
+  .lv-book .book .cpeek{height:20px}
+  #riskMain .homemap{min-height:clamp(150px,23vh,230px);margin:4px 0 3px}
+  .chpanel .chpicker{gap:4px;margin:5px 0 4px}.chpick{padding:2px 6px}.chtf{margin-bottom:4px}
+  .chchartwrap{height:clamp(64px,10vh,100px);min-height:clamp(64px,10vh,100px);margin-bottom:4px}
+  .mdchart.candles,.mdna{min-height:clamp(64px,10vh,100px)}
+  .marketpanel .uitem{padding:1px 4px}.marketpanel .universegrid{gap:1px}
+  .sectorfact{padding:4px 5px}.govdetail{padding-top:5px}.govverdict{margin-bottom:4px}.govfacts{margin:5px 0}
+  .govtab .gklong{display:none}.govtab .gkshort{display:inline}
+  button.nitem.homenews{padding:5px 8px}.homenews .ht{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
+@media (min-width:1200px) and (max-width:1700px) and (max-height:800px){
+  .chaintbl .chrow:nth-child(n+6){display:none}
+  .lv-book .book{gap:1px}.lv-book .book .card{padding:1px 7px}
+  .govtab .gklong{display:none}.govtab .gkshort{display:inline}
 }
 .recede,.focus,.panel{display:none}
 .lv-position .book{display:none}
@@ -361,6 +416,8 @@
 .expchip .ml{font-size:var(--f-xs);color:var(--faint);padding:0 5px;letter-spacing:.04em;text-transform:uppercase}
 /* pending-edit bar (delta + place / cancel) — replaces the quick actions while editing */
 .pendingbar{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.pendintro{display:flex;flex-direction:column;gap:3px;min-width:150px}
+.pendintro .hint{font-size:var(--f-xs);white-space:nowrap}
 .adjnums.inline{flex-direction:row;flex-wrap:wrap;gap:5px 18px;border:0;padding:0;background:0;flex:1;min-width:220px}
 .adjnums.inline .adjn{gap:6px}
 .adjnums.inline .adjn .lbl{width:auto}
@@ -411,6 +468,8 @@
 .bd-pay{margin-bottom:13px}
 .paytitle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
 .paytitle .hint{font-family:var(--mono)}
+.payread{display:none;align-items:baseline;gap:5px;margin-left:auto;color:var(--faint);font-family:var(--mono);font-size:var(--f-2xs);white-space:nowrap}
+.payread i{color:var(--faint);font-style:normal}.payread b{font-size:var(--f-xs)}
 .cbig{width:100%;height:clamp(200px,32vh,286px);display:block;
   border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
 .bd-cols{display:grid;grid-template-columns:1.3fr 1fr;gap:14px}
@@ -604,6 +663,7 @@
 .srow .sn .snm{color:var(--text);font-weight:650;white-space:normal;line-height:1.2;min-width:0}
 .srow .sn .snshort{display:none}
 .srow .sn .smv{font-family:var(--mono);font-size:var(--f-xs);line-height:1;flex:none}
+.srow .sn .sprob{display:none;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);line-height:1;flex:none}
 .srow .sn .cg{width:24px;height:13px;flex:none;opacity:.6;margin-left:auto}
 .srow .sdesc{display:none;grid-area:desc;color:var(--faint);font-size:var(--f-xs);line-height:1.3}
 .srow .smv.up{color:var(--profit)} .srow .smv.dn{color:var(--loss)} .srow .smv.fl{color:var(--faint)}
@@ -626,7 +686,8 @@
 /* selected tile marks the cause; the shared ribbon below owns playback + assumptions */
 .srow.pinned{background:var(--accent-wash);border-color:var(--accent-2);box-shadow:inset 2px 0 0 var(--accent)}
 .srow.pinned .snm{color:var(--accent)}
-.srow-ctl{grid-column:1/-1;display:flex;flex-direction:column;gap:7px;padding:9px 10px;border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:7px;background:#0d131c;cursor:default;animation:decSettle var(--mo-dur) var(--mo-ease)}
+.srow-ctl{grid-column:1/-1;display:flex;flex-direction:column;gap:7px;padding:9px 10px;border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:7px;background:#0d131c;cursor:default;
+  transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
 .srx-read{font-size:var(--f-2xs);color:var(--dim);line-height:1.35;text-align:center}
 .srx-read b{color:var(--text)} .srx-read b.pos{color:var(--profit)} .srx-read b.neg{color:var(--loss)}
 .smstps{display:flex;justify-content:center;flex-wrap:wrap;gap:8px}
@@ -762,24 +823,40 @@
   .focus .card .bd-actions{margin-top:5px;padding-top:5px}
 }
 
-/* Position hierarchy pass: the payoff gets the flexible canvas, scenarios reuse the
-   quiet spectrum, and one progressive inspector replaces three simultaneous detail
-   panels. The top decision band remains the sole default action entry point. */
-.focus .card>.cdetail>.bd-cols{flex:1;min-height:0;gap:9px;margin-top:7px}
-.focus .card>.cdetail>.bd-cols>.bd-hero{flex:1;min-height:230px}
-.focus .card .bd-hero .paywrap{flex:1;min-height:0;height:auto}
-.focus .card .bd-right{flex:none}
-.focus .card .bd-right .scenbox{gap:0}
+/* Position workspace: payoff and its causal context share the primary row. The old full-width
+   chart used nearly the whole canvas while reducing the held structure to a glyph; this grid
+   gives the chart a bounded hero, keeps the complete scenario spectrum readable, and makes the
+   book's moving exposure map co-visible. The split is fluid, not tuned to a named resolution. */
+.lv-position .focus .card>.cdetail{overflow:hidden}
+.focus .card>.cdetail>.bd-cols{flex:1;min-height:0;display:grid;
+  grid-template-columns:minmax(0,1.32fr) minmax(440px,.78fr);gap:10px;margin-top:7px}
+.focus .card>.cdetail>.bd-cols>.bd-hero{min-height:0;overflow:hidden}
+.focus .card .bd-hero .paywrap{flex:1;min-height:180px;height:auto}
+.focus .card .bd-right{min-height:0;display:grid;grid-template-rows:auto minmax(122px,1fr);gap:8px}
+.focus .card .bd-right .scenbox{gap:0;min-height:0}
 .focus .card .bd-right .bloomgap{margin:5px 0 7px;padding:4px 8px}
 .focus .card .bd-right .decspectrum{margin-top:3px}
 .focus .card .bd-right .ssread{padding:6px 7px 1px}
 .focus .card .ksecondary{margin-bottom:1px}
-.focus .card .bd-legs .legsummary{margin-top:2px}
+.focus .card .bd-legs{flex:none;margin-top:8px}
+.focus .card .bd-legs .legspanel{margin-top:0}
+.posrisk{position:relative;min-height:118px;display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:7px 9px;overflow:hidden}
+.posrisk .lenshd{margin:0 0 2px}.posrisk .hint{white-space:nowrap}
+.posriskmap{width:100%;height:auto;min-height:82px;display:block;align-self:stretch}
+.posriskread{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding-top:2px;
+  color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
+.posriskread b{font-family:var(--mono);font-size:var(--f-xs);color:var(--text)}
+.posriskread b.pos{color:var(--profit)}.posriskread b.neg{color:var(--loss)}
+.prnode circle{transition:fill var(--mo-quick) var(--mo-ease),stroke var(--mo-quick) var(--mo-ease)}
+.prnode text{font-family:var(--mono);font-size:9.5px;font-weight:750;fill:var(--text);paint-order:stroke fill;stroke:var(--panel-2);stroke-width:3px}
+.prfocus{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-opacity:.8}
 .posdepth{height:224px;min-height:224px;margin-top:8px;display:grid;grid-template-columns:140px minmax(0,1fr);gap:9px;min-width:0}
 .posdepth .posinspectrail{display:flex;flex-direction:column;grid-template-columns:none;gap:5px}
 .posdepth .posinspectrail .inspecttab{width:100%;padding:7px 10px}
 .posinspectwell{min-width:0;min-height:0;overflow:hidden;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
-.posinspectwell>.lens{border:0;border-radius:0;background:transparent;padding:9px 11px;gap:7px}
+.pospane{display:none;height:100%;min-width:0}.pospane.on{display:block}
+.posinspectwell>.pospane>.lens{height:100%;border:0;border-radius:0;background:transparent;padding:9px 11px;gap:7px}
 .posresearch{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr);
   grid-template-areas:"hd hd" "px why" "label why" "rel news" "iv news";column-gap:18px;row-gap:5px;align-content:start}
 .posresearch>.lenshd{grid-area:hd}.posresearch>.lenspx{grid-area:px}.posresearch>.lblrow{grid-area:label;margin:0}
@@ -806,9 +883,14 @@
   .focus .card>.cdetail>.bd-cols{margin-top:4px;gap:7px}
 }
 @media (max-width:1500px){
+  .focus .card>.cdetail>.bd-cols{grid-template-columns:minmax(0,1.08fr) minmax(390px,.92fr)}
   .posdepth{grid-template-columns:112px minmax(0,1fr)}
   .posinspectwell{overflow:auto}
   .posresearch{grid-template-columns:1fr;grid-template-areas:"hd" "px" "label" "rel" "iv" "why" "news"}
+}
+@media (max-width:1000px){
+  .lv-position .focus .card>.cdetail{overflow:auto}
+  .focus .card>.cdetail>.bd-cols{display:flex;flex-direction:column}
 }
 
 /* ============================================================
@@ -825,7 +907,7 @@
    .decwrap is the FLIP hero (breathes from the origin control). */
 .decwrap{position:absolute;inset:0;padding:10px 15px 12px;display:grid;
   grid-template-rows:auto minmax(0,1fr) auto;gap:9px}
-.decgrid,.decdock{--dec-left:clamp(520px,27vw,700px);--dec-right:clamp(440px,21vw,540px);
+.decgrid,.decdock{--dec-left:clamp(560px,32vw,820px);--dec-right:clamp(360px,18.5vw,480px);
   display:grid;grid-template-columns:var(--dec-left) minmax(0,1fr) var(--dec-right);gap:13px;min-width:0}
 .decgrid{min-height:0}
 .deccol{min-height:0;min-width:0;display:flex;flex-direction:column;gap:9px;overflow:hidden}
@@ -893,8 +975,8 @@
 @media (min-width:1900px) and (min-height:1000px){
   .dccenter .dcctop{flex:1}
   .dccenter .dccpay{flex:1;max-height:610px}
-  .dccenter .decpay{flex:1;height:auto;max-height:none;min-height:360px}
-  .dccenter .scenpanel{display:flex;flex:0 0 min(30vh,360px);min-height:300px;flex-direction:column}
+  .dccenter .decpay{flex:1;height:auto;max-height:none;min-height:210px}
+  .dccenter .scenpanel{display:flex;flex:0 0 min(38vh,410px);min-height:340px;flex-direction:column}
   .dccenter .scenpanel .smx.barmode{flex:1;grid-auto-rows:1fr}
   .dccenter .scenpanel .srow{grid-template-areas:"name name" "desc desc" "odds odds" "pl value";align-content:center}
   .dccenter .scenpanel .sdesc{display:block}
@@ -914,14 +996,14 @@
 /* RIGHT — depth (stacked, compact) + place ticket */
 /* ---- Decide RIGHT column: Understand (mechanics + evidence/sim + book) then Execute ---- */
 .dcright{gap:12px}
-.understand{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px}
+.understand{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;container:understand / inline-size}
 .dccenter .scenpanel{container:scenarios / inline-size}
 @container scenarios (min-width:1500px){ .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(8,minmax(0,1fr))} }
-@container scenarios (max-width:820px){
+@container scenarios (max-width:420px){
   .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (max-width:1700px){
-  .decgrid,.decdock{--dec-left:clamp(330px,27vw,390px);--dec-right:clamp(320px,27vw,380px);gap:9px}
+  .decgrid,.decdock{--dec-left:clamp(340px,28vw,470px);--dec-right:clamp(285px,24vw,360px);gap:9px}
   .decwrap{padding-left:10px;padding-right:10px}
   .dccenter .decpay{height:clamp(230px,30vh,320px)}
   .srow{padding-left:6px;padding-right:6px;column-gap:6px}
@@ -930,23 +1012,31 @@
   .scensum .sumfull{display:none}.scensum .sumshort{display:inline}
   .srow .sn .cg{display:none}
   .tmplbtn .tmpllong{display:none}.tmplbtn .tmplshort{display:inline}
+  .dcleft .srchd.sub{min-width:0;gap:5px}.dcleft .srchd.sub .lbl{flex:none;white-space:nowrap;margin-right:0}
+  .dcleft .srchd.sub .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+  .dcleft .pickmap .fanleg{display:none}
 }
 @media (max-width:1700px) and (max-height:850px){
   .decwrap{padding-top:7px;padding-bottom:8px;gap:6px}
   .deccol{gap:5px}.dcctop{gap:5px}
+  .dcleft .pickmap{flex-basis:163px;min-height:160px}
+  .dcleft .fanmain .fr3 .why{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .declegpanel{padding:4px 6px}.decleghead{align-items:center;gap:6px;margin-bottom:2px}
   .dccenter .decpay{height:145px;min-height:145px}
   .dccenter .kgrid.calm .k{padding-top:5px;padding-bottom:5px}
   .dccenter .ksecondary{margin-top:2px;gap:10px}
-  .dccenter .scenpanel{padding:6px 8px}
+  .dccenter .scenpanel{padding:4px 7px}
   .dccenter .scenpanel .lenshd{margin-bottom:1px}
-  .dccenter .smx.barmode{gap:3px;margin:3px 0}
+  .dccenter .smx.barmode{gap:3px;margin:2px 0}
   .dccenter .srow{min-height:54px;padding:4px 6px;row-gap:2px;font-size:12px}
-  .dccenter .srow .sn{height:28px;overflow:hidden}
-  .dccenter .srow .snm{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:12px;line-height:1.15}
+  .dccenter .srow{grid-template-areas:"name name" "pl value";min-height:44px}
+  .dccenter .srow .sn{height:auto;overflow:hidden}
+  .dccenter .srow .snm{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:11px;line-height:1}
   .dccenter .srow .sn .smv{font-size:10px}
+  .dccenter .srow .sn .sprob{display:inline}.dccenter .srow .slk{display:none}
   .dccenter .srow .slk-b{height:3px}
   .dccenter .srow .sbw{height:9px}
-  .dccenter .scensum{padding-top:4px;gap:5px 10px;font-size:var(--f-xs)}
+  .dccenter .scensum{padding-top:2px;gap:3px 8px;font-size:var(--f-2xs);line-height:1.05}
   .legsummary{min-height:34px;padding-top:3px;padding-bottom:3px}
   .dccenter .tmplrow{flex-wrap:nowrap;gap:4px;margin:0}.dccenter .tmplrow .lbl{font-size:var(--f-2xs)}
   .dccenter .tmplbtn{padding:2px 6px;font-size:11px}
@@ -956,9 +1046,20 @@
   .dccenter .declegs .legr{flex:1;min-width:0}.dccenter .addleg.sm{padding:4px 7px;font-size:11px;white-space:nowrap}
   .dccenter .addleg.sm .addlong{display:none}.dccenter .addleg.sm{width:30px;padding-left:0;padding-right:0}
   .dccenter:has(.declegs) .decpay{height:134px;min-height:134px}
+  .decwrap:has(.reviewdock) .dccenter:has(.declegs) .decpay{height:128px;min-height:128px}
   .inspectpane{padding:8px 9px}
-  .evsimstage{min-height:190px}
-  .mcreceipt{margin-top:3px}
+  .dcleft .srchd.sub{min-width:0;gap:5px}.dcleft .srchd.sub .lbl{flex:none;white-space:nowrap;margin-right:0}
+  .dcleft .srchd.sub .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+  .dcleft .pickmap .fanleg{display:none}.dcleft .decmap{min-height:130px}
+  .understand{gap:5px}.understand .inspectwell{min-height:0}
+  .inspectpane{padding:7px 8px}
+  .inspectpane>.upanel .lenshd{gap:6px;margin-bottom:3px;min-width:0}
+  .inspectpane>.upanel .lenshd .eyebrow{flex:none;white-space:nowrap}
+  .inspectpane>.upanel .lenshd .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .inspectpane .evgrid{gap:3px}.inspectpane .evrow{gap:5px}.inspectpane .evrow .evk{width:88px}
+  .inspectpane .evrow .evtxt{font-size:var(--f-xs);line-height:1.25}
+  .inspectpane .evsimstage{min-height:100px;margin-top:5px}
+  .inspectpane .mcreceipt{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .mcreceipt span:last-child{display:none}
   .bookimpact .lenshd{margin-bottom:4px}
   .bookimpact .paneverdict{padding:6px 7px}.bookimpact .paneverdict span{display:none}
@@ -1002,35 +1103,95 @@
   .dccenter:has(.srow-ctl) .decpay{height:108px;min-height:108px}
   .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:95px;min-height:95px}
 }
-@media (min-width:1001px) and (max-width:1700px) and (max-height:850px){
+@media (min-width:1001px) and (max-width:1899px) and (min-height:851px) and (max-height:1150px){
+  .dccenter .dcctop{flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,1.35fr) minmax(210px,.85fr);gap:7px;margin-bottom:0}
+  .dccenter .dccpay{height:auto;min-height:0;overflow:hidden}
+  .dccenter .decpay{flex:1;height:auto;min-height:180px;max-height:none}
+  .dccenter .scenpanel{display:flex;height:auto;min-height:0;flex-direction:column;overflow:hidden;padding:8px 10px 7px}
+  .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:4px 0}
+  .dccenter .scenpanel .srow{grid-template-areas:"name name" "pl value";min-height:42px;padding:4px 6px;row-gap:3px}
+  .dccenter .scenpanel .srow .sprob{display:inline}.dccenter .scenpanel .srow .slk{display:none}
+  .dccenter .scenpanel .scensum{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px 10px;
+    margin-top:auto;padding-top:3px;font-size:var(--f-xs);white-space:nowrap}
+  .dccenter .scenpanel:has(.srow-ctl)>.lenshd,.dccenter .scenpanel:has(.srow-ctl) .scensum{display:none}
+  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{min-height:35px;padding-top:2px;padding-bottom:2px}
+}
+@media (min-width:1001px) and (max-width:1700px) and (max-height:1150px){
   .focus .card>.cdetail{padding:7px 10px 8px;overflow:hidden}
   .focus .card .decband{flex:none;gap:4px;padding:6px 10px;margin:0}
-  .focus .card .decrow{grid-template-columns:170px minmax(0,1fr);gap:12px}
-  .focus .card .decpl{padding-right:10px}.focus .card .decplv{font-size:calc(var(--f-xl)*1.08)}
+  .focus .card .decrow{grid-template-columns:200px minmax(0,1fr);gap:12px}
+  .focus .card .decpl{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"label value" "sub sub";
+    align-items:baseline;gap:2px 7px;padding-right:10px}
+  .focus .card .decpl>.lbl{grid-area:label;margin:0}.focus .card .decplv{grid-area:value;font-size:calc(var(--f-xl)*1.08)}
+  .focus .card .decpl>.decsub{grid-area:sub;flex-wrap:nowrap;gap:5px;white-space:nowrap}
   .focus .card .decmain{display:grid;grid-template-columns:minmax(0,1fr) auto;
     grid-template-areas:"eye acts" "read acts";column-gap:12px;row-gap:2px;align-items:center}
   .focus .card .deceyebrow{grid-area:eye}.focus .card .decread,.focus .card .verdict{grid-area:read;font-size:13px;line-height:1.3}
   .focus .card .decacts{grid-area:acts;margin:0;align-self:center;justify-content:flex-end;gap:5px}
   .focus .card .decacts .btn{padding:5px 9px;font-size:var(--f-xs)}
   .focus .card .decbridge{padding-top:3px;line-height:1.2;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .focus .card>.cdetail>.bd-cols{flex:none;display:grid;grid-template-columns:minmax(0,1.18fr) minmax(0,1fr);height:198px;min-height:198px;gap:7px;margin-top:5px}
-  .focus .card>.cdetail>.bd-cols>.bd-hero{min-height:0;height:198px;overflow:hidden}
-  .focus .card .bd-hero .paytitle{margin-bottom:3px}.focus .card .bd-hero .paywrap{flex:none;height:105px;min-height:105px}
+  .focus .card>.cdetail>.bd-cols{flex:1 1 219px;display:grid;grid-template-columns:minmax(0,1.18fr) minmax(0,1fr);height:auto;min-height:219px;gap:7px;margin-top:5px}
+  .focus .card>.cdetail>.bd-cols>.bd-hero{min-height:0;height:auto;overflow:hidden}
+  .focus .card .bd-hero .paytitle{margin-bottom:3px}.focus .card .bd-hero .paywrap{flex:1;height:auto;min-height:105px}
+  .focus .card .bd-hero .paytitle .payfull{display:none}.focus .card .bd-hero .payread{display:inline-flex}
+  .focus .card .bd-hero .llearn{width:24px;height:22px;padding:0;font-size:0;display:grid;place-items:center}
+  .focus .card .bd-hero .llearn::after{content:"?";font-size:11px;font-weight:800}
   .focus .card .bd-hero .kgrid.calm .k{padding-top:4px;padding-bottom:4px}
   .focus .card .bd-hero .ksecondary{margin-top:1px;gap:9px;white-space:nowrap;overflow:hidden}
-  .focus .card .bd-right{height:198px;min-height:198px}
-  .focus .card .bd-right .scenbox{height:198px;padding:6px 7px}
+  .focus .card .bd-right{height:auto;min-height:219px;grid-template-rows:minmax(140px,1fr) 74px;gap:5px}
+  .focus .card .bd-right .scenbox{height:auto;min-height:0;padding:5px 7px;overflow:hidden}
+  .focus .card .posrisk{min-height:74px;padding:4px 7px;grid-template-rows:auto minmax(0,1fr)}
+  .focus .card .posrisk .lenshd{display:flex}.focus .card .posriskmap{height:auto;min-height:0;align-self:stretch}.focus .card .posriskread{display:none}
   .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin:2px 0}
-  .focus .card .bd-right .scenbox .srow{min-height:51px;padding:4px 5px;row-gap:2px;font-size:12px}
-  .focus .card .bd-right .scenbox .srow .sn{height:16px;overflow:hidden}
+  .focus .card .bd-right .scenbox .srow{grid-template-areas:"name name" "pl value";min-height:39px;padding:3px 5px;row-gap:2px;font-size:12px}
+  .focus .card .bd-right .scenbox .srow .sn{height:14px;overflow:hidden}
   .focus .card .bd-right .scenbox .srow .snm{font-size:12px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .focus .card .bd-right .scenbox .slk-b{height:3px}.focus .card .bd-right .scenbox .sbw{height:8px}
-  .focus .card .bd-right .scenbox .scensum{padding-top:3px;margin-top:2px;gap:4px 8px;font-size:var(--f-2xs)}
-  .focus .card .bd-right .scenbox:has(.srow-ctl) .srow[data-si]{min-height:39px;padding-top:2px;padding-bottom:2px}
-  .focus .card .bd-legs .legsummary{min-height:32px;margin-top:4px;padding-top:2px;padding-bottom:2px}
-  .focus .card .posdepth{height:194px;min-height:194px;margin-top:5px}
+  .focus .card .bd-right .scenbox .srow .sprob{display:inline}.focus .card .bd-right .scenbox .srow .slk{display:none}
+  .focus .card .bd-right .scenbox .sbw{height:7px}
+  .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox>.lenshd{margin-bottom:0}
+  .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox .scensum{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;
+    padding:1px 2px 0;margin-top:0;gap:4px 8px;font-size:var(--f-2xs);line-height:1;white-space:nowrap}
+  .focus .card .bd-right .scenbox .scensum .e{min-width:0;gap:4px;overflow:hidden}.focus .card .bd-right .scenbox .scensum .range{margin-left:0}
+  .focus .card .bd-right .scenbox:has(.srow-ctl)>.lenshd{display:none}
+  .focus .card .bd-right .scenbox:has(.srow-ctl) .srow[data-si]{min-height:30px;padding-top:1px;padding-bottom:1px}
+  .focus .card .bd-right .scenbox:has(.srow-ctl) .srow-ctl{padding:1px 4px;row-gap:1px}
+  .focus .card .bd-right .scenbox:has(.srow-ctl) .srx-read{display:flex;align-items:center;gap:2px;line-height:1;min-height:22px}
+  .focus .card .bd-right .scenbox:has(.srow-ctl) .srx-read .wf-main{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .focus .card .bd-right .scenbox:has(.srow-ctl) .smstps{align-items:center;line-height:1}
+  .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox:has(.srow-ctl) .scensum{display:none}
+  .focus .card .bd-legs .legspanel{display:grid;grid-template-columns:230px minmax(0,1fr);align-items:center;gap:8px;margin-top:4px;padding:5px 7px}
+  .focus .card .bd-legs .legshd{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:2px 6px;margin:0;min-width:0}
+  .focus .card .bd-legs .legshd>.eyebrow{white-space:nowrap}.focus .card .bd-legs .legshd>.badge{justify-self:start}
+  .focus .card .bd-legs .legshd>.hint{grid-column:1/-1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .focus .card .bd-legs .legshd>.expchip{grid-column:1/-1;justify-self:start}
+  .focus .card .bd-legs .legrow{min-width:0;flex-wrap:nowrap;gap:5px;overflow:hidden}
+  .focus .card .bd-legs .legr{min-width:0;padding:4px 6px;gap:2px}.focus .card .bd-legs .legr-top{flex-wrap:nowrap}
+  .focus .card .bd-legs .tgl{font-size:12px;line-height:16px;padding:2px 5px}
+  .focus .card .bd-legs .lgm{font-size:12px;line-height:1.15}
+  .focus .card .bd-legs .addleg.sm{flex:none;width:auto;margin:0;padding:6px 9px;white-space:nowrap}
+  .focus .card .posdepth{flex:.25 1 160px;height:auto;min-height:160px;margin-top:5px}
+  .focus .card .posinspectwell{overflow:hidden}
   .focus .card .posresearch{grid-template-columns:minmax(0,1.05fr) minmax(300px,.95fr);
-    grid-template-areas:"hd hd" "px why" "label why" "rel news" "iv news"}
+    grid-template-areas:"hd hd" "px why" "label why" "rel news" "iv news";row-gap:2px}
+  .focus .card .posinspectwell>.pospane>.lens{padding:6px 8px;gap:4px}.focus .card .posresearch{column-gap:12px;row-gap:2px}
+  .focus .card .posmechanics{column-gap:7px}
+  .focus .card .posmechanics>.mechg{gap:4px}.focus .card .posmechanics .mgt{padding:4px 6px}
+  .focus .card .posmechanics .mgbar{margin:2px 0 1px}.focus .card .posmechanics .mgc{font-size:var(--f-2xs);line-height:1.1}
+  .focus .card .posmechanics>.mechstats{gap:3px 7px}
+  .focus .card .posresearch .lenspx{min-height:0;gap:7px}.focus .card .posresearch .plspark{height:20px}
+  .focus .card .posresearch .lblrow{line-height:1}.focus .card .posresearch .relgrid{gap:2px}
+  .focus .card .posresearch .relrow{line-height:1.15}.focus .card .posresearch .ivrow{gap:5px;line-height:1;white-space:nowrap;overflow:hidden}
+  .focus .card .posresearch .ivrow .hint{overflow:hidden;text-overflow:ellipsis}
+  .focus .card .posresearch>.lenswhy .wtext,.focus .card .posresearch>.lensnews>div{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .focus .card>.cdetail:has(.legspanel.editing) .posdepth,
+  .focus .card>.cdetail:has(.bd-manage .closebar) .posdepth{display:none}
+  .focus .card>.cdetail:has(.legspanel.editing) .bd-manage,
+  .focus .card>.cdetail:has(.bd-manage .closebar) .bd-manage{display:flex;flex:1;min-height:0;margin-top:5px}
+  .focus .card>.cdetail:has(.legspanel.editing) .pendingbar,
+  .focus .card>.cdetail:has(.bd-manage .closebar) .closebar{width:100%;min-height:0;border:1px solid var(--accent-2);border-left:3px solid var(--accent);
+    border-radius:9px;background:linear-gradient(100deg,var(--accent-wash),var(--panel-2) 72%);padding:9px 12px}
+  .focus .card>.cdetail:has(.legspanel.editing) .pendingbar{display:grid;grid-template-columns:minmax(180px,.7fr) minmax(360px,1.2fr) auto;
+    align-items:center;gap:12px;flex-wrap:nowrap}
   .focus .card .posinspectwell{overflow:hidden}
   .focus .card .posresearch>.lensnews{padding-top:3px}.focus .card .posresearch>.lenswhy .wtext{font-size:var(--f-xs);line-height:1.3}
   .focus .card .posbook{padding:6px 8px;gap:4px}
@@ -1038,6 +1199,28 @@
   .focus .card .posbook .bookfact2 b{margin-top:1px;font-size:var(--f-xs)}
   .focus .card .posbook .bookbar{margin:4px 0 2px}.focus .card .posbook .corrrow{margin-top:3px;gap:4px}
   .focus .card .posbook .panefoot{margin-top:2px;padding-top:3px;font-size:var(--f-2xs);line-height:1.25}
+}
+@media (min-width:1900px){
+  .focus .card>.cdetail>.bd-cols{flex:.75 1 400px;min-height:390px;max-height:520px}
+  .focus .card .posdepth{flex:1 1 250px;height:auto;min-height:250px;grid-template-columns:minmax(0,1fr);gap:0}
+  .focus .card .posinspectrail{display:none}
+  .focus .card .posinspectwell{display:grid;grid-template-columns:minmax(0,1.22fr) minmax(0,.85fr) minmax(0,.93fr);
+    gap:8px;border:0;border-radius:0;background:transparent;overflow:hidden}
+  .focus .card .posinspectwell>.pospane{display:block;min-width:0;height:100%;overflow:hidden}
+  .focus .card .posinspectwell>.pospane>.lens{height:100%;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:9px 10px}
+  .focus .card .posresearch{grid-template-rows:auto auto auto minmax(0,1fr) auto;align-content:stretch}
+  .focus .card .posresearch>.relgrid{align-self:start}.focus .card .posresearch>.lensnews{align-self:end}
+  .focus .card .posresearch .plspark{height:40px}
+  .focus .card .posbook .corrrow{margin-top:auto}
+}
+@media (min-width:1701px) and (max-height:1179px){
+  .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+  .focus .card .bd-right .scenbox .srow{grid-template-areas:"name name" "pl value";min-height:52px;padding:5px 7px;row-gap:3px}
+  .focus .card .bd-right .scenbox .srow .sprob{display:inline}.focus .card .bd-right .scenbox .srow .slk{display:none}
+  .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox .scensum{display:grid;grid-template-columns:minmax(0,1fr) auto;
+    align-items:center;gap:6px 12px;margin-top:2px;padding-top:3px;white-space:nowrap}
+  .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox:has(.srow-ctl) .scensum{display:none}
+  .focus .card .bd-right .scenbox:has(.srow-ctl)>.lenshd{display:none}
 }
 .execute{flex:none}
 .usechead{font-size:var(--f-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent-2);font-weight:700;margin-bottom:1px}
@@ -1062,6 +1245,17 @@
 .inspecttab span{grid-area:name;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inspecttab b{grid-area:value;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inspecttab.on b{color:var(--accent)}
+@container understand (max-width:420px){
+  .understand .inspectrail{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+  .understand .inspecttab{padding:3px 6px;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"ico name" "ico value"}
+  .understand .inspecttab b{grid-area:value;text-align:left}
+  .understand .decisionbrief{padding:6px 7px}
+  .understand .decisionbrief .dbtop b{font-size:var(--f-xs);line-height:1.25}
+  .understand .decisionbrief .dbread{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .understand .decisionbrief .dbfacts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:5px}
+  .understand .decisionbrief .dbfact{display:flex;min-width:0;flex-direction:column;gap:0;white-space:nowrap;overflow:hidden}
+  .understand .decisionbrief .dbfact b{overflow:hidden;text-overflow:ellipsis}
+}
 .inspectwell{flex:1;height:auto;min-height:310px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);overflow:hidden}
 .inspectpane{height:100%;min-height:0;padding:10px 11px;overflow:auto}
 .inspectpane>.upanel{border:0;background:transparent;padding:0}
@@ -1160,6 +1354,7 @@
 .bookfact2{border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);padding:7px 8px;min-width:0}
 .bookfact2 span{display:block;color:var(--faint);font-size:var(--f-2xs);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bookfact2 b{display:block;margin-top:3px;font-family:var(--mono);font-size:var(--f-sm);white-space:nowrap}.bookfact2 b.neg{color:var(--loss)}.bookfact2 b.pos{color:var(--profit)}.bookfact2 b.warn{color:var(--caution)}
+.bookimpact .bookfact2{overflow:hidden}.bookimpact .bookfact2 b{white-space:normal;line-height:1.2}
 .bookcompare{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:7px;align-items:center;margin-top:8px;color:var(--faint);font-size:var(--f-2xs)}
 .bookcompare .track,.tailtrack{height:7px;border-radius:4px;background:var(--line-soft);overflow:hidden;position:relative}
 .bookcompare .track i{display:block;height:100%;background:linear-gradient(90deg,var(--accent-2),var(--caution));border-radius:4px}
@@ -1405,6 +1600,25 @@
 .ssread .sspl{font-family:var(--mono);font-weight:800}.ssread .sspl.pos{color:var(--profit)}.ssread .sspl.neg{color:var(--loss)}
 .ssread .ssrange{margin-left:auto;color:var(--faint);font-size:var(--f-2xs)}
 .scenpanel .srow-ctl{margin-top:7px}
+/* The shared scenario toolbar responds to its own width. Readout + playback lead, while the
+   existing assumption steppers share one compact row; only a genuinely wide center places all
+   three groups side by side. This keeps the same controls and stable DOM without vertical spill. */
+.dccenter .scenpanel .srow-ctl{display:grid;grid-template-columns:minmax(0,.82fr) minmax(260px,1.18fr);
+  grid-template-areas:"read play" "steps steps";align-items:center;gap:3px 6px;padding:4px 5px}
+.dccenter .scenpanel .srow-ctl>.srx-read{grid-area:read;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dccenter .scenpanel .srow-ctl>.scenplay{grid-area:play;padding:1px 4px;gap:5px}
+.dccenter .scenpanel .srow-ctl .scenplay .playb{width:21px;height:21px}
+.dccenter .scenpanel .srow-ctl .scenplay .spd button{padding:2px 4px}
+.dccenter .scenpanel .srow-ctl>.smstps{grid-area:steps;align-items:center;flex-wrap:nowrap;gap:5px}
+.dccenter .scenpanel .srow-ctl .mstp button,.dccenter .scenpanel .srow-ctl .tunit button{height:20px;width:18px}
+.dccenter .scenpanel .srow-ctl .mstp .mv{min-width:38px;font-size:var(--f-2xs)}
+@container scenarios (min-width:1080px){
+  .dccenter .scenpanel .srow-ctl{grid-template-columns:minmax(230px,.75fr) minmax(400px,1.25fr) auto;
+    grid-template-areas:"read play steps";gap:8px;padding:5px 7px}
+}
+@media (min-width:1900px) and (min-height:1000px){
+  .dccenter .scenpanel:has(.srow-ctl) .smx.barmode{grid-template-rows:repeat(2,minmax(0,1fr)) auto;grid-auto-rows:auto}
+}
 .legsummary{display:flex;align-items:center;gap:7px;min-height:38px;margin:0;color:var(--dim);font-size:var(--f-xs);
   border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);padding:5px 8px}
 .legsummary .lsleg{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel)}
@@ -1415,6 +1629,24 @@
   color:var(--accent);font-size:var(--f-xs);font-weight:700;padding:4px 8px;cursor:pointer}
 .structedit:hover{border-color:var(--accent);background:var(--accent-wash)}
 .structedit svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* The exact package is a persistent workbench, not a hidden mode. Engine ideas remain immutable;
+   the first direct edit forks the visible package into a draft through the existing leg actions. */
+.declegpanel{flex:none;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:7px 9px}
+.declegpanel.is-draft{border-color:var(--accent-2);background:linear-gradient(100deg,var(--accent-wash),transparent 68%)}
+.decleghead{display:flex;align-items:baseline;gap:8px;margin-bottom:5px;min-width:0}
+.decleghead>.eyebrow{flex:none;white-space:nowrap}
+.decleghead .hint{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.declegstate{margin-left:auto;flex:none;border:1px solid var(--line);border-radius:4px;padding:0 6px;
+  color:var(--faint);font-size:var(--f-2xs);font-weight:750;letter-spacing:.05em;text-transform:uppercase}
+.declegpanel.is-draft .declegstate{color:var(--accent);border-color:var(--accent-2)}
+.declegpanel .declegs{display:flex;align-items:stretch;gap:6px;min-width:0;overflow:hidden}
+.declegpanel .declegs .legr{flex:1 1 0;min-width:0;padding:4px 6px;gap:2px}
+.declegpanel .declegs .legr-top{flex-wrap:nowrap}.declegpanel .declegs .lgm{overflow:hidden;text-overflow:ellipsis}
+.declegpanel .addleg.sm{flex:none;align-self:stretch;display:grid;place-items:center;margin:0}
+@media (max-width:1450px){
+  .declegpanel{padding:5px 7px}.decleghead{margin-bottom:3px}
+  .declegpanel .declegs .lgm{display:none}.declegpanel .declegs .tgl{padding-left:5px;padding-right:5px}
+}
 /* risk/reward map (ported from plan-desk) */
 .decmap{width:100%;height:200px;display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel)}
 .mapcap{font-size:var(--f-xs);color:var(--faint);padding:7px 2px 0;line-height:1.4}
@@ -1528,6 +1760,25 @@
 .placenote{text-align:center;font-size:var(--f-xs);color:var(--faint);margin-top:7px}
 .confirmwrap{border:1px solid var(--accent-2);background:var(--accent-wash);border-radius:8px;padding:11px 13px;margin-top:11px}
 .confirmwrap .crow{display:flex;gap:8px;margin-top:9px}
+/* Review owns the existing dock. It never appends another card below the viewport or changes the
+   three-column geometry; the receipt, checks, and final action stay in one bounded row. */
+.decdock.reviewdock>.execute{grid-column:1/-1}
+.reviewbar{min-height:54px;display:grid;grid-template-columns:minmax(260px,1.05fr) minmax(340px,1.45fr) auto;
+  align-items:center;gap:14px;border:1px solid var(--accent-2);border-radius:9px;background:linear-gradient(100deg,var(--accent-wash),var(--panel-2) 68%);padding:6px 10px}
+.revieworder{min-width:0;line-height:1.2}.revieworder .eyebrow{display:inline;margin:0 7px 0 0}.revieworder b{display:inline;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:var(--f-sm)}
+.revieworder span{display:block;margin-top:3px;color:var(--dim);font-size:var(--f-xs)}
+.reviewchecks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.reviewcheck{min-width:0;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);padding:5px 7px}
+.reviewcheck i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;background:var(--profit)}
+.reviewcheck.warn i{background:var(--caution)}.reviewcheck span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.04em}
+.reviewcheck b{display:block;margin-top:1px;font-family:var(--mono);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reviewacts{display:flex;align-items:center;gap:8px;white-space:nowrap}.reviewacts .btn{padding:7px 12px}
+@media (max-width:1450px){
+  .dockrow{grid-template-columns:minmax(0,1.35fr) minmax(170px,.85fr) auto auto;gap:8px}
+  .dockorder{min-width:0}.dockorder span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .reviewbar{grid-template-columns:minmax(220px,1fr) minmax(270px,1.2fr) auto;gap:8px;padding:6px 8px}
+  .reviewcheck{padding:3px 5px}.reviewacts .btn{padding:6px 9px}
+}
 
 .decdepth{grid-template-columns:repeat(4,1fr)}
 
@@ -1712,6 +1963,18 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .chrow .chiv{text-align:center;color:var(--caution)}
 .chrow .chb{color:var(--profit)} .chrow .cha{color:var(--dim)} .chrow .chb.p,.chrow .cha.p{color:var(--loss)}
 .chrow .cha.p{color:var(--dim)}
+/* On a genuinely tall, wide canvas the lower lenses and chain distribute their existing
+   information through the available field. This is continuous fill behavior, not a second
+   desktop composition: narrower/shorter viewports retain the same components and bounded rows. */
+@media (min-width:1701px) and (min-height:1200px){
+  .lv-book #chainBand .chaintbl{flex:1;min-height:0;display:flex;flex-direction:column}
+  .lv-book #chainBand .chrow{flex:1;min-height:0;padding-top:2px;padding-bottom:2px}
+  .lv-book .marketpanel .universegrid{flex:1;overflow:hidden;grid-auto-rows:minmax(0,1fr)}
+  .lv-book .bookband .govdetail{display:flex;flex-direction:column;overflow:hidden}
+  .lv-book .bookband .govhedge{margin-top:auto}
+  .lv-book .newspanel .newsfeed{display:flex;flex-direction:column;overflow:hidden}
+  .lv-book .newspanel .homenews{flex:1;min-height:0}
+}
 @media (max-height:1199px) and (min-width:1701px){
   #riskMain .homemap{min-height:185px}
   .chchartwrap{height:84px;min-height:84px;margin-bottom:6px}
@@ -1751,6 +2014,79 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .mdchart.candles,.mdna{min-height:100px}
   .chaintbl .chrow:nth-child(n+8){display:none}
   .marketpanel .uitem{padding:3px 6px}
+}
+@media (min-width:1200px) and (max-width:1700px){
+  #riskMain .homemap{min-height:clamp(140px,21vh,215px);margin:4px 0 3px}
+  .chchartwrap{height:clamp(62px,9vh,96px);min-height:clamp(62px,9vh,96px);margin-bottom:4px}
+  .mdchart.candles,.mdna{min-height:clamp(62px,9vh,96px)}
+}
+@media (min-width:1200px) and (max-width:1700px) and (max-height:800px){
+  .lv-book .bookband{gap:4px}
+  .lv-book .bookband>.lenshd .rkhero{gap:6px;padding-left:6px}
+  .lv-book .bookband>.lenshd .rkhero .rkh b{font-size:var(--f-sm)}
+  .lv-book .govtabs{gap:3px}.lv-book .govtab{padding:3px 4px}
+  .lv-book .govtab .gv{margin-top:0;font-size:var(--f-xs)}
+  .lv-book .govdetail{padding-top:4px;overflow:hidden}
+  .lv-book .govverdict{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin-bottom:3px;line-height:1.25}
+  .lv-book .govbars{gap:1px}.lv-book .govbar{padding:0 2px;line-height:1.15}
+  .lv-book .govbar:nth-child(n+4){display:none}
+  .lv-book .govfacts{gap:3px;margin:3px 0}.lv-book .govfact{padding:2px 5px}
+  .lv-book .govfact b{margin-top:0;font-size:var(--f-xs)}
+  .lv-book .govhedge{padding-top:3px;line-height:1.2}.lv-book .govhedge>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lv-book .govhedge .iconcta{width:27px;height:27px;border-radius:7px}.lv-book .govhedge .iconcta svg{width:15px;height:15px}
+  .lv-book .govdetail .expcal{min-height:55px;margin:3px 0}.lv-book .govdetail .rkcard{margin-top:3px;padding:5px 7px}
+  .lv-book .govcampaign{gap:3px;margin:4px 0}.lv-book .govround{padding:3px 4px}
+  .lv-book .marketpanel .mdrow,.lv-book .sectorpanel .mdrow{height:48px;margin:3px 0 4px;flex:none}
+  .lv-book .marketpanel .mdchart.mdmini,.lv-book .sectorpanel .mdchart.mdmini{height:48px;min-height:48px}
+  .lv-book .mdmeta.col{min-width:75px;gap:1px;font-size:var(--f-xs)}
+  .lv-book .marketpanel .msgrid.tight{gap:2px;margin-bottom:3px}
+  .lv-book .marketpanel .msgrid.tight .msector{padding:2px 4px;gap:1px}
+  .lv-book .marketpanel .lenshd.sub{margin:2px 0}
+  .lv-book .marketpanel .universegrid{flex:1;overflow:hidden;gap:0}
+  .lv-book .marketpanel .uitem{grid-template-columns:34px minmax(0,1fr) auto;gap:3px;padding:0 3px;line-height:1.1}
+  .lv-book .marketpanel .uitem:nth-child(n+7){display:none}
+  .lv-book .sectorpanel .holdrow{gap:2px}.lv-book .sectorpanel .holdchip{padding:1px 4px}
+  .lv-book .sectorpanel .sectorfacts{justify-content:stretch;gap:1px;margin-top:3px;overflow:hidden}
+  .lv-book .sectorpanel .sectorfact{grid-template-columns:58px minmax(0,1fr);gap:4px;padding:2px 3px;line-height:1.15}
+  .lv-book .sectorpanel .sectorfact>span:nth-child(2){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lv-book .sectorpanel .sectorfact .sfsrc{display:none}
+  .lv-book .newspanel>.lenshd{padding:0 10px 5px}
+  .lv-book .newspanel .newsfeed{overflow:hidden}
+  .lv-book .newspanel .homenews{padding:4px 7px}
+  .lv-book .newspanel .homenews .ht,.lv-book .newspanel .homenews .mt{line-height:1.15}
+  .lv-book .newspanel .homenews .mt{margin-top:1px}
+  .lv-book .newspanel .homenews:nth-child(n+5){display:none}
+}
+@media (min-width:1200px) and (max-width:1700px) and (min-height:801px) and (max-height:1000px){
+  .lv-book .bookband{gap:6px}.lv-book .bookband>.lenshd .rkhero{gap:8px;padding-left:8px}
+  .lv-book .govtabs{gap:4px}.lv-book .govtab{padding:4px 5px}
+  .lv-book .govdetail{padding-top:5px;overflow:hidden}
+  .lv-book .govverdict{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin-bottom:4px;line-height:1.3}
+  .lv-book .govbars{gap:2px}.lv-book .govbar{padding:1px 2px;line-height:1.2}
+  .lv-book .govbar:nth-child(n+5){display:none}
+  .lv-book .govfacts{gap:4px;margin:4px 0}.lv-book .govfact{padding:3px 6px}.lv-book .govfact b{margin-top:1px;font-size:var(--f-sm)}
+  .lv-book .govhedge{padding-top:4px;line-height:1.25}.lv-book .govhedge>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lv-book .govdetail .expcal{min-height:72px;margin:4px 0}.lv-book .govdetail .rkcard{margin-top:4px;padding:7px 8px}
+  .lv-book .govcampaign{gap:4px;margin:6px 0}.lv-book .govround{padding:4px 5px}
+  .lv-book .marketpanel .mdrow,.lv-book .sectorpanel .mdrow{height:70px;margin:4px 0 5px;flex:none}
+  .lv-book .marketpanel .mdchart.mdmini,.lv-book .sectorpanel .mdchart.mdmini{height:70px;min-height:70px}
+  .lv-book .mdmeta.col{min-width:82px;gap:2px;font-size:var(--f-xs)}
+  .lv-book .marketpanel .msgrid.tight{gap:3px;margin-bottom:4px}
+  .lv-book .marketpanel .msgrid.tight .msector{padding:3px 5px;gap:2px}
+  .lv-book .marketpanel .lenshd.sub{margin:3px 0}
+  .lv-book .marketpanel .universegrid{flex:1;overflow:hidden;gap:0}
+  .lv-book .marketpanel .uitem{grid-template-columns:38px minmax(0,1fr) auto;gap:4px;padding:1px 3px;line-height:1.15}
+  .lv-book .marketpanel .uitem:nth-child(n+11){display:none}
+  .lv-book .sectorpanel .holdrow{gap:3px}.lv-book .sectorpanel .holdchip{padding:2px 5px}
+  .lv-book .sectorpanel .sectorfacts{justify-content:stretch;gap:2px;margin-top:4px;overflow:hidden}
+  .lv-book .sectorpanel .sectorfact{grid-template-columns:66px minmax(0,1fr);gap:5px;padding:3px 4px;line-height:1.2}
+  .lv-book .sectorpanel .sectorfact>span:nth-child(2){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lv-book .sectorpanel .sectorfact .sfsrc{display:none}
+  .lv-book .newspanel .newsfeed{overflow:hidden}
+  .lv-book .newspanel .homenews{padding:5px 8px}
+  .lv-book .newspanel .homenews .ht,.lv-book .newspanel .homenews .mt{line-height:1.2}
+  .lv-book .newspanel .homenews .mt{margin-top:1px}
+  .lv-book .newspanel .homenews:nth-child(n+6){display:none}
 }
 .srctag{display:inline-flex;align-items:center;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);border:1px solid var(--line-soft);border-radius:4px;padding:1px 6px}
 .srctag.sim{color:var(--violet);border-color:var(--violet)}
@@ -2171,6 +2507,7 @@ function drawPayoff(svg,p,full,ghost,opts){
   }
   var W=Math.max(40,Math.round(svg.clientWidth||(full?520:170)));
   var H=Math.max(24,Math.round(svg.clientHeight||(full?260:46)));
+  var compactHero=full&&(H<145||(p.isHeld&&H<240));
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
   var dom=payDomain(p), lo=dom[0], hi=dom[1];
   /* adjust-in-place: a GHOST (the current structure) is drawn faint under the adjusted
@@ -2182,7 +2519,7 @@ function drawPayoff(svg,p,full,ghost,opts){
   /* on the full hero, widen left just enough to SHOW the characteristic gap — the crash region and
      the distribution's fat left tail become visible instead of sitting off-screen. */
   if(full){ var gpx=p.spot*(1-tailParams(p).gap*1.15); if(gpx<lo) lo=gpx-(hi-lo)*0.02; }
-  var mL=full?56:3, mR=full?18:3, mT=full?22:5, mB=full?38:5;   /* roomier margins so the bigger labels don't collide */
+  var mL=full?56:3, mR=full?18:3, mT=full?(compactHero?16:22):5, mB=full?(compactHero?32:38):5;
   var x0=mL, x1=W-mR, y0=mT, y1=H-mB, pw=x1-x0, ph=y1-y0;
   var n=full?200:80, pts=[], vmin=0, vmax=0;
   for(var i=0;i<=n;i++){var px=lo+(hi-lo)*i/n, v=payFor(p,px); pts.push([px,v]); if(v<vmin)vmin=v; if(v>vmax)vmax=v;}
@@ -2234,7 +2571,7 @@ function drawPayoff(svg,p,full,ghost,opts){
     if(hi>prevx) lrects+='<rect x="'+f(sx(prevx))+'" y="'+y0+'" width="'+f(Math.max(0,sx(hi)-sx(prevx)))+'" height="'+f(ph)+'"/>';
     if(lrects){ var lid='loss'+uid; g+='<clipPath id="'+lid+'">'+lrects+'</clipPath><path d="'+bellA+'" fill="var(--loss)" opacity=".16" clip-path="url(#'+lid+')"/>'; }
     var popv=(typeof p.pop==='number'?p.pop:popCalc(p));
-    g+='<text class="pfpop" x="'+(x0+3)+'" y="'+(y0+12)+'">'+popv+'% chance of profit</text>';
+    if(!compactHero) g+='<text class="pfpop" x="'+(x0+3)+'" y="'+(y0+12)+'">'+popv+'% chance of profit</text>';
     var yt=pfTicks(yLo,yHi,4);
     for(var i=0;i<yt.length;i++){var t=yt[i], yy=sy(t); if(yy<y0-1||yy>y1+1)continue;
       if(Math.abs(t)>1e-6) g+='<line x1="'+hx(x0)+'" y1="'+hx(yy)+'" x2="'+hx(x1)+'" y2="'+hx(yy)+'" stroke="var(--line-soft)" stroke-width="1"/>';
@@ -2262,7 +2599,7 @@ function drawPayoff(svg,p,full,ghost,opts){
     }
     var sX=sx(p.spot);
     g+='<line x1="'+hx(sX)+'" y1="'+y0+'" x2="'+hx(sX)+'" y2="'+y1+'" stroke="var(--text)" stroke-dasharray="2 3" opacity=".33"/>';
-    g+='<text class="pflab" x="'+f(sX)+'" y="'+(y0-6)+'" text-anchor="middle">now '+Math.round(p.spot)+'</text>';
+    if(!compactHero) g+='<text class="pflab" x="'+f(sX)+'" y="'+(y0-6)+'" text-anchor="middle">now '+Math.round(p.spot)+'</text>';
     var pLo=(lo/p.spot-1)*100, pHi=(hi/p.spot-1)*100, xt=pfTicks(pLo,pHi,5);
     for(var i=0;i<xt.length;i++){var pc=xt[i], px=p.spot*(1+pc/100), X=sx(px); if(X<x0-1||X>x1+1)continue;
       g+='<text class="pfpx" x="'+f(X)+'" y="'+(y1+16)+'" text-anchor="middle">'+Math.round(px)+'</text>';
@@ -2287,7 +2624,10 @@ function drawPayoff(svg,p,full,ghost,opts){
       if(ppx>=lo&&ppx<=hi){ var pv=payFor(p,ppx), pX=sx(ppx), pY=sy(pv), pcol=pv>=0?'var(--profit)':'var(--loss)';
         var pinAnchor=pX<x0+90?'start':pX>x1-115?'end':'middle';
         var pinTextX=pinAnchor==='start'?pX+8:pinAnchor==='end'?pX-8:pX;
-        var pinTextY=pX<x0+190?y0+31:y0+10;
+        /* At the beginning of playback the scenario marker sits on the spot/mark story. Put its
+           annotation in a separate lower lane until it has moved away, so the three labels never
+           pile up at the same coordinate (especially on high-priced held lines such as MU/SMH). */
+        var pinTextY=Math.abs(pmag)<2.5?Math.max(y0+18,y1-12):(pX<x0+190?y0+31:y0+10);
         g+='<line x1="'+hx(pX)+'" y1="'+y0+'" x2="'+hx(pX)+'" y2="'+y1+'" stroke="'+pcol+'" stroke-width="1.3" stroke-dasharray="4 2" opacity=".85"/>';
         g+='<circle cx="'+f(pX)+'" cy="'+f(pY)+'" r="6" fill="'+pcol+'" stroke="var(--ground)" stroke-width="2"/>';
         g+='<text class="pfpin" x="'+f(pinTextX)+'" y="'+pinTextY+'" text-anchor="'+pinAnchor+'" fill="'+pcol+'">'+(pmag>0?'+':'')+Math.round(pmag)+'% · '+money(pv)+' at exp</text>';
@@ -2303,8 +2643,18 @@ function drawPayoff(svg,p,full,ghost,opts){
       g+='<circle cx="'+f(expX)+'" cy="'+f(mkY)+'" r="4" fill="var(--ground)" stroke="var(--dim)" stroke-width="1.6"/>';
       g+='<circle cx="'+f(expX)+'" cy="'+f(mkY)+'" r="1.3" fill="var(--dim)"/>';
       g+='<circle cx="'+f(expX)+'" cy="'+f(expY)+'" r="4.7" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/>';
-      g+='<text class="pfmk" x="'+f(lX)+'" y="'+f(mkY+(mkY>=expY?12:-5))+'" text-anchor="'+anc+'">now · mark '+money(p.pnl)+'</text>';
-      g+='<text class="pfxp" x="'+f(lX)+'" y="'+f(expY+(expY>mkY?12:-5))+'" text-anchor="'+anc+'" fill="'+expCol+'">at expiry '+money(expV)+'</text>';
+      if(!compactHero){
+        var closeLabels=Math.abs(mkY-expY)<40, mkLX=lX, xpLX=lX, mkAnc=anc, xpAnc=anc;
+        var mkLY=mkY+(mkY>=expY?12:-5), xpLY=expY+(expY>mkY?12:-5);
+        if(closeLabels){
+          /* Two horizontal lanes are easier to scan than stacked text when today's mark and the
+             expiry-at-spot value nearly coincide. Use opposite anchors while keeping both in-bounds. */
+          mkLX=Math.max(x0+92,expX-9); mkAnc='end'; mkLY=Math.max(y0+15,Math.min(y1-20,mkY-7));
+          xpLX=Math.min(x1-92,expX+9); xpAnc='start'; xpLY=Math.max(y0+31,Math.min(y1-6,expY+13));
+        }
+        g+='<text class="pfmk" x="'+f(mkLX)+'" y="'+f(mkLY)+'" text-anchor="'+mkAnc+'">now · mark '+money(p.pnl)+'</text>';
+        g+='<text class="pfxp" x="'+f(xpLX)+'" y="'+f(xpLY)+'" text-anchor="'+xpAnc+'" fill="'+expCol+'">at expiry '+money(expV)+'</text>';
+      }
     } else {
       g+='<circle cx="'+f(expX)+'" cy="'+f(expY)+'" r="4.7" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/>';
       g+='<text class="pfxp" x="'+f(lX)+'" y="'+f(expY-7)+'" text-anchor="'+anc+'" fill="'+expCol+'">at spot '+money(expV)+'</text>';
@@ -2415,8 +2765,8 @@ function decband(p){
    control ribbon (readout + scrub + canonical steppers) opens under the spectrum. Shared bloom + Decide. */
 function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=daysOf(p), t=st.t, tu=tUnitOf(p), pin=(p.id in pinnedScen)?+pinnedScen[p.id]:0, pinProb=Math.round((scenProbs(p)[pin]||0)*100);
   var curM=mag*t, curPx=p.spot*(1+curM/100), ivsh=iv*t, dfwd=days*t, pv=scenPL(p,curPx,ivsh,dfwd);
-  function stp(key,lbl,val,cls){ return '<span class="mstp"><span class="ml">'+lbl+'</span><button data-wf="'+key+'dn">−</button><span class="mv '+(cls||'')+'">'+val+'</span><button data-wf="'+key+'up">+</button></span>'; }
-  var timeStp='<span class="mstp"><span class="ml">time</span><button data-wf="daysdn">−</button><span class="mv">+'+tDisp(days,tu)+'</span><button data-wf="daysup">+</button>'+
+  function stp(key,lbl,val,cls){ return '<span class="mstp" data-asm="'+key+'"><span class="ml">'+lbl+'</span><button data-wf="'+key+'dn">−</button><span class="mv '+(cls||'')+'">'+val+'</span><button data-wf="'+key+'up">+</button></span>'; }
+  var timeStp='<span class="mstp" data-asm="days"><span class="ml">time</span><button data-wf="daysdn">−</button><span class="mv">+'+tDisp(days,tu)+'</span><button data-wf="daysup">+</button>'+
     '<span class="tunit">'+['d','h','m'].map(function(u){return '<button class="'+(tu===u?'on':'')+'" data-wf="tu-'+u+'" title="'+({d:'days',h:'hours',m:'minutes'}[u])+'">'+u+'</button>';}).join('')+'</span></span>';
   return '<div class="srow-ctl">'+
     '<div class="srx-read"><span class="wf-main"><b>'+pinProb+'%</b> likely · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv)+'</span> <button class="microcta" data-wf="adjust" aria-label="Use these scenario assumptions" title="Use these scenario assumptions">'+deskGlyph('tune')+'</button> <button class="microcta" data-wf="unpin" aria-label="Clear the pinned scenario" title="Clear the pinned scenario">×</button></div>'+
@@ -2432,6 +2782,51 @@ function renderScenbox(p){
     '<div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">±'+p.em+'% · value at expiry</span></div>'+
     decScenSpectrum(p)+
   '</div>';
+}
+
+/* The position's book map is the Home exposure map under the active scenario frame: horizontal
+   motion is live net delta, vertical position remains committed capital, and colour is projected
+   mark P/L. Axes stay fixed while the frame plays, so motion communicates changing exposure rather
+   than a rescaling chart. */
+function positionRiskMap(p){
+  return '<div class="posrisk"><div class="lenshd"><span class="eyebrow">Book in this move</span><span class="hint">all held lines · Δ→ · capital↑</span></div>'+
+    '<svg class="posriskmap" id="posRiskMap-'+p.id+'"></svg>'+
+    '<div class="posriskread"><span>same market frame across the book</span><b data-live="bookmap">'+signed(0)+'</b></div></div>';
+}
+function drawPositionRiskMap(focusP){
+  var svg=document.getElementById('posRiskMap-'+focusP.id); if(!svg)return;
+  var W=Math.max(280,Math.round(svg.clientWidth||620)), H=Math.max(52,Math.round(svg.clientHeight||130));
+  svg.setAttribute('viewBox','0 0 '+W+' '+H);
+  /* Leave a full bubble radius inside the viewBox. Safari otherwise clips the highest-capital
+     and lowest-capital nodes when this same map contracts into the short desktop composition. */
+  var padL=19,padR=14,padT=20,padB=20,cHi=Math.max.apply(0,POS.map(function(p){return p.cap;}))||1;
+  var moves=[-20,0,20], dMax=1.15;
+  POS.forEach(function(p){ moves.forEach(function(m){ var gg=liveGreeks(p,p.spot*(1+m/100),m<0?8:-3,m<0?3:8); dMax=Math.max(dMax,Math.abs(gg.delta)*1.14); }); });
+  var X=function(d){return padL+(W-padL-padR)*(Math.max(-dMax,Math.min(dMax,d))+dMax)/(2*dMax);};
+  var Y=function(cap){return H-padB-(H-padB-padT)*Math.max(0,Math.min(cHi,cap))/cHi;};
+  var xz=X(0), g='<line x1="'+xz.toFixed(1)+'" y1="'+padT+'" x2="'+xz.toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line)" stroke-dasharray="3 3"/>'+
+    '<text x="'+(padL+1)+'" y="10" fill="var(--faint)" font-size="9">short Δ</text><text x="'+(W-padR-1)+'" y="10" fill="var(--faint)" font-size="9" text-anchor="end">long Δ</text>';
+  POS.forEach(function(p){ var r=9+Math.min(6,(p.riskPct||1)/4), x=X(+p.delta||0), y=Y(p.cap);
+    g+='<g class="prnode" data-prid="'+p.id+'" transform="translate('+x.toFixed(1)+' '+y.toFixed(1)+')">'+
+      (p.id===focusP.id?'<circle class="prfocus" r="'+(r+4).toFixed(1)+'"/>':'')+
+      '<circle class="prbody" r="'+r.toFixed(1)+'" fill="var(--accent-2)" fill-opacity=".32" stroke="var(--accent-2)" stroke-width="1.3"/>'+
+      '<text text-anchor="middle" y="3">'+p.sym+'</text></g>'; });
+  svg.innerHTML=g; svg._posrisk={X:X,Y:Y,dMax:dMax};
+  var st=scenSt(focusP.id), tgt=magOf(focusP), t=st.t, m=tgt==null?0:tgt*t;
+  updatePositionRiskMap(focusP,m,tgt==null?0:ivOf(focusP)*t,tgt==null?0:daysOf(focusP)*t);
+}
+function updatePositionRiskMap(focusP,curM,ivsh,dfwd){
+  var svg=document.getElementById('posRiskMap-'+focusP.id); if(!svg||!svg._posrisk)return;
+  var frame=[], maxLoss=1, total=0;
+  POS.forEach(function(p){ var px=p.spot*(1+curM/100), gg=liveGreeks(p,px,ivsh,dfwd), pl=scenPL(p,px,ivsh,dfwd);
+    frame.push({p:p,d:gg.delta,pl:pl}); if(pl<0)maxLoss=Math.max(maxLoss,-pl); total+=pl; });
+  frame.forEach(function(fm){ var n=svg.querySelector('[data-prid="'+fm.p.id+'"]'); if(!n)return;
+    var x=svg._posrisk.X(fm.d), y=svg._posrisk.Y(fm.p.cap); n.setAttribute('transform','translate('+x.toFixed(1)+' '+y.toFixed(1)+')');
+    var body=n.querySelector('.prbody'), col=fm.pl>=0?'var(--profit)':tempColor(Math.min(1,-fm.pl/maxLoss));
+    if(body){ body.setAttribute('fill',col); body.setAttribute('stroke',col); body.setAttribute('fill-opacity',fm.pl>=0?'.28':'.34'); }
+  });
+  var read=(cardEl[focusP.id]||{}).querySelector?cardEl[focusP.id].querySelector('[data-live="bookmap"]'):null;
+  if(read){ read.textContent=signed(total); read.className=total>=0?'pos':'neg'; }
 }
 
 /* ---- C · one quiet depth inspector: research · mechanics · book context ---- */
@@ -2487,7 +2882,10 @@ function depthBand(p){
   var tabs=[['research','path','Research','IV '+p.ivRank+'th'],['mechanics','tune','Mechanics','Θ '+signed(p.theta)+'/d'],['book','book','Book',p.riskPct+'% risk']].map(function(t){
     return '<button id="postab-'+p.id+'-'+t[0]+'" class="inspecttab'+(pane===t[0]?' on':'')+'" data-pospane="'+t[0]+'" data-posid="'+p.id+'" aria-pressed="'+(pane===t[0])+'" aria-controls="'+panelId+'">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';
   }).join('');
-  return '<div class="depth posdepth"><div class="inspectrail posinspectrail" role="group" aria-label="Position detail">'+tabs+'</div><div id="'+panelId+'" class="posinspectwell" role="region" aria-labelledby="'+selectedTabId+'">'+(panes[pane]||research)+'</div></div>';
+  var paneHtml=['research','mechanics','book'].map(function(k){
+    return '<div class="pospane '+k+(pane===k?' on':'')+'" data-pospane-panel="'+k+'" role="region" aria-labelledby="postab-'+p.id+'-'+k+'">'+panes[k]+'</div>';
+  }).join('');
+  return '<div class="depth posdepth"><div class="inspectrail posinspectrail" role="group" aria-label="Position detail">'+tabs+'</div><div id="'+panelId+'" class="posinspectwell" role="group" aria-labelledby="'+selectedTabId+'">'+paneHtml+'</div></div>';
 }
 
 /* ---- D · the manage rail; recommended verb (from the flag) is the primary ---- */
@@ -2507,19 +2905,20 @@ function legSummary(c,control){
     return '<span class="lsleg '+side+'"><i>'+(side==='sell'?'−':'+')+'</i><b>'+body+'</b></span>'; }).join('');
   return '<div class="legsummary"><span class="eyebrow">Structure</span>'+legs+control+'</div>';
 }
-/* The exact structure is always visible as a compact summary. Its tune control opens the same
-   inline leg editor used by Roll; the complete controls appear only while they are being used. */
+/* Held structure workbench. The held package is always rendered with the same leg controls used
+   by Roll; the first manipulation creates a proposed adjustment and the ghost payoff preserves
+   the before/after distinction. Nothing silently mutates the held lots. */
 function renderLegs(p){
   var editing=adjust&&adjust.posId===p.id;
-  if(!editing) return legSummary(p,'<button class="microcta" data-act="Adjust" aria-label="Adjust the position legs" title="Adjust legs">'+deskGlyph('tune')+'</button>');
   var legs=editing?adjust.legs:p.legs;
   var chips=legs.map(function(l,i){return adjChip(p,l,i);}).join('');
   return '<div class="legspanel'+(editing?' editing':'')+'">'+
-    '<div class="legshd"><span class="eyebrow">Legs'+(editing?' · editing':'')+'</span>'+
-      '<span class="hint">nothing changes your book until you place</span>'+
+    '<div class="legshd"><span class="eyebrow">Structure workbench</span>'+
+      '<span class="badge '+(editing?'ok':'')+'">'+(editing?'Proposed':'Held')+'</span>'+
+      '<span class="hint">'+(editing?'compare the draft with the dotted held curve':'use any leg control to begin an adjustment')+'</span>'+
       (editing?'<span class="mstp expchip"><span class="ml">exp</span><button data-madj="exp-prev">−</button><span class="mv">'+adjust.exp+'</span><button data-madj="exp-next">+</button></span>':'')+
     '</div>'+
-    '<div class="legrow">'+chips+'<button class="addleg sm" data-madj="add">＋ Add leg</button></div>'+
+    '<div class="legrow">'+chips+'<button class="addleg sm" data-madj="add">＋ Add hedge leg</button></div>'+
   '</div>';
 }
 /* the bottom manage bar: pending-edit controls · close confirm · or the quick actions */
@@ -2530,7 +2929,7 @@ function manageRail(p){
 }
 function renderPendingBar(p){
   var c=adjustCand();
-  return '<div class="pendingbar"><div class="adjnums inline">'+adjNums(p,c)+'</div>'+
+  return '<div class="pendingbar"><div class="pendintro"><span class="eyebrow">Adjustment impact</span><span class="hint">held curve stays dotted · not placed</span></div><div class="adjnums inline">'+adjNums(p,c)+'</div>'+
     '<div class="pendacts"><button class="btn pri" data-madj="place">Place adjustment →</button>'+
       '<button class="btn" data-madj="cancel">Cancel</button>'+
       '<button class="linklike" data-madj="workbench">full workbench →</button></div></div>';
@@ -2711,7 +3110,7 @@ function tStep(u){ return u==='h'?1/24:u==='m'?5/1440:1; }          /* one stepp
 function tDisp(days,u){ return u==='h'?Math.round(days*24)+'h':u==='m'?Math.round(days*1440)+'m':Math.round(days)+'d'; }
 function scenSt(id){ if(!scenPlay[id]) scenPlay[id]={t:1,playing:false,speed:1,raf:0}; return scenPlay[id]; }
 function scrubMag(p){ var m=magOf(p); return m==null?null:m*scenSt(p.id).t; }   /* the LIVE (animated) magnitude at the current timeline point */
-function refreshScenbox(p){ var card=cardEl[p.id]; if(card){ var box=card.querySelector('.bd-right'); if(box) box.innerHTML=renderScenbox(p); } redrawBloomPayoff(p, true); }
+function refreshScenbox(p){ var card=cardEl[p.id]; if(card){ var box=card.querySelector('.scenbox'); if(box) box.outerHTML=renderScenbox(p); } redrawBloomPayoff(p, true); }
 function bloomSurf(p){ return { obj:function(){return p;}, el:function(){return cardEl[p.id];}, root:function(){return cardEl[p.id];}, redraw:function(a){redrawBloomPayoff(p,a);}, refresh:function(){refreshScenbox(p);} }; }
 function pinScen(s, si){
   var p=s.obj(), cur=(p.id in pinnedScen)?pinnedScen[p.id]:null;
@@ -2724,7 +3123,7 @@ function adjustAsm(s, key, d){ var p=s.obj(); if(!(p.id in pinnedScen))return;
   if(key==='mag'){ pinMag[p.id]=Math.max(-40,Math.min(40,magOf(p)+d)); }
   else if(key==='iv'){ pinIV[p.id]=Math.max(-30,Math.min(60,ivOf(p)+d)); }
   else if(key==='days'){ pinDays[p.id]=Math.max(0,Math.min(45,daysOf(p)+d*tStep(tUnitOf(p)))); }   /* step in the chosen time unit */
-  s.refresh();
+  patchScenarioAssumptions(s);
 }
 function setTUnit(s, u){ var p=s.obj(); if(!(p.id in pinnedScen))return; var d=daysOf(p); pinTUnit[p.id]=u;
   /* re-seat the value to a sensible magnitude for the new unit — switching to minutes shouldn't read 7200;
@@ -2732,7 +3131,21 @@ function setTUnit(s, u){ var p=s.obj(); if(!(p.id in pinnedScen))return; var d=d
   if(u==='h' && d>2) pinDays[p.id]=6/24;              // ~6 hours
   else if(u==='m' && d>0.5) pinDays[p.id]=30/1440;    // ~30 minutes
   else if(u==='d' && d<1) pinDays[p.id]=((SCEN[pinnedScen[p.id]]||{}).d||5);   // back to a day-scale default
-  s.refresh();
+  patchScenarioAssumptions(s);
+}
+/* Assumption edits are value patches, not component renders. Keeping the ribbon node alive avoids
+   the abrupt Safari flash and lets an in-progress timeline continue from the exact same frame. */
+function patchScenarioAssumptions(s){
+  var p=s.obj(), el=s.el(); if(!el)return;
+  function setVal(key,val,cls){ var v=el.querySelector('[data-asm="'+key+'"] .mv'); if(!v)return; v.textContent=val; if(cls!=null)v.className='mv '+cls; }
+  var mag=magOf(p), iv=ivOf(p), days=daysOf(p), tu=tUnitOf(p);
+  setVal('mag',(mag>0?'+':'')+mag+'%',mag>=0?'pos':'neg');
+  setVal('iv',(iv>0?'+':'')+iv+' IV',iv>0?'warn':'');
+  setVal('days','+'+tDisp(days,tu),'');
+  var ub=el.querySelectorAll('[data-asm="days"] .tunit button');
+  for(var i=0;i<ub.length;i++)ub[i].classList.toggle('on',ub[i].getAttribute('data-wf')==='tu-'+tu);
+  var end=el.querySelector('.scenplay .tk.end'); if(end){ end.textContent=(mag>0?'+':'')+Math.round(mag)+'%'; end.className='tk end '+(mag>=0?'pos':'neg'); }
+  s.redraw(true); renderAtPrice(s);
 }
 function adjustPinMag(s, d){ adjustAsm(s,'mag',d); }   /* back-compat alias */
 /* ---- scenario timeline: scrub / play / speed ---- */
@@ -2778,11 +3191,14 @@ function renderAtPrice(s){
   var aBar=root.querySelector('[data-livebar="assign"]'); if(aBar){ aBar.style.width=Math.max(0,Math.min(100,lg.assign))+'%'; aBar.style.background=(lg.assign>=50?'var(--caution)':'var(--accent-2)'); }
   /* the hero P/L — the mark under the scenario (pinned) or the at-expiry hold (idle) */
   var pj=root.querySelector('[data-live="proj"]'); if(pj){ pj.textContent=signed(pv)+(pinned?' mark':' at expiry'); pj.className='expv '+(pv>=0?'pos':'neg')+(pinned?' proj-live':''); }
+  var hp=root.querySelector('[data-live="heroProj"]'); if(hp){ hp.textContent=money(pv); hp.className=(pv>=0?'pos':'neg'); }
+  var hl=root.querySelector('[data-live="heroLab"]'); if(hl) hl.textContent=pinned?'scenario':'expiry';
   var lpx=root.querySelector('[data-live="px"]'); if(lpx) lpx.textContent=(pinned?Math.round(curPx):p.spot.toFixed(2));
   /* light up the scenario row the marker is currently passing */
   var rows=root.querySelectorAll('.srow[data-si]');
   if(rows.length){ var best=-1,bd=1e9; for(var i=0;i<rows.length;i++){ var si=+rows[i].getAttribute('data-si'), mm=SCEN[si]?SCEN[si].m:0, dd=Math.abs(mm-curM); if(dd<bd){bd=dd;best=i;} }
     for(var j=0;j<rows.length;j++) rows[j].classList.toggle('live', pinned && j===best); }
+  if(root.querySelector('.posriskmap')) updatePositionRiskMap(p,curM,ivsh,dfwd);
 }
 /* concise, low-precision readout of the live assumptions + the resulting mark */
 function scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv){
@@ -2818,6 +3234,7 @@ function bookMaxRisk(){ var m=1; for(var i=0;i<POS.length;i++) if(POS[i].riskPct
 function peekDraw(el,p){ if(!el||el._peekDrawn)return; el._peekDrawn=1; var sv=el.querySelector('.cspark'); if(sv) drawPayoff(sv,p,false); }
 function makeCard(p){
   var el=document.createElement('div');
+  var holdAtSpot=payFor(p,p.spot);
   el.className='card'+(p.need?' needs '+p.tone:''); el.setAttribute('data-id',p.id);
   el.innerHTML=
    /* COMPACT SCALABLE FACE — density earned by focus: a short row (name·struct·P/L, then a
@@ -2838,11 +3255,13 @@ function makeCard(p){
      decband(p)+
      '<div class="bd-cols">'+   /* one causal stack: payoff → scenarios, with the scenario component shared with Decide */
        '<div class="bd-hero">'+
-         '<div class="paytitle"><span class="lbl">Where it stands — payoff at expiry</span>'+(learnStrat(p.struct)?'<button class="llearn" data-learn="'+p.struct+'" title="learn this structure">＋ learn '+p.struct.toLowerCase()+'</button>':'')+'</div>'+
+         '<div class="paytitle"><span class="lbl"><span class="payfull">Where it stands — </span>payoff at expiry</span>'+
+           '<span class="payread"><span>mark <b class="'+(p.pnl>=0?'pos':'neg')+'">'+money(p.pnl)+'</b></span><i>→</i><span data-live="heroLab">expiry</span><b data-live="heroProj" class="'+(holdAtSpot>=0?'pos':'neg')+'">'+money(holdAtSpot)+'</b></span>'+
+           (learnStrat(p.struct)?'<button class="llearn" data-learn="'+p.struct+'" title="learn this structure">＋ learn '+p.struct.toLowerCase()+'</button>':'')+'</div>'+
          '<div class="paywrap"><svg class="cbig"></svg><div class="paycross"></div><div class="paytip"></div></div>'+
          stratKPIs(p,{calm:true})+
        '</div>'+
-       '<div class="bd-right">'+renderScenbox(p)+'</div>'+   /* .bd-right so refreshScenbox() finds the box on pin/scrub */
+       '<div class="bd-right">'+renderScenbox(p)+positionRiskMap(p)+'</div>'+   /* stable scenario + linked book frame */
      '</div>'+
      '<div class="bd-legs">'+renderLegs(p)+'</div>'+
      depthBand(p)+
@@ -2861,7 +3280,7 @@ function makeCard(p){
     var pp=ev.target.closest('[data-pospane]'); if(pp){ ev.stopPropagation(); var nextPane=pp.getAttribute('data-pospane'); POS_PANE[p.id]=nextPane;
       var old=el.querySelector('.posdepth'); if(old)old.outerHTML=depthBand(p);
       var nextTab=el.querySelector('[data-pospane="'+nextPane+'"]'); if(nextTab)nextTab.focus();
-      var ps=el.querySelector('.plspark'); if(ps)priceSpark(ps,p); return; }
+      var ps=el.querySelector('.plspark'); if(ps)priceSpark(ps,p); renderAtPrice(surf); return; }
     var ll=ev.target.closest('[data-learn]'); if(ll){ ev.stopPropagation(); var ls=learnStrat(ll.getAttribute('data-learn')); if(ls)openLearn({type:'strat',s:ls}, ll.getBoundingClientRect()); return; }
     var da=ev.target.closest('[data-act]'); if(da){ ev.stopPropagation(); handleBandAction(p,da.getAttribute('data-act')); return; }
     var mj=ev.target.closest('[data-madj]'); if(mj){ ev.stopPropagation(); handleManage(p,mj.getAttribute('data-madj')); return; }
@@ -2933,6 +3352,7 @@ function layoutForLevel(level,focus){
     var fp=byId[focus];
     redrawBloomPayoff(fp);
     priceSpark(cardEl[focus].querySelector('.plspark'),fp);
+    drawPositionRiskMap(fp);
   }
 }
 
@@ -3106,6 +3526,9 @@ function handleCmd(raw){
   if(q==='market'){ go('book'); scrollToBand('univBand'); cmdEl.value=''; return; }
   if(q==='sector'){ go('book'); scrollToBand('sectorBand'); cmdEl.value=''; return; }
   if(q==='learn'||q==='?'||q==='help'){ if(typeof openLearn==='function'){ openLearn(null); cmdEl.value=''; return; } }
+  /* While composing a free idea, an exact universe symbol retargets that idea in place. The
+     persistent command field must not silently navigate away to a held position instead. */
+  if(decide&&decide.canPick&&univBy[q.toUpperCase()]){ setUnderlying(q.toUpperCase()); cmdEl.value=''; return; }
   /* 2 · a held position (symbol or structure) */
   for(var i=0;i<POS.length;i++){ var p=POS[i];
     if(p.sym.toLowerCase()===q || p.struct.toLowerCase().indexOf(q)>=0){ go('position',p.id); cmdEl.value=''; return; }
@@ -3135,11 +3558,12 @@ var BOOK_REALIZED=18420, BOOK_WINRATE=68, BOOK_DAY=184;
 function bookEquity(net){ var rnd=mulberry32(70414), n=30, out=[], v=0;
   for(var i=0;i<n;i++){ v+=(i<19?280:-560)+(rnd()-0.5)*1200; out.push(v); }   /* climb, then a recent give-back */
   var shift=net-out[n-1]; return out.map(function(x){return Math.round(x+shift);}); }
-function pstat(k,v,good){ return '<div class="pfs"><span class="pfk">'+k+'</span><span class="pfv '+(good==null?'':good?'pos':'neg')+'">'+v+'</span></div>'; }
+function pstat(k,v,good){ var sh={'Realized YTD':'Realized','Premium working':'Working','Win rate':'Win'}[k]||k;
+  return '<div class="pfs"><span class="pfk"><span class="hfull">'+k+'</span><span class="hshort">'+sh+'</span></span><span class="pfv '+(good==null?'':good?'pos':'neg')+'">'+v+'</span></div>'; }
 function perfBand(){
   var net=0,prem=0; POS.forEach(function(p){net+=p.pnl;prem+=Math.max(0,+p.net||0);});
   return '<div class="perfband">'+
-    '<div class="pf-lead"><span class="lbl">Book P/L · 30 sessions</span>'+
+    '<div class="pf-lead"><span class="lbl"><span class="hfull">Book P/L · 30 sessions</span><span class="hshort">Book P/L · 30d</span></span>'+
       '<span class="pf-net '+(net>=0?'pos':'neg')+'">'+money(net)+'</span>'+
       '<span class="pf-day '+(BOOK_DAY>=0?'pos':'neg')+'">'+(BOOK_DAY>=0?'▲':'▼')+' '+money(Math.abs(BOOK_DAY))+' today</span></div>'+
     '<svg class="pf-eq" id="bookEq"></svg>'+
@@ -3231,13 +3655,13 @@ function renderSummary(){
   /* ROW 2 — YOUR BOOK line: totals · attention · ambient posture · the entry doors */
   var posture='<div class="posture"><span class="pgt">Posture</span>'+
     '<button class="pchip" data-posture="goal" title="what your new ideas lean toward">'+POSTURE.goal+'</button>'+
-    '<button class="pchip" data-posture="risk" title="default caps inherited by Decide">'+postureName()+' <span class="pcsub">$'+(POSTURE.risk/1000)+'k · $'+(POSTURE.bp/1000)+'k</span></button>'+
-    '<button class="pchip" data-posture="lane" title="which lane new orders default to">'+(POSTURE.lane==='real'?'Real-first':'Paper-first')+'</button>'+
+    '<button class="pchip" data-posture="risk" title="default caps inherited by Decide"><span class="hfull">'+postureName()+'</span><span class="hshort">'+(postureName()==='Conservative'?'Consv.':postureName()==='Aggressive'?'Aggr.':'Bal.')+'</span> <span class="pcsub">$'+(POSTURE.risk/1000)+'k · $'+(POSTURE.bp/1000)+'k</span></button>'+
+    '<button class="pchip" data-posture="lane" title="which lane new orders default to"><span class="hfull">'+(POSTURE.lane==='real'?'Real-first':'Paper-first')+'</span><span class="hshort">'+(POSTURE.lane==='real'?'Real':'Paper')+'</span></button>'+
     '<span class="pchip static lanes"><span class="ld real">'+real+' real</span><span class="ld paper">'+paper+' paper</span></span>'+
   '</div>';
   var bookline='<div class="bookline">'+
-    '<div class="sblock"><div class="lbl" title="collateral set aside + defined risk committed">Capital at work</div><div class="sv">'+money(capRisk)+'</div></div>'+
-    '<button class="sblock sblock-btn" data-open="risk" title="the whole book on ONE shared '+(bt.sector||'sector').toLowerCase()+' gap of −'+bt.gapPct+'% — every line moves together. Jump to the book-risk band."><div class="lbl">If '+(bt.sector||'sector').toLowerCase()+' −'+bt.gapPct+'%</div><div class="sv '+(bt.gapPL<0?'warnv':'pos')+'">'+money(bt.gapPL)+'</div></button>'+
+    '<div class="sblock"><div class="lbl" title="collateral set aside + defined risk committed"><span class="hfull">Capital at work</span><span class="hshort">Capital</span></div><div class="sv">'+money(capRisk)+'</div></div>'+
+    '<button class="sblock sblock-btn" data-open="risk" title="the whole book on ONE shared '+(bt.sector||'sector').toLowerCase()+' gap of −'+bt.gapPct+'% — every line moves together. Jump to the book-risk band."><div class="lbl"><span class="hfull">If '+(bt.sector||'sector').toLowerCase()+' −'+bt.gapPct+'%</span><span class="hshort">'+(bt.sector||'sector')+' −'+bt.gapPct+'%</span></div><div class="sv '+(bt.gapPL<0?'warnv':'pos')+'">'+money(bt.gapPL)+'</div></button>'+
     (need?'<button class="sneed" data-open="risk" title="'+needNames.join(', ')+' need attention"><span class="badge bad">'+need+' need you</span></button>':'')+
     posture+
     '<div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div>'+
@@ -3355,6 +3779,7 @@ function redraw(){
     var fp=byId[state.focus];
     redrawBloomPayoff(fp);
     priceSpark(cardEl[state.focus].querySelector('.plspark'),fp);
+    drawPositionRiskMap(fp);
   }
 }
 
@@ -4129,14 +4554,21 @@ function startDecStrikeDrag(legIdx, ev){
 }
 
 /* ---- render ---- */
+function scenSurfaceKey(c){ return [c.id,hashCand(c),GAP_STANCE,MKT_MODE,SIM.world,SIM.seed].join('|'); }
 function renderDecide(){
   if(!decide)return;
   if(decide.kind==='close'){ renderClose(); wireDecide(); return; }
   var c=activeCand();
+  /* Most Decide actions (inspect, order, review, intent, picker typing) do not change the
+     scenario artifact. Detach and re-seat that exact subtree so playback, focus, and controls
+     retain identity instead of flashing every time another part of the screen updates. */
+  var oldScen=decideEl.querySelector('.scenpanel'), keepScen=null, skey=scenSurfaceKey(c);
+  if(oldScen&&oldScen.getAttribute('data-scen-key')===skey){ keepScen=oldScen; oldScen.parentNode.removeChild(oldScen); }
   decideEl.innerHTML='<div class="decwrap">'+decTop(c)+
     '<div class="decgrid">'+leftCol(c)+centerCol(c)+rightCol(c)+'</div>'+
-    '<div class="decdock"><span></span>'+decExecute(c)+'</div>'+
+    '<div class="decdock'+(decide.order.review?' reviewdock':'')+'"><span></span>'+decExecute(c)+'</div>'+
   '</div>';
+  if(keepScen){ var freshScen=decideEl.querySelector('.scenpanel'); if(freshScen)freshScen.parentNode.replaceChild(keepScen,freshScen); }
   drawPayoff(decideEl.querySelector('#decPay'), c, true, null, {interactive:true, pinM:scrubMag(c)});
   if(!_dragActive && document.getElementById('decMap')) drawDecMap();
   if(decide.mcOn) drawMCFan();
@@ -4153,7 +4585,7 @@ function decTop(c){
   return '<div class="dectop">'+
     '<button class="dback" data-dec="back">← Back</button>'+
     '<div class="decttl">Decide<span class="dctx"> · '+crumbTail+'</span></div>'+
-    '<button class="decintent'+(decide.intentOpen?' on':'')+'" data-dec="intent" aria-label="Edit idea intent" title="Edit idea intent"><b>'+decide.sym+'</b><span class="idots">·</span>'+decide.goal+'<span class="idots">·</span>'+decide.view+'<span class="idots">·</span>'+decide.horizon+' '+deskGlyph('tune')+'</button>'+editor+
+    '<button class="decintent'+(decide.intentOpen?' on':'')+'" data-dec="intent" aria-label="Select underlying and edit idea intent" title="Select underlying and edit intent"><b>'+decide.sym+(decide.canPick?' ▾':'')+'</b><span class="idots">·</span>'+decide.goal+'<span class="idots">·</span>'+decide.view+'<span class="idots">·</span>'+decide.horizon+' '+deskGlyph('tune')+'</button>'+editor+
   '</div>';
 }
 /* --- LEFT column: pick & shape (governors + fan + linked map), or the legs editor --- */
@@ -4183,15 +4615,22 @@ function renderTemplates(){ var short={bps:'Bull put',bcs:'Bear call',ic:'Condor
 function decLegSummary(c){
   return legSummary(c,'<button class="structedit" data-dec="editlegs" aria-label="Edit the strategy legs" title="Fork and edit these exact legs">'+deskGlyph('tune')+'<span>Edit legs</span></button>');
 }
+function decLegWorkbench(c){
+  var build=decide.mode==='build';
+  return '<div class="declegpanel'+(build?' is-draft':'')+'">'+
+    '<div class="decleghead"><span class="eyebrow">Leg workbench</span><span class="hint">'+
+      (build?'your proposed exact package · every number below follows it':'engine package · touch any control to fork it')+'</span>'+
+      '<span class="declegstate">'+(build?'Your draft':'Engine')+'</span><span class="badge">exp '+c.exp+'</span></div>'+
+    '<div class="declegs">'+c.legs.map(function(l,i){return legChip(l,i,'leg','li',decide.spot);}).join('')+
+      '<button class="addleg sm" data-addleg="1" aria-label="Add another leg">＋ <span class="addlong">Add leg</span></button></div>'+
+    (build?renderTemplates():'')+
+  '</div>';
+}
 /* --- CENTER column: payoff hero → numbers → HOW IT REACTS (full-width, right under the payoff the
    scrubber drives) → the exact structure. Execution lives in the stable dock below the grid. --- */
 function centerCol(c){
-  var build=decide.mode==='build', legArea=build?(renderTemplates()+
-    '<div class="leghd"><span class="eyebrow">Legs</span><span class="hint">edit on the chart or with the controls</span></div>'+
-    '<div class="declegs">'+c.legs.map(function(l,i){return legChip(l,i,'leg','li',decide.spot);}).join('')+
-      '<button class="addleg sm" data-addleg="1" aria-label="Add another leg">＋ <span class="addlong">Add leg</span></button></div>'):decLegSummary(c);
   return '<div class="deccol dccenter">'+
-    legArea+
+    decLegWorkbench(c)+
     '<div class="dcctop">'+   /* causal stack, not competing side rails: payoff then its scenario spectrum */
       '<div class="dccpay">'+
         '<div class="paytitle"><span class="lbl">Candidate payoff — '+c.short+'</span>'+
@@ -4199,7 +4638,7 @@ function centerCol(c){
         '<svg class="decpay" id="decPay"></svg>'+
         stratKPIs(c,{calm:true})+
       '</div>'+
-      '<div class="upanel scenpanel">'+decScenInner(c)+'</div>'+
+      '<div class="upanel scenpanel" data-scen-key="'+scenSurfaceKey(c)+'">'+decScenInner(c)+'</div>'+
     '</div>'+
   '</div>';
 }
@@ -4221,7 +4660,7 @@ function decScenSpectrum(c){
     var pinned=pin===r.i, likely=r===d.ml, width=(Math.abs(r.pl)/maxAbs*49).toFixed(1);
     if(pinned)ctl=scenExpand(c);
     return '<button class="srow'+(r===d.best?' best':'')+(r===d.worst?' worst':'')+(likely?' likely':'')+(pinned?' pinned':'')+'" data-si="'+r.i+'" aria-pressed="'+pinned+'" title="Pin '+r.s.n+' and inspect its path">'+
-      '<span class="sn"><span class="snm"><span class="snfull">'+r.s.n+'</span><span class="snshort">'+shortNames[r.i]+'</span></span><span class="smv '+(r.m>0?'up':r.m<0?'dn':'fl')+'">'+(r.m>0?'+':'')+r.m+'%</span>'+glyph(r.s,'var(--dim)')+'</span>'+
+      '<span class="sn"><span class="snm"><span class="snfull">'+r.s.n+'</span><span class="snshort">'+shortNames[r.i]+'</span></span><span class="smv '+(r.m>0?'up':r.m<0?'dn':'fl')+'">'+(r.m>0?'+':'')+r.m+'%</span><span class="sprob">'+Math.round(r.prob*100)+'%</span>'+glyph(r.s,'var(--dim)')+'</span>'+
       '<span class="sdesc">'+r.s.dsc+'</span>'+
       '<span class="slk"><span class="slk-b"><i style="width:'+Math.round(r.prob/(pmax||1)*100)+'%"></i></span><span class="slk-n">'+Math.round(r.prob*100)+'%</span></span>'+
       '<span class="sbw"><span class="sb '+(r.pl>=0?'p':'n')+'" style="width:'+width+'%"></span></span>'+
@@ -4288,8 +4727,8 @@ function setUnderlying(sym){
   var u=univBy[sym]; if(!u)return;
   decide.sym=u.sym; decide.u=u; decide.spot=u.spot; decide.em=u.em;
   decide.cands=candsFor(decide.kind,u); decide.candId=decide.cands.length?decide.cands[0].id:null;
-  decide.buildLegs=null; decide.mode='engine'; decide.pickOpen=false; decide.pickq=''; DEC_HOT=-1;
-  renderAfterDecisionChange();
+  decide.buildLegs=null; decide.mode='engine'; decide.pickOpen=false; decide.intentOpen=false; decide.pickq=''; DEC_HOT=-1;
+  renderAfterDecisionChange(); updateThread();
 }
 function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc==='collat'?'secured':'defined'; }
 function fanList(){
@@ -4465,7 +4904,7 @@ function decExecute(c){
       '<span class="fbtrack"><i class="fbmid"></i><i class="fbmark '+(marketable?'now':'rest')+'" style="left:'+pct.toFixed(0)+'%"></i></span>'+
       '<span class="fbend r">best price</span>'+
       '<span class="fbstate '+(marketable?'now':'rest')+'">'+(marketable?'below mid · fills now':'at mid · rests')+'</span></div>';
-  if(o.review) return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+confirmBlock(c,eCredit,o)+'</div></div>';
+  if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,eCredit,o)+'</div>';
   if(!decide.orderOpen){
     var dockfill='<div class="fillbar" title="where your '+typeLabel(o.type)+' price sits in the bid⟷ask spread"><span class="fbend">fill</span>'+
       '<span class="fbtrack"><i class="fbmid"></i><i class="fbmark '+(marketable?'now':'rest')+'" style="left:'+pct.toFixed(0)+'%"></i></span><span class="fbend r">price</span></div>';
@@ -4478,6 +4917,16 @@ function decExecute(c){
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary+foot+'</div></div>';
 }
 function typeLabel(t){ return {netcr:'net-credit order',limit:'limit order',market:'market order'}[t]||t; }
+function reviewBlock(c,eCredit,o){
+  var collateral=isCollat(c)||c.undef, cap=collateral?decide.govs.bp:decide.govs.risk, used=(c.cap||c.maxLoss)*o.qty, inside=used<=cap,
+      rc=riskChar(c), rcLabel=rc==='undef'?'Undefined risk':rc==='collat'?'Secured':'Defined risk';
+  function check(label,value,warn){return '<div class="reviewcheck'+(warn?' warn':'')+'"><span><i></i>'+label+'</span><b>'+value+'</b></div>';}
+  return '<div class="reviewbar" role="region" aria-label="Order review">'+
+    '<div class="revieworder"><span class="eyebrow">Review</span><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b>'+
+      '<span>'+typeLabel(o.type)+' · '+signed(eCredit)+' credit · exp '+c.exp+'</span></div>'+
+    '<div class="reviewchecks">'+check('Structure',rcLabel,rc==='undef')+check(collateral?'Collateral':'Risk cap',inside?money(used)+' within cap':money(used)+' over cap',!inside)+check('Lane',o.lane==='paper'?'Paper only':'Real order',o.lane==='real')+'</div>'+
+    '<div class="reviewacts"><button class="btn" data-dec="cancel">← Edit</button><button class="btn pri" data-dec="confirm">Confirm &amp; place →</button></div></div>';
+}
 function confirmBlock(c,eCredit,o){
   return '<div class="confirmwrap"><div class="lbl">Confirm order</div>'+
     '<div class="booktext" style="margin-top:6px"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b> · '+typeLabel(o.type)+' · '+signed(eCredit)+' credit · <span class="badge '+(o.lane==='paper'?'':'ok')+'" style="'+(o.lane==='paper'?'color:var(--violet);border-color:var(--violet)':'')+'">'+o.lane+'</span></div>'+
@@ -4688,6 +5137,12 @@ function wireDecide(){
     var scr=e.target.closest&&e.target.closest('.scenpanel .scrub[data-wf="scrub"]'); if(scr){ scenScrub(decSurf(), +scr.value/100); return; }
     var g=e.target.closest('[data-gov]'); if(!g)return;
     var k=g.getAttribute('data-gov'), lab=document.getElementById('gv-'+k); if(lab)lab.textContent=govFmt(k,+g.value); });
+  decideEl.addEventListener('keydown',function(e){
+    if(e.target.id!=='univq'||e.key!=='Enter')return;
+    var raw=(e.target.value||'').trim(), exact=univBy[raw.toUpperCase()], pick=exact;
+    if(!pick){ var q=raw.toLowerCase(); pick=UNIV.filter(function(x){return x.sym.toLowerCase().indexOf(q)===0||x.name.toLowerCase().indexOf(q)>=0;})[0]; }
+    if(pick){ e.preventDefault(); setUnderlying(pick.sym); }
+  });
   decideEl.addEventListener('change',function(e){ var g=e.target.closest('[data-gov]'); if(!g)return;
     decide.govs[g.getAttribute('data-gov')]=+g.value; renderDecide(); });
 }
@@ -5098,7 +5553,9 @@ function drawCandles(svg, bars){ if(typeof svg==='string')svg=document.getElemen
   svg.innerHTML=g; }
 /* option chain: strikes around spot × bid/ask/IV/Δ from the BS engine */
 function renderChain(sym){ var spot=symSpot(sym), T=DEC_T, inc=strikeInc(spot), atm=Math.round(spot/inc)*inc, rows='';
-  for(var k=atm-3*inc; k<=atm+3*inc; k+=inc){ var isATM=Math.abs(k-atm)<inc*0.5;
+  /* Keep a single chain component. Tall canvases reveal the outer strikes; existing responsive
+     containment rules trim the same rows to the nearest contracts when vertical room contracts. */
+  for(var k=atm-5*inc; k<=atm+5*inc; k+=inc){ var isATM=Math.abs(k-atm)<inc*0.5;
     var cp=bsPrice(spot,k,T,ivForK(spot,k),'c'), pp=bsPrice(spot,k,T,ivForK(spot,k),'p'), iv=Math.round(ivForK(spot,k)*100);
     var cmid=cp.price, pmid=pp.price;
     rows+='<div class="chrow'+(isATM?' atm':'')+'"><span class="chb">'+cmid.toFixed(2)+'</span><span class="cha">'+(cmid*1.04).toFixed(2)+'</span>'+
@@ -5313,14 +5770,16 @@ function boot(){
   /* brand mark = the home anchor (was a lone 'Your book' crumb); click zooms all the way out */
   var bh=document.getElementById('brandHome'); if(bh) bh.onclick=function(){ if(decide)exitDecide(); go('book'); };
   /* the symbol pill echoes what the chain/sector lenses point at — click to retarget via the command bar */
-  var cs=document.getElementById('cmdSym'); if(cs) cs.onclick=function(){ cmdEl.focus(); if(cmdEl.select)cmdEl.select(); };
+  var cs=document.getElementById('cmdSym'); if(cs) cs.onclick=function(){
+    if(decide&&decide.canPick){ decide.intentOpen=true; decide.pickOpen=true; renderDecide(); var uq=document.getElementById('univq'); if(uq){uq.focus();if(uq.select)uq.select();} return; }
+    cmdEl.focus(); if(cmdEl.select)cmdEl.select(); };
   /* persistent New idea — reachable from ANY view (not just the landing) */
   var tni=document.getElementById('threadNewIdea');
   if(tni) tni.onclick=function(){
     /* already composing a fresh idea? don't re-animate the same screen — open the underlying picker so
        'New idea' means start over on a new symbol (or Esc to keep this one). */
     if(decide && decide.kind==='idea' && !decide.posId){
-      decide.pickOpen=true; renderDecide();
+      decide.intentOpen=true; decide.pickOpen=true; renderDecide();
       var q=document.getElementById('univq'); if(q){ q.focus(); if(q.select)q.select(); }
       toast('Pick an underlying to start a fresh idea'); return; }
     var wasOpen=!!(decide||importOpen), ctx=currentContextSym();
