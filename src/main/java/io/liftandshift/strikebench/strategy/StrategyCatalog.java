@@ -72,6 +72,12 @@ public final class StrategyCatalog {
         return FAMILIES.get(family.name());
     }
 
+    /** Canonical family identity for API receipts that have not yet been converted to exact legs. */
+    public static PositionIdentity identify(StrategyFamily family) {
+        if (family == null) throw new IllegalArgumentException("strategy family is required");
+        return identity(family);
+    }
+
     public static boolean backtestEnabled(StrategyFamily family) {
         FamilyEntry entry = family(family);
         return entry != null && entry.backtestEnabled();
