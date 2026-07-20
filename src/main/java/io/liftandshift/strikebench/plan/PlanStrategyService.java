@@ -466,7 +466,13 @@ public final class PlanStrategyService {
         put(n, "combinedMaxLossCents", r.combinedMaxLoss());
         n.set("evaluation", Json.parse(r.evaluationSnapshot()));
         n.put("selected", r.selected());
-        n.set("legs", loadLegs(c, r.id()));
+        ArrayNode legs = loadLegs(c, r.id());
+        n.set("legs", legs);
+        if (r.symbol() != null && r.qty() != null && r.qty() > 0 && !legs.isEmpty()) {
+            n.set("identity", Json.MAPPER.valueToTree(
+                    io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                            r.symbol(), r.qty(), identityLegs(legs))));
+        }
         n.set("breakevens", loadNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", r.id()));
         n.set("intents", loadStrings(c, "plan_candidate_intent", "intent_index", "intent", "candidate_id", r.id()));
         n.set("warnings", loadWarnings(c, r.id()));
@@ -530,6 +536,23 @@ public final class PlanStrategyService {
             n.put("positionEffect", "OPEN");
             if (leg.entryPrice() != null) n.put("entryPrice", decimalString(leg.entryPrice()));
         });
+        return out;
+    }
+
+    private static List<io.liftandshift.strikebench.model.Leg> identityLegs(ArrayNode legs) {
+        List<io.liftandshift.strikebench.model.Leg> out = new ArrayList<>();
+        for (JsonNode leg : legs) {
+            String rawType = requiredText(leg, "type");
+            boolean stock = "STOCK".equalsIgnoreCase(rawType);
+            out.add(new io.liftandshift.strikebench.model.Leg(
+                    io.liftandshift.strikebench.model.LegAction.valueOf(requiredText(leg, "action")),
+                    stock ? null : io.liftandshift.strikebench.model.OptionType.valueOf(rawType),
+                    stock ? null : new BigDecimal(requiredText(leg, "strike")),
+                    stock ? null : java.time.LocalDate.parse(requiredText(leg, "expiration")),
+                    requiredPositiveInteger(leg, "ratio"),
+                    new BigDecimal(requiredText(leg, "entryPrice")),
+                    requiredPositiveInteger(leg, "multiplier")));
+        }
         return out;
     }
 

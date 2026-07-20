@@ -317,6 +317,9 @@ class PlanApiIntegrationTest {
             JsonNode restored = json(get("/api/plans/" + plan.get("id").asText() + "/strategy/latest"))
                     .at("/strategy/result/candidates/0");
             assertThat(candidate.at("/legs")).isNotEmpty();
+            assertThat(candidate.at("/identity/family").asText()).isEqualTo(candidate.get("strategy").asText());
+            assertThat(candidate.at("/identity/definedRisk").isBoolean()).isTrue();
+            assertThat(restored.get("identity")).isEqualTo(candidate.get("identity"));
             assertThat(restored.at("/legs").size()).isEqualTo(candidate.at("/legs").size());
             for (int i = 0; i < candidate.at("/legs").size(); i++) {
                 JsonNode before = candidate.at("/legs").get(i), after = restored.at("/legs").get(i);

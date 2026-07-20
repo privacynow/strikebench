@@ -130,6 +130,10 @@ final class DiscoveryController {
             for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
+                m.set("identity", Json.MAPPER.valueToTree(
+                        io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                                io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(
+                                        e.candidate().strategy()))));
                 var economics = e.assessment().economics();
                 if (economics != null) {
                     switch (economics.verdict()) {
