@@ -35,9 +35,10 @@ grade simplicity — separate from and equal to contract compliance.**
 
 ### 2.1 Three destinations (plus back-of-house)
 
-- **Desk** — a true home: what needs attention, what to resume, today's argued ideas. Nothing
-  else. (Plan chip bar retired; Desk resume cards do that job. Plans-library becomes Desk's
-  archive drawer.)
+- **Desk** — a true home: current Book condition and what needs attention, the market/research
+  context required to interpret it, what to resume, and today's argued ideas. It composes canonical
+  owners read-only; actions enter those owners rather than becoming Desk-owned journeys. (Plan chip
+  bar retired; Desk resume cards do that job. Plans-library becomes Desk's archive drawer.)
 - **Workspace** — THE journey (§3). Public Research dissolves into its open beginning: exploring
   a symbol IS the journey before commitment (the truth table shows Understand already *is* the
   Research renderer — the merge is chrome removal, not surgery).
@@ -127,6 +128,9 @@ and today's argued ideas (the teaser density of the one argued-idea component; g
 read-only, one CTA, one destination, one data source). Beginner-tuned first-steps strip; the
 tour becomes a guided first run OF the flow (its two load-bearing jobs — level selection and
 the rename glossary — move into it).
+
+Appendix B.8 defines the signed-off wide-screen composition; it changes density and co-visibility,
+not capability ownership or journey count.
 
 ### 2.6 The SPA and desktop workspace contract
 
@@ -394,6 +398,16 @@ invent alternate endpoints for the same job, or create another entry journey. Fo
 cluster signal may focus Book Governor, but Book Governor remains the single hedge-entry owner;
 the resulting hedge is still a Plan/Strategy/Decision flow.
 
+New Idea composes existing owners in sequence: `/api/plans/{id}/strategy/*` supplies ranked,
+selected, and custom packages; `POST /api/evaluate` and `OutcomeContract` supply exact payoff and
+economics. `POST /api/plans/{id}/outcomes/ensemble` and
+`GET .../outcomes/ensemble/latest` supply the immutable Plan-owned path artifact;
+`POST .../outcomes/run` values the selected package and `POST .../outcomes/compare` values the field
+against a supplied or stored `ensembleId`; the existing decision preview/commit path alone owns
+executable order state and mutation. Where animation data is missing, extend these responses through
+`ScenarioSimulator` or `ScenarioCanvasValuator`; do not add a Desk-specific payoff, Monte Carlo,
+scenario, or order endpoint.
+
 ### B.3 Client state contract
 
 The integrated Desk keeps four deliberately separate layers:
@@ -415,6 +429,16 @@ Every artifact cache key includes the identities that can change its meaning: us
 and dataset, Plan and context revision, package/selection version, ensemble fingerprint, and model
 version. A cache hit with a mismatched identity is a miss, not a best-effort display.
 
+Simulation exposes two non-overloaded identities. `ensembleFingerprint` names the stored Plan-context
+artifact—world/dataset, context revision, anchor and provenance, basis/spec/horizon/seed, stored
+IV/canvas/rate environment, and model versions—and excludes candidate, package, order, and display-
+label identity. `valuationFingerprint` names one child valuation and covers `ensembleFingerprint`
+plus exact package/selection version, legs/ratios/multipliers, quantity, captured entry or fill,
+fees/cash baseline, and valuation-kernel version. Changing a candidate, leg, quantity, entry, or fee
+retains the ensemble and replaces only its valuation; changing a path/context declaration replaces
+the ensemble and invalidates every child valuation. Combined responses and cache entries carry both
+identities explicitly.
+
 ### B.4 Backend-derived animation contract
 
 “Every frame benefits from the engines” does **not** mean one server request per animation frame.
@@ -425,6 +449,13 @@ from one versioned server artifact, while the browser performs only time interpo
   position P/L and Greeks, event/transformation markers, payoff points, and exact scenario results.
   `PathEnsembleService` supplies the one fingerprinted path artifact; `ScenarioCanvasValuator`
   supplies coherent daily position traces over it.
+- The existing `SimulationEngine.Preview` and `ScenarioCanvasValuator.Report` are the normative wire
+  sources. The ensemble view model carries the actual path count and horizon, receipt, ordered session
+  dates, p10/p50/p90 underlying bands, ATM-IV knots, and a bounded deterministic set of sample paths.
+  A child valuation carries ordered value/P&L p10/p50/p90 knots, Greeks, per-leg value/Greeks/state,
+  discrete transformations, terminal comparison, notes, and unavailable reasons. Both use the same
+  session index/date domain. The full path matrix remains server-side unless a canonical studio
+  operation requires it; the browser never hard-codes “1,500 paths” or “21 sessions.”
 - The client keeps the last complete artifact visible while a changed input requests a new one.
   It marks the view updating/stale, aborts superseded reads, and swaps artifacts only after identity
   and version validation. It never mixes knots from two fingerprints.
@@ -446,6 +477,13 @@ removing its expensive full-render-per-frame behavior. The first performance tar
 60 Hz presentation on the 2560 cockpit with no long task over 50 ms during playback; correctness
 tests assert exact equality at every server knot, not merely visual similarity.
 
+Contract tests pin candidate A → candidate B → candidate A: the ensemble fingerprint and displayed
+path coordinates remain byte-identical, the valuation fingerprint and exact P/L/Greeks change with
+the package, and returning to A reproduces its prior child artifact. Changing a path-defining
+declaration changes the ensemble. Browser tests assert server equality at every knot, no API or
+financial calculation per animation frame, no long task over 50 ms during playback, and no geometry
+or scroll-owner change between simulation states.
+
 ### B.5 Economic and market invariants
 
 - `OBSERVED`, `DEMO`, `SIMULATED`, and `SCENARIO` never mix silently. The active world and source
@@ -458,8 +496,10 @@ tests assert exact equality at every server knot, not merely visual similarity.
   refresh a view; they may not rewrite the decision receipt.
 - POP, EV, payoff, Greeks, capital, scenario outcomes, ranking, and hedge effects come from their
   canonical server owners. Missing is rendered as missing with its named reason, never zero.
-- Proposal/custom/cash comparison and every animated repricing use one ensemble fingerprint.
-  Changing a relevant declaration mints or selects a new artifact explicitly.
+- Proposal/custom/cash comparison and every animated repricing cite one `ensembleFingerprint`; each
+  exact package cites its own `valuationFingerprint`. Package or economic changes mint only a child
+  valuation. A Plan-context or path-assumption change mints or selects a new ensemble and invalidates
+  its children explicitly.
 - All writes carry the existing expected version/idempotency/preview contracts. Smooth UI feedback
   never weakens a guardrail, archive boundary, broker gate, or receipt.
 
@@ -504,3 +544,31 @@ a second chain, candle, news, strategy, payoff, Monte Carlo, scenario, trade, im
 The integration is complete only when the prototype contains no authoritative mock economics in the
 shipping path, every visible result can name its backend owner and provenance, and the new experience
 is still as fluid at real data volume as the signed-off design.
+
+### B.8 Signed-off hierarchy and state geometry (2026-07-20)
+
+These names describe compositions inside the existing SPA, not new destinations, routes, or
+calculation owners.
+
+- **Home.** One shallow orientation band combines Book P/L with capital at work, shared-gap loss,
+  compact attention, posture, and import. On the wide cockpit, a compact risk-sorted position roster
+  sits at left, Book risk in the center, and the active-world chain at right; Book Governor,
+  market/universe, sector/research, and news remain co-visible below. Position rows own position-
+  specific attention. There is no second narrative triage strip and no duplicate hedge entry.
+- **Position.** A position blooms from its Home row through the shared-element motion. Its default
+  hierarchy is decision band; payoff hero; three primary facts—collect/cost, max loss, chance—with a
+  quiet secondary line; the shared scenario spectrum; exact-leg summary; then one bounded inspector
+  showing Research, Mechanics, or Book context one at a time. Editing and confirmation controls
+  appear only after their owning action starts.
+- **New Idea.** A compact editable intent capsule anchors the composition. The left rail owns the
+  ranked field and shows deeper rationale only for the selected candidate; risk/reward map and
+  screens/caps are summoned into that same rail one at a time. The center owns exact payoff, the same
+  fact hierarchy and scenario spectrum, and exact legs/composer. The right owns one decision brief
+  and one inspector—Paths, Fit, Greeks, or Book—one pane at a time. A stable bottom transaction dock
+  owns order editing, review, and confirmation. These inspector choices are disclosure facets, not
+  navigation or parallel journeys.
+- **Geometry.** In the signed-off 2560 fixture states, neither the document nor the center/right
+  primary columns scroll, and idle, pending, result, stale, and error states retain the same bounds.
+  If real collection cardinality exceeds available space, the collection itself may own bounded
+  overflow; page-plus-column nested scrolling is not permitted. Narrower layouts reflow the same
+  content and owners rather than hiding them.
