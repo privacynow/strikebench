@@ -13,6 +13,9 @@ const CUSTOM_CANDIDATE_ID = 'candidate_backend_exact_package';
 const ENSEMBLE_ID = 'ensemble_desk_1';
 const ENSEMBLE_FINGERPRINT = 'ensemble-fingerprint-desk-1';
 const PLAN_ID = 'plan_desk_test';
+const SIM_PLAN_ID = 'plan_desk_simulated_test';
+const SIM_WORLD_ID = 'sim_desk_amd';
+const SIM_DATASET_ID = 'dataset-desk-simulated-test';
 const ACCOUNT_ID = 'account_desk_test';
 const DATASET_ID = 'dataset-desk-test';
 const WORLD_REVISION = 41;
@@ -65,13 +68,13 @@ after(async () => {
 
 function plan(version, overrides = {}) {
   return {
-    id: PLAN_ID,
+    id: overrides.id || PLAN_ID,
     version,
     open: true,
     status: 'ACTIVE',
     symbol: 'AMD',
     intent: 'INCOME',
-    marketKind: 'OBSERVED',
+    marketKind: overrides.marketKind || 'OBSERVED',
     worldId: overrides.worldId === undefined ? null : overrides.worldId,
     accountId: ACCOUNT_ID,
     context: {
@@ -130,7 +133,13 @@ function candidate() {
           verdict: 'COHERENT',
           reasons: ['The backend package fits the declared objective and duration.']
         },
-        economics: { marketEvAfterCostsCents: 1450 }
+        economics: {
+          verdict: 'FAVORABLE',
+          placement: 'WORTH_INVESTIGATING',
+          label: 'Worth investigating',
+          marketEvAfterCostsCents: 1450,
+          observedEvidence: true
+        }
       },
       capital: { incrementalCents: 12345 },
       risk: {
@@ -169,6 +178,22 @@ function incoherentCandidate() {
   row.evaluation.assessment.coherence = {
     verdict: 'INCOHERENT',
     reasons: ['This package conflicts with the declared objective.']
+  };
+  return row;
+}
+
+function unfavorableCandidate() {
+  const row = candidate();
+  row.id = 'candidate_backend_unfavorable';
+  row.label = 'Backend adverse comparison';
+  row.displayName = 'Backend adverse comparison';
+  row.evaluation.assessment.economics = {
+    verdict: 'UNFAVORABLE',
+    placement: 'LEARN_FROM',
+    label: 'Unfavorable at these prices',
+    summary: 'The package is mechanically valid, but its modeled after-cost economics are adverse.',
+    marketEvAfterCostsCents: -37000,
+    observedEvidence: true
   };
   return row;
 }
@@ -434,14 +459,27 @@ async function installBackend(page, options = {}) {
   let scenarioCalls = 0;
   let planVersion = 10;
   let selectedCandidate = null;
-  const strategyCandidates = options.strategyCandidates || [candidate()];
+  let activeWorld = 'observed';
+  let activeMarketLane = 'OBSERVED';
+  let activeDataset = DATASET_ID;
+  let worldRevision = WORLD_REVISION;
+  let worldEpoch = WORLD_EPOCH;
+  let simulatedPlanCreated = false;
+  let simulatedSession = null;
+  const marketFreshness = options.marketFreshness || 'FRESH';
+  const sourceCandidates = options.strategyCandidates === undefined
+    ? [candidate()] : options.strategyCandidates;
+  const strategyCandidates = sourceCandidates.map(row => options.marketFreshness
+    ? Object.assign({}, row, { freshness: marketFreshness }) : row);
+  const strategyRejected = options.strategyRejected || [];
+  const strategyNotes = options.strategyNotes || [];
   let hasCompetition = false;
   let strategyRunNumber = 0;
   let strategyRunId = null;
   const strategyInputHash = 'f'.repeat(64);
   let quote = {
     symbol: 'AMD', bid: 99, ask: 101, last: 100,
-    source: 'BACKEND_TEST_RECEIPT', freshness: 'FRESH', asOf: 1784563200000,
+    source: 'BACKEND_TEST_RECEIPT', freshness: marketFreshness, asOf: 1784563200000,
     evidence: { source: 'BACKEND_TEST_RECEIPT', lane: 'OBSERVED', provenance: 'OBSERVED' }
   };
   let chainIv = 0.30;
@@ -455,8 +493,20 @@ async function installBackend(page, options = {}) {
     riskMode: options.planRiskMode || 'balanced'
   };
 
+  function currentPlanId() {
+    return activeWorld === 'observed' ? PLAN_ID : SIM_PLAN_ID;
+  }
+
+  function currentProvenance() {
+    return activeMarketLane === 'SIMULATED' ? 'SIMULATED' : 'OBSERVED';
+  }
+
   function currentPlan(version = planVersion) {
-    return plan(version, planOverrides);
+    return plan(version, Object.assign({}, planOverrides, {
+      id: currentPlanId(),
+      marketKind: activeWorld === 'observed' ? 'OBSERVED' : 'SIMULATED',
+      worldId: activeWorld === 'observed' ? planOverrides.worldId : activeWorld
+    }));
   }
 
   function strategyState() {
@@ -467,7 +517,8 @@ async function installBackend(page, options = {}) {
       createdAt: '2026-07-20T16:00:00Z',
       result: {
         candidates: strategyCandidates,
-        rejected: [],
+        rejected: strategyRejected,
+        notes: strategyNotes,
         strategyRunId,
         strategyRunState: 'CURRENT'
       }
@@ -480,32 +531,85 @@ async function installBackend(page, options = {}) {
     const method = request.method();
     const body = request.postData() ? request.postDataJSON() : null;
     requests.push({ method, path: url.pathname, query: url.search, body });
+    const activePlanPath = `/api/plans/${currentPlanId()}`;
 
     let response;
     if (method === 'GET' && url.pathname === '/api/config') {
       response = {
         fixturesOnly: false,
-        world: 'observed',
-        activeDataset: DATASET_ID,
-        activeDatasetName: 'Desk observed test dataset',
-        marketLane: 'OBSERVED',
-        scenarioMode: false
+        world: activeWorld,
+        activeDataset,
+        activeDatasetName: activeMarketLane === 'OBSERVED'
+          ? 'Desk observed test dataset' : 'Desk simulated test dataset',
+        marketLane: activeMarketLane,
+        scenarioMode: activeMarketLane === 'SIMULATED'
       };
     } else if (method === 'GET' && url.pathname === '/api/status') {
       response = { ok: true, status: 'READY', fixturesOnly: false };
     } else if (method === 'GET' && url.pathname === '/api/world') {
       response = {
-        world: 'observed',
-        revision: WORLD_REVISION,
-        epoch: WORLD_EPOCH
+        world: options.failWorldVerification && activeWorld !== 'observed' ? 'observed' : activeWorld,
+        revision: worldRevision,
+        epoch: worldEpoch
       };
+    } else if (method === 'GET' && url.pathname === '/api/sim/market') {
+      response = { sessions: simulatedSession ? [simulatedSession] : [] };
+    } else if (method === 'POST' && url.pathname === '/api/sim/market') {
+      simulatedSession = {
+        id: SIM_WORLD_ID,
+        status: 'CREATED',
+        name: body.name,
+        rehearsal: false,
+        config: {
+          symbolBetas: options.simExclusionReason ? {} : { AMD: 1 }
+        }
+      };
+      response = { worldId: SIM_WORLD_ID, status: 'CREATED' };
+    } else if (method === 'GET' && url.pathname === `/api/sim/market/${SIM_WORLD_ID}/anchors`) {
+      response = {
+        worldId: SIM_WORLD_ID,
+        anchors: options.simExclusionReason ? [] : [{ symbol: 'AMD', anchorPrice: 100 }],
+        excluded: options.simExclusionReason
+          ? [{ symbol: 'AMD', reason: options.simExclusionReason }] : []
+      };
+    } else if (method === 'POST' && url.pathname === `/api/sim/market/${SIM_WORLD_ID}/start`) {
+      simulatedSession = Object.assign({}, simulatedSession, { status: 'RUNNING' });
+      response = { worldId: SIM_WORLD_ID, status: 'RUNNING' };
+    } else if (method === 'PUT' && url.pathname === '/api/world') {
+      if (options.failWorldPut) {
+        await route.fulfill({ status: 409, contentType: 'application/json',
+          body: JSON.stringify({ error: 'The simulated market could not become active.' }) });
+        return;
+      }
+      activeWorld = body.world;
+      activeMarketLane = activeWorld === 'observed' ? 'OBSERVED' : 'SIMULATED';
+      activeDataset = activeWorld === 'observed' ? DATASET_ID : SIM_DATASET_ID;
+      worldRevision += 1;
+      worldEpoch = `${activeWorld}-epoch-desk-${worldRevision}`;
+      quote = Object.assign({}, quote, {
+        source: activeMarketLane === 'OBSERVED' ? 'BACKEND_TEST_RECEIPT' : 'SIMULATED_DESK_TEST',
+        freshness: activeMarketLane === 'OBSERVED' ? marketFreshness : 'FRESH',
+        asOf: quote.asOf + 60000,
+        evidence: {
+          source: activeMarketLane === 'OBSERVED' ? 'BACKEND_TEST_RECEIPT' : 'SIMULATED_DESK_TEST',
+          lane: activeMarketLane,
+          provenance: currentProvenance()
+        }
+      });
+      planVersion = activeWorld === 'observed' ? 10 : 20;
+      selectedCandidate = null;
+      hasCompetition = false;
+      strategyRunId = null;
+      storedEnsemble = null;
+      storedOutcomes = [];
+      response = { world: activeWorld, revision: worldRevision, epoch: worldEpoch };
     } else if (method === 'GET' && url.pathname === '/api/account') {
       response = { account: { id: ACCOUNT_ID, name: 'Desk practice account' } };
     }
     else if (method === 'GET' && url.pathname === '/api/quotes') {
       response = {
-        marketLane: 'OBSERVED',
-        world: 'observed',
+        marketLane: activeMarketLane,
+        world: activeWorld,
         quotes: [Object.assign({}, quote, { refreshing: false })]
       };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD') {
@@ -522,7 +626,7 @@ async function installBackend(page, options = {}) {
         symbol: 'AMD',
         quote: Object.assign({}, quote, { asOfEpochMs: quote.asOf }),
         displayPrice: (quote.bid + quote.ask) / 2,
-        marketLane: 'OBSERVED',
+        marketLane: activeMarketLane,
         freshness: quote.freshness,
         evidence: {
           summary: quote.evidence,
@@ -537,9 +641,13 @@ async function installBackend(page, options = {}) {
     } else if (method === 'GET' && url.pathname === '/api/research/AMD/chain') {
       response = {
         underlying: 'AMD', expiration: '2026-08-21',
-        source: 'BACKEND_TEST_RECEIPT', freshness: 'FRESH', asOfEpochMs: chainAsOf,
+        source: activeMarketLane === 'OBSERVED' ? 'BACKEND_TEST_RECEIPT' : 'SIMULATED_DESK_TEST',
+        freshness: activeMarketLane === 'OBSERVED' ? marketFreshness : 'FRESH',
+        asOfEpochMs: activeMarketLane === 'OBSERVED' ? chainAsOf : chainAsOf + 60000,
         evidence: {
-          source: 'BACKEND_TEST_RECEIPT', lane: 'OBSERVED', provenance: 'OBSERVED'
+          source: activeMarketLane === 'OBSERVED' ? 'BACKEND_TEST_RECEIPT' : 'SIMULATED_DESK_TEST',
+          lane: activeMarketLane,
+          provenance: currentProvenance()
         },
         calls: [
           { strike: 95, bid: 8.8, ask: 9.2, iv: chainIv },
@@ -554,19 +662,24 @@ async function installBackend(page, options = {}) {
         ]
       };
     } else if (method === 'GET' && url.pathname === '/api/plans') {
-      response = { world: 'observed', market: 'OBSERVED', plans: [currentPlan()] };
-    } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}`) {
+      response = {
+        world: activeWorld,
+        market: activeMarketLane,
+        plans: activeWorld === 'observed' || simulatedPlanCreated ? [currentPlan()] : []
+      };
+    } else if (method === 'GET' && url.pathname === activePlanPath) {
       response = currentPlan();
     } else if (method === 'POST' && url.pathname === '/api/plans') {
       // Production create is idempotent by canonical active-Plan identity. In particular, a
       // different risk default resumes the existing Plan and preserves its persisted posture.
+      if (activeWorld !== 'observed') simulatedPlanCreated = true;
       response = currentPlan();
-    } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}/strategy/latest`) {
+    } else if (method === 'GET' && url.pathname === `${activePlanPath}/strategy/latest`) {
       response = hasCompetition ? {
         strategy: strategyState(),
         ...(selectedCandidate ? { selected: selectedCandidate } : {})
       } : {};
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/strategy/run`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/strategy/run`) {
       if (selectedCandidate && strategyCandidates.some(row => row.id === selectedCandidate.id)) {
         selectedCandidate = null;
       }
@@ -574,7 +687,7 @@ async function installBackend(page, options = {}) {
       strategyRunId = `strategy_run_${strategyRunNumber}`;
       hasCompetition = true;
       response = { plan: currentPlan(), strategy: strategyState() };
-    } else if (method === 'PUT' && url.pathname === `/api/plans/${PLAN_ID}/strategy/select`) {
+    } else if (method === 'PUT' && url.pathname === `${activePlanPath}/strategy/select`) {
       if (options.selectDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.selectDelayMs));
       }
@@ -594,8 +707,11 @@ async function installBackend(page, options = {}) {
         selection: { candidateId: selectedCandidate.id, planVersion }
       };
     } else if (method === 'POST' && url.pathname === '/api/trades/preview') {
+      if (options.draftPreviewDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.draftPreviewDelayMs));
+      }
       response = customTradePreview(body);
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/strategy/custom`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/strategy/custom`) {
       if (options.customDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.customDelayMs));
       }
@@ -614,7 +730,7 @@ async function installBackend(page, options = {}) {
         preview: customTradePreview(body.position).preview,
         identity: positionIdentity()
       };
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/outcomes/ensemble/paths`) {
       scenarioCalls += 1;
       const terminal = body.waypoints[body.waypoints.length - 1].priceRatio;
       if (terminal < 1) {
@@ -627,7 +743,7 @@ async function installBackend(page, options = {}) {
       } else {
         response = scenarioResponse('second');
       }
-    } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/ensemble/latest`) {
+    } else if (method === 'GET' && url.pathname === `${activePlanPath}/outcomes/ensemble/latest`) {
       if (!options.latestEnsembleEnabled || !storedEnsemble) {
         await route.fulfill({ status: 404, contentType: 'application/json',
           body: JSON.stringify({ error: 'No current stored ensemble.' }) });
@@ -637,9 +753,9 @@ async function installBackend(page, options = {}) {
       response.preview.marketImplied.atmIv = chainIv;
       response.preview.marketImplied.expiration = '2026-08-21';
       response.plan = currentPlan();
-    } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/latest`) {
+    } else if (method === 'GET' && url.pathname === `${activePlanPath}/outcomes/latest`) {
       response = { plan: currentPlan(), outcomes: storedOutcomes };
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/ensemble`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/outcomes/ensemble`) {
       if (options.ensembleDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.ensembleDelayMs));
       }
@@ -662,8 +778,13 @@ async function installBackend(page, options = {}) {
       storedEnsemble = ensemble(planVersion, {
         id, fingerprint, spot: mark, asOf: quote.asOf, atmIv: chainIv, expiration: '2026-08-21'
       });
+      storedEnsemble.plan = currentPlan(planVersion);
+      storedEnsemble.preview.receipt.worldId = activeWorld;
+      storedEnsemble.preview.receipt.datasetId = activeDataset;
+      storedEnsemble.preview.receipt.anchorSource = quote.source;
+      storedEnsemble.preview.receipt.anchorFreshness = quote.freshness;
       response = storedEnsemble;
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/run`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/outcomes/run`) {
       const ensembleRef = storedEnsemble && storedEnsemble.ensemble;
       const fingerprint = ensembleRef && ensembleRef.id === body.ensembleId
         ? ensembleRef.fingerprint : ENSEMBLE_FINGERPRINT;
@@ -687,8 +808,10 @@ async function installBackend(page, options = {}) {
         },
         outcome: savedOutcome
       };
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/decision/preview`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/decision/preview`) {
       response = decisionPreview(body, selectedCandidate, planVersion);
+      response.preview.freshness = quote.freshness;
+      response.preview.evidence = { source: quote.source, lane: activeMarketLane };
       if (options.unavailableDecisionPreview) {
         const reason = 'Cannot execute AMD from a stale observed option book.';
         response.preview = Object.assign({}, response.preview, {
@@ -721,7 +844,7 @@ async function installBackend(page, options = {}) {
         };
         response.accountFit = { overRiskCapital: true };
       }
-    } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/decision/trade`) {
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/decision/trade`) {
       if (options.commitDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.commitDelayMs));
       }
@@ -736,7 +859,7 @@ async function installBackend(page, options = {}) {
       return;
     }
 
-    if (response && response.plan && response.plan.id === PLAN_ID) {
+    if (response && response.plan) {
       response.plan = currentPlan(response.plan.version);
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response) });
@@ -772,7 +895,7 @@ async function openAuthoritativeDesk(options = {}) {
     await page.waitForFunction(id => window.decide
       && window.decide.backendPhase === 'ready'
       && window.decide.candId === id
-      && window.decide.orderPreview, CANDIDATE_ID, { timeout: 10000 });
+      && window.decide.orderPreview, options.expectedCandidateId || CANDIDATE_ID, { timeout: 10000 });
   } catch (error) {
     const diagnosis = await page.evaluate(() => {
       const state = window.DeskBackend && window.DeskBackend.state();
@@ -838,6 +961,111 @@ test('an interrupted authoritative load renders one actionable state and retries
   }
 });
 
+test('a zero-candidate backend result remains a stable Desk with screening receipts', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    strategyCandidates: [],
+    strategyNotes: [
+      'The observed AMD chain was analyzed from the prior close; no eligible package survived.'
+    ],
+    strategyRejected: [
+      {
+        strategy: 'CASH_SECURED_PUT',
+        reasons: ['Assignment chance exceeds the declared cap.']
+      },
+      {
+        family: 'IRON_CONDOR',
+        blockReasons: ['No liquid two-sided package fits the exact horizon.']
+      }
+    ],
+    marketFreshness: 'STALE'
+  });
+  try {
+    await page.goto(deskUrl);
+    await page.waitForSelector('#stage.lv-book #homeRiskMap');
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(() => window.decide
+      && window.decide.backendPhase === 'strategy-empty', null, { timeout: 10000 });
+
+    const initialRun = backend.requests.find(row => row.method === 'POST'
+      && row.path === `/api/plans/${PLAN_ID}/strategy/run`);
+    assert.deepEqual(initialRun.body, {},
+      'unchanged visible defaults are not serialized as hidden backend screens');
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 0);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 0);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 0);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 0);
+
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      const empty = await page.evaluate(() => {
+        const surface = document.querySelector('.decgrid.authempty');
+        const cards = Array.from(document.querySelectorAll('.decgrid.authempty .emptycard'));
+        return {
+          phase: window.decide && window.decide.backendPhase,
+          candidateCount: window.decide && window.decide.cands.length,
+          text: surface && surface.textContent.replace(/\s+/g, ' ').trim(),
+          cardCount: cards.length,
+          cardsContained: cards.every(card => {
+            const rect = card.getBoundingClientRect();
+            return rect.left >= -1 && rect.right <= window.innerWidth + 1;
+          }),
+          failedCount: document.querySelectorAll('.authfailed').length,
+          pendingCount: document.querySelectorAll('.authpending').length,
+          payoffCount: document.querySelectorAll('#decPay').length,
+          documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+        };
+      });
+      assert.equal(empty.phase, 'strategy-empty');
+      assert.equal(empty.candidateCount, 0);
+      assert.equal(empty.cardCount, 3,
+        `${viewport.width}px preserves declaration, explanation, and market context`);
+      assert.match(empty.text, /observed AMD chain was analyzed from the prior close/i);
+      assert.match(empty.text, /assignment chance exceeds the declared cap/i);
+      assert.match(empty.text, /no liquid two-sided package fits the exact horizon/i);
+      assert.match(empty.text, /no package fits this exact idea yet/i);
+      assert.match(empty.text, /STALE/i);
+      assert.equal(empty.failedCount, 0,
+        'a valid empty competition is not presented as a transport failure');
+      assert.equal(empty.pendingCount, 0,
+        'a valid empty competition does not remain in a loading state');
+      assert.equal(empty.payoffCount, 0,
+        'the Desk does not fabricate a payoff without a selected backend package');
+      assert.equal(empty.cardsContained, true,
+        `${viewport.width}px empty-state cards remain horizontally contained`);
+      assert.equal(empty.documentOverflow, false,
+        `${viewport.width}px empty competition has no horizontal page overflow`);
+    }
+
+    const reopened = await page.evaluate(async () => {
+      const state = await window.DeskBackend.openIdea(
+        Object.assign({}, window.DeskBackend.state().context));
+      return {
+        phase: window.decide.backendPhase,
+        candidates: state.candidates.length,
+        notes: state.strategyNotes,
+        rejections: state.rejections.length
+      };
+    });
+    assert.equal(reopened.phase, 'strategy-empty');
+    assert.equal(reopened.candidates, 0);
+    assert.equal(reopened.rejections, 2);
+    assert.match(reopened.notes.join(' '), /prior close/i);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/run`), 1,
+      'the current fingerprinted empty result is reused instead of refreshing forever');
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 0);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 0);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 0);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 0);
+    assert.deepEqual(pageErrors, [], `empty competition emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('served Desk replaces fixture candidates and payoff with backend-owned receipts', async () => {
   const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
   try {
@@ -893,8 +1121,8 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
       'candidate risk and structure labels come from the canonical backend catalog receipt');
     assert.equal(rendered.deskPickId, CANDIDATE_ID);
     assert.equal(rendered.pickBadgeCandidate, CANDIDATE_ID,
-      'Desk Pick is bound to the coherent backend assessment, not a row index');
-    assert.match(rendered.fanSummary, /1 fit/);
+      'Desk Pick is bound to the coherent, favorable backend assessment, not a row index');
+    assert.match(rendered.fanSummary, /1 endorsable/);
     assert.match(rendered.scenarioHint, /selected outcome stored/,
       'preserving scenario DOM identity still refreshes its authoritative receipt state');
     assert.ok(rendered.maxStoredPathSegments > 2,
@@ -903,6 +1131,10 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
       'the exact matching Plan is reused instead of creating a duplicate');
     assert.equal(backend.count('POST', '/api/strategies/identify'), 0,
       'a candidate that already carries canonical identity does not require fallback classification');
+    const strategyRun = backend.requests.find(row => row.method === 'POST'
+      && row.path === `/api/plans/${PLAN_ID}/strategy/run`);
+    assert.deepEqual(strategyRun.body, {},
+      'the first strategy run carries no implicit 0DTE, loss, POP, or assignment screen');
 
     const marketPreview = backend.requests.find(row =>
       row.method === 'POST' && row.path === `/api/plans/${PLAN_ID}/decision/preview`);
@@ -913,6 +1145,7 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
 
     for (const viewport of [
       { width: 1280, height: 800 },
+      { width: 1440, height: 900 },
       { width: 1920, height: 1080 },
       { width: 2560, height: 1440 },
       { width: 390, height: 844 }
@@ -959,14 +1192,180 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
   }
 });
 
+test('the same AMD declaration reopens on a server-created simulated world and Plan', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
+  try {
+    const transitioned = await page.evaluate(async () => {
+      const before = window.DeskBackend.state();
+      let cleared = null;
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase !== 'world-transition') return;
+        const state = event.detail.state;
+        cleared = {
+          market: state.market,
+          plan: state.plan,
+          strategy: state.strategy,
+          candidates: state.candidates.length,
+          selected: state.selected,
+          ensemble: state.ensemble,
+          outcome: state.outcome,
+          decisionPreview: state.decisionPreview
+        };
+      });
+      const context = Object.assign({}, before.context, {
+        symbol: 'AMD', goal: 'Income', view: 'Neutral', horizon: '1 day'
+      });
+      const state = await window.DeskBackend.transitionWorld('sim', context);
+      return {
+        beforePlan: before.plan.id,
+        beforeEnsemble: before.ensemble.ensemble.id,
+        cleared,
+        phase: window.decide.backendPhase,
+        plan: {
+          id: state.plan.id,
+          marketKind: state.plan.marketKind,
+          worldId: state.plan.worldId,
+          symbol: state.plan.symbol,
+          intent: state.plan.intent,
+          horizonDays: state.plan.context.horizonDays
+        },
+        market: state.market.identity,
+        ensembleId: state.ensemble.ensemble.id,
+        ensembleWorld: state.ensemble.preview.receipt.worldId,
+        ensembleDataset: state.ensemble.preview.receipt.datasetId,
+        selectedId: state.selected.id,
+        visibleCandidateId: window.decide.candId,
+        mode: window.MKT_MODE,
+        observedOn: document.querySelector('#mktMode [data-mkt="observed"]')?.classList.contains('on'),
+        simulatedOn: document.querySelector('#mktMode [data-mkt="sim"]')?.classList.contains('on'),
+        simulatedBody: document.body.classList.contains('mkt-sim')
+      };
+    });
+
+    assert.equal(transitioned.beforePlan, PLAN_ID);
+    assert.equal(transitioned.beforeEnsemble, ENSEMBLE_ID);
+    assert.deepEqual(transitioned.cleared, {
+      market: null,
+      plan: null,
+      strategy: null,
+      candidates: 0,
+      selected: null,
+      ensemble: null,
+      outcome: null,
+      decisionPreview: null
+    }, 'the verified world boundary clears every observed financial artifact before reopening');
+    assert.equal(transitioned.phase, 'ready');
+    assert.deepEqual(transitioned.plan, {
+      id: SIM_PLAN_ID,
+      marketKind: 'SIMULATED',
+      worldId: SIM_WORLD_ID,
+      symbol: 'AMD',
+      intent: 'INCOME',
+      horizonDays: 1
+    }, 'the declaration is preserved while Plan ownership moves to the new simulated world');
+    assert.deepEqual(transitioned.market, {
+      world: SIM_WORLD_ID,
+      revision: WORLD_REVISION + 1,
+      epoch: `${SIM_WORLD_ID}-epoch-desk-${WORLD_REVISION + 1}`,
+      datasetId: SIM_DATASET_ID,
+      marketLane: 'SIMULATED',
+      accountId: ACCOUNT_ID
+    });
+    assert.notEqual(transitioned.ensembleId, transitioned.beforeEnsemble,
+      'the observed ensemble cannot cross the world boundary');
+    assert.equal(transitioned.ensembleWorld, SIM_WORLD_ID);
+    assert.equal(transitioned.ensembleDataset, SIM_DATASET_ID);
+    assert.equal(transitioned.selectedId, CANDIDATE_ID);
+    assert.equal(transitioned.visibleCandidateId, CANDIDATE_ID);
+    assert.equal(transitioned.mode, 'sim');
+    assert.equal(transitioned.observedOn, false);
+    assert.equal(transitioned.simulatedOn, true);
+    assert.equal(transitioned.simulatedBody, true);
+
+    assert.equal(backend.count('POST', '/api/sim/market'), 1);
+    const create = backend.requests.find(row => row.method === 'POST' && row.path === '/api/sim/market');
+    assert.deepEqual(create.body.symbols, { AMD: 1 });
+    assert.equal(create.body.allowFictional, false);
+    assert.equal(backend.count('POST', `/api/sim/market/${SIM_WORLD_ID}/start`), 1);
+    const worldChange = backend.requests.find(row => row.method === 'PUT' && row.path === '/api/world');
+    assert.deepEqual(worldChange.body, { world: SIM_WORLD_ID });
+    const planCreates = backend.requests.filter(row => row.method === 'POST' && row.path === '/api/plans');
+    assert.equal(planCreates.length, 1,
+      'the simulation receives a new market-owned Plan instead of reusing the observed Plan');
+    assert.equal(planCreates[0].body.symbol, 'AMD');
+    assert.equal(planCreates[0].body.intent, 'INCOME');
+    assert.equal(planCreates[0].body.horizonDays, 1);
+    assert.equal(backend.count('POST', `/api/plans/${SIM_PLAN_ID}/strategy/run`), 1);
+    assert.equal(backend.count('POST', `/api/plans/${SIM_PLAN_ID}/outcomes/ensemble`), 1);
+    assert.equal(backend.count('POST', `/api/plans/${SIM_PLAN_ID}/outcomes/run`), 1);
+    assert.equal(backend.count('POST', `/api/plans/${SIM_PLAN_ID}/decision/preview`), 1);
+    assert.deepEqual(pageErrors, [], `simulated-world transition emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a simulated-world symbol exclusion cannot optimistically flip the visible lane', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    simExclusionReason: 'AMD has no complete server-owned anchor history.'
+  });
+  try {
+    const result = await page.evaluate(async () => {
+      const before = window.DeskBackend.state();
+      try {
+        await window.DeskBackend.transitionWorld('sim', Object.assign({}, before.context, {
+          symbol: 'AMD', goal: 'Income', view: 'Neutral', horizon: '1 day'
+        }));
+        return { rejected: false };
+      } catch (error) {
+        const after = window.DeskBackend.state();
+        return {
+          rejected: true,
+          message: error.message,
+          world: after.market.identity.world,
+          lane: after.market.identity.marketLane,
+          planId: after.plan.id,
+          ensembleId: after.ensemble.ensemble.id,
+          pending: after.mutationPending,
+          mode: window.MKT_MODE,
+          observedOn: document.querySelector('#mktMode [data-mkt="observed"]')?.classList.contains('on'),
+          simulatedOn: document.querySelector('#mktMode [data-mkt="sim"]')?.classList.contains('on'),
+          simulatedBody: document.body.classList.contains('mkt-sim')
+        };
+      }
+    });
+    assert.equal(result.rejected, true);
+    assert.match(result.message, /AMD has no complete server-owned anchor history/i);
+    assert.equal(result.world, 'observed');
+    assert.equal(result.lane, 'OBSERVED');
+    assert.equal(result.planId, PLAN_ID);
+    assert.equal(result.ensembleId, ENSEMBLE_ID,
+      'a rejected transition leaves the observed evaluation intact');
+    assert.equal(result.pending, false);
+    assert.equal(result.mode, 'observed');
+    assert.equal(result.observedOn, true);
+    assert.equal(result.simulatedOn, false);
+    assert.equal(result.simulatedBody, false);
+    assert.equal(backend.count('GET', `/api/sim/market/${SIM_WORLD_ID}/anchors`), 1);
+    assert.equal(backend.count('POST', `/api/sim/market/${SIM_WORLD_ID}/start`), 0);
+    assert.equal(backend.count('PUT', '/api/world'), 0,
+      'the excluded simulation is never promoted to the active server world');
+    assert.deepEqual(pageErrors, [], `simulated exclusion emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('unavailable execution preserves candidate economics without promoting zero sentinels', async () => {
-  const { context, page, pageErrors } = await openAuthoritativeDesk({
-    unavailableDecisionPreview: true
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    unavailableDecisionPreview: true,
+    marketFreshness: 'STALE'
   });
   try {
     const rendered = await page.evaluate(candidateId => {
       const active = window.decide.cands.find(row => row.id === candidateId);
       const dock = document.querySelector('.execute');
+      const state = window.DeskBackend.state();
       return {
         payoffPoints: active.payoffPoints,
         payoffAtSpot: window.payFor(active, 100),
@@ -974,7 +1373,12 @@ test('unavailable execution preserves candidate economics without promoting zero
         dockText: dock?.textContent.replace(/\s+/g, ' ').trim(),
         reviewDisabled: dock?.querySelector('[data-dec="review"]')?.disabled,
         orderState: window.decide.orderPreview.order.executability,
-        valuedNetCents: window.decide.orderPreview.order.valuedNetCents
+        valuedNetCents: window.decide.orderPreview.order.valuedNetCents,
+        candidateFreshness: active.backend.freshness,
+        quoteFreshness: state.market.quote.freshness,
+        chainFreshness: state.market.chain.freshness,
+        ensembleAnchorFreshness: state.ensemble.preview.receipt.anchorFreshness,
+        previewFreshness: window.decide.orderPreview.preview.freshness
       };
     }, CANDIDATE_ID);
 
@@ -985,11 +1389,25 @@ test('unavailable execution preserves candidate economics without promoting zero
       'an unavailable execution book cannot blank the candidate payoff chart');
     assert.equal(rendered.orderState, 'UNAVAILABLE');
     assert.equal(rendered.valuedNetCents, null);
+    assert.equal(rendered.candidateFreshness, 'STALE');
+    assert.equal(rendered.quoteFreshness, 'STALE');
+    assert.equal(rendered.chainFreshness, 'STALE');
+    assert.equal(rendered.ensembleAnchorFreshness, 'STALE',
+      'analysis retains the prior-close anchor provenance through the ensemble');
+    assert.equal(rendered.previewFreshness, 'STALE');
     assert.match(rendered.dockText, /candidate −\$123 debit · execution unavailable/i);
     assert.match(rendered.dockText, /book unavailable/i);
     assert.match(rendered.dockText, /Cannot execute AMD from a stale observed option book/i);
     assert.doesNotMatch(rendered.dockText, /backend proposed \+\$0|collect \+\$0|pay \+\$0/i);
     assert.equal(rendered.reviewDisabled, true);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
+      'stale same-lane observations still support explicitly labeled analysis');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 1,
+      'the selected package is evaluated before execution availability is assessed');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 1,
+      'placement uses the separate executable-book preview contract');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/trade`), 0,
+      'an unavailable stale book cannot reach commitment');
     assert.deepEqual(pageErrors, [], `unavailable execution emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -1138,6 +1556,70 @@ test('Desk Pick preserves backend rank while selecting the coherent assessed can
     assert.equal(selection.body.candidateId, second.id,
       'the selected package and visible Desk Pick share one backend candidate identity');
     assert.deepEqual(pageErrors, [], `Desk Pick flow emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('adverse coherent economics stay visible as a selected comparison without becoming Desk Pick', async () => {
+  const adverse = unfavorableCandidate();
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    strategyCandidates: [adverse],
+    expectedCandidateId: adverse.id
+  });
+  try {
+    const view = await page.evaluate(() => ({
+      candidateIds: Array.from(document.querySelectorAll('.fanr[data-cand]')).map(row => row.dataset.cand),
+      selectedId: window.decide.candId,
+      deskPickId: window.decide.deskPickId,
+      badges: document.querySelectorAll('.fanr .pickbadge').length,
+      rankRead: document.querySelector('.modebar .hint')?.textContent.trim(),
+      payoffTitle: document.querySelector('#decideStage .dccenter .paytitle .lbl')?.textContent.trim(),
+      economicVerdict: window.DeskBackend.state().selected.evaluation.assessment.economics.verdict
+    }));
+    assert.deepEqual(view.candidateIds, [adverse.id],
+      'the adverse package remains available for comparison');
+    assert.equal(view.selectedId, adverse.id,
+      'the highest backend-ranked comparison can remain selected when no endorsement exists');
+    assert.equal(view.economicVerdict, 'UNFAVORABLE');
+    assert.equal(view.deskPickId, null,
+      'a coherent declaration fit is not promoted over an unfavorable economic verdict');
+    assert.equal(view.badges, 0);
+    assert.equal(view.rankRead, 'no endorsable pick · 1 comparison');
+    assert.match(view.payoffTitle, /^Selected comparison payoff/,
+      'the selected adverse package is labeled as a comparison rather than the recommendation');
+    const selection = backend.requests.find(row => row.method === 'PUT'
+      && row.path === `/api/plans/${PLAN_ID}/strategy/select`);
+    assert.equal(selection.body.candidateId, adverse.id,
+      'selection identity stays backend-owned even when no Desk Pick exists');
+    assert.deepEqual(pageErrors, [], `adverse comparison flow emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a favorable coherent package receives Desk Pick ahead of a higher-ranked adverse comparison', async () => {
+  const adverse = unfavorableCandidate();
+  const favorable = candidate();
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    strategyCandidates: [adverse, favorable]
+  });
+  try {
+    const view = await page.evaluate(() => ({
+      order: Array.from(document.querySelectorAll('.fanr[data-cand]')).map(row => row.dataset.cand),
+      selectedId: window.decide.candId,
+      deskPickId: window.decide.deskPickId,
+      badgeId: document.querySelector('.fanr .pickbadge')?.closest('.fanr')?.dataset.cand
+    }));
+    assert.deepEqual(view.order, [adverse.id, favorable.id],
+      'frontend endorsement does not reorder the backend competition');
+    assert.equal(view.selectedId, favorable.id);
+    assert.equal(view.deskPickId, favorable.id);
+    assert.equal(view.badgeId, favorable.id);
+    const selection = backend.requests.find(row => row.method === 'PUT'
+      && row.path === `/api/plans/${PLAN_ID}/strategy/select`);
+    assert.equal(selection.body.candidateId, favorable.id);
+    assert.deepEqual(pageErrors, [], `economic Desk Pick flow emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -1320,7 +1802,10 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
 });
 
 test('exact-package drafts are previewed and selected by the backend on the existing ensemble', async () => {
-  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ latestEnabled: true });
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    latestEnabled: true,
+    draftPreviewDelayMs: 450
+  });
   try {
     const ensemblePath = `/api/plans/${PLAN_ID}/outcomes/ensemble`;
     const outcomePath = `/api/plans/${PLAN_ID}/outcomes/run`;
@@ -1328,29 +1813,123 @@ test('exact-package drafts are previewed and selected by the backend on the exis
     const ensembleBefore = backend.count('POST', ensemblePath);
     const outcomeBefore = backend.count('POST', outcomePath);
 
-    const invalid = await page.evaluate(async candidateId => {
-      await window.DeskBackend.previewDraft([{
-        t: 'c', k: 100, q: 1, expiration: '2026-08-21', multiplier: 100
-      }], candidateId);
+    const baseline = await page.evaluate(async () => {
+      await window.DeskBackend.scenarioAnimation({ movePct: 5, days: 10 });
+      const visible = window.activeCand();
+      const scenario = window.scenData(visible);
+      window.__draftBaselineMc = window.decide._mc;
+      window.__draftBaselineScenario = document.querySelector('#decideStage .scenpanel');
+      return {
+        activeId: visible.id,
+        activePayoffAtSpot: window.payFor(visible, 100),
+        frame: window.authoritativeFrame(visible, 0.5),
+        scenarioPnl: scenario.rows.map(row => row.pl),
+        animationMarker: window.DeskBackend.state().animation.testMarker
+      };
+    });
+
+    await page.locator('#decideStage .declegpanel [data-dec="editlegs"]').click();
+    await page.locator('#decideStage .declegpanel [data-leg="rm"][data-li="1"]')
+      .evaluate(node => node.click());
+    await page.waitForFunction(() => window.decide.draftPending
+      && window.decide.buildLegs?.length === 1);
+
+    const pending = await page.evaluate(() => {
+      const visible = window.activeCand();
+      return {
+        activeId: visible.id,
+        activePayoffAtSpot: window.payFor(visible, 100),
+        frame: window.authoritativeFrame(visible, 0.5),
+        scenarioPnl: window.scenData(visible).rows.map(row => row.pl),
+        sameMc: window.decide._mc === window.__draftBaselineMc,
+        sameScenarioNode: document.querySelector('#decideStage .scenpanel')
+          === window.__draftBaselineScenario,
+        animationMarker: window.DeskBackend.state().animation.testMarker,
+        workbenchLegs: document.querySelectorAll('#decideStage .declegpanel .legr').length,
+        payoffTitle: document.querySelector('#decideStage .dccenter .paytitle')?.textContent
+          .replace(/\s+/g, ' ').trim()
+      };
+    });
+
+    assert.equal(pending.activeId, CANDIDATE_ID);
+    assert.equal(pending.activePayoffAtSpot, baseline.activePayoffAtSpot);
+    assert.deepEqual(pending.frame, baseline.frame,
+      'pending draft edits preserve the selected conditioned valuation checkpoints');
+    assert.deepEqual(pending.scenarioPnl, baseline.scenarioPnl,
+      'pending draft edits cannot flash browser-generated scenario values');
+    assert.equal(pending.sameMc, true,
+      'pending draft edits preserve the paths paired with those checkpoints');
+    assert.equal(pending.sameScenarioNode, true,
+      'pending draft edits preserve scenario DOM identity and playback state');
+    assert.equal(pending.animationMarker, baseline.animationMarker);
+    assert.equal(pending.workbenchLegs, 1,
+      'the edited leg package remains visible while its preview is pending');
+    assert.match(pending.payoffTitle, /draft repricing.*selected package remains shown until applied/i);
+
+    await page.waitForFunction(() => !window.decide.draftPending
+      && /one-leg draft is blocked/i.test(window.decide.draftError || ''));
+    const invalid = await page.evaluate(() => {
       const state = window.DeskBackend.state();
+      const visible = window.activeCand();
       return {
         selectedId: state.selected.id,
         visibleSelectedId: window.decide.candId,
+        activeId: visible.id,
+        activePayoffAtSpot: window.payFor(visible, 100),
+        payoffTitle: document.querySelector('#decideStage .dccenter .paytitle')?.textContent.replace(/\s+/g, ' ').trim(),
+        workbenchLegs: document.querySelectorAll('#decideStage .declegpanel .legr').length,
+        workbenchText: document.querySelector('#decideStage .declegpanel')?.textContent.replace(/\s+/g, ' ').trim(),
+        frame: window.authoritativeFrame(visible, 0.5),
+        scenarioPnl: window.scenData(visible).rows.map(row => row.pl),
+        sameMc: window.decide._mc === window.__draftBaselineMc,
+        animationMarker: state.animation.testMarker,
         valid: state.draft.valid,
         error: state.draft.error,
         ensembleId: state.ensemble.ensemble.id
       };
-    }, CANDIDATE_ID);
+    });
 
     assert.equal(invalid.selectedId, CANDIDATE_ID,
       'a blocked analysis cannot replace the selected recommendation');
     assert.equal(invalid.visibleSelectedId, CANDIDATE_ID,
       'the prior candidate remains visible while an invalid draft is explained');
+    assert.equal(invalid.activeId, CANDIDATE_ID,
+      'an invalid draft cannot replace the selected candidate financial surface');
+    assert.equal(invalid.activePayoffAtSpot, 777,
+      'the selected backend payoff remains visible instead of a browser-calculated zero shell');
+    assert.match(invalid.payoffTitle, /Backend debit call spread.*selected package remains shown until applied/i);
+    assert.equal(invalid.workbenchLegs, 1,
+      'the edited draft legs remain visible independently from the selected payoff');
+    assert.match(invalid.workbenchText, /one-leg draft is blocked/i);
+    assert.deepEqual(invalid.frame, baseline.frame,
+      'a blocked draft leaves the selected conditioned valuation intact');
+    assert.deepEqual(invalid.scenarioPnl, baseline.scenarioPnl,
+      'a blocked draft leaves the selected scenario checkpoints intact');
+    assert.equal(invalid.sameMc, true,
+      'a blocked draft leaves its matching conditioned paths intact');
+    assert.equal(invalid.animationMarker, baseline.animationMarker);
     assert.equal(invalid.valid, false);
     assert.match(invalid.error, /one-leg draft is blocked/i);
     assert.equal(invalid.ensembleId, ENSEMBLE_ID);
     assert.equal(backend.count('POST', customPath), 0,
       'invalid pure previews never invoke the mutating custom-selection route');
+
+    const decisionPath = `/api/plans/${PLAN_ID}/decision/preview`;
+    const decisionBeforeCancel = backend.count('POST', decisionPath);
+    await page.locator('#decideStage .declegpanel [data-dec="canceldraft"]').click();
+    await page.waitForFunction(() => window.decide.mode === 'engine'
+      && window.decide.orderPreview && !window.decide.order.previewPending);
+    const restored = await page.evaluate(() => ({
+      activeId: window.activeCand().id,
+      reviewDisabled: document.querySelector('#decideStage .execute [data-dec="review"]')?.disabled,
+      animationMarker: window.DeskBackend.state().animation.testMarker
+    }));
+    assert.equal(restored.activeId, CANDIDATE_ID);
+    assert.equal(restored.reviewDisabled, false,
+      'canceling a draft restores an actionable backend order preview');
+    assert.equal(restored.animationMarker, baseline.animationMarker);
+    assert.equal(backend.count('POST', decisionPath), decisionBeforeCancel + 1,
+      'canceling a draft explicitly reprices the restored selected instruction');
 
     const invalidRequest = backend.requests.filter(row =>
       row.method === 'POST' && row.path === '/api/trades/preview').at(-1);
@@ -1531,6 +2110,7 @@ test('order commitment serializes Plan mutations and clears a superseded governo
       try { await window.DeskBackend.chooseCandidate(candidateId); }
       catch (error) { competingError = error.message; }
       window.decide.govs.risk = 6666;
+      window.decide.govExplicit.risk = true;
       const control = document.createElement('input');
       control.setAttribute('data-gov', 'risk');
       document.body.appendChild(control);
@@ -1693,6 +2273,7 @@ test('the latest governor change runs after an in-flight selection instead of be
     await page.evaluate(candidateId => {
       window.DeskBackend.chooseCandidate(candidateId).catch(() => {});
       window.decide.govs.risk = 7777;
+      window.decide.govExplicit.risk = true;
       const control = document.createElement('input');
       control.setAttribute('data-gov', 'risk');
       document.body.appendChild(control);

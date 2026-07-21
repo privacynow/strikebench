@@ -210,8 +210,13 @@ public final class StrategyCatalog {
             if (puts.size() == 2 && calls.size() == 2 && buy(puts.get(0)) && sell(puts.get(1))
                     && sell(calls.get(0)) && buy(calls.get(1))
                     && options.stream().mapToLong(StrategyCatalog::units).distinct().count() == 1) {
-                return identity(equal(puts.get(1).strike(), calls.get(0).strike())
-                        ? StrategyFamily.IRON_BUTTERFLY : StrategyFamily.IRON_CONDOR);
+                BigDecimal shortPut = puts.get(1).strike();
+                BigDecimal shortCall = calls.get(0).strike();
+                if (equal(shortPut, shortCall)) return identity(StrategyFamily.IRON_BUTTERFLY);
+                if (shortPut.compareTo(shortCall) < 0) return identity(StrategyFamily.IRON_CONDOR);
+                // Crossed short strikes invert the advertised range-income geometry. The exact
+                // package remains fully analyzable, but it is not an iron condor and must not
+                // inherit that family's name, explanation, or recommendation semantics.
             }
         }
         return customIdentity("Custom structure",

@@ -53,8 +53,7 @@ public final class StrategyBuilder {
                 case DEBIT_PUT_SPREAD -> vertical(chain, OptionType.PUT, LegAction.BUY, 0.50, -2);
                 case CREDIT_CALL_SPREAD -> creditVertical(chain, OptionType.CALL, spot);
                 case CREDIT_PUT_SPREAD -> creditVertical(chain, OptionType.PUT, spot);
-                case IRON_CONDOR -> combine(creditVertical(chain, OptionType.PUT, spot),
-                        creditVertical(chain, OptionType.CALL, spot));
+                case IRON_CONDOR -> ironCondor(chain, spot);
                 case IRON_BUTTERFLY -> ironButterfly(chain, spot);
                 case LONG_CALL_BUTTERFLY -> butterfly(chain, OptionType.CALL, spot);
                 case LONG_PUT_BUTTERFLY -> butterfly(chain, OptionType.PUT, spot);
@@ -94,6 +93,11 @@ public final class StrategyBuilder {
      * book is tight — and returns null (honest) only when nothing earns a genuine credit.
      */
     private static Built creditVertical(OptionChain chain, OptionType type, BigDecimal spot) {
+        return creditVertical(chain, type, spot, false);
+    }
+
+    private static Built creditVertical(OptionChain chain, OptionType type, BigDecimal spot,
+                                        boolean strictlyOutsideSpot) {
         if (spot == null || spot.signum() <= 0) return null;
         double s = spot.doubleValue();
         List<OptionQuote> side = (type == OptionType.CALL ? chain.calls() : chain.puts()).stream()
@@ -107,7 +111,14 @@ public final class StrategyBuilder {
         double bestScore = -1;
         for (OptionQuote shortLeg : side) {
             double ks = shortLeg.strike().doubleValue();
-            boolean shortOtm = type == OptionType.CALL ? ks >= s * 0.98 : ks <= s * 1.02;
+            // A standalone credit vertical may deliberately sit slightly in the money. An iron
+            // condor cannot: independently maximizing the two verticals can otherwise cross the
+            // short strikes and silently turn the advertised range-income shape into a long-vol
+            // inverted package. Condor construction therefore keeps each short on its own side of
+            // spot and validates the complete four-strike ordering below.
+            boolean shortOtm = strictlyOutsideSpot
+                    ? (type == OptionType.CALL ? ks > s : ks < s)
+                    : (type == OptionType.CALL ? ks >= s * 0.98 : ks <= s * 1.02);
             if (!shortOtm) continue;
             for (OptionQuote longLeg : side) {
                 double kl = longLeg.strike().doubleValue();
@@ -129,6 +140,28 @@ public final class StrategyBuilder {
         return new Built(List.of(leg(LegAction.SELL, bestShort), leg(LegAction.BUY, bestLong)),
                 List.of(bestShort, bestLong),
                 "SELL " + strikeLabel(bestShort) + " / BUY " + strikeLabel(bestLong) + " " + chain.expiration());
+    }
+
+    /**
+     * Builds the canonical range-credit shape as one package. The two component spreads share the
+     * same executable search, but their short strikes must bracket spot and their four strikes must
+     * remain strictly ordered: long put < short put < short call < long call.
+     */
+    private static Built ironCondor(OptionChain chain, BigDecimal spot) {
+        Built put = creditVertical(chain, OptionType.PUT, spot, true);
+        Built call = creditVertical(chain, OptionType.CALL, spot, true);
+        if (put == null || call == null) return null;
+
+        BigDecimal shortPut = put.legs().get(0).strike();
+        BigDecimal longPut = put.legs().get(1).strike();
+        BigDecimal shortCall = call.legs().get(0).strike();
+        BigDecimal longCall = call.legs().get(1).strike();
+        if (longPut.compareTo(shortPut) >= 0
+                || shortPut.compareTo(shortCall) >= 0
+                || shortCall.compareTo(longCall) >= 0) {
+            return null;
+        }
+        return combine(put, call);
     }
 
     private static Built vertical(OptionChain chain, OptionType type, LegAction anchorAction, double targetDelta, int hedgeSteps) {

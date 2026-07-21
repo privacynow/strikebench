@@ -100,7 +100,7 @@ public final class SignalEngine {
                     .min(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - 30)))
                     .orElse(null);
             OptionChain chain = exp == null ? null : market.chain(sym, exp, worldId).orElse(null);
-            if (chain != null && !chain.isEmpty() && chain.evidence().executableIn(lane)) {
+            if (chain != null && !chain.isEmpty() && chain.evidence().usableIn(lane)) {
                 OptionQuote atm = chain.calls().stream()
                         .filter(q -> q.iv() != null && q.hasMark())
                         .min(Comparator.comparingDouble(q -> Math.abs(q.strike().doubleValue() - chain.underlyingPrice().doubleValue())))

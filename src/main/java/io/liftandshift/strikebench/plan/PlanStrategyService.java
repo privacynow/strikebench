@@ -22,7 +22,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Normalized, exact Strategy-stage competition persistence for one Plan context. */
 public final class PlanStrategyService {
-    public static final String ENGINE_VERSION = "plan-strategy-1";
+    public static final String ENGINE_VERSION = "plan-strategy-2";
 
     /** inputHash identifies the canonical server-side request snapshot that produced this run. */
     public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
@@ -98,13 +98,14 @@ public final class PlanStrategyService {
                             "ranking_policy,economic_message,favorable_count,mixed_count,unfavorable_count," +
                             "unavailable_count,disclaimer,sentiment_scorer_version,input_hash,state,created_at::text created_at FROM plan_strategy_run " +
                             "WHERE plan_id=? AND context_rev=? AND run_kind='COMPETITION' AND state='CURRENT' " +
+                            "AND engine_version=? " +
                             "ORDER BY created_at DESC LIMIT 1",
                     r -> new RunRow(r.str("id"), r.str("thesis"), r.str("horizon"), r.str("risk_mode"),
                             r.str("intent"), r.lngOrNull("risk_budget_cents"), r.lngOrNull("spot_cents"), r.str("ranking_policy"),
                             r.str("economic_message"), r.intv("favorable_count"), r.intv("mixed_count"),
                             r.intv("unfavorable_count"), r.intv("unavailable_count"), r.str("disclaimer"),
                             r.str("sentiment_scorer_version"), r.str("input_hash"), r.str("state"), r.str("created_at")),
-                    planId, plan.contextRev());
+                    planId, plan.contextRev(), ENGINE_VERSION);
             if (runs.isEmpty()) return null;
             RunRow run = runs.getFirst();
             ObjectNode result = Json.MAPPER.createObjectNode();

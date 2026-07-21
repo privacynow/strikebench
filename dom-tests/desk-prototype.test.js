@@ -321,8 +321,12 @@ test('New Idea retargets NVDA, retains its scenario, and bounds Review in the ex
 
 test('New Idea keeps six exact legs readable beside ideas across desktop and mobile structures', async () => {
   const viewports = [
+    { width: 1280, height: 720 },
+    { width: 1280, height: 800 },
     { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
     { width: 1920, height: 1080 },
+    { width: 2048, height: 1080 },
     { width: 2560, height: 1440 },
     { width: 1000, height: 800 },
     { width: 390, height: 844 },
@@ -339,8 +343,11 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       await page.locator('#decideStage [data-cand="i-ic"]').click();
       assert.equal(await page.locator('#decideStage .declegpanel .legr').count(), 4,
         `${label} renders the complete condor package`);
-      await page.locator('#decideStage .declegpanel [data-addleg]').click();
-      await page.locator('#decideStage .declegpanel [data-addleg]').click();
+      /* This is a geometry matrix, and the Add control intentionally lives inside the
+         panel-local scroll rail at short heights. Invoke the same DOM handler without
+         coupling the layout assertion to Playwright's auto-scroll heuristics. */
+      await page.locator('#decideStage .declegpanel [data-addleg]').evaluate(node => node.click());
+      await page.locator('#decideStage .declegpanel [data-addleg]').evaluate(node => node.click());
       assert.equal(await page.locator('#decideStage .declegpanel .legr').count(), 6,
         `${label} renders the extended six-leg package`);
       await page.waitForTimeout(420);
@@ -348,6 +355,7 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       const layout = await page.evaluate(() => {
         const left = document.querySelector('#decideStage .dcleft');
         const center = document.querySelector('#decideStage .dccenter');
+        const right = document.querySelector('#decideStage .dcright');
         const fan = left.querySelector('.fan');
         const panel = left.querySelector('.declegpanel');
         const rail = panel.querySelector('.declegs');
@@ -356,6 +364,8 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
         const grid = document.querySelector('#decideStage .decgrid');
         const panelRect = panel.getBoundingClientRect();
         const mapRect = map.getBoundingClientRect();
+        const centerRect = center.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
         const legRects = Array.from(rail.querySelectorAll('.legr')).map(leg => {
           const rect = leg.getBoundingClientRect();
           return {
@@ -374,11 +384,13 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
           gridDirection: getComputedStyle(grid).flexDirection,
           railDirection: getComputedStyle(rail).flexDirection,
           railOverflowX: getComputedStyle(rail).overflowX,
+          railOverflowY: getComputedStyle(rail).overflowY,
           railXOverflow: Math.max(0, rail.scrollWidth - rail.clientWidth),
           railYOverflow: Math.max(0, rail.scrollHeight - rail.clientHeight),
           panelXOverflow: Math.max(0, panel.scrollWidth - panel.clientWidth),
           wrapXOverflow: Math.max(0, wrap.scrollWidth - wrap.clientWidth),
           leftXOverflow: Math.max(0, left.scrollWidth - left.clientWidth),
+          leftYOverflow: Math.max(0, left.scrollHeight - left.clientHeight),
           panelRect: {
             left: panelRect.left, top: panelRect.top,
             right: panelRect.right, bottom: panelRect.bottom, width: panelRect.width
@@ -387,6 +399,8 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
             left: mapRect.left, top: mapRect.top, right: mapRect.right,
             bottom: mapRect.bottom, width: mapRect.width, height: mapRect.height
           },
+          centerWidth: centerRect.width,
+          rightWidth: rightRect.width,
           legRects
         };
       });
@@ -401,7 +415,19 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       assert.ok(layout.panelXOverflow <= 1 && layout.wrapXOverflow <= 1 && layout.leftXOverflow <= 1,
         `${label} contains the leg structure without widening a panel or the overlay `
           + `(panel ${layout.panelXOverflow}px, wrap ${layout.wrapXOverflow}px, left ${layout.leftXOverflow}px)`);
-      assert.ok(layout.railYOverflow <= 1, `${label} never makes the leg rail vertically scroll`);
+      assert.ok(layout.leftYOverflow <= 1,
+        `${label} keeps candidates, stacked legs, and the risk map inside the left decision rail `
+          + `(overflow ${layout.leftYOverflow}px)`);
+      assert.equal(layout.railDirection, 'column', `${label} stacks every exact leg at full width`);
+      assert.ok(layout.railXOverflow <= 1, `${label} needs no sideways scrolling for exact legs`);
+      layout.legRects.forEach((rect, index) => {
+        assert.ok(rect.width >= layout.panelRect.width - 28,
+          `${label} leg ${index + 1} uses the available panel width`);
+        assert.ok(rect.left >= layout.panelRect.left - 1 && rect.right <= layout.panelRect.right + 1,
+          `${label} leg ${index + 1} stays inside the workbench`);
+        if (index) assert.ok(rect.top > layout.legRects[index - 1].top,
+          `${label} leg ${index + 1} follows the preceding leg vertically`);
+      });
 
       if (viewport.width >= 1900) {
         assert.ok(layout.mapRect.top > layout.panelRect.bottom,
@@ -415,23 +441,16 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       if (viewport.width <= 900) {
         assert.equal(layout.gridDisplay, 'flex', `${label} structurally stacks decision areas`);
         assert.equal(layout.gridDirection, 'column', `${label} uses a vertical mobile reading order`);
-        assert.equal(layout.railDirection, 'column', `${label} stacks each exact leg at full width`);
-        assert.ok(layout.railXOverflow <= 1, `${label} needs no sideways scrolling for six legs`);
-        layout.legRects.forEach((rect, index) => {
-          assert.ok(rect.width >= layout.panelRect.width - 18,
-            `${label} leg ${index + 1} uses the available panel width`);
-          assert.ok(rect.left >= layout.panelRect.left - 1 && rect.right <= layout.panelRect.right + 1,
-            `${label} leg ${index + 1} stays inside the workbench`);
-          if (index) assert.ok(rect.top > layout.legRects[index - 1].top,
-            `${label} leg ${index + 1} follows the preceding leg vertically`);
-        });
+        assert.equal(layout.railOverflowY, 'visible', `${label} exposes the complete mobile leg stack`);
+        assert.ok(layout.railYOverflow <= 1, `${label} does not add a nested mobile leg scroller`);
       } else {
         assert.equal(layout.gridDisplay, 'grid', `${label} retains the desktop analysis grid`);
-        assert.equal(layout.railDirection, 'row', `${label} uses the bounded desktop leg rail`);
-        assert.equal(layout.railOverflowX, 'auto', `${label} makes overflow explicit and local`);
-        assert.ok(layout.railXOverflow > 0, `${label} keeps six legs at a readable card width`);
-        assert.ok(layout.legRects.every(rect => rect.width >= 280),
-          `${label} never crushes a multi-leg card into an illegible column`);
+        assert.equal(layout.railOverflowX, 'hidden', `${label} does not expose a horizontal leg rail`);
+        assert.equal(layout.railOverflowY, 'auto', `${label} contains only genuinely long leg stacks locally`);
+        assert.ok(layout.rightWidth >= (viewport.width >= 1280 ? 350 : 300),
+          `${label} gives Evidence & Paths useful horizontal room (${layout.rightWidth}px)`);
+        assert.ok(layout.centerWidth / layout.rightWidth <= 2.1,
+          `${label} keeps the payoff center proportionate to Evidence & Paths`);
       }
 
       assertNoOverflow(await overflowMetrics(page,

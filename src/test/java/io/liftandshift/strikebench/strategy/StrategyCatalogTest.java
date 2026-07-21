@@ -143,6 +143,9 @@ class StrategyCatalogTest {
         assertThat(StrategyCatalog.identify(pkg(
                 put(0, "BUY", "90", NEAR, 2), put(1, "SELL", "95", NEAR, 1),
                 call(2, "SELL", "105", NEAR, 1), call(3, "BUY", "110", NEAR, 1))).custom()).isTrue();
+        assertThat(StrategyCatalog.identify(pkg(
+                put(0, "BUY", "90", NEAR, 1), put(1, "SELL", "105", NEAR, 1),
+                call(2, "SELL", "95", NEAR, 1), call(3, "BUY", "110", NEAR, 1))).custom()).isTrue();
     }
 
     @Test

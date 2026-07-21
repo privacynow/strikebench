@@ -213,8 +213,9 @@ public final class RecommendationEngine {
         List<ExpiryCtx> contexts = expiryContexts(symbol, worldId, expirations, anchorDays, today, laneNow, lane,
                 allow0dte, MAX_EXPIRY_CANDIDATES);
         if (contexts.isEmpty()) {
-            notes.add("The " + lane + " market has no liquid, executable option chain for " + symbol
-                    + " near a " + anchorDays + "-day horizon — nearby expirations were empty or not two-sided.");
+            notes.add("The " + lane + " market has no analyzable same-lane option chain for " + symbol
+                    + " near a " + anchorDays + "-day horizon — nearby expirations were empty,"
+                    + " one-sided, or belonged to another market lane.");
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
                     null, List.of(), rejected, notes, DISCLAIMER);
         }
@@ -306,7 +307,7 @@ public final class RecommendationEngine {
                 long coverSharesPerUnit = builtOnHeldShares
                         ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
                         : 0;
-                Verdict verdict = Guardrails.check(new Guardrails.Proposal(
+                Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
                         family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
                         buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
                 if (verdict.blocked()) {
@@ -355,7 +356,7 @@ public final class RecommendationEngine {
         if (rejected.stream().noneMatch(r -> r.strategy().equals(StrategyFamily.NAKED_CALL.name()))) {
             StrategyBuilder.Built naked = StrategyBuilder.build(StrategyFamily.NAKED_CALL, chain, farChain, spot);
             if (naked != null) {
-                Verdict v = Guardrails.check(new Guardrails.Proposal(StrategyFamily.NAKED_CALL, naked.legs(), 1,
+                Verdict v = Guardrails.checkForAnalysis(new Guardrails.Proposal(StrategyFamily.NAKED_CALL, naked.legs(), 1,
                         naked.quotes(), spot, chain.freshness(), today, buyingPowerCents, false, false, false));
                 rejected.add(new Rejection(StrategyFamily.NAKED_CALL.name(), StrategyFamily.NAKED_CALL.display(),
                         v.blockReasons().isEmpty() ? List.of("Undefined risk — blocked by default") : v.blockReasons()));
@@ -423,8 +424,8 @@ public final class RecommendationEngine {
             notes.add("Option chain unavailable for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
-        if (!chain.evidence().executableIn(lane)) {
-            notes.add("The " + lane + " market has no executable option chain for " + symbol);
+        if (!chain.evidence().usableIn(lane)) {
+            notes.add("The " + lane + " market has no same-lane option chain for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         double riskFreeRate = market.riskFreeRateQuote(
@@ -1056,8 +1057,10 @@ public final class RecommendationEngine {
         return io.liftandshift.strikebench.model.Horizon.parse(horizon).expiryCalendarDays();
     }
 
-    /** The liquid, executable-chain expirations nearest the horizon anchor, nearest first, up to
-     *  maxCount. Each carries its own spot, far chain (for calendars/diagonals) and risk-free rate. */
+    /** The liquid, same-lane analysis expirations nearest the horizon anchor, nearest first, up to
+     *  maxCount. A stale observed close may support labeled analysis but never execution; the
+     *  decision/preview boundary owns that stricter gate. Each context carries its own spot, far
+     *  chain (for calendars/diagonals) and risk-free rate. */
     private List<ExpiryCtx> expiryContexts(String symbol, String worldId, List<LocalDate> expirations,
             int anchorDays, LocalDate today, java.time.Instant now,
             io.liftandshift.strikebench.market.MarketLane lane, boolean allow0dte, int maxCount) {
@@ -1071,22 +1074,22 @@ public final class RecommendationEngine {
         for (LocalDate exp : usable) {
             if (ctxs.size() >= maxCount) break;
             OptionChain chain = market.chain(symbol, exp, worldId).orElse(null);
-            if (chain == null || chain.isEmpty() || !chain.evidence().executableIn(lane)) continue;
+            if (chain == null || chain.isEmpty() || !chain.evidence().usableIn(lane)) continue;
             BigDecimal spot = chain.underlyingPrice();
             if (spot == null || spot.signum() <= 0 || executableStrikesNearSpot(chain, spot) < MIN_LIQUID_STRIKES) continue;
             int idx = expirations.indexOf(exp);
             LocalDate far = idx >= 0 && idx + 4 < expirations.size() ? expirations.get(idx + 4)
                     : expirations.getLast().isAfter(exp) ? expirations.getLast() : null;
             OptionChain farChain = far == null ? null : market.chain(symbol, far, worldId).orElse(null);
-            if (farChain != null && !farChain.evidence().executableIn(lane)) farChain = null;
+            if (farChain != null && !farChain.evidence().usableIn(lane)) farChain = null;
             double rfr = market.riskFreeRateQuote((int) Math.max(1, ChronoUnit.DAYS.between(today, exp)), worldId).annualRate();
             ctxs.add(new ExpiryCtx(exp, chain, farChain, spot, rfr));
         }
         return ctxs;
     }
 
-    /** Strikes within ±15% of spot with a two-sided executable CALL quote — a liquidity proxy: a
-     *  thin or one-sided expiration can never build a fillable structure and must not be chosen. */
+    /** Strikes within ±15% of spot with a two-sided CALL observation — a liquidity proxy. The
+     *  enclosing evidence receipt determines whether those observations are fresh enough to execute. */
     private static int executableStrikesNearSpot(OptionChain chain, BigDecimal spot) {
         double s = spot.doubleValue(), lo = s * 0.85, hi = s * 1.15;
         return (int) chain.calls().stream()

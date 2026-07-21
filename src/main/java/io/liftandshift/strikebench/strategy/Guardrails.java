@@ -59,6 +59,17 @@ public final class Guardrails {
     }
 
     public static Verdict check(Proposal p) {
+        return check(p, false);
+    }
+
+    /** Strategy discovery may analyze same-lane prior-close observations when they are labeled
+     * stale. This never relaxes placement: trade preview and commitment continue to call
+     * {@link #check(Proposal)}, where stale marks are blocking. */
+    public static Verdict checkForAnalysis(Proposal p) {
+        return check(p, true);
+    }
+
+    private static Verdict check(Proposal p, boolean analysisOnly) {
         List<String> blocks = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
@@ -81,6 +92,7 @@ public final class Guardrails {
 
         // Marks / chain availability
         boolean anyOption = p.legs().stream().anyMatch(l -> !l.isStock());
+        boolean staleAnalysisMarks = false;
         for (int i = 0; i < p.legs().size(); i++) {
             Leg leg = p.legs().get(i);
             if (leg.isStock()) continue;
@@ -91,7 +103,12 @@ public final class Guardrails {
                 continue;
             }
             if (q.markFreshness() == Freshness.STALE || q.markFreshness() == Freshness.MISSING) {
-                blocks.add("Quote for " + q.occSymbol() + " is " + q.markFreshness() + "; refusing to size a trade against it");
+                if (analysisOnly && q.markFreshness() == Freshness.STALE) {
+                    staleAnalysisMarks = true;
+                } else {
+                    blocks.add("Quote for " + q.occSymbol() + " is " + q.markFreshness()
+                            + "; refusing to size a trade against it");
+                }
             }
             // Impossible price: an option marked below intrinsic vs the same feed's underlying
             if (p.spot() != null && q.mid() != null) {
@@ -191,7 +208,9 @@ public final class Guardrails {
                 }
             }
         }
-        if (p.freshness() == Freshness.DELAYED || p.freshness() == Freshness.EOD) {
+        if (analysisOnly && (staleAnalysisMarks || p.freshness() == Freshness.STALE)) {
+            warnings.add("Analysis uses STALE same-lane observations from the prior close — it is not executable now");
+        } else if (p.freshness() == Freshness.DELAYED || p.freshness() == Freshness.EOD) {
             warnings.add("Pricing uses " + p.freshness() + " data — real quotes may differ");
         }
 
