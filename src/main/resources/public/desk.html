@@ -961,6 +961,12 @@
 .authpending .authline{height:8px;border-radius:4px;background:linear-gradient(90deg,var(--line-soft),var(--row-hover),var(--line-soft));background-size:220% 100%;animation:authpulse 1.4s ease-in-out infinite}
 .authpending .authline:nth-child(2){width:76%}.authpending .authline:nth-child(3){width:58%}.authpending .authline.chart{height:clamp(150px,26vh,250px);width:100%;border-radius:7px}
 .authpending .authmessage{margin:auto;max-width:42ch;text-align:center;color:var(--dim);font-size:var(--f-sm);line-height:1.5}.authpending .authmessage b{display:block;color:var(--text);margin-bottom:5px}
+.authfailed{grid-column:1/-1;align-self:center;justify-self:center;width:min(720px,100%);padding:22px 24px;
+  border:1px solid rgba(255,105,120,.34);border-left:3px solid var(--loss);border-radius:10px;background:var(--panel);box-shadow:0 18px 50px rgba(0,0,0,.18)}
+.authfailed .eyebrow{color:var(--loss)}.authfailed h2{margin:8px 0 7px;font-size:var(--f-xl);color:var(--text)}
+.authfailed p{margin:0;max-width:66ch;color:var(--dim);font-size:var(--f-sm);line-height:1.55;overflow-wrap:anywhere}
+.authfailed .authfailact{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;margin-top:16px}
+.authfailed .authfailact .hint{flex:1;min-width:220px;line-height:1.4}
 @keyframes authpulse{50%{background-position:100% 0;opacity:.58}}
 .authcompare{display:grid;gap:7px;margin-top:8px}.authcompare .acrow{display:grid;grid-template-columns:minmax(120px,1fr) repeat(4,minmax(64px,.62fr));gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:6px;font-size:var(--f-xs)}
 .authcompare .acrow.head{border:0;padding-block:2px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;font-size:var(--f-2xs)}.authcompare .acrow.proposed{background:var(--accent-wash);border-color:var(--accent-2)}
@@ -1042,11 +1048,16 @@
   .dcleft .srchd.sub .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
   .dcleft .pickmap .fanleg{display:none}
 }
+@media (min-width:1280px) and (max-width:1700px){
+  /* Known desktop widths can give exact contracts more room. Intermediate widths retain the
+     narrower rule above until the layout switches structurally to the mobile stack. */
+  .decgrid,.decdock{--dec-left:clamp(380px,30vw,500px)}
+}
 @media (max-width:1700px) and (max-height:850px){
   .decwrap{padding-top:7px;padding-bottom:8px;gap:6px}
   .deccol{gap:5px}.dcctop{gap:5px}
   .dccenter .dcctop,.dccenter .dccpay{flex:1;min-height:0}
-  .dcleft .pickmap{flex-basis:145px;min-height:140px}
+  .dcleft .pickmap{flex-basis:165px;min-height:160px}
   .dcleft .fanmain .fr3 .why{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
   .declegpanel{padding:4px 6px}.decleghead{align-items:center;gap:6px;margin-bottom:2px}
   .dccenter .decpay{flex:1;height:auto;min-height:145px}
@@ -1077,7 +1088,7 @@
   .inspectpane{padding:8px 9px}
   .dcleft .srchd.sub{min-width:0;gap:5px}.dcleft .srchd.sub .lbl{flex:none;white-space:nowrap;margin-right:0}
   .dcleft .srchd.sub .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
-  .dcleft .pickmap .fanleg{display:none}.dcleft .decmap{min-height:94px}
+  .dcleft .pickmap .fanleg{display:none}.dcleft .decmap{min-height:114px}
   .understand{gap:5px}.understand .inspectwell{min-height:0}
   .inspectpane{padding:7px 8px}
   .inspectpane>.upanel .lenshd{gap:6px;margin-bottom:3px;min-width:0}
@@ -1680,6 +1691,7 @@
 .declegfoot .btn{padding:5px 9px;white-space:nowrap}
 @media (max-width:1450px){
   .declegpanel{padding:5px 7px}.decleghead{margin-bottom:3px}
+  .decleghead .hint{display:none}
   .declegpanel .declegs .tgl{padding-left:5px;padding-right:5px}
 }
 /* risk/reward map (ported from plan-desk) */
@@ -2196,6 +2208,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .depth{grid-template-columns:1fr}
   .decrow{grid-template-columns:1fr}
   .decpl{padding-right:0;border-right:0;border-bottom:1px solid var(--line-soft);padding-bottom:9px}
+  .focus .card .posdepth{height:auto;min-height:0;grid-template-columns:minmax(0,1fr);gap:7px}
+  .focus .card .posdepth .posinspectrail{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+  .focus .card .posdepth .posinspectrail .inspecttab{width:auto;min-width:0;padding:7px 5px;text-align:center}
+  .focus .card .posinspectwell{width:100%;min-height:260px;overflow:visible}
+  .focus .card .pospane.on,.focus .card .posinspectwell>.pospane>.lens{height:auto;min-height:260px}
 }
 /* Decide changes composition on narrow screens. The overlay itself becomes the one bounded
    reading surface; its columns do not acquire nested scrollbars, and each leg becomes a full-
@@ -2887,9 +2904,10 @@ function mechGraphic(c){
     return '<div class="mgs"><div class="mgstop"><span class="mgsk">'+label+'</span><span class="mgsv '+(cls||'')+'"'+(live?' data-live="'+live+'"':'')+'>'+val+'</span></div>'+
       (barW!=null?mechBar(barW,barCol,center,side,live):'')+'</div>';
   }
+  var edgeLabel=c.authoritative?(c.edgeBasis==='MARKET_AFTER_COSTS'?'EV · after costs':'Model EV · pre-cost'):'Edge · fees';
   var stats='<div class="mechstats">'+
     mgStat('Assignment',hasAssign?as+'%':'—',(hasAssign?(as>=50?'warn':as<=15?'pos':''):''),hasAssign?as:0,(hasAssign&&as>=50?'var(--caution)':'var(--accent-2)'),false,1,'assign')+
-    mgStat('Edge · fees',hasEdge?signed(edge):'—',(hasEdge?(edge>=0?'pos':'neg'):''),hasEdge?Math.min(100,Math.abs(edge)/500*100):0,(hasEdge&&edge>=0?'var(--profit)':'var(--loss)'),false,1)+
+    mgStat(edgeLabel,hasEdge?signed(edge):'—',(hasEdge?(edge>=0?'pos':'neg'):''),hasEdge?Math.min(100,Math.abs(edge)/500*100):0,(hasEdge&&edge>=0?'var(--profit)':'var(--loss)'),false,1)+
     (c.yieldPct!=null?mgStat('Yield / yr',(c.yieldPct?c.yieldPct+'%':'—'),'',Math.min(100,c.yieldPct||0),'var(--accent)',false,1):'')+
     (c.mark?mgStat('Mark',c.mark,(/rich/.test(c.mark)?'pos':/cheap/.test(c.mark)?'neg':''),null):'')+
   '</div>';
@@ -3308,17 +3326,30 @@ function requestAuthoritativeScenario(s,autoplay){
   decide.animation=null; decide._mc=null; decide.mcRunning=true; renderDecide();renderAtPrice(s);
   AUTH_SCEN_TIMER=window.setTimeout(function(){
     if(!decide||activeCand()!==p||!(p.id in pinnedScen))return;
+    if(window.DeskBackend.state().mutationPending){
+      p.authoritativeAnimation=null;decide.animation=null;
+      if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
+      decide.mcRunning=false;renderDecide();return;
+    }
     window.DeskBackend.scenarioAnimation({movePct:magOf(p),ivShiftPoints:ivOf(p),days:daysOf(p),waypoints:authoredScenarioWaypoints(p)})
       .then(function(response){
         if(!response||!decide||activeCand()!==p)return;
         p.authoritativeAnimation=response; decide.animation=response; decide.mcRunning=false;
         if(autoplay){scenSt(p.id).t=0;playScen(s);} else {s.redraw(true);renderAtPrice(s);}
-      }).catch(function(){ /* the bridge renders the typed error and leaves prior truth untouched */ });
+      }).catch(function(){
+        if(!decide)return;
+        p.authoritativeAnimation=null;decide.animation=null;
+        if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
+        decide.mcRunning=false;if(activeCand()===p)renderDecide();
+      });
   },140);
   return true;
 }
 function pinScen(s, si){
   var p=s.obj(), cur=(p.id in pinnedScen)?pinnedScen[p.id]:null;
+  if(p.authoritative&&deskBackendEnabled()&&window.DeskBackend.state().mutationPending){
+    toast('Wait for the current Plan change to finish.');return;
+  }
   stopScen(s);
   if(si==null || String(cur)===String(si)){ delete pinnedScen[p.id]; delete pinMag[p.id]; delete pinIV[p.id]; delete pinDays[p.id]; delete pinTUnit[p.id]; p.authoritativeAnimation=null;
     if(p.authoritative&&decide&&decide.ensemble){decide.animation=null;decide._mc=authoritativeFanFromEnsemble(decide.ensemble);} s.refresh(); renderAtPrice(s); }
@@ -4127,14 +4158,27 @@ function applyAuthoritativePreview(envelope){
   decide.order.executability=envelope.order&&envelope.order.executability;
   decide.order.executableNetCents=envelope.order&&envelope.order.executableNetCents;
 }
+function applyAuthoritativePlanContext(plan){
+  if(!decide||!plan||!plan.context)return;
+  decide.planContext=plan.context;
+  var mode=String(plan.context.riskMode||'').toLowerCase();
+  var preset=RISK_PRESETS.find(function(row){return row.k.toLowerCase()===mode;});
+  if(preset){decide.govs.risk=preset.risk;decide.govs.bp=preset.bp;}
+}
 function deskBackendChanged(payload){
   if(!decide||!deskBackendEnabled())return;
+  if(payload.phase==='committed'&&payload.detached){
+    toast('Practice order committed; the new idea remains open.');
+    return;
+  }
   var phase=payload.phase, bs=payload.state||{};
   decide.backendPhase=phase; decide.backendOperation=payload.operation||null; decide.backendError=null; decide.backendState=bs;
   if(phase==='market'&&payload.market){
     if(String(payload.market.quote.symbol).toUpperCase()!==String(decide.sym).toUpperCase())return;
     decide.spot=payload.market.spot; decide.u.spot=payload.market.spot; decide.provenance=payload.market.provenance;
     syncMarketModeFromBackend(payload.market);
+  } else if(phase==='plan'&&payload.plan){
+    applyAuthoritativePlanContext(payload.plan);
   } else if(phase==='strategy'){
     decide.cands=payload.candidates||[]; decide.deskPickId=payload.deskPickId||null;
     decide.candId=decide.deskPickId||(decide.cands.length?decide.cands[0].id:null);
@@ -5067,6 +5111,7 @@ function renderDecide(){
     '<div class="decdock'+(decide.order.review?' reviewdock':'')+'"><span></span>'+decExecute(c)+'</div>'+
   '</div>';
   if(keepScen){ var freshScen=decideEl.querySelector('.scenpanel'); if(freshScen)freshScen.parentNode.replaceChild(keepScen,freshScen); }
+  refreshDecScenHeader(c);
   drawPayoff(decideEl.querySelector('#decPay'), c, true, null, {interactive:!c.authoritative, pinM:scrubMag(c)});
   if(!_dragActive && document.getElementById('decMap')) drawDecMap();
   if(decide.mcOn) drawMCFan();
@@ -5076,6 +5121,15 @@ function renderDecide(){
 function renderAuthoritativePending(){
   var failed=!!decide.backendError,operation=String(decide.backendOperation||'market and strategy').replaceAll('-',' ');
   var message=failed?deskEsc(decide.backendError):'Loading '+deskEsc(operation)+' through the active Plan and market services…';
+  if(failed){
+    decideEl.innerHTML='<div class="decwrap">'+decTop(null)+'<div class="decgrid">'+
+      '<section class="authfailed" role="alert" aria-live="assertive"><span class="eyebrow">Authoritative data interrupted</span>'+
+      '<h2>This idea did not finish loading.</h2><p>'+message+'</p>'+
+      '<div class="authfailact"><button class="btn primary" data-dec="retry">Retry this idea</button>'+
+      '<span class="hint">Your declared symbol and intent are preserved; no prototype values were substituted.</span></div></section>'+
+    '</div></div>';
+    return;
+  }
   decideEl.innerHTML='<div class="decwrap">'+decTop(null)+'<div class="decgrid authpending">'+
     '<div class="authpane"><span class="eyebrow">Ranked ideas</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></div>'+
     '<div class="authpane hero"><span class="eyebrow">Authoritative decision surface</span><div class="authline chart"></div><div class="authmessage"><b>'+(failed?'Backend data unavailable':'No prototype values are shown while data loads')+'</b>'+message+'</div></div>'+
@@ -5091,7 +5145,8 @@ function decTop(c){
     objChip('Horizon',['1 day','7 days','30 days','45 days'],decide.horizon,'horizon')+'</div></div>':'';
   var backend='';
   if(deskBackendEnabled()&&decide.kind==='idea'){
-    var err=!!decide.backendError, label=err?decide.backendError:(decide.backendPhase==='ready'?'authoritative · ready':String(decide.backendOperation||decide.backendPhase||'loading').replaceAll('-',' '));
+    var err=!!decide.backendError,risk=decide.planContext&&decide.planContext.riskMode,
+      label=err?decide.backendError:(decide.backendPhase==='ready'?'authoritative'+(risk?' · '+risk:''):String(decide.backendOperation||decide.backendPhase||'loading').replaceAll('-',' '));
     backend='<span class="backendstate'+(err?' err':'')+'" title="'+deskEsc(label)+'"><i></i>'+deskEsc(label)+'</span>';
   }
   return '<div class="dectop">'+
@@ -5138,7 +5193,7 @@ function decLegWorkbench(c){
     var exact=c.legs.map(function(l){var side=l.q<0?'SELL':'BUY',type=l.t==='s'?'STOCK':l.t==='c'?'CALL':'PUT',qty=Math.abs(l.q),strike=l.t==='s'?'':('<span class="mv">'+l.k+'</span>');
       return '<div class="legr"><div class="legr-top"><span class="tgl '+(l.q<0?'sell':'buy')+'">'+side+'</span><span class="tgl '+(l.t==='c'?'callc':l.t==='p'?'putc':'stockc')+'">'+type+'</span>'+strike+'<span class="mv">'+qty+(l.t==='s'?' sh':' contracts')+'</span></div>'+
         '<span class="lgm">'+(l.expiration?'exp '+deskEsc(l.expiration):'backend-owned leg')+(l.entryPrice!=null?' · entry '+Number(l.entryPrice).toFixed(2):'')+'</span></div>';}).join('');
-    return '<div class="declegpanel"><div class="decleghead"><span class="eyebrow">Leg workbench</span><span class="hint">backend-owned exact package · edit through Plan Strategy</span><span class="declegstate">Engine</span><span class="badge">exp '+deskEsc(c.exp)+'</span></div><div class="declegs">'+exact+'</div><div class="declegfoot"><span class="hint">Edits are repriced by the active chain before this selection changes.</span><button class="btn" data-dec="editlegs">Edit legs</button></div></div>';
+    return '<div class="declegpanel"><div class="decleghead"><span class="eyebrow">Leg workbench</span><span class="hint">backend-owned exact package · edit through Plan Strategy</span><span class="declegstate">Engine</span><span class="badge">exp '+deskEsc(c.exp)+'</span></div><div class="declegs">'+exact+'</div><div class="declegfoot"><span class="hint">Edits reprice against the active chain.</span><button class="btn" data-dec="editlegs">Edit legs</button></div></div>';
   }
   if(c.authoritative&&build){
     var status=decide.draftPending?'Previewing exact package…':decide.draftValid?'Backend preview valid':decide.draftError||'Change a leg to request an exact preview';
@@ -5189,9 +5244,20 @@ function rightCol(c){
 }
 /* the Decide "how it reacts" panel body — bars + shared playback foot (drives the hero) */
 function decScenInner(c){
-  var eb=authoritativeBasis(),hint=c.authoritative?(decide&&decide.ensemble?((eb.basis==='PARAMETRIC'?'SIMULATED · PARAMETRIC':'SIMULATED · '+(eb.basis||'stored'))+' fan · server-valued checkpoints'):'authoritative outcomes loading'):'±'+c.em+'% · value at expiry';
-  return '<div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">'+hint+'</span></div>'+
+  return '<div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">'+deskEsc(decScenHint(c))+'</span></div>'+
     decScenSpectrum(c);
+}
+function decScenHint(c){
+  if(!c.authoritative)return '±'+c.em+'% · value at expiry';
+  var eb=authoritativeBasis(),kind=eb.basis==='PARAMETRIC'?'SIMULATED · PARAMETRIC':'SIMULATED · '+(eb.basis||'stored');
+  if(decide&&decide.animation)return kind+' · conditioned paths · server-valued steps';
+  if(decide&&decide.outcome)return kind+' fan · selected outcome stored';
+  if(decide&&decide.ensemble)return kind+' fan · server-valued checkpoints';
+  return 'authoritative outcomes loading';
+}
+function refreshDecScenHeader(c){
+  var hint=decideEl&&decideEl.querySelector('.scenpanel>.lenshd .hint');
+  if(hint&&c)hint.textContent=decScenHint(c);
 }
 function decScenSpectrum(c){
   var d=scenData(c), pin=(c.id in pinnedScen)?+pinnedScen[c.id]:null, pmax=0, maxAbs=1, ctl='';
@@ -5477,11 +5543,25 @@ function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</spa
 function estPrice(c){
   if(decide.order.price!=null)return decide.order.price;
   var order=decide.orderPreview&&decide.orderPreview.order;
-  return order&&order.executableNetCents!=null?Number(order.executableNetCents)/100:c.credit;
+  var valued=authoritativeOrderValue(order);
+  return valued==null?c.credit:valued;
+}
+function authoritativeOrderValue(order){
+  if(!order)return null;
+  var state=String(order.executability||'UNAVAILABLE').toUpperCase();
+  if(order.valuedNetCents!=null&&String(order.valuationBasis||'').toUpperCase()!=='UNAVAILABLE')return Number(order.valuedNetCents)/100;
+  /* Migration fallback for servers predating the explicit valuation receipt. */
+  if(state==='IMMEDIATE'&&order.executableNetCents!=null)return Number(order.executableNetCents)/100;
+  if(state==='RESTING'&&order.orderInstruction&&order.orderInstruction.limitNetCents!=null)return Number(order.orderInstruction.limitNetCents)/100;
+  return null;
 }
 function currentOrderRequest(){
   var o=decide.order, request={type:String(o.type||'market').toUpperCase(),qty:Math.max(1,Number(o.qty||1)),timeInForce:'DAY'};
-  if(request.type==='LIMIT')request.limitNetCents=Math.round(Number(estPrice(activeCand()))*100);
+  if(request.type==='LIMIT'){
+    var signedLimit=estPrice(activeCand());
+    if(signedLimit==null||!Number.isFinite(Number(signedLimit)))return null;
+    request.limitNetCents=Math.round(Number(signedLimit)*100);
+  }
   return request;
 }
 function authoritativePreviewEligibility(envelope){
@@ -5503,7 +5583,9 @@ function queueOrderPreview(){
   window.clearTimeout(ORDER_PREVIEW_TIMER); decide.order.previewPending=true; decide.order.review=false; renderDecide();
   ORDER_PREVIEW_TIMER=window.setTimeout(function(){
     if(!decide||activeCand()!==c)return;
-    window.DeskBackend.repreviewOrder(currentOrderRequest()).catch(function(){ /* typed error is rendered by the bridge */ });
+    var request=currentOrderRequest();
+    if(!request){decide.order.previewPending=false;decide.orderPreview=null;renderDecide();return;}
+    window.DeskBackend.repreviewOrder(request).catch(function(){ /* typed error is rendered by the bridge */ });
   },140);
 }
 function seg3(cur,opts,attr){ return '<div class="seg" role="group">'+opts.map(function(x){return '<button class="'+(cur===x[0]?'on':'')+'" '+attr+'="'+x[0]+'">'+x[1]+'</button>';}).join('')+'</div>'; }
@@ -5515,17 +5597,20 @@ function decExecute(c){
       '<div class="dockorder"><b>Exact package not selected yet</b><span>Use the backend preview above to replace the selected strategy before reviewing an instruction.</span></div>'+
       '<button class="btn pri place" disabled>Review →</button></div></div></div>';
   }
-  var o=decide.order, qf=o.qty, price=estPrice(c);
+  var o=decide.order, qf=o.qty, price=estPrice(c),hasSignedPrice=price!=null&&Number.isFinite(Number(price));
   var ap=c.authoritative&&decide.orderPreview, preview=ap&&ap.preview, order=ap&&ap.order;
-  var oi=order&&order.orderInstruction, instructionMatches=!c.authoritative||!!(oi&&String(oi.type||'').toLowerCase()===o.type&&(o.type!=='limit'||Number(oi.limitNetCents)===Math.round(Number(price)*100)));
+  var oi=order&&order.orderInstruction, instructionMatches=!c.authoritative||!!(oi&&String(oi.type||'').toLowerCase()===o.type&&(o.type!=='limit'||hasSignedPrice&&Number(oi.limitNetCents)===Math.round(Number(price)*100)));
   var usablePreview=!c.authoritative||!!(preview&&order&&!o.previewPending&&instructionMatches),mid=usablePreview&&order&&order.executableNetCents!=null?Number(order.executableNetCents)/100:(c.authoritative?null:c.credit);
   var previewEligibility=c.authoritative&&usablePreview?authoritativePreviewEligibility(ap):{eligible:!c.authoritative,immediate:!c.authoritative,reasons:[]};
-  var eNet=usablePreview&&preview?Number(preview.entryNetPremiumCents)/100:(c.authoritative?null:c.credit*qf), side=eNet==null?null:eNet>=0?'credit':'debit';
-  var marketable=c.authoritative?!!(usablePreview&&previewEligibility.eligible&&order.presentlyExecutable):(o.type==='market'||price<=mid), status=c.authoritative?(usablePreview?(previewEligibility.eligible?order.executability:'BLOCKED'):'PENDING'):(marketable?'IMMEDIATE':'RESTING');
-  var eBP=usablePreview&&preview&&preview.reserveCents!=null?Number(preview.reserveCents)/100:(c.authoritative?null:c.cap*qf);
+  var executionState=c.authoritative?(usablePreview?String(order.executability||'UNAVAILABLE').toUpperCase():'PENDING'):(o.type==='market'||price<=mid?'IMMEDIATE':'RESTING');
+  var eNet=c.authoritative?(usablePreview?authoritativeOrderValue(order):null):c.credit*qf, side=eNet==null?null:eNet>=0?'credit':'debit';
+  var candidateNet=c.credit==null?null:Number(c.credit),candidateSide=candidateNet==null?null:candidateNet>=0?'credit':'debit';
+  var marketable=c.authoritative?executionState==='IMMEDIATE':executionState==='IMMEDIATE',status=executionState;
+  var hasExecutionValuation=eNet!=null&&status!=='UNAVAILABLE'&&status!=='PENDING';
+  var eBP=hasExecutionValuation&&preview&&preview.reserveCents!=null?Number(preview.reserveCents)/100:(c.authoritative?c.cap:c.cap*qf);
   var priceControl=o.type==='limit'
-    ? '<div class="efield"><span class="elbl">Signed package limit · + credit / − debit</span><span class="mstp wide"><span class="ml">$</span><button data-step="price" data-d="-1">−</button><span class="mv">'+signed(price)+'</span><button data-step="price" data-d="1">+</button></span></div>'
-    : '<div class="efield"><span class="elbl">Natural executable package</span><span class="ostatic">'+(mid==null?'previewing…':signed(mid)+' · '+side)+'</span></div>';
+    ? '<div class="efield"><span class="elbl">Signed package limit · + credit / − debit</span><span class="mstp wide"><span class="ml">$</span><button data-step="price" data-d="-1">−</button><span class="mv">'+(hasSignedPrice?signed(price):'set price')+'</span><button data-step="price" data-d="1">+</button></span></div>'
+    : '<div class="efield"><span class="elbl">Natural executable package</span><span class="ostatic">'+(mid==null?(status==='UNAVAILABLE'?'unavailable':'previewing…'):signed(mid)+' · '+(mid>=0?'credit':'debit'))+'</span></div>';
   var quantityControl=c.authoritative?'<div class="efield"><span class="elbl">Backend-selected quantity</span><span class="ostatic">'+qf+' package'+(qf===1?'':'s')+' · ensemble-matched</span></div>':'<div class="efield"><span class="elbl">Quantity · sets</span><span class="mstp wide"><span class="ml">sets</span><button data-step="qty" data-d="-1">−</button><span class="mv">'+qf+'</span><button data-step="qty" data-d="1">+</button></span></div>';
   var controls='<div class="execgrid">'+
     '<div class="efield"><span class="elbl">Execution instruction</span>'+seg3(o.type,[['market','Market'],['limit','Limit']],'data-otype')+'</div>'+
@@ -5534,9 +5619,11 @@ function decExecute(c){
   '</div>';
   var half=c.authoritative?null:Math.max(1,Math.abs(mid)*0.07), bid=c.authoritative?null:mid-half, ask=c.authoritative?null:mid+half;
   var pct=c.authoritative?null:Math.max(5,Math.min(95,(price-bid)/(ask-bid)*100));
-  var cashText=eNet==null?'Backend execution preview loading':(side==='credit'?'collect ':'pay ')+'<b class="'+(side==='credit'?'pos':'neg')+'">'+signed(eNet)+'</b>'+(eBP!=null?' · reserves <b>'+money(eBP)+'</b>':'');
-  var backendFill='<div class="fillbar" title="Backend execution state"><span class="fbstate '+(marketable?'now':'rest')+'">'+(status==='IMMEDIATE'?'executable now':status==='RESTING'?'rests at the signed limit':status==='PENDING'?'previewing instruction':status==='BLOCKED'?'blocked by backend guardrails':'book unavailable')+'</span>'+
-    (usablePreview&&order&&order.proposedNetCents!=null?'<span class="fbend">backend proposed '+signed(Number(order.proposedNetCents)/100)+'</span>':'')+'</div>';
+  var cashText=hasExecutionValuation?(status==='RESTING'?'requested ':'')+(side==='credit'?'collect ':'pay ')+'<b class="'+(side==='credit'?'pos':'neg')+'">'+signed(eNet)+'</b>'+(eBP!=null?' · reserves <b>'+money(eBP)+'</b>':''):
+    (candidateNet==null?'Execution valuation unavailable':'Analyzed candidate <b class="'+(candidateSide==='credit'?'pos':'neg')+'">'+signed(candidateNet)+' '+candidateSide+'</b> · executable package unavailable');
+  var fillDetail=status==='IMMEDIATE'&&eNet!=null?'natural '+signed(eNet):status==='RESTING'&&eNet!=null?'limit '+signed(eNet)+(mid!=null?' · natural '+signed(mid):''):status==='UNAVAILABLE'?'no executable package':'';
+  var backendFill='<div class="fillbar" title="Backend execution state"><span class="fbstate '+(marketable?'now':'rest')+'">'+(status==='IMMEDIATE'?'executable now':status==='RESTING'?'rests at the signed limit':status==='PENDING'?'previewing instruction':'book unavailable')+'</span>'+
+    (fillDetail?'<span class="fbend">'+fillDetail+'</span>':'')+'</div>';
   var fixtureFill=c.authoritative?'':'<div class="fillbar" title="where your '+typeLabel(o.type)+' price sits in the bid⟷ask spread"><span class="fbend">fills now</span><span class="fbtrack"><i class="fbmid"></i><i class="fbmark '+(marketable?'now':'rest')+'" style="left:'+pct.toFixed(0)+'%"></i></span><span class="fbend r">best price</span><span class="fbstate '+(marketable?'now':'rest')+'">'+(status==='IMMEDIATE'?'executable now':status==='RESTING'?'rests at the signed limit':'book unavailable')+'</span></div>';
   var eligibilityNote=c.authoritative&&usablePreview&&!previewEligibility.eligible?'<div class="placenote">'+deskEsc(previewEligibility.reasons.join(' '))+'</div>':'';
   var summary='<div class="execact"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b>'+
@@ -5545,7 +5632,7 @@ function decExecute(c){
   if(!decide.orderOpen){
     var dockfill=c.authoritative?backendFill:'<div class="fillbar" title="where your '+typeLabel(o.type)+' price sits in the bid⟷ask spread"><span class="fbend">fill</span><span class="fbtrack"><i class="fbmid"></i><i class="fbmark '+(marketable?'now':'rest')+'" style="left:'+pct.toFixed(0)+'%"></i></span><span class="fbend r">price</span></div>';
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox"><div class="dockrow">'+
-      '<div class="dockorder"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b><span>'+(o.lane==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(eNet==null?' · previewing':' · '+signed(eNet)+' '+side)+'</span></div>'+dockfill+
+      '<div class="dockorder"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b><span>'+(o.lane==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(hasExecutionValuation?' · '+signed(eNet)+' '+side:(candidateNet==null?' · execution unavailable':' · candidate '+signed(candidateNet)+' '+candidateSide+' · execution unavailable'))+'</span></div>'+dockfill+
       '<button class="ticketedit" data-dec="ticket" aria-label="Edit order controls" title="Edit order">'+deskGlyph('tune')+'</button>'+
       '<button class="btn pri place" data-dec="review" '+(c.authoritative&&(!usablePreview||!previewEligibility.eligible)?'disabled':'')+'>Review →</button></div>'+eligibilityNote+'</div></div>';
   }
@@ -5584,7 +5671,13 @@ function drawDecMap(){
   var W=Math.max(320,Math.round(svg.clientWidth||600)), H=Math.max(150,Math.round(svg.clientHeight||200));
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
   var cs=decide.cands, authoritative=cs.some(function(c){return c.authoritative;}),buildC=decide.mode==='build'&&(!authoritative||decide.draftValid)?activeCand():null, mapSet=buildC?cs.concat([buildC]):cs, padL=44,padB=26,padT=12,padR=14;
-  var drawable=mapSet.filter(function(c){return Number.isFinite(Number(c.pop))&&Number.isFinite(Number(authoritative?c.edge:c.credit));});
+  var drawable=mapSet.filter(function(c){var y=authoritative?c.edge:c.credit;
+    return c.pop!=null&&c.pop!==''&&y!=null&&y!==''&&Number.isFinite(Number(c.pop))&&Number.isFinite(Number(y));});
+  var comparisonBasis='MODEL_PRE_COST';
+  if(authoritative){
+    var afterCost=drawable.filter(function(c){return c.edgeBasis==='MARKET_AFTER_COSTS';});
+    if(afterCost.length){drawable=afterCost;comparisonBasis='MARKET_AFTER_COSTS';}
+  }
   if(!drawable.length){svg.innerHTML='<text x="50%" y="50%" fill="var(--dim)" font-size="11" text-anchor="middle">Backend comparison metrics unavailable</text>';return;}
   var pops=drawable.map(function(c){return Number(c.pop);}), cr=drawable.map(function(c){return authoritative?Number(c.edge):Math.max(300,Number(c.credit));});
   var popLo=Math.max(40,Math.floor((Math.min.apply(0,pops)-4)/5)*5), popHi=Math.min(90,Math.ceil((Math.max.apply(0,pops)+4)/5)*5);
@@ -5600,9 +5693,9 @@ function drawDecMap(){
   pfTicks(popLo,popHi,4).forEach(function(p){var xx=X(p);if(xx<padL-1||xx>W-padR+1)return;g+='<line x1="'+xx.toFixed(1)+'" y1="'+padT+'" x2="'+xx.toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line-soft)"/>';g+='<text x="'+xx.toFixed(1)+'" y="'+(H-padB+12)+'" fill="var(--faint)" font-size="12" text-anchor="middle" font-family="ui-monospace">'+Math.round(p)+'</text>';});
   pfTicks(cLo,cHi,3).forEach(function(v){var yy=Y(v);if(yy<padT-1||yy>H-padB+1)return;g+='<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)"/>';g+='<text x="'+(padL-5)+'" y="'+(yy+3).toFixed(1)+'" fill="var(--faint)" font-size="12" text-anchor="end" font-family="ui-monospace">'+(v>=1000?'$'+(v/1000).toFixed(v%1000?1:0)+'k':'$'+Math.round(v))+'</text>';});
   g+='<text x="'+((W+padL)/2)+'" y="'+(H-3)+'" fill="var(--dim)" font-size="12.5" text-anchor="middle">chance of profit →</text>';
-  g+='<text transform="translate(11,'+(H/2)+') rotate(-90)" fill="var(--dim)" font-size="12.5" text-anchor="middle">'+(authoritative?'after-cost EV ↑':'premium collected ↑')+'</text>';
+  g+='<text transform="translate(11,'+(H/2)+') rotate(-90)" fill="var(--dim)" font-size="12.5" text-anchor="middle">'+(authoritative?(comparisonBasis==='MARKET_AFTER_COSTS'?'after-cost EV ↑':'model EV · pre-cost ↑'):'premium collected ↑')+'</text>';
   DEC_MPOS=[];
-  cs.forEach(function(c){if(!Number.isFinite(Number(c.pop))||!Number.isFinite(Number(authoritative?c.edge:c.credit)))return;var x=X(c.pop),y=Y(authoritative?c.edge:Math.max(300,c.credit)),r=5+Math.min(9,Math.sqrt(Math.max(c.cap,c.maxLoss))/70);
+  cs.forEach(function(c){if(drawable.indexOf(c)<0)return;var x=X(c.pop),y=Y(authoritative?c.edge:Math.max(300,c.credit)),r=5+Math.min(9,Math.sqrt(Math.max(c.cap,c.maxLoss))/70);
     DEC_MPOS.push({id:c.id,x:x,y:y,r:r});
     var col=riskCharCol(c),sel=String(c.id)===String(decide.candId)&&decide.mode==='engine',hot=String(c.id)===String(DEC_HOT),gated=candGated(c);
     var rr=hot?r+2.5:r, op=gated?.16:(DEC_HOT>=0||DEC_HOT!==-1?(hot?1:.5):.85);
@@ -5659,7 +5752,7 @@ function showMapCard(id){
 /* ---- interactions (delegated once on the stable overlay) ---- */
 function decStep(kind,d){
   if(kind==='qty') decide.order.qty=Math.max(1,Math.min(20,decide.order.qty+d));
-  else if(kind==='price'&&decide.order.type==='limit'){ var base=estPrice(activeCand()); decide.order.price=Math.round((base+d*.25)*100)/100; }
+  else if(kind==='price'&&decide.order.type==='limit'){ var base=estPrice(activeCand()); if(base==null||!Number.isFinite(Number(base)))base=0;decide.order.price=Math.round((Number(base)+d*.25)*100)/100; }
   decide.order.acknowledged={};
   if(authoritativeCandidate())queueOrderPreview(); else renderDecide();
 }
@@ -5774,6 +5867,7 @@ function legAction(act,i,d){
   renderAfterDecisionChange();
 }
 function decAction(a,el){
+  if(a==='retry'){ loadAuthoritativeIdea(); return; }
   if(a==='back'){ exitDecide(); return; }
   if(a==='intent'){ decide.intentOpen=!decide.intentOpen; if(!decide.intentOpen)decide.pickOpen=false; renderDecide(); return; }
   if(a==='lefttool'){ var tool=el&&el.getAttribute('data-tool'); decide.leftTool=decide.leftTool===tool?null:tool; renderDecide(); return; }
@@ -5823,8 +5917,10 @@ function decAction(a,el){
       var commitEligibility=authoritativePreviewEligibility(decide.orderPreview);
       if(!commitEligibility.eligible){decide.backendError=commitEligibility.reasons.join(' ')||'Backend guardrails block this exact order.';renderDecide();return;}
       if(!commitEligibility.immediate){decide.backendError='This instruction is not presently executable; no order was sent.';renderDecide();return;}
+      var commitRequest=currentOrderRequest();
+      if(!commitRequest){decide.backendError='Enter a finite signed package limit before reviewing this instruction.';renderDecide();return;}
       decide.order.committing=true; renderDecide();
-      window.DeskBackend.commitOrder(currentOrderRequest(),acknowledged).catch(function(){ /* typed error is rendered by the bridge */ });
+      window.DeskBackend.commitOrder(commitRequest,acknowledged).catch(function(){ /* typed error is rendered by the bridge */ });
       return;
     }
     decide.order.placed=true;
@@ -5833,15 +5929,20 @@ function decAction(a,el){
   }
 }
 function loadCand(id){
-  stopDecScen(); decide.mode='engine'; decide.candId=id; DEC_HOT=id;
-  var c=activeCand();
-  if(c&&c.authoritative&&deskBackendEnabled()){
+  var requested=decide.cands.find(function(row){return String(row.id)===String(id);});
+  if(requested&&requested.authoritative&&deskBackendEnabled()){
+    /* Selection is a versioned backend mutation. Keep the currently acknowledged package on
+       screen until the receipt arrives; an optimistic id swap can otherwise strand the UI on B
+       while the ensemble, outcome, and preview still belong to A. */
+    if(window.DeskBackend.state().mutationPending){toast('Wait for the current Plan change to finish.');return;}
+    stopDecScen(); decide.mode='engine'; DEC_HOT=id;
     decide.backendPhase='loading'; decide.mcRunning=true; decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
     renderDecide();
     window.DeskBackend.chooseCandidate(id).catch(function(){ /* typed error is rendered by the bridge */ });
     return;
   }
+  stopDecScen(); decide.mode='engine'; decide.candId=id; DEC_HOT=id;
   renderAfterDecisionChange();
 }
 function wireDecide(){

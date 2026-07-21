@@ -292,10 +292,12 @@ public final class ApiResponses {
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit,
                                        io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
+    public enum OrderValuationBasis { EXECUTABLE_BOOK, RESTING_LIMIT, UNAVAILABLE }
     public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents,
                                OrderInstruction orderInstruction,
                                OrderInstruction.Executability executability,
-                               boolean presentlyExecutable, Long executableNetCents) {}
+                               boolean presentlyExecutable, Long executableNetCents,
+                               Long valuedNetCents, OrderValuationBasis valuationBasis) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
                                              Guardrails guardrails,

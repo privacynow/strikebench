@@ -61,6 +61,24 @@ and per-leg valuation checkpoints; the focus path had non-linear interior moveme
 context paths retained distinct terminals. No trade was submitted. Receipts are in
 `/private/var/folders/fj/6zb38k1n2l73djm42fkdm03c0000gn/T/strikebench-live-desk-flow-20260720-201910`.
 
+The packaged Desk was then verified end to end against the closed-session observed AMD context.
+The canonical Plan resumed with its persisted `conservative` risk posture; the Desk accepted that
+mutable context instead of treating a header default as Plan identity. Quote and evidence now come
+from the direct Research owner used by Strategy and Outcomes, avoiding a mixed ambient-engine
+snapshot. The screen rendered three backend candidates, a selected 77% model POP, an exact
+server-owned payoff curve, the stored 500-path parametric ensemble, a 96% profitable-path outcome,
+and the backend's signed +$670 Practice order valuation. A selected -20% scenario displayed several
+conditioned original paths with noisy interior checkpoints and one emphasized focus path. No trade
+was submitted.
+
+After the final convergence package and restart, the same observed AMD Plan rendered four backend
+candidates and a selected 86% model POP. The stored 500-path result and server payoff remained
+visible, while the now-`STALE` observed option receipt correctly changed execution to
+`UNAVAILABLE`: the dock retained the analyzed +$670 candidate credit, showed no executable package,
+disabled Review, and did not promote the backend's legacy zero sentinel into a `+$0` order. The
+-20% scenario again displayed a bounded set of original noisy paths with one focus trajectory and
+server-valued progression. No trade was submitted.
+
 This proves the quote/expiration/chain seam while the market is open. It does not prove order
 placement, fill state, historical coverage, or that every contract is executable. Those retain
 their existing gates.
@@ -143,6 +161,15 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
   `IMMEDIATE`, `RESTING`, or `UNAVAILABLE`, retain the natural executable signed net, derive
   CREDIT/DEBIT economics, and prevent a resting limit from creating a position. A marketable limit
   receives the better natural executable fill.
+- Candidate evaluation now carries a versioned `risk.terminalPayoff` receipt produced by the
+  existing `PayoffCurve` kernel. It retains model/schema version, anchor spot, expiration, captured
+  package-net basis, fee treatment, and a bounded exact polyline, and survives the existing
+  evaluation JSON snapshot without another schema or pricing owner. Mixed-expiration structures
+  explicitly withhold a false single-terminal curve and use supplied-path valuation checkpoints.
+- Order summaries add nullable `valuedNetCents` plus `EXECUTABLE_BOOK`, `RESTING_LIMIT`, or
+  `UNAVAILABLE` valuation basis while retaining the legacy proposal field during convergence. The
+  Desk keeps selected-candidate economics visible when the execution book is unavailable, but never
+  promotes the trade preview's primitive zero sentinel into a `+$0` debit/credit claim.
 - The Desk's HTTP runtime sequences quote, expiration, chain, Plan, recommendation, selection,
   ensemble, outcome, conditioned animation, and decision-preview owners. Its `file://` dataset is
   retained only as a visual regression fixture. Production animation interpolates returned
@@ -150,6 +177,10 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
 - Candidate/leg/risk composition now reads Ideas → exact Legs → supporting map. Four-plus-leg
   packages use a panel-local rail on desktop and full-width stacked legs on narrow layouts; position
   risk marks expose identity through focus/hover instead of printing ticker text over every dot.
+- At 1280–1700 desktop widths the stacked candidate/leg/map rail now gives exact contracts slightly
+  more width and the risk map more useful height; intermediate and mobile widths retain their
+  structural breakpoints. Scenario receipt text updates in place when Outcomes arrive, preserving
+  the same scenario DOM node without leaving a stale “loading” label.
 - Backend rank remains visible and unmodified. Desk Pick is a separate candidate identity and is
   shown only for a mechanically usable `COHERENT` backend assessment; if no such candidate exists,
   the Desk does not invent an endorsement. Screened alternatives keep readable names and verdicts
@@ -181,11 +212,26 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
   `preview.ok`, backend guardrails, account fit, required acknowledgments, and present executability.
   MARKET/LIMIT preview facts stay inside the execution surface and no longer overwrite the
   candidate/outcome payoff.
+- The view now waits for the accepted selection receipt before changing the visible package, and
+  rapid candidate clicks cannot split UI selection from outcome or preview identity. Screens &
+  Caps changes queue behind an in-flight Plan mutation and then rerun the canonical competition;
+  an explicit cap remains a recommendation filter within the persisted qualitative risk posture.
+  A missing signed package value cannot become a zero-cent limit. When an authoritative load does
+  fail, the Desk renders one contained retry state at desktop and mobile widths instead of leaving
+  three indefinite loading skeletons on screen.
+- Initial idea hydration is one serialized unit through selection, ensemble, selected-package
+  outcome, stored decision, and execution preview. Candidate changes cannot enter while that unit
+  is incomplete. Backing out invalidates the canceled read chain and an immediate New Idea re-entry
+  queues behind the releasing mutation, so neither overlapping Plan writes nor a stranded loading
+  surface can result. A financially completed trade remains committed after navigation, but its
+  detached receipt cannot close the replacement idea; a canceled exact-package application stops
+  before publishing selection, outcome, or preview state into that replacement journey.
 - The current HTTP Book/Position surface is still a labeled visual fixture and does not yet call the
   Desk bridge. A persistent compact position context strip prevents quote/event/news orientation
-  from disappearing during Mechanics/Book pane changes or leg adjustment, but authoritative Book
-  wiring must use the existing portfolio, Plan, trade, research, history, news, and book-risk routes
-  rather than promoting those staged values.
+  from disappearing during Mechanics/Book pane changes or leg adjustment; its mobile detail rail
+  now stacks above a full-width research/market pane instead of crushing that pane into a sidecar.
+  Authoritative Book wiring must use the existing portfolio, Plan, trade, research, history, news,
+  and book-risk routes rather than promoting those staged values.
 
 ## Non-negotiable verification
 

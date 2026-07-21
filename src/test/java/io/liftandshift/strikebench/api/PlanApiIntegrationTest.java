@@ -359,6 +359,11 @@ class PlanApiIntegrationTest {
         assertThat(candidate.at("/evaluation/score/components").isArray()).isTrue();
         assertThat(candidate.at("/evaluation/evidence/perDimension").isObject()).isTrue();
         assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
+        JsonNode terminalPayoff = candidate.at("/evaluation/risk/terminalPayoff");
+        assertThat(terminalPayoff.at("/available").asBoolean()).isTrue();
+        assertThat(terminalPayoff.at("/schemaVersion").asText()).isEqualTo("risk-terminal-payoff-1");
+        assertThat(terminalPayoff.at("/entryBasis").asText()).isEqualTo("CAPTURED_CANDIDATE_NET");
+        assertThat(terminalPayoff.at("/points")).isNotEmpty();
 
         JsonNode latest = json(get("/api/plans/" + id + "/strategy/latest")).get("strategy");
         assertThat(latest.at("/inputHash").asText()).isEqualTo(run.at("/strategy/inputHash").asText());
@@ -378,6 +383,8 @@ class PlanApiIntegrationTest {
         }
         assertThat(latest.at("/result/candidates/0/evaluation/assessment/economics/verdict").asText())
                 .isEqualTo(candidate.at("/evaluation/assessment/economics/verdict").asText());
+        assertJsonEquivalent(latest.at("/result/candidates/0/evaluation/risk/terminalPayoff"),
+                terminalPayoff);
         assertThat(candidate.at("/evaluation/assessment/portfolioImpacts/practice/lane").asText())
                 .isEqualTo("PRACTICE");
         assertJsonEquivalent(latest.at("/result/candidates/0/evaluation"), candidate.at("/evaluation"));

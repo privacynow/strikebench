@@ -63,7 +63,7 @@ after(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
 });
 
-function plan(version) {
+function plan(version, overrides = {}) {
   return {
     id: PLAN_ID,
     version,
@@ -72,12 +72,12 @@ function plan(version) {
     symbol: 'AMD',
     intent: 'INCOME',
     marketKind: 'OBSERVED',
-    worldId: 'observed',
+    worldId: overrides.worldId === undefined ? null : overrides.worldId,
     accountId: ACCOUNT_ID,
     context: {
       thesis: 'neutral',
       horizonDays: 1,
-      riskMode: 'balanced',
+      riskMode: overrides.riskMode || 'balanced',
       rev: 7
     }
   };
@@ -106,9 +106,7 @@ function candidate() {
     entryNetPremiumCents: -12345,
     maxLossCents: 12345,
     maxProfitCents: 87655,
-    pop: 0.63,
     assignmentProb: 0.08,
-    expectedValueCents: 1450,
     breakevens: [101.23],
     freshness: 'FRESH',
     sourceKind: 'BACKEND_TEST_RECEIPT',
@@ -125,6 +123,7 @@ function candidate() {
       }
     ],
     evaluation: {
+      available: true,
       assessment: {
         mechanics: { eligible: true },
         coherence: {
@@ -135,6 +134,23 @@ function candidate() {
       },
       capital: { incrementalCents: 12345 },
       risk: {
+        pop: 0.63,
+        expectedValueCents: 1450,
+        terminalPayoff: {
+          schemaVersion: 'risk-terminal-payoff-1',
+          modelVersion: 'payoff-curve-1',
+          available: true,
+          anchorSpotCents: 10000,
+          expiration: '2026-08-21',
+          basis: 'EXPIRATION_INTRINSIC',
+          entryBasis: 'CAPTURED_CANDIDATE_NET',
+          feesIncluded: false,
+          points: [
+            { price: 90, profitCents: -99900 },
+            { price: 100, profitCents: 77700 },
+            { price: 110, profitCents: 22200 }
+          ]
+        },
         scenarios: [
           { underlyingMovePct: -0.20, pnlCents: -12345 },
           { underlyingMovePct: 0, pnlCents: 77700 },
@@ -170,9 +186,7 @@ function customCandidate(position) {
     entryNetPremiumCents: preview.entryNetPremiumCents,
     maxLossCents: preview.maxLossCents,
     maxProfitCents: preview.maxProfitCents,
-    pop: preview.popEntry,
     assignmentProb: 0.04,
-    expectedValueCents: 2121,
     breakevens: preview.breakevens,
     freshness: 'FRESH',
     sourceKind: 'BUILDER',
@@ -182,12 +196,28 @@ function customCandidate(position) {
       entryPrice: index === 0 ? 6.2 : 3.1
     })),
     evaluation: {
+      available: true,
       assessment: {
         mechanics: { eligible: true },
         economics: { marketEvAfterCostsCents: 2121 }
       },
       capital: { incrementalCents: 31000 },
-      risk: { scenarios: [] }
+      risk: {
+        pop: preview.popEntry,
+        expectedValueCents: 2121,
+        terminalPayoff: {
+          schemaVersion: 'risk-terminal-payoff-1',
+          modelVersion: 'payoff-curve-1',
+          available: true,
+          anchorSpotCents: 10000,
+          expiration: '2026-08-21',
+          basis: 'EXPIRATION_INTRINSIC',
+          entryBasis: 'CAPTURED_CANDIDATE_NET',
+          feesIncluded: false,
+          points: preview.payoff
+        },
+        scenarios: []
+      }
     }
   };
 }
@@ -305,7 +335,7 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
       maxLossCents: selected.maxLossCents,
       maxProfitCents: selected.maxProfitCents,
       reserveCents: selected.maxLossCents,
-      popEntry: selected.pop,
+      popEntry: selected.evaluation?.risk?.pop ?? selected.pop,
       breakevens: selected.breakevens,
       freshness: 'FRESH',
       evidence: { source: 'BACKEND_TEST_RECEIPT', lane: 'OBSERVED' },
@@ -326,7 +356,9 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
       orderInstruction: instruction,
       executability: executable ? 'IMMEDIATE' : 'RESTING',
       presentlyExecutable: executable,
-      executableNetCents: proposedNetCents
+      executableNetCents: proposedNetCents,
+      valuedNetCents: executable ? proposedNetCents : limit,
+      valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT'
     }
   };
 }
@@ -417,6 +449,15 @@ async function installBackend(page, options = {}) {
   let ensembleGeneration = 0;
   let storedEnsemble = null;
   let storedOutcomes = [];
+  let researchFailuresRemaining = options.failResearchOnce ? 1 : 0;
+  const planOverrides = {
+    worldId: options.observedWorldId === undefined ? null : options.observedWorldId,
+    riskMode: options.planRiskMode || 'balanced'
+  };
+
+  function currentPlan(version = planVersion) {
+    return plan(version, planOverrides);
+  }
 
   function strategyState() {
     return {
@@ -465,7 +506,31 @@ async function installBackend(page, options = {}) {
       response = {
         marketLane: 'OBSERVED',
         world: 'observed',
-        quotes: [quote]
+        quotes: [Object.assign({}, quote, { refreshing: false })]
+      };
+    } else if (method === 'GET' && url.pathname === '/api/research/AMD') {
+      if (researchFailuresRemaining > 0) {
+        researchFailuresRemaining -= 1;
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'market_unavailable', detail: 'The observed AMD research receipt is temporarily unavailable.' })
+        });
+        return;
+      }
+      response = {
+        symbol: 'AMD',
+        quote: Object.assign({}, quote, { asOfEpochMs: quote.asOf }),
+        displayPrice: (quote.bid + quote.ask) / 2,
+        marketLane: 'OBSERVED',
+        freshness: quote.freshness,
+        evidence: {
+          summary: quote.evidence,
+          inputs: { quote: quote.evidence }
+        },
+        expirations: ['2026-08-21'],
+        planEligible: true,
+        planEligibility: 'Ready for the active observed market.'
       };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD/expirations') {
       response = { asOfDate: '2026-07-20', expirations: ['2026-08-21'] };
@@ -489,9 +554,13 @@ async function installBackend(page, options = {}) {
         ]
       };
     } else if (method === 'GET' && url.pathname === '/api/plans') {
-      response = { world: 'observed', market: 'OBSERVED', plans: [plan(planVersion)] };
+      response = { world: 'observed', market: 'OBSERVED', plans: [currentPlan()] };
     } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}`) {
-      response = plan(planVersion);
+      response = currentPlan();
+    } else if (method === 'POST' && url.pathname === '/api/plans') {
+      // Production create is idempotent by canonical active-Plan identity. In particular, a
+      // different risk default resumes the existing Plan and preserves its persisted posture.
+      response = currentPlan();
     } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}/strategy/latest`) {
       response = hasCompetition ? {
         strategy: strategyState(),
@@ -504,7 +573,7 @@ async function installBackend(page, options = {}) {
       strategyRunNumber += 1;
       strategyRunId = `strategy_run_${strategyRunNumber}`;
       hasCompetition = true;
-      response = { plan: plan(planVersion), strategy: strategyState() };
+      response = { plan: currentPlan(), strategy: strategyState() };
     } else if (method === 'PUT' && url.pathname === `/api/plans/${PLAN_ID}/strategy/select`) {
       if (options.selectDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.selectDelayMs));
@@ -521,17 +590,20 @@ async function installBackend(page, options = {}) {
         storedOutcomes = [];
       }
       response = {
-        plan: plan(planVersion),
+        plan: currentPlan(),
         selection: { candidateId: selectedCandidate.id, planVersion }
       };
     } else if (method === 'POST' && url.pathname === '/api/trades/preview') {
       response = customTradePreview(body);
     } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/strategy/custom`) {
+      if (options.customDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.customDelayMs));
+      }
       planVersion += 1;
       selectedCandidate = customCandidate(body.position);
       storedOutcomes = [];
       response = {
-        plan: plan(planVersion),
+        plan: currentPlan(),
         strategy: {
           state: 'CURRENT',
           result: {
@@ -564,10 +636,13 @@ async function installBackend(page, options = {}) {
       response = JSON.parse(JSON.stringify(storedEnsemble));
       response.preview.marketImplied.atmIv = chainIv;
       response.preview.marketImplied.expiration = '2026-08-21';
-      response.plan = plan(planVersion);
+      response.plan = currentPlan();
     } else if (method === 'GET' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/latest`) {
-      response = { plan: plan(planVersion), outcomes: storedOutcomes };
+      response = { plan: currentPlan(), outcomes: storedOutcomes };
     } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/outcomes/ensemble`) {
+      if (options.ensembleDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.ensembleDelayMs));
+      }
       if (options.rollQuoteOnFirstEnsemble && ensembleGeneration === 0) {
         quote = Object.assign({}, quote, {
           bid: quote.bid + 2,
@@ -604,7 +679,7 @@ async function installBackend(page, options = {}) {
       };
       storedOutcomes.push(savedOutcome);
       response = {
-        plan: plan(planVersion),
+        plan: currentPlan(),
         ensemble: {
           id: body.ensembleId,
           fingerprint,
@@ -614,6 +689,28 @@ async function installBackend(page, options = {}) {
       };
     } else if (method === 'POST' && url.pathname === `/api/plans/${PLAN_ID}/decision/preview`) {
       response = decisionPreview(body, selectedCandidate, planVersion);
+      if (options.unavailableDecisionPreview) {
+        const reason = 'Cannot execute AMD from a stale observed option book.';
+        response.preview = Object.assign({}, response.preview, {
+          ok: false,
+          entryNetPremiumCents: 0,
+          maxLossCents: 0,
+          maxProfitCents: 0,
+          reserveCents: 0,
+          blockReasons: [reason],
+          legs: [],
+          payoff: []
+        });
+        response.order = Object.assign({}, response.order, {
+          proposedNetCents: 0,
+          executability: 'UNAVAILABLE',
+          presentlyExecutable: false,
+          executableNetCents: null,
+          valuedNetCents: null,
+          valuationBasis: 'UNAVAILABLE'
+        });
+        response.guardrails = { level: 'WARN', blockReasons: [], warnings: [reason] };
+      }
       if (options.blockDecisionPreview) {
         response.preview.ok = false;
         response.preview.blockReasons = ['The exact package exceeds the backend loss limit.'];
@@ -629,7 +726,7 @@ async function installBackend(page, options = {}) {
         await new Promise(resolve => setTimeout(resolve, options.commitDelayMs));
       }
       planVersion += 1;
-      response = { plan: plan(planVersion), decision: { state: 'COMMITTED' }, trade: { id: 'trade-desk-test' } };
+      response = { plan: currentPlan(), decision: { state: 'COMMITTED' }, trade: { id: 'trade-desk-test' } };
     } else {
       await route.fulfill({
         status: 404,
@@ -639,6 +736,9 @@ async function installBackend(page, options = {}) {
       return;
     }
 
+    if (response && response.plan && response.plan.id === PLAN_ID) {
+      response.plan = currentPlan(response.plan.version);
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response) });
   });
 
@@ -691,6 +791,53 @@ async function openAuthoritativeDesk(options = {}) {
   return { context, page, pageErrors, backend };
 }
 
+test('an interrupted authoritative load renders one actionable state and retries in place', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, { failResearchOnce: true });
+  try {
+    await page.goto(deskUrl);
+    await page.waitForSelector('#stage.lv-book #homeRiskMap');
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'error');
+
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      const failed = await page.evaluate(() => {
+        const panel = document.querySelector('.authfailed');
+        const rect = panel && panel.getBoundingClientRect();
+        return {
+          panelCount: document.querySelectorAll('.authfailed').length,
+          skeletonCount: document.querySelectorAll('.authpending,.authline').length,
+          retryCount: document.querySelectorAll('.authfailed [data-dec="retry"]').length,
+          text: panel && panel.textContent.replace(/\s+/g, ' ').trim(),
+          contained: !!rect && rect.left >= -1 && rect.right <= window.innerWidth + 1,
+          documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+        };
+      });
+      assert.equal(failed.panelCount, 1);
+      assert.equal(failed.skeletonCount, 0, 'a failed request is not presented as an endless loading skeleton');
+      assert.equal(failed.retryCount, 1);
+      assert.match(failed.text, /observed AMD research receipt is temporarily unavailable/i);
+      assert.match(failed.text, /no prototype values were substituted/i);
+      assert.equal(failed.contained, true, `${viewport.width}px error state stays inside the viewport`);
+      assert.equal(failed.documentOverflow, false, `${viewport.width}px error state has no horizontal page overflow`);
+    }
+
+    await page.locator('.authfailed [data-dec="retry"]').click();
+    await page.waitForFunction(id => window.decide
+      && window.decide.backendPhase === 'ready'
+      && window.decide.candId === id, CANDIDATE_ID, { timeout: 10000 });
+    assert.equal(backend.count('GET', '/api/research/AMD'), 2);
+    assert.equal(await page.locator('.authfailed').count(), 0);
+    assert.deepEqual(pageErrors, [], `authoritative retry emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('served Desk replaces fixture candidates and payoff with backend-owned receipts', async () => {
   const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
   try {
@@ -712,6 +859,7 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
         deskPickId: window.decide.deskPickId,
         pickBadgeCandidate: document.querySelector('.fanr .pickbadge')?.closest('.fanr')?.dataset.cand,
         fanSummary: document.querySelector('.dcleft .modebar .hint')?.textContent,
+        scenarioHint: document.querySelector('.scenpanel > .lenshd .hint')?.textContent,
         maxStoredPathSegments: Math.max(0, ...Array.from(document.querySelectorAll('#mcFan path[d]'))
           .map(path => (path.getAttribute('d').match(/L/g) || []).length))
       };
@@ -747,6 +895,8 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
     assert.equal(rendered.pickBadgeCandidate, CANDIDATE_ID,
       'Desk Pick is bound to the coherent backend assessment, not a row index');
     assert.match(rendered.fanSummary, /1 fit/);
+    assert.match(rendered.scenarioHint, /selected outcome stored/,
+      'preserving scenario DOM identity still refreshes its authoritative receipt state');
     assert.ok(rendered.maxStoredPathSegments > 2,
       'the visible stored trajectories retain a multi-checkpoint stochastic journey');
     assert.equal(backend.count('POST', '/api/plans'), 0,
@@ -764,7 +914,8 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
     for (const viewport of [
       { width: 1280, height: 800 },
       { width: 1920, height: 1080 },
-      { width: 2560, height: 1440 }
+      { width: 2560, height: 1440 },
+      { width: 390, height: 844 }
     ]) {
       await page.setViewportSize(viewport);
       const scenarioGeometry = await page.locator('#decideStage .scenpanel').evaluate(panel => {
@@ -788,8 +939,174 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
         assert.doesNotMatch(row.text, /condition/i,
           `${viewport.width}px does not leak the former condition label`);
       });
+      const containment = await page.evaluate(() => ({
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        offenders: ['.dcleft', '.declegpanel', '.pickmap', '.scenpanel', '.execute']
+          .flatMap(selector => Array.from(document.querySelectorAll(`#decideStage ${selector}`)))
+          .filter(element => {
+            const rect = element.getBoundingClientRect();
+            return rect.left < -1 || rect.right > window.innerWidth + 1;
+          }).map(element => element.className)
+      }));
+      assert.equal(containment.documentOverflow, false,
+        `${viewport.width}px authoritative Desk has no horizontal document overflow`);
+      assert.deepEqual(containment.offenders, [],
+        `${viewport.width}px authoritative decision panels remain horizontally contained`);
     }
     assert.deepEqual(pageErrors, [], `served Desk emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('unavailable execution preserves candidate economics without promoting zero sentinels', async () => {
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    unavailableDecisionPreview: true
+  });
+  try {
+    const rendered = await page.evaluate(candidateId => {
+      const active = window.decide.cands.find(row => row.id === candidateId);
+      const dock = document.querySelector('.execute');
+      return {
+        payoffPoints: active.payoffPoints,
+        payoffAtSpot: window.payFor(active, 100),
+        payoffPathCount: document.querySelectorAll('#decPay path[d]').length,
+        dockText: dock?.textContent.replace(/\s+/g, ' ').trim(),
+        reviewDisabled: dock?.querySelector('[data-dec="review"]')?.disabled,
+        orderState: window.decide.orderPreview.order.executability,
+        valuedNetCents: window.decide.orderPreview.order.valuedNetCents
+      };
+    }, CANDIDATE_ID);
+
+    assert.equal(rendered.payoffAtSpot, 777);
+    assert.equal(rendered.payoffPoints.length, 3,
+      'the preview-independent evaluation payoff remains active');
+    assert.ok(rendered.payoffPathCount > 0,
+      'an unavailable execution book cannot blank the candidate payoff chart');
+    assert.equal(rendered.orderState, 'UNAVAILABLE');
+    assert.equal(rendered.valuedNetCents, null);
+    assert.match(rendered.dockText, /candidate −\$123 debit · execution unavailable/i);
+    assert.match(rendered.dockText, /book unavailable/i);
+    assert.match(rendered.dockText, /Cannot execute AMD from a stale observed option book/i);
+    assert.doesNotMatch(rendered.dockText, /backend proposed \+\$0|collect \+\$0|pay \+\$0/i);
+    assert.equal(rendered.reviewDisabled, true);
+    assert.deepEqual(pageErrors, [], `unavailable execution emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a missing analyzed package price cannot become a zero-cent limit', async () => {
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    unavailableDecisionPreview: true
+  });
+  try {
+    const state = await page.evaluate(candidateId => {
+      const active = window.decide.cands.find(row => row.id === candidateId);
+      active.credit = null;
+      active.net = null;
+      window.decide.order.type = 'limit';
+      window.decide.order.price = null;
+      window.decide.orderOpen = true;
+      window.decide.orderPreview = null;
+      window.decide.order.previewPending = false;
+      window.renderDecide();
+      return {
+        request: window.currentOrderRequest(),
+        control: document.querySelector('.execute .efield .mv')?.textContent,
+        executeText: document.querySelector('.execute')?.textContent.replace(/\s+/g, ' ').trim()
+      };
+    }, CANDIDATE_ID);
+    assert.equal(state.request, null);
+    assert.match(state.control, /set price/i);
+    assert.doesNotMatch(state.executeText, /\+\$0|−\$0|limit 0/i);
+    assert.deepEqual(pageErrors, [], `missing-limit guard emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('missing authoritative POP or EV stays absent from the risk map', async () => {
+  const { context, page, pageErrors } = await openAuthoritativeDesk();
+  try {
+    const map = await page.evaluate(candidateId => {
+      const active = window.decide.cands.find(row => row.id === candidateId);
+      active.pop = null;
+      active.edge = null;
+      window.drawDecMap();
+      return {
+        marks: document.querySelectorAll('#decMap [data-mapi]').length,
+        text: document.querySelector('#decMap')?.textContent
+      };
+    }, CANDIDATE_ID);
+    assert.equal(map.marks, 0);
+    assert.match(map.text, /comparison metrics unavailable/i);
+    assert.deepEqual(pageErrors, [], `missing comparison metrics emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('served Desk resumes a canonical observed Plan with its persisted risk posture', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    planRiskMode: 'conservative'
+  });
+  try {
+    const resumed = await page.evaluate(() => {
+      const state = window.DeskBackend.state();
+      return {
+        phase: window.decide.backendPhase,
+        planId: state.plan && state.plan.id,
+        worldId: state.plan && state.plan.worldId,
+        accountId: state.plan && state.plan.accountId,
+        riskMode: state.plan && state.plan.context && state.plan.context.riskMode,
+        candidateCount: window.decide.cands.length
+      };
+    });
+
+    assert.deepEqual(resumed, {
+      phase: 'ready',
+      planId: PLAN_ID,
+      worldId: null,
+      accountId: ACCOUNT_ID,
+      riskMode: 'conservative',
+      candidateCount: 1
+    }, 'the adapter maps the real observed Plan shape and keeps persisted mutable context authoritative');
+    assert.equal(backend.count('POST', '/api/plans'), 0,
+      'a different header risk default does not reject or duplicate the canonical active Plan');
+    assert.deepEqual(pageErrors, [], `canonical Plan resume emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('served Desk fingerprints outcomes from the canonical research-owned quote', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
+  try {
+    const settled = await page.evaluate(() => {
+      const state = window.DeskBackend.state();
+      return {
+        phase: window.decide.backendPhase,
+        researchSymbol: state.market.research.symbol,
+        freshness: state.market.quote.freshness,
+        ensembleId: state.ensemble.ensemble.id,
+        outcomeEnsembleId: state.outcome.outcome.ensembleId
+      };
+    });
+    assert.deepEqual(settled, {
+      phase: 'ready',
+      researchSymbol: 'AMD',
+      freshness: 'FRESH',
+      ensembleId: ENSEMBLE_ID,
+      outcomeEnsembleId: ENSEMBLE_ID
+    });
+    assert.equal(backend.count('GET', '/api/research/AMD'), 1,
+      'the quote and its research/evidence receipt come from the canonical research service');
+    assert.equal(backend.count('GET', '/api/quotes'), 0,
+      'the ambient market-engine snapshot is not mixed into Plan outcomes');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
+      'Strategy and Outcomes start after the quote receipt settles');
+    assert.deepEqual(pageErrors, [], `research quote wiring emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -1188,7 +1505,8 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
     assert.equal(rendered.risk, 'unknown');
     assert.match(rendered.riskTitle, /classification unavailable/i);
     assert.equal(rendered.reviewDisabled, true);
-    assert.match(rendered.dock, /blocked by backend guardrails/i);
+    assert.match(rendered.dock, /guardrails block this exact package/i,
+      'execution pricing and placement guardrails remain separately visible');
     assert.match(rendered.dock, /exceeds the backend loss limit/i);
 
     const guard = await page.evaluate(() => {
@@ -1203,8 +1521,8 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
   }
 });
 
-test('order commitment serializes Plan mutations until the backend returns', async () => {
-  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ commitDelayMs: 120 });
+test('order commitment serializes Plan mutations and clears a superseded governor refresh', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ commitDelayMs: 320 });
   try {
     const result = await page.evaluate(async candidateId => {
       const commit = window.DeskBackend.commitOrder({ type: 'MARKET', timeInForce: 'DAY', qty: 1 }, []);
@@ -1212,6 +1530,12 @@ test('order commitment serializes Plan mutations until the backend returns', asy
       let competingError = null;
       try { await window.DeskBackend.chooseCandidate(candidateId); }
       catch (error) { competingError = error.message; }
+      window.decide.govs.risk = 6666;
+      const control = document.createElement('input');
+      control.setAttribute('data-gov', 'risk');
+      document.body.appendChild(control);
+      control.dispatchEvent(new Event('change', { bubbles: true }));
+      control.remove();
       const pendingDuring = window.DeskBackend.state().mutationPending;
       const committed = await commit;
       return {
@@ -1225,10 +1549,176 @@ test('order commitment serializes Plan mutations until the backend returns', asy
     assert.equal(result.pendingDuring, true);
     assert.equal(result.pendingAfter, false);
     assert.equal(result.tradeId, 'trade-desk-test');
+    await new Promise(resolve => setTimeout(resolve, 800));
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/trade`), 1);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/run`), 1,
+      'a cap change for the committed idea cannot replay after the journey leaves Decide');
     assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 1,
       'no second selection request can race a pending commit');
     assert.deepEqual(pageErrors, [], `serialized commitment emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a detached order completion cannot close the replacement idea', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ commitDelayMs: 320 });
+  try {
+    await page.evaluate(() => {
+      window.__detachedCommit = window.DeskBackend.commitOrder(
+        { type: 'MARKET', timeInForce: 'DAY', qty: 1 }, []);
+    });
+    for (let attempt = 0; attempt < 100
+      && backend.count('POST', `/api/plans/${PLAN_ID}/decision/trade`) < 1; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/trade`), 1,
+      'the backend commitment is in flight');
+
+    await page.locator('[data-dec="back"]').click();
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(id => {
+      const state = window.DeskBackend.state();
+      return window.decide && window.decide.backendPhase === 'ready'
+        && state.selected && state.selected.id === id
+        && !state.mutationPending;
+    }, CANDIDATE_ID, { timeout: 10000 });
+    const committed = await page.evaluate(() => window.__detachedCommit);
+    assert.equal(committed.trade.id, 'trade-desk-test');
+
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const replacement = await page.evaluate(() => ({
+      open: !!window.decide,
+      phase: window.decide && window.decide.backendPhase,
+      selected: window.DeskBackend.state().selected && window.DeskBackend.state().selected.id
+    }));
+    assert.deepEqual(replacement, { open: true, phase: 'ready', selected: CANDIDATE_ID },
+      'the old commitment receipt cannot schedule exit against the replacement journey');
+    assert.deepEqual(pageErrors, [], `detached commitment emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('canceling exact-package application cannot publish draft state into the replacement idea', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ customDelayMs: 320 });
+  try {
+    await page.evaluate(async candidateId => {
+      await window.DeskBackend.previewDraft([
+        { t: 'c', k: 100, q: 1, expiration: '2026-08-21', multiplier: 100 },
+        { t: 'c', k: 105, q: -1, expiration: '2026-08-21', multiplier: 100 }
+      ], candidateId);
+      window.__detachedDraft = window.DeskBackend.useDraft();
+    }, CANDIDATE_ID);
+    for (let attempt = 0; attempt < 100
+      && backend.count('POST', `/api/plans/${PLAN_ID}/strategy/custom`) < 1; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/custom`), 1,
+      'the exact-package mutation is in flight');
+    const outcomeBefore = backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`);
+
+    await page.locator('[data-dec="back"]').click();
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(id => {
+      const state = window.DeskBackend.state();
+      return window.decide && window.decide.backendPhase === 'ready'
+        && state.selected && state.selected.id === id
+        && state.outcome && state.outcome.outcome
+        && !state.mutationPending;
+    }, CUSTOM_CANDIDATE_ID, { timeout: 10000 });
+    const canceledResult = await page.evaluate(() => window.__detachedDraft);
+    assert.equal(canceledResult, null);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), outcomeBefore + 1,
+      'only the replacement journey values the now-canonical custom package');
+    assert.equal(await page.locator('.authpending').count(), 0);
+    assert.deepEqual(pageErrors, [], `detached draft application emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('rapid candidate clicks keep the visible package aligned with the accepted backend selection', async () => {
+  const adjacent = incoherentCandidate();
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    strategyCandidates: [candidate(), adjacent],
+    selectDelayMs: 180
+  });
+  try {
+    await page.locator(`.fanr[data-cand="${adjacent.id}"]`).click();
+    await page.getByRole('button', { name: /^Crash -20% path/ }).click();
+    await page.locator(`.fanr[data-cand="${CANDIDATE_ID}"]`).click();
+    await page.waitForFunction(id => {
+      const state = window.DeskBackend.state();
+      return window.decide.backendPhase === 'ready'
+        && window.decide.candId === id
+        && state.selected && state.selected.id === id
+        && state.outcome && state.outcome.outcome.candidateId === id
+        && window.decide.orderPreview && window.decide.orderPreview.selected.id === id;
+    }, adjacent.id, { timeout: 10000 });
+
+    const aligned = await page.evaluate(() => ({
+      visible: window.decide.candId,
+      selected: window.DeskBackend.state().selected.id,
+      outcome: window.DeskBackend.state().outcome.outcome.candidateId,
+      preview: window.decide.orderPreview.selected.id,
+      pending: window.DeskBackend.state().mutationPending
+    }));
+    assert.deepEqual(aligned, {
+      visible: adjacent.id,
+      selected: adjacent.id,
+      outcome: adjacent.id,
+      preview: adjacent.id,
+      pending: false
+    });
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 2,
+      'the ignored second click does not launch a competing selection mutation');
+    assert.equal(backend.scenarioCalls(), 0,
+      'a scenario pin cannot race the in-flight candidate selection');
+    assert.equal(await page.locator('.ensembleresult').count(), 1,
+      'the stored fan remains visible instead of getting stranded on a loading state');
+    assert.deepEqual(pageErrors, [], `candidate click serialization emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('the latest governor change runs after an in-flight selection instead of being dropped', async () => {
+  const adjacent = incoherentCandidate();
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    strategyCandidates: [candidate(), adjacent],
+    selectDelayMs: 220
+  });
+  try {
+    await page.evaluate(candidateId => {
+      window.DeskBackend.chooseCandidate(candidateId).catch(() => {});
+      window.decide.govs.risk = 7777;
+      const control = document.createElement('input');
+      control.setAttribute('data-gov', 'risk');
+      document.body.appendChild(control);
+      control.dispatchEvent(new Event('change', { bubbles: true }));
+      control.remove();
+    }, adjacent.id);
+    await page.waitForFunction(() => {
+      const state = window.DeskBackend.state();
+      return window.decide.backendPhase === 'ready'
+        && !state.mutationPending
+        && state.context && state.context.governors
+        && Number(state.context.governors.risk) === 7777;
+    }, null, { timeout: 10000 });
+
+    const state = await page.evaluate(() => ({
+      visible: window.decide.candId,
+      selected: window.DeskBackend.state().selected.id,
+      outcome: window.DeskBackend.state().outcome.outcome.candidateId,
+      risk: window.DeskBackend.state().context.governors.risk
+    }));
+    assert.equal(state.visible, state.selected);
+    assert.equal(state.outcome, state.selected);
+    assert.equal(state.risk, 7777);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/run`), 2,
+      'the queued governor value refreshes the canonical competition after selection releases');
+    assert.deepEqual(pageErrors, [], `queued governor refresh emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -1274,7 +1764,94 @@ test('the initial backend selection cannot be superseded by a second idea load',
   }
 });
 
-test('a quote rollover during fan generation is rejected before mixed state can render', async () => {
+test('the initial ensemble build keeps candidate changes behind one coherent mutation', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const adjacent = incoherentCandidate();
+  const backend = await installBackend(page, {
+    strategyCandidates: [candidate(), adjacent],
+    ensembleDelayMs: 320
+  });
+  try {
+    await page.goto(deskUrl);
+    await page.waitForSelector('#stage.lv-book #homeRiskMap');
+    await page.locator('#threadNewIdea').click();
+    for (let attempt = 0; attempt < 100
+      && backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`) < 1; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
+      'the authoritative ensemble is in flight');
+
+    const competing = await page.evaluate(async candidateId => {
+      try {
+        await window.DeskBackend.chooseCandidate(candidateId);
+        return { blocked: false };
+      } catch (error) {
+        return { blocked: true, message: error.message };
+      }
+    }, adjacent.id);
+    assert.equal(competing.blocked, true);
+    assert.match(competing.message, /current Plan change/);
+
+    await page.waitForFunction(id => {
+      const state = window.DeskBackend.state();
+      return window.decide && window.decide.backendPhase === 'ready'
+        && state.selected && state.selected.id === id
+        && state.ensemble && state.ensemble.ensemble
+        && state.outcome && state.outcome.outcome
+        && !state.mutationPending;
+    }, CANDIDATE_ID, { timeout: 10000 });
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 1,
+      'the competing click cannot supersede the initial selection');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 1,
+      'one selected package is valued against the completed fan');
+    assert.deepEqual(pageErrors, [], `initial ensemble serialization emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('backing out of a slow idea load queues a clean re-entry instead of stranding the Desk', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, { ensembleDelayMs: 320 });
+  try {
+    await page.goto(deskUrl);
+    await page.waitForSelector('#stage.lv-book #homeRiskMap');
+    await page.locator('#threadNewIdea').click();
+    for (let attempt = 0; attempt < 100
+      && backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`) < 1; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
+      'the first idea fan is in flight');
+
+    await page.locator('[data-dec="back"]').click();
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(id => {
+      const state = window.DeskBackend.state();
+      return window.decide && window.decide.backendPhase === 'ready'
+        && state.selected && state.selected.id === id
+        && state.outcome && state.outcome.outcome
+        && !state.mutationPending;
+    }, CANDIDATE_ID, { timeout: 10000 });
+
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 2,
+      'the canceled fan is not promoted into the re-entered idea');
+    assert.equal(await page.locator('.authpending').count(), 0,
+      'the re-entered Desk leaves its loading skeleton');
+    assert.deepEqual(pageErrors, [], `canceled idea re-entry emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a quote rollover during fan generation converges on one fresh authoritative snapshot', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   const pageErrors = [];
@@ -1284,33 +1861,34 @@ test('a quote rollover during fan generation is rejected before mixed state can 
     await page.goto(deskUrl);
     await page.waitForSelector('#stage.lv-book #homeRiskMap');
     await page.locator('#threadNewIdea').click();
-    await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'error', null,
+    await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'ready', null,
       { timeout: 10000 });
     const state = await page.evaluate(() => {
       const bridge = window.DeskBackend.state();
       return {
-        message: bridge.error && bridge.error.message,
-        ensemble: bridge.ensemble,
-        outcome: bridge.outcome,
+        error: bridge.error && bridge.error.message,
+        ensembleId: bridge.ensemble && bridge.ensemble.ensemble.id,
+        outcomeEnsembleId: bridge.outcome && bridge.outcome.outcome.ensembleId,
         pending: bridge.mutationPending
       };
     });
-    assert.match(state.message, /Market inputs changed while the outcome fan was being built/);
-    assert.equal(state.ensemble, null);
-    assert.equal(state.outcome, null);
+    assert.equal(state.error, null);
+    assert.equal(state.ensembleId, `${ENSEMBLE_ID}_2`);
+    assert.equal(state.outcomeEnsembleId, state.ensembleId);
     assert.equal(state.pending, false);
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1);
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 0,
-      'no selected-package result may be saved against a fan from another quote snapshot');
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 0,
-      'execution preview cannot inherit mixed market and ensemble state');
-    assert.deepEqual(pageErrors, [], `mid-flight market guard emitted page errors: ${pageErrors.join('\n')}`);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 2,
+      'the mixed fan is discarded and rebuilt after recapturing the quote');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 1,
+      'only the fresh fan receives a selected-package valuation');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 1,
+      'execution preview is created only after the coherent retry reaches ready');
+    assert.deepEqual(pageErrors, [], `mid-flight market convergence emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
 });
 
-test('an option-surface rollover during fan generation is rejected before valuation', async () => {
+test('an option-surface rollover during fan generation converges before valuation', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   const pageErrors = [];
@@ -1320,25 +1898,25 @@ test('an option-surface rollover during fan generation is rejected before valuat
     await page.goto(deskUrl);
     await page.waitForSelector('#stage.lv-book #homeRiskMap');
     await page.locator('#threadNewIdea').click();
-    await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'error', null,
+    await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'ready', null,
       { timeout: 10000 });
     const state = await page.evaluate(() => {
       const bridge = window.DeskBackend.state();
       return {
-        message: bridge.error && bridge.error.message,
-        ensemble: bridge.ensemble,
-        outcome: bridge.outcome,
+        error: bridge.error && bridge.error.message,
+        ensembleId: bridge.ensemble && bridge.ensemble.ensemble.id,
+        outcomeEnsembleId: bridge.outcome && bridge.outcome.outcome.ensembleId,
         pending: bridge.mutationPending
       };
     });
-    assert.match(state.message, /Market inputs changed while the outcome fan was being built/);
-    assert.equal(state.ensemble, null);
-    assert.equal(state.outcome, null);
+    assert.equal(state.error, null);
+    assert.equal(state.ensembleId, `${ENSEMBLE_ID}_2`);
+    assert.equal(state.outcomeEnsembleId, state.ensembleId);
     assert.equal(state.pending, false);
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1);
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 0);
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 0);
-    assert.deepEqual(pageErrors, [], `mid-flight option-surface guard emitted page errors: ${pageErrors.join('\n')}`);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 2);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 1);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 1);
+    assert.deepEqual(pageErrors, [], `mid-flight option-surface convergence emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }

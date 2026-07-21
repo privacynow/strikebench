@@ -266,8 +266,8 @@ final class PlanDecisionController {
         return body.proposedNetCents() == marketPreview.entryNetPremiumCents() ? marketBody : body;
     }
 
-    private static ApiResponses.OrderSummary orderSummary(TradeOpenRequest order,
-                                                           io.liftandshift.strikebench.paper.TradePreview preview) {
+    static ApiResponses.OrderSummary orderSummary(TradeOpenRequest order,
+                                                  io.liftandshift.strikebench.paper.TradePreview preview) {
         OrderInstruction instruction = order.orderInstruction() == null
                 ? OrderInstruction.fromLegacy(order.proposedNetCents()) : order.orderInstruction();
         Map<?, ?> quality = preview.analytics() == null ? Map.of()
@@ -282,9 +282,20 @@ final class PlanDecisionController {
         }
         Long executableNet = quality.get("executableNetCents") instanceof Number number
                 ? number.longValue() : null;
+        Long valuedNet = null;
+        ApiResponses.OrderValuationBasis valuationBasis = ApiResponses.OrderValuationBasis.UNAVAILABLE;
+        if (executability == OrderInstruction.Executability.IMMEDIATE && executableNet != null) {
+            valuedNet = executableNet;
+            valuationBasis = ApiResponses.OrderValuationBasis.EXECUTABLE_BOOK;
+        } else if (executability == OrderInstruction.Executability.RESTING
+                && instruction.limitNetCents() != null) {
+            valuedNet = instruction.limitNetCents();
+            valuationBasis = ApiResponses.OrderValuationBasis.RESTING_LIMIT;
+        }
         return new ApiResponses.OrderSummary(order.qty(), preview.entryNetPremiumCents(),
                 order.feesOverrideCents() == null ? 0L : order.feesOverrideCents(), instruction,
-                executability, executability == OrderInstruction.Executability.IMMEDIATE, executableNet);
+                executability, executability == OrderInstruction.Executability.IMMEDIATE, executableNet,
+                valuedNet, valuationBasis);
     }
 
     private static String requiredCandidateText(ObjectNode candidate, String field) {
