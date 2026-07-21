@@ -15,7 +15,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -339,15 +338,8 @@ public final class PositionTransformation {
         }
     }
 
-    private static StablePackage stable(PositionPackage position) {
-        if (position == null) return null;
-        List<StableLeg> legs = position.legs().stream().map(leg -> new StableLeg(
-                        upper(leg.action()), upper(leg.instrumentType()), upper(leg.symbol()), upper(leg.optionType()),
-                        decimal(leg.strike()), leg.expiration() == null ? null : leg.expiration().toString(),
-                        leg.quantity(), leg.multiplier(), decimal(leg.price()), leg.priceAuthority()))
-                .sorted(Comparator.comparing(StableLeg::sortKey)).toList();
-        return new StablePackage(position.source(), position.lane(), upper(position.symbol()),
-                position.packageQuantity(), position.exactPackageCashCents(), legs);
+    private static PositionPackageFingerprint.CanonicalPackage stable(PositionPackage position) {
+        return PositionPackageFingerprint.canonical(position);
     }
 
     private static StableRisk stable(RiskSnapshot risk) {
@@ -416,20 +408,9 @@ public final class PositionTransformation {
         long addedStock() { return added.stream().filter(d -> stock(d.leg())).mapToLong(LegDelta::increase).sum(); }
         long removedStock() { return removed.stream().filter(d -> stock(d.leg())).mapToLong(LegDelta::decrease).sum(); }
     }
-    private record StableRequest(Action action, StablePackage before, StablePackage after,
+    private record StableRequest(Action action, PositionPackageFingerprint.CanonicalPackage before,
+                                 PositionPackageFingerprint.CanonicalPackage after,
                                  StableRisk beforeRisk, StableRisk afterRisk, Long realizedClosingCents) {}
-    private record StablePackage(PositionDomain.PackageSource source, PositionDomain.ExecutionLane lane,
-                                 String symbol, long packageQuantity, Long exactPackageCashCents,
-                                 List<StableLeg> legs) {}
-    private record StableLeg(String action, String instrumentType, String symbol, String optionType,
-                             String strike, String expiration, long quantity, int multiplier,
-                             String price, PositionDomain.PriceAuthority priceAuthority) {
-        String sortKey() {
-            return String.join("|", action, instrumentType, symbol, optionType, strike,
-                    Objects.toString(expiration, ""), String.valueOf(quantity), String.valueOf(multiplier),
-                    price, Objects.toString(priceAuthority, ""));
-        }
-    }
     private record StableRisk(Long maxLossCents, long reserveCents, Long maxProfitCents,
                               boolean mechanicallyEligible, List<String> blockReasons, String evidenceBasis) {}
 }

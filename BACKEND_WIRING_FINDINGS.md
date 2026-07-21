@@ -162,9 +162,25 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
   position-value/P&L, Greek, leg-state, and transformation checkpoints from that same source row.
   The response binds Plan context, world, dataset, model, assumptions, ensemble fingerprint,
   selected candidate, path-selection rule, and child valuation fingerprint.
+- The same request now accepts an optional `focusPositionKey` for an existing-position journey.
+  The key must resolve through the canonical same-symbol `ScenarioPositionScopeService`/Scenario
+  Canvas scope (or an existing stock/proposal canvas key); no selected proposal is required. The
+  response reuses the unchanged stored ensemble and original display paths, returns checkpoints
+  only for the focused package, and echoes the key in both the animation and model receipts. Its
+  child valuation fingerprint includes the normalized key and exact position input: identical
+  requests are stable, while a position change updates that child fingerprint without changing the
+  ensemble fingerprint. Blank or unknown keys return 400; an in-scope package that cannot be
+  repriced returns 409. The original no-focus proposal path and fingerprint construction remain
+  unchanged. The focused integration test, full `PlanApiIntegrationTest`, and full 974-test Maven
+  suite pass with no failures or errors.
 - Conditioning is nearest-path selection over the immutable stored fan. It does not claim to
   sample a new conditional posterior. Full-fan probability bands remain context; the focus trace
   and neighboring paths show the selected hypothesis's journey.
+- Outcome reads have two existing wire shapes: `POST /outcomes/run` returns the saved result under
+  `outcome.result`, while `GET /outcomes/latest` exposes those stored result fields directly on each
+  outcome row. The Desk adapter now normalizes both at the presentation boundary, and the browser
+  regression pins fresh-run and restored-result statistics so valid probability/tail values cannot
+  silently degrade to placeholders.
 - Default Plan ensembles now retain a generator-owned intraday grid: 12 steps per session for one-
   and two-session decisions, six through one week, three through 45 sessions, and one thereafter.
   A one-session default therefore stores 13 stochastic checkpoints rather than drawing straight
@@ -280,12 +296,24 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
   the leg workbench independently shows the draft and its backend preview status. Canceling the
   draft explicitly restores the selected order preview; no zero-valued draft shell or generic-path /
   conditioned-payoff mixture can appear.
-- The current HTTP Book/Position surface is still a labeled visual fixture and does not yet call the
-  Desk bridge. A persistent compact position context strip prevents quote/event/news orientation
-  from disappearing during Mechanics/Book pane changes or leg adjustment; its mobile detail rail
-  now stacks above a full-width research/market pane instead of crushing that pane into a sidecar.
-  Authoritative Book wiring must use the existing portfolio, Plan, trade, research, history, news,
-  and book-risk routes rather than promoting those staged values.
+- HTTP Book and Position are now read-only projections of the existing portfolio, Plan, exact-trade,
+  payoff, marks, Greeks, Book Risk, research, observed-history, and source-backed-news routes. The
+  bridge pages the complete active roster, rejects partial identity, reconciles cards by exact trade
+  package revision, and invalidates a focused position whenever that package changes. An empty
+  Practice account stays honestly empty instead of restoring staged holdings. The compact position
+  context strip remains visible through Mechanics/Book panes; mobile stacks its detail rail above a
+  full-width research and market pane.
+- Position scenario animation now conditions the Plan's stored `PathEnsembleService` artifact on the
+  exact active trade (or owned share lot) through `/outcomes/ensemble/paths`. The response retains
+  ensemble id/fingerprint, source-path indices, selection rule, anchor provenance, authored
+  waypoints, and exact-package and valuation fingerprints. A Practice trade focus must be the Plan's
+  linked active trade in the same account and symbol. Its basis includes opening fees and frozen
+  held-share context, so covered packages retain stock P/L and Delta; its receipt also binds immutable
+  entry time, source, freshness, snapshot fingerprint, leg authorities, and package economics.
+  Multiple neighboring stored trajectories and one emphasized path are animated against server-valued
+  payoff, P/L, and Greek checkpoints; browser code only interpolates those checkpoints. Requests and
+  events are owned by exact trade id and package revision, so an in-flight response cannot attach to a
+  replacement or mutated position.
 
 ## Non-negotiable verification
 

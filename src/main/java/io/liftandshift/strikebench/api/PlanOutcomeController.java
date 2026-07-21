@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.backtest.Backtester;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.plan.PlanEvidenceService;
+import io.liftandshift.strikebench.plan.PlanManagementService;
 import io.liftandshift.strikebench.plan.PlanOutcomeService;
 import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.plan.PlanStrategyService;
@@ -29,6 +30,7 @@ final class PlanOutcomeController {
     private final PlanService planSvc;
     private final PlanEvidenceService planEvidence;
     private final PlanStrategyService planStrategy;
+    private final PlanManagementService planManagement;
     private final PlanOutcomeService planOutcomes;
     private final PathEnsembleService pathEnsembles;
     private final SimulationEngine simEngine;
@@ -42,7 +44,8 @@ final class PlanOutcomeController {
     PlanOutcomeController(PlanController root, AppConfig cfg,
                           MarketDataService market, Backtester backtester,
                           PlanService planSvc, PlanEvidenceService planEvidence,
-                          PlanStrategyService planStrategy, PlanOutcomeService planOutcomes,
+                          PlanStrategyService planStrategy, PlanManagementService planManagement,
+                          PlanOutcomeService planOutcomes,
                           PathEnsembleService pathEnsembles, SimulationEngine simEngine,
                           OutcomeController outcomeController,
                           io.liftandshift.strikebench.plan.AuthoredScenarioService authoredScenarios,
@@ -55,6 +58,7 @@ final class PlanOutcomeController {
         this.planSvc = planSvc;
         this.planEvidence = planEvidence;
         this.planStrategy = planStrategy;
+        this.planManagement = planManagement;
         this.planOutcomes = planOutcomes;
         this.pathEnsembles = pathEnsembles;
         this.simEngine = simEngine;
@@ -78,12 +82,18 @@ final class PlanOutcomeController {
                                             List<String> candidateIds,
                                             io.liftandshift.strikebench.sim.ScenarioSpec over,
                                             io.liftandshift.strikebench.sim.IvSpec iv) {}
-    /** Non-mutating animation query; inline pins are evaluated against an already-stored fan. */
+    /**
+     * Non-mutating animation query; inline pins are evaluated against an already-stored fan.
+     * When {@code focusPositionKey} is present, it must name a package already exposed by the
+     * same-symbol Scenario Canvas scope (or its stock/proposal baseline), and only that package is
+     * repriced into checkpoints. The stored path artifact is never regenerated.
+     */
     public record PlanScenarioPathsRequest(String ensembleId, String scenarioId,
                                            List<io.liftandshift.strikebench.sim.ScenarioSpec.Waypoint> waypoints,
                                            io.liftandshift.strikebench.sim.IvSpec iv,
                                            io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas,
-                                           Integer limit) {}
+                                           Integer limit,
+                                           String focusPositionKey) {}
     public record PlanBacktestRequest(Long expectedVersion, String engine, String from, String to,
                                       Integer targetDte, Integer entryEveryDays, Integer maxConcurrent,
                                       Integer qty, Double slippagePct, Long startingCashCents,
@@ -162,7 +172,8 @@ final class PlanOutcomeController {
             return;
         }
 
-        ObjectNode selected = root.selectedCandidate(ctx, plan, true);
+        String focusPositionKey = normalizeFocusPositionKey(body.focusPositionKey());
+        ObjectNode selected = focusPositionKey == null ? root.selectedCandidate(ctx, plan, true) : null;
         int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
         var effectiveIv = body.iv() == null ? stored.iv() : body.iv().sane();
         var effectiveCanvas = (body.canvas() == null
@@ -171,19 +182,31 @@ final class PlanOutcomeController {
                 : body.canvas()).sane(stored.ensemble().spec().horizonDays());
         ObjectNode checkpointHolder = Json.MAPPER.createObjectNode();
         ObjectNode checkpoints = decorateCanvasValuation(ctx, checkpointHolder, plan, stored,
-                focusSourcePathIndex, effectiveIv, effectiveCanvas);
-        String selectedCandidateId = selected.path("id").asText();
-        boolean selectedPositionPresent = false;
+                focusSourcePathIndex, effectiveIv, effectiveCanvas, focusPositionKey);
+        String selectedCandidateId = selected == null ? null : selected.path("id").asText();
+        String requiredPositionKey = focusPositionKey == null
+                ? "PROPOSED:" + selectedCandidateId : focusPositionKey;
+        boolean requiredPositionPresent = false;
         for (JsonNode position : checkpoints.path("positions")) {
-            if (("PROPOSED:" + selectedCandidateId).equals(position.path("key").asText())) {
-                selectedPositionPresent = true;
+            if (requiredPositionKey.equals(position.path("key").asText())) {
+                requiredPositionPresent = true;
                 break;
             }
         }
-        if (!selectedPositionPresent) {
-            throw new IllegalStateException("The selected package could not be repriced on this stored ensemble; inspect the named canvas refusal.");
+        if (!requiredPositionPresent) {
+            throw new IllegalStateException(focusPositionKey == null
+                    ? "The selected package could not be repriced on this stored ensemble; inspect the named canvas refusal."
+                    : "The focused position could not be repriced on this stored ensemble; inspect the named canvas refusal.");
         }
         String valuationFingerprint = checkpoints.at("/modelReceipt/valuationFingerprint").asText();
+        JsonNode focusedPackageNode = checkpoints.at("/modelReceipt/focusedPackageProvenance");
+        ApiResponses.FocusedPackageProvenance focusedPackageProvenance =
+                focusedPackageNode.isObject()
+                        ? Json.MAPPER.convertValue(focusedPackageNode,
+                            ApiResponses.FocusedPackageProvenance.class)
+                        : null;
+        String focusedPackageFingerprint = checkpoints.at("/modelReceipt/focusedPackageFingerprint")
+                .asText(null);
         var receipt = new ApiResponses.ScenarioAnimationReceipt(
                 "scenario-animation-1", stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().modelVersion(), stored.ensemble().scope().symbol(),
@@ -193,7 +216,8 @@ final class PlanOutcomeController {
                 stored.asOf(), stored.stepSeconds(), stored.ensemble().paths().length,
                 stored.ensemble().spec().totalSteps(), stored.ensemble().waypointFill().name(),
                 stored.ensemble().spec(), scenarioSpec, effectiveIv, effectiveCanvas, stored.rateAnnual(),
-                selectedCandidateId, valuationFingerprint);
+                selectedCandidateId, focusPositionKey, focusedPackageFingerprint,
+                focusedPackageProvenance, valuationFingerprint);
         ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection,
                 receipt, checkpoints));
     }
@@ -202,6 +226,14 @@ final class PlanOutcomeController {
         if (raw == null || raw.isBlank()) return 8;
         try { return Integer.parseInt(raw); }
         catch (NumberFormatException e) { throw new IllegalArgumentException("limit must be a whole number"); }
+    }
+
+    private static String normalizeFocusPositionKey(String raw) {
+        if (raw == null) return null;
+        String key = raw.trim();
+        if (key.isEmpty()) throw new IllegalArgumentException("focusPositionKey cannot be blank");
+        if (key.length() > 200) throw new IllegalArgumentException("focusPositionKey is too long");
+        return key;
     }
 
     /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */
@@ -746,7 +778,7 @@ final class PlanOutcomeController {
     private void decorateCanvasValuation(Context ctx, ObjectNode preview,
             io.liftandshift.strikebench.plan.Plan.View plan,
             io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored) {
-        decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas());
+        decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null);
     }
 
     private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
@@ -754,7 +786,8 @@ final class PlanOutcomeController {
             io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored,
             Integer focusSourcePathIndex,
             io.liftandshift.strikebench.sim.IvSpec valuationIv,
-            io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationCanvas) {
+            io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationCanvas,
+            String focusPositionKey) {
         var canvas = valuationCanvas == null
                 ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
                 : valuationCanvas.sane(stored.ensemble().spec().horizonDays());
@@ -762,26 +795,32 @@ final class PlanOutcomeController {
         List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput> inputs = new ArrayList<>();
         var refused = Json.MAPPER.createArrayNode();
         java.time.LocalDate anchor = stored.ensemble().anchorDate();
-        try {
-            for (var scoped : canvasPositions.list(root.ownerId(ctx), root.currentAccount(ctx).id(),
-                    plan.symbol(), anchor)) {
-                try {
-                    var path = pathPosition(scoped.packageView(), anchor);
-                    inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
-                            scoped.packageView().id(), scoped.label() + " · " + scoped.accountName(),
-                            scoped.packageView().lane().name(), scoped.packageView().source().name(),
-                            path, 1, scoped.entryCostCents(), false));
-                } catch (RuntimeException e) {
-                    ObjectNode row = refused.addObject();
-                    row.put("key", scoped.packageView().id()); row.put("label", scoped.label());
-                    row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+        io.liftandshift.strikebench.position.ScenarioPositionScopeService.Scoped focusedScoped = null;
+        boolean exactBookFocus = focusPositionKey != null
+                && !focusPositionKey.startsWith("PROPOSED:")
+                && !focusPositionKey.equals("STOCK:" + plan.symbol());
+        if (exactBookFocus) {
+            String activePlanTradeId = planManagement.activeTradeId(root.ownerId(ctx), plan.id());
+            focusedScoped = canvasPositions.focused(root.ownerId(ctx), plan.accountId(),
+                    plan.symbol(), anchor, focusPositionKey, activePlanTradeId);
+            addCanvasPosition(inputs, refused, focusedScoped, anchor);
+        } else if (focusPositionKey == null) {
+            try {
+                for (var scoped : canvasPositions.list(root.ownerId(ctx), root.currentAccount(ctx).id(),
+                        plan.symbol(), anchor)) {
+                    addCanvasPosition(inputs, refused, scoped, anchor);
                 }
+            } catch (RuntimeException e) {
+                ObjectNode row = refused.addObject(); row.put("key", "POSITION_SCOPE");
+                row.put("label", "Same-symbol Book positions"); row.put("reason", e.getMessage());
             }
-        } catch (RuntimeException e) {
-            ObjectNode row = refused.addObject(); row.put("key", "POSITION_SCOPE");
-            row.put("label", "Same-symbol Book positions"); row.put("reason", e.getMessage());
         }
-        ObjectNode candidate = root.selectedCandidate(ctx, plan, false);
+        ObjectNode candidate = focusPositionKey == null || focusPositionKey.startsWith("PROPOSED:")
+                ? root.selectedCandidate(ctx, plan, false) : null;
+        if (candidate != null) {
+            String candidateKey = "PROPOSED:" + candidate.path("id").asText();
+            if (focusPositionKey != null && !focusPositionKey.equals(candidateKey)) candidate = null;
+        }
         if (candidate != null) {
             try {
                 var position = planOutcomePosition(candidate);
@@ -792,23 +831,43 @@ final class PlanOutcomeController {
                                 ctx, position.legs(), anchor),
                         position.qty(), position.entryCostCents(), true));
             } catch (RuntimeException e) {
-                ObjectNode row = refused.addObject(); row.put("key", "PROPOSED");
+                ObjectNode row = refused.addObject();
+                row.put("key", "PROPOSED:" + candidate.path("id").asText());
                 row.put("label", "Selected Plan proposal");
                 row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
             }
         }
-        try {
-            int shares = 100;
-            var stock = new io.liftandshift.strikebench.sim.PathPosition(anchor, List.of(
-                    io.liftandshift.strikebench.model.Leg.stockShares(
-                            io.liftandshift.strikebench.model.LegAction.BUY, shares,
-                            BigDecimal.valueOf(stored.ensemble().spot()))));
-            inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
-                    "STOCK:" + plan.symbol(), "Buy and hold 100 shares", "BASELINE", "STOCK_BASELINE",
-                    stock, 1, Math.round(stored.ensemble().spot() * shares * 100), false));
-        } catch (RuntimeException e) {
-            ObjectNode row = refused.addObject(); row.put("key", "STOCK_BASELINE");
-            row.put("label", "Buy and hold"); row.put("reason", e.getMessage());
+        String stockKey = "STOCK:" + plan.symbol();
+        if (focusPositionKey == null || focusPositionKey.equals(stockKey)) {
+            try {
+                int shares = 100;
+                var stock = new io.liftandshift.strikebench.sim.PathPosition(anchor, List.of(
+                        io.liftandshift.strikebench.model.Leg.stockShares(
+                                io.liftandshift.strikebench.model.LegAction.BUY, shares,
+                                BigDecimal.valueOf(stored.ensemble().spot()))));
+                inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
+                        stockKey, "Buy and hold 100 shares", "BASELINE", "STOCK_BASELINE",
+                        stock, 1, Math.round(stored.ensemble().spot() * shares * 100), false));
+            } catch (RuntimeException e) {
+                ObjectNode row = refused.addObject(); row.put("key", stockKey);
+                row.put("label", "Buy and hold"); row.put("reason", e.getMessage());
+            }
+        }
+        if (focusPositionKey != null && inputs.isEmpty()) {
+            JsonNode matchingRefusal = null;
+            for (JsonNode row : refused) {
+                if (focusPositionKey.equals(row.path("key").asText())) {
+                    matchingRefusal = row;
+                    break;
+                }
+            }
+            if (matchingRefusal != null) {
+                throw new IllegalStateException("The focused position '" + focusPositionKey
+                        + "' is in the Scenario Canvas scope but could not be repriced: "
+                        + matchingRefusal.path("reason").asText("valuation unavailable"));
+            }
+            throw new IllegalArgumentException("focusPositionKey '" + focusPositionKey
+                    + "' does not name a same-symbol position in the current Scenario Canvas scope");
         }
         ObjectNode canvasJson;
         try {
@@ -833,6 +892,14 @@ final class PlanOutcomeController {
             row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
         }
         canvasJson.set("refused", refused);
+        io.liftandshift.strikebench.position.PositionPackageFingerprint.FocusedIdentity
+                focusedPackageIdentity = focusedScoped == null
+                ? null : focusedPackageIdentity(focusedScoped);
+        String focusedPackageFingerprint = focusedPackageIdentity == null
+                ? null : io.liftandshift.strikebench.position.PositionPackageFingerprint
+                    .fingerprint(focusedPackageIdentity);
+        ApiResponses.FocusedPackageProvenance focusedPackageProvenance = focusedScoped == null
+                ? null : focusedPackageProvenance(focusedScoped);
         ObjectNode receipt = canvasJson.putObject("modelReceipt");
         receipt.put("fingerprint", stored.fingerprint());
         receipt.put("ensembleFingerprint", stored.fingerprint());
@@ -858,6 +925,12 @@ final class PlanOutcomeController {
         int actualFocusPath = canvasJson.path("focusSourcePathIndex").asInt(
                 focusSourcePathIndex == null ? -1 : focusSourcePathIndex);
         receipt.put("focusSourcePathIndex", actualFocusPath);
+        if (focusPositionKey != null) receipt.put("focusPositionKey", focusPositionKey);
+        if (focusedPackageFingerprint != null) {
+            receipt.put("focusedPackageFingerprint", focusedPackageFingerprint);
+            receipt.set("focusedPackageProvenance",
+                    Json.MAPPER.valueToTree(focusedPackageProvenance));
+        }
         String selectedCandidateId = candidate == null ? null : candidate.path("id").asText(null);
         if (selectedCandidateId != null) {
             receipt.put("selectedCandidateId", selectedCandidateId);
@@ -874,6 +947,10 @@ final class PlanOutcomeController {
         valuationIdentity.set("ivAssumptions", Json.MAPPER.valueToTree(iv));
         valuationIdentity.set("canvasAssumptions", Json.MAPPER.valueToTree(canvas));
         valuationIdentity.set("positionPackages", Json.MAPPER.valueToTree(inputs));
+        if (focusPositionKey != null) valuationIdentity.put("focusPositionKey", focusPositionKey);
+        if (focusedPackageIdentity != null) {
+            valuationIdentity.set("focusedPackage", Json.MAPPER.valueToTree(focusedPackageIdentity));
+        }
         if (selectedCandidateId != null) {
             valuationIdentity.put("selectedCandidateId", selectedCandidateId);
             valuationIdentity.put("selectedCandidateFingerprint", sha256(candidate));
@@ -883,6 +960,56 @@ final class PlanOutcomeController {
         preview.set("canvas", canvasJson);
         preview.set("canvasModel", Json.MAPPER.valueToTree(canvas));
         return canvasJson;
+    }
+
+    private static void addCanvasPosition(
+            List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput> inputs,
+            com.fasterxml.jackson.databind.node.ArrayNode refused,
+            io.liftandshift.strikebench.position.ScenarioPositionScopeService.Scoped scoped,
+            java.time.LocalDate anchor) {
+        try {
+            var path = pathPosition(scoped.packageView(), anchor);
+            inputs.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.PositionInput(
+                    scoped.packageView().id(), scoped.label() + " · " + scoped.accountName(),
+                    scoped.packageView().lane().name(), scoped.packageView().source().name(),
+                    path, 1, scoped.entryCostCents(), false));
+        } catch (RuntimeException e) {
+            ObjectNode row = refused.addObject();
+            row.put("key", scoped.packageView().id());
+            row.put("label", scoped.label());
+            row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
+        }
+    }
+
+    private static io.liftandshift.strikebench.position.PositionPackageFingerprint.FocusedIdentity
+            focusedPackageIdentity(
+            io.liftandshift.strikebench.position.ScenarioPositionScopeService.Scoped scoped) {
+        return io.liftandshift.strikebench.position.PositionPackageFingerprint.focusedIdentity(
+                scoped.packageView(), scoped.entryCostCents(), scoped.entryProvenance());
+    }
+
+    private static ApiResponses.FocusedPackageProvenance focusedPackageProvenance(
+            io.liftandshift.strikebench.position.ScenarioPositionScopeService.Scoped scoped) {
+        var p = scoped.packageView();
+        List<String> authorities = p.legs().stream()
+                .map(io.liftandshift.strikebench.position.PositionPackage.Leg::priceAuthority)
+                .filter(java.util.Objects::nonNull)
+                .map(Enum::name)
+                .distinct()
+                .sorted()
+                .toList();
+        var entry = scoped.entryProvenance();
+        return new ApiResponses.FocusedPackageProvenance(
+                io.liftandshift.strikebench.position.PositionPackageFingerprint.CONTRACT_VERSION,
+                p.id(), p.source().name(), p.lane().name(),
+                p.symbol(), p.packageQuantity(), p.legs().size(), p.exactPackageCashCents(),
+                scoped.entryCostCents(), p.asOf().toString(),
+                entry == null ? null : entry.createdAt(),
+                entry == null ? null : entry.dataProvenance(),
+                entry == null ? null : entry.dataAge(),
+                entry == null ? null : entry.dataSource(),
+                entry == null ? null : entry.entrySnapshotFingerprint(), authorities,
+                entry == null ? null : entry.sourceIdentity());
     }
 
     private static String sha256(JsonNode node) {

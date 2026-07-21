@@ -31,8 +31,16 @@
     context: null,
     rejections: [],
     strategyNotes: [],
+    book: null,
+    position: null,
+    positionScenario: null,
     error: null
   };
+  // Book and Position are independent read surfaces. Their requests must never supersede a
+  // New Idea calculation (or one another), so neither lifecycle borrows state.requestSeq.
+  var bookRequestSeq = 0;
+  var positionRequestSeq = 0;
+  var positionScenarioRequestSeq = 0;
   var mutationOwnerSequence = 0;
   var activeMutationOwner = null;
   var activeMutationKind = null;
@@ -285,6 +293,81 @@
       : marketLane === 'SCENARIO' ? ['MODELED', 'OBSERVED'] : [];
     if (allowed.length && allowed.indexOf(provenance) < 0) {
       throw new Error(label + ' provenance ' + provenance + ' cannot be used in the ' + marketLane + ' market lane.');
+    }
+  }
+
+  function errorReceipt(error, path) {
+    return {
+      path: path || error && error.path || null,
+      message: error && error.message ? String(error.message) : 'The backend read failed.',
+      status: error && error.status == null ? null : Number(error.status),
+      code: error && error.code == null ? null : String(error.code)
+    };
+  }
+
+  function readIdentitySnapshot() {
+    var api = requireApi();
+    return Promise.all([
+      api.getFresh('/api/config'),
+      api.getFresh('/api/world'),
+      api.getFresh('/api/account')
+    ]).then(function (docs) {
+      var config = docs[0] || {}, world = docs[1] || {}, accountEnvelope = docs[2] || {};
+      var identity = marketIdentity(config, world, null, accountEnvelope);
+      if (!identity.world || !identity.marketLane) {
+        throw new Error('The active market identity is unavailable for this Desk read.');
+      }
+      if (config.world && world.world && String(config.world) !== String(world.world)) {
+        throw new Error('Configuration and the active market world do not agree. Reload after the market transition completes.');
+      }
+      if (!identity.accountId) {
+        throw new Error('The active account identity is unavailable for this Desk read.');
+      }
+      return {
+        identity: identity,
+        config: config,
+        world: world,
+        account: accountEnvelope.account,
+        accountEnvelope: accountEnvelope
+      };
+    });
+  }
+
+  function assertSameReadIdentity(before, after) {
+    assertSameMarket(before.identity, after.identity);
+    if (String(before.identity.accountId) !== String(after.identity.accountId)) {
+      throw new Error('The active account changed while the Desk was loading. Reload this view in the current account.');
+    }
+  }
+
+  function readSlot(key, path) {
+    return requireApi().getFresh(path).then(function (value) {
+      return { key: key, path: path, available: true, value: value, error: null };
+    }).catch(function (error) {
+      return { key: key, path: path, available: false, value: null, error: errorReceipt(error, path) };
+    });
+  }
+
+  function unavailableSlot(key, path, message) {
+    return {
+      key: key,
+      path: path,
+      available: false,
+      value: null,
+      error: errorReceipt(new Error(message), path)
+    };
+  }
+
+  function objectSlot(slot, label) {
+    if (!slot || !slot.available) return slot;
+    if (slot.value && typeof slot.value === 'object' && !Array.isArray(slot.value)) return slot;
+    return unavailableSlot(slot.key, slot.path, label + ' did not return its typed object.');
+  }
+
+  function assertDocumentSymbol(documentValue, symbol, label) {
+    if (!documentValue || !documentValue.symbol) return;
+    if (String(documentValue.symbol).toUpperCase() !== String(symbol).toUpperCase()) {
+      throw new Error(label + ' belongs to ' + documentValue.symbol + ', not ' + symbol + '.');
     }
   }
 
@@ -1332,8 +1415,8 @@
       candidateId: candidateId
     });
     if (seq !== state.requestSeq) return null;
-    var receipt = out && (out.selection || out.selected);
-    var echoedId = receipt && (receipt.candidateId || receipt.id);
+    var receipt = out && out.selection;
+    var echoedId = receipt && receipt.candidateId;
     if (!receipt || String(echoedId || '') !== String(candidateId)) {
       throw new Error('The backend did not retain the requested strategy selection identity.');
     }
@@ -1670,6 +1753,9 @@
   }
 
   function clearAuthoritativeArtifacts() {
+    bookRequestSeq++;
+    positionRequestSeq++;
+    positionScenarioRequestSeq++;
     state.market = null;
     state.plan = null;
     state.planIdentity = null;
@@ -1686,6 +1772,9 @@
     state.rejections = [];
     state.strategyNotes = [];
     state.animation = null;
+    state.book = null;
+    state.position = null;
+    state.positionScenario = null;
   }
 
   async function transitionWorld(mode, context) {
@@ -2009,6 +2098,669 @@
     }
   }
 
+  function slotsByKey(slots) {
+    var result = {};
+    (slots || []).forEach(function (slot) { result[slot.key] = slot; });
+    return result;
+  }
+
+  function missingSlots(slots) {
+    return (slots || []).filter(function (slot) { return !slot.available; }).map(function (slot) {
+      return { key: slot.key, path: slot.path, error: slot.error };
+    });
+  }
+
+  function requireSlot(slot, label) {
+    if (slot && slot.available) return slot.value;
+    var detail = slot && slot.error && slot.error.message;
+    var error = new Error(label + ' is unavailable' + (detail ? ': ' + detail : '.'));
+    if (slot && slot.error) {
+      error.status = slot.error.status;
+      error.code = slot.error.code;
+    }
+    if (slot && slot.path) error.path = slot.path;
+    throw error;
+  }
+
+  function assertPlanPortfolioIdentity(documentValue, identity) {
+    if (!documentValue || !documentValue.market) return;
+    var expected = expectedMarketKind(identity);
+    if (String(documentValue.market).toUpperCase() !== String(expected).toUpperCase()) {
+      throw new Error('The Plan portfolio belongs to ' + documentValue.market
+        + ', not the active ' + expected + ' market.');
+    }
+  }
+
+  async function readActiveTradeRoster() {
+    var path = '/api/trades?status=ACTIVE&page=0&size=100';
+    var first = objectSlot(await readSlot('activeTrades', path), 'The active-trade roster');
+    if (!first.available) return first;
+    var page = first.value;
+    if (!Array.isArray(page.trades)) {
+      return unavailableSlot('activeTrades', path,
+        'The active-trade roster did not return its typed trades array.');
+    }
+    var pageSize = Math.max(1, Number(page.size || 100));
+    var total = Math.max(page.trades.length, Number(page.total || page.trades.length));
+    var pageCount = Math.ceil(total / pageSize);
+    if (pageCount <= 1) return first;
+    var requests = [];
+    for (var index = 1; index < pageCount; index++) {
+      requests.push(readSlot('activeTradesPage' + index,
+        '/api/trades?status=ACTIVE&page=' + index + '&size=' + pageSize));
+    }
+    var rest = await Promise.all(requests);
+    var rows = page.trades.slice();
+    for (var i = 0; i < rest.length; i++) {
+      var slot = objectSlot(rest[i], 'Active-trade page ' + (i + 1));
+      if (!slot.available || !Array.isArray(slot.value.trades)) {
+        return unavailableSlot('activeTrades', path,
+          'The complete active-trade roster could not be read without omitting positions.');
+      }
+      rows = rows.concat(slot.value.trades);
+    }
+    if (rows.length < total) {
+      return unavailableSlot('activeTrades', path,
+        'The active-trade roster ended before its declared total was reached.');
+    }
+    return {
+      key: 'activeTrades', path: path, available: true,
+      value: { trades: rows.slice(0, total), total: total, page: 0, size: rows.length }, error: null
+    };
+  }
+
+  /**
+   * Read the current Practice Book without borrowing the New Idea request sequence. Empty arrays
+   * are authoritative empty states. An unavailable auxiliary risk lens is retained as a named
+   * missing receipt; it is never replaced with zeroes or fixture positions.
+   */
+  async function loadBook() {
+    if (!state.enabled) return null;
+    var seq = ++bookRequestSeq;
+    state.book = {
+      phase: 'loading', requestId: seq, identity: null, data: null, missing: [], error: null
+    };
+    notify('book-loading', { operation: 'book', requestId: seq, book: state.book });
+    try {
+      var before = await readIdentitySnapshot();
+      if (seq !== bookRequestSeq) return null;
+      var slots = await Promise.all([
+        readActiveTradeRoster(),
+        readSlot('sharePositions', '/api/positions'),
+        readSlot('summary', '/api/portfolio/summary'),
+        readSlot('heat', '/api/portfolio/heat'),
+        readSlot('greeks', '/api/portfolio/greeks'),
+        readSlot('bookRisk', '/api/portfolio/book-risk'),
+        readSlot('planPortfolio', '/api/plans/portfolio')
+      ]);
+      if (seq !== bookRequestSeq) return null;
+      var after = await readIdentitySnapshot();
+      if (seq !== bookRequestSeq) return null;
+      assertSameReadIdentity(before, after);
+
+      var bookLabels = {
+        activeTrades: 'The active-trade roster',
+        sharePositions: 'The share-position roster',
+        summary: 'The portfolio summary',
+        heat: 'The portfolio heat receipt',
+        greeks: 'The portfolio Greeks receipt',
+        bookRisk: 'The Book risk receipt',
+        planPortfolio: 'The Plan portfolio'
+      };
+      slots = slots.map(function (slot) { return objectSlot(slot, bookLabels[slot.key]); });
+      var values = slotsByKey(slots);
+      var tradePage = requireSlot(values.activeTrades, 'The active-trade roster');
+      var positionBook = requireSlot(values.sharePositions, 'The share-position roster');
+      if (!tradePage || !Array.isArray(tradePage.trades)) {
+        throw new Error('The active-trade roster did not return its typed trades array.');
+      }
+      if (!positionBook || !Array.isArray(positionBook.positions)) {
+        throw new Error('The share-position roster did not return its typed positions array.');
+      }
+
+      if (values.planPortfolio.available) assertPlanPortfolioIdentity(values.planPortfolio.value, before.identity);
+      var planRows = values.planPortfolio.available && values.planPortfolio.value
+        && Array.isArray(values.planPortfolio.value.plans) ? values.planPortfolio.value.plans : null;
+      if (values.planPortfolio.available && planRows == null) {
+        values.planPortfolio = unavailableSlot('planPortfolio', '/api/plans/portfolio',
+          'The Plan portfolio did not return its typed plans array.');
+        slots = slots.map(function (slot) {
+          return slot.key === 'planPortfolio' ? values.planPortfolio : slot;
+        });
+      }
+      planRows = values.planPortfolio.available ? planRows : null;
+      var accountPlans = planRows == null ? null : planRows.filter(function (row) {
+        var plan = row && row.plan;
+        return plan && plan.accountId != null
+          && String(plan.accountId) === String(before.identity.accountId);
+      });
+      var missing = missingSlots(slots);
+      var data = {
+        identity: before.identity,
+        account: before.account,
+        activeTrades: tradePage.trades,
+        sharePositions: positionBook.positions,
+        portfolio: {
+          summary: values.summary.available ? values.summary.value : null,
+          heat: values.heat.available ? values.heat.value : null,
+          greeks: values.greeks.available ? values.greeks.value : null,
+          bookRisk: values.bookRisk.available ? values.bookRisk.value : null
+        },
+        planPortfolio: values.planPortfolio.available ? values.planPortfolio.value : null,
+        plans: planRows,
+        accountPlans: accountPlans,
+        loadedAt: new Date().toISOString()
+      };
+      var phase = missing.length ? 'partial' : 'ready';
+      state.book = {
+        phase: phase, requestId: seq, identity: before.identity,
+        data: data, missing: missing, error: null
+      };
+      notify('book-' + phase, {
+        operation: 'book', requestId: seq, book: state.book, data: data
+      });
+      return data;
+    } catch (error) {
+      if (seq !== bookRequestSeq) return null;
+      state.book = {
+        phase: 'error', requestId: seq, identity: before && before.identity || null, data: null,
+        missing: [], error: errorReceipt(error)
+      };
+      notify('book-error', {
+        operation: 'book', requestId: seq, book: state.book, error: error
+      });
+      throw error;
+    }
+  }
+
+  function tradeHintFromBook(tradeId) {
+    var rows = state.book && state.book.data && state.book.data.activeTrades;
+    if (!Array.isArray(rows)) return null;
+    return rows.find(function (row) { return row && String(row.id) === String(tradeId); }) || null;
+  }
+
+  function planHintFromBook(tradeId, explicitPlanId) {
+    var rows = state.book && state.book.data
+      && (state.book.data.accountPlans || state.book.data.plans);
+    if (!Array.isArray(rows)) return null;
+    return rows.find(function (row) {
+      if (!row || !row.plan) return false;
+      if (explicitPlanId) return String(row.plan.id) === String(explicitPlanId);
+      return row.tradeId != null && String(row.tradeId) === String(tradeId);
+    }) || null;
+  }
+
+  function positionDescriptor(tradeOrId, options) {
+    var input = tradeOrId && typeof tradeOrId === 'object' ? tradeOrId : {};
+    var hintedTrade = input.trade && typeof input.trade === 'object' ? input.trade : input;
+    options = Object.assign({}, input.options || {}, options || {});
+    var id = typeof tradeOrId === 'string' || typeof tradeOrId === 'number'
+      ? tradeOrId : hintedTrade.id || options.tradeId;
+    id = id == null ? '' : String(id).trim();
+    if (!id) throw new Error('Choose an authoritative trade before loading Position Bloom.');
+    var bookTrade = tradeHintFromBook(id);
+    var symbol = String(options.symbol || hintedTrade.symbol || bookTrade && bookTrade.symbol || '')
+      .trim().toUpperCase();
+    var planHint = planHintFromBook(id, options.planId);
+    var planId = options.planId || planHint && planHint.plan && planHint.plan.id || null;
+    var range = String(options.historyRange || '6m').toLowerCase();
+    if (['1m', '3m', '6m', 'ytd', '1y', '2y', '5y', 'max'].indexOf(range) < 0) range = '6m';
+    return {
+      id: id,
+      symbol: symbol,
+      planId: planId == null ? null : String(planId),
+      historyRange: range,
+      planHint: planHint
+    };
+  }
+
+  function positionAuxiliarySlots(descriptor, symbol) {
+    var encoded = encodeURIComponent(symbol);
+    var requests = [
+      readSlot('research', '/api/research/' + encoded),
+      readSlot('history', '/api/research/' + encoded + '/history?range='
+        + encodeURIComponent(descriptor.historyRange)),
+      readSlot('news', '/api/research/' + encoded + '/news')
+    ];
+    if (descriptor.planId) {
+      requests.push(readSlot('planWorkspace', '/api/plans/'
+        + encodeURIComponent(descriptor.planId) + '/manage'));
+      requests.push(readSlot('positionEnsemble', '/api/plans/'
+        + encodeURIComponent(descriptor.planId) + '/outcomes/ensemble/latest'));
+    }
+    return Promise.all(requests);
+  }
+
+  function assertPlanWorkspaceIdentity(workspace, descriptor, identity, tradeId) {
+    if (!workspace || !workspace.plan) {
+      throw new Error('The linked Plan workspace omitted its Plan identity.');
+    }
+    var plan = workspace.plan;
+    if (descriptor.planId && String(plan.id) !== String(descriptor.planId)) {
+      throw new Error('The linked Plan workspace belongs to another Plan.');
+    }
+    if (plan.accountId != null && String(plan.accountId) !== String(identity.accountId)) {
+      throw new Error('The linked Plan belongs to another account.');
+    }
+    var expected = expectedMarketKind(identity);
+    if (plan.marketKind && String(plan.marketKind).toUpperCase() !== String(expected).toUpperCase()) {
+      throw new Error('The linked Plan belongs to another market lane.');
+    }
+    if (expected === 'SIMULATED' && plan.worldId
+        && String(plan.worldId) !== String(identity.world)) {
+      throw new Error('The linked Plan belongs to another simulated market world.');
+    }
+    if (workspace.trade && workspace.trade.trade && workspace.trade.trade.id
+        && String(workspace.trade.trade.id) !== String(tradeId)) {
+      throw new Error('The linked Plan workspace points at another active trade.');
+    }
+  }
+
+  function assertPositionEnsembleIdentity(envelope, descriptor, identity, linkedPlan) {
+    if (!envelope || !envelope.plan || !envelope.ensemble) {
+      throw new Error('The stored Position ensemble omitted its Plan or ensemble identity.');
+    }
+    var plan = envelope.plan;
+    var ensemble = envelope.ensemble;
+    var receipt = envelope.preview && envelope.preview.receipt || {};
+    if (!descriptor.planId || String(plan.id || '') !== String(descriptor.planId)) {
+      throw new Error('The stored Position ensemble belongs to another Plan.');
+    }
+    if (!ensemble.id || !ensemble.fingerprint) {
+      throw new Error('The stored Position ensemble omitted its immutable id or fingerprint.');
+    }
+    if (receipt.ensembleId && String(receipt.ensembleId) !== String(ensemble.id)) {
+      throw new Error('The stored Position ensemble receipt names another ensemble id.');
+    }
+    if ((receipt.ensembleFingerprint || receipt.fingerprint)
+        && String(receipt.ensembleFingerprint || receipt.fingerprint) !== String(ensemble.fingerprint)) {
+      throw new Error('The stored Position ensemble receipt names another ensemble fingerprint.');
+    }
+    if (plan.accountId != null && String(plan.accountId) !== String(identity.accountId)) {
+      throw new Error('The stored Position ensemble belongs to another account.');
+    }
+    var expected = expectedMarketKind(identity);
+    if (plan.marketKind && String(plan.marketKind).toUpperCase() !== String(expected).toUpperCase()) {
+      throw new Error('The stored Position ensemble belongs to another market lane.');
+    }
+    if (expected === 'SIMULATED' && plan.worldId
+        && String(plan.worldId) !== String(identity.world)) {
+      throw new Error('The stored Position ensemble belongs to another simulated market world.');
+    }
+    if (receipt.symbol && String(receipt.symbol).toUpperCase() !== String(descriptor.symbol).toUpperCase()) {
+      throw new Error('The stored Position ensemble belongs to another underlying.');
+    }
+    if (receipt.worldId && identity.world
+        && String(receipt.worldId) !== String(identity.world)) {
+      throw new Error('The stored Position ensemble belongs to another market world.');
+    }
+    if (receipt.datasetId != null && identity.datasetId != null
+        && String(receipt.datasetId) !== String(identity.datasetId)) {
+      throw new Error('The stored Position ensemble belongs to another analysis dataset.');
+    }
+    var contextRev = linkedPlan && linkedPlan.context && linkedPlan.context.rev;
+    if (receipt.contextRev != null && contextRev != null
+        && Number(receipt.contextRev) !== Number(contextRev)) {
+      throw new Error('The stored Position ensemble belongs to another Plan context revision.');
+    }
+  }
+
+  /**
+   * Load one server-owned position receipt plus its same-world Research context. Supplying the
+   * trade row (or options.symbol) lets detail, Research, history, news, and Plan/manage read in
+   * parallel; a bare id first discovers its server-owned symbol, then performs the same reads.
+   */
+  async function loadPosition(tradeOrId, options) {
+    if (!state.enabled) return null;
+    var seq = ++positionRequestSeq;
+    // A Position change invalidates only its own focused projection. It does not borrow or
+    // advance the Book, New Idea, or New Idea animation request sequences.
+    positionScenarioRequestSeq++;
+    state.positionScenario = null;
+    state.position = {
+      phase: 'loading', requestId: seq, identity: null, data: null, missing: [], error: null
+    };
+    notify('position-loading', { operation: 'position', requestId: seq, position: state.position });
+    try {
+      var descriptor = positionDescriptor(tradeOrId, options);
+      var before = await readIdentitySnapshot();
+      if (seq !== positionRequestSeq) return null;
+
+      var detailPromise = readSlot('tradeDetail', '/api/trades/' + encodeURIComponent(descriptor.id));
+      var auxiliaryPromise = descriptor.symbol
+        ? positionAuxiliarySlots(descriptor, descriptor.symbol) : Promise.resolve(null);
+      var loaded = await Promise.all([detailPromise, auxiliaryPromise]);
+      if (seq !== positionRequestSeq) return null;
+      var detailSlot = loaded[0];
+      var detail = requireSlot(detailSlot, 'The position detail');
+      if (!detail || !detail.trade || String(detail.trade.id) !== descriptor.id) {
+        throw new Error('The position detail did not return the requested authoritative trade.');
+      }
+      var symbol = String(detail.trade.symbol || '').trim().toUpperCase();
+      if (!symbol) throw new Error('The authoritative trade omitted its underlying symbol.');
+      if (descriptor.symbol && descriptor.symbol !== symbol) {
+        throw new Error('The requested position symbol does not match the authoritative trade.');
+      }
+      descriptor.symbol = symbol;
+      var auxiliary = loaded[1] || await positionAuxiliarySlots(descriptor, symbol);
+      if (seq !== positionRequestSeq) return null;
+      var after = await readIdentitySnapshot();
+      if (seq !== positionRequestSeq) return null;
+      assertSameReadIdentity(before, after);
+
+      var positionLabels = {
+        research: 'Research', history: 'History', news: 'News',
+        planWorkspace: 'The linked Plan workspace',
+        positionEnsemble: 'The stored Position outcome ensemble'
+      };
+      auxiliary = auxiliary.map(function (slot) { return objectSlot(slot, positionLabels[slot.key]); });
+      var values = slotsByKey(auxiliary);
+      if (values.research.available) {
+        assertDocumentSymbol(values.research.value, symbol, 'Research');
+        if (values.research.value && values.research.value.marketLane
+            && String(values.research.value.marketLane).toUpperCase()
+              !== String(before.identity.marketLane).toUpperCase()) {
+          throw new Error('Research belongs to another market lane.');
+        }
+        assertEvidenceLane(values.research.value && values.research.value.quote
+          && values.research.value.quote.evidence, before.identity.marketLane, 'Research quote');
+      }
+      if (values.history.available) {
+        assertDocumentSymbol(values.history.value, symbol, 'History');
+        assertEvidenceLane(values.history.value && values.history.value.evidence,
+          before.identity.marketLane, 'History');
+      }
+      if (values.news.available) assertDocumentSymbol(values.news.value, symbol, 'News');
+      if (values.planWorkspace && values.planWorkspace.available) {
+        assertPlanWorkspaceIdentity(values.planWorkspace.value, descriptor,
+          before.identity, descriptor.id);
+      }
+
+      var missing = missingSlots(auxiliary);
+      var workspace = values.planWorkspace && values.planWorkspace.available
+        ? values.planWorkspace.value : null;
+      var linkedPlan = workspace ? workspace.plan : descriptor.planHint && descriptor.planHint.plan || null;
+      var positionEnsemble = values.positionEnsemble && values.positionEnsemble.available
+        ? values.positionEnsemble.value : null;
+      if (positionEnsemble) {
+        assertPositionEnsembleIdentity(positionEnsemble, descriptor, before.identity, linkedPlan);
+      }
+      var data = {
+        identity: before.identity,
+        account: before.account,
+        trade: detail.trade,
+        tradeDetail: detail,
+        research: values.research.available ? values.research.value : null,
+        history: values.history.available ? values.history.value : null,
+        news: values.news.available ? values.news.value : null,
+        plan: linkedPlan,
+        management: workspace ? workspace.management : null,
+        planWorkspace: workspace,
+        positionEnsemble: positionEnsemble,
+        loadedAt: new Date().toISOString()
+      };
+      var phase = missing.length ? 'partial' : 'ready';
+      state.position = {
+        phase: phase, requestId: seq, identity: before.identity,
+        data: data, missing: missing, error: null
+      };
+      notify('position-' + phase, {
+        operation: 'position', requestId: seq, position: state.position, data: data
+      });
+      return data;
+    } catch (error) {
+      if (seq !== positionRequestSeq) return null;
+      state.position = {
+        phase: 'error', requestId: seq, identity: before && before.identity || null, data: null,
+        missing: [], error: errorReceipt(error)
+      };
+      notify('position-error', {
+        operation: 'position', requestId: seq, position: state.position, error: error
+      });
+      throw error;
+    }
+  }
+
+  function exactPositionScenarioWaypoints(options) {
+    var supplied = options && options.waypoints;
+    if (!Array.isArray(supplied) || !supplied.length) {
+      throw new Error('Position scenario animation requires at least one explicit stored-fan waypoint.');
+    }
+    return supplied.map(function (pin) {
+      var dayIndex = number(pin && pin.dayIndex);
+      var priceRatio = number(pin && pin.priceRatio);
+      var tolerance = pin && pin.tolerance == null ? null : number(pin.tolerance);
+      if (!Number.isInteger(dayIndex) || dayIndex < 1 || !(priceRatio > 0)
+          || (tolerance != null && !(tolerance > 0))) {
+        throw new Error('Each Position scenario waypoint needs a positive whole day, price ratio, and optional tolerance.');
+      }
+      var result = { dayIndex: dayIndex, priceRatio: priceRatio };
+      if (tolerance != null) result.tolerance = tolerance;
+      return result;
+    });
+  }
+
+  function positionTransientCanvas(data, options) {
+    var stored = data && data.positionEnsemble, preview = stored && stored.preview || {};
+    var shift = number(options && options.ivShiftPoints);
+    if (!shift) return null;
+    var underlying = preview.canvas && preview.canvas.underlying || [];
+    var base = number(underlying.length && underlying[0].atmIv);
+    if (!(base > 0)) return null;
+    var horizon = Math.max(1, Number(preview.horizonDays || 1));
+    var day = Math.max(1, Math.min(horizon,
+      Math.round(Number(options && options.days || horizon))));
+    var canvas = Object.assign({}, preview.canvasModel || {});
+    canvas.ivNodes = [
+      { dayIndex: 0, atmIv: base },
+      { dayIndex: day, atmIv: Math.max(0.01, Math.min(4, base + shift / 100)) }
+    ];
+    return canvas;
+  }
+
+  function positionPackageFingerprint(trade) {
+    trade = trade || {};
+    return JSON.stringify(canonicalJson({
+      id: trade.id, symbol: trade.symbol, strategy: trade.strategy, intent: trade.intent,
+      qty: trade.qty, entryNetPremiumCents: trade.entryNetPremiumCents,
+      entryUnderlyingCents: trade.entryUnderlyingCents, openedAt: trade.openedAt,
+      updatedAt: trade.updatedAt, status: trade.status, legs: trade.legs || []
+    }));
+  }
+
+  function assertPositionScenarioResponse(response, requestIdentity) {
+    var plan = response && response.plan || {};
+    var ensemble = response && response.ensemble || {};
+    var receipt = response && response.receipt || {};
+    var paths = response && response.paths || {};
+    var selection = paths.receipt || {};
+    var checkpoints = response && response.checkpoints || {};
+    var modelReceipt = checkpoints.modelReceipt || {};
+    var focused = Array.isArray(checkpoints.positions) && checkpoints.positions.find(function (row) {
+      return row && String(row.key || '') === requestIdentity.tradeId;
+    });
+    var focusPath = Array.isArray(paths.paths) && paths.paths.find(function (row) {
+      return row && String(row.role || '').toUpperCase() === 'FOCUS'
+        && Number(row.sourcePathIndex) === Number(selection.focusSourcePathIndex);
+    });
+    var expectedContextRev = requestIdentity.contextRev;
+    var expectedWorld = requestIdentity.worldId;
+    var expectedDataset = requestIdentity.datasetId;
+    var returnedWaypoints = receipt.conditioningAssumptions
+      && receipt.conditioningAssumptions.waypoints || [];
+    var returnedRule = paths.selection || selection.rule;
+    var returnedCanvas = receipt.valuationAssumptions || {};
+    var focusedPackageFingerprint = String(receipt.focusedPackageFingerprint || '');
+    var focusedPackageProvenance = receipt.focusedPackageProvenance || {};
+    if (!response || String(plan.id || '') !== requestIdentity.planId
+        || plan.accountId != null && String(plan.accountId) !== String(requestIdentity.accountId)
+        || plan.context && plan.context.rev != null && expectedContextRev != null
+          && Number(plan.context.rev) !== Number(expectedContextRev)
+        || String(ensemble.id || '') !== requestIdentity.ensembleId
+        || String(ensemble.fingerprint || '') !== requestIdentity.ensembleFingerprint
+        || String(receipt.ensembleId || '') !== requestIdentity.ensembleId
+        || String(receipt.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
+        || String(modelReceipt.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
+        || String(receipt.focusPositionKey || '') !== requestIdentity.tradeId
+        || String(modelReceipt.focusPositionKey || '') !== requestIdentity.tradeId
+        || receipt.symbol && String(receipt.symbol).toUpperCase() !== requestIdentity.symbol
+        || expectedContextRev != null && Number(receipt.contextRev) !== Number(expectedContextRev)
+        || expectedWorld && String(receipt.worldId || '') !== String(expectedWorld)
+        || expectedDataset != null && String(receipt.datasetId || '') !== String(expectedDataset)
+        || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
+        || Number(modelReceipt.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
+        || String(returnedRule || '') !== requestIdentity.pathSelectionRule
+        || JSON.stringify(canonicalJson(returnedWaypoints))
+          !== JSON.stringify(canonicalJson(requestIdentity.waypoints))
+        || requestIdentity.canvasIvNodes
+          && JSON.stringify(canonicalJson(returnedCanvas.ivNodes || []))
+            !== JSON.stringify(canonicalJson(requestIdentity.canvasIvNodes))
+        || requestIdentity.anchorSource
+          && String(receipt.anchorSource || '') !== String(requestIdentity.anchorSource)
+        || requestIdentity.anchorFreshness
+          && String(receipt.anchorFreshness || '') !== String(requestIdentity.anchorFreshness)
+        || !/^[0-9a-f]{64}$/i.test(focusedPackageFingerprint)
+        || String(modelReceipt.focusedPackageFingerprint || '') !== focusedPackageFingerprint
+        || JSON.stringify(canonicalJson(modelReceipt.focusedPackageProvenance || {}))
+          !== JSON.stringify(canonicalJson(focusedPackageProvenance))
+        || String(focusedPackageProvenance.contractVersion || '') !== 'focused-position-package-2'
+        || String(focusedPackageProvenance.key || '') !== requestIdentity.tradeId
+        || String(focusedPackageProvenance.source || '') !== 'PRACTICE_TRADE'
+        || String(focusedPackageProvenance.symbol || '').toUpperCase() !== requestIdentity.symbol
+        || !(Number(focusedPackageProvenance.packageQuantity) > 0)
+        || !(Number(focusedPackageProvenance.legCount) > 0)
+        || !Array.isArray(focusedPackageProvenance.priceAuthorities)
+          || !focusedPackageProvenance.priceAuthorities.length
+        || focusedPackageProvenance.entryBasisCents == null
+        || !focusedPackageProvenance.valuationAsOf
+        || !focusedPackageProvenance.entryCreatedAt
+        || !focusedPackageProvenance.dataProvenance
+        || !focusedPackageProvenance.dataSource
+        || !/^[0-9a-f]{64}$/i.test(String(
+          focusedPackageProvenance.entrySnapshotFingerprint || ''))
+        || !focusPath || !focused || !Array.isArray(focused.steps) || !focused.steps.length
+        || !receipt.valuationFingerprint
+        || String(modelReceipt.valuationFingerprint || '') !== String(receipt.valuationFingerprint)) {
+      throw new Error('The Position scenario response did not retain the linked Plan, focused trade, stored ensemble, path, and valuation identity.');
+    }
+    return focused;
+  }
+
+  /**
+   * Reprice the authoritative Position on a conditioned projection of its owning Plan's latest
+   * stored fan. This never creates an ensemble and never shares cancellation state with New Idea,
+   * Book, Position loading, or New Idea animation.
+   */
+  async function positionScenario(options) {
+    if (!state.enabled) return null;
+    var token = ++positionScenarioRequestSeq;
+    var positionRequestId = state.position && state.position.requestId;
+    var data = state.position && state.position.data;
+    var tradeId = data && data.trade && data.trade.id == null ? null
+      : data && data.trade && String(data.trade.id);
+    state.positionScenario = {
+      phase: 'loading', requestId: token, positionRequestId: positionRequestId,
+      tradeId: tradeId, data: null, error: null
+    };
+    notify('position-scenario-loading', {
+      operation: 'position-scenario', requestId: token,
+      positionScenario: state.positionScenario
+    });
+    try {
+      if (!data || !data.trade || !data.plan) {
+        throw new Error('Load an authoritative Position and its linked Plan before animating a scenario.');
+      }
+      if (options && options.tradeId != null
+          && String(options.tradeId) !== String(data.trade.id)) {
+        throw new Error('The active Position adapter owns another trade; reload this exact position before conditioning it.');
+      }
+      var stored = data.positionEnsemble;
+      if (!stored || !stored.ensemble || !stored.ensemble.id || !stored.ensemble.fingerprint) {
+        throw new Error('This Position has no stored outcome ensemble to condition; run its owning Plan outcomes first.');
+      }
+      var planId = String(data.plan.id || '');
+      if (!planId) throw new Error('The authoritative Position omitted its owning Plan id.');
+      tradeId = String(data.trade.id || '');
+      if (!tradeId) throw new Error('The authoritative Position omitted its trade id.');
+      var limit = options && options.limit == null ? 9 : number(options.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 24) {
+        throw new Error('Position scenario path limit must be a whole number from 1 through 24.');
+      }
+      var waypoints = exactPositionScenarioWaypoints(options || {});
+      var storedReceipt = stored.preview && stored.preview.receipt || {};
+      var requestIdentity = {
+        positionRequestId: positionRequestId,
+        planId: planId,
+        accountId: data.identity && data.identity.accountId,
+        contextRev: data.plan.context && data.plan.context.rev,
+        symbol: String(data.trade.symbol || '').toUpperCase(),
+        tradeId: tradeId,
+        ensembleId: String(stored.ensemble.id),
+        ensembleFingerprint: String(stored.ensemble.fingerprint),
+        worldId: storedReceipt.worldId || data.identity && data.identity.world || null,
+        datasetId: storedReceipt.datasetId == null
+          ? data.identity && data.identity.datasetId : storedReceipt.datasetId,
+        positionPackageFingerprint: positionPackageFingerprint(data.trade),
+        waypoints: waypoints,
+        pathSelectionRule: 'NEAREST_AUTHORED_WAYPOINTS',
+        anchorSource: storedReceipt.anchorSource || null,
+        anchorFreshness: storedReceipt.anchorFreshness || null
+      };
+      var body = {
+        ensembleId: requestIdentity.ensembleId,
+        waypoints: waypoints,
+        limit: limit,
+        focusPositionKey: tradeId
+      };
+      var canvas = positionTransientCanvas(data, options || {});
+      if (canvas) {
+        body.canvas = canvas;
+        requestIdentity.canvasIvNodes = canvas.ivNodes;
+      }
+      var response = await requireApi().post('/api/plans/' + encodeURIComponent(planId)
+        + '/outcomes/ensemble/paths', body);
+      if (token !== positionScenarioRequestSeq) return null;
+      assertPositionScenarioResponse(response, requestIdentity);
+      var confirmedDetail = await requireApi().getFresh('/api/trades/' + encodeURIComponent(tradeId));
+      if (token !== positionScenarioRequestSeq) return null;
+      if (!confirmedDetail || !confirmedDetail.trade
+          || String(confirmedDetail.trade.id || '') !== requestIdentity.tradeId
+          || positionPackageFingerprint(confirmedDetail.trade)
+            !== requestIdentity.positionPackageFingerprint) {
+        throw new Error('The focused Position package changed while its scenario was being valued. Reload the exact position before using these checkpoints.');
+      }
+      var current = state.position && state.position.data;
+      var currentEnsemble = current && current.positionEnsemble && current.positionEnsemble.ensemble;
+      if (!state.position || state.position.requestId !== requestIdentity.positionRequestId
+          || !current || String(current.trade && current.trade.id || '') !== requestIdentity.tradeId
+          || positionPackageFingerprint(current.trade) !== requestIdentity.positionPackageFingerprint
+          || !currentEnsemble || String(currentEnsemble.id || '') !== requestIdentity.ensembleId
+          || String(currentEnsemble.fingerprint || '') !== requestIdentity.ensembleFingerprint) {
+        return null;
+      }
+      state.positionScenario = {
+        phase: 'ready', requestId: token, positionRequestId: positionRequestId,
+        tradeId: tradeId, data: response, error: null
+      };
+      notify('position-scenario-ready', {
+        operation: 'position-scenario', requestId: token,
+        positionScenario: state.positionScenario, data: response, options: options || {}
+      });
+      return response;
+    } catch (error) {
+      if (token !== positionScenarioRequestSeq) return null;
+      state.positionScenario = {
+        phase: 'error', requestId: token, positionRequestId: positionRequestId,
+        tradeId: tradeId, data: null, error: errorReceipt(error)
+      };
+      notify('position-scenario-error', {
+        operation: 'position-scenario', requestId: token,
+        positionScenario: state.positionScenario, error: error
+      });
+      throw error;
+    }
+  }
+
   var governorTimer = null;
   var pendingGovernorContext = null;
 
@@ -2057,6 +2809,9 @@
     commitOrder: commitOrder,
     transitionWorld: transitionWorld,
     scenarioAnimation: scenarioAnimation,
+    loadBook: loadBook,
+    loadPosition: loadPosition,
+    positionScenario: positionScenario,
     cancel: function () {
       pendingIdeaContext = null;
       if (state.mutationPending) activeMutationCancelled = true;
