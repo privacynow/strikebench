@@ -15,8 +15,14 @@ import java.util.Optional;
 public final class MarketSnapshotStore implements io.liftandshift.strikebench.market.ports.SnapshotStore {
 
     private final Db db;
+    private final MarketDataMaintenanceGate maintenance;
 
-    public MarketSnapshotStore(Db db) { this.db = db; }
+    public MarketSnapshotStore(Db db) { this(db, new MarketDataMaintenanceGate()); }
+
+    public MarketSnapshotStore(Db db, MarketDataMaintenanceGate maintenance) {
+        this.db = db;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
+    }
 
     /** Upsert one symbol's last-known quote (best-effort; called after a successful refresh). */
     @Override public void save(MarketSnapshot s) {
@@ -24,14 +30,15 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
         var evidence = io.liftandshift.strikebench.model.DataEvidence.of(s.source(), s.freshness());
         if (evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED
                 && evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.BROKER) return;
-        db.exec("INSERT INTO market_snapshot (symbol, description, last, bid, ask, prev_close, optionable, "
+        maintenance.write(() -> db.exec(
+                "INSERT INTO market_snapshot (symbol, description, last, bid, ask, prev_close, optionable, "
               + "source, freshness, as_of, captured_at) VALUES (?,?,?,?,?,?,?,?,?,?, now()) "
               + "ON CONFLICT (symbol) DO UPDATE SET description=excluded.description, last=excluded.last, "
               + "bid=excluded.bid, ask=excluded.ask, prev_close=excluded.prev_close, optionable=excluded.optionable, "
               + "source=excluded.source, freshness=excluded.freshness, as_of=excluded.as_of, captured_at=now()",
                 s.symbol(), s.description(), s.last(), s.bid(), s.ask(), s.prevClose(), s.optionable(),
                 s.source(), s.freshness() == null ? null : s.freshness().name(),
-                java.time.Instant.ofEpochMilli(s.asOfEpochMs()).atOffset(java.time.ZoneOffset.UTC));
+                java.time.Instant.ofEpochMilli(s.asOfEpochMs()).atOffset(java.time.ZoneOffset.UTC)));
     }
 
     /** Load every persisted last-known quote as a STALE snapshot to seed the engine on boot. */

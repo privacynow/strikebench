@@ -79,6 +79,12 @@ class AutoRecommenderTest {
             assertThat(pick.signals().thesis()).isIn("BULLISH", "BEARISH", "NEUTRAL", "VOLATILE");
             assertThat(pick.signals().rationale()).isNotEmpty();
             assertThat(pick.opportunityScore()).isBetween(0.0, 1.0);
+            assertThat(pick.opportunity().goal()).isEqualTo("DIRECTIONAL");
+            assertThat(pick.opportunity().score()).isEqualTo(pick.opportunityScore());
+            assertThat(pick.opportunity().summary()).isNotBlank();
+            assertThat(pick.opportunity().volatilityEvidence()).isNotNull();
+            assertThat(pick.opportunity().eventEvidence()).isNotNull();
+            assertThat(pick.bestIdea()).isNotNull();
             // default horizons without 0DTE opt-in
             assertThat(pick.horizons()).extracting(AutoRecommender.HorizonIdeas::horizon)
                     .containsExactly("week", "month");
@@ -96,6 +102,18 @@ class AutoRecommenderTest {
         assertThat(result.disclaimer()).containsIgnoringCase("not predictions");
         // VTSAX is in the fixture universe and must be skipped with a reason
         assertThat(result.skipped()).isEmpty(); // fixture universe has only optionable symbols
+    }
+
+    @Test
+    void opportunityRankingUsesVolatilityInTheDirectionOfTheDeclaredGoal() {
+        assertThat(AutoRecommender.volatilityFit(1.8, io.liftandshift.strikebench.strategy.StrategyIntent.INCOME))
+                .isGreaterThan(AutoRecommender.volatilityFit(0.6,
+                        io.liftandshift.strikebench.strategy.StrategyIntent.INCOME));
+        assertThat(AutoRecommender.volatilityFit(0.6, io.liftandshift.strikebench.strategy.StrategyIntent.HEDGE))
+                .isGreaterThan(AutoRecommender.volatilityFit(1.8,
+                        io.liftandshift.strikebench.strategy.StrategyIntent.HEDGE));
+        assertThat(AutoRecommender.volatilityFit(null,
+                io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isNull();
     }
 
     @Test
@@ -290,6 +308,12 @@ class AutoRecommenderTest {
         assertThat(res.picks()).isNotEmpty();
         for (AutoRecommender.Pick p : res.picks()) {
             assertThat(p.intent()).isEqualTo("INCOME");
+            assertThat(p.opportunity().goal()).isEqualTo("INCOME");
+            assertThat(p.opportunity().summary()).containsAnyOf("premium", "IV-versus-realized");
+            assertThat(p.bestIdea().available()).isTrue();
+            assertThat(p.bestIdea().family()).isNotBlank();
+            assertThat(p.bestIdea().economicVerdict())
+                    .isIn("FAVORABLE", "MIXED", "UNFAVORABLE", "UNAVAILABLE");
             for (AutoRecommender.HorizonIdeas h : p.horizons()) {
                 for (AutoRecommender.ScoredCandidate sc : h.candidates()) {
                     assertThat(io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(sc.evaluation().candidate().strategy())

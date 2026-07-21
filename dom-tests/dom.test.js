@@ -6608,8 +6608,8 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   assert.match(historySetup, /Yahoo Finance automation/);
   assert.match(await page.textContent('#dc-history-sync'), /charts, HV, realized-volatility EV, and favorable observed verdicts/i,
     'the source bridge explains the product consequence of candle starvation');
-  assert.match(await page.textContent('#dc-history-sync'), /YAHOO_ENABLED=true.*YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true/i,
-    'an authorized local user gets the exact opt-in path without enabling it silently');
+  assert.match(await page.textContent('#dc-history-sync'), /standing authorization.*YAHOO_ENABLED=false/i,
+    'the product-owned source and its explicit revocation control stay visible');
   assert.doesNotMatch(sources, /Yahoo Finance automation|Alpha Vantage|Stooq/,
     'daily-history connectors are not repeated in a second inventory');
   assert.match(sources, /Cboe|SEC EDGAR/);

@@ -39,6 +39,27 @@ public enum Horizon {
         };
     }
 
+    /** Exact-or-named trading sessions at every engine boundary. */
+    public static int tradingSessions(String raw) {
+        Integer exact = exactSessions(raw);
+        return exact == null ? parse(raw).tradingSessions() : exact;
+    }
+
+    /** Exact-or-named calendar-day anchor used only to select listed expirations. */
+    public static int expiryCalendarDays(String raw) {
+        Integer exact = exactSessions(raw);
+        return exact == null ? parse(raw).expiryCalendarDays()
+                : Math.max(1, Math.round(exact * 7f / 5f));
+    }
+
+    private static Integer exactSessions(String raw) {
+        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        if (!value.matches("[1-9]\\d{0,2}d")) return null;
+        int sessions = Integer.parseInt(value.substring(0, value.length() - 1));
+        if (sessions > 756) throw new IllegalArgumentException("horizon sessions must be between 1 and 756");
+        return sessions;
+    }
+
     /** Maps a persisted Plan's trading-session count back to the nearest named horizon. */
     public static Horizon fromTradingSessions(Integer sessions) {
         if (sessions == null) return MONTH;
@@ -46,5 +67,18 @@ public enum Horizon {
         if (sessions <= 10) return WEEK;
         if (sessions <= 45) return MONTH;
         return QUARTER;
+    }
+
+    /**
+     * Exact Plan-to-engine contract. Named horizons remain useful request shortcuts, but a Plan's
+     * declared 30 sessions must not silently become the MONTH bucket's 21 sessions on the way to
+     * recommendation, evidence, or order review.
+     */
+    public static String exactTradingSessions(Integer sessions) {
+        if (sessions == null) return null;
+        if (sessions < 1 || sessions > 756) {
+            throw new IllegalArgumentException("horizon sessions must be between 1 and 756");
+        }
+        return sessions + "d";
     }
 }

@@ -22,8 +22,11 @@ public final class EvidenceAssembler {
         EvidenceLevel volatility = ctx.ivHistory().size() >= 10 && pricing.isObserved()
                 ? pricing : EvidenceLevel.MODELED.worseOf(pricing);
         EvidenceLevel liquidity = c.liquidityScore() > 0 ? pricing : EvidenceLevel.UNKNOWN;
+        // Daily-history provenance belongs to the CandleSeries that produced realizedVol30.
+        // Deriving it from option pricing let an observed quote relabel synthetic/scenario bars
+        // as observed and could turn a modeled realistic-measure result into a live endorsement.
         EvidenceLevel history = ctx.realizedVol30() == null ? EvidenceLevel.UNKNOWN
-                : pricing.isObserved() ? EvidenceLevel.OBSERVED_EOD : pricing;
+                : EvidenceLevel.fromEvidence(ctx.historyEvidence());
         EvidenceLevel rates = EvidenceLevel.fromEvidence(ctx.rateEvidence());
 
         Map<String, EvidenceLevel> dims = new LinkedHashMap<>();
@@ -35,10 +38,13 @@ public final class EvidenceAssembler {
         dims.put("history", history);
         dims.put("rates", rates);
 
-        String note = pricing.isObserved()
+        String historyReceipt = "daily history is " + ctx.historyEvidence().provenance()
+                + "/" + ctx.historyEvidence().age() + " from " + ctx.historyEvidence().source();
+        String note = (pricing.isObserved()
                 ? "pricing is " + c.freshness()
                     + "; volatility, history, and rates retain their own provenance; least-certain dimension sets the badge"
-                : "generated pricing inputs — NOT observed market prices; least-certain dimension sets the badge";
+                : "generated pricing inputs — NOT observed market prices; least-certain dimension sets the badge")
+                + "; " + historyReceipt;
         Map<String, EvidenceProfile.ClaimEvidence> claims = new LinkedHashMap<>();
         claims.put("marketEv", EvidenceProfile.project(dims,
                 List.of("pricing", "currentVolatility", "rates"),
@@ -47,8 +53,8 @@ public final class EvidenceAssembler {
                 List.of("pricing", "history"),
                 "Realized-volatility EV uses executable pricing and eligible daily history."));
         claims.put("endorsement", EvidenceProfile.project(dims,
-                List.of("pricing", "currentVolatility", "rates", "history"),
-                "A live-market endorsement requires observed inputs for both after-cost EV lanes."));
+                List.of("pricing", "history"),
+                "A live-market endorsement is driven by executable pricing and the observed-history realistic-measure lane. Current IV and rates remain scoped to the separate market-implied cost benchmark."));
         claims.put("ivRank", EvidenceProfile.project(dims,
                 List.of("pricing", "volatility"),
                 "IV rank is descriptive context and requires trailing IV observations."));

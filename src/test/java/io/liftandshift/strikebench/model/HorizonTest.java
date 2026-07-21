@@ -5,6 +5,15 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class HorizonTest {
+
+    @Test void exactPlanSessionsDoNotCollapseIntoNamedBuckets() {
+        assertThat(Horizon.exactTradingSessions(1)).isEqualTo("1d");
+        assertThat(Horizon.exactTradingSessions(30)).isEqualTo("30d");
+        assertThat(Horizon.exactTradingSessions(45)).isEqualTo("45d");
+        assertThat(Horizon.tradingSessions("30d")).isEqualTo(30);
+        assertThat(Horizon.expiryCalendarDays("30d")).isEqualTo(42);
+        assertThat(Horizon.tradingSessions("month")).isEqualTo(21);
+    }
     @Test
     void keepsResearchSessionsSeparateFromExpirationCalendarDays() {
         assertThat(Horizon.WEEK.tradingSessions()).isEqualTo(5);

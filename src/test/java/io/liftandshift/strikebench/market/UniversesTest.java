@@ -13,4 +13,15 @@ class UniversesTest {
                 .contains("SMH", "SPY", "TLT", "GLD")
                 .doesNotContain("NVDA");
     }
+
+    @Test void memoryAndStorageThemeUsesTradableUsProxies() {
+        assertThat(Universes.SECTORS.get("SEMICONDUCTORS").symbols())
+                .contains("MU", "STX", "WDC", "SNDK", "SMH")
+                .doesNotContain("000660.KS");
+        assertThat(Universes.peersOf("SNDK"))
+                .contains("MU", "STX", "WDC", "SMH")
+                .doesNotContain("SNDK");
+        assertThat(Universes.allocationSectorLabel("WDC"))
+                .isEqualTo("Semiconductors, memory & storage");
+    }
 }

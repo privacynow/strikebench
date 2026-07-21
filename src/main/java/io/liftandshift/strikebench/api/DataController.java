@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.db.DataSyncState;
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.MissingRangePlanner;
+import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.db.UnderlyingCsvIngest;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -54,6 +55,7 @@ final class DataController {
     private final DataJobService dataJobs;
     private final DataCoverage dataCoverage;
     private final DataResetService dataReset;
+    private final MarketDataMaintenanceGate marketDataMaintenance;
     private final DataConnectorCatalog dataConnectors;
     private final DataSyncState dataSyncState;
     private final DatasetService datasets;
@@ -71,7 +73,8 @@ final class DataController {
     DataController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
                    MarketDataEngine marketEngine, UniverseService universe,
                    DataJobService dataJobs, DataCoverage dataCoverage,
-                   DataResetService dataReset, DataConnectorCatalog dataConnectors,
+                   DataResetService dataReset, MarketDataMaintenanceGate marketDataMaintenance,
+                   DataConnectorCatalog dataConnectors,
                    DataSyncState dataSyncState, DatasetService datasets,
                    CboeProvider cboe, SimulationSessions simSessions,
                    WorldTransitionService worldTransitions, AuditLog audit,
@@ -90,6 +93,7 @@ final class DataController {
         this.dataJobs = dataJobs;
         this.dataCoverage = dataCoverage;
         this.dataReset = dataReset;
+        this.marketDataMaintenance = marketDataMaintenance;
         this.dataConnectors = dataConnectors;
         this.dataSyncState = dataSyncState;
         this.datasets = datasets;
@@ -168,9 +172,10 @@ final class DataController {
         var schedule = dataSyncState.schedule(ownerId.apply(ctx));
         ctx.json(new ApiResponses.DataSync<>(dataConnectors.all(), dataConnectors.recommendedSource(),
                 dataSyncState.cursors(ownerId.apply(ctx)), schedule,
+                dataSyncState.schedule(io.liftandshift.strikebench.util.OwnerScope.SYSTEM),
                 dataSyncState.quarantineSummary(ownerId.apply(ctx)),
                 DataSyncScheduler.latestCompletedSession(clock).toString(),
-                "Daily price maintenance runs once after a completed market session. "
+                "Owner-authorized Yahoo maintenance covers the canonical universe once after a completed market session. "
                         + "Hourly daily-bar downloads are intentionally avoided."));
     }
 
@@ -223,8 +228,10 @@ final class DataController {
         if (enabled) dataConnectors.requireAutomated(source);
         List<String> symbols = normalizeSymbols(body.symbols());
         if (symbols.isEmpty()) symbols = universe.active().symbols();
-        ctx.json(dataSyncState.saveSchedule(ownerId.apply(ctx), enabled, source, symbols,
-                body.years() == null ? 5 : body.years()));
+        List<String> scheduledSymbols = symbols;
+        ctx.json(marketDataMaintenance.write(() -> dataSyncState.saveSchedule(
+                ownerId.apply(ctx), enabled, source, scheduledSymbols,
+                body.years() == null ? 5 : body.years())));
     }
 
     private void importUnderlying(Context ctx) throws IOException {
@@ -244,9 +251,10 @@ final class DataController {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("basis must be AUTO, RAW, or ADJUSTED");
         }
-        var result = UnderlyingCsvIngest.run(file.content(), file.filename(),
-                ctx.formParam("symbol"), ctx.formParam("sourceLabel"), basis,
-                db, dataSyncState, clock, ownerId.apply(ctx));
+        var result = marketDataMaintenance.writeChecked(() -> UnderlyingCsvIngest.run(
+                file.content(), file.filename(), ctx.formParam("symbol"),
+                ctx.formParam("sourceLabel"), basis, db, dataSyncState, clock,
+                ownerId.apply(ctx)));
         invalidateHistoricalViews.run();
         ctx.json(result);
     }
@@ -305,14 +313,14 @@ final class DataController {
             throw new IllegalStateException("You are inside a simulated market session — return to the "
                     + "baseline market before activating a scenario dataset (they are separate worlds).");
         }
-        datasets.setActive(body.id(), owner);
+        marketDataMaintenance.write(() -> datasets.setActive(body.id(), owner));
         String nowActive = datasets.activeId(owner);
         ctx.json(new ApiResponses.DatasetActivation(true, nowActive,
                 !DatasetService.OBSERVED.equals(nowActive)));
     }
 
     private void deleteDataset(Context ctx) {
-        datasets.delete(ctx.pathParam("id"), ownerId.apply(ctx));
+        marketDataMaintenance.write(() -> datasets.delete(ctx.pathParam("id"), ownerId.apply(ctx)));
         ctx.json(new ApiResponses.Ok(true));
     }
 
@@ -337,7 +345,9 @@ final class DataController {
         invalidateHistoricalViews.run();
         try {
             audit.log(null, null, "DATA_RESET", "WARN",
-                    Map.of("tier", result.tier(), "areas", result.areasCleared()));
+                    Map.of("tier", result.tier(), "areas", result.areasCleared(),
+                            "maintenanceStatus", result.maintenanceStatus(),
+                            "warnings", result.warnings()));
         } catch (Exception ignored) {
             // Reset has committed; audit is best-effort by design.
         }

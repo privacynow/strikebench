@@ -22,12 +22,18 @@ import java.util.Optional;
 public final class StoredCandleStore implements CandleStore {
 
     private final Db db;
+    private final MarketDataMaintenanceGate maintenance;
 
-    public StoredCandleStore(Db db) { this.db = db; }
+    public StoredCandleStore(Db db) { this(db, new MarketDataMaintenanceGate()); }
+
+    public StoredCandleStore(Db db, MarketDataMaintenanceGate maintenance) {
+        this.db = db;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
+    }
 
     @Override
     public int persistObserved(String symbol, CandleSeries series) {
-        return ObservedCandleWriter.write(db, symbol, series).written();
+        return maintenance.write(() -> ObservedCandleWriter.write(db, symbol, series).written());
     }
 
     @Override

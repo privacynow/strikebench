@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.strategy.Guardrails;
+import io.liftandshift.strikebench.strategy.IronCondorQuality;
 import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
@@ -42,7 +43,8 @@ public final class RecommendationEngine {
             + "current (possibly delayed or simulated) data. Options involve substantial risk; you can lose the "
             + "entire amount at risk and, in undefined-risk strategies, more. Nothing here promises any profit. "
             + "POP and market EV use a present-value risk-neutral lognormal approximation at the lane's "
-            + "risk-free rate (q=0 dividend-yield assumption); breakevens are payoff geometry. Raw model outputs "
+            + "risk-free rate (q=0 dividend-yield assumption); market EV is a price/cost benchmark, not an "
+            + "independent edge forecast; breakevens are payoff geometry. Raw model outputs "
             + "exclude commissions; any EV labeled after costs subtracts the disclosed estimated round-trip commissions.";
 
     /** Structural shape group — delegates to the catalog's explicit metadata (presentation only). */
@@ -151,6 +153,7 @@ public final class RecommendationEngine {
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         RiskMode mode = RiskMode.parse(req.riskMode());
         StrategyIntent intent = StrategyIntent.parse(req.intent());
+        String horizon = effectiveHorizon(req.horizon(), intent);
         StrategyFamily.Thesis thesis = parseThesis(req.thesis());
         Holdings holdings = req.holdings();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
@@ -164,6 +167,11 @@ public final class RecommendationEngine {
         double minConfidence = req.minConfidence() == null ? 0 : req.minConfidence();
 
         List<String> notes = new ArrayList<>();
+        if (req.horizon() == null || req.horizon().isBlank()) {
+            notes.add(intent == StrategyIntent.INCOME
+                    ? "No horizon was supplied to this internal engine call; using an explicit 30-session income cycle. Product decision routes still require the user-owned horizon to be persisted before ranking."
+                    : "No horizon was supplied to this internal engine call; using the month analysis bucket. Product decision routes still require an explicit persisted horizon.");
+        }
         // ONE CLOCK PER LANE: a simulated session's clock is always in-session while it runs —
         // the observed market being closed says nothing about THIS market (review P2).
         java.time.Instant laneNow = market.simInstant(worldId).orElseGet(clock::instant);
@@ -187,18 +195,18 @@ public final class RecommendationEngine {
         Quote quote = market.quote(symbol, worldId).orElse(null);
         if (quote == null) {
             notes.add(missingMarketDataNote(lane, symbol));
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
+            return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
         if (!quote.evidence().usableIn(lane)) {
             notes.add("No " + lane + "-lane quote is available for " + symbol + "; refusing to substitute "
                     + quote.evidence().provenance() + " data from " + quote.evidence().source());
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
+            return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget,
                     null, List.of(), rejected, notes, DISCLAIMER);
         }
         List<LocalDate> expirations = market.expirations(symbol, worldId);
         if (!quote.optionable() || expirations.isEmpty()) {
             notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
+            return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
 
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
@@ -206,7 +214,7 @@ public final class RecommendationEngine {
         // the liquid, executable-chain expirations near it and let each family pick the one where it
         // is most profitable — instead of forcing one quantized date whose chain may be empty/thin,
         // which silently produced NOTHING for ~half of observed symbols.
-        int anchorDays = horizonAnchorCalendarDays(req.horizon());
+        int anchorDays = horizonAnchorCalendarDays(horizon);
         if (anchorDays == 0 && !allow0dte) {
             notes.add("0DTE horizon requested but same-day expiration is disabled (allow0dte=false); using the nearest expiration instead");
         }
@@ -216,7 +224,7 @@ public final class RecommendationEngine {
             notes.add("The " + lane + " market has no analyzable same-lane option chain for " + symbol
                     + " near a " + anchorDays + "-day horizon — nearby expirations were empty,"
                     + " one-sided, or belonged to another market lane.");
-            return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
+            return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget,
                     null, List.of(), rejected, notes, DISCLAIMER);
         }
         // The anchor context drives the expiry-independent setup (spot, teaching examples, notes).
@@ -307,67 +315,69 @@ public final class RecommendationEngine {
             List<Candidate> familyCandidates = new ArrayList<>();
             Rejection firstRejection = null;
             for (ExpiryCtx ctx : contexts) {
-                StrategyBuilder.Built built = StrategyBuilder.build(family, ctx.chain(), ctx.farChain(), ctx.spot(), hints);
-                if (built == null) continue;
+                List<StrategyBuilder.Built> builtAlternatives = StrategyBuilder.buildAlternatives(
+                        family, ctx.chain(), ctx.farChain(), ctx.spot(), hints);
+                for (StrategyBuilder.Built built : builtAlternatives) {
 
-                // A structure whose computed worst case is <= $0 is a quote-integrity failure.
-                if (!family.multiExpiration()) {
-                    PayoffCurve integrity = PayoffCurve.of(built.legs(), 1);
-                    if (!integrity.maxLossUnbounded() && integrity.maxLossCents() <= 0) {
-                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
-                                List.of("Priced as risk-free by the current quotes — impossible; stale or crossed data, skipped"));
+                    // A structure whose computed worst case is <= $0 is a quote-integrity failure.
+                    if (!family.multiExpiration()) {
+                        PayoffCurve integrity = PayoffCurve.of(built.legs(), 1);
+                        if (!integrity.maxLossUnbounded() && integrity.maxLossCents() <= 0) {
+                            if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
+                                    List.of("Priced as risk-free by the current quotes — impossible; stale or crossed data, skipped"));
+                            continue;
+                        }
+                    }
+
+                    long coverSharesPerUnit = builtOnHeldShares
+                            ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
+                            : 0;
+                    Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
+                            family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
+                            buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
+                    if (verdict.blocked()) {
+                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), verdict.blockReasons());
                         continue;
                     }
-                }
 
-                long coverSharesPerUnit = builtOnHeldShares
-                        ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
-                        : 0;
-                Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
-                        family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
-                        buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
-                if (verdict.blocked()) {
-                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), verdict.blockReasons());
-                    continue;
+                    CandidateProbe probe = new CandidateProbe();
+                    Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, budget, buyingPowerCents,
+                            ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
+                            builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
+                            quote, ctx.riskFreeRate(), probe);
+                    if (candidate == null) {
+                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
+                                List.of(probe.reason != null ? probe.reason
+                                        : "The current option book cannot produce an executable one-lot package"));
+                        continue;
+                    }
+                    // OBJECTIVE-COHERENCE GATE: a structure whose economics contradict the declared intent
+                    // is never a viable recommendation for it — the engine must not offer a "pay-to-earn-
+                    // income" debit or a can't-profit package. (This is the offer-time enforcement of the
+                    // same carry/coherence idea the eval layer already annotates on a selected position.)
+                    String incoherence = intentIncoherence(intent, family, candidate);
+                    if (incoherence != null) {
+                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(incoherence));
+                        continue;
+                    }
+                    String viability = packageViability(family, candidate);
+                    if (viability != null) {
+                        if (firstRejection == null) firstRejection = new Rejection(
+                                family.name(), family.display(), List.of(viability));
+                        continue;
+                    }
+                    if (candidate.confidence() < minConfidence) {
+                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
+                                List.of(String.format("Confidence %.2f is below your minimum %.2f", candidate.confidence(), minConfidence)));
+                        continue;
+                    }
+                    String filterReason = failsFilter(candidate, filters);
+                    if (filterReason != null) {
+                        if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(filterReason));
+                        continue;
+                    }
+                    familyCandidates.add(candidate);
                 }
-
-                CandidateProbe probe = new CandidateProbe();
-                Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, budget, buyingPowerCents,
-                        ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
-                        builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
-                        quote, ctx.riskFreeRate(), probe);
-                if (candidate == null) {
-                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
-                            List.of(probe.reason != null ? probe.reason
-                                    : "The current option book cannot produce an executable one-lot package"));
-                    continue;
-                }
-                // OBJECTIVE-COHERENCE GATE: a structure whose economics contradict the declared intent
-                // is never a viable recommendation for it — the engine must not offer a "pay-to-earn-
-                // income" debit or a can't-profit package. (This is the offer-time enforcement of the
-                // same carry/coherence idea the eval layer already annotates on a selected position.)
-                String incoherence = intentIncoherence(intent, family, candidate);
-                if (incoherence != null) {
-                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(incoherence));
-                    continue;
-                }
-                String viability = packageViability(family, candidate);
-                if (viability != null) {
-                    if (firstRejection == null) firstRejection = new Rejection(
-                            family.name(), family.display(), List.of(viability));
-                    continue;
-                }
-                if (candidate.confidence() < minConfidence) {
-                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
-                            List.of(String.format("Confidence %.2f is below your minimum %.2f", candidate.confidence(), minConfidence)));
-                    continue;
-                }
-                String filterReason = failsFilter(candidate, filters);
-                if (filterReason != null) {
-                    if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(filterReason));
-                    continue;
-                }
-                familyCandidates.add(candidate);
             }
             if (!familyCandidates.isEmpty()) {
                 candidates.addAll(familyCandidates);
@@ -395,10 +405,11 @@ public final class RecommendationEngine {
             }
         }
 
-        // Return the complete construction field. DecisionPolicy is the sole ranking owner;
-        // structural diversity is a presentation concern with an explicit Show-all affordance.
+        // Return the complete, bounded construction field. StrategyBuilder preserves materially
+        // different short-boundary and wing-width strata; DecisionPolicy remains the sole owner of
+        // recommendation ranking and endorsement across those exact packages.
         if (candidates.isEmpty()) notes.add("No strategy passed the risk screens for this combination — try a wider risk budget or different horizon");
-        return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
+        return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget,
                 spot.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).longValue(), candidates, rejected, notes, DISCLAIMER);
     }
 
@@ -450,7 +461,13 @@ public final class RecommendationEngine {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         LocalDate today = LocalDate.ofInstant(ladderNow, MarketHours.EASTERN);
-        LocalDate near = pickExpiration(expirations, req.horizon(), today, false, ladderNow, notes);
+        String horizon = effectiveHorizon(req.horizon(), intent);
+        if (req.horizon() == null || req.horizon().isBlank()) {
+            notes.add(intent == StrategyIntent.INCOME
+                    ? "No horizon was supplied; using a 30-session income cycle."
+                    : "No horizon was supplied; using the month analysis bucket.");
+        }
+        LocalDate near = pickExpiration(expirations, horizon, today, false, ladderNow, notes);
         OptionChain chain = near == null ? null : market.chain(symbol, near, worldId).orElse(null);
         if (chain == null || chain.isEmpty()) {
             notes.add("Option chain unavailable for " + symbol);
@@ -1093,6 +1110,14 @@ public final class RecommendationEngine {
         catch (IllegalArgumentException e) { return StrategyFamily.Thesis.NEUTRAL; }
     }
 
+    /** Internal callers historically relied on Horizon.parse(null) silently becoming month.
+     * Keep compatibility explicit and make income's neutral starting cycle 30 trading sessions.
+     * Public decision routes still reject an absent declaration before this engine is reached. */
+    static String effectiveHorizon(String requested, StrategyIntent intent) {
+        if (requested != null && !requested.isBlank()) return requested.trim();
+        return intent == StrategyIntent.INCOME ? "30d" : "month";
+    }
+
     /** How many liquid expirations the dynamic search evaluates per family, nearest-anchor first. */
     private static final int MAX_EXPIRY_CANDIDATES = 4;
     /** A tradeable chain needs at least this many two-sided strikes bracketing spot; below it, an
@@ -1106,11 +1131,7 @@ public final class RecommendationEngine {
     /** Exact horizon → calendar days. "Nd" sessions convert at 7/5; the named buckets fall back to
      *  their calendar span. This is only the ANCHOR — the search spans liquid expirations around it. */
     private static int horizonAnchorCalendarDays(String horizon) {
-        if (horizon != null && horizon.matches("(?i)\\d+d")) {
-            int sessions = Integer.parseInt(horizon.substring(0, horizon.length() - 1));
-            return Math.max(1, Math.round(sessions * 7f / 5f));
-        }
-        return io.liftandshift.strikebench.model.Horizon.parse(horizon).expiryCalendarDays();
+        return io.liftandshift.strikebench.model.Horizon.expiryCalendarDays(horizon);
     }
 
     /** The liquid, same-lane analysis expirations nearest the horizon anchor, nearest first, up to
@@ -1180,26 +1201,69 @@ public final class RecommendationEngine {
         return null;
     }
 
-    /**
-     * A technically positive condor credit can still be economic dust. Requiring at least 5% of
-     * the widest wing keeps a one-cent credit against a $10 wing from entering the ranked field,
-     * while leaving the complete after-cost/evidence judgment to DecisionPolicy. The ratio is
-     * quantity-invariant because both credit and maximum loss scale together.
-     */
+    /** Structural viability only; the complete economics/evidence judgment remains downstream. */
     static String packageViability(StrategyFamily family, Candidate c) {
         if (family != StrategyFamily.IRON_CONDOR) return null;
         long credit = c.entryNetPremiumCents();
         double grossWidth = (double) c.maxLossCents() + credit;
         double creditToWidth = grossWidth > 0 ? credit / grossWidth : 0.0;
-        if (credit > 0 && creditToWidth >= StrategyBuilder.MIN_IRON_CONDOR_CREDIT_TO_WIDTH) return null;
-        return String.format(Locale.ROOT,
-                "Executable credit %s is only %.1f%% of the widest wing; an iron condor must collect at least 5%% of its width to be an economically meaningful comparison.",
-                Money.fmt(Math.max(0, credit)), Math.max(0.0, creditToWidth * 100.0));
+        double wingBalance = condorWingBalance(c);
+        IronCondorQuality.Assessment quality = IronCondorQuality.assessRatios(
+                creditToWidth, wingBalance, credit > 0 && credit < grossWidth);
+        if (quality.viable()) return null;
+
+        List<String> reasons = new ArrayList<>();
+        if (!quality.positiveBoundedCredit() || !quality.adequateCredit()) {
+            reasons.add(String.format(Locale.ROOT,
+                    "executable credit %s is %.1f%% of the widest wing (minimum %.0f%%)",
+                    Money.fmt(Math.max(0, credit)), quality.creditToWidestWing() * 100.0,
+                    IronCondorQuality.MIN_CREDIT_TO_WIDEST_WING * 100.0));
+        }
+        if (!quality.balancedWings()) {
+            reasons.add(String.format(Locale.ROOT,
+                    "the narrower protective wing is only %.1f%% of the wider wing (minimum %.0f%%); that is a broken-wing package, not a canonical range-income condor",
+                    quality.narrowToWideWing() * 100.0,
+                    IronCondorQuality.MIN_NARROW_TO_WIDE_WING * 100.0));
+        }
+        return "Iron condor quality screen: " + String.join("; ", reasons)
+                + ". It remains analyzable as exact legs, but is not an automatic recommendation.";
+    }
+
+    private static double condorWingBalance(Candidate candidate) {
+        if (candidate.legs() == null) return 0.0;
+        BigDecimal longPut = null;
+        BigDecimal shortPut = null;
+        BigDecimal shortCall = null;
+        BigDecimal longCall = null;
+        for (LegView leg : candidate.legs()) {
+            if (leg == null || leg.strike() == null) continue;
+            BigDecimal strike;
+            try { strike = new BigDecimal(leg.strike()); }
+            catch (NumberFormatException e) { return 0.0; }
+            if ("PUT".equalsIgnoreCase(leg.type()) && "BUY".equalsIgnoreCase(leg.action())) {
+                if (longPut != null) return 0.0;
+                longPut = strike;
+            } else if ("PUT".equalsIgnoreCase(leg.type()) && "SELL".equalsIgnoreCase(leg.action())) {
+                if (shortPut != null) return 0.0;
+                shortPut = strike;
+            } else if ("CALL".equalsIgnoreCase(leg.type()) && "SELL".equalsIgnoreCase(leg.action())) {
+                if (shortCall != null) return 0.0;
+                shortCall = strike;
+            } else if ("CALL".equalsIgnoreCase(leg.type()) && "BUY".equalsIgnoreCase(leg.action())) {
+                if (longCall != null) return 0.0;
+                longCall = strike;
+            }
+        }
+        if (longPut == null || shortPut == null || shortCall == null || longCall == null) return 0.0;
+        BigDecimal putWidth = shortPut.subtract(longPut);
+        BigDecimal callWidth = longCall.subtract(shortCall);
+        if (putWidth.signum() <= 0 || callWidth.signum() <= 0) return 0.0;
+        return putWidth.min(callWidth).doubleValue() / putWidth.max(callWidth).doubleValue();
     }
 
     private static LocalDate pickExpiration(List<LocalDate> expirations, String horizon, LocalDate today,
                                             boolean allow0dte, java.time.Instant now, List<String> notes) {
-        int targetDays = io.liftandshift.strikebench.model.Horizon.parse(horizon).expiryCalendarDays();
+        int targetDays = io.liftandshift.strikebench.model.Horizon.expiryCalendarDays(horizon);
         List<LocalDate> usable = expirations.stream()
                 .filter(d -> !d.isBefore(today))
                 // A contract whose final bell (4pm ET on expiration day) has passed is DEAD — never

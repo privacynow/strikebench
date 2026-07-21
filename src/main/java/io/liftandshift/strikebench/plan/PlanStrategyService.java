@@ -22,7 +22,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Normalized, exact Strategy-stage competition persistence for one Plan context. */
 public final class PlanStrategyService {
-    public static final String ENGINE_VERSION = "plan-strategy-3";
+    public static final String ENGINE_VERSION = "plan-strategy-6";
 
     /** inputHash identifies the canonical server-side request snapshot that produced this run. */
     public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
@@ -813,7 +813,7 @@ public final class PlanStrategyService {
         return value.stripTrailingZeros().toPlainString();
     }
     private static String horizonName(Integer days) {
-        return io.liftandshift.strikebench.model.Horizon.fromTradingSessions(days).key();
+        return io.liftandshift.strikebench.model.Horizon.exactTradingSessions(days);
     }
     private static String normalizeScope(String raw) {
         String value = raw == null ? "PEERS" : raw.trim().toUpperCase(java.util.Locale.ROOT);

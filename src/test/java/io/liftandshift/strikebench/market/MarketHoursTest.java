@@ -44,6 +44,7 @@ class MarketHoursTest {
         org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 7, 4))).isFalse();   // Saturday anyway
         org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 11, 26))).isFalse(); // Thanksgiving
         org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 12, 25))).isFalse(); // Christmas
+        org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2025, 1, 9))).isFalse();    // Carter day of mourning
         org.assertj.core.api.Assertions.assertThat(MarketHours.isTradingDay(java.time.LocalDate.of(2026, 7, 10))).isTrue();   // ordinary Friday
         // A holiday weekday is NOT a regular session even at noon ET.
         java.time.Instant noonOnMlk = java.time.LocalDate.of(2026, 1, 19).atTime(12, 0)

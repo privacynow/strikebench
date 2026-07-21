@@ -292,7 +292,15 @@ class SimulationStackTest {
                         new SimulationEngine.DecisionLevel("floor", 240)),
                 new SimulationEngine.MarketVolInput(0.30, LocalDate.parse("2026-08-07"), 32), 0.04);
         assertThat(p.bands()).hasSize(21); // day 0..20
-        assertThat(p.samples()).isNotEmpty();
+        assertThat(p.stepBands()).hasSize(21); // every stored step, not a terminal triangle
+        assertThat(p.samples()).hasSize(48);
+        assertThat(p.samples()).allSatisfy(path -> assertThat(path).hasSize(21));
+        assertThat(p.stepBands()).allSatisfy(band -> {
+            assertThat(band.p10()).isLessThanOrEqualTo(band.p25());
+            assertThat(band.p25()).isLessThanOrEqualTo(band.p50());
+            assertThat(band.p50()).isLessThanOrEqualTo(band.p75());
+            assertThat(band.p75()).isLessThanOrEqualTo(band.p90());
+        });
         assertThat(p.endP10()).isLessThanOrEqualTo(p.endP50());
         assertThat(p.endP50()).isLessThanOrEqualTo(p.endP90());
         assertThat(p.decisionMap().terminal().p5()).isLessThanOrEqualTo(p.decisionMap().terminal().p50());
@@ -314,6 +322,46 @@ class SimulationStackTest {
         assertThat(p.marketImplied().basis()).contains("Risk-neutral").contains("not a forecast");
         assertThat(p.marketImplied().expiration()).isEqualTo("2026-08-07");
         assertThat(p.marketImplied().horizonSessions()).isEqualTo(20);
+    }
+
+    @Test
+    void maximumResolutionStoredPreviewKeepsFullStatisticsButBoundsSerializedSeries() {
+        var max = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                756, 96, 0, .25, 0, 0, 0, 6,
+                ScenarioSpec.Heston.fromVol(.25), 501L, 5_000).sane();
+        int steps = max.totalSteps();
+        double[][] paths = new double[max.paths()][steps + 1];
+        for (int step = 0; step <= steps; step++) {
+            for (int path = 0; path < paths.length; path++) {
+                paths[path][step] = 100 + (path - paths.length / 2.0) * step / 1_000_000.0;
+            }
+        }
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "observed",
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED),
+                100, max, paths, null, PathGenerator.MODEL_VERSION, PATH_DATE);
+        var stored = new io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble(
+                "pen_max", "fingerprint", "PARAMETRIC", 1, null, "CURRENT", ensemble,
+                IvSpec.flat(.25), null, .04, 23_400.0 / 96, "test", "MODELED",
+                clock.instant().toString());
+
+        var preview = new SimulationEngine(null, null, null, clock, null)
+                .previewFromStored(stored, List.of(), null, .04);
+
+        assertThat((long) max.paths() * (steps + 1)).isLessThanOrEqualTo(ScenarioSpec.MAX_TOTAL_POINTS);
+        assertThat(preview.paths()).isEqualTo(max.paths());
+        assertThat(preview.bands()).hasSize(757); // full daily statistical surface
+        assertThat(preview.stepBands()).hasSize(PathEnsembleService.MAX_DISPLAY_POINTS_PER_SERIES);
+        assertThat(preview.stepBands().getFirst().step()).isZero();
+        assertThat(preview.stepBands().getLast().step()).isEqualTo(steps);
+        assertThat(preview.samples()).hasSize(max.paths()).allSatisfy(path ->
+                assertThat(path).hasSize(PathEnsembleService.MAX_DISPLAY_POINTS_PER_SERIES));
+        assertThat(preview.samples()).allSatisfy(path -> assertThat(path.getFirst()).isEqualTo(100));
+        assertThat(io.liftandshift.strikebench.util.Json.canonical(
+                io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(preview)).length())
+                .isLessThan(2_000_000);
+        assertThat(preview.notes()).anyMatch(note -> note.contains("deterministic checkpoints")
+                && note.contains("Full stored paths"));
     }
 
     @Test

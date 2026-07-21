@@ -26,13 +26,33 @@ public record EvalContext(
         PortfolioExposureContext portfolioExposure,
         DeclaredObjective declared,   // what the user SAID this is for; null = undeclared
         RegimeSnapshot regime,        // the lane's trailing regime; null = not computed
-        List<Double> trailingCloses   // chronological lane closes for history-fit; empty = none
+        List<Double> trailingCloses,  // chronological lane closes for history-fit; empty = none
+        DataEvidence historyEvidence  // exact provenance of the CandleSeries behind realized vol/history
 ) {
     public EvalContext {
         if (asOfDate == null) throw new IllegalArgumentException("evaluation date is required");
         ivHistory = ivHistory == null ? List.of() : List.copyOf(ivHistory);
         rateEvidence = rateEvidence == null ? DataEvidence.missing("rate input") : rateEvidence;
         trailingCloses = trailingCloses == null ? List.of() : List.copyOf(trailingCloses);
+        historyEvidence = historyEvidence == null
+                ? DataEvidence.missing("daily history provenance") : historyEvidence;
+    }
+
+    /**
+     * Compatibility shape for callers that predate history provenance. A realized-volatility
+     * number alone cannot prove where its bars came from, so the evidence stays explicitly
+     * missing rather than being inferred from option pricing or the presence of a value.
+     */
+    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
+                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
+                       long buyingPowerCents, boolean marketOpen, long feePerContractCents,
+                       long feePerOrderCents, double riskFreeRate, DataEvidence rateEvidence,
+                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
+                       RegimeSnapshot regime, List<Double> trailingCloses) {
+        this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
+                buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
+                rateEvidence, portfolioExposure, declared, regime, trailingCloses,
+                DataEvidence.missing("daily history provenance not supplied"));
     }
 
     /** Undeclared-context constructor: existing callers keep their shape. */

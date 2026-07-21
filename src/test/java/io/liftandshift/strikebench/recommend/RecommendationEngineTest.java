@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
+import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.util.Money;
 import org.junit.jupiter.api.BeforeEach;
@@ -142,21 +143,81 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void boundedStrikeAndWidthAlternativesReachDecisionPolicy() {
+        MarketDataProvider provider = staleObservedProvider(CLOCK);
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(provider), List.of(), List.of()), CLOCK);
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "neutral", "30d", "aggressive", null, null, null,
+                List.of("CREDIT_PUT_SPREAD"), true, false, "INCOME", null, null);
+
+        RecommendationEngine.Result result = observed.recommend(request, BP);
+        var byExpiration = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CREDIT_PUT_SPREAD"))
+                .collect(java.util.stream.Collectors.groupingBy(candidate ->
+                        candidate.legs().getFirst().expiration()));
+
+        assertThat(byExpiration).isNotEmpty();
+        assertThat(byExpiration).hasSizeLessThanOrEqualTo(4);
+        assertThat(byExpiration.values()).allSatisfy(packages ->
+                assertThat(packages).hasSizeLessThanOrEqualTo(StrategyBuilder.MAX_SEARCH_ALTERNATIVES));
+        assertThat(result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CREDIT_PUT_SPREAD")))
+                .hasSizeLessThanOrEqualTo(4 * StrategyBuilder.MAX_SEARCH_ALTERNATIVES);
+        assertThat(byExpiration.values()).anySatisfy(packages -> {
+            assertThat(packages).hasSizeBetween(2, StrategyBuilder.MAX_SEARCH_ALTERNATIVES);
+            assertThat(packages.stream().map(Candidate::label).distinct().count())
+                    .isEqualTo(packages.size());
+        });
+    }
+
+    @Test
+    void internalIncomeFallbackIsThirtySessionsAndNeverRewritesAnExplicitHorizon() {
+        assertThat(RecommendationEngine.effectiveHorizon(
+                null, io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isEqualTo("30d");
+        assertThat(RecommendationEngine.effectiveHorizon(
+                "1d", io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isEqualTo("1d");
+    }
+
+    @Test
     void ironCondorRejectsPennyCreditAgainstTenDollarWings() {
         Candidate pennyCondor = condorCandidate(100L, 99_900L); // $1 total credit / $1,000 gross width
         Candidate viableCondor = condorCandidate(10_000L, 90_000L); // $100 / $1,000 = 10%
 
         assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, pennyCondor))
-                .contains("only 0.1%")
-                .contains("at least 5%")
-                .contains("economically meaningful");
+                .contains("is 0.1%")
+                .contains("minimum 10%")
+                .contains("not an automatic recommendation");
         assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, viableCondor))
                 .isNull();
     }
 
+    @Test
+    void ironCondorRejectsWildlyAsymmetricProtectionEvenWhenCreditClearsOldFloor() {
+        Candidate brokenWing = condorCandidate(10_500L, 179_500L,
+                "575", "594", "788", "792");
+
+        assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, brokenWing))
+                .contains("5.5% of the widest wing")
+                .contains("21.1% of the wider wing")
+                .contains("broken-wing package")
+                .contains("not an automatic recommendation");
+    }
+
     private static Candidate condorCandidate(long creditCents, long maxLossCents) {
+        return condorCandidate(creditCents, maxLossCents, "90", "100", "110", "120");
+    }
+
+    private static Candidate condorCandidate(long creditCents, long maxLossCents,
+                                              String longPut, String shortPut,
+                                              String shortCall, String longCall) {
         return new Candidate("IRON_CONDOR", "Iron condor", "range_credit", "four-leg package",
-                List.of(), 1, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
+                List.of(
+                        new LegView("BUY", "PUT", longPut, "2026-08-21", 1, "0.10", 100, "OPEN"),
+                        new LegView("SELL", "PUT", shortPut, "2026-08-21", 1, "0.40", 100, "OPEN"),
+                        new LegView("SELL", "CALL", shortCall, "2026-08-21", 1, "0.40", 100, "OPEN"),
+                        new LegView("BUY", "CALL", longCall, "2026-08-21", 1, "0.10", 100, "OPEN")),
+                1, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
                 0.50, "DELAYED", List.of(), 0.50, "range income", "credit", "wing risk",
                 "breakout", "four defined-risk legs", "INCOME", List.of("INCOME"),
                 0.20, null, null, null, false, null, null);

@@ -125,11 +125,22 @@ grants storage or redistribution rights; the source's plan and terms remain auth
 | Your own CSV export | Broker/vendor/Yahoo-exported daily OHLCV or closes, validated and stored locally with its source and raw/adjusted basis |
 | `POLYGON_API_KEY` | Official keyed daily history and plan-dependent historical option data; your subscribed terms apply |
 | `ALPHAVANTAGE_API_KEY` | Official keyed adjusted daily history; compact access is request-limited and full history requires an entitled plan |
-| Authorized Yahoo automation | Disabled unless both local opt-in and permission confirmation are set; never a hosted default |
+| Yahoo daily history | Enabled under the product owner's standing authorization; serialized, budgeted, persisted locally, and explicitly disabled with `YAHOO_ENABLED=false` |
 
 Data → Sources & jobs previews missing sessions and request cost before downloading, resumes
-per symbol after interruption, quarantines invalid rows, and can run once after each completed
-market session. Daily bars are intentionally not re-downloaded every hour.
+per symbol after interruption, quarantines invalid rows, and runs Yahoo enrichment once after each
+completed market session for the canonical curated universe. The durable store serves complete
+ranges without another request. Daily bars are intentionally not re-downloaded every hour.
+
+For destructive local-development database recreation, `scripts/dev-market-snapshot.sh` maintains
+a transient observed-data recovery bundle under `.tmp/`. A format-3 capture is taken from one
+read-only repeatable-read database snapshot, preserves durable provider request usage and persisted
+cooldowns, and versions the prior verified bundle before installing a new one. By default it refuses
+to lose any canonical Yahoo symbol or established per-symbol coverage, important option/quote
+sentinels, or prior provider usage. `SNAPSHOT_ALLOW_REGRESSION=true` is the explicit emergency
+override. Hydration merges only when the bundle row is newer or higher quality and never lowers a
+request count or cooldown. This helper is a development recovery artifact, not a product data
+fallback.
 
 ## Good to know
 

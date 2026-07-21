@@ -178,7 +178,7 @@ final class DiscoveryController {
                             + " favorable inside an explicit generated teaching market. That is useful practice, not evidence of a live-market edge."
                     : needsDailyHistory
                         ? "A favorable observed verdict cannot be formed yet because eligible daily history is missing. The structures remain available for mechanics and market-implied comparison; acquire observed bars in Data → Sources & jobs."
-                    : "No setup currently shows a robust after-cost edge. Mixed and unfavorable structures remain available for comparison and learning.");
+                    : "No setup currently shows a material realistic-measure advantage after costs. Mixed and unfavorable structures remain available for comparison and learning.");
             return out;
         } catch (RuntimeException e) {
             log.warn("Decision ranking is temporarily unavailable");

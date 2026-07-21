@@ -132,6 +132,8 @@ public final class ApiResponses {
             String waypointFill,
             io.liftandshift.strikebench.sim.ScenarioSpec pathAssumptions,
             io.liftandshift.strikebench.sim.ScenarioSpec conditioningAssumptions,
+            List<io.liftandshift.strikebench.sim.PathEnsembleService.DisplayWaypoint>
+                    conditioningPathWaypoints,
             io.liftandshift.strikebench.sim.IvSpec ivAssumptions,
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationAssumptions,
             double rateAnnual,
@@ -177,7 +179,7 @@ public final class ApiResponses {
     public record DataSources<T, U>(T feeds, U connectors, String recommendedCandleSource,
                                     boolean fixturesOnly) {}
     public record DataSync<T, U, V, W>(T connectors, String recommendedSource, U cursors,
-                                       V schedule, W quarantine, String latestCompletedSession,
+                                       V schedule, V systemSchedule, W quarantine, String latestCompletedSession,
                                        String note) {}
     public record SyncSymbolPlan<T>(String symbol, int existingSessions, int missingSessions,
                                     int requests, boolean complete, T ranges) {}

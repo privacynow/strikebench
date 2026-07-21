@@ -60,8 +60,42 @@ public final class AutoRecommender {
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
 
+    /** Goal-aware cross-symbol score. It ranks the scan, never replaces candidate economics. */
+    public record OpportunityContext(
+            String goal,
+            double score,
+            double signalConfidence,
+            Double volatilityFit,
+            Double liquidity,
+            double eventAdjustment,
+            String summary,
+            SignalEngine.VolatilityEvidence volatilityEvidence,
+            SignalEngine.EventEvidence eventEvidence
+    ) {}
+
+    /** Compact best-candidate projection for an opportunity lens; the full evaluation remains below. */
+    public record BestIdea(
+            boolean available,
+            String horizon,
+            String family,
+            String displayName,
+            String economicVerdict,
+            String placement,
+            Double chanceOfProfit,
+            Long maxLossCents,
+            Long marketImpliedEvAfterCostsCents,
+            Long realizedVolEvAfterCostsCents,
+            Long realizedVsMarketEvDifferenceCents,
+            Long realisticEvLowAfterCostsCents,
+            Long realisticEvHighAfterCostsCents,
+            String realisticEvBasis,
+            boolean observedEvidence,
+            String summary
+    ) {}
+
     public record Pick(String symbol, SignalEngine.Signals signals, double opportunityScore,
-                       List<HorizonIdeas> horizons, String intent) {}
+                       List<HorizonIdeas> horizons, String intent,
+                       OpportunityContext opportunity, BestIdea bestIdea) {}
 
     public record AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
                              long riskBudgetCents, String disclaimer,
@@ -117,8 +151,7 @@ public final class AutoRecommender {
 
         // 1. Signals for the whole universe, scanned concurrently — live providers are
         // network-bound and per-symbol independent (the service layer is thread-safe).
-        record Scored(SignalEngine.Signals s, double score) {}
-        List<Scored> scored = new ArrayList<>();
+        List<SignalEngine.Signals> eligibleSignals = new ArrayList<>();
         java.util.Map<String, SignalEngine.Signals> bySymbol = new java.util.concurrent.ConcurrentHashMap<>();
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
@@ -138,9 +171,8 @@ public final class AutoRecommender {
                 skipped.add(symbol + String.format(": signal confidence %.2f below %.2f", s.confidence(), minConfidence));
                 continue;
             }
-            scored.add(new Scored(s, opportunityScore(s)));
+            eligibleSignals.add(s);
         }
-        scored.sort(Comparator.comparingDouble((Scored x) -> x.score).reversed());
 
         long[] riskBudget = {0};
         List<Pick> picks = new ArrayList<>();
@@ -148,6 +180,13 @@ public final class AutoRecommender {
         for (HoldingInfo h : holdings) heldBySymbol.put(h.symbol().toUpperCase(Locale.ROOT), h);
 
         for (StrategyIntent intent : normalizeIntents(req.intents())) {
+            record GoalScored(SignalEngine.Signals signals, OpportunityContext opportunity) {}
+            List<GoalScored> rankedForGoal = eligibleSignals.stream()
+                    .map(signal -> new GoalScored(signal, opportunityContext(signal, intent)))
+                    .sorted(Comparator.comparingDouble(
+                                    (GoalScored row) -> row.opportunity().score()).reversed()
+                            .thenComparing(row -> row.signals().symbol()))
+                    .toList();
             if (intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE) {
                 // Hold-based intents scan YOUR SHARES, not the universe: the question is
                 // "which holding should I harvest or protect", not "which ticker looks good".
@@ -172,12 +211,14 @@ public final class AutoRecommender {
                             h.freeShares(), h.avgCostCents(), null);
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
                             buyingPowerCents, riskBudget, worldId);
-                    picks.add(new Pick(sym, s, round2(opportunityScore(s)), perHorizon, intent.name()));
+                    OpportunityContext opportunity = opportunityContext(s, intent);
+                    picks.add(new Pick(sym, s, opportunity.score(), perHorizon, intent.name(),
+                            opportunity, bestIdea(perHorizon)));
                 }
                 continue;
             }
-            for (Scored top : scored.subList(0, Math.min(maxPicks, scored.size()))) {
-                SignalEngine.Signals s = top.s;
+            for (GoalScored top : rankedForGoal.subList(0, Math.min(maxPicks, rankedForGoal.size()))) {
+                SignalEngine.Signals s = top.signals();
                 HoldingInfo held = heldBySymbol.get(s.symbol().toUpperCase(Locale.ROOT));
                 // ACQUIRE never inherits the existing position: sharesOwned means "shares I want"
                 // there and defaults to one lot — owned shares must not scale new purchases.
@@ -187,7 +228,8 @@ public final class AutoRecommender {
                         : null;
                 List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
                         buyingPowerCents, riskBudget, worldId);
-                picks.add(new Pick(s.symbol(), s, round2(top.score), perHorizon, intent.name()));
+                picks.add(new Pick(s.symbol(), s, top.opportunity().score(), perHorizon, intent.name(),
+                        top.opportunity(), bestIdea(perHorizon)));
             }
         }
 
@@ -324,12 +366,93 @@ public final class AutoRecommender {
         return List.copyOf(out);
     }
 
-    /** How interesting a symbol is to look at, 0..1: signal strength, vol edge, liquidity. */
-    private static double opportunityScore(SignalEngine.Signals s) {
-        double volEdge = s.ivHvRatio() == null ? 0.3
-                : Math.clamp(Math.abs(Math.log(s.ivHvRatio())) / Math.log(2), 0, 1); // 2x or 0.5x saturates
-        double liquidity = s.liquidityScore() == null ? 0.5 : s.liquidityScore();
-        return 0.5 * s.confidence() + 0.3 * volEdge + 0.2 * liquidity;
+    /**
+     * Cross-symbol opportunity is goal-aware. Rich options help an income scan but do not count as
+     * cheap protection; cheap options help a hedge scan but do not masquerade as premium richness.
+     * Missing IV or realized volatility receives no volatility credit and is named in the payload.
+     */
+    private static OpportunityContext opportunityContext(SignalEngine.Signals s, StrategyIntent intent) {
+        Double volFit = volatilityFit(s.ivHvRatio(), intent);
+        double liquidity = s.liquidityScore() == null ? 0.5 : Math.clamp(s.liquidityScore(), 0, 1);
+        double weighted = 0.5 * s.confidence() + 0.2 * liquidity;
+        if (volFit != null) {
+            weighted += 0.3 * volFit;
+        }
+        double eventAdjustment = eventAdjustment(s.eventRisk(), intent);
+        double score = Math.clamp(weighted + eventAdjustment, 0, 1);
+        return new OpportunityContext(intent.name(), round2(score), round2(s.confidence()),
+                volFit == null ? null : round2(volFit), round2(liquidity), round2(eventAdjustment),
+                goalFitSummary(s, intent, volFit), s.volatilityEvidence(), s.eventEvidence());
+    }
+
+    static Double volatilityFit(Double ivHvRatio, StrategyIntent intent) {
+        if (ivHvRatio == null || !Double.isFinite(ivHvRatio) || ivHvRatio <= 0) return null;
+        double log2 = Math.log(ivHvRatio) / Math.log(2);
+        return switch (intent) {
+            case INCOME, ACQUIRE, EXIT -> Math.clamp(log2, 0, 1);
+            case HEDGE -> Math.clamp(-log2, 0, 1);
+            case DIRECTIONAL -> Math.clamp(Math.abs(log2), 0, 1);
+        };
+    }
+
+    private static double eventAdjustment(boolean eventRisk, StrategyIntent intent) {
+        if (!eventRisk) return 0.0;
+        return switch (intent) {
+            case INCOME, ACQUIRE, EXIT -> -0.12;
+            case HEDGE -> 0.08;
+            case DIRECTIONAL -> 0.0;
+        };
+    }
+
+    private static String goalFitSummary(SignalEngine.Signals s, StrategyIntent intent, Double volFit) {
+        if (volFit == null) {
+            return "The IV-versus-realized-volatility comparison is unavailable; it receives no ranking credit and the remaining signal and liquidity evidence stays visible.";
+        }
+        if (s.eventRisk() && (intent == StrategyIntent.INCOME
+                || intent == StrategyIntent.ACQUIRE || intent == StrategyIntent.EXIT)) {
+            return "Option premium is elevated, but a source-backed event flag may explain it; compare the after-cost edge with the gap tail before collecting premium.";
+        }
+        return switch (intent) {
+            case INCOME -> "Ranks richer option premium against realized movement, then asks the shared evaluator whether any income package clears costs and tail risk.";
+            case ACQUIRE -> "Ranks put premium against realized movement for a desired-price entry; assignment and cash collateral remain explicit.";
+            case EXIT -> "Ranks call premium against realized movement for held-share exits; assignment is the declared goal, not a failure.";
+            case HEDGE -> "Ranks comparatively inexpensive option protection, with event risk increasing—not hiding—the need to inspect the hedge.";
+            case DIRECTIONAL -> "Ranks the size of the volatility mismatch alongside direction, evidence confidence, and executable liquidity.";
+        };
+    }
+
+    private static BestIdea bestIdea(List<HorizonIdeas> horizons) {
+        record Located(String horizon, ScoredCandidate scored) {}
+        Located best = horizons.stream()
+                .flatMap(horizon -> horizon.candidates().stream()
+                        .map(scored -> new Located(horizon.horizon(), scored)))
+                .max(Comparator.comparingDouble(row -> row.scored().evaluation().decisionScore()))
+                .orElse(null);
+        if (best == null) {
+            return new BestIdea(false, null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, false,
+                    "No package passed the current market, evidence, and account screens.");
+        }
+        StrategyEvaluation evaluation = best.scored().evaluation();
+        Candidate candidate = evaluation.candidate();
+        EconomicAssessment economics = evaluation.assessment() == null
+                ? null : evaluation.assessment().economics();
+        Long difference = economics == null || economics.marketEvAfterCostsCents() == null
+                || economics.realizedVolEvAfterCostsCents() == null ? null
+                : economics.realizedVolEvAfterCostsCents() - economics.marketEvAfterCostsCents();
+        return new BestIdea(true, best.horizon(), candidate.strategy(), candidate.displayName(),
+                economics == null ? "UNAVAILABLE" : economics.verdict().name(),
+                economics == null ? null : economics.placement(),
+                evaluation.pop(), evaluation.maxLossCents(),
+                economics == null ? null : economics.marketEvAfterCostsCents(),
+                economics == null ? null : economics.realizedVolEvAfterCostsCents(),
+                difference,
+                economics == null ? null : economics.realisticEvLowAfterCostsCents(),
+                economics == null ? null : economics.realisticEvHighAfterCostsCents(),
+                economics == null ? null : economics.realisticEvBasis(),
+                economics != null && economics.observedEvidence(),
+                economics == null ? "Economic comparison is unavailable for this package."
+                        : economics.summary());
     }
 
     private static String targetFit(Candidate c, Long targetProfitCents) {
@@ -359,9 +482,13 @@ public final class AutoRecommender {
             if ((norm.equals("0DTE") || norm.equals("week") || norm.equals("month") || norm.equals("quarter"))
                     && !out.contains(norm)) {
                 out.add(norm);
+            } else if (norm.matches("[1-9]\\d{0,2}d")
+                    && Integer.parseInt(norm.substring(0, norm.length() - 1)) <= 756
+                    && !out.contains(norm)) {
+                out.add(norm);
             } else if (!norm.isBlank() && !out.contains(norm)) {
                 throw new IllegalArgumentException("Unknown Scout horizon '" + h
-                        + "' — choose 0DTE, week, month, or quarter");
+                        + "' — choose 0DTE, week, month, quarter, or an exact value such as 30d");
             }
         }
         if (out.isEmpty()) throw new IllegalArgumentException("Universe Scout requires an explicit horizon");

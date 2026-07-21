@@ -56,6 +56,22 @@ final class DecisionDeclarationPolicyTest {
                 "Portfolio construction", "INCOME", "neutral", "month", "balanced", "DECISION"));
     }
 
+    @Test
+    void exactTradingSessionHorizonsPassWithoutBucketConversion() {
+        var recommendation = request("neutral", "30d", "balanced");
+        var scout = new AutoRecommender.AutoRequest(null, List.of("30d", "45d"), 3,
+                null, null, null, null, "balanced", false,
+                List.of("INCOME"), null, null);
+
+        assertThatNoException().isThrownBy(() -> DecisionDeclarationPolicy.requireRecommendation(
+                "Strategy recommendation", recommendation, true));
+        assertThatNoException().isThrownBy(() -> DecisionDeclarationPolicy.requireScout(
+                "Universe Scout", scout));
+        assertThatThrownBy(() -> DecisionDeclarationPolicy.requireRecommendation(
+                "Strategy recommendation", request("neutral", "757d", "balanced"), true))
+                .hasMessageContaining("maximum 756d");
+    }
+
     private static RecommendationEngine.Request request(String thesis, String horizon, String risk) {
         return new RecommendationEngine.Request("AAPL", thesis, horizon, risk,
                 null, null, null, null, true, false, "INCOME", null, null);

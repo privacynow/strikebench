@@ -90,6 +90,8 @@ final class PlanOutcomeController {
      */
     public record PlanScenarioPathsRequest(String ensembleId, String scenarioId,
                                            List<io.liftandshift.strikebench.sim.ScenarioSpec.Waypoint> waypoints,
+                                           List<io.liftandshift.strikebench.sim.PathEnsembleService.DisplayWaypoint>
+                                                   pathWaypoints,
                                            io.liftandshift.strikebench.sim.IvSpec iv,
                                            io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas,
                                            Integer limit,
@@ -125,7 +127,15 @@ final class PlanOutcomeController {
         String scenarioId = body == null ? ctx.queryParam("scenarioId") : body.scenarioId();
         List<io.liftandshift.strikebench.sim.ScenarioSpec.Waypoint> inlineWaypoints =
                 body == null || body.waypoints() == null ? List.of() : List.copyOf(body.waypoints());
-        if (scenarioId != null && !scenarioId.isBlank() && !inlineWaypoints.isEmpty()) {
+        List<io.liftandshift.strikebench.sim.PathEnsembleService.DisplayWaypoint> inlinePathWaypoints =
+                body == null || body.pathWaypoints() == null
+                        ? List.of() : List.copyOf(body.pathWaypoints());
+        if (!inlineWaypoints.isEmpty() && !inlinePathWaypoints.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "waypoints and pathWaypoints are alternative conditioning sources; provide exactly one");
+        }
+        if (scenarioId != null && !scenarioId.isBlank()
+                && (!inlineWaypoints.isEmpty() || !inlinePathWaypoints.isEmpty())) {
             throw new IllegalArgumentException("scenarioId and inline waypoints are alternative scenario sources");
         }
         int limit = body == null || body.limit() == null
@@ -160,11 +170,18 @@ final class PlanOutcomeController {
         if (!inlineWaypoints.isEmpty()) {
             scenarioSpec = stored.ensemble().spec().withWaypoints(inlineWaypoints).sane();
         }
+        if (!inlinePathWaypoints.isEmpty()
+                && inlinePathWaypoints.getLast().sessionProgress()
+                    > stored.ensemble().spec().horizonDays()) {
+            throw new IllegalArgumentException("The final path waypoint lies beyond the stored ensemble horizon.");
+        }
         if (typedAnimationRequest
                 && !java.util.Objects.equals(root.activeWorld(ctx), stored.ensemble().scope().worldId())) {
             throw new IllegalStateException("This path set belongs to another market world. Open its market before animating it.");
         }
-        var projection = pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit);
+        var projection = inlinePathWaypoints.isEmpty()
+                ? pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit)
+                : pathEnsembles.displayPathsAtProgress(stored.ensemble(), inlinePathWaypoints, limit);
         var ensembleRef = new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().waypointFill().name());
         if (!typedAnimationRequest) {
@@ -175,6 +192,7 @@ final class PlanOutcomeController {
         String focusPositionKey = normalizeFocusPositionKey(body.focusPositionKey());
         ObjectNode selected = focusPositionKey == null ? root.selectedCandidate(ctx, plan, true) : null;
         int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
+        var displayPathSelections = canvasDisplaySelections(projection);
         var effectiveIv = body.iv() == null ? stored.iv() : body.iv().sane();
         var effectiveCanvas = (body.canvas() == null
                 ? stored.canvas() == null
@@ -182,7 +200,8 @@ final class PlanOutcomeController {
                 : body.canvas()).sane(stored.ensemble().spec().horizonDays());
         ObjectNode checkpointHolder = Json.MAPPER.createObjectNode();
         ObjectNode checkpoints = decorateCanvasValuation(ctx, checkpointHolder, plan, stored,
-                focusSourcePathIndex, effectiveIv, effectiveCanvas, focusPositionKey);
+                focusSourcePathIndex, effectiveIv, effectiveCanvas, focusPositionKey,
+                displayPathSelections, projection.selection());
         String selectedCandidateId = selected == null ? null : selected.path("id").asText();
         String requiredPositionKey = focusPositionKey == null
                 ? "PROPOSED:" + selectedCandidateId : focusPositionKey;
@@ -215,7 +234,14 @@ final class PlanOutcomeController {
                 stored.ensemble().anchorDate().toString(), stored.anchorSource(), stored.anchorFreshness(),
                 stored.asOf(), stored.stepSeconds(), stored.ensemble().paths().length,
                 stored.ensemble().spec().totalSteps(), stored.ensemble().waypointFill().name(),
-                stored.ensemble().spec(), scenarioSpec, effectiveIv, effectiveCanvas, stored.rateAnnual(),
+                stored.ensemble().spec(), scenarioSpec,
+                inlinePathWaypoints.isEmpty()
+                        ? scenarioSpec == null ? List.of() : scenarioSpec.waypoints().stream()
+                            .map(pin -> new io.liftandshift.strikebench.sim.PathEnsembleService.DisplayWaypoint(
+                                    pin.dayIndex(), pin.priceRatio(), pin.tolerance()))
+                            .toList()
+                        : inlinePathWaypoints,
+                effectiveIv, effectiveCanvas, stored.rateAnnual(),
                 selectedCandidateId, focusPositionKey, focusedPackageFingerprint,
                 focusedPackageProvenance, valuationFingerprint);
         ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection,
@@ -778,7 +804,9 @@ final class PlanOutcomeController {
     private void decorateCanvasValuation(Context ctx, ObjectNode preview,
             io.liftandshift.strikebench.plan.Plan.View plan,
             io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored) {
-        decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null);
+        var projection = pathEnsembles.displayPaths(stored.ensemble(), null, 48);
+        decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null,
+                canvasDisplaySelections(projection), projection.selection());
     }
 
     private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
@@ -787,7 +815,10 @@ final class PlanOutcomeController {
             Integer focusSourcePathIndex,
             io.liftandshift.strikebench.sim.IvSpec valuationIv,
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationCanvas,
-            String focusPositionKey) {
+            String focusPositionKey,
+            List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection>
+                    displayPathSelections,
+            String displayPathRule) {
         var canvas = valuationCanvas == null
                 ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
                 : valuationCanvas.sane(stored.ensemble().spec().horizonDays());
@@ -873,9 +904,9 @@ final class PlanOutcomeController {
         try {
             var report = focusSourcePathIndex == null
                     ? canvasValuator.value(stored.ensemble(), iv, canvas,
-                        stored.rateAnnual(), inputs)
+                        stored.rateAnnual(), inputs, displayPathSelections)
                     : canvasValuator.value(stored.ensemble(), iv, canvas,
-                        stored.rateAnnual(), inputs, focusSourcePathIndex);
+                        stored.rateAnnual(), inputs, focusSourcePathIndex, displayPathSelections);
             canvasJson = Json.MAPPER.valueToTree(report);
         } catch (IllegalArgumentException | IllegalStateException e) {
             canvasJson = Json.MAPPER.createObjectNode();
@@ -891,6 +922,12 @@ final class PlanOutcomeController {
             row.put("label", "Same-symbol position comparison");
             row.put("reason", io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
         }
+        canvasJson.put("displayPathRule", displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
+        canvasJson.put("displayPathCount", displayPathSelections == null ? 0 : displayPathSelections.size());
+        canvasJson.set("displayPathSourceIndices", Json.MAPPER.valueToTree(
+                displayPathSelections == null ? List.of() : displayPathSelections.stream()
+                        .map(io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection::sourcePathIndex)
+                        .toList()));
         canvasJson.set("refused", refused);
         io.liftandshift.strikebench.position.PositionPackageFingerprint.FocusedIdentity
                 focusedPackageIdentity = focusedScoped == null
@@ -922,6 +959,8 @@ final class PlanOutcomeController {
         receipt.put("authoredPathMeaning", "USER_HYPOTHESIS_NOT_FORECAST");
         receipt.put("positionScopeCount", canvasJson.path("positions").size());
         receipt.put("positionScopeAttempted", inputs.size());
+        receipt.put("displayPathRule", displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
+        receipt.put("displayPathCount", displayPathSelections == null ? 0 : displayPathSelections.size());
         int actualFocusPath = canvasJson.path("focusSourcePathIndex").asInt(
                 focusSourcePathIndex == null ? -1 : focusSourcePathIndex);
         receipt.put("focusSourcePathIndex", actualFocusPath);
@@ -947,6 +986,10 @@ final class PlanOutcomeController {
         valuationIdentity.set("ivAssumptions", Json.MAPPER.valueToTree(iv));
         valuationIdentity.set("canvasAssumptions", Json.MAPPER.valueToTree(canvas));
         valuationIdentity.set("positionPackages", Json.MAPPER.valueToTree(inputs));
+        valuationIdentity.put("displayPathRule",
+                displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
+        valuationIdentity.set("displayPathSelections", Json.MAPPER.valueToTree(
+                displayPathSelections == null ? List.of() : displayPathSelections));
         if (focusPositionKey != null) valuationIdentity.put("focusPositionKey", focusPositionKey);
         if (focusedPackageIdentity != null) {
             valuationIdentity.set("focusedPackage", Json.MAPPER.valueToTree(focusedPackageIdentity));
@@ -960,6 +1003,16 @@ final class PlanOutcomeController {
         preview.set("canvas", canvasJson);
         preview.set("canvasModel", Json.MAPPER.valueToTree(canvas));
         return canvasJson;
+    }
+
+    private static List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection>
+            canvasDisplaySelections(
+                    io.liftandshift.strikebench.sim.PathEnsembleService.DisplayProjection projection) {
+        if (projection == null || projection.paths().isEmpty()) return List.of();
+        return projection.paths().stream()
+                .map(path -> new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection(
+                        path.sourcePathIndex(), path.role()))
+                .toList();
     }
 
     private static void addCanvasPosition(

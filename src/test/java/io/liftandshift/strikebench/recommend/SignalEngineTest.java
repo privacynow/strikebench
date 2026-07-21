@@ -53,6 +53,15 @@ class SignalEngineTest {
         assertThat(s.sentimentAggregate().available()).isFalse();
         assertThat(s.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
         assertThat(s.headlineSentiment()).isEmpty();
+        assertThat(s.volatilityEvidence().impliedAvailable()).isTrue();
+        assertThat(s.volatilityEvidence().realizedAvailable()).isTrue();
+        assertThat(s.volatilityEvidence().impliedSource()).isEqualTo("fixture");
+        assertThat(s.volatilityEvidence().realizedSource()).isEqualTo("fixture");
+        assertThat(s.volatilityEvidence().realizedObservations()).isGreaterThan(30);
+        assertThat(s.volatilityEvidence().unavailableReasons()).isEmpty();
+        assertThat(s.eventEvidence().available()).isFalse();
+        assertThat(s.eventEvidence().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
+        assertThat(s.eventEvidence().scorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
         assertThat(s.rationale()).noneSatisfy(r -> assertThat(r)
                 .containsIgnoringCase("earnings/guidance-type"));
         assertThat(s.liquidityScore()).isBetween(0.0, 1.0);
@@ -82,6 +91,9 @@ class SignalEngineTest {
         SignalEngine.Signals vtsax = engine.analyze("VTSAX").orElseThrow();
         assertThat(vtsax.optionable()).isFalse();
         assertThat(vtsax.ivAtm()).isNull();
+        assertThat(vtsax.volatilityEvidence().impliedAvailable()).isFalse();
+        assertThat(vtsax.volatilityEvidence().unavailableReasons())
+                .anySatisfy(reason -> assertThat(reason).contains("No listed option chain"));
         assertThat(engine.analyze("ZZZZ")).isEmpty();
     }
 

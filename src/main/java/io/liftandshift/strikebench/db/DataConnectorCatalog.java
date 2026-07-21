@@ -46,12 +46,15 @@ public final class DataConnectorCatalog {
                 "The default local allowance is 25 requests/day and survives restarts."));
         out.add(connector("yahoo", "Yahoo Finance automation", "Daily equity, ETF, and index prices",
                 yahooOn, yahooPermitted, true, "Unofficial automated endpoint",
-                "Automated collection requires permission under Yahoo's terms; not suitable as a hosted default.",
-                "End-of-day", "Requested date range", "Raw OHLCV", cfg.yahooDailyRequestLimit(), false,
+                "Enabled under the product owner's standing authorization; source terms still govern storage and use.",
+                "End-of-day", "Requested date range; saved locally and incrementally enriched", "Raw OHLCV",
+                cfg.yahooDailyRequestLimit(), !polygon && !alpha,
                 yahooOn && !cfg.yahooAutomationPermissionConfirmed()
-                        ? "Automation is still blocked: permission confirmation is required in addition to YAHOO_ENABLED."
-                        : "For authorized personal use only: set YAHOO_ENABLED and YAHOO_AUTOMATION_PERMISSION_CONFIRMED.",
-                "Prefer a user-exported CSV or an official keyed provider when possible."));
+                        ? "Automation is revoked by YAHOO_AUTOMATION_PERMISSION_CONFIRMED=false."
+                        : yahooOn
+                            ? "Enabled. Set YAHOO_ENABLED=false to stop requests; stored rows retain their Yahoo provenance."
+                            : "Disabled by YAHOO_ENABLED=false.",
+                "Requests are serialized, spaced, daily-budgeted, and cooled down after rate limiting."));
         out.add(connector("user_csv", "Your price-history CSV", "Daily OHLCV exported from a source you may use",
                 true, true, false, "User-owned file import",
                 "You control the file and remain responsible for its source terms; StrikeBench does not redistribute it.",

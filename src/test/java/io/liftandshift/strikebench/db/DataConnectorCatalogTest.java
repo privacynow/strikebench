@@ -17,16 +17,20 @@ class DataConnectorCatalogTest {
     @AfterEach void close() { if (db != null) db.close(); }
 
     @Test
-    void yahooAutomationNeedsPermissionNotJustAnEnableFlag() {
+    void yahooIsOwnerAuthorizedByDefaultAndEitherFlagCanRevokeIt() {
         db = TestDb.fresh();
-        var catalog = catalog(Map.of("YAHOO_ENABLED", "true"));
-        var yahoo = catalog.all().stream().filter(c -> c.key().equals("yahoo")).findFirst().orElseThrow();
+        var defaults = catalog(Map.of());
+        var yahoo = defaults.all().stream().filter(c -> c.key().equals("yahoo")).findFirst().orElseThrow();
         assertThat(yahoo.configured()).isTrue();
-        assertThat(yahoo.eligible()).isFalse();
-        assertThatThrownBy(() -> catalog.requireAutomated("yahoo")).hasMessageContaining("not eligible");
+        assertThat(yahoo.eligible()).isTrue();
+        assertThat(defaults.requireAutomated("auto").key()).isEqualTo("yahoo");
 
-        var permitted = catalog(Map.of("YAHOO_ENABLED", "true", "YAHOO_AUTOMATION_PERMISSION_CONFIRMED", "true"));
-        assertThat(permitted.requireAutomated("yahoo").eligible()).isTrue();
+        var disabled = catalog(Map.of("YAHOO_ENABLED", "false"));
+        assertThatThrownBy(() -> disabled.requireAutomated("yahoo")).hasMessageContaining("not eligible");
+
+        var revoked = catalog(Map.of("YAHOO_ENABLED", "true",
+                "YAHOO_AUTOMATION_PERMISSION_CONFIRMED", "false"));
+        assertThatThrownBy(() -> revoked.requireAutomated("yahoo")).hasMessageContaining("not eligible");
     }
 
     @Test

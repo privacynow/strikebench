@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Yahoo chart-API daily candle parsing (keyless, personal-mode equity backfill). */
 class YahooFinanceProviderTest {
@@ -64,5 +65,52 @@ class YahooFinanceProviderTest {
         assertThat(provider.domains()).containsExactly(Domain.CANDLES);
         assertThat(provider.quote("AAPL")).isEmpty();
         assertThat(provider.expirations("AAPL")).isEmpty();
+    }
+
+    @Test
+    void http200InterstitialMalformedJsonAndChartErrorTripAfterThreeFailures() {
+        server.enqueue(ok("<html><title>Will be right back</title></html>"));
+        server.enqueue(ok("{\"chart\":"));
+        server.enqueue(ok("""
+                {"chart":{"result":null,"error":{"code":"Not Found","description":"No data found"}}}
+                """));
+
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> provider.candles("AAPL",
+                    LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31")))
+                    .isInstanceOf(RuntimeException.class);
+            assertThat(provider.coolingDown()).isEqualTo(i == 2);
+        }
+
+        // The fourth call is answered by the cooldown fallback and never reaches the wire.
+        assertThat(provider.candles("AAPL",
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).isEmpty();
+        assertThat(server.getRequestCount()).isEqualTo(3);
+    }
+
+    @Test
+    void emptyHttp200ChartResultsAreFailuresAndStopTheUniverseSweep() {
+        server.enqueue(ok("{\"chart\":{\"result\":[],\"error\":null}}"));
+        server.enqueue(ok("""
+                {"chart":{"result":[{"timestamp":[],"indicators":{"quote":[]}}],"error":null}}
+                """));
+        server.enqueue(ok("""
+                {"chart":{"result":[{"timestamp":[1782950400],
+                  "indicators":{"quote":[{"close":[null]}]}}],"error":null}}
+                """));
+
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> provider.candles("AAPL",
+                    LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31")))
+                    .isInstanceOf(RuntimeException.class);
+        }
+        assertThat(provider.coolingDown()).isTrue();
+        assertThat(provider.candles("MSFT",
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).isEmpty();
+        assertThat(server.getRequestCount()).isEqualTo(3);
+    }
+
+    private static MockResponse ok(String body) {
+        return new MockResponse().setBody(body).addHeader("Content-Type", "application/json");
     }
 }

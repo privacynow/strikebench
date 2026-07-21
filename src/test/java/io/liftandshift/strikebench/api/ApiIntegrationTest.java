@@ -234,6 +234,16 @@ class ApiIntegrationTest {
         assertThat(pick.at("/signals/sentimentScorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
         assertThat(pick.at("/signals/sentimentAggregate/available").asBoolean()).isFalse();
         assertThat(pick.at("/signals/sentimentAggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
+        assertThat(pick.at("/opportunity/goal").asText()).isEqualTo("DIRECTIONAL");
+        assertThat(pick.at("/opportunity/score").asDouble()).isBetween(0.0, 1.0);
+        assertThat(pick.at("/opportunity/volatilityEvidence/impliedSource").asText())
+                .isEqualTo("fixture");
+        assertThat(pick.at("/opportunity/eventEvidence/basis").asText())
+                .isEqualTo("DEMO_FABRICATED");
+        assertThat(pick.at("/bestIdea/available").asBoolean()).isTrue();
+        assertThat(pick.at("/bestIdea/family").asText()).isNotBlank();
+        assertThat(pick.at("/bestIdea/economicVerdict").asText())
+                .isIn("FAVORABLE", "MIXED", "UNFAVORABLE", "UNAVAILABLE");
         assertThat(pick.get("horizons").size()).isEqualTo(2);
         JsonNode candidates = pick.get("horizons").get(0).get("candidates");
         if (candidates.size() > 0) {
@@ -920,12 +930,13 @@ class ApiIntegrationTest {
         // Daily-history connectors have one authoritative catalog; supporting feeds are distinct.
         JsonNode sourceDoc = Json.parse(get("/api/data/sources").body());
         assertThat(sourceDoc.get("connectors").toString())
-                .contains("Yahoo Finance").contains("personal use").contains("Your price-history CSV");
+                .contains("Yahoo Finance").contains("standing authorization").contains("Your price-history CSV");
         assertThat(sourceDoc.get("feeds").toString()).contains("Cboe").contains("SEC EDGAR");
         assertThat(sourceDoc.get("feeds").toString()).doesNotContain("Yahoo Finance");
         JsonNode sync = Json.parse(get("/api/data/sync").body());
         assertThat(sync.get("note").asText()).contains("once after a completed market session");
         assertThat(sync.has("cursors")).isTrue();
+        assertThat(sync.has("systemSchedule")).isTrue();
         // A local user-owned daily CSV enters the observed store through multipart upload; the
         // browser never fetches a provider endpoint or sends a server filesystem path.
         String boundary = "StrikeBenchBoundary";
@@ -1364,7 +1375,7 @@ class ApiIntegrationTest {
         assertThat(r.get("candidates")).isNotEmpty();
         assertThat(r.get("economicPolicy").asText()).isEqualTo("decision_score");
         assertThat(r.get("economicMessage").asText()).isNotBlank();
-        boolean teachingCase = false;
+        boolean adverseCounterexample = false;
         boolean favorableTeachingCase = false;
         boolean splitEvidenceTeachingCase = false;
         double previousDecisionScore = Double.MAX_VALUE;
@@ -1392,12 +1403,23 @@ class ApiIntegrationTest {
                     && economics.path("realizedVolEvAfterCostsCents").asLong() > 0) {
                 splitEvidenceTeachingCase = true;
             }
-            teachingCase |= "UNFAVORABLE".equals(economics.get("verdict").asText());
+            long realisticPoint = economics.path("realizedVolEvAfterCostsCents").asLong(Long.MAX_VALUE);
+            long materiality = economics.path("realisticEvMaterialityCents").asLong();
+            if (realisticPoint < -materiality) {
+                assertThat(economics.get("verdict").asText())
+                        .as("a materially adverse realistic-measure point remains an unfavorable teaching case")
+                        .isEqualTo("UNFAVORABLE");
+            }
+            adverseCounterexample |= realisticPoint < 0
+                    && ("MIXED".equals(economics.get("verdict").asText())
+                        || "UNFAVORABLE".equals(economics.get("verdict").asText()));
         }
         assertThat(favorableTeachingCase || splitEvidenceTeachingCase)
                 .as("the deterministic teaching world demonstrates either a favorable case or an honestly split model comparison without rigging an endorsement")
                 .isTrue();
-        assertThat(teachingCase).as("unfavorable structures stay visible as counterexamples").isTrue();
+        assertThat(adverseCounterexample)
+                .as("adverse structures stay visible as non-endorsed counterexamples even when their point estimate is inside the materiality band")
+                .isTrue();
         if (favorableTeachingCase) {
             assertThat(r.get("economicMessage").asText()).containsIgnoringCase("generated teaching market")
                     .containsIgnoringCase("not evidence of a live-market edge");

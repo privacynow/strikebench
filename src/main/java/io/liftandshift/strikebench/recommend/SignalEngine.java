@@ -31,6 +31,43 @@ public final class SignalEngine {
     static final List<String> NEGATIVE = NewsSentimentScorer.NEGATIVE_KEYWORDS;
     public static final String SENTIMENT_SCORER_VERSION = NewsSentimentScorer.VERSION;
 
+    /** Machine-readable provenance for the volatility comparison used by Universe Scout. */
+    public record VolatilityEvidence(
+            boolean impliedAvailable,
+            String impliedSource,
+            String impliedFreshness,
+            Long impliedAsOfEpochMs,
+            boolean realizedAvailable,
+            String realizedSource,
+            String realizedFreshness,
+            int realizedObservations,
+            String realizedFrom,
+            String realizedTo,
+            List<String> unavailableReasons
+    ) {
+        public VolatilityEvidence {
+            unavailableReasons = unavailableReasons == null ? List.of() : List.copyOf(unavailableReasons);
+        }
+    }
+
+    /** Event context stays source-backed and explicitly unavailable when no eligible news exists. */
+    public record EventEvidence(
+            boolean available,
+            boolean eventRisk,
+            List<NewsSentimentScorer.EventFlag> flags,
+            int headlineCount,
+            List<String> sources,
+            Long latestPublishedEpochMs,
+            String basis,
+            String scorerVersion,
+            String note
+    ) {
+        public EventEvidence {
+            flags = flags == null ? List.of() : List.copyOf(flags);
+            sources = sources == null ? List.of() : List.copyOf(sources);
+        }
+    }
+
     public record Signals(
             String symbol,
             boolean optionable,
@@ -50,7 +87,9 @@ public final class SignalEngine {
             List<String> rationale,     // human-readable evidence, in order of weight
             String sentimentScorerVersion,
             NewsSentimentScorer.Aggregate sentimentAggregate,
-            List<NewsSentimentScorer.HeadlineSentiment> headlineSentiment
+            List<NewsSentimentScorer.HeadlineSentiment> headlineSentiment,
+            VolatilityEvidence volatilityEvidence,
+            EventEvidence eventEvidence
     ) {}
 
     private final MarketDataService market;
@@ -95,12 +134,14 @@ public final class SignalEngine {
 
         Double ivAtm = null;
         Double liquidity = null;
+        OptionChain volatilityChain = null;
         if (optionable) {
             LocalDate exp = market.expirations(sym, worldId).stream()
                     .min(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - 30)))
                     .orElse(null);
             OptionChain chain = exp == null ? null : market.chain(sym, exp, worldId).orElse(null);
             if (chain != null && !chain.isEmpty() && chain.evidence().usableIn(lane)) {
+                volatilityChain = chain;
                 OptionQuote atm = chain.calls().stream()
                         .filter(q -> q.iv() != null && q.hasMark())
                         .min(Comparator.comparingDouble(q -> Math.abs(q.strike().doubleValue() - chain.underlyingPrice().doubleValue())))
@@ -184,10 +225,51 @@ public final class SignalEngine {
         }
         if (eventRisk) rationale.add("Event risk: an earnings/guidance-type headline is in the news window");
 
+        List<String> volatilityGaps = new ArrayList<>();
+        if (ivAtm == null) {
+            volatilityGaps.add(optionable
+                    ? "ATM implied volatility is unavailable from the eligible option chain."
+                    : "No listed option chain is available for this symbol.");
+        }
+        if (hv30 == null) {
+            volatilityGaps.add("At least 31 eligible daily closes are required for 30-day realized volatility.");
+        }
+        VolatilityEvidence volatilityEvidence = new VolatilityEvidence(
+                ivAtm != null,
+                volatilityChain == null ? null : volatilityChain.source(),
+                volatilityChain == null ? "MISSING" : volatilityChain.freshness().name(),
+                volatilityChain == null ? null : volatilityChain.asOfEpochMs(),
+                hv30 != null,
+                series.source(),
+                series.freshness().name(),
+                candles.size(),
+                candles.isEmpty() ? null : candles.getFirst().date().toString(),
+                candles.isEmpty() ? null : candles.getLast().date().toString(),
+                volatilityGaps);
+        List<String> newsSources = newsSentiment.headlines().stream()
+                .map(NewsSentimentScorer.HeadlineSentiment::source)
+                .filter(java.util.Objects::nonNull)
+                .filter(source -> !source.isBlank())
+                .distinct().toList();
+        Long latestPublished = newsSentiment.headlines().stream()
+                .map(NewsSentimentScorer.HeadlineSentiment::publishedEpochMs)
+                .filter(published -> published > 0)
+                .max(Long::compareTo).orElse(null);
+        EventEvidence eventEvidence = new EventEvidence(
+                newsSentiment.aggregate().available(),
+                eventRisk,
+                newsSentiment.aggregate().eventRiskFlags(),
+                newsSentiment.aggregate().totalHeadlines(),
+                newsSources,
+                latestPublished,
+                newsSentiment.aggregate().basis(),
+                newsSentiment.aggregate().scorerVersion(),
+                newsSentiment.aggregate().note());
+
         return Optional.of(new Signals(sym, optionable, ret5, ret20, ivAtm, hv30, ivHv, volSignal,
                 round2(sentiment), List.copyOf(posHits), List.copyOf(negHits), eventRisk,
                 liquidity, thesis, round2(confidence), List.copyOf(rationale), SENTIMENT_SCORER_VERSION,
-                newsSentiment.aggregate(), newsSentiment.headlines()));
+                newsSentiment.aggregate(), newsSentiment.headlines(), volatilityEvidence, eventEvidence));
     }
 
     private static Double trailingReturn(List<Candle> candles, int days) {
