@@ -82,7 +82,7 @@ final class PlanController {
         this.strategyController = new PlanStrategyController(this, cfg, market, positions, trades,
                 auto, evaluations, planSvc, planStrategy, discoveryController, tradeController);
         this.planOutcomeController = new PlanOutcomeController(this, cfg, market, backtester,
-                planSvc, planEvidence, planStrategy, planOutcomes, pathEnsembles, simEngine,
+                planSvc, planEvidence, planStrategy, planManagement, planOutcomes, pathEnsembles, simEngine,
                 outcomeController,
                 new io.liftandshift.strikebench.plan.AuthoredScenarioService(db, clock),
                 new io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService(market, events, clock),

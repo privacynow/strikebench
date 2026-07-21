@@ -55,6 +55,9 @@ fetch status /api/status
 fetch world /api/world
 fetch market-engine /api/market/engine
 fetch quote "/api/quotes?symbols=${SYMBOL}"
+fetch research "/api/research/${SYMBOL}"
+fetch history "/api/research/${SYMBOL}/history?range=6m"
+fetch news "/api/research/${SYMBOL}/news"
 fetch expirations "/api/research/${SYMBOL}/expirations"
 
 expiration="$(jq -r '.expirations[0] // empty' "$OUT_DIR/expirations.json" 2>/dev/null || true)"

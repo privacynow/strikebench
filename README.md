@@ -160,7 +160,8 @@ npx playwright install chromium
 npm run test:ci       # declarations, SPA, fixture, grown-state, responsive, auth, Book, Learn
 npm run test:live     # observed-provider journey; requires network/source availability
 
-# Read-only capture from an already-running local server (defaults to NVDA).
+# Read-only quote, chain, research, history, and news capture from an already-running
+# local server (defaults to NVDA); files go to a private temporary directory.
 scripts/live-market-probe.sh
 ```
 

@@ -89,6 +89,26 @@ public final class ApiResponses {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ScenarioPathRef(String id, String fingerprint, String title, boolean currentContext,
                                   String waypointFill, String baseEnsembleId) {}
+    /** Auditable identity for the exact Book package repriced by a focused animation. */
+    public record FocusedPackageProvenance(
+            String contractVersion,
+            String key,
+            String source,
+            String lane,
+            String symbol,
+            long packageQuantity,
+            int legCount,
+            Long exactPackageCashCents,
+            long entryBasisCents,
+            String valuationAsOf,
+            String entryCreatedAt,
+            String dataProvenance,
+            String dataAge,
+            String dataSource,
+            String entrySnapshotFingerprint,
+            List<String> priceAuthorities,
+            io.liftandshift.strikebench.position.PositionPackageFingerprint.SourceIdentity
+                    sourceIdentity) {}
     /** Complete immutable lineage for a non-mutating scenario-animation projection. */
     public record ScenarioAnimationReceipt(
             String contractVersion,
@@ -116,6 +136,9 @@ public final class ApiResponses {
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationAssumptions,
             double rateAnnual,
             String selectedCandidateId,
+            String focusPositionKey,
+            String focusedPackageFingerprint,
+            FocusedPackageProvenance focusedPackageProvenance,
             String valuationFingerprint) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanScenarioPaths<T, U, V, W>(T plan, EnsembleRef ensemble,

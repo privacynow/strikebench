@@ -916,6 +916,376 @@ class PlanApiIntegrationTest {
                 .contains("Observed market").contains("never borrowed into Demo");
     }
 
+    @Test void existingPositionCanOwnAnimationCheckpointsWithoutASelectedProposal() throws Exception {
+        String positionKey = "practice-shares-AAPL";
+        int sharesOwned = 0;
+        try {
+            HttpResponse<String> bought = post("/api/positions/buy",
+                    "{\"symbol\":\"AAPL\",\"shares\":1}");
+            assertThat(bought.statusCode()).as(bought.body()).isEqualTo(201);
+            sharesOwned = 1;
+
+            JsonNode plan = json(post("/api/plans", """
+                    {"clientRequestId":"position-focused-scenario","symbol":"AAPL",
+                     "intent":"HEDGE","title":"Existing position scenario",
+                     "thesis":"protect the held shares","horizonDays":5,"riskMode":"conservative"}
+                    """));
+            String planId = plan.path("id").asText();
+            JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                    {"expectedVersion":%d,
+                     "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                       "driftAnnual":0.0,"volAnnual":0.3,"jumpsPerYear":0,
+                       "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":9127,"paths":24}}
+                    """.formatted(plan.path("version").asLong())));
+            String ensembleId = ensemble.at("/ensemble/id").asText();
+            String ensembleFingerprint = ensemble.at("/ensemble/fingerprint").asText();
+
+            String request = "{\"ensembleId\":\"" + ensembleId
+                    + "\",\"focusPositionKey\":\"" + positionKey + "\",\"limit\":5}";
+            JsonNode animation = json(post("/api/plans/" + planId
+                    + "/outcomes/ensemble/paths", request));
+            assertThat(animation.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+            assertThat(animation.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
+            assertThat(animation.at("/paths/totalPathCount").asInt()).isEqualTo(24);
+            assertThat(animation.at("/paths/paths")).hasSize(5);
+            assertThat(animation.at("/receipt/contractVersion").asText())
+                    .isEqualTo("scenario-animation-1");
+            assertThat(animation.at("/receipt/focusPositionKey").asText()).isEqualTo(positionKey);
+            assertThat(animation.at("/receipt/selectedCandidateId").isMissingNode()).isTrue();
+            String initialPackageFingerprint = animation.at("/receipt/focusedPackageFingerprint").asText();
+            assertThat(initialPackageFingerprint).hasSize(64);
+            assertThat(animation.at("/checkpoints/modelReceipt/focusedPackageFingerprint").asText())
+                    .isEqualTo(initialPackageFingerprint);
+            assertThat(animation.at("/receipt/focusedPackageProvenance/key").asText())
+                    .isEqualTo(positionKey);
+            assertThat(animation.at("/receipt/focusedPackageProvenance/source").asText())
+                    .isEqualTo("PRACTICE_HOLDING");
+            assertThat(animation.at("/receipt/focusedPackageProvenance/legCount").asInt()).isEqualTo(1);
+            assertThat(animation.at("/receipt/focusedPackageProvenance/priceAuthorities/0").asText())
+                    .isEqualTo("MODELED");
+            assertThat(animation.at("/receipt/focusedPackageProvenance"))
+                    .isEqualTo(animation.at("/checkpoints/modelReceipt/focusedPackageProvenance"));
+            assertThat(animation.at("/checkpoints/positions")).hasSize(1);
+            assertThat(animation.at("/checkpoints/positions/0/key").asText()).isEqualTo(positionKey);
+            assertThat(animation.at("/checkpoints/positions/0/source").asText())
+                    .isEqualTo("PRACTICE_HOLDING");
+            assertThat(animation.at("/checkpoints/positions/0/steps")).hasSize(11);
+            assertThat(animation.at("/checkpoints/modelReceipt/focusPositionKey").asText())
+                    .isEqualTo(positionKey);
+            assertThat(animation.at("/checkpoints/modelReceipt/positionScopeAttempted").asInt())
+                    .isEqualTo(1);
+            assertThat(animation.at("/receipt/valuationFingerprint").asText()).hasSize(64);
+            assertThat(animation.at("/receipt/valuationFingerprint").asText())
+                    .isEqualTo(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText());
+            assertThat(animation.at("/checkpoints/focusSourcePathIndex").asInt())
+                    .isEqualTo(animation.at("/paths/receipt/focusSourcePathIndex").asInt());
+
+            JsonNode repeated = json(post("/api/plans/" + planId
+                    + "/outcomes/ensemble/paths", request));
+            assertThat(repeated.at("/receipt/valuationFingerprint").asText())
+                    .isEqualTo(animation.at("/receipt/valuationFingerprint").asText());
+
+            HttpResponse<String> secondBuy = post("/api/positions/buy",
+                    "{\"symbol\":\"AAPL\",\"shares\":1}");
+            assertThat(secondBuy.statusCode()).as(secondBuy.body()).isEqualTo(201);
+            sharesOwned = 2;
+            JsonNode changedPosition = json(post("/api/plans/" + planId
+                    + "/outcomes/ensemble/paths", request));
+            assertThat(changedPosition.at("/ensemble/fingerprint").asText())
+                    .isEqualTo(ensembleFingerprint);
+            assertThat(changedPosition.at("/receipt/focusedPackageFingerprint").asText())
+                    .isNotEqualTo(initialPackageFingerprint);
+            assertThat(changedPosition.at("/receipt/valuationFingerprint").asText())
+                    .isNotEqualTo(animation.at("/receipt/valuationFingerprint").asText());
+
+            HttpResponse<String> unknown = post("/api/plans/" + planId
+                    + "/outcomes/ensemble/paths", request.replace(positionKey, "missing-position"));
+            assertThat(unknown.statusCode()).isEqualTo(400);
+            assertThat(Json.parse(unknown.body()).path("detail").asText())
+                    .contains("focusPositionKey").contains("Plan/account scope");
+            HttpResponse<String> blank = post("/api/plans/" + planId
+                    + "/outcomes/ensemble/paths", request.replace(positionKey, "  "));
+            assertThat(blank.statusCode()).isEqualTo(400);
+            assertThat(Json.parse(blank.body()).path("detail").asText())
+                    .contains("focusPositionKey cannot be blank");
+
+            JsonNode storedAfterAnimation = json(get("/api/plans/" + planId
+                    + "/outcomes/ensemble/latest"));
+            assertThat(storedAfterAnimation.at("/ensemble/fingerprint").asText())
+                    .isEqualTo(ensembleFingerprint);
+        } finally {
+            if (sharesOwned > 0) {
+                HttpResponse<String> sold = post("/api/positions/sell",
+                        "{\"symbol\":\"AAPL\",\"shares\":" + sharesOwned + "}");
+                assertThat(sold.statusCode()).as(sold.body()).isEqualTo(200);
+            }
+        }
+    }
+
+    @Test void activeOptionTradeOwnsFocusedAnimationAcrossPackageMutationAndLeavesNoStaleFocus() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}
+                """).statusCode()).isBetween(200, 299);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"option-trade-focused-scenario","symbol":"AAPL",
+                 "intent":"DIRECTIONAL","title":"Focused option position scenario",
+                 "thesis":"bullish","horizonDays":5,"riskMode":"conservative"}
+                """));
+        String planId = plan.path("id").asText();
+        String expiration = json(get("/api/research/AAPL/expirations"))
+                .at("/expirations/2").asText();
+
+        var custom = Json.MAPPER.createObjectNode();
+        custom.put("expectedVersion", plan.path("version").asLong());
+        custom.set("position", Json.parse("""
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":1,
+                 "fillNature":"PROPOSED","legs":[
+                   {"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration)));
+        JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
+        long selectedVersion = selected.at("/plan/version").asLong();
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                {"expectedVersion":%d,
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                   "driftAnnual":0.0,"volAnnual":0.3,"jumpsPerYear":0,
+                   "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":9131,"paths":24}}
+                """.formatted(selectedVersion)));
+        String ensembleId = ensemble.at("/ensemble/id").asText();
+        String ensembleFingerprint = ensemble.at("/ensemble/fingerprint").asText();
+
+        JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":2}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", selectedVersion);
+        order.put("qty", 2);
+        order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
+        var openingAcks = order.putArray("acknowledgedRisks");
+        preview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+        String tradeId = opened.at("/trade/id").asText();
+        long openVersion = opened.at("/plan/version").asLong();
+
+        String animationRequest = "{\"ensembleId\":\"" + ensembleId
+                + "\",\"focusPositionKey\":\"" + tradeId + "\",\"limit\":5}";
+        JsonNode animation = json(post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", animationRequest));
+        assertThat(animation.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+        assertThat(animation.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
+        assertThat(animation.at("/receipt/ensembleId").asText()).isEqualTo(ensembleId);
+        assertThat(animation.at("/receipt/ensembleFingerprint").asText())
+                .isEqualTo(ensembleFingerprint);
+        assertThat(animation.at("/receipt/focusPositionKey").asText()).isEqualTo(tradeId);
+        assertThat(animation.at("/receipt/selectedCandidateId").isMissingNode()).isTrue();
+        String initialPackageFingerprint = animation.at("/receipt/focusedPackageFingerprint").asText();
+        assertThat(initialPackageFingerprint).hasSize(64);
+        assertThat(animation.at("/checkpoints/modelReceipt/focusedPackageFingerprint").asText())
+                .isEqualTo(initialPackageFingerprint);
+        assertThat(animation.at("/receipt/focusedPackageProvenance"))
+                .isEqualTo(animation.at("/checkpoints/modelReceipt/focusedPackageProvenance"));
+        assertThat(animation.at("/receipt/focusedPackageProvenance/key").asText()).isEqualTo(tradeId);
+        assertThat(animation.at("/receipt/focusedPackageProvenance/source").asText())
+                .isEqualTo("PRACTICE_TRADE");
+        assertThat(animation.at("/receipt/focusedPackageProvenance/packageQuantity").asInt())
+                .isEqualTo(2);
+        assertThat(animation.at("/receipt/focusedPackageProvenance/legCount").asInt()).isEqualTo(2);
+        assertThat(animation.at("/receipt/focusedPackageProvenance/entryBasisCents").asLong())
+                .isEqualTo(opened.at("/trade/feesOpenCents").asLong()
+                        - opened.at("/trade/entryNetPremiumCents").asLong());
+        assertThat(animation.at("/receipt/focusedPackageProvenance/entryCreatedAt").asText())
+                .isEqualTo(opened.at("/trade/createdAt").asText());
+        assertThat(animation.at("/receipt/focusedPackageProvenance/entrySnapshotFingerprint").asText())
+                .hasSize(64);
+        assertThat(animation.at("/checkpoints/positions")).hasSize(1);
+        assertThat(animation.at("/checkpoints/positions/0/key").asText()).isEqualTo(tradeId);
+        assertThat(animation.at("/checkpoints/positions/0/source").asText())
+                .isEqualTo("PRACTICE_TRADE");
+        assertThat(animation.at("/checkpoints/positions/0/proposed").asBoolean()).isFalse();
+        assertThat(animation.at("/checkpoints/positions/0/legs")).hasSize(2);
+        assertThat(animation.at("/checkpoints/positions/0/steps")).hasSize(11);
+        assertThat(animation.at("/checkpoints/modelReceipt/focusPositionKey").asText())
+                .isEqualTo(tradeId);
+        assertThat(animation.at("/checkpoints/modelReceipt/positionScopeAttempted").asInt())
+                .isEqualTo(1);
+        String initialValuation = animation.at("/receipt/valuationFingerprint").asText();
+        assertThat(initialValuation).hasSize(64);
+        assertThat(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText())
+                .isEqualTo(initialValuation);
+
+        JsonNode otherPlan = json(post("/api/plans", """
+                {"clientRequestId":"cross-plan-focused-scenario","symbol":"AAPL",
+                 "intent":"INCOME","title":"Different same-symbol Plan",
+                 "thesis":"neutral","horizonDays":7,"riskMode":"balanced"}
+                """));
+        assertThat(otherPlan.path("id").asText()).isNotEqualTo(planId);
+        JsonNode otherEnsemble = json(post("/api/plans/" + otherPlan.path("id").asText()
+                + "/outcomes/ensemble", """
+                {"expectedVersion":%d,
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":7,"stepsPerDay":2,
+                   "driftAnnual":0.0,"volAnnual":0.3,"jumpsPerYear":0,
+                   "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":9133,"paths":24}}
+                """.formatted(otherPlan.path("version").asLong())));
+        HttpResponse<String> crossPlan = post("/api/plans/" + otherPlan.path("id").asText()
+                + "/outcomes/ensemble/paths", "{\"ensembleId\":\""
+                        + otherEnsemble.at("/ensemble/id").asText()
+                        + "\",\"focusPositionKey\":\"" + tradeId + "\",\"limit\":5}");
+        assertThat(crossPlan.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(crossPlan.body()).path("detail").asText())
+                .contains("focusPositionKey").contains("owned by this Plan/account scope");
+
+        var partial = Json.MAPPER.createObjectNode();
+        partial.put("source", "PRACTICE_TRADE");
+        partial.put("sourceId", tradeId);
+        partial.put("planId", planId);
+        partial.put("expectedPlanVersion", openVersion);
+        partial.put("action", "PARTIAL_CLOSE");
+        partial.put("closeQuantity", 1);
+        JsonNode partialPreview = json(post("/api/position-transformations/preview", partial.toString()));
+        partial.put("previewToken", partialPreview.get("previewToken").asText());
+        JsonNode reduced = json(post("/api/position-transformations/apply", partial.toString()));
+        assertThat(reduced.at("/trade/id").asText()).isEqualTo(tradeId);
+        assertThat(reduced.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(reduced.at("/trade/qty").asInt()).isEqualTo(1);
+
+        JsonNode repriced = json(post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", animationRequest));
+        assertThat(repriced.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+        assertThat(repriced.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
+        assertThat(repriced.at("/checkpoints/positions/0/key").asText()).isEqualTo(tradeId);
+        assertThat(repriced.at("/receipt/focusedPackageFingerprint").asText())
+                .isNotEqualTo(initialPackageFingerprint);
+        assertThat(repriced.at("/receipt/focusedPackageProvenance/packageQuantity").asInt())
+                .isEqualTo(1);
+        assertThat(repriced.at("/receipt/valuationFingerprint").asText())
+                .isNotEqualTo(initialValuation);
+
+        JsonNode voided = applyTransformation(tradeId, planId,
+                reduced.at("/plan/version").asLong(), "VOID", null);
+        assertThat(voided.at("/trade/status").asText()).isEqualTo("DELETED");
+        HttpResponse<String> staleFocus = post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", animationRequest);
+        assertThat(staleFocus.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(staleFocus.body()).path("detail").asText())
+                .contains(tradeId).contains("Plan/account scope");
+
+        JsonNode stored = json(get("/api/plans/" + planId + "/outcomes/ensemble/latest"));
+        assertThat(stored.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+        assertThat(stored.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
+    }
+
+    @Test void focusedHeldShareTradeCarriesFrozenSharesFeesAndEntryProvenance() throws Exception {
+        int addedShares = 0;
+        String tradeId = null;
+        String planId = null;
+        long planVersion = -1;
+        try {
+            HttpResponse<String> bought = post("/api/positions/buy",
+                    "{\"symbol\":\"AAPL\",\"shares\":100}");
+            assertThat(bought.statusCode()).as(bought.body()).isEqualTo(201);
+            addedShares = 100;
+
+            JsonNode plan = json(post("/api/plans", """
+                    {"clientRequestId":"held-share-focused-scenario","symbol":"AAPL",
+                     "intent":"EXIT","title":"Held-share focused position",
+                     "thesis":"neutral","horizonDays":9,"riskMode":"balanced"}
+                    """));
+            planId = plan.path("id").asText();
+            String expiration = json(get("/api/research/AAPL/expirations"))
+                    .at("/expirations/0").asText();
+            JsonNode chain = json(get("/api/research/AAPL/chain?expiration=" + expiration));
+            JsonNode call = chain.at("/calls/12");
+            assertThat(call.path("strike").asText()).isNotBlank();
+
+            var custom = Json.MAPPER.createObjectNode();
+            custom.put("expectedVersion", plan.path("version").asLong());
+            var position = custom.putObject("position");
+            position.put("symbol", "AAPL");
+            position.put("strategy", "COVERED_CALL");
+            position.put("qty", 1);
+            position.put("useHeldShares", true);
+            position.put("fillNature", "PROPOSED");
+            var legs = position.putArray("legs");
+            var shortCall = legs.addObject();
+            shortCall.put("action", "SELL");
+            shortCall.put("type", "CALL");
+            shortCall.put("strike", call.path("strike").asText());
+            shortCall.put("expiration", expiration);
+            shortCall.put("ratio", 1);
+            shortCall.put("multiplier", 100);
+            shortCall.put("positionEffect", "OPEN");
+            JsonNode selected = json(post("/api/plans/" + planId
+                    + "/strategy/custom", custom.toString()));
+            assertThat(selected.at("/strategy/result/candidate/usesHeldShares").asBoolean()).isTrue();
+            long selectedVersion = selected.at("/plan/version").asLong();
+
+            JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                    {"expectedVersion":%d,
+                     "over":{"model":"GBM","shape":"CHOP","horizonDays":9,"stepsPerDay":2,
+                       "driftAnnual":0.0,"volAnnual":0.3,"jumpsPerYear":0,
+                       "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":9141,"paths":24}}
+                    """.formatted(selectedVersion)));
+            String ensembleId = ensemble.at("/ensemble/id").asText();
+
+            long exactFees = 137;
+            JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                    "{\"expectedVersion\":" + selectedVersion
+                            + ",\"qty\":1,\"feesOverrideCents\":" + exactFees + "}"));
+            var order = Json.MAPPER.createObjectNode();
+            order.put("expectedVersion", selectedVersion);
+            order.put("qty", 1);
+            order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+            order.put("feesOverrideCents", exactFees);
+            if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
+            var acks = order.putArray("acknowledgedRisks");
+            preview.withArray("requiredAcks").forEach(ack -> acks.add(ack.get("id").asText()));
+            JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade", order.toString()));
+            tradeId = opened.at("/trade/id").asText();
+            planVersion = opened.at("/plan/version").asLong();
+            assertThat(opened.at("/trade/sharesLocked").asLong()).isEqualTo(100);
+            assertThat(opened.at("/trade/feesOpenCents").asLong()).isEqualTo(exactFees);
+
+            JsonNode animation = json(post("/api/plans/" + planId
+                    + "/outcomes/ensemble/paths", "{\"ensembleId\":\"" + ensembleId
+                            + "\",\"focusPositionKey\":\"" + tradeId + "\",\"limit\":5}"));
+            JsonNode provenance = animation.at("/receipt/focusedPackageProvenance");
+            long expectedBasis = Math.addExact(exactFees
+                            - opened.at("/trade/entryNetPremiumCents").asLong(),
+                    Math.multiplyExact(opened.at("/trade/entryUnderlyingCents").asLong(), 100L));
+            assertThat(provenance.path("entryBasisCents").asLong()).isEqualTo(expectedBasis);
+            assertThat(provenance.path("legCount").asInt()).isEqualTo(2);
+            assertThat(provenance.path("entryCreatedAt").asText())
+                    .isEqualTo(opened.at("/trade/createdAt").asText());
+            assertThat(provenance.path("dataProvenance").asText()).isNotBlank();
+            assertThat(provenance.path("dataAge").asText()).isNotBlank();
+            assertThat(provenance.path("dataSource").asText()).isNotBlank();
+            assertThat(provenance.path("entrySnapshotFingerprint").asText()).hasSize(64);
+            assertThat(animation.at("/receipt/focusedPackageFingerprint").asText()).hasSize(64);
+            assertThat(animation.at("/receipt/focusedPackageFingerprint").asText())
+                    .isEqualTo(animation.at("/checkpoints/modelReceipt/focusedPackageFingerprint").asText());
+            assertThat(animation.at("/checkpoints/positions/0/legs")).hasSize(2);
+            assertThat(animation.at("/checkpoints/positions/0/legs").toString())
+                    .contains("BUY 100 shares");
+            assertThat(animation.at("/checkpoints/positions/0/steps/0/focusPnlCents").asLong())
+                    .isEqualTo(animation.at("/checkpoints/positions/0/steps/0/focusValueCents").asLong()
+                            - expectedBasis);
+            assertThat(animation.at("/checkpoints/positions/0/steps/0/greeks/deltaShares").asDouble())
+                    .isGreaterThan(0.0);
+        } finally {
+            if (tradeId != null && planId != null && planVersion >= 0) {
+                JsonNode voided = applyTransformation(tradeId, planId, planVersion, "VOID", null);
+                assertThat(voided.at("/trade/status").asText()).isEqualTo("DELETED");
+            }
+            if (addedShares > 0) {
+                HttpResponse<String> sold = post("/api/positions/sell",
+                        "{\"symbol\":\"AAPL\",\"shares\":" + addedShares + "}");
+                assertThat(sold.statusCode()).as(sold.body()).isEqualTo(200);
+            }
+        }
+    }
+
     @Test void authoredWaypointsReachGenerationCarryTheirHonestyLabelAndFreezeAsScenarios() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"scenario-canvas-plan","symbol":"AAPL","intent":"DIRECTIONAL",
@@ -1403,6 +1773,49 @@ class PlanApiIntegrationTest {
                 row -> row.intv("n"))).containsExactly(receiptsBefore);
     }
 
+    @Test void unallocatedTrackedLotAnimationBindsItsOpeningLedgerIdentity() throws Exception {
+        JsonNode account = json(post("/api/portfolio/accounts", """
+                {"name":"Scenario provenance brokerage","accountType":"TAXABLE",
+                 "broker":"Example","openingCashCents":9000000}
+                """));
+        String accountId = account.get("id").asText();
+        JsonNode opening = json(post("/api/portfolio/accounts/" + accountId + "/transactions", """
+                {"occurredAt":"2026-07-10T15:00:00Z","eventType":"TRADE","source":"BROKER",
+                 "externalRef":"tracked-free-order-19","fillNature":"EXECUTED",
+                 "legs":[{"instrumentType":"STOCK","action":"BUY","positionEffect":"OPEN",
+                          "symbol":"AAPL","quantity":25,"multiplier":1,"price":"250.00"}]}
+                """));
+        JsonNode lot = json(get("/api/portfolio/accounts/" + accountId + "/lots"))
+                .withArray("lots").get(0);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"tracked-free-animation-plan","symbol":"AAPL","intent":"HEDGE",
+                 "title":"Tracked free lot animation","thesis":"protect shares","horizonDays":17,
+                 "riskMode":"conservative"}
+                """));
+        JsonNode ensemble = json(post("/api/plans/" + plan.get("id").asText() + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + plan.get("version").asLong() + "}"));
+        String focusKey = "tracked-free-" + accountId + "-AAPL";
+        JsonNode animation = json(post("/api/plans/" + plan.get("id").asText()
+                + "/outcomes/ensemble/paths", "{\"ensembleId\":\""
+                + ensemble.at("/ensemble/id").asText() + "\",\"focusPositionKey\":\""
+                + focusKey + "\",\"limit\":5}"));
+        JsonNode provenance = animation.at("/receipt/focusedPackageProvenance");
+        assertThat(provenance.path("key").asText()).isEqualTo(focusKey);
+        assertThat(provenance.path("source").asText()).isEqualTo("TRACKED_HOLDING");
+        assertThat(provenance.at("/sourceIdentity/structureRevisionId").isMissingNode()).isTrue();
+        assertThat(provenance.at("/sourceIdentity/lots")).hasSize(1);
+        assertThat(provenance.at("/sourceIdentity/lots/0/lotId").asText())
+                .isEqualTo(lot.get("id").asText());
+        assertThat(provenance.at("/sourceIdentity/lots/0/openingTransactionId").asText())
+                .isEqualTo(opening.get("id").asText());
+        assertThat(provenance.at("/sourceIdentity/lots/0/openedAt").asText())
+                .isEqualTo("2026-07-10T15:00Z");
+        assertThat(provenance.at("/sourceIdentity/lots/0/transactionSource").asText())
+                .isEqualTo("BROKER");
+        assertThat(provenance.at("/sourceIdentity/lots/0/externalRef").asText())
+                .isEqualTo("tracked-free-order-19");
+    }
+
     @Test void brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically() throws Exception {
         JsonNode account = json(post("/api/portfolio/accounts", """
                 {"name":"Real brokerage","accountType":"TAXABLE","broker":"Example Broker","openingCashCents":5000000}
@@ -1428,6 +1841,8 @@ class PlanApiIntegrationTest {
                 "{\"candidateId\":\"" + candidate.get("id").asText() + "\",\"expectedVersion\":"
                         + field.at("/plan/version").asLong() + "}"));
         long version = selected.at("/plan/version").asLong();
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + version + "}"));
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
                 "{\"expectedVersion\":" + version + ",\"qty\":1}"));
 
@@ -1491,6 +1906,31 @@ class PlanApiIntegrationTest {
         for (JsonNode leg : tracked.path("legs")) {
             assertThat(leg.hasNonNull("fillPrice")).as("broker-reported fills are on the receipt").isTrue();
         }
+
+        JsonNode animation = json(post("/api/plans/" + planId + "/outcomes/ensemble/paths",
+                "{\"ensembleId\":\"" + ensemble.at("/ensemble/id").asText()
+                        + "\",\"focusPositionKey\":\"" + placed.get("structureId").asText()
+                        + "\",\"limit\":5}"));
+        JsonNode packageProvenance = animation.at("/receipt/focusedPackageProvenance");
+        assertThat(packageProvenance.path("contractVersion").asText())
+                .isEqualTo("focused-position-package-2");
+        assertThat(packageProvenance.path("source").asText()).isEqualTo("TRACKED_STRUCTURE");
+        assertThat(packageProvenance.at("/sourceIdentity/structureRevisionId").asText())
+                .isEqualTo(inspectDb.query("SELECT current_revision_id FROM portfolio_structure WHERE id=?",
+                        row -> row.str("current_revision_id"), placed.get("structureId").asText()).getFirst());
+        assertThat(packageProvenance.at("/sourceIdentity/receiptId").asText())
+                .isEqualTo(placed.get("receiptId").asText());
+        assertThat(packageProvenance.at("/sourceIdentity/lots")).hasSize(candidate.withArray("legs").size());
+        for (JsonNode sourceLot : packageProvenance.at("/sourceIdentity/lots")) {
+            assertThat(sourceLot.path("lotId").asText()).isNotBlank();
+            assertThat(sourceLot.path("openingTransactionId").asText())
+                    .isEqualTo(placed.at("/transaction/id").asText());
+            assertThat(sourceLot.path("openedAt").asText()).isNotBlank();
+            assertThat(sourceLot.path("transactionSource").asText()).isEqualTo("BROKER");
+            assertThat(sourceLot.path("externalRef").asText()).isEqualTo("broker-order-77");
+        }
+        assertThat(animation.at("/receipt/focusedPackageFingerprint").asText()).hasSize(64);
+        assertThat(animation.at("/receipt/valuationFingerprint").asText()).hasSize(64);
 
         // The frozen plan refuses another decision; the tracked book refuses the duplicate reference.
         assertThat(post("/api/plans/" + planId + "/decision/broker", request.toString()).statusCode())

@@ -46,7 +46,7 @@ function contained(inner, outer, tolerance = 2) {
 function assertNoOverflow(metrics, label) {
   Object.entries(metrics).forEach(([selector, value]) => {
     assert.ok(value.xOverflow <= 1,
-      `${label} ${selector} has no horizontal overflow (${value.xOverflow}px)`);
+      `${label} ${selector} has no horizontal overflow (${value.xOverflow}px; ${JSON.stringify(value.offenders || [])})`);
     assert.ok(value.yOverflow <= 1,
       `${label} ${selector} has no vertical overflow (${value.yOverflow}px)`);
   });
@@ -58,7 +58,11 @@ async function overflowMetrics(page, selectors) {
     if (!node) throw new Error(`Missing overflow target: ${selector}`);
     return [selector, {
       xOverflow: Math.max(0, node.scrollWidth - node.clientWidth),
-      yOverflow: Math.max(0, node.scrollHeight - node.clientHeight)
+      yOverflow: Math.max(0, node.scrollHeight - node.clientHeight),
+      offenders: selector === '#app' ? Array.from(node.querySelectorAll('*')).map(child => {
+        const rect = child.getBoundingClientRect();
+        return { tag: child.tagName, cls: String(child.className || '').slice(0, 80), right: rect.right };
+      }).filter(row => row.right > document.documentElement.clientWidth + 1).slice(0, 8) : []
     }];
   })), selectors);
 }
@@ -366,6 +370,17 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
         const mapRect = map.getBoundingClientRect();
         const centerRect = center.getBoundingClientRect();
         const rightRect = right.getBoundingClientRect();
+        const leftRect = left.getBoundingClientRect();
+        const leftOffenders = Array.from(left.querySelectorAll('*')).map(node => {
+          const rect = node.getBoundingClientRect();
+          return {
+            tag: node.tagName,
+            cls: String(node.className || '').slice(0, 90),
+            right: Math.round((rect.right - leftRect.right) * 10) / 10,
+            width: Math.round(rect.width * 10) / 10,
+            scroll: Math.max(0, node.scrollWidth - node.clientWidth)
+          };
+        }).filter(row => row.right > 1 || row.scroll > 1).slice(0, 8);
         const legRects = Array.from(rail.querySelectorAll('.legr')).map(leg => {
           const rect = leg.getBoundingClientRect();
           return {
@@ -391,6 +406,7 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
           wrapXOverflow: Math.max(0, wrap.scrollWidth - wrap.clientWidth),
           leftXOverflow: Math.max(0, left.scrollWidth - left.clientWidth),
           leftYOverflow: Math.max(0, left.scrollHeight - left.clientHeight),
+          leftOffenders,
           panelRect: {
             left: panelRect.left, top: panelRect.top,
             right: panelRect.right, bottom: panelRect.bottom, width: panelRect.width
@@ -414,7 +430,8 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
         `${label} does not clip controls or per-leg economics`);
       assert.ok(layout.panelXOverflow <= 1 && layout.wrapXOverflow <= 1 && layout.leftXOverflow <= 1,
         `${label} contains the leg structure without widening a panel or the overlay `
-          + `(panel ${layout.panelXOverflow}px, wrap ${layout.wrapXOverflow}px, left ${layout.leftXOverflow}px)`);
+          + `(panel ${layout.panelXOverflow}px, wrap ${layout.wrapXOverflow}px, left ${layout.leftXOverflow}px; `
+          + `offenders ${JSON.stringify(layout.leftOffenders)})`);
       assert.ok(layout.leftYOverflow <= 1,
         `${label} keeps candidates, stacked legs, and the risk map inside the left decision rail `
           + `(overflow ${layout.leftYOverflow}px)`);
