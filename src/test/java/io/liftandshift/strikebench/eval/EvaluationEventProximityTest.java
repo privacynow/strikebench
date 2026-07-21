@@ -59,6 +59,38 @@ class EvaluationEventProximityTest {
                 .noneSatisfy(line -> assertThat(line).contains("Event proximity"));
     }
 
+    @Test
+    void everyExpiryCarriesItsOwnDteAndVolatilityContext() {
+        MarketDataService market = marketWithReports(Map.of());
+        db = TestDb.fresh();
+        EvaluationService service = new EvaluationService(market, db, CLOCK,
+                new EventService(market, CLOCK));
+        List<LocalDate> expirations = market.expirations("AAPL", null);
+        LocalDate near = expirations.getFirst();
+        LocalDate far = expirations.get(Math.min(4, expirations.size() - 1));
+
+        List<StrategyEvaluation> evaluated = service.evaluate("AAPL", "INCOME", null, "month",
+                "balanced", List.of(premiumCandidate(near.toString()), premiumCandidate(far.toString())),
+                10_000_000L, null, false, AnalysisContext.OBSERVED, null, null);
+
+        java.util.Map<String, StrategyEvaluation> byExpiration = evaluated.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        row -> row.candidate().legs().getFirst().expiration(), row -> row));
+        StrategyEvaluation nearEvaluation = byExpiration.get(near.toString());
+        StrategyEvaluation farEvaluation = byExpiration.get(far.toString());
+        int nearDte = (int) java.time.temporal.ChronoUnit.DAYS.between(
+                LocalDate.ofInstant(CLOCK.instant(), io.liftandshift.strikebench.market.MarketHours.EASTERN), near);
+        int farDte = (int) java.time.temporal.ChronoUnit.DAYS.between(
+                LocalDate.ofInstant(CLOCK.instant(), io.liftandshift.strikebench.market.MarketHours.EASTERN), far);
+
+        assertThat(nearEvaluation.capital().daysToExpiry()).isEqualTo(nearDte);
+        assertThat(farEvaluation.capital().daysToExpiry()).isEqualTo(farDte);
+        assertThat(farEvaluation.volatility().expectedMovePct())
+                .isGreaterThan(nearEvaluation.volatility().expectedMovePct());
+        assertThat(evaluated).allSatisfy(row ->
+                assertThat(row.spec().family()).isEqualTo(row.candidate().strategy()));
+    }
+
     private StrategyEvaluation evaluate(MarketDataService market) {
         db = TestDb.fresh();
         EventService events = new EventService(market, CLOCK);

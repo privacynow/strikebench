@@ -824,7 +824,8 @@ public final class RecommendationEngine {
                                 : family.needsStock() ? " (the 100 shares the call is written against)" : "")
                             + ", within your " + Money.fmt(buyingPowerCents) + " account — this is collateral you hold, not a fee you lose."
                         : maxLoss > 0 ? "Sized to keep new cash at risk within your " + Money.fmt(budget) + " budget." : "");
-        String beginner = beginnerText(family, entryNet);
+        boolean includesStockLeg = built.legs().stream().anyMatch(Leg::isStock);
+        String beginner = beginnerText(family, entryNet, optionNetCents, includesStockLeg);
         String intentNote = intentNote(intent, family, holdings, spot, qty, netOptionIncomeCents, minDte,
                 effectivePrice, assignProb, annualYieldPct, shortCallStrike, shortPutStrike, longPutStrike,
                 onHeldShares, packageShareUnitsPerUnit);
@@ -1031,11 +1032,32 @@ public final class RecommendationEngine {
         return Math.clamp(1.0 - worstSpread / 0.15, 0, 1);
     }
 
-    private static String beginnerText(StrategyFamily family, long entryNet) {
-        String cash = entryNet >= 0
-                ? "You collect " + Money.fmt(entryNet) + " up front and keep it if the trade works out."
-                : "You pay " + Money.fmt(-entryNet) + " up front — that payment is the most you can lose"
-                    + (family.needsStock() ? " on the options portion" : family.multiExpiration() ? "" : "") + ".";
+    private static String beginnerText(StrategyFamily family, long entryNet, long optionEntryNet,
+                                       boolean includesStockLeg) {
+        String cash;
+        if (family.needsStock()) {
+            String optionCash = optionEntryNet > 0
+                    ? "The option legs collect " + Money.fmt(optionEntryNet) + " net up front."
+                    : optionEntryNet < 0
+                        ? "The option legs cost " + Money.fmt(-optionEntryNet) + " net up front."
+                        : "The option legs have no net entry premium.";
+            if (includesStockLeg) {
+                String packageCash = entryNet > 0
+                        ? "The complete stock-plus-options package collects " + Money.fmt(entryNet) + " net up front."
+                        : entryNet < 0
+                            ? "The complete stock-plus-options package costs " + Money.fmt(-entryNet) + " up front."
+                            : "The complete stock-plus-options package has no net entry payment.";
+                cash = packageCash + " " + optionCash
+                        + " The shares are part of that package value and keep their own upside and downside.";
+            } else {
+                cash = optionCash + " Your existing shares remain a separate source of gain or loss.";
+            }
+        } else {
+            cash = entryNet >= 0
+                    ? "You collect " + Money.fmt(entryNet) + " up front and keep it if the trade works out."
+                    : "You pay " + Money.fmt(-entryNet)
+                        + " up front — that payment is the most you can lose.";
+        }
         return switch (family) {
             case LONG_CALL -> "Buying a call is a bet the stock rises above the strike before expiration. " + cash;
             case LONG_PUT -> "Buying a put is a bet the stock falls below the strike before expiration. " + cash;
@@ -1048,7 +1070,9 @@ public final class RecommendationEngine {
             case LONG_CALL_BUTTERFLY, LONG_PUT_BUTTERFLY -> "A pinned bet that the stock finishes near the middle strike. Cheap to buy, capped both ways. " + cash;
             case CALENDAR_CALL, CALENDAR_PUT -> "You sell a near-term option and buy a longer one at the same strike, hoping time decays the near one faster. " + cash;
             case DIAGONAL_CALL, DIAGONAL_PUT -> "Like a calendar but the strikes differ, adding a directional lean. " + cash;
-            case COVERED_CALL -> "You own 100 shares and rent them out by selling a call; income now, upside capped. " + cash;
+            case COVERED_CALL -> (includesStockLeg
+                    ? "You buy shares and rent them out by selling a call; income now, upside capped. "
+                    : "You own shares and rent them out by selling a call; income now, upside capped. ") + cash;
             case COVERED_STRANGLE -> "A covered call plus a cash-secured put: you collect two premiums, cap the upside, and stand ready to buy 100 more shares at the put strike. " + cash;
             case COVERED_CALL_PUT_SPREAD -> "You own shares, rent out the upside with a call, and use the premium to buy a put spread - a protected shelf that absorbs losses down to the lower put strike. " + cash;
             case COVERED_CALL_CALL_OVERLAY -> "A covered call plus a farther long call: income now, and if the stock runs past the overlay strike your upside participation resumes. " + cash;
@@ -1167,7 +1191,7 @@ public final class RecommendationEngine {
         long credit = c.entryNetPremiumCents();
         double grossWidth = (double) c.maxLossCents() + credit;
         double creditToWidth = grossWidth > 0 ? credit / grossWidth : 0.0;
-        if (credit > 0 && creditToWidth >= 0.05) return null;
+        if (credit > 0 && creditToWidth >= StrategyBuilder.MIN_IRON_CONDOR_CREDIT_TO_WIDTH) return null;
         return String.format(Locale.ROOT,
                 "Executable credit %s is only %.1f%% of the widest wing; an iron condor must collect at least 5%% of its width to be an economically meaningful comparison.",
                 Money.fmt(Math.max(0, credit)), Math.max(0.0, creditToWidth * 100.0));

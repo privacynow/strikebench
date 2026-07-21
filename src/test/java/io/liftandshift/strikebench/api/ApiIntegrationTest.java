@@ -1366,6 +1366,7 @@ class ApiIntegrationTest {
         assertThat(r.get("economicMessage").asText()).isNotBlank();
         boolean teachingCase = false;
         boolean favorableTeachingCase = false;
+        boolean splitEvidenceTeachingCase = false;
         double previousDecisionScore = Double.MAX_VALUE;
         for (JsonNode c : r.get("candidates")) {
             JsonNode evaluation = c.get("evaluation");
@@ -1385,14 +1386,26 @@ class ApiIntegrationTest {
                 assertThat(economics.get("label").asText()).containsIgnoringCase("teaching market");
                 favorableTeachingCase = true;
             }
+            if ("MIXED".equals(economics.get("verdict").asText())
+                    && !economics.get("observedEvidence").asBoolean()
+                    && economics.path("marketEvAfterCostsCents").asLong() < 0
+                    && economics.path("realizedVolEvAfterCostsCents").asLong() > 0) {
+                splitEvidenceTeachingCase = true;
+            }
             teachingCase |= "UNFAVORABLE".equals(economics.get("verdict").asText());
         }
-        assertThat(favorableTeachingCase)
-                .as("the deterministic teaching world demonstrates a favorable case without rigging every result positive")
+        assertThat(favorableTeachingCase || splitEvidenceTeachingCase)
+                .as("the deterministic teaching world demonstrates either a favorable case or an honestly split model comparison without rigging an endorsement")
                 .isTrue();
         assertThat(teachingCase).as("unfavorable structures stay visible as counterexamples").isTrue();
-        assertThat(r.get("economicMessage").asText()).containsIgnoringCase("generated teaching market")
-                .containsIgnoringCase("not evidence of a live-market edge");
+        if (favorableTeachingCase) {
+            assertThat(r.get("economicMessage").asText()).containsIgnoringCase("generated teaching market")
+                    .containsIgnoringCase("not evidence of a live-market edge");
+        } else {
+            assertThat(r.get("economicMessage").asText()).containsIgnoringCase("no setup currently shows")
+                    .containsIgnoringCase("after-cost edge")
+                    .containsIgnoringCase("comparison and learning");
+        }
 
         JsonNode auto = Json.parse(post("/api/research/scout", """
                 {"universe":["SPY"],"horizons":["month"],"riskMode":"conservative",

@@ -144,6 +144,27 @@ public final class StrategyBuilder {
 
     private static final double CONDOR_SHORT_DELTA = 0.20;
 
+    /** Shared construction/ranking floor for an executable iron-condor credit. */
+    public static final double MIN_IRON_CONDOR_CREDIT_TO_WIDTH = 0.05;
+
+    private record CondorSide(
+            Built built,
+            OptionQuote shortLeg,
+            OptionQuote longLeg,
+            int shortPreference,
+            int wingPreference
+    ) {}
+
+    private record CondorPackage(
+            Built built,
+            int maximumShortPreference,
+            int totalShortPreference,
+            int maximumWingPreference,
+            int totalWingPreference,
+            double creditToWidth,
+            boolean bounded
+    ) {}
+
     /**
      * Builds the canonical range-credit shape as one package. A condor is not merely the two
      * highest-return credit verticals: optimizing each side independently pulls both short strikes
@@ -156,20 +177,64 @@ public final class StrategyBuilder {
      * long put &lt; short put &lt; short call &lt; long call.</p>
      */
     private static Built ironCondor(OptionChain chain, BigDecimal spot) {
-        Built put = condorSide(chain, OptionType.PUT, spot);
-        Built call = condorSide(chain, OptionType.CALL, spot);
-        if (put == null || call == null) return null;
+        List<CondorSide> puts = condorSides(chain, OptionType.PUT, spot);
+        List<CondorSide> calls = condorSides(chain, OptionType.CALL, spot);
+        if (puts.isEmpty() || calls.isEmpty()) return null;
 
-        BigDecimal shortPut = put.legs().get(0).strike();
-        BigDecimal longPut = put.legs().get(1).strike();
-        BigDecimal shortCall = call.legs().get(0).strike();
-        BigDecimal longCall = call.legs().get(1).strike();
-        if (longPut.compareTo(shortPut) >= 0
-                || shortPut.compareTo(shortCall) >= 0
-                || shortCall.compareTo(longCall) >= 0) {
-            return null;
+        List<CondorPackage> packages = new ArrayList<>();
+        for (CondorSide put : puts) {
+            for (CondorSide call : calls) {
+                BigDecimal longPut = put.longLeg().strike();
+                BigDecimal shortPut = put.shortLeg().strike();
+                BigDecimal shortCall = call.shortLeg().strike();
+                BigDecimal longCall = call.longLeg().strike();
+                if (longPut.compareTo(shortPut) >= 0
+                        || shortPut.compareTo(shortCall) >= 0
+                        || shortCall.compareTo(longCall) >= 0) {
+                    continue;
+                }
+
+                BigDecimal putWidth = shortPut.subtract(longPut);
+                BigDecimal callWidth = longCall.subtract(shortCall);
+                BigDecimal widestWing = putWidth.max(callWidth);
+                BigDecimal executableCredit = put.shortLeg().bid().subtract(put.longLeg().ask())
+                        .add(call.shortLeg().bid().subtract(call.longLeg().ask()));
+                if (widestWing.signum() <= 0 || executableCredit.signum() <= 0) continue;
+
+                double creditToWidth = executableCredit.doubleValue() / widestWing.doubleValue();
+                packages.add(new CondorPackage(
+                        combine(put.built(), call.built()),
+                        Math.max(put.shortPreference(), call.shortPreference()),
+                        put.shortPreference() + call.shortPreference(),
+                        Math.max(put.wingPreference(), call.wingPreference()),
+                        put.wingPreference() + call.wingPreference(),
+                        creditToWidth,
+                        executableCredit.compareTo(widestWing) < 0));
+            }
         }
-        return combine(put, call);
+        if (packages.isEmpty()) return null;
+
+        // Probability boundary remains the primary selector. Within the same pair of short
+        // boundaries, retain the existing 2/1/3/4 wing preference, but keep searching when an
+        // earlier exact package would immediately fail the authoritative credit/width gate.
+        packages.sort(Comparator
+                .comparingInt(CondorPackage::maximumShortPreference)
+                .thenComparingInt(CondorPackage::totalShortPreference)
+                .thenComparingInt(CondorPackage::maximumWingPreference)
+                .thenComparingInt(CondorPackage::totalWingPreference));
+        CondorPackage firstBounded = null;
+        for (CondorPackage candidate : packages) {
+            if (!candidate.bounded()) continue;
+            if (firstBounded == null) firstBounded = candidate;
+            if (candidate.creditToWidth() >= MIN_IRON_CONDOR_CREDIT_TO_WIDTH) {
+                return candidate.built();
+            }
+        }
+
+        // Preserve a concrete comparison/rejection when the chain has a bounded condor but no
+        // economically meaningful one. Truly impossible quote packages remain visible to the
+        // existing payoff-integrity guard only when no bounded package exists at all.
+        return firstBounded != null ? firstBounded.built() : packages.get(0).built();
     }
 
     /**
@@ -177,14 +242,14 @@ public final class StrategyBuilder {
      * short and protective wing (a restrained, readable width), then fall back to one/three/four
      * when the chain is sparse. A side that cannot collect a credit at bid/ask is not a credit side.
      */
-    private static Built condorSide(OptionChain chain, OptionType type, BigDecimal spot) {
-        if (spot == null || spot.signum() <= 0) return null;
+    private static List<CondorSide> condorSides(OptionChain chain, OptionType type, BigDecimal spot) {
+        if (spot == null || spot.signum() <= 0) return List.of();
         double s = spot.doubleValue();
         List<OptionQuote> side = (type == OptionType.CALL ? chain.calls() : chain.puts()).stream()
                 .filter(StrategyBuilder::hasExecutableBook)
                 .sorted(Comparator.comparing(OptionQuote::strike))
                 .toList();
-        if (side.size() < 2) return null;
+        if (side.size() < 2) return List.of();
 
         List<OptionQuote> shorts = side.stream()
                 .filter(q -> type == OptionType.CALL
@@ -194,21 +259,28 @@ public final class StrategyBuilder {
                         .thenComparingDouble(q -> Math.abs(q.strike().doubleValue() - s)))
                 .toList();
         int direction = type == OptionType.CALL ? 1 : -1;
-        for (OptionQuote shortLeg : shorts) {
+        int[] preferredWingSteps = {2, 1, 3, 4};
+        List<CondorSide> candidates = new ArrayList<>();
+        for (int shortPreference = 0; shortPreference < shorts.size(); shortPreference++) {
+            OptionQuote shortLeg = shorts.get(shortPreference);
             int shortIndex = side.indexOf(shortLeg);
-            for (int steps : new int[] {2, 1, 3, 4}) {
+            for (int wingPreference = 0; wingPreference < preferredWingSteps.length; wingPreference++) {
+                int steps = preferredWingSteps[wingPreference];
                 int wingIndex = shortIndex + direction * steps;
                 if (wingIndex < 0 || wingIndex >= side.size()) continue;
                 OptionQuote longLeg = side.get(wingIndex);
                 BigDecimal credit = shortLeg.bid().subtract(longLeg.ask());
                 if (credit.signum() <= 0) continue;
-                return new Built(List.of(leg(LegAction.SELL, shortLeg), leg(LegAction.BUY, longLeg)),
+                Built built = new Built(
+                        List.of(leg(LegAction.SELL, shortLeg), leg(LegAction.BUY, longLeg)),
                         List.of(shortLeg, longLeg),
                         "SELL " + strikeLabel(shortLeg) + " / BUY " + strikeLabel(longLeg)
                                 + " " + chain.expiration());
+                candidates.add(new CondorSide(
+                        built, shortLeg, longLeg, shortPreference, wingPreference));
             }
         }
-        return null;
+        return candidates;
     }
 
     private static boolean hasExecutableBook(OptionQuote quote) {

@@ -2251,10 +2251,12 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
   });
   // Home deliberately paints before its durable Plan collection finishes reconciling. Assert the
   // settled ownership state, not the useful provisional list that may exist for a single frame.
-  await page.waitForFunction(activeId => App.state.activePlanId === activeId
-    && !document.querySelector('#home-plan-library [data-plan-id="' + activeId + '"]')
+  await page.waitForFunction(values => App.state.activePlanId === values.simTwo
+    && !!document.querySelector('#home-plan-library .home-plan-compact-list')
+    && !!document.querySelector('#home-plan-library [data-plan-id="' + values.simOne + '"]')
+    && !document.querySelector('#home-plan-library [data-plan-id="' + values.simTwo + '"]')
     && /^Continue SPY/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || ''),
-  ids.simTwo, { timeout: 20000 });
+  ids, { timeout: 30000 });
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
     'Home shows a bounded alternative-Plan lens');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.simTwo + '"]').count(), 0,
@@ -2457,6 +2459,8 @@ test('equivalent Plan retries collapse while materially different Plans survive 
     .getByRole('button', { name: 'Delete draft' }).click();
   await page.getByRole('button', { name: 'Delete draft' }).last().click();
   await page.waitForFunction(id => !PlanStore.allMarkets().some(p => p.id === id), ids.disposable);
+  await page.waitForFunction(() => !(document.getElementById('plans-library')?.textContent || '')
+    .includes('SPY · Disposable tab'));
   assert.equal(await page.locator('#plans-library').getByText('SPY · Disposable tab').count(), 0,
     'permanent draft deletion removes the Plan from the all-market library');
 
@@ -2515,12 +2519,15 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
     if (App.state.world !== base) await App.switchWorld(base);
     await PlanStore.load(true);
     const seeds = [
-      ['AAPL', 'DIRECTIONAL', 'bullish', 30, 'AAPL upside'],
-      ['QQQ', 'INCOME', 'neutral', 45, 'QQQ income'],
-      ['SPY', 'ACQUIRE', 'neutral', 20, 'SPY discount'],
-      ['AAPL', 'HEDGE', 'bearish', 45, 'AAPL protection'],
-      ['TSLA', 'EXIT', 'bullish', 45, 'TSLA target'],
-      ['QQQ', 'DIRECTIONAL', 'bearish', 20, 'QQQ downside']
+      // Uncommon horizons make these six durable identities unique to this collection test;
+      // equivalent-Plan deduplication is exercised separately and must not collapse this setup
+      // into Plans intentionally left open by earlier journey tests.
+      ['AAPL', 'DIRECTIONAL', 'bullish', 71, 'AAPL upside'],
+      ['QQQ', 'INCOME', 'neutral', 72, 'QQQ income'],
+      ['SPY', 'ACQUIRE', 'neutral', 73, 'SPY discount'],
+      ['AAPL', 'HEDGE', 'bearish', 74, 'AAPL protection'],
+      ['TSLA', 'EXIT', 'bullish', 75, 'TSLA target'],
+      ['QQQ', 'DIRECTIONAL', 'bearish', 76, 'QQQ downside']
     ];
     const created = [];
     for (const seed of seeds) {
@@ -2534,6 +2541,8 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   const compact = page.locator('#home-plan-library .home-plan-compact-list');
   await compact.waitFor({ state: 'visible' });
   await page.waitForFunction(activeId => App.state.activePlanId === activeId
+    && !!document.querySelector('#home-plan-library .home-plan-compact-list')
+    && document.querySelectorAll('#home-plan-library .home-plan-compact-row').length === 3
     && /^Continue QQQ/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || '')
     && !document.querySelector('#home-plan-library [data-plan-id="' + activeId + '"]'),
   ids[5], { timeout: 20000 });
@@ -2555,6 +2564,8 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   await page.waitForSelector('#home-plan-drawer .xp-head[aria-expanded="true"]');
   await page.waitForSelector('#plans-library [data-plan-group="in-this-market"]');
   const group = page.locator('#plans-library [data-plan-group="in-this-market"]');
+  const showAll = group.getByRole('button', { name: /^Show all / });
+  if (await showAll.count()) await showAll.click();
   for (const id of ids) assert.equal(await group.locator('[data-plan-id="' + id + '"]').count(), 1,
     'every Plan remains reachable in the canonical Plan library');
   await page.screenshot({ path: path.join(__dirname, 'shots/plan-p8-library-expanded-desktop.png'), fullPage: true });
@@ -6096,7 +6107,10 @@ test('TRADER/OWN interaction contract: vocabulary, local visual editor, and disc
   assert.deepEqual(viewportDisclosure,
     { openedByDesktop: true, userChoiceSurvivesLabelChange: true, stableKey: true },
   'desktop defaults and explicit user choices use stable disclosure identity rather than changing labels');
-  const editorPlan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish');
+  // This contract asserts a rejected proposal against a Plan with no prior selection. Give it
+  // a distinct durable identity so an earlier AAPL/bullish recommendation test cannot be reused
+  // by the product's intentional equivalent-Plan deduplication.
+  const editorPlan = await openPlan('AAPL', 'strategy', 'DIRECTIONAL', 'bullish', '43d');
   await page.click('#plan-tool-yourTrade');
   await page.waitForSelector('#plan-strategy-body .position-editor');
   await page.waitForSelector('#plan-strategy-body .position-chain-contract');
@@ -8068,6 +8082,11 @@ test('simulated market: product creator, loud live band, world-routed research, 
     return App.state.world === baseline && u && u.active && !/simulated session/i.test(u.active.label || '')
       && App.Market.world === baseline && !document.body.classList.contains('in-sim-world');
   }, baselineWorld, { timeout: 15000 });
+  await page.waitForFunction(() => App.state.transitionStatus === 'committed'
+    && !App._rendering && !App._renderQueued
+    && App._lastRenderedHash === window.location.hash
+    && document.getElementById('app')?.getAttribute('data-ready') === 'true',
+  null, { timeout: 15000 });
   const after = await page.evaluate(async () => ({
     world: (await API.getFresh('/api/world')).world,
     acct: (await API.getFresh('/api/account')).account.id,
@@ -8081,7 +8100,9 @@ test('simulated market: product creator, loud live band, world-routed research, 
 
   // Finish via the app modal (never window.confirm): the REPORT shows before the finish.
   await go('#/data/simulation');
-  await page.waitForSelector('.sim-session-row button:has-text("Finish")', { timeout: 30000 }).catch(async error => {
+  const createdSessionRow = page.locator('.sim-session-row[data-sim-id="' + created.worldId + '"]');
+  const createdSessionFinish = createdSessionRow.getByRole('button', { name: 'Finish', exact: true });
+  await createdSessionFinish.waitFor({ state: 'visible', timeout: 30000 }).catch(async error => {
     const diag = await page.evaluate(() => ({
       world: App.state.world,
       rail: (document.getElementById('dc-sim-sessions') || {}).textContent?.slice(0, 200),
@@ -8098,21 +8119,21 @@ test('simulated market: product creator, loud live band, world-routed research, 
   assert.ok(await page.locator('.sim-session-row .sim-session-summary').count() >= 1,
     'each session exposes one explicit primary card action alongside separate controls');
   for (const label of ['Enter this market', 'Pause', 'Inject event']) {
-    assert.equal(await page.locator('.sim-session-row button').filter({ hasText: label }).isEnabled(), true,
+    assert.equal(await createdSessionRow.getByRole('button', { name: label, exact: true }).isEnabled(), true,
       label + ' stays actionable after returning from the running session');
   }
-  await page.locator('.sim-session-row button').filter({ hasText: 'Inject event' }).click();
+  await createdSessionRow.getByRole('button', { name: 'Inject event', exact: true }).click();
   await page.waitForSelector('#inject-symbol');
   await assertNamedControls('#modal-root');
   await page.keyboard.press('Escape');
   await page.waitForSelector('#modal-root [role="dialog"]', { state: 'detached' });
   // The card surface itself enters the market; it is not a decorative shell around buttons.
-  await page.click('.sim-session-row', { position: { x: 5, y: 5 } });
+  await createdSessionRow.click({ position: { x: 5, y: 5 } });
   await page.waitForFunction((baseline) => App.state.world !== baseline, baselineWorld, { timeout: 15000 });
   await page.click('#world-exit');
   await page.waitForFunction((baseline) => App.state.world === baseline, baselineWorld, { timeout: 15000 });
   await go('#/data/simulation');
-  await page.waitForSelector('.sim-session-row button:has-text("Finish")', { timeout: 30000 }).catch(async error => {
+  await createdSessionFinish.waitFor({ state: 'visible', timeout: 30000 }).catch(async error => {
     const diag = await page.evaluate(() => ({
       world: App.state.world,
       rail: (document.getElementById('dc-sim-sessions') || {}).textContent?.slice(0, 200),
@@ -8122,7 +8143,7 @@ test('simulated market: product creator, loud live band, world-routed research, 
     }));
     throw new Error('DIAG ' + JSON.stringify(diag) + ' :: ' + error.message);
   });
-  await page.click('.sim-session-row button:has-text("Finish")');
+  await createdSessionFinish.click();
   await page.waitForSelector('#modal-confirm');
   await page.waitForSelector('#sim-report', { timeout: 15000 });
   const rep = await page.textContent('#sim-report');
@@ -8393,9 +8414,19 @@ test('viewport composition: welcome rows share one width, Data Overview fits 128
     'Plan progress, Tools, and Sector pulse are all explicitly headed');
   // Responsive chrome must recalculate its sticky anchor. It previously retained the 120px
   // mobile top after resizing to desktop and overlaid both the tape and the page.
+  await go('#/home');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.waitForTimeout(100);
+  await page.waitForFunction(() => {
+    const tape = document.getElementById('tape');
+    const band = document.getElementById('world-band');
+    const top = document.querySelector('.topbar');
+    if (!tape || !band || !top || !tape.offsetParent || tape.getBoundingClientRect().height <= 0) return false;
+    const topBox = top.getBoundingClientRect();
+    const bandBox = band.getBoundingClientRect();
+    const tapeBox = tape.getBoundingClientRect();
+    return Math.abs(topBox.bottom - bandBox.top) <= 2 && bandBox.bottom <= tapeBox.top + 2;
+  }, { timeout: 10000 });
   const chromeGeo = await page.evaluate(() => {
     const top = document.querySelector('.topbar').getBoundingClientRect();
     const band = document.getElementById('world-band').getBoundingClientRect();

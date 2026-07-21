@@ -383,3 +383,33 @@ default — every visitor otherwise shares the single local paper account.
 Set `snapshot.enabled=true` to record a daily EOD snapshot of the active universe's option chains
 into `option_bar`/`underlying_bar` (evidence-tagged). Off by default so the demo never hammers
 providers; `POST /api/admin/snapshot` triggers one on demand.
+
+### Reusing observed market data after a local database rebuild
+
+For the local development loop only, `scripts/dev-market-snapshot.sh` preserves the authorized
+Yahoo daily history and attributable forward quote/chain snapshots already stored in
+`strikebench_dev`. It does not capture Plans, accounts, jobs, request budgets, generated datasets,
+or raw research/news responses, and it is never read by application boot as a hidden fallback.
+
+Start the app with `YAHOO_ENABLED=true` and
+`YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true`, run `sync_underlying` with `source: "yahoo"`, and
+run `snapshot_now` once while the observed market is available. Then:
+
+```bash
+scripts/dev-market-snapshot.sh capture
+scripts/dev-market-snapshot.sh verify
+```
+
+The default bundle is `.tmp/dev-market-snapshot`; set `BUNDLE_DIR` to use another transient path.
+An ordinary Postgres restart retains the Docker volume and needs no action. After deliberately
+recreating the development database, let the current app initialize its schema, stop the app, and
+run:
+
+```bash
+scripts/dev-market-snapshot.sh hydrate
+```
+
+Hydration is idempotent and restricted to the exact `strikebench_dev` schema fingerprint. It stages
+and validates every row before one transactional upsert, rejects generated or mismatched provenance,
+and requires an application restart afterward so saved quotes return as honestly labeled `STALE`
+while daily history is read as stored observed data. Never use this helper for tests or deployment.

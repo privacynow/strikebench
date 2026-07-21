@@ -81,6 +81,51 @@ class EconomicAssessmentTest {
         assertThat(a.favorable()).isTrue();
     }
 
+    @Test void unrelatedIvRankHistoryDoesNotVetoAnObservedEconomicClaim() {
+        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
+                20_000, 0.20, List.of(), 2_000L, "test");
+        Map<String, EvidenceLevel> dimensions = Map.of(
+                "pricing", EvidenceLevel.OBSERVED_DELAYED,
+                "currentVolatility", EvidenceLevel.OBSERVED_DELAYED,
+                "rates", EvidenceLevel.OBSERVED_EOD,
+                "history", EvidenceLevel.OBSERVED_EOD,
+                "volatility", EvidenceLevel.MODELED,
+                "liquidity", EvidenceLevel.UNKNOWN);
+        Map<String, EvidenceProfile.ClaimEvidence> claims = Map.of(
+                "endorsement", EvidenceProfile.project(dimensions,
+                        List.of("pricing", "currentVolatility", "rates", "history"), "economic inputs"));
+        EvidenceProfile evidence = EvidenceProfile.of(dimensions, "holistic disclosure", claims);
+
+        EconomicAssessment assessment = EconomicAssessment.assess(
+                candidate(0.55), risk, evidence, pass(), ctx());
+
+        assertThat(evidence.rollup()).isEqualTo(EvidenceLevel.UNKNOWN);
+        assertThat(evidence.claims().get("endorsement").observed()).isTrue();
+        assertThat(assessment.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(assessment.observedEvidence()).isTrue();
+    }
+
+    @Test void modeledCurrentVolatilityStillBlocksAnObservedEndorsement() {
+        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
+                20_000, 0.20, List.of(), 2_000L, "test");
+        Map<String, EvidenceLevel> dimensions = Map.of(
+                "pricing", EvidenceLevel.OBSERVED_DELAYED,
+                "currentVolatility", EvidenceLevel.MODELED,
+                "rates", EvidenceLevel.OBSERVED_EOD,
+                "history", EvidenceLevel.OBSERVED_EOD);
+        Map<String, EvidenceProfile.ClaimEvidence> claims = Map.of(
+                "endorsement", EvidenceProfile.project(dimensions,
+                        List.of("pricing", "currentVolatility", "rates", "history"), "economic inputs"));
+        EvidenceProfile evidence = EvidenceProfile.of(dimensions, "modeled current IV", claims);
+
+        EconomicAssessment assessment = EconomicAssessment.assess(
+                candidate(0.55), risk, evidence, pass(), ctx());
+
+        assertThat(assessment.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(assessment.observedEvidence()).isFalse();
+        assertThat(assessment.reasons()).anyMatch(reason -> reason.contains("currentVolatility"));
+    }
+
     @Test void generatedEvidenceCanTeachAFavorableCaseWithoutClaimingObservedEdge() {
         RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, 2_000L,
                 20_000, 0.20, List.of(), 3_000L, "test");

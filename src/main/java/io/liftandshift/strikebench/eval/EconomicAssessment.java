@@ -69,7 +69,10 @@ public record EconomicAssessment(
         long maxLoss = risk == null ? 0 : Math.max(0, risk.maxLossCents());
         Double evPct = marketNet == null || maxLoss <= 0
                 ? null : 100.0 * marketNet / maxLoss;
-        boolean observed = evidence != null && evidence.rollup() != null && evidence.rollup().isObserved();
+        // The holistic badge remains worst-of for disclosure, but an economic claim is judged by
+        // the inputs it actually consumes. Missing IV-rank history, Greeks, or unrelated portfolio
+        // decoration cannot veto an observed two-lane EV claim; missing daily history still can.
+        boolean observed = evidence != null && evidence.observedFor("endorsement");
         EvidenceLevel pricingEvidence = evidence == null ? EvidenceLevel.UNKNOWN
                 : evidence.perDimension().getOrDefault("pricing", EvidenceLevel.UNKNOWN);
         boolean explicitTeachingMarket = pricingEvidence == EvidenceLevel.DEMO_FIXTURE
@@ -111,7 +114,15 @@ public record EconomicAssessment(
             reasons.add("The realized-volatility EV lane could not be computed for this payoff shape.");
         }
         if (lowProbability) reasons.add("The modeled chance of any profit is below 30%; low probability is not a rejection by itself.");
-        if (!observed) reasons.add("The evidence is generated or modeled, so it cannot establish a live-market edge.");
+        if (!observed) {
+            var claim = evidence == null ? null : evidence.claims().get("endorsement");
+            if (claim != null && !claim.nonObservedDimensions().isEmpty()) {
+                reasons.add("The live-market endorsement is limited by non-observed inputs: "
+                        + String.join(", ", claim.nonObservedDimensions()) + ".");
+            } else {
+                reasons.add("The evidence is generated or modeled, so it cannot establish a live-market edge.");
+            }
+        }
 
         // A favorable classification requires a positive realized-volatility scenario that survives
         // fees. Observed evidence determines whether the label can describe a live-market edge or only

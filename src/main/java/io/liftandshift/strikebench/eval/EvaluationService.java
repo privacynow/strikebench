@@ -180,11 +180,24 @@ public final class EvaluationService {
                 && assignmentPreference == null) ? null
                 : new DeclaredObjective(intent, thesis, horizonSessions(horizon), assignmentPreference,
                         "this Plan's declared view");
-        EvalContext ctx = buildContext(symbol, candidates, buyingPowerCents, actx, worldId,
-                portfolioExposure, declared);
-        String family = candidates.isEmpty() ? null : candidates.getFirst().strategy();
-        StrategySpec spec = new StrategySpec(symbol, family, intent, horizon, thesis, riskMode, "decision");
-        return evaluator.evaluateAndRank(candidates, spec, ctx);
+        // Expiry is financial context, not presentation metadata. A field that retains several
+        // expirations cannot price/rank every package with the earliest contract's DTE, ATM IV,
+        // rate and event window. Reuse contexts only when both edges of the package's lifetime
+        // match (single-expiry packages naturally share one key), then rank the exact evaluations.
+        record ContextKey(LocalDate front, LocalDate last) {}
+        java.util.Map<ContextKey, EvalContext> contexts = new java.util.HashMap<>();
+        List<StrategyEvaluation> evaluated = new ArrayList<>(candidates.size());
+        StrategySpec competition = new StrategySpec(symbol, null, intent, horizon, thesis, riskMode,
+                "decision");
+        for (Candidate candidate : candidates) {
+            ContextKey key = new ContextKey(frontExpiration(List.of(candidate)),
+                    lastExpiration(List.of(candidate)));
+            EvalContext ctx = contexts.computeIfAbsent(key, ignored -> buildContext(symbol,
+                    List.of(candidate), buyingPowerCents, actx, worldId, portfolioExposure, declared));
+            evaluated.add(evaluator.evaluateAndRank(List.of(candidate), competition, ctx).getFirst());
+        }
+        evaluated.sort(StrategyEvaluator.RANKING);
+        return List.copyOf(evaluated);
     }
 
     private static Integer horizonSessions(String raw) {

@@ -1494,10 +1494,14 @@
 
     function scheduleRun(delay) {
       if (runTimer) clearTimeout(runTimer);
-      runTimer = setTimeout(function () { runTimer = null; rerun(); }, delay == null ? 350 : delay);
+      // Invalidate an already-running request at the moment newer authoring input arrives,
+      // not only when the debounce timer eventually starts its replacement. Otherwise the old
+      // response can repaint the Canvas with its captured model and erase a just-typed node.
+      var scheduledSeq = ++runSeq;
+      runTimer = setTimeout(function () { runTimer = null; rerun(scheduledSeq); }, delay == null ? 350 : delay);
     }
-    async function rerun() {
-      var seq = ++runSeq;
+    async function rerun(seq) {
+      if (seq == null) seq = ++runSeq;
       setStatus(UI.spinner(state.pins.length
         ? 'Re-running the stored fan through your ' + state.pins.length + ' waypoint' + (state.pins.length === 1 ? '' : 's') + '…'
         : 'Re-running the plain fan…'));
@@ -1894,11 +1898,15 @@
           value: Number(currentIv) >= .01 ? (currentIv * 100).toFixed(1) : '',
           placeholder: Number(currentIv) >= .01 ? null : 'Enter IV',
           'aria-label': 'ATM implied volatility at ' + sessionLabel(row.day) });
-        iv.addEventListener('change', function () {
+        function commitIvNode(delay) {
           var value = parseFloat(iv.value);
           if (!isFinite(value)) return;
-          setIvNode(row.day, value / 100); state.ivPreset = null; scheduleRun(0);
-        });
+          setIvNode(row.day, value / 100); state.ivPreset = null; scheduleRun(delay);
+        }
+        // Input owns the authoring state immediately. Change remains as a keyboard/browser
+        // compatibility commit, while the sequenced debounce prevents duplicate calculations.
+        iv.addEventListener('input', function () { commitIvNode(); });
+        iv.addEventListener('change', function () { commitIvNode(0); });
         tbody.appendChild(el('tr', { 'data-canvas-day': String(row.day) },
           el('td', {}, row.day === 0 ? 'Now' : String(row.day)),
           el('td', { class: 'nowrap' }, row.sessionDate || '—'),

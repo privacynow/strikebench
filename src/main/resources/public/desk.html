@@ -261,7 +261,7 @@
 @media (min-width:1200px) and (max-width:1700px){
   .homesummary{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(500px,.95fr);align-items:stretch}
   .homesummary .hfull{display:none}.homesummary .hshort{display:inline}
-  .homesummary .perfband{grid-template-columns:120px minmax(190px,1fr) auto;padding:6px 10px;gap:10px}
+  .homesummary .perfband{grid-template-columns:minmax(180px,auto) minmax(190px,1fr);padding:6px 10px;gap:10px}
   .homesummary .pf-eq{height:42px}.homesummary .pf-stats{gap:2px 7px}.homesummary .pf-stats .pfk{white-space:nowrap;font-size:var(--f-2xs)}
   .homesummary .pf-lead .lbl{font-size:10px;line-height:1.1;white-space:nowrap}.homesummary .pf-net{font-size:16px}.homesummary .pf-day{font-size:11px;line-height:1.1}
   .homesummary .pf-stats .pfk{font-size:9px;line-height:1.1}.homesummary .pf-stats .pfv{font-size:12px;line-height:1.2}
@@ -959,6 +959,7 @@
 .backendstate.err{color:var(--loss);border-color:rgba(255,105,120,.35)}.backendstate.err i{background:var(--loss);box-shadow:0 0 0 3px var(--loss-wash)}
 .backendnotice{padding:7px 9px;border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:7px;background:var(--panel-2);font-size:var(--f-xs);color:var(--dim);line-height:1.45}
 .backendnotice.err{border-left-color:var(--loss);color:var(--text)}
+.dcleft>.backendnotice,.evsimstage>.backendnotice{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
 .conditionedpatherror{height:100%;min-height:0;display:flex;align-items:center}.conditionedpatherror .backendnotice{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:12px}.conditionedpatherror .backendnotice b{color:var(--loss)}.conditionedpatherror .backendnotice .btn{margin-top:2px}
 .authpending{grid-column:1/-1;min-height:min(62vh,560px);display:grid;grid-template-columns:minmax(230px,.72fr) minmax(360px,1.45fr) minmax(260px,.85fr);gap:10px}
 .authpending .authpane{border:1px solid var(--line-soft);border-radius:9px;background:var(--panel);padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0;overflow:hidden}
@@ -996,6 +997,8 @@
 .authsharerow{grid-template-columns:minmax(0,1fr) auto auto;align-items:center}.authsharerow .authrowmain{min-width:0;display:flex;flex-direction:column;gap:2px}.authsharerow .authrowmain small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authshareshead{margin-top:4px}
 .authrosterempty{min-height:0;display:flex;flex:1;flex-direction:column;justify-content:center;gap:7px;padding:14px 10px;color:var(--dim);font-size:var(--f-xs);line-height:1.5}
 .authrosterempty b{color:var(--text);font-size:var(--f-sm)}.authrosterempty p{margin:0}.authrosterempty .emptyactions{margin-top:7px}
+.authemptybook{flex:1;display:flex;flex-direction:column;justify-content:center;gap:7px;padding:9px;border:1px solid var(--line-soft);border-radius:8px;background:linear-gradient(145deg,var(--panel-2),var(--accent-wash));color:var(--dim);font-size:var(--f-xs);line-height:1.45}
+.authemptybook b{color:var(--text);font-size:var(--f-sm)}.authemptybook .emptyfacts{grid-template-columns:1fr 1fr;margin-top:4px}.authemptybook .emptyfact{margin:0;padding:6px 7px}
 .authlistbutton{width:100%;border:1px solid var(--line-soft);cursor:pointer;text-align:left;font:inherit;transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
 .authlistbutton:hover,.authlistbutton:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}
 .authlistbutton .authrowmain{min-width:0;display:flex;flex-direction:column;gap:2px}.authlistbutton .authrowmain b{display:block}.authlistbutton .authrowmain small{color:var(--faint);font-size:var(--f-2xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1037,6 +1040,13 @@
 .card.authoritative .cdetail{min-height:0}
 @media(max-width:1250px){.authscenarioarea{grid-template-columns:1fr}.authpathpanel{min-height:260px}}
 @media(max-width:1100px){.authposhero,.authresearchgrid{grid-template-columns:1fr}.authposhero{min-height:0}.authpayoff{min-height:220px}.authresearchpanel{min-height:220px}}
+/* On the principal desktop widths, market/research is part of the position decision—not a section
+   hidden below two tall analytics blocks. Keep a compact, scroll-contained evidence band visible
+   after the mark/payoff hero, then continue into the full scenario workspace. */
+@media(min-width:1101px){
+  .authposhero{order:1}.authresearchgrid{order:2;height:190px;min-height:190px}.authscenstage{order:3}
+  .authresearchgrid .authresearchpanel{min-height:0}.authresearchgrid .authhistory{height:78px}
+}
 @media(max-width:700px){.authscengrid{grid-template-columns:repeat(2,minmax(0,1fr))}.authscenmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}.authscenarioarea{min-height:0}.authpathpanel{min-height:235px}.authscenrow{min-height:62px}.authscenrow .asdesc{display:none}.authscenpanel .srow-ctl{grid-template-columns:1fr;grid-template-areas:"read" "play" "steps"}.authscenpanel .srow-ctl>.smstps{flex-wrap:wrap}.authleg{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"side qty mark" "side contract contract"}.authleg .side{grid-area:side}.authleg>span:nth-child(2){grid-area:qty}.authleg .contract{grid-area:contract}.authleg .mark{grid-area:mark}}
 @keyframes authpulse{50%{background-position:100% 0;opacity:.58}}
 .authcompare{display:grid;gap:7px;margin-top:8px}.authcompare .acrow{display:grid;grid-template-columns:minmax(120px,1fr) repeat(4,minmax(64px,.62fr));gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:6px;font-size:var(--f-xs)}
@@ -1099,6 +1109,19 @@
 .dcleft .bpread{margin-top:8px;padding-top:8px}
 .dcleft .raildrawer.capsdrawer{position:absolute;z-index:25;inset:34px 0 0;padding:10px;overflow:auto;
   border:1px solid var(--line);border-radius:10px;background:var(--pop-surface,#0d131c);box-shadow:0 16px 42px rgba(0,0,0,.58)}
+.dcleft .raildrawer.catalogdrawer{position:absolute;z-index:25;inset:34px 0 0;padding:10px;overflow:auto;
+  border:1px solid var(--line);border-radius:10px;background:var(--pop-surface,#0d131c);box-shadow:0 16px 42px rgba(0,0,0,.58)}
+.catalogintro{margin:7px 0 9px;color:var(--dim);font-size:var(--f-xs);line-height:1.45}
+.cataloglist{display:flex;flex-direction:column;gap:5px}
+.catalogrow{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 8px;
+  border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);color:var(--dim);text-align:left}
+button.catalogrow{cursor:pointer;font:inherit}.catalogrow.now{border-color:var(--accent-2);background:var(--accent-wash)}
+button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accent);outline:none}.catalogrow.blocked{opacity:.62}
+.catalogshape{width:42px;height:22px}.catalogshape polyline{fill:none;stroke:var(--accent-2);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.catalogcopy{min-width:0}.catalogcopy b{display:block;color:var(--text);font-size:var(--f-xs)}
+.catalogcopy small{display:block;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.catalogstate{font-family:var(--mono);font-size:var(--f-2xs);white-space:nowrap;color:var(--faint)}
+.catalogrow.now .catalogstate{color:var(--accent)}.catalogrow.screened .catalogstate{color:var(--caution)}
 /* RIGHT — depth (stacked, compact) + place ticket */
 /* ---- Decide RIGHT column: Understand (mechanics + evidence/sim + book) then Execute ---- */
 .dcright{gap:12px}
@@ -1673,12 +1696,14 @@
 .fanr.dis{opacity:1}
 .fanr.dis .fanicon,.fanr.dis .fr2{opacity:.58}
 .fanr.hot{background:#132030;box-shadow:inset 2px 0 0 var(--accent)}
+.card.authoritative.justopened{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent),0 10px 32px rgba(25,205,218,.10)}
 .badge.pickbadge{color:#06212a;background:var(--accent);border-color:var(--accent);padding:1px 6px}
 .badge.pickbadge{flex:none}
 .fanicon{width:38px;height:30px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);flex:none}
 .fanmain{min-width:0;display:flex;flex-direction:column;gap:3px}
 .fanmain .fr1{display:flex;align-items:center;gap:7px;min-width:0}
 .fanmain .fnm{flex:1;font-family:var(--mono);font-weight:800;color:var(--text);font-size:var(--f-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.fanmain .fexact{margin:2px 0 3px;color:var(--faint);font-family:var(--mono);font-size:var(--f-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fanmain .fr1 .ffit{margin-left:auto;font-size:var(--f-2xs);letter-spacing:.05em;text-transform:uppercase;font-weight:700;flex:none}
 .fanr.sel .fanmain .fr1{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start}
 .fanr.sel .fanmain .fnm{grid-column:1/-1;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.28}
@@ -1690,6 +1715,10 @@
 .fanmain .fr3{display:none;align-items:center;gap:10px;margin-top:2px;padding-top:5px;border-top:1px solid var(--line-soft);
   font-size:var(--f-2xs);color:var(--faint);flex-wrap:wrap}
 .fanr.sel .fr3{display:flex}
+/* A comparison field intentionally has no selected row, but that must not hide the compact
+   economics users need to compare it. The full rationale remains in the Understand surface. */
+.fan.comparefield .fr3{display:flex;padding-top:3px;gap:7px}
+.fan.comparefield .fr3 .why{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
 .fanmain .fr3 b{font-family:var(--mono);color:var(--text)}
 .fanmain .fr3 b.bad{color:var(--loss)}.fanmain .fr3 b.warn{color:var(--caution)}.fanmain .fr3 b.ok{color:var(--profit)}
 .fanmain .fr3 .why{flex-basis:100%;line-height:1.35;color:var(--dim)}
@@ -2393,6 +2422,34 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decdock .execbox.open .execgrid{grid-template-columns:1fr}
   .reviewchecks{grid-template-columns:1fr}.reviewacts{white-space:normal;justify-content:stretch}.reviewacts .btn{flex:1}
 }
+/* An empty Practice book is not a zero-valued risk dashboard. Remove the plot with no marks and
+   give the prime Home canvas to positions/entry, market evidence, Plans, watch, and research. */
+.lv-book[data-book-authority="empty"] #riskMain,
+.lv-book[data-book-authority="empty"] #bookrisk{display:none}
+@media (min-width:901px){
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));
+    grid-template-rows:minmax(220px,1.05fr) minmax(190px,.95fr);
+    grid-template-areas:
+      "roster roster roster chain chain chain chain univ univ univ univ univ"
+      "sector sector sector sector sector news news news news news news news";
+    gap:9px;overflow:hidden}
+}
+@media (max-width:900px){
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;
+    grid-template-areas:"roster" "chain" "univ" "sector" "news";overflow-y:auto}
+}
+/* A three-column spectrum is the useful middle state for the bounded desktop Decide center. At
+   the 1280 contract that surface is about 400px wide: four tiles technically fit, but their name,
+   move, value bar, and amount do not. This final desktop container rule intentionally follows the
+   height-specific compaction rules above; the structural mobile layout keeps its two columns. */
+@media (min-width:1001px){
+  @container scenarios (max-width:520px){
+    .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(3,minmax(0,1fr))}
+  }
+  @container scenarios (max-width:400px){
+    .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+}
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important;animation:none!important}
   .focus .card>.cdetail>*{opacity:1;transform:none}
@@ -2988,6 +3045,7 @@ function authPct(v,digits){var n=authNumber(v);return n==null?'—':(n*100).toFi
 function authHuman(value){return String(value||'Position').toLowerCase().replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});}
 function authAccount(data){var a=data&&data.account||{};return a.account||a;}
 function authPlanRows(data){if(data&&Array.isArray(data.accountPlans))return data.accountPlans;var src=data&&data.planPortfolio&&data.planPortfolio.plans||data&&data.plans||[];return Array.isArray(src)?src:[];}
+function authWorkingPlanRows(data){return authPlanRows(data).filter(function(row){var p=row&&row.plan||row,status=String(p&&p.status||'').toUpperCase();return p&&p.open!==false&&p.assumptionsEditable!==false&&(status==='DRAFT'||status==='ACTIVE');});}
 function authPlanForTrade(data,trade){var rows=authPlanRows(data);for(var i=0;i<rows.length;i++){var r=rows[i]||{};if(String(r.tradeId||'')===String(trade.id))return r;}return null;}
 function authLegs(trade){return (trade.legs||[]).map(function(l){var sign=String(l.action).toUpperCase()==='SELL'?-1:1,type=String(l.type||'').toUpperCase();return {
   t:type==='STOCK'?'s':type==='CALL'?'c':'p',k:type==='STOCK'?Number(trade.entryUnderlyingCents||0)/100:Number(l.strike),
@@ -3003,15 +3061,19 @@ function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portf
     provenance:{lane:trade.dataProvenance||null,freshness:trade.dataAge||null,source:trade.dataSource||null},_positionPhase:'idle'};}
 function authClearPositionCards(){Object.keys(cardEl||{}).forEach(function(id){var el=cardEl[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});cardEl={};}
 function authTradeRevision(t){return JSON.stringify({id:t&&t.id,status:t&&t.status,qty:t&&t.qty,entry:t&&t.entryNetPremiumCents,updated:t&&t.updatedAt,legs:(t&&t.legs||[]).map(function(l){return [l.action,l.type,l.ratio,l.multiplier,l.strike,l.expiration,l.entryPrice,l.positionEffect];})});}
-function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},next=[],nextById={},nextCards={};(data.activeTrades||[]).forEach(function(t){var fresh=authTradePosition(t,data),p=priorById[fresh.id];if(p){var samePackage=authTradeRevision(p._trade)===authTradeRevision(t),heldState=samePackage?{_positionPhase:p._positionPhase,_positionData:p._positionData,_positionError:p._positionError,_positionScenarioPhase:p._positionScenarioPhase,_positionScenarioError:p._positionScenarioError,authoritativeAnimation:p.authoritativeAnimation,_positionScenarioTimer:p._positionScenarioTimer,_positionScenarioUiSeq:p._positionScenarioUiSeq,_positionScenarioRequestId:p._positionScenarioRequestId}:{};if(!samePackage){window.clearTimeout(p._positionScenarioTimer);var st=scenPlay[p.id];if(st&&st.raf)cancelAnimationFrame(st.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];}Object.keys(fresh).forEach(function(key){p[key]=fresh[key];});Object.keys(heldState).forEach(function(key){if(heldState[key]!==undefined)p[key]=heldState[key];});}else p=fresh;next.push(p);nextById[p.id]=p;nextCards[p.id]=priorCards[p.id]||makeCard(p);var face=nextCards[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);});Object.keys(priorCards).forEach(function(id){if(nextCards[id])return;var el=priorCards[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});POS=next;byId=nextById;cardEl=nextCards;if(!state.focus||!byId[state.focus])state.focus=POS.length?POS[0].id:null;}
+function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},next=[],nextById={},nextCards={};(data.activeTrades||[]).forEach(function(t){var fresh=authTradePosition(t,data),p=priorById[fresh.id];fresh._openedJustNow=String(data.recentTradeId||'')===fresh.id;if(p){var samePackage=authTradeRevision(p._trade)===authTradeRevision(t),heldState=samePackage?{_positionPhase:p._positionPhase,_positionData:p._positionData,_positionError:p._positionError,_positionScenarioPhase:p._positionScenarioPhase,_positionScenarioError:p._positionScenarioError,authoritativeAnimation:p.authoritativeAnimation,_positionScenarioTimer:p._positionScenarioTimer,_positionScenarioUiSeq:p._positionScenarioUiSeq,_positionScenarioRequestId:p._positionScenarioRequestId}:{};if(!samePackage){window.clearTimeout(p._positionScenarioTimer);var st=scenPlay[p.id];if(st&&st.raf)cancelAnimationFrame(st.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];}Object.keys(fresh).forEach(function(key){p[key]=fresh[key];});Object.keys(heldState).forEach(function(key){if(heldState[key]!==undefined)p[key]=heldState[key];});}else p=fresh;next.push(p);nextById[p.id]=p;nextCards[p.id]=priorCards[p.id]||makeCard(p);nextCards[p.id].classList.toggle('justopened',p._openedJustNow===true);var face=nextCards[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);});Object.keys(priorCards).forEach(function(id){if(nextCards[id])return;var el=priorCards[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});POS=next;byId=nextById;cardEl=nextCards;if(!state.focus||!byId[state.focus])state.focus=POS.length?POS[0].id:null;}
 function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{};
-  return '<div class="crow1"><span class="crisk" style="background:var(--accent)" title="backend-owned position"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span><span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
+  return '<div class="crow1"><span class="crisk" style="background:var(--accent)" title="backend-owned position"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
     '<div class="cshareRow"><span class="cshare" title="share of backend-reported maximum loss"><i style="width:'+share.toFixed(1)+'%"></i></span><span class="csharev">'+(share?share.toFixed(0)+'%':'—')+'</span><svg class="cplspark" id="plsp-'+deskEsc(p.id)+'" title="stored mark history"></svg></div>'+
     '<div class="cpeek"><span class="badge ok">'+deskEsc(String(prov.lane||'PRACTICE'))+'</span><span class="ccap">'+authMoney(p.cap)+' max loss</span><span class="hint">'+deskEsc(String(prov.freshness||'current receipt'))+'</span></div>';
 }
 function makeAuthoritativeCard(p){var el=document.createElement('div');el.className='card authoritative';el.setAttribute('data-id',p.id);el.setAttribute('data-authoritative-position','true');
-  el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading the exact position.</b>Mark, payoff, research, news, Plan, and management receipts are being read together.</div></div></div>';
+  el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading the exact position.</b>Reading its stored mark, payoff, and legs first.</div></div></div>';
   el.addEventListener('click',function(ev){
+    var retry=ev.target.closest&&ev.target.closest('[data-auth-position-retry]');
+    if(retry){ev.preventDefault();ev.stopPropagation();p._positionPhase='loading';p._positionError=null;renderAuthoritativePosition(p);window.DeskBackend.loadPosition(p._trade,{symbol:p.sym,planId:p._plan&&p._plan.id,historyRange:'3M'}).catch(function(){});return;}
+    var back=ev.target.closest&&ev.target.closest('[data-auth-position-back]');
+    if(back){ev.preventDefault();ev.stopPropagation();go('book');return;}
     var row=ev.target.closest&&ev.target.closest('[data-auth-scenario]');
     if(row){ev.preventDefault();ev.stopPropagation();pinScen(positionSurf(p),row.getAttribute('data-auth-scenario'));return;}
     var wf=ev.target.closest&&ev.target.closest('[data-wf]');
@@ -3053,10 +3115,11 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
       '<div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div><div class="authscenmetric"><span>Net delta</span><b data-live="delta">'+(authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2))+'</b></div><div class="authscenmetric"><span>Theta / day</span><b data-live="theta">'+(authNumber(g.thetaCentsPerDay)==null?'—':money(Number(g.thetaCentsPerDay)/100))+'</b></div><div class="authscenmetric"><span>Gamma</span><b data-live="gamma">'+(authNumber(g.gammaSharesPerDollar)==null?'—':Number(g.gammaSharesPerDollar).toFixed(3))+'</b></div><div class="authscenmetric"><span>Vega / pt</span><b data-live="vega">'+(authNumber(g.vegaCentsPerPoint)==null?'—':money(Number(g.vegaCentsPerPoint)/100))+'</b></div></div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     '<div class="authscenreceipt" id="authScenReceipt-'+deskEsc(p.id)+'">'+authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</div></section>';}
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
-  if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading the exact position.</b>Mark, payoff, research, news, Plan, and management receipts are being read together.</div>';return;}
-  if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Authoritative position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The backend position receipt is unavailable.')+'</p></div>';return;}
+  if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Authoritative position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The backend position receipt is unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to Book</button></div></div>';return;}
+  if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading the exact position.</b>Reading its stored mark, payoff, and legs first.</div>';return;}
   var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},greeks=cur.greeks||{};
   var payoffReady=Array.isArray(p.payoffPoints)&&p.payoffPoints.length>1;
+  var historyBody=data.auxiliaryPending?'<div class="authpositionnotice"><b>History is still loading.</b>The exact position remains usable while this optional receipt resolves.</div>':data.history?'<svg class="authhistory" id="authHist-'+deskEsc(p.id)+'"></svg><div class="authreceipt">'+deskEsc(history.coverage?history.coverage.availableSessions+' of '+history.coverage.requestedSessions+' requested sessions · '+Number(history.coverage.coveragePct||0).toFixed(0)+'% coverage':'No history coverage receipt returned.')+'</div>':'<div class="authpositionnotice"><b>Observed history unavailable.</b>Mark, payoff, legs, and scenarios remain available. <a class="btn xs" href="/#/data/sources">Review sources &amp; fetch bars →</a></div>';
   host.innerHTML='<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Stored terminal payoff</span><span class="hint">backend checkpoints · exact package</span></div>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>':'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>The browser will not reconstruct it from the legs.</div>')+'</section>'+
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Current executable mark</span><span class="hint">'+deskEsc(cur.freshness||p.provenance.freshness||'receipt')+'</span></div><div class="authmetricgrid">'+
@@ -3068,7 +3131,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Executable book</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
       '<div class="authmetric"><span>ATM IV</span><b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></div><div class="authmetric"><span>Quote receipt</span><b>'+deskEsc(authEvidenceLabel(ev.quote))+'</b></div></div>'+
       '<div class="backendnotice">'+deskEsc(research.regime&&research.regime.basis||research.ivRankNote||'No additional regime statement was returned.')+'</div></section>'+
-    '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Observed history</span><span class="hint">'+deskEsc([history.range,history.freshness,history.priceBasis].filter(Boolean).join(' · ')||'unavailable')+'</span></div><svg class="authhistory" id="authHist-'+deskEsc(p.id)+'"></svg><div class="authreceipt">'+deskEsc(history.coverage?history.coverage.availableSessions+' of '+history.coverage.requestedSessions+' requested sessions · '+Number(history.coverage.coveragePct||0).toFixed(0)+'% coverage':'No history coverage receipt returned.')+'</div></section>'+
+    '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Observed history</span><span class="hint">'+deskEsc([history.range,history.freshness,history.priceBasis].filter(Boolean).join(' · ')||(data.auxiliaryPending?'loading':'unavailable'))+'</span></div>'+historyBody+'</section>'+
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Source-backed news</span><span class="hint">'+deskEsc(data.news&&data.news.evidence||'—')+'</span></div>'+authNewsHTML(data)+'<div class="lenshd sub"><span class="eyebrow">Plan &amp; management</span><span class="hint">read only</span></div>'+authManagementHTML(p,data)+'</section></div>';
   window.requestAnimationFrame(function(){if(payoffReady){var svg=document.getElementById('authPay-'+p.id);if(svg)drawPayoff(svg,p,true,null,{hideScenarios:true,pinM:scrubMag(p)});}drawAuthoritativeHistory(p);drawAuthoritativePositionScenario(p);});
 }
@@ -3594,6 +3657,19 @@ function requestAuthoritativeScenario(s,autoplay){
 }
 function pinScen(s, si){
   var p=s.obj(), cur=(p.id in pinnedScen)?pinnedScen[p.id]:null;
+  if(p.authoritative&&!p.isHeld&&decide&&decide.backendPhase==='comparison-required'){
+    /* A scenario click is an explicit request to analyze this comparison. Let the canonical
+       selection start first, then retain the user's exact hypothesis so `ready` conditions and
+       plays it from the newly stored ensemble instead of asking for a second click. */
+    if(si==null)return;
+    var selectedScenario=SCEN[+si]||{},comparisonHorizon=authoritativeHorizon(p);
+    loadCand(p.id);
+    pinnedScen[p.id]=+si;pinMag[p.id]=selectedScenario.m||0;pinIV[p.id]=selectedScenario.iv||0;
+    pinDays[p.id]=Math.min(comparisonHorizon,selectedScenario.d||0);scenSt(p.id).t=0;
+    p._authoritativeScenarioQueued=true;
+    toast('Comparison selected — its exact stored paths will be conditioned to this scenario.');
+    return;
+  }
   var queueAuthoritative=!!(p.authoritative&&!p.isHeld&&deskBackendEnabled()
     &&window.DeskBackend.state().mutationPending);
   if(queueAuthoritative)toast('Scenario selected — conditioning starts when this evaluation finishes.');
@@ -3878,7 +3954,7 @@ function authMetric(label,value,cls){return '<div class="authmetric"><span>'+des
 function authBookSummary(){var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.summary||{},a=authAccount(d),pnl=authDollarsFromCents(s.totalPnlCents),complete=s.complete===true;
   if(!BOOK_AUTH.data){summaryEl.innerHTML='<div class="bookline"><div class="sblock"><div class="lbl">Practice book</div><div class="sv">Loading authoritative account…</div></div></div>';return;}
   summaryEl.innerHTML='<div class="homesummary authsummary"><div class="perfband"><div class="pf-lead"><span class="lbl">Practice account equity</span><span class="pf-net '+(pnl==null?'':pnl>=0?'pos':'neg')+'">'+authMoney(authDollarsFromCents(s.totalValueCents))+'</span><span class="pf-day '+(pnl==null?'':pnl>=0?'pos':'neg')+'">'+authSigned(pnl)+' since funding</span></div><div class="authmetricgrid">'+
-    authMetric('Cash',authMoney(authDollarsFromCents(s.cashCents)))+authMetric('Buying power',authMoney(authDollarsFromCents(s.buyingPowerCents)))+authMetric('Reserved',authMoney(authDollarsFromCents(s.reservedCents)))+authMetric('Liquidation',complete?'complete':'incomplete',complete?'pos':'neg')+'</div></div><div class="bookline"><div class="sblock"><div class="lbl">Open packages</div><div class="sv">'+Number(s.openTradesCount||0)+'</div></div><div class="sblock"><div class="lbl">Share positions</div><div class="sv">'+Number(s.sharesPositions||0)+'</div></div><div class="sblock"><div class="lbl">Account</div><div class="sv">'+deskEsc(a.name||'Practice')+'</div></div><div class="posture"><span class="pchip static">'+deskEsc(s.freshness||'receipt')+'</span></div><div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div></div></div>';
+    authMetric('Cash',authMoney(authDollarsFromCents(s.cashCents)))+authMetric('Buying power',authMoney(authDollarsFromCents(s.buyingPowerCents)))+authMetric('Reserved',authMoney(authDollarsFromCents(s.reservedCents)))+authMetric('Mark coverage',complete?'complete':'incomplete',complete?'pos':'neg')+'</div></div><div class="bookline"><div class="sblock"><div class="lbl">Open packages</div><div class="sv">'+Number(s.openTradesCount||0)+'</div></div><div class="sblock"><div class="lbl">Share positions</div><div class="sv">'+Number(s.sharesPositions||0)+'</div></div><div class="sblock"><div class="lbl">Account</div><div class="sv">'+deskEsc(a.name||'Practice')+'</div></div><div class="posture"><span class="pchip static">'+deskEsc(s.freshness||'receipt')+'</span></div><div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div></div></div>';
   wireLanding();}
 function authBookLoading(){stageEl.setAttribute('data-book-authority','loading');authSetBookPanels(true);var host=document.getElementById('bookAuthState');host.hidden=false;authBookSummary();host.innerHTML='<div class="authpending" role="status" aria-live="polite"><section class="authpane"><span class="eyebrow">Practice positions</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section><section class="authpane hero"><span class="eyebrow">Authoritative Book</span><div class="authline chart"></div><div class="authmessage"><b>Loading the Practice book.</b>Positions, shares, liquidation, Greeks, Book Risk, and owning Plans are read independently from their existing APIs.</div></section><section class="authpane"><span class="eyebrow">Receipts</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section></div>';}
 function authBookError(){stageEl.setAttribute('data-book-authority','error');authSetBookPanels(true);var host=document.getElementById('bookAuthState');host.hidden=false;authBookSummary();host.innerHTML='<div class="authfailed"><span class="eyebrow">Authoritative Book interrupted</span><h2>The Practice book did not finish loading.</h2><p>'+deskEsc(BOOK_AUTH.error||'The backend portfolio receipt is unavailable.')+'</p><div class="authfailact"><button class="btn pri" id="retryBook">Retry Book</button><span class="hint">No staged positions were substituted.</span></div></div>';var retry=document.getElementById('retryBook');if(retry)retry.onclick=function(){window.DeskBackend.loadBook().catch(function(){});};}
@@ -3894,38 +3970,43 @@ function authOpenPlan(plan,origin){if(!plan)return;enterDecide('idea',null,'Resu
 function authOpenSymbol(symbol,origin){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase());}
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
     var planButton=ev.target.closest&&ev.target.closest('[data-auth-plan-id]');if(planButton){ev.preventDefault();authOpenPlan(authPlanById(BOOK_AUTH.data,planButton.getAttribute('data-auth-plan-id')),planButton.getBoundingClientRect());return;}
-    var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){HOME_AUTH_SYMBOL=marketButton.getAttribute('data-auth-market-symbol');authRenderMarketPanels();return;}
+    var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){HOME_AUTH_SYMBOL=marketButton.getAttribute('data-auth-market-symbol');authRenderMarketPanels();if(window.DeskBackend.focusBookSymbol)window.DeskBackend.focusBookSymbol(HOME_AUTH_SYMBOL).catch(function(){});return;}
     var ideaButton=ev.target.closest&&ev.target.closest('[data-auth-newidea-symbol]');if(ideaButton){authOpenSymbol(ideaButton.getAttribute('data-auth-newidea-symbol'),ideaButton.getBoundingClientRect());return;}
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
     var emptyImport=ev.target.closest&&ev.target.closest('#authEmptyImport');if(emptyImport){openImport(emptyImport.getBoundingClientRect());return;}
   });}
-function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=authPlanRows(d),ctx=d.homeContext||{},rows=authHomeContextRows(d),symbols=ctx.symbols||rows.map(function(row){return row.symbol;}),available=rows.map(function(row){return row.symbol;});
+function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=authWorkingPlanRows(d),ctx=d.homeContext||{},rows=authHomeContextRows(d),symbols=ctx.symbols||rows.map(function(row){return row.symbol;}),available=rows.map(function(row){return row.symbol;});
   if(!HOME_AUTH_SYMBOL||available.indexOf(HOME_AUTH_SYMBOL)<0)HOME_AUTH_SYMBOL=available[0]||symbols[0]||null;
   var active=authHomeContextRow(d,HOME_AUTH_SYMBOL),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
-  var marketBody;if(phase==='loading')marketBody='<div class="backendnotice">Loading current Plan-symbol quotes and research in the background. Book actions are ready now.</div>';
-  else if(!active||!active.research)marketBody='<div class="backendnotice">Market context is unavailable for '+deskEsc(HOME_AUTH_SYMBOL||'the saved Plans')+'. The account and Plans remain usable.</div>';
+  var marketBody;if(phase==='loading'&&(!active||!active.research))marketBody='<div class="backendnotice">Loading the active market watch in the background. Book actions are ready now.</div>';
+  else if(!active||!active.research)marketBody='<div class="backendnotice">Market context is unavailable for '+deskEsc(HOME_AUTH_SYMBOL||'the active universe')+'. The account and Plans remain usable.</div>';
   else {var ch=quote.pct==null?'—':(quote.pct>=0?'+':'')+quote.pct.toFixed(2)+'%',chcls=quote.pct==null?'':quote.pct>=0?'pos':'neg';marketBody='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(active.symbol)+' · '+deskEsc(String(d.identity&&d.identity.marketLane||''))+'</span><span class="amh-change '+chcls+'">'+deskEsc(ch)+' vs close</span><b class="amh-price">'+deskEsc(authHomePrice(quote.price))+'</b></div><div class="authmarketfacts">'+
       '<div class="authmarketfact"><span>Quote</span><b>'+deskEsc(quote.source)+'</b></div><div class="authmarketfact"><span>Freshness</span><b>'+deskEsc(quote.freshness)+'</b></div><div class="authmarketfact"><span>ATM IV</span><b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></div><div class="authmarketfact"><span>Regime</span><b>'+deskEsc(quote.regime||'Insufficient history')+'</b></div></div><div class="emptyactions"><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Analyze '+deskEsc(active.symbol)+'</button></div>';}
-  document.getElementById('chainBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Market evidence</span><span class="hint">Plan symbols · source-owned</span></div>'+marketBody+'</div>';
-  var planRows=plans.slice(0,12).map(function(row){var p=row.plan||row,ctxp=p.context||{};return '<button type="button" class="authlistrow authlistbutton" data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc(authHuman(p.intent||'')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'—')+' sessions')+'</small></span><span class="authrowgo">Resume →</span></button>';});
-  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Active Plans</span><span class="hint">'+plans.length+' backend-owned</span></div>'+authRowsHTML(planRows,'No active Plans. Start with a new idea when you are ready.')+'</div>';
+  document.getElementById('chainBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Market evidence</span><span class="hint">active universe · source-owned</span></div>'+marketBody+'</div>';
+  var planRows=plans.slice(0,12).map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});
+  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working Plans</span><span class="hint">'+plans.length+' mutable · backend-owned</span></div>'+authRowsHTML(planRows,'No working Plans. Start with a new idea when you are ready.')+'</div>';
   var watchRows=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})).map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL);return '<button type="button" class="authmarketrow'+(on?' on':'')+'" data-auth-market-symbol="'+deskEsc(row.symbol)+'"><b>'+deskEsc(row.symbol)+'</b><span>'+deskEsc(q.source)+' · '+deskEsc(q.freshness)+'</span><em>'+deskEsc(authHomePrice(q.price))+'</em></button>';});
-  document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Market watch</span><span class="hint">saved Plan underlyings</span></div><div class="authmarketwatch">'+(watchRows.join('')||'<div class="backendnotice">Saved Plan symbols will appear here with current market provenance.</div>')+'</div></div>';
+  document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Market watch</span><span class="hint">Book first · active universe follows</span></div><div class="authmarketwatch">'+(watchRows.join('')||'<div class="backendnotice">The active market universe has no available quote receipts.</div>')+'</div></div>';
   var newsItems=authHomeNewsItems(active).slice(0,6),newsRows=newsItems.map(function(item){var url=authHomeUrl(item.url),meta=[active&&active.symbol,item.source,item.classification].filter(Boolean).join(' · ');return url?'<a href="'+deskEsc(url)+'" target="_blank" rel="noopener noreferrer">'+deskEsc(item.headline||'Untitled source item')+'<small>'+deskEsc(meta)+'</small></a>':'<div class="authlistrow"><span class="authrowmain"><b>'+deskEsc(item.headline||'Untitled source item')+'</b><small>'+deskEsc(meta)+'</small></span><span></span></div>';});
-  var newsEmpty=phase==='loading'?'Research headlines are loading without blocking the Book.':active?'No source-backed headlines were returned for '+active.symbol+'.':'Choose or create a Plan to follow its research.';
-  document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research & news</span><span class="hint">'+deskEsc(HOME_AUTH_SYMBOL||'Plan context')+'</span></div><div class="authhomenews">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+'</div>')+'</div></div>';
+  var newsEmpty=phase==='loading'?'Research headlines are loading without blocking the Book.':active?'No source-backed headlines were returned for '+active.symbol+'.':'The focused market symbol has no research receipt.';
+  document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research & news</span><span class="hint">'+deskEsc(HOME_AUTH_SYMBOL||'market context')+'</span></div><div class="authhomenews">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+'</div>')+'</div></div>';
   wireAuthoritativeHome();}
 function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};});authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
 function authShareInventoryHTML(shares){if(!shares.length)return '<div class="backendnotice">No share inventory in this Practice account.</div>';return '<div class="authlist">'+shares.map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),last=authDollarsFromCents(row.lastCents),unreal=authDollarsFromCents(row.unrealizedCents);return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(String(row.symbol||'—').toUpperCase())+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+(last==null?'':' · mark '+authMoney(last))+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(String(row.symbol||'').toUpperCase())+'">Analyze</button></div>';}).join('')+'</div>';}
-function authRenderReadyPanels(){var d=BOOK_AUTH.data||{},pf=d.portfolio||{},s=pf.summary||{},h=pf.heat||{},g=pf.greeks||{},br=pf.bookRisk||{},shares=d.sharePositions||[];
-  document.getElementById('riskMain').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Risk / reward map</span><span class="hint">backend POP × max loss · exact open packages</span></div><svg id="authBookRiskViz" class="authriskviz"></svg><div class="authmetricgrid">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div></div>';
-  document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Book Risk</span><span class="hint">Practice lane · never netted with tracked accounts</span></div><div class="authmetricgrid">'+authMetric('Delta',authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2)+' sh')+authMetric('Gamma',authNumber(g.gammaShares)==null?'—':Number(g.gammaShares).toFixed(3)+' sh/$')+authMetric('Theta',authNumber(g.thetaPerDay)==null?'—':money(Number(g.thetaPerDay))+'/day')+authMetric('Vega',authNumber(g.vegaPerPoint)==null?'—':money(Number(g.vegaPerPoint))+'/pt')+'</div><div class="authreceipt">'+deskEsc(br.basis||g.note||'Book Risk receipt unavailable')+'</div><div class="lenshd authshareshead"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' backend-owned line'+(shares.length===1?'':'s')+'</span></div>'+authShareInventoryHTML(shares)+'</div>';
+function authRenderReadyPanels(empty){var d=BOOK_AUTH.data||{},pf=d.portfolio||{},s=pf.summary||{},h=pf.heat||{},g=pf.greeks||{},br=pf.bookRisk||{},shares=d.sharePositions||[];
+  if(empty){
+    document.getElementById('riskMain').innerHTML='';
+    document.getElementById('bookrisk').innerHTML='';
+  }else{
+    document.getElementById('riskMain').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Risk / reward map</span><span class="hint">backend POP × max loss · exact open packages</span></div><svg id="authBookRiskViz" class="authriskviz"></svg><div class="authmetricgrid">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div></div>';
+    document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Book Risk</span><span class="hint">Practice lane · never netted with tracked accounts</span></div><div class="authmetricgrid">'+authMetric('Delta',authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2)+' sh')+authMetric('Gamma',authNumber(g.gammaShares)==null?'—':Number(g.gammaShares).toFixed(3)+' sh/$')+authMetric('Theta',authNumber(g.thetaPerDay)==null?'—':money(Number(g.thetaPerDay))+'/day')+authMetric('Vega',authNumber(g.vegaPerPoint)==null?'—':money(Number(g.vegaPerPoint))+'/pt')+'</div><div class="authreceipt">'+deskEsc(br.basis||g.note||'Book Risk receipt unavailable')+'</div><div class="lenshd authshareshead"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' backend-owned line'+(shares.length===1?'':'s')+'</span></div>'+authShareInventoryHTML(shares)+'</div>';
+  }
   authRenderMarketPanels();
-  window.requestAnimationFrame(drawAuthoritativeBookRisk);}
+  if(!empty)window.requestAnimationFrame(drawAuthoritativeBookRisk);}
 function drawAuthoritativeBookRisk(){var svg=document.getElementById('authBookRiskViz');if(!svg)return;var W=Math.max(260,Math.round(svg.clientWidth||440)),H=Math.max(120,Math.round(svg.clientHeight||210)),pad={l:38,r:18,t:16,b:28},max=Math.max.apply(0,POS.map(function(p){return Number(p.cap||0);}).concat([1]));svg.setAttribute('viewBox','0 0 '+W+' '+H);var g='<line x1="'+pad.l+'" y1="'+(H-pad.b)+'" x2="'+(W-pad.r)+'" y2="'+(H-pad.b)+'" stroke="var(--line)"/><line x1="'+pad.l+'" y1="'+pad.t+'" x2="'+pad.l+'" y2="'+(H-pad.b)+'" stroke="var(--line)"/><text x="'+(W-pad.r)+'" y="'+(H-7)+'" text-anchor="end">chance of profit →</text><text x="8" y="'+(pad.t+3)+'">max loss</text>'+(POS.length?'':'<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle">No open positions to plot</text>');
   var missing=0;POS.forEach(function(p){if(p.pop==null){missing++;return;}var pop=Math.max(0,Math.min(100,p.pop)),x=pad.l+(W-pad.l-pad.r)*pop/100,y=H-pad.b-(H-pad.t-pad.b)*Number(p.cap||0)/max,col=p.pnl==null?'var(--accent)':p.pnl>=0?'var(--profit)':'var(--loss)';g+='<g tabindex="0" role="img" aria-label="'+deskEsc(p.sym+' '+p.struct+' · POP '+p.pop.toFixed(0)+'% · max loss '+authMoney(p.cap))+'"><title>'+deskEsc(p.sym+' · '+p.struct)+'</title><circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="7" fill="'+col+'" fill-opacity=".35" stroke="'+col+'" stroke-width="1.4"/>'+(W>360&&POS.length<8?'<text x="'+(x+10).toFixed(1)+'" y="'+(y+3).toFixed(1)+'">'+deskEsc(p.sym)+'</text>':'')+'</g>';});if(missing)g+='<text x="'+(W-pad.r)+'" y="'+(pad.t+3)+'" text-anchor="end">'+missing+' POP unavailable · not plotted</text>';svg.innerHTML=g;}
 function authBookReady(){var d=BOOK_AUTH.data||{},empty=!(d.activeTrades||[]).length&&!(d.sharePositions||[]).length;stageEl.setAttribute('data-book-authority',empty?'empty':'ready');authSetBookPanels(false);var host=document.getElementById('bookAuthState');host.hidden=true;host.innerHTML='';authBookSummary();
-  bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length));bookEl.innerHTML='';var hd=document.createElement('div');hd.className='lenshd rosterhd';hd.innerHTML='<span class="eyebrow">Practice positions</span><span class="hint">'+POS.length+' exact package'+(POS.length===1?'':'s')+'</span>';bookEl.appendChild(hd);if(POS.length)POS.forEach(function(p){bookEl.appendChild(cardEl[p.id]);drawPlSpark(p);});else {var emptyNode=document.createElement('div');emptyNode.className='authrosterempty';emptyNode.innerHTML='<b>No open Practice positions</b><p>Your saved Plans, market evidence, and research remain available. Start a new idea or import a tracked trade when it belongs in the book.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ New idea</button><button class="btn xs" id="authEmptyImport">↧ Import trade</button></div>';bookEl.appendChild(emptyNode);}authRenderReadyPanels();}
+  bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length));bookEl.innerHTML='';var hd=document.createElement('div');hd.className='lenshd rosterhd';hd.innerHTML='<span class="eyebrow">Practice positions</span><span class="hint">'+POS.length+' exact package'+(POS.length===1?'':'s')+'</span>';bookEl.appendChild(hd);if(POS.length)POS.forEach(function(p){bookEl.appendChild(cardEl[p.id]);drawPlSpark(p);});else {var emptyNode=document.createElement('div');emptyNode.className='authrosterempty';emptyNode.innerHTML='<b>No open Practice positions</b><p>Your saved Plans, market evidence, and research remain available. Start a new idea or import a tracked trade when it belongs in the book.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ New idea</button><button class="btn xs" id="authEmptyImport">↧ Import trade</button></div>';bookEl.appendChild(emptyNode);}authRenderReadyPanels(empty);}
 function layoutAuthoritativeBook(){if(BOOK_AUTH.phase==='loading'||BOOK_AUTH.phase==='fixture'){authBookLoading();return;}if(BOOK_AUTH.phase==='error'){authBookError();return;}authBookReady();}
 function authStartPositionLoad(p){if(!p)return;var bridge=window.DeskBackend.state().position||{},owned=bridge.data&&bridge.data.trade&&String(bridge.data.trade.id)===String(p.id)&&(bridge.phase==='ready'||bridge.phase==='partial'),samePending=bridge.phase==='loading'&&p._positionRequestId!=null&&Number(p._positionRequestId)===Number(bridge.requestId);if(owned&&(p._positionPhase==='ready'||p._positionPhase==='partial')||samePending)return;p._positionPhase='loading';p._positionError=null;renderAuthoritativePosition(p);window.DeskBackend.loadPosition(p._trade,{symbol:p.sym,planId:p._plan&&p._plan.id,historyRange:'3M'}).catch(function(){});}
 function layoutAuthoritativePosition(focus){var p=byId[focus];if(!p){state.level='book';state.focus=null;layoutAuthoritativeBook();return;}var host=document.getElementById('bookAuthState');host.hidden=true;for(var i=0;i<POS.length;i++){var row=POS[i],el=cardEl[row.id];if(row.id===focus){el.classList.add('is-focus');focusEl.appendChild(el);}else{el.classList.remove('is-focus');el.querySelector('.cdetail').classList.remove('reveal');recedeEl.appendChild(el);}}renderAuthoritativePosition(p);authStartPositionLoad(p);}
@@ -4418,6 +4499,8 @@ function deskBackendEnabled(){ return !!(window.DeskBackend&&window.DeskBackend.
 function deskEsc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
 function authoritativeCandidate(){ var c=decide&&activeCand(); return c&&c.authoritative?c:null; }
 function authoritativeAssessment(c){return c&&c.authoritative&&c.evaluation&&c.evaluation.assessment||{};}
+function authoritativeMissingEvidence(c){var claim=c&&c.evaluation&&c.evaluation.evidence&&c.evaluation.evidence.claims&&c.evaluation.evidence.claims.endorsement,rows=claim&&claim.missingDimensions;return Array.isArray(rows)?rows.map(String):[];}
+function authoritativeEvidenceIncomplete(c){var econ=authoritativeAssessment(c).economics||{},missing=authoritativeMissingEvidence(c);return String(econ.verdict||'').toUpperCase()==='MIXED'&&(missing.length||String(econ.label||'').toLowerCase().indexOf('incomplete evidence')>=0);}
 function authoritativeEndorsable(c){var ass=authoritativeAssessment(c),co=ass.coherence||{},mech=ass.mechanics||{},econ=ass.economics||{};
   return String(co.verdict||'').toUpperCase()==='COHERENT'&&String(econ.verdict||'').toUpperCase()==='FAVORABLE'&&mech.eligible!==false&&(!c.evaluation||c.evaluation.viable!==false);}
 function authoritativeRisk(c){return c&&c.authoritative&&c.evaluation&&c.evaluation.risk||{};}
@@ -4487,9 +4570,26 @@ function applyAuthoritativePreview(envelope){
   decide.order.executableNetCents=envelope.order&&envelope.order.executableNetCents;
 }
 function applyAuthoritativePlanContext(plan){
-  if(!decide||!plan||!plan.context)return;
-  decide.planContext=plan.context;
-  var mode=String(plan.context.riskMode||'').toLowerCase();
+  if(!decide||!plan)return;
+  var context=plan.context||{};
+  decide.planContext=context;
+  decide.goal=plan.intent?authHuman(plan.intent):'Undeclared';
+  decide.view=context.thesis==null?'Undeclared':authHuman(context.thesis);
+  decide.horizon=context.horizonDays==null?'Undeclared':String(context.horizonDays)+' days';
+  decide.riskMode=context.riskMode?authHuman(context.riskMode):'Undeclared';
+  if(decide.resumePlanContext){
+    decide.resumePlanContext.goal=plan.intent==null?null:String(plan.intent);
+    decide.resumePlanContext.view=context.thesis==null?null:context.thesis;
+    decide.resumePlanContext.horizon=context.horizonDays==null?null:String(context.horizonDays)+' days';
+    decide.resumePlanContext.riskMode=context.riskMode==null?null:String(context.riskMode);
+    decide.resumePlanContext.originPlanId=plan.originPlanId==null?null:plan.originPlanId;
+    decide.resumePlanContext.targetCents=context.targetCents==null?null:context.targetCents;
+    decide.resumePlanContext.holdingsShares=context.holdingsShares==null?null:context.holdingsShares;
+    decide.resumePlanContext.costBasisCents=context.costBasisCents==null?null:context.costBasisCents;
+    decide.resumePlanContext.priceAssumptionCents=context.priceAssumptionCents==null?null:context.priceAssumptionCents;
+    decide.resumePlanContext.assignmentPreference=context.assignmentPreference==null?null:context.assignmentPreference;
+  }
+  var mode=String(context.riskMode||'').toLowerCase();
   var preset=RISK_PRESETS.find(function(row){return row.k.toLowerCase()===mode;});
   if(preset){decide.govs.risk=preset.risk;decide.govs.bp=preset.bp;}
 }
@@ -4518,16 +4618,54 @@ function deskBackendChanged(payload){
   if(payload&&String(payload.phase||'').indexOf('position-')===0){authPositionEvent(payload);return;}
   if(payload&&payload.phase==='world-transition'){Object.keys(byId||{}).forEach(function(id){var p=byId[id],st=scenPlay[id];if(st&&st.raf)cancelAnimationFrame(st.raf);if(p)window.clearTimeout(p._positionScenarioTimer);});authClearPositionCards();POS=[];byId={};state.level='book';state.focus=null;BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};layoutAuthoritativeBook();window.DeskBackend.loadBook().catch(function(){});}
   if(!decide)return;
+  if(payload&&payload.phase==='strategy-catalog'){
+    var catalogState=payload.state||{};
+    decide.backendState=catalogState;
+    if(catalogState.strategyCatalog&&Array.isArray(catalogState.strategyCatalog.catalog))decide.strategyCatalog=catalogState.strategyCatalog;
+    renderDecide();updateThread();return;
+  }
   if(payload.phase==='committed'&&payload.detached){
-    toast('Practice order committed; the new idea remains open.');
+    toast('Practice order committed; the Book is reconciling while this idea remains open.');
     return;
   }
+  if(payload.phase==='commit-reconciled'){
+    if(payload.detached){toast('Practice order committed and visible in the Book.');return;}
+    decide.order.committing=false;decide.order.placed=true;
+    toast('Practice order committed and reconciled into the Book.');
+    var openedId=payload.tradeId;
+    exitDecide();go('book');
+    window.setTimeout(function(){var opened=openedId&&cardEl[openedId];if(opened&&opened.scrollIntoView)opened.scrollIntoView({block:'nearest',behavior:'smooth'});},80);
+    return;
+  }
+  if(payload.phase==='commit-reconcile-error'){
+    if(payload.detached){toast('Practice order committed; refresh the Book to reconcile it.');return;}
+    decide.order.committing=false;decide.order.placed=true;
+    decide.backendError='The Practice order was committed, but the Book refresh did not confirm its new row: '+String(payload.error&&payload.error.message||'refresh unavailable');
+    renderDecide();updateThread();return;
+  }
   var phase=payload.phase, bs=payload.state||{};
+  if(phase==='loading'&&payload.operation==='idea'
+      &&(decide.cands.length||decide.ensemble||decide.outcome||decide.orderPreview
+        ||Object.keys(pinnedScen).length)){
+    /* Governor refreshes originate in the bridge rather than the declaration controls. They
+       still invalidate the old package and scenario pins before recomputation; a failed refresh
+       must never leave the previous financial artifact looking current. */
+    prepareAuthoritativeIdeaLoad();
+  }
   decide.backendPhase=phase; decide.backendOperation=payload.operation||null; decide.backendError=null; decide.backendState=bs;
+  if(bs.strategyCatalog&&Array.isArray(bs.strategyCatalog.catalog))decide.strategyCatalog=bs.strategyCatalog;
+  /* Every notification carries the complete bridge state. If an earlier presentation frame
+     failed after the financial pipeline had already advanced, a later frame rehydrates the
+     exact stored artifacts instead of leaving the screen on an obsolete loading shell. */
+  if(phase!=='ensemble'&&bs.ensemble&&(!decide.ensemble||String(decide.ensemble.ensemble&&decide.ensemble.ensemble.id)!==String(bs.ensemble.ensemble&&bs.ensemble.ensemble.id))){
+    decide.ensemble=bs.ensemble;decide._mc=authoritativeFanFromEnsemble(bs.ensemble);decide._mcId=decide.candId;decide.mcOn=true;decide.mcRunning=false;
+  }
+  if(phase!=='outcome'&&bs.outcome&&!decide.outcome)decide.outcome=bs.outcome;
   if(phase==='world-transition'){
+    stopDecScen();
     decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
     decide.ensemble=null;decide.outcome=null;decide.animation=null;decide._mc=null;decide.orderPreview=null;decide.order.review=false;
-    decide.backendNotes=[];decide.backendRejections=[];decide.mcRunning=true;
+    decide.backendNotes=[];decide.backendRejections=[];decide.missingDeclarations=[];decide.mcRunning=true;
     syncMarketModeFromBackend({identity:{marketLane:payload.config&&payload.config.marketLane,world:payload.target}});
   } else if(phase==='market'&&payload.market){
     if(String(payload.market.quote.symbol).toUpperCase()!==String(decide.sym).toUpperCase())return;
@@ -4535,7 +4673,22 @@ function deskBackendChanged(payload){
     syncMarketModeFromBackend(payload.market);
   } else if(phase==='plan'&&payload.plan){
     applyAuthoritativePlanContext(payload.plan);
+  } else if(phase==='declaration'&&payload.plan){
+    applyAuthoritativePlanContext(payload.plan);
+    decide.missingDeclarations=[];
+  } else if(phase==='declaration-required'){
+    decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.mode='engine';
+    decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
+    decide.draftPending=false;decide.draftValid=false;decide.draftError=null;
+    decide.ensemble=null;decide.outcome=null;decide.animation=null;decide._mc=null;decide.mcRunning=false;
+    decide.orderPreview=null;decide.order.previewPending=false;decide.order.review=false;
+    decide.backendNotes=payload.notes||bs.strategyNotes||[];
+    decide.backendRejections=[];
+    decide.missingDeclarations=(payload.missingDeclarations||[]).slice();
+    if(payload.plan)applyAuthoritativePlanContext(payload.plan);
   } else if(phase==='strategy'){
+    decide.pendingCandidateId=null;
+    decide.missingDeclarations=[];
     decide.cands=payload.candidates||[]; decide.deskPickId=payload.deskPickId||null;
     decide.backendNotes=bs.strategyNotes||[];decide.backendRejections=bs.rejections||[];
     decide.candId=decide.deskPickId||(decide.cands.length?decide.cands[0].id:null);
@@ -4544,6 +4697,8 @@ function deskBackendChanged(payload){
     decide.mode='engine'; decide.buildLegs=null; decide.buildSourceId=null; decide.draftCand=null;
     decide.draftPending=false; decide.draftValid=false; decide.draftError=null; DEC_HOT=-1;
   } else if(phase==='strategy-empty'){
+    decide.pendingCandidateId=null;
+    decide.missingDeclarations=[];
     decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.mode='engine';
     decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
     decide.draftPending=false;decide.draftValid=false;decide.draftError=null;
@@ -4551,7 +4706,17 @@ function deskBackendChanged(payload){
     decide.orderPreview=null;decide.order.previewPending=false;decide.order.review=false;
     decide.backendNotes=payload.notes||bs.strategyNotes||[];
     decide.backendRejections=payload.rejected||bs.rejections||[];
+  } else if(phase==='comparison-required'){
+    /* Ranking is useful even when nothing earned endorsement. Keep the complete comparison
+       field visible, but do not let its first row masquerade as a selected Plan package or
+       start an expensive outcome/order flow until the user explicitly chooses it. */
+    decide.mcRunning=false;decide.mcOn=true;decide.ensemble=null;decide.outcome=null;
+    decide.animation=null;decide._mc=null;decide.orderPreview=null;
+    decide.order.previewPending=false;decide.order.review=false;decide.backendNotes=payload.notes||bs.strategyNotes||[];
+    decide.pendingCandidateId=null;
+    DEC_HOT=-1;
   } else if(phase==='selection'&&bs.selected){
+    decide.pendingCandidateId=null;
     var priorSelection=activeCand();
     if(priorSelection&&String(priorSelection.id)!==String(bs.selected.id)){
       /* A queued scenario belongs to the package that was visible when it was chosen. If the
@@ -4560,6 +4725,7 @@ function deskBackendChanged(payload){
       stopDecScen();
       if(decide.ensemble){decide._mc=authoritativeFanFromEnsemble(decide.ensemble);decide.mcOn=true;}
       decide.mcRunning=false;
+      decide.outcome=null;decide.animation=null;decide.orderPreview=null;
     }
     decide.candId=bs.selected.id; decide.mode='engine';
     decide.order.qty=Math.max(1,Number(bs.selected.qty||1)); decide.order.price=null; decide.order.type='market';
@@ -4607,6 +4773,7 @@ function deskBackendChanged(payload){
     decide.animation=payload.animation; var ac=authoritativeCandidate(); if(ac){ac.authoritativeAnimation=payload.animation;ac._authoritativeScenarioError=null;}
     decide._mc=authoritativeFanFromAnimation(payload.animation); decide.mcOn=true; decide.mcRunning=false;
   } else if(phase==='ready'){
+    decide.missingDeclarations=[];
     /* `ready` is published immediately before the bridge releases its Plan mutation. Replay a
        scenario chosen during the earlier strategy/ensemble paint on the next task, when the
        immutable ensemble is fully owned and the exact order preview can no longer supersede it. */
@@ -4629,8 +4796,19 @@ function deskBackendChanged(payload){
       decide.animation=null;decide._mc=null;decide.mcRunning=false;decide.mcOn=true;
     }
   } else if(phase==='error'){
+    decide.pendingCandidateId=null;
     decide.backendError=payload.error&&payload.error.message||'The authoritative Desk request failed.';
     decide.mcRunning=false; decide.order.previewPending=false; decide.order.committing=false;
+    if(payload.operation==='candidate'){
+      stopDecScen();
+      decide.backendPhase=bs.selected?'ready':decide.deskPickId?'ready':'comparison-required';
+      if(bs.outcome)decide.outcome=bs.outcome;
+      if(bs.ensemble){decide.ensemble=bs.ensemble;decide._mc=authoritativeFanFromEnsemble(bs.ensemble);decide.mcOn=true;}
+    }
+    /* A declaration chip is optimistic only while its versioned mutation is in flight. If the
+       Plan service rejects that mutation, restore the last accepted Plan before offering Retry;
+       otherwise Retry would compare the backend Plan against a declaration it never accepted. */
+    if(payload.operation==='declaration'&&bs.plan)applyAuthoritativePlanContext(bs.plan);
     if(payload.operation==='draft-select'||payload.operation==='draft-preview'){
       decide.draftPending=false;
       decide.draftValid=!!(bs.draft&&bs.draft.valid);
@@ -4639,28 +4817,48 @@ function deskBackendChanged(payload){
     }
   } else if(phase==='committed'){
     decide.order.committing=false; decide.order.placed=true;
-    toast('Practice order committed through the Plan decision workflow.');
-    window.setTimeout(function(){ if(decide){exitDecide();go('book');} },650);
+    toast(payload.reconciling?'Practice order committed; reconciling the Book…':'Practice order committed through the Plan decision workflow.');
     return;
   }
   renderDecide(); updateThread();
 }
 window.StrikeBenchDesk={backendChanged:deskBackendChanged};
 
-function loadAuthoritativeIdea(){
-  if(!decide||!deskBackendEnabled())return;
+function authoritativeIdeaContext(){return Object.assign({symbol:decide.sym,goal:decide.goal,view:decide.view,horizon:decide.horizon,
+    riskMode:decide.riskMode,planId:decide.resumePlanId,
+    governorExplicit:Object.assign({},decide.govExplicit||{})},decide.resumePlanContext||{});}
+function prepareAuthoritativeIdeaLoad(){
   /* Assumption changes invalidate the whole previous financial artifact. Keep only the declared
      context visible while the canonical flow rebuilds it; never flash the file:// fan meanwhile. */
+  stopDecScen();
   decide.backendPhase='loading'; decide.backendError=null; decide.mcRunning=true;
   decide.cands=[];decide.candId=null;decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
   decide.draftPending=false;decide.draftValid=false;decide.draftError=null;decide.ensemble=null;decide.outcome=null;
   decide.animation=null;decide._mc=null;decide.orderPreview=null;decide.order.previewPending=true;
-  decide.backendNotes=[];decide.backendRejections=[];
+  decide.backendNotes=[];decide.backendRejections=[];decide.missingDeclarations=[];
   renderDecide();
-  window.DeskBackend.openIdea(Object.assign({symbol:decide.sym,goal:decide.goal,view:decide.view,horizon:decide.horizon,
-    planId:decide.resumePlanId,
-    governorExplicit:Object.assign({},decide.govExplicit||{})},decide.resumePlanContext||{}))
+}
+function loadAuthoritativeIdea(){
+  if(!decide||!deskBackendEnabled())return;
+  prepareAuthoritativeIdeaLoad();
+  window.DeskBackend.openIdea(authoritativeIdeaContext())
     .catch(function(){ /* the bridge reports the typed error through backendChanged */ });
+}
+function updateAuthoritativeDeclaration(key,value){
+  if(!decide||!deskBackendEnabled())return;
+  decide[key]=value;
+  if(decide.resumePlanContext){
+    if(key==='goal')decide.resumePlanContext.goal=value==='Undeclared'?null:value;
+    else if(key==='view')decide.resumePlanContext.view=value==='Undeclared'?null:value;
+    else if(key==='horizon')decide.resumePlanContext.horizon=value==='Undeclared'?null:value;
+    else if(key==='riskMode')decide.resumePlanContext.riskMode=value==='Undeclared'?null:String(value).toLowerCase();
+  }
+  decide.intentOpen=false;
+  prepareAuthoritativeIdeaLoad();
+  var context=authoritativeIdeaContext(),bridge=window.DeskBackend.state();
+  var change=bridge.plan&&typeof window.DeskBackend.updatePlanDeclaration==='function'
+    ?window.DeskBackend.updatePlanDeclaration(context):window.DeskBackend.openIdea(context);
+  change.catch(function(){/* the bridge publishes the typed declaration failure */});
 }
 
 /* lightweight Black–Scholes for Build-your-own pricing (ported from compose) */
@@ -5217,7 +5415,7 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
     if(mech.eligible===false){verdict='off';word='Blocked';}
     else if(raw==='INCOHERENT'){verdict='off';word='Doesn’t fit';}
     else if(economic==='UNFAVORABLE'){verdict='mid';word='Unfavorable';}
-    else if(economic==='MIXED'){verdict='mid';word='No proven edge';}
+    else if(economic==='MIXED'){verdict='mid';word=authoritativeEvidenceIncomplete(c)?'Evidence incomplete':'No edge found';}
     else if(economic==='UNAVAILABLE'){verdict='mid';word='Evidence unavailable';}
     else if(raw==='COHERENT'){verdict='on';word='Coherent';}
     else if(raw==='MIXED'){verdict='mid';word='Mixed fit';}
@@ -5227,7 +5425,9 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
       {k:'Mechanics',s:mech.eligible===true?'on':mech.eligible===false?'off':'mid',note:(mech.reasons||[])[0]||'Backend mechanical assessment'},
       {k:'Economics',s:economic==='FAVORABLE'?'on':economic==='UNFAVORABLE'?'off':'mid',note:econ.summary||econ.label||'Backend economic assessment unavailable'}
     ];
-    return {verdict:verdict,word:word,checks:checks,prose:((mech.reasons||[])[0]||econ.summary||reasons.join(' ')||'The backend has not supplied a complete assessment.'),dom:null};
+    var prose=(mech.reasons||[])[0]||econ.summary||reasons.join(' ')||'The backend has not supplied a complete assessment.';
+    if(authoritativeEvidenceIncomplete(c)&&authoritativeMissingEvidence(c).indexOf('history')>=0)prose='Observed daily history is missing, so the realized-volatility edge check is incomplete. Market-implied mechanics remain available.';
+    return {verdict:verdict,word:word,checks:checks,prose:prose,dom:null};
   }
   var vf=candFit(c,ctx), gf=goalFit(c,ctx), gate=candGated(c,ctx), dom=dominatedBy(c,ctx);
   var v=ctx.view.toLowerCase(), gl=ctx.goal.toLowerCase();
@@ -5386,26 +5586,28 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride){
   fan.forEach(function(c){ c.pop=popCalc(c); });
   decide={kind:kind,posId:posId,act:actLabel||(kind==='idea'?'New idea':kind==='close'?'Close':'Roll'),
     sym:u.sym,u:u,spot:u.spot,em:u.em,
-    goal:planOverride?authHuman(planOverride.intent||'INCOME'):POSTURE.goal,
+    goal:planOverride?(planOverride.intent?authHuman(planOverride.intent):'Undeclared'):POSTURE.goal,
     view:planOverride?(planContext.thesis==null?'Undeclared':String(planContext.thesis)):POSTURE.view,
     horizon:planOverride?(planContext.horizonDays==null?'Undeclared':String(planContext.horizonDays)+' days'):'1 day',
+    riskMode:planOverride?(planContext.riskMode?authHuman(planContext.riskMode):'Undeclared'):postureName(),
     resumePlanId:planOverride&&planOverride.id||null,
-    resumePlanContext:planOverride?{goal:String(planOverride.intent||'INCOME'),
+    resumePlanContext:planOverride?{goal:planOverride.intent==null?null:String(planOverride.intent),
       view:planContext.thesis==null?null:planContext.thesis,
       horizon:planContext.horizonDays==null?null:String(planContext.horizonDays)+' days',
+      riskMode:planContext.riskMode==null?null:String(planContext.riskMode),
       originPlanId:planOverride.originPlanId||null,
       targetCents:planContext.targetCents,holdingsShares:planContext.holdingsShares,
       costBasisCents:planContext.costBasisCents,priceAssumptionCents:planContext.priceAssumptionCents,
       assignmentPreference:planContext.assignmentPreference}:null,
     /* free New idea (not tied to a held line) lets you pick the underlying; anything else is fixed by context */
-    canPick:(kind==='idea'&&!posId), pickOpen:false, pickq:'',
+    canPick:(kind==='idea'&&!posId&&!planOverride), pickOpen:false, pickq:'',
     mode:'engine', intentOpen:false, leftTool:null, inspect:'paths', orderOpen:false, mcRunning:false,
     cands:fan, candId:fan.length?fan[0].id:null, deskPickId:fan.length?fan[0].id:null,
     buildLegs:null,buildSourceId:null,draftCand:null,draftPending:false,draftValid:false,draftError:null,
     govs:{risk:POSTURE.risk,bp:POSTURE.bp,minPop:55,maxAsn:60,gapLoss:POSTURE.gapLoss||25000},govExplicit:{},
     order:{type:'market',price:null,qty:1,lane:POSTURE.lane,review:false,placed:false,acknowledged:{}},
     backendPhase:deskBackendEnabled()&&kind==='idea'?'loading':null,backendError:null,backendState:null,
-    backendNotes:[],backendRejections:[],
+    backendNotes:[],backendRejections:[],missingDeclarations:[],strategyCatalog:null,pendingCandidateId:null,
     _origin:origin||null, _payoffOrigin:null};
   /* SHARED-ELEMENT capture: if we came from a held position, grab its on-screen payoff rect so
      the candidate payoff can morph FROM the position's chart (not just grow from the button). */
@@ -5419,7 +5621,7 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride){
   showDecide(origin);
   if(kind==='idea'&&deskBackendEnabled()) loadAuthoritativeIdea();
 }
-function exitDecide(){ if(!decide)return; var origin=decide._origin, payoffOrigin=decide._payoffOrigin, posId=decide.posId; if(deskBackendEnabled())window.DeskBackend.cancel(); decide=null; hideDecide(origin,payoffOrigin,posId); updateThread(); }
+function exitDecide(){ if(!decide)return; var origin=decide._origin, payoffOrigin=decide._payoffOrigin, posId=decide.posId; stopDecScen(); if(deskBackendEnabled())window.DeskBackend.cancel(); decide=null; hideDecide(origin,payoffOrigin,posId); updateThread(); }
 function showDecide(origin){
   void decideEl.offsetWidth; decideEl.classList.add('on'); decideEl.setAttribute('aria-hidden','false');
   decideEl.scrollTop=0;
@@ -5510,7 +5712,7 @@ function decSurf(){ var c=activeCand(); return {
   refresh:function(){ var el=decideEl.querySelector('.scenpanel'); if(el) el.innerHTML=decScenInner(c); drawPayoff(decideEl.querySelector('#decPay'), c, true, null, {interactive:!c.authoritative, pinM:scrubMag(c), animate:true}); }
 }; }
 /* switching candidate/strategy must not leave a scenario playing on a stale curve */
-function stopDecScen(){ (decide&&decide.cands||[]).forEach(function(o){ var st=scenPlay[o.id]; if(st){ if(st.raf){ cancelAnimationFrame(st.raf); st.raf=0; } st.playing=false; } o._authoritativeScenarioQueued=false;o._authoritativeScenarioError=null;delete pinnedScen[o.id]; delete pinMag[o.id]; }); }
+function stopDecScen(){ (decide&&decide.cands||[]).forEach(function(o){ var st=scenPlay[o.id]; if(st){ if(st.raf){ cancelAnimationFrame(st.raf); st.raf=0; } st.playing=false; } o._authoritativeScenarioQueued=false;o._authoritativeScenarioError=null;o.authoritativeAnimation=null;delete pinnedScen[o.id];delete pinMag[o.id];delete pinIV[o.id];delete pinDays[o.id];delete pinTUnit[o.id]; }); }
 /* DRAG a strike handle on the Decide payoff → forks to your build + live-edits the strike */
 function startDecStrikeDrag(legIdx, ev){
   if(deskBackendEnabled()&&authoritativeCandidate())return;
@@ -5529,6 +5731,7 @@ function renderDecide(){
   if(!decide)return;
   if(decide.kind==='close'){ renderClose(); wireDecide(); return; }
   var c=activeCand();
+  if(!c&&deskBackendEnabled()&&decide.kind==='idea'&&decide.backendPhase==='declaration-required'){renderAuthoritativeDeclarationRequired();wireDecide();return;}
   if(!c&&deskBackendEnabled()&&decide.kind==='idea'&&decide.backendPhase==='strategy-empty'){renderAuthoritativeEmpty();wireDecide();return;}
   if(!c&&deskBackendEnabled()&&decide.kind==='idea'){renderAuthoritativePending();wireDecide();return;}
   /* Most Decide actions (inspect, order, review, intent, picker typing) do not change the
@@ -5548,11 +5751,26 @@ function renderDecide(){
   drawFanIcons();
   wireDecide();
 }
+function renderAuthoritativeDeclarationRequired(){
+  var bs=decide.backendState||{},plan=bs.plan||{},market=bs.market||{},identity=market.identity||{};
+  var missing=(decide.missingDeclarations||[]).map(function(item){return String(item);});
+  var labels={goal:'Goal',view:'Market view',horizon:'Time horizon','risk posture':'Risk posture'};
+  var rows=missing.map(function(item){return '<div class="emptyfact"><b>'+deskEsc(labels[item]||authHuman(item))+'</b>Required before the engine may rank or value a package.</div>';}).join('');
+  var declared=[
+    ['Underlying',decide.sym],['Goal',decide.goal],['View',decide.view],
+    ['Horizon',decide.horizon],['Risk',decide.riskMode]
+  ].map(function(row){return '<div class="emptyfact"><b>'+deskEsc(row[0])+'</b>'+deskEsc(row[1]||'Undeclared')+'</div>';}).join('');
+  decideEl.innerHTML='<div class="decwrap">'+decTop(null)+'<div class="decgrid authempty declarationempty">'+
+    '<section class="emptycard"><span class="eyebrow">Missing declarations</span><div class="emptyfacts">'+(rows||'<div class="emptyfact"><b>Declaration check</b>Review the exact Plan assumptions before continuing.</div>')+'</div></section>'+
+    '<section class="emptycard hero" role="status" aria-live="polite"><span class="eyebrow">Exact Plan · no inferred assumptions</span><h2>Finish this Plan’s declaration.</h2><p>The Desk has preserved this exact backend Plan. Recommendation, payoff, probability, paths, and order economics remain absent until every required assumption is explicit.</p><div class="emptyactions"><button class="btn primary" data-dec="emptyintent">Declare assumptions</button><button class="btn" data-dec="back">Return to the Desk</button></div></section>'+
+    '<section class="emptycard"><span class="eyebrow">Plan &amp; market receipt</span><div class="emptyfacts">'+declared+'</div><dl class="emptyreceipt"><dt>Plan</dt><dd>'+deskEsc(plan.id||decide.resumePlanId||'backend-owned')+'</dd><dt>Lane</dt><dd>'+deskEsc(identity.marketLane||market.provenance&&market.provenance.lane||'unknown')+'</dd><dt>World</dt><dd>'+deskEsc(identity.world||'unknown')+'</dd></dl></section>'+
+  '</div></div>';
+}
 function renderAuthoritativeEmpty(){
   var bs=decide.backendState||{},market=bs.market||{},identity=market.identity||{},quote=market.quote||{},chain=market.chain||{};
   var notes=(decide.backendNotes||[]).filter(Boolean),rejected=decide.backendRejections||[],reasonRows=[];
   rejected.forEach(function(row){
-    var label=row.strategy||row.family||row.displayName||row.candidateId||'Screened package';
+    var label=row.displayName||row.display||row.strategy||row.family||row.candidateId||'Screened package';
     var reasons=Array.isArray(row.reasons)?row.reasons:Array.isArray(row.blockReasons)?row.blockReasons:row.reason?[row.reason]:row.detail?[row.detail]:[];
     reasons.forEach(function(reason){reasonRows.push({label:String(label).replaceAll('_',' '),reason:String(reason)});});
   });
@@ -5596,7 +5814,8 @@ function decTop(c){
   var editor=decide.intentOpen?'<div class="intentpop"><div class="objrow">'+underlyingChip()+
     objChip('Goal',['Income','Hedge','Directional','Acquire','Exit'],decide.goal,'goal')+
     objChip('View',['Bearish','Neutral','Bullish'],decide.view,'view')+
-    objChip('Horizon',['1 day','7 days','30 days','45 days'],decide.horizon,'horizon')+'</div></div>':'';
+    objChip('Horizon',['1 day','7 days','30 days','45 days'],decide.horizon,'horizon')+
+    objChip('Risk',['Conservative','Balanced','Aggressive'],decide.riskMode,'riskMode')+'</div></div>':'';
   var backend='';
   if(deskBackendEnabled()&&decide.kind==='idea'){
     var err=!!decide.backendError,risk=decide.planContext&&decide.planContext.riskMode,
@@ -5609,6 +5828,19 @@ function decTop(c){
     '<button class="decintent'+(decide.intentOpen?' on':'')+'" data-dec="intent" aria-label="Select underlying and edit idea intent" title="Select underlying and edit intent"><b>'+decide.sym+(decide.canPick?' ▾':'')+'</b><span class="idots">·</span>'+decide.goal+'<span class="idots">·</span>'+decide.view+'<span class="idots">·</span>'+decide.horizon+' '+deskGlyph('tune')+'</button>'+backend+editor+
   '</div>';
 }
+function catalogIntentKey(goal){var key=String(goal||'').toUpperCase();return key==='INCOME'?'INCOME':key==='HEDGE'?'HEDGE':key==='ACQUIRE'?'ACQUIRE':key==='EXIT'?'EXIT':'DIRECTIONAL';}
+function catalogRejection(name){var rows=decide.backendRejections||[];return rows.find(function(row){return String(row.strategy||row.family||row.name||row.template||'').toUpperCase()===String(name||'').toUpperCase();})||null;}
+function catalogRejectionText(row){if(!row)return '';if(row.reason)return String(row.reason);if(Array.isArray(row.reasons))return row.reasons.join('; ');if(Array.isArray(row.blockReasons))return row.blockReasons.join('; ');return String(row.detail||'');}
+function strategyCatalogPanel(){var doc=decide.strategyCatalog||decide.backendState&&decide.backendState.strategyCatalog,entries=doc&&doc.catalog;
+  if(!Array.isArray(entries)){var catalogError=decide.backendState&&decide.backendState.strategyCatalogError;return '<div class="lenshd"><span class="eyebrow">Supported strategy catalog</span></div><div class="backendnotice">'+deskEsc(catalogError||'The canonical StrategyCatalog receipt is unavailable.')+' Ranked ideas remain unchanged.</div>';}
+  var intent=catalogIntentKey(decide.goal),byFamily={};(decide.cands||[]).forEach(function(c){var family=String(c.backend&&c.backend.strategy||'').toUpperCase();if(family&&!byFamily[family])byFamily[family]=c;});
+  var rows=entries.slice().sort(function(a,b){var an=byFamily[String(a.name).toUpperCase()]?0:(a.intents||[]).indexOf(intent)>=0?1:a.blockedByDefault?3:2,bn=byFamily[String(b.name).toUpperCase()]?0:(b.intents||[]).indexOf(intent)>=0?1:b.blockedByDefault?3:2;return an-bn||Number(a.foundationalRank||99)-Number(b.foundationalRank||99)||String(a.display).localeCompare(String(b.display));}).map(function(entry){
+    var name=String(entry.name||'').toUpperCase(),candidate=byFamily[name],applicable=(entry.intents||[]).indexOf(intent)>=0,rejection=catalogRejection(name),stateLabel,cls='';
+    if(candidate){stateLabel='compared now';cls=' now';}else if(entry.blockedByDefault||entry.recommendationEnabled===false){stateLabel='blocked';cls=' blocked';}else if(applicable&&rejection){stateLabel='screened out';cls=' screened';}else if(applicable){stateLabel='not evaluated';cls=' pending';}else stateLabel='other intent';
+    var reason=catalogRejectionText(rejection)||entry.summary||'',tag=candidate?'button':'div',attrs=candidate?' type="button" data-cand="'+deskEsc(candidate.id)+'"':'';
+    return '<'+tag+' class="catalogrow'+cls+'"'+attrs+'><svg class="catalogshape" viewBox="0 0 64 30" aria-hidden="true"><polyline points="'+deskEsc(entry.payoffShape||'2,15 62,15')+'"/></svg><span class="catalogcopy"><b>'+deskEsc(entry.display||name)+'</b><small>'+deskEsc(reason)+'</small></span><span class="catalogstate">'+deskEsc(stateLabel)+'</span></'+tag+'>';}).join('');
+  return '<div class="lenshd"><span class="eyebrow">Supported strategy catalog</span><span class="hint">'+entries.length+' server-owned families</span></div><div class="catalogintro">Recommendations are the priced comparison for this '+deskEsc(intent.toLowerCase())+' Plan. The catalog stays complete: every family is shown as compared, explicitly rejected, blocked, not evaluated, or belonging to another intent.</div><div class="cataloglist">'+rows+'</div>';
+}
 /* --- LEFT column: ideas -> exact package -> supporting linked map. --- */
 /* The workbench lives once, directly after its ranked candidates. "Your build" means those
    controls have forked the selected engine package; tap any engine idea to load it back. */
@@ -5620,14 +5852,18 @@ function leftCol(c){
         : 'no endorsable pick · '+decide.cands.length+' comparison'+(decide.cands.length===1?'':'s'))
     : ('ranked for this intent · '+decide.cands.length);
   var modebar='<div class="modebar"><span class="eyebrow">'+(deskBackendEnabled()&&!decide.deskPickId?'Engine comparisons':'Engine ideas')+'</span><span class="hint">'+rankRead+'</span>'+
-    '<div class="railtools"><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
+    '<div class="railtools"><button class="railtool'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-label="Browse the supported strategy catalog" title="Supported strategy catalog">'+deskGlyph('book')+'</button><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
   var map='<div class="pickmap"><div class="srchd sub"><span class="lbl">Risk / reward map</span><span class="hint">linked to ideas · size = capital</span></div>'+
     '<svg class="decmap" id="decMap"></svg><div class="mapcard" id="decMapCard"></div>'+
     '<div class="fanleg"><span><i style="background:var(--profit)"></i>defined</span><span><i style="background:var(--violet)"></i>secured</span><span><i style="background:var(--loss)"></i>undefined</span></div></div>';
-  var drawer=decide.leftTool==='caps'?'<div class="raildrawer capsdrawer">'+governorsPanel()+'</div>':'';
+  var drawer=decide.leftTool==='caps'?'<div class="raildrawer capsdrawer">'+governorsPanel()+'</div>':decide.leftTool==='catalog'?'<div class="raildrawer catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
   var notice='';
-  if(deskBackendEnabled()&&decide.kind==='idea'&&((decide.backendPhase==='loading'&&(!decide.backendOperation||decide.backendOperation==='idea'||decide.backendOperation==='candidate'))||decide.backendError)){
+  if(decide.pendingCandidateId){var pendingCandidate=decide.cands.find(function(row){return String(row.id)===String(decide.pendingCandidateId);});
+    notice='<div class="backendnotice"><b>Analyzing '+deskEsc(pendingCandidate&&pendingCandidate.short||'the requested comparison')+'.</b><span>The currently acknowledged package remains visible until the exact selection, outcome, and preview receipts agree.</span></div>';
+  } else if(deskBackendEnabled()&&decide.kind==='idea'&&((decide.backendPhase==='loading'&&(!decide.backendOperation||decide.backendOperation==='idea'||decide.backendOperation==='candidate'))||decide.backendError)){
     notice='<div class="backendnotice'+(decide.backendError?' err':'')+'">'+deskEsc(decide.backendError||'Loading quote, expirations, option chain, Plan, and ranked strategies…')+'</div>';
+  } else if(deskBackendEnabled()&&decide.backendPhase==='comparison-required'){
+    notice='<div class="backendnotice"><b>No package earned endorsement at these prices.</b><span>The complete ranked field remains available. Choose one explicitly to create its exact stored paths, outcome, and order preview.</span></div>';
   }
   return '<div class="deccol dcleft">'+modebar+notice+fanList()+'<div class="leftsupport">'+decLegWorkbench(c)+map+'</div>'+drawer+'</div>';
 }
@@ -5651,7 +5887,8 @@ function decLegWorkbench(c){
     var exact=c.legs.map(function(l){var side=l.q<0?'SELL':'BUY',type=l.t==='s'?'STOCK':l.t==='c'?'CALL':'PUT',qty=Math.abs(l.q),strike=l.t==='s'?'':('<span class="mv">'+l.k+'</span>');
       return '<div class="legr"><div class="legr-top"><span class="tgl '+(l.q<0?'sell':'buy')+'">'+side+'</span><span class="tgl '+(l.t==='c'?'callc':l.t==='p'?'putc':'stockc')+'">'+type+'</span>'+strike+'<span class="mv">'+qty+(l.t==='s'?' sh':' contracts')+'</span></div>'+
         '<span class="lgm">'+(l.expiration?'exp '+deskEsc(l.expiration):'backend-owned leg')+(l.entryPrice!=null?' · entry '+Number(l.entryPrice).toFixed(2):'')+'</span></div>';}).join('');
-    return '<div class="declegpanel"><div class="decleghead"><span class="eyebrow">Leg workbench</span><span class="hint">backend-owned exact package · edit through Plan Strategy</span><span class="declegstate">Engine</span><span class="badge">exp '+deskEsc(c.exp)+'</span></div><div class="declegs">'+exact+'</div><div class="declegfoot"><span class="hint">Edits reprice against the active chain.</span><button class="btn" data-dec="editlegs">Edit legs</button></div></div>';
+    var comparisonOnly=decide.backendPhase==='comparison-required';
+    return '<div class="declegpanel"><div class="decleghead"><span class="eyebrow">Leg workbench</span><span class="hint">backend-owned exact package · '+(comparisonOnly?'comparison in view':'edit through Plan Strategy')+'</span><span class="declegstate">Engine</span><span class="badge">exp '+deskEsc(c.exp)+'</span></div><div class="declegs">'+exact+'</div><div class="declegfoot"><span class="hint">'+(comparisonOnly?'Choose this row in the ranked field to analyze its exact package.':'Edits reprice against the active chain.')+'</span>'+(comparisonOnly?'':'<button class="btn" data-dec="editlegs" data-cid="'+deskEsc(c.id)+'">Edit legs</button>')+'</div></div>';
   }
   if(c.authoritative&&build){
     var draftLegs=decide.buildLegs||c.legs;
@@ -5686,10 +5923,11 @@ function backendDecisionLegChip(l,i){
 /* --- CENTER column: payoff hero -> numbers -> HOW IT REACTS. The exact structure stays beside
    its candidate list in the decision rail; execution lives in the stable dock below the grid. --- */
 function centerCol(c){
-  var payoffLabel=deskBackendEnabled()&&!decide.deskPickId?'Selected comparison payoff':'Candidate payoff';
+  var pendingCandidate=decide.pendingCandidateId&&decide.cands.find(function(row){return String(row.id)===String(decide.pendingCandidateId);});
+  var payoffLabel=pendingCandidate?'Current acknowledged payoff':decide.backendPhase==='comparison-required'?'Comparison preview payoff':deskBackendEnabled()&&!decide.deskPickId?'Selected comparison payoff':'Candidate payoff';
   var draftFallback=c.authoritative&&decide.mode==='build';
   var draftState=decide.draftValid?'draft preview valid':decide.draftError?'draft blocked':'draft repricing';
-  var payoffHint=draftFallback?draftState+' · selected package remains shown until applied · exp '+c.exp:'exp '+c.exp;
+  var payoffHint=pendingCandidate?'analyzing '+pendingCandidate.short+' · exp '+c.exp:draftFallback?draftState+' · selected package remains shown until applied · exp '+c.exp:'exp '+c.exp;
   return '<div class="deccol dccenter">'+
     '<div class="dcctop">'+   /* causal stack, not competing side rails: payoff then its scenario spectrum */
       '<div class="dccpay">'+
@@ -5715,6 +5953,7 @@ function decScenInner(c){
 function decScenHint(c){
   if(!c.authoritative)return '±'+c.em+'% · value at expiry';
   var eb=authoritativeBasis(),kind=eb.basis==='PARAMETRIC'?'SIMULATED · PARAMETRIC':'SIMULATED · '+(eb.basis||'stored');
+  if(decide&&decide.backendPhase==='comparison-required')return 'choose this comparison to create its exact stored fan';
   if(c.id in pinnedScen&&c._authoritativeScenarioError)return kind+' · conditioned paths unavailable';
   if(c.id in pinnedScen&&decide&&decide.mcRunning)return kind+' · conditioning stored paths';
   if(decide&&decide.animation)return kind+' · conditioned paths · server-valued steps';
@@ -5809,21 +6048,23 @@ function setUnderlying(sym){
 function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc==='collat'?'secured':rc==='unknown'?'unknown':'defined'; }
 function fanList(){
   var rows=decide.cands.map(function(c){var co=coherence(c),gt=candGated(c),ft=co.verdict, isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'), gl=gapLoss(c);
-    var gcls=gl==null?'':gl<=-15000?'bad':gl<=-6000?'warn':'ok', rcCol=riskCharCol(c), fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine',whyRead=c.authoritative?co.prose:c.why;
-    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-cand="'+c.id+'">'+
+    var gcls=gl==null?'':gl<=-15000?'bad':gl<=-6000?'warn':'ok', rcCol=riskCharCol(c), fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=c.authoritative?co.prose:c.why;
+    var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),evidence=evaluation.evidence&&evaluation.evidence.rollup,exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
+    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-cand="'+c.id+'" aria-label="Analyze '+deskEsc(c.short)+'">'+
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
       '<div class="fanmain">'+
         '<div class="fr1"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span>'+
           (isPick?'<span class="badge pickbadge">desk pick</span>':'')+
           '<span class="ffit '+ft+'" title="'+co.prose+'">'+co.word+'</span></div>'+
+        (exact?'<div class="fexact">'+deskEsc(exact)+'</div>':'')+
         '<div class="fr2"><span class="rchip" style="color:'+rcCol+';border-color:'+rcCol+'">'+riskCharShort(c)+'</span>'+
           '<span class="fmet '+(c.credit>=0?'pos':'')+'"><small>'+(c.credit>=0?'collect':'cost')+'</small>'+signed(c.credit)+'</span>'+
-          '<span class="fmet"><small>risk</small>'+maxLossDisp(c)+'</span>'+(gt?'<span class="fscr">screened</span>':'')+'</div>'+
+          '<span class="fmet"><small>risk</small>'+maxLossDisp(c)+'</span>'+(score==null?'':'<span class="fmet"><small>score</small>'+score.toFixed(1)+'</span>')+(evidence?'<span class="fscr">'+deskEsc(evidence)+'</span>':'')+(gt?'<span class="fscr">screened</span>':'')+'</div>'+
         '<div class="fr3"><span>chance <b>'+(c.pop==null?'—':c.pop+'%')+'</b></span><span>stress <b class="'+gcls+'">'+(gl==null?'—':money(gl))+'</b></span><span>capital <b>'+money(c.cap)+'</b></span>'+
           '<span class="why">'+deskEsc(whyRead)+'</span></div>'+
       '</div></button>';
   }).join('');
-  return '<div class="fan">'+rows+'</div>';
+  return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+'">'+rows+'</div>';
 }
 /* each engine idea's own payoff SHAPE is its strategy icon (condor = plateau, put spread = step,
    CSP = ramp) — drawn tiny with the same engine, so the icon is always true to the trade. */
@@ -5972,6 +6213,9 @@ function evidencePanel(c){
   if(c.authoritative&&(c.id in pinnedScen)&&c._authoritativeScenarioError){
     stage='<div class="conditionedpatherror" role="alert" data-conditioned-paths="unavailable"><div class="backendnotice err"><b>Selected scenario paths are unavailable.</b><span>'+deskEsc(c._authoritativeScenarioError)+'</span><span>No generic ensemble fan has been substituted for this scenario.</span><button class="btn" data-dec="retry-scenario">Retry conditioned paths</button></div></div>';
   }
+  else if(c.authoritative&&decide.backendPhase==='comparison-required'){
+    stage='<div class="backendnotice" role="status"><b>No package is endorsed at these prices.</b><span>This is a ranked comparison, not a recommendation. Choose its ranked row to create one authoritative ensemble, exact outcome, and execution preview.</span></div>';
+  }
   else if(c.authoritative&&decide.mcOn&&decide._mc){ var ar=decide._mc,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{};
     stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+Number(ar.n||or.paths||0).toLocaleString()+' stored paths · '+Number(or.horizonDays||ar.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0)+' sessions</span><span class="mchdacts"><span class="hint" title="ensemble '+deskEsc(ar.fingerprint||'')+' · valuation '+deskEsc(ar.valuationFingerprint||'pending')+'">'+deskEsc(ar.model||'stored ensemble')+' · '+deskEsc(ar.freshness||'')+'</span><button class="microcta" data-dec="montecarlo" aria-label="Close the path ensemble" title="Close paths">×</button></span></div>'+
       '<svg class="mcfan" id="mcFan"></svg><div class="mcstats">'+mcStat('Profitable',or.winRatePct==null?'—':Number(or.winRatePct).toFixed(1)+'%',Number(or.winRatePct)>=50)+
@@ -5993,8 +6237,9 @@ function evidencePanel(c){
       '<path d="M0 45 C42 32 58 61 96 39 S162 22 240 15"/><path d="M0 47 C45 70 72 21 112 49 S176 78 240 63"/>'+
       '<path d="M0 44 C38 40 73 51 111 31 S175 37 240 25"/><path d="M0 49 C37 59 80 47 116 64 S180 34 240 45"/></svg>'+
       '<span class="mcplay">▶</span><span class="ensemblecap">1,500 paths · 21 sessions · exact payoff</span></button>'; }
-  var receipt=c.authoritative?(decide.ensemble?'<div class="mcreceipt">'+authoritativeBasisHTML()+'<span>ensemble '+deskEsc(decide.ensemble.ensemble.fingerprint.slice(0,10))+'…</span></div>':'<div class="mcreceipt"><span>Simulation receipt loading</span></div>'):'<div class="mcreceipt"><span>Offline visual fixture · shared ensemble</span><span>exact legs · 1,500 paths</span></div>';
-  var evidenceRows=c.authoritative?'<div class="evrow"><span class="evk">Recommendation</span><span class="evtxt">'+deskEsc(c.analog||'Backend recommendation receipt')+'</span></div><div class="evrow"><span class="evk">Market input</span><span class="evtxt">'+deskEsc(c.ivnote||'Market input receipt attached')+'</span></div>':'<div class="evrow"><span class="evk">Past analogs</span><span class="evtxt">'+c.analog+'</span></div><div class="evrow"><span class="evk">Implied vol</span><span class="evtxt">'+c.ivnote+'</span></div>';
+  var receipt=c.authoritative?(decide.ensemble?'<div class="mcreceipt">'+authoritativeBasisHTML()+'<span>ensemble '+deskEsc(decide.ensemble.ensemble.fingerprint.slice(0,10))+'…</span></div>':decide.backendPhase==='comparison-required'?'<div class="mcreceipt"><span>No ensemble created until explicit selection</span></div>':'<div class="mcreceipt"><span>Simulation receipt loading</span></div>'):'<div class="mcreceipt"><span>Offline visual fixture · shared ensemble</span><span>exact legs · 1,500 paths</span></div>';
+  var comparisonLabel=String(c.id)===String(decide.deskPickId)?'Recommendation':'Ranked comparison';
+  var evidenceRows=c.authoritative?'<div class="evrow"><span class="evk">'+comparisonLabel+'</span><span class="evtxt">'+deskEsc(c.analog||(comparisonLabel==='Recommendation'?'Backend recommendation receipt':'Backend-ranked comparison receipt'))+'</span></div><div class="evrow"><span class="evk">Market input</span><span class="evtxt">'+deskEsc(c.ivnote||'Market input receipt attached')+'</span></div>':'<div class="evrow"><span class="evk">Past analogs</span><span class="evtxt">'+c.analog+'</span></div><div class="evrow"><span class="evk">Implied vol</span><span class="evtxt">'+c.ivnote+'</span></div>';
   return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Evidence &amp; paths</span><span class="hint">same ensemble across ideas</span></div>'+
     '<div class="evgrid">'+evidenceRows+'</div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+receipt+'</div>';
 }
@@ -6065,6 +6310,9 @@ function seg3(cur,opts,attr){ return '<div class="seg" role="group">'+opts.map(f
 /* EXECUTE — the final journey step: order controls grouped together + a single live summary
    line (no restating credit/max-loss/capital — those live on the candidate numbers). */
 function decExecute(c){
+  if(c.authoritative&&decide.backendPhase==='comparison-required'){
+    return '<div class="execute"><div class="usechead">Selection</div><div class="execbox draftlocked"><div class="dockrow"><div class="dockorder"><b>Comparison in view · nothing selected</b><span>Choose any ranked row once to analyze it. No market distribution or order instruction exists before that explicit selection.</span></div></div></div></div>';
+  }
   if(c.authoritative&&decide.mode==='build'){
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox draftlocked"><div class="dockrow">'+
       '<div class="dockorder"><b>Exact package not selected yet</b><span>Use the backend preview above to replace the selected strategy before reviewing an instruction.</span></div>'+
@@ -6170,7 +6418,7 @@ function drawDecMap(){
   DEC_MPOS=[];
   cs.forEach(function(c){if(drawable.indexOf(c)<0)return;var x=X(c.pop),y=Y(authoritative?c.edge:Math.max(300,c.credit)),r=5+Math.min(9,Math.sqrt(Math.max(c.cap,c.maxLoss))/70);
     DEC_MPOS.push({id:c.id,x:x,y:y,r:r});
-    var col=riskCharCol(c),sel=String(c.id)===String(decide.candId)&&decide.mode==='engine',hot=String(c.id)===String(DEC_HOT),gated=candGated(c);
+    var col=riskCharCol(c),sel=String(c.id)===String(decide.candId)&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',hot=String(c.id)===String(DEC_HOT),gated=candGated(c);
     var rr=hot?r+2.5:r, op=gated?.16:(DEC_HOT>=0||DEC_HOT!==-1?(hot?1:.5):.85);
     if(coherence(c).verdict==='on'&&!gated)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+2.6).toFixed(1)+'" fill="none" stroke="var(--accent)" stroke-opacity=".7" stroke-width="1.2"/>';
     if(sel)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+5.5).toFixed(1)+'" fill="none" stroke="#fff" stroke-opacity=".92" stroke-width="1.4"/>';
@@ -6342,13 +6590,17 @@ function legAction(act,i,d){
 }
 function decAction(a,el){
   if(a==='retry'){ loadAuthoritativeIdea(); return; }
+  if(a==='selectcomparison'){var comparisonId=el&&el.getAttribute('data-cid');if(comparisonId)loadCand(comparisonId);return;}
   if(a==='retry-scenario'){
     var scenarioCandidate=authoritativeCandidate();
     if(scenarioCandidate&&Object.prototype.hasOwnProperty.call(pinnedScen,scenarioCandidate.id))requestAuthoritativeScenario(decSurf(),true);
     return;
   }
   if(a==='empty7'||a==='empty30'){
-    decide.horizon=a==='empty7'?'7 days':'30 days';loadAuthoritativeIdea();return;
+    var emptyHorizon=a==='empty7'?'7 days':'30 days';
+    if(deskBackendEnabled())updateAuthoritativeDeclaration('horizon',emptyHorizon);
+    else {decide.horizon=emptyHorizon;loadAuthoritativeIdea();}
+    return;
   }
   if(a==='emptyintent'){decide.intentOpen=true;renderDecide();return;}
   if(a==='empty-sim'){setMktMode('sim',true);return;}
@@ -6422,14 +6674,14 @@ function loadCand(id){
        screen until the receipt arrives; an optimistic id swap can otherwise strand the UI on B
        while the ensemble, outcome, and preview still belong to A. */
     if(window.DeskBackend.state().mutationPending){toast('Wait for the current Plan change to finish.');return;}
-    stopDecScen(); decide.mode='engine'; DEC_HOT=id;
+    stopDecScen(); decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id; DEC_HOT=id;
     decide.backendPhase='loading'; decide.mcRunning=true; decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
     renderDecide();
     window.DeskBackend.chooseCandidate(id).catch(function(){ /* typed error is rendered by the bridge */ });
     return;
   }
-  stopDecScen(); decide.mode='engine'; decide.candId=id; DEC_HOT=id;
+  stopDecScen(); decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=null; decide.candId=id; DEC_HOT=id;
   renderAfterDecisionChange();
 }
 function wireDecide(){
@@ -6463,8 +6715,9 @@ function wireDecide(){
       if(nm==='build'&&!decide.buildLegs){ var eng=decide.cands.filter(function(c){return c.id===decide.candId;})[0]||decide.cands[0];
         decide.buildLegs=eng.legs.map(cloneDecisionLeg); }
       decide.mode=nm; renderAfterDecisionChange(); return; }
-    var ob=t.closest('[data-obj]'); if(ob){ decide[ob.getAttribute('data-obj')]=ob.getAttribute('data-val'); decide.intentOpen=false;
-      if(decide.kind==='idea'&&deskBackendEnabled())loadAuthoritativeIdea();else renderDecide(); return; }
+    var ob=t.closest('[data-obj]'); if(ob){var declarationKey=ob.getAttribute('data-obj'),declarationValue=ob.getAttribute('data-val');
+      if(decide.kind==='idea'&&deskBackendEnabled())updateAuthoritativeDeclaration(declarationKey,declarationValue);
+      else {decide[declarationKey]=declarationValue;decide.intentOpen=false;renderDecide();} return; }
     var pk=t.closest('[data-pick]'); if(pk){ setUnderlying(pk.getAttribute('data-pick')); return; }
     var cd=t.closest('[data-cand]'); if(cd){ loadCand(cd.getAttribute('data-cand')); return; }
     var mi=t.closest('[data-mapi]'); if(mi){ if(mi.getAttribute('data-mapi')!=='build')loadCand(mi.getAttribute('data-mapi')); return; }
