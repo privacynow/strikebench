@@ -149,6 +149,18 @@ class StrategyCatalogTest {
     }
 
     @Test
+    void crossedCondorGeometryIsNeverClassifiedAsRangeIncome() {
+        var identity = StrategyCatalog.identify(pkg(
+                put(0, "BUY", "90", NEAR, 1), put(1, "SELL", "105", NEAR, 1),
+                call(2, "SELL", "95", NEAR, 1), call(3, "BUY", "110", NEAR, 1)));
+
+        assertThat(identity.custom()).isTrue();
+        assertThat(identity.family()).isNull();
+        assertThat(identity.label()).isEqualTo("Custom structure");
+        assertThat(identity.summary()).doesNotContainIgnoringCase("condor");
+    }
+
+    @Test
     void stockOnlyLifecycleSurvivorIsNamedAsSharesRatherThanStockAndOptions() {
         var longShares = StrategyCatalog.identify(pkg(stock(0, "BUY", 100)));
         var shortShares = StrategyCatalog.identify(pkg(stock(0, "SELL", 100)));

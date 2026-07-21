@@ -2249,6 +2249,12 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
       + ' routeError=' + await page.locator('#route-error').count()
       + ' text=' + (await page.locator('#app').textContent()).slice(0, 3000) + '\n' + error.message);
   });
+  // Home deliberately paints before its durable Plan collection finishes reconciling. Assert the
+  // settled ownership state, not the useful provisional list that may exist for a single frame.
+  await page.waitForFunction(activeId => App.state.activePlanId === activeId
+    && !document.querySelector('#home-plan-library [data-plan-id="' + activeId + '"]')
+    && /^Continue SPY/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || ''),
+  ids.simTwo, { timeout: 20000 });
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
     'Home shows a bounded alternative-Plan lens');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.simTwo + '"]').count(), 0,
@@ -2415,6 +2421,12 @@ test('equivalent Plan retries collapse while materially different Plans survive 
 
   await go('#/home');
   await page.waitForSelector('#home-plan-library .home-plan-compact-list');
+  await page.waitForFunction(values => App.state.activePlanId === values.variant
+    && /^Continue AAPL/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || '')
+    && !document.querySelector('#home-plan-library [data-plan-id="' + values.variant + '"]')
+    && !!document.querySelector('#home-plan-library [data-plan-id="' + values.one + '"]')
+    && !!document.querySelector('#home-plan-library [data-plan-id="' + values.disposable + '"]'),
+  ids, { timeout: 20000 });
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
     'Home keeps a bounded lens even when earlier journeys left other working Plans');
   assert.deepEqual(await page.evaluate(values => [values.one, values.variant].map(id =>
@@ -2450,6 +2462,9 @@ test('equivalent Plan retries collapse while materially different Plans survive 
 
   await page.setViewportSize({ width: 390, height: 844 });
   const survivorRow = page.locator('#home-plan-library .home-plan-compact-row[data-plan-id="' + ids.one + '"]');
+  await page.waitForFunction(values => App.state.activePlanId === values.variant
+    && !!document.querySelector('#home-plan-library [data-plan-id="' + values.one + '"]'),
+  ids, { timeout: 20000 });
   await survivorRow.waitFor({ state: 'visible' });
   const survivorAction = survivorRow.locator('.home-plan-compact-actions .btn').first();
   await survivorAction.waitFor({ state: 'visible' });
@@ -2518,6 +2533,10 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
   await go('#/home');
   const compact = page.locator('#home-plan-library .home-plan-compact-list');
   await compact.waitFor({ state: 'visible' });
+  await page.waitForFunction(activeId => App.state.activePlanId === activeId
+    && /^Continue QQQ/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || '')
+    && !document.querySelector('#home-plan-library [data-plan-id="' + activeId + '"]'),
+  ids[5], { timeout: 20000 });
   assert.equal(await compact.locator('.home-plan-compact-row').count(), 3,
     'the desk shows at most three alternatives to the hero-owned active Plan');
   assert.ok((await compact.locator('.home-plan-compact-meta').allTextContents()).some(text =>

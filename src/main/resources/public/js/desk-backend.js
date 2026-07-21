@@ -39,6 +39,7 @@
   // Book and Position are independent read surfaces. Their requests must never supersede a
   // New Idea calculation (or one another), so neither lifecycle borrows state.requestSeq.
   var bookRequestSeq = 0;
+  var bookContextLoads = {};
   var positionRequestSeq = 0;
   var positionScenarioRequestSeq = 0;
   var mutationOwnerSequence = 0;
@@ -125,20 +126,22 @@
 
   function horizonDays(context) {
     var raw = context && context.horizon;
+    if (context && Object.prototype.hasOwnProperty.call(context, 'horizon')
+        && (raw == null || String(raw).trim() === '')) return null;
     var parsed = raw == null ? null : Number(String(raw).match(/\d+/) && String(raw).match(/\d+/)[0]);
     return parsed && parsed > 0 ? Math.min(756, parsed) : 45;
   }
 
   function intentOf(goal) {
     var key = String(goal || '').trim().toUpperCase();
-    if (key === 'HEDGE') return 'HEDGE';
-    if (key === 'DIRECTIONAL') return 'DIRECTIONAL';
+    if (key === 'HEDGE' || key === 'DIRECTIONAL' || key === 'ACQUIRE' || key === 'EXIT') return key;
     return 'INCOME';
   }
 
   function thesisOf(view) {
+    if (view == null) return null;
     var key = String(view || '').trim().toLowerCase();
-    return key || 'neutral';
+    return key || null;
   }
 
   function riskModeOf(context) {
@@ -527,8 +530,8 @@
     if (identity.accountId && String(plan.accountId || '') !== String(identity.accountId)) return false;
     if (!sameNullable(identity.originPlanId, plan.originPlanId)) return false;
     var ctx = plan.context || {};
-    if (String(ctx.thesis || '').toLowerCase() !== identity.thesis
-        || Number(ctx.horizonDays || 0) !== identity.horizonDays) return false;
+    if (!sameNullable(identity.thesis, ctx.thesis)
+        || !sameNullable(identity.horizonDays, ctx.horizonDays)) return false;
     // Risk posture is mutable Plan context, not active Plan identity. The Plan service
     // deliberately resumes the same line of inquiry when a different entry surface supplies a
     // different header/default posture. Keep the persisted context authoritative; changing it is
@@ -579,16 +582,25 @@
     var api = requireApi(), symbol = String(context.symbol || '').trim().toUpperCase();
     var intent = intentOf(context.goal);
     var identity = planIdentity(symbol, intent, context, market);
-    var listed = await api.getFresh('/api/plans');
-    if (seq !== state.requestSeq) return null;
-    if (listed && listed.world && market.identity.world
-        && String(listed.world) !== String(market.identity.world)) {
-      throw new Error('The Plan list belongs to another market world.');
+    var requestedPlanId = context.planId == null ? null : String(context.planId).trim();
+    var plan = null;
+    if (requestedPlanId) {
+      // Home resumes the exact Plan the user clicked. Its visible declarations still have to
+      // match the active account and market; an id is never permission to cross those seams.
+      plan = await api.getFresh('/api/plans/' + encodeURIComponent(requestedPlanId));
+      if (seq !== state.requestSeq) return null;
+    } else {
+      var listed = await api.getFresh('/api/plans');
+      if (seq !== state.requestSeq) return null;
+      if (listed && listed.world && market.identity.world
+          && String(listed.world) !== String(market.identity.world)) {
+        throw new Error('The Plan list belongs to another market world.');
+      }
+      if (listed && listed.market && String(listed.market).toUpperCase() !== identity.marketKind) {
+        throw new Error('The Plan list belongs to another market lane.');
+      }
+      plan = await freshestMatchingPlan(listed && listed.plans, identity, seq);
     }
-    if (listed && listed.market && String(listed.market).toUpperCase() !== identity.marketKind) {
-      throw new Error('The Plan list belongs to another market lane.');
-    }
-    var plan = await freshestMatchingPlan(listed && listed.plans, identity, seq);
     if (!plan) {
       var requested = requestedPlanContext(context);
       plan = await api.post('/api/plans', {
@@ -1886,7 +1898,8 @@
       notify('loading', { operation: 'idea' });
       var symbol = String(context && context.symbol || '').trim().toUpperCase();
       if (!symbol) throw new Error('Choose an underlying before loading a Desk idea.');
-      var market = await loadMarket(symbol, horizonDays(context), seq);
+      var declaredHorizon = horizonDays(context);
+      var market = await loadMarket(symbol, declaredHorizon == null ? 45 : declaredHorizon, seq);
       if (!market || seq !== state.requestSeq) return null;
       var plan = await ensurePlan(context, market, seq);
       if (!plan || seq !== state.requestSeq) return null;
@@ -2151,6 +2164,96 @@
     }
   }
 
+  function homeBookSymbols(rows, trades, sharePositions) {
+    var seen = {};
+    var sources = (rows || []).map(function (row) { return row && row.plan || row; })
+      .concat(trades || []).concat(sharePositions || []);
+    return sources.map(function (source) {
+      return String(source && source.symbol || '').trim().toUpperCase();
+    })
+      .filter(function (symbol) {
+        if (!symbol || seen[symbol]) return false;
+        seen[symbol] = true;
+        return true;
+      }).slice(0, 4);
+  }
+
+  function publishBookContext(seq, data, context) {
+    if (seq !== bookRequestSeq || !state.book || state.book.requestId !== seq
+        || state.book.data !== data) return;
+    data.homeContext = context;
+    state.book.data = data;
+    notify('book-context', {
+      operation: 'book-context', requestId: seq, book: state.book, data: data
+    });
+  }
+
+  function loadBookSymbolContext(symbol) {
+    if (bookContextLoads[symbol]) return bookContextLoads[symbol];
+    var encoded = encodeURIComponent(symbol);
+    bookContextLoads[symbol] = Promise.all([
+      readSlot('research:' + symbol, '/api/research/' + encoded),
+      readSlot('news:' + symbol, '/api/research/' + encoded + '/news')
+    ]);
+    return bookContextLoads[symbol];
+  }
+
+  /**
+   * Market and headline context is useful on Home, but it must not hold the position roster or
+   * account summary behind provider latency. Hydrate the bounded set of Plan symbols after the
+   * core Book receipt has rendered, then publish one same-world additive update.
+   */
+  async function hydrateBookContext(seq, before, data, symbols) {
+    if (!symbols.length) return;
+    try {
+      var groups = await Promise.all(symbols.map(loadBookSymbolContext));
+      var slots = [];
+      groups.forEach(function (group) { slots = slots.concat(group); });
+      if (seq !== bookRequestSeq) return;
+      var after = await readIdentitySnapshot();
+      if (seq !== bookRequestSeq) return;
+      assertSameReadIdentity(before, after);
+      var byKey = slotsByKey(slots);
+      var rows = symbols.map(function (symbol) {
+        var researchSlot = objectSlot(byKey['research:' + symbol], symbol + ' Research');
+        var newsSlot = objectSlot(byKey['news:' + symbol], symbol + ' News');
+        try {
+          if (researchSlot.available) {
+            assertDocumentSymbol(researchSlot.value, symbol, 'Home Research');
+            if (researchSlot.value.marketLane
+                && String(researchSlot.value.marketLane).toUpperCase()
+                  !== String(before.identity.marketLane).toUpperCase()) {
+              throw new Error(symbol + ' Research belongs to another market lane.');
+            }
+            assertEvidenceLane(researchSlot.value.quote && researchSlot.value.quote.evidence
+              || researchSlot.value.evidence && researchSlot.value.evidence.inputs
+                && researchSlot.value.evidence.inputs.quote,
+            before.identity.marketLane, 'Home Research quote');
+          }
+          if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Home News');
+        } catch (error) {
+          return { symbol: symbol, research: null, news: null,
+            missing: [{ key: 'context:' + symbol, error: errorReceipt(error) }] };
+        }
+        return {
+          symbol: symbol,
+          research: researchSlot.available ? researchSlot.value : null,
+          news: newsSlot.available ? newsSlot.value : null,
+          missing: missingSlots([researchSlot, newsSlot])
+        };
+      });
+      publishBookContext(seq, data, {
+        phase: 'ready', symbols: symbols, rows: rows,
+        missing: rows.reduce(function (all, row) { return all.concat(row.missing || []); }, [])
+      });
+    } catch (error) {
+      publishBookContext(seq, data, {
+        phase: 'error', symbols: symbols, rows: [],
+        missing: [{ key: 'homeContext', error: errorReceipt(error) }]
+      });
+    }
+  }
+
   async function readActiveTradeRoster() {
     var path = '/api/trades?status=ACTIVE&page=0&size=100';
     var first = objectSlot(await readSlot('activeTrades', path), 'The active-trade roster');
@@ -2197,6 +2300,7 @@
   async function loadBook() {
     if (!state.enabled) return null;
     var seq = ++bookRequestSeq;
+    bookContextLoads = {};
     state.book = {
       phase: 'loading', requestId: seq, identity: null, data: null, missing: [], error: null
     };
@@ -2255,6 +2359,7 @@
           && String(plan.accountId) === String(before.identity.accountId);
       });
       var missing = missingSlots(slots);
+      var homeSymbols = homeBookSymbols(accountPlans || [], tradePage.trades, positionBook.positions);
       var data = {
         identity: before.identity,
         account: before.account,
@@ -2269,6 +2374,10 @@
         planPortfolio: values.planPortfolio.available ? values.planPortfolio.value : null,
         plans: planRows,
         accountPlans: accountPlans,
+        homeContext: {
+          phase: homeSymbols.length ? 'loading' : 'empty',
+          symbols: homeSymbols, rows: [], missing: []
+        },
         loadedAt: new Date().toISOString()
       };
       var phase = missing.length ? 'partial' : 'ready';
@@ -2279,6 +2388,9 @@
       notify('book-' + phase, {
         operation: 'book', requestId: seq, book: state.book, data: data
       });
+      // Do not await optional market/news reads: positions and Book actions remain interactive
+      // while a cold observed provider or source cache is warming.
+      hydrateBookContext(seq, before, data, data.homeContext.symbols);
       return data;
     } catch (error) {
       if (seq !== bookRequestSeq) return null;
@@ -2336,19 +2448,23 @@
 
   function positionAuxiliarySlots(descriptor, symbol) {
     var encoded = encodeURIComponent(symbol);
-    var requests = [
-      readSlot('research', '/api/research/' + encoded),
-      readSlot('history', '/api/research/' + encoded + '/history?range='
-        + encodeURIComponent(descriptor.historyRange)),
-      readSlot('news', '/api/research/' + encoded + '/news')
-    ];
+    var marketContext = bookContextLoads[symbol] || loadBookSymbolContext(symbol);
+    var requests = [readSlot('history', '/api/research/' + encoded + '/history?range='
+      + encodeURIComponent(descriptor.historyRange))];
     if (descriptor.planId) {
       requests.push(readSlot('planWorkspace', '/api/plans/'
         + encodeURIComponent(descriptor.planId) + '/manage'));
       requests.push(readSlot('positionEnsemble', '/api/plans/'
         + encodeURIComponent(descriptor.planId) + '/outcomes/ensemble/latest'));
     }
-    return Promise.all(requests);
+    return Promise.all([marketContext, Promise.all(requests)]).then(function (groups) {
+      var market = groups[0], rest = groups[1];
+      return [
+        Object.assign({}, market[0], { key: 'research' }),
+        rest[0],
+        Object.assign({}, market[1], { key: 'news' })
+      ].concat(rest.slice(1));
+    });
   }
 
   function assertPlanWorkspaceIdentity(workspace, descriptor, identity, tradeId) {
@@ -2804,12 +2920,13 @@
     var key = control.getAttribute('data-gov');
     if (key !== 'risk' && key !== 'minPop' && key !== 'maxAsn') return;
     if (governorTimer) window.clearTimeout(governorTimer);
+    var resumed = window.decide.resumePlanContext || {};
     pendingGovernorContext = Object.assign({}, state.context, {
       __deskGovernorOverride: true,
       symbol: window.decide.sym,
-      goal: window.decide.goal,
-      view: window.decide.view,
-      horizon: window.decide.horizon,
+      goal: Object.prototype.hasOwnProperty.call(resumed, 'goal') ? resumed.goal : window.decide.goal,
+      view: Object.prototype.hasOwnProperty.call(resumed, 'view') ? resumed.view : window.decide.view,
+      horizon: Object.prototype.hasOwnProperty.call(resumed, 'horizon') ? resumed.horizon : window.decide.horizon,
       governors: Object.assign({}, window.decide.govs || {}),
       governorExplicit: Object.assign({}, window.decide.govExplicit || {})
     });

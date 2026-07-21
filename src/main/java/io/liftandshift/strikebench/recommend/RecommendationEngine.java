@@ -219,8 +219,10 @@ public final class RecommendationEngine {
             return new Result(symbol, thesis.name(), req.horizon(), mode.name(), intent.name(), budget,
                     null, List.of(), rejected, notes, DISCLAIMER);
         }
-        // The anchor context drives the expiry-independent setup (spot, teaching examples, notes);
-        // the family loop searches the full candidate set for the most profitable expiry per family.
+        // The anchor context drives the expiry-independent setup (spot, teaching examples, notes).
+        // Every viable package from the nearby expiry set survives construction. The existing
+        // DecisionPolicy evaluates the complete field and only then chooses one package per family;
+        // construction must not pre-empt that evidence- and after-cost-aware judgment.
         ExpiryCtx anchorCtx = contexts.get(0);
         OptionChain chain = anchorCtx.chain();
         OptionChain farChain = anchorCtx.farChain();
@@ -283,12 +285,26 @@ public final class RecommendationEngine {
                 continue;
             }
 
-            // DYNAMIC EXPIRY: build and screen this family across every liquid candidate expiration,
-            // and keep the instance with the best modeled edge ("where we make the most money"). The
-            // first (anchor-nearest) rejection reason is retained for teaching when none is viable.
+            // Complete catalog accounting: undefined-risk families are legitimate structures to
+            // study, but they are never auto-recommendations. Name every applicable exclusion in
+            // rejected[] instead of silently omitting families whose builder deliberately returns
+            // null (short straddles/strangles). This lets clients distinguish "not suitable" from
+            // "the engine forgot this strategy" without weakening the safety policy.
+            if (family.blockedByDefault()) {
+                rejected.add(new Rejection(family.name(), family.display(), List.of(
+                        family.display() + " has undefined risk and is blocked by default; "
+                                + "it remains available for payoff education, while automatic ideas use a defined-risk alternative.")));
+                continue;
+            }
+
+            // DYNAMIC EXPIRY: build and screen this family across every liquid candidate expiration.
+            // Do not collapse the packages here using raw EV/max-loss: that happens before costs,
+            // realized-volatility evidence, objective fit, tail risk, and evidence quality exist.
+            // The existing DecisionPolicy evaluates this complete set and chooses the family's
+            // representative afterward. The first anchor-nearest rejection remains the teaching
+            // reason only when no expiry produces a viable package.
             boolean builtOnHeldShares = sharesHeld && family.needsStock();
-            Candidate bestCandidate = null;
-            double bestEdge = Double.NEGATIVE_INFINITY;
+            List<Candidate> familyCandidates = new ArrayList<>();
             Rejection firstRejection = null;
             for (ExpiryCtx ctx : contexts) {
                 StrategyBuilder.Built built = StrategyBuilder.build(family, ctx.chain(), ctx.farChain(), ctx.spot(), hints);
@@ -335,6 +351,12 @@ public final class RecommendationEngine {
                     if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(incoherence));
                     continue;
                 }
+                String viability = packageViability(family, candidate);
+                if (viability != null) {
+                    if (firstRejection == null) firstRejection = new Rejection(
+                            family.name(), family.display(), List.of(viability));
+                    continue;
+                }
                 if (candidate.confidence() < minConfidence) {
                     if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
                             List.of(String.format("Confidence %.2f is below your minimum %.2f", candidate.confidence(), minConfidence)));
@@ -345,11 +367,21 @@ public final class RecommendationEngine {
                     if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(filterReason));
                     continue;
                 }
-                double edge = modeledEdge(candidate);
-                if (edge > bestEdge) { bestEdge = edge; bestCandidate = candidate; }
+                familyCandidates.add(candidate);
             }
-            if (bestCandidate != null) candidates.add(bestCandidate);
-            else if (firstRejection != null) rejected.add(firstRejection);
+            if (!familyCandidates.isEmpty()) {
+                candidates.addAll(familyCandidates);
+            } else if (firstRejection != null) {
+                rejected.add(firstRejection);
+            } else {
+                // A family can be valid in the catalog but impossible on this exact surface (for
+                // example, no matching far expiration for a calendar or no executable protective
+                // wing). Preserve that distinction in the response instead of making the family
+                // disappear, which clients and users reasonably interpret as incomplete coverage.
+                rejected.add(new Rejection(family.name(), family.display(), List.of(
+                        "No canonical " + family.display().toLowerCase(Locale.ROOT)
+                                + " package could be built from the available same-lane contracts near this horizon.")));
+            }
         }
 
         // Always show a blocked undefined-risk example for education, even if not requested
@@ -1099,9 +1131,6 @@ public final class RecommendationEngine {
                 .count();
     }
 
-    /** Modeled edge for choosing the most profitable expiry for a family: positive risk-neutral EV
-     *  per unit of risk ranks highest, then probability of profit, then reward:risk. Bands are offset
-     *  so a real EV always beats a POP-only or geometry-only comparison. */
     /**
      * OBJECTIVE-COHERENCE GATE (offer time). Rejects any structure whose economics contradict the
      * declared intent, so the engine never presents an outcome incompatible with the objective:
@@ -1127,15 +1156,21 @@ public final class RecommendationEngine {
         return null;
     }
 
-    private static double modeledEdge(Candidate c) {
-        if (c.expectedValueCents() != null && c.maxLossCents() > 0) {
-            return (double) c.expectedValueCents() / c.maxLossCents();
-        }
-        if (c.pop() != null) return c.pop() - 2.0;
-        if (c.maxProfitCents() != null && c.maxLossCents() > 0) {
-            return (double) c.maxProfitCents() / c.maxLossCents() - 5.0;
-        }
-        return -10.0;
+    /**
+     * A technically positive condor credit can still be economic dust. Requiring at least 5% of
+     * the widest wing keeps a one-cent credit against a $10 wing from entering the ranked field,
+     * while leaving the complete after-cost/evidence judgment to DecisionPolicy. The ratio is
+     * quantity-invariant because both credit and maximum loss scale together.
+     */
+    static String packageViability(StrategyFamily family, Candidate c) {
+        if (family != StrategyFamily.IRON_CONDOR) return null;
+        long credit = c.entryNetPremiumCents();
+        double grossWidth = (double) c.maxLossCents() + credit;
+        double creditToWidth = grossWidth > 0 ? credit / grossWidth : 0.0;
+        if (credit > 0 && creditToWidth >= 0.05) return null;
+        return String.format(Locale.ROOT,
+                "Executable credit %s is only %.1f%% of the widest wing; an iron condor must collect at least 5%% of its width to be an economically meaningful comparison.",
+                Money.fmt(Math.max(0, credit)), Math.max(0.0, creditToWidth * 100.0));
     }
 
     private static LocalDate pickExpiration(List<LocalDate> expirations, String horizon, LocalDate today,

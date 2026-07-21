@@ -116,13 +116,15 @@ final class DiscoveryController {
         try {
             // The decision score is computed from the SAME market that priced the candidates —
             // inside a simulated session that is the world's spot/IV/vol, never observed (review P0).
-            var evals = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
+            var evaluated = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
                     result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
                     practiceExposure(acct, result.symbol()), assignmentPreference);
-            if (evals.size() != result.candidates().size()) {
+            if (evaluated.size() != result.candidates().size()) {
                 throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
             }
+            var evals = io.liftandshift.strikebench.eval.StrategyEvaluator
+                    .bestPackagePerFamily(evaluated);
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
@@ -185,10 +187,13 @@ final class DiscoveryController {
         String world = activeWorldResolver.apply(ctx);
         boolean generatedWorld = !"observed".equals(world);
         String owner = ownerResolver.apply(ctx);
-        var ranked = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
-                result.riskMode(), result.candidates(), account.buyingPowerCents(), owner, !generatedWorld,
+        var evaluated = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
+                result.riskMode(), result.candidates(), account.buyingPowerCents(), owner, false,
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
                 practiceExposure(account, result.symbol()));
+        var ranked = io.liftandshift.strikebench.eval.StrategyEvaluator
+                .bestPackagePerFamily(evaluated);
+        if (!generatedWorld) evaluations.persist(ranked, owner);
 
         String recommendationId = null;
         if (!ranked.isEmpty() && !generatedWorld) {

@@ -247,9 +247,11 @@ public final class AutoRecommender {
             }
             List<ScoredCandidate> assessed;
             if (!pool.isEmpty()) {
-                List<StrategyEvaluation> evals = evaluations.evaluate(s.symbol(), intent.name(), thesis, horizon,
+                List<StrategyEvaluation> evaluated = evaluations.evaluate(s.symbol(), intent.name(), thesis, horizon,
                         req.riskMode(), pool, buyingPowerCents, null, false,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null);
+                List<StrategyEvaluation> evals = io.liftandshift.strikebench.eval.StrategyEvaluator
+                        .bestPackagePerFamily(evaluated);
                 assessed = evals.stream().map(e -> new ScoredCandidate(
                                 targetFit(e.candidate(), req.targetProfitCents()), e))
                         .sorted(Comparator.comparingDouble(

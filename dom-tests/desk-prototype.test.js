@@ -367,6 +367,7 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
         const wrap = document.querySelector('#decideStage .decwrap');
         const grid = document.querySelector('#decideStage .decgrid');
         const panelRect = panel.getBoundingClientRect();
+        const fanRect = fan.getBoundingClientRect();
         const mapRect = map.getBoundingClientRect();
         const centerRect = center.getBoundingClientRect();
         const rightRect = right.getBoundingClientRect();
@@ -411,6 +412,9 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
             left: panelRect.left, top: panelRect.top,
             right: panelRect.right, bottom: panelRect.bottom, width: panelRect.width
           },
+          fanRect: {
+            top: fanRect.top, bottom: fanRect.bottom, height: fanRect.height
+          },
           mapRect: {
             left: mapRect.left, top: mapRect.top, right: mapRect.right,
             bottom: mapRect.bottom, width: mapRect.width, height: mapRect.height
@@ -447,19 +451,21 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       });
 
       if (viewport.width >= 1900) {
+        assert.ok(layout.panelRect.top - layout.fanRect.bottom <= 16,
+          `${label} places the selected strategy legs directly after the ranked ideas`);
         assert.ok(layout.mapRect.top > layout.panelRect.bottom,
           `${label} stacks the useful risk map below the full-width leg workbench`);
         assert.ok(Math.abs(layout.mapRect.width - layout.panelRect.width) <= 2,
           `${label} gives legs and risk map the same left-rail width`);
-        assert.ok(layout.mapRect.height >= 180,
+        assert.ok(layout.mapRect.height >= (viewport.height >= 1000 ? 210 : 180),
           `${label} keeps the risk map large enough to read (${layout.mapRect.height}px)`);
       }
 
-      if (viewport.width <= 900) {
+      if (viewport.width <= 1000) {
         assert.equal(layout.gridDisplay, 'flex', `${label} structurally stacks decision areas`);
-        assert.equal(layout.gridDirection, 'column', `${label} uses a vertical mobile reading order`);
-        assert.equal(layout.railOverflowY, 'visible', `${label} exposes the complete mobile leg stack`);
-        assert.ok(layout.railYOverflow <= 1, `${label} does not add a nested mobile leg scroller`);
+        assert.equal(layout.gridDirection, 'column', `${label} uses a vertical narrow-screen reading order`);
+        assert.equal(layout.railOverflowY, 'visible', `${label} exposes the complete narrow-screen leg stack`);
+        assert.ok(layout.railYOverflow <= 1, `${label} does not add a nested narrow-screen leg scroller`);
       } else {
         assert.equal(layout.gridDisplay, 'grid', `${label} retains the desktop analysis grid`);
         assert.equal(layout.railOverflowX, 'hidden', `${label} does not expose a horizontal leg rail`);
