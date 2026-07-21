@@ -949,7 +949,11 @@
 .intentpop{position:absolute;left:142px;top:calc(100% + 7px);z-index:70;display:flex;align-items:center;gap:7px;
   padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--pop-surface,#0d131c);
   box-shadow:0 14px 40px rgba(0,0,0,.55);animation:zoomin var(--mo-quick) var(--mo-ease)}
-.ideacomposer{gap:10px;overflow:hidden}.ideacomposer .composerintro{padding:9px 10px;border:1px solid var(--accent-2);border-radius:8px;background:linear-gradient(115deg,var(--accent-wash),transparent);color:var(--dim);font-size:var(--f-xs);line-height:1.45}.ideacomposer .objrow{display:flex;flex-direction:column;align-items:stretch;gap:7px;overflow:auto;padding-right:2px}.ideacomposer .objchip{display:grid;grid-template-columns:88px minmax(0,1fr);width:100%;min-width:0}.ideacomposer .objchip>.ok{display:flex;align-items:center}.ideacomposer .objchip .oseg{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));min-width:0}.ideacomposer .objchip .oseg button{min-height:31px;padding:4px 6px}.ideacomposer .pickchip{position:relative}.ideacomposer .pickchip .pickbtn{width:100%;text-align:left}.ideacomposer .composerstructure{padding:8px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}.ideacomposer .composeractions{display:flex;align-items:center;gap:6px;margin-top:auto}.ideacomposer .composeractions .btn:first-child{flex:1}.ideacomposer .catalogdrawer{position:absolute;z-index:25;inset:42px 0 0;padding:10px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.ideacomposer{gap:10px;overflow:hidden}.ideacomposer .lenshd .hint.num{font-family:var(--mono);color:var(--accent);font-weight:700}.ideacomposer .objrow{display:flex;flex-direction:column;align-items:stretch;gap:7px;overflow:auto;padding-right:2px}.ideacomposer .objchip{display:grid;grid-template-columns:88px minmax(0,1fr);width:100%;min-width:0}.ideacomposer .objchip>.ok{display:flex;align-items:center}.ideacomposer .objchip .oseg{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));min-width:0}.ideacomposer .objchip .oseg button{min-height:31px;padding:4px 6px}.ideacomposer .pickchip{position:relative}.ideacomposer .pickchip .pickbtn{width:100%;text-align:left}
+/* In the composer the symbol picker flows IN PLACE (the floating variant clipped against the
+   scrolling declaration column — the "clipped search" defect). Rows push down instead. */
+.ideacomposer .pickchip .univpop{position:static;width:100%;margin-top:6px;box-shadow:none}
+.ideacomposer .composerstructure{padding:8px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}.ideacomposer .composeractions{display:flex;align-items:center;gap:6px;margin-top:2px}.ideacomposer .composeractions .btn:first-child{flex:1}.ideacomposer .catalogdrawer{position:absolute;z-index:25;inset:42px 0 0;padding:10px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
 .dectop .rec{flex:1;min-width:0;padding:7px 12px}
 .dectop .rec .recmain{font-size:var(--f-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dectop .rec .receyebrow{display:inline;margin:0 4px 0 0;vertical-align:baseline}
@@ -1479,13 +1483,15 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .cohverdict.on{color:var(--profit);border-color:var(--profit);background:var(--profit-wash)}
 .cohverdict.mid{color:var(--caution);border-color:var(--caution);background:var(--caution-wash)}
 .cohverdict.off{color:var(--loss);border-color:var(--loss);background:var(--loss-wash)}
-.cohpips{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin:2px 0 8px}
-.cohpip{display:flex;align-items:baseline;gap:6px;font-size:var(--f-xs);font-weight:700;color:var(--dim);border:1px solid var(--line-soft);border-radius:6px;padding:5px 8px;flex-wrap:wrap}
+/* Coherence checks read as a tight ledger, not four airy cards: one row per check, the note
+   wrapping beside its verdict mark — the freed space belongs to real content (market, stress). */
+.cohpips{display:grid;grid-template-columns:1fr;gap:5px;margin:2px 0 8px}
+.cohpip{display:flex;align-items:baseline;gap:6px;font-size:var(--f-xs);font-weight:700;color:var(--dim);border:1px solid var(--line-soft);border-radius:6px;padding:5px 8px}
 .cohpip .cohmk{font-weight:800;flex:none}
 .cohpip.on{color:var(--text)} .cohpip.on .cohmk{color:var(--profit)}
 .cohpip.mid .cohmk{color:var(--caution)}
 .cohpip.off .cohmk{color:var(--loss)}
-.cohpip .cohnote{flex-basis:100%;font-weight:400;font-style:normal;color:var(--faint);font-size:var(--f-sm);line-height:1.3}
+.cohpip .cohnote{flex:1;min-width:0;font-weight:400;font-style:normal;color:var(--faint);font-size:var(--f-sm);line-height:1.3}
 .cohprose{font-size:var(--f-xs);color:var(--dim);line-height:1.45;border-top:1px solid var(--line-soft);padding-top:8px}
 .cohswap{border:0;background:0;color:var(--accent);font-weight:700;font-size:var(--f-xs);cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
 .mcfan{width:100%;height:130px;display:block}
@@ -1550,11 +1556,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .bcnode.warn{border-color:var(--caution);background:var(--caution-wash)}.bcnode.bad{border-color:var(--loss);background:var(--loss-wash)}
   .bcnode.idea{border-style:dashed;border-width:2px;border-color:var(--accent);background:var(--accent-wash);box-shadow:0 0 0 6px rgba(70,213,181,.05)}.bcnode.idea b{color:var(--accent)}
   .bcresult{border-top:1px solid var(--line-soft)}.bcresult b{font-family:var(--mono);color:var(--loss)}.bcresult i{color:var(--faint);font-style:normal}
-  .inspectpane:has(>.cohpanel){display:grid;grid-template-rows:minmax(330px,1fr) 150px 130px;gap:12px;overflow:hidden}
-  .inspectpane:has(>.cohpanel)>.cohpanel{display:flex;min-height:0;flex-direction:column}
-  .inspectpane:has(>.cohpanel) .cohpips{flex:1;align-items:stretch;margin:8px 0 12px}
-  .inspectpane:has(>.cohpanel) .cohpip{align-content:center;padding:14px 16px;font-size:var(--f-sm)}
-  .inspectpane:has(>.cohpanel)>.tailpanel,.inspectpane:has(>.cohpanel)>.fitbudget{display:flex;flex-direction:column;justify-content:center;margin:0;padding:13px 15px}
+  /* The Fit pane stays a tight ledger even on tall canvases — no stretched verdict cards; the
+     right column's remaining height belongs to the always-visible market band below the well. */
+  .inspectpane:has(>.cohpanel){display:flex;flex-direction:column;gap:10px;overflow:hidden}
+  .inspectpane:has(>.cohpanel)>.tailpanel,.inspectpane:has(>.cohpanel)>.fitbudget{margin:0}
   .inspectpane>.upanel:only-child:has(>.mechg){display:grid;grid-template-rows:auto minmax(270px,1.25fr) auto minmax(210px,1fr) auto;gap:12px}
   .inspectpane>.upanel:only-child:has(>.mechg)>.mechg{height:100%;margin:0}
   .inspectpane>.upanel:only-child:has(>.mechg) .mgt{display:flex;flex-direction:column;justify-content:center;padding:14px 16px}
@@ -2521,37 +2526,68 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .fanr .fev{margin-left:auto;flex:none;font-family:var(--mono);font-weight:700;font-size:var(--f-sm)}
 .fanr .fev.pos{color:var(--profit)} .fanr .fev.neg{color:var(--loss)}
 .fanr .fmet .bad{color:var(--loss)} .fanr .fmet .warn{color:var(--caution)} .fanr .fmet .ok{color:var(--profit)}
-/* below ~1080px of height the ranked list keeps priority: support panes compress first */
+/* below ~1080px of height the ranked list keeps priority: the workbench and map share ONE row
+   beside each other, so the support strip costs half the height and the list gains whole rows */
 @media (max-height:1079px){
-  .dcleft .pickmap{flex-basis:clamp(150px,17vh,190px);min-height:146px}
-  .dcleft .decmap{min-height:94px}
+  .dcleft .leftsupport{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;align-items:stretch}
+  .dcleft .leftsupport>.declegpanel{min-width:0;margin:0}
+  .dcleft .pickmap{flex:none;min-width:0;min-height:186px;border-top:0;border-left:1px solid var(--line-soft);padding:0 0 0 9px}
+  .dcleft .decmap{min-height:118px}
   .dcleft .pickmap .fanleg{display:none}
   .declegpanel .legr{padding:3px 6px}
 }
-/* book-level possible futures — the fan hero above the risk map */
-.bookfanwrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(168px,222px);gap:9px;align-items:stretch}
-.bookfan{width:100%;height:clamp(180px,22vh,250px);display:block;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
+/* book-level possible futures — ONE hero row that always fits its cell: the fan flexes wide,
+   the legend and the POP × loss facet ride beside it, every column clipped to the row height. */
+.bookfuturespanel{gap:6px}
+.bookfanwrap{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,200px) minmax(150px,196px);gap:9px;align-items:stretch}
+.bookfanstage{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0;overflow:hidden}
+.bookfan{width:100%;flex:1;min-height:0;height:auto;display:block;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
+.bookfanstage .mcpathread{flex:none}
+.bookfanlegend{overflow:auto;min-height:0}
+.bookmapfacet{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;gap:4px}
+.bookmapfacet .authriskviz.compactrisk{flex:1;min-height:70px}
+.bookmapfacet .authmetricgrid.onecol{grid-template-columns:1fr;gap:4px;flex:none}
+@media (max-width:1700px){
+  /* the stacked board rows are auto-height here, so the facet moves under the fan instead */
+  .bookfanwrap{grid-template-columns:minmax(0,1fr) minmax(150px,190px)}
+  .bookmapfacet{grid-column:1/-1;flex-direction:row;align-items:stretch;gap:9px}
+  .bookmapfacet .lenshd.sub{display:none}
+  .bookmapfacet .authriskviz.compactrisk{min-height:96px;max-height:120px}
+  .bookmapfacet .authmetricgrid.onecol{align-self:center;min-width:170px}
+}
 .bookfanlegend{display:flex;flex-direction:column;gap:4px;min-width:0}
 .bookfanrow{display:grid;grid-template-columns:auto auto minmax(0,1fr);grid-template-areas:"dot sym val" "dot struct val";
-  column-gap:7px;align-items:center;text-align:left;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);
-  padding:5px 8px;cursor:pointer;color:var(--dim);transition:border-color var(--mo-quick) var(--mo-ease)}
+  column-gap:7px;row-gap:0;align-items:center;text-align:left;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);
+  padding:3px 7px;cursor:pointer;color:var(--dim);transition:border-color var(--mo-quick) var(--mo-ease)}
 .bookfanrow:hover,.bookfanrow.hot{border-color:var(--accent-2);background:var(--row-hover)}
 .bookfanrow i{grid-area:dot;width:9px;height:9px;border-radius:50%;flex:none}
-.bookfanrow b{grid-area:sym;color:var(--text);font-size:var(--f-sm);line-height:1.15}
-.bookfanrow span{grid-area:struct;font-size:var(--f-2xs);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bookfanrow em{grid-area:val;justify-self:end;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;line-height:1.25}
+.bookfanrow b{grid-area:sym;color:var(--text);font-size:var(--f-xs);line-height:1.1}
+.bookfanrow span{grid-area:struct;font-size:var(--f-2xs);color:var(--faint);line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bookfanrow em{grid-area:val;justify-self:end;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;line-height:1.15}
 .bookfanrow em b{font-size:var(--f-xs)} .bookfanrow em .pos{color:var(--profit)} .bookfanrow em .neg{color:var(--loss)}
 .bookfanrow em small{display:block;color:var(--faint);font-size:var(--f-2xs)} .bookfanrow em small.warn{color:var(--caution)}
 .card.fanhot{outline:1px solid var(--accent-2);outline-offset:1px}
 @media (max-width:1200px){.bookfanwrap{grid-template-columns:minmax(0,1fr)}.bookfanlegend{flex-direction:row;flex-wrap:wrap}.bookfanrow{flex:1 1 150px}}
-/* Decide Market lens */
-.inspectrail.five{grid-template-columns:repeat(5,minmax(0,1fr))}
-@media (max-width:1500px){.inspectrail.five{grid-template-columns:repeat(3,minmax(0,1fr))}}
-.marketlens .authmarkethero{margin-bottom:6px}
-.marketlens .decmarketcandles{width:100%;height:clamp(110px,13vh,150px);display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);margin-top:6px}
-.marketlens .authreceipt{margin-top:3px}
-.marketlens .authnews.compactnews a{padding:5px 7px}
-.marketlens .lenshd.sub{margin-top:8px}
+/* Decide market band — always visible in the right column, never behind a tab */
+.decmarketband{flex:none}
+.decmarketband .authmarkethero{margin-bottom:6px;display:flex;align-items:baseline;gap:9px}
+.decmarketband .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
+.decmarketband .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
+.decmarketband .decmarketcandles{width:100%;height:clamp(96px,11vh,140px);display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);margin-top:4px}
+.decmarketband .authreceipt{margin-top:3px}
+.decmarketband .marketctx{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 12px;margin-top:6px}
+.decmarketband .marketcol{min-width:0}
+.decmarketband .authnews.compactnews a{padding:4px 6px}
+.decmarketband .lenshd.sub{margin-top:6px}
+@media (max-width:1500px){.decmarketband .marketctx{grid-template-columns:minmax(0,1fr)}}
+@media (max-height:1079px){
+  .inspectwell{min-height:210px}
+  .decmarketband .decmarketcandles{height:clamp(80px,9vh,110px)}
+  .decmarketband .authnews.compactnews a small{display:none}
+  .bookfanrow{padding:3px 7px;column-gap:6px}
+  .bookfanrow em small{display:inline;margin-left:4px}
+  .bookmaprow .authriskviz.compactrisk{min-height:84px;max-height:104px}
+}
 /* position management actions */
 .authmanageacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
 </style>
@@ -4172,20 +4208,24 @@ function authLoadBookFan(){
   (function next(i){
     if(seq!==BOOK_FAN.seq||i>=queue.length)return;
     var p=queue[i];
-    window.DeskBackend.positionFutures({planId:p._plan.id,tradeId:p.id,limit:1}).then(function(response){
+    window.DeskBackend.positionFutures({planId:p._plan.id,tradeId:p.id,limit:6}).then(function(response){
       if(seq!==BOOK_FAN.seq)return;
       var rows=response&&response.checkpoints&&response.checkpoints.positions||[];
       var row=rows.find(function(r){return String(r&&r.key||'')===String(p.id);});
       var comparison=response&&response.checkpoints&&response.checkpoints.comparison||[];
       var cmp=Array.isArray(comparison)?comparison.find(function(r){return String(r&&r.key||'')===String(p.id);}):null;
       var frames=authBookFanBands(row);
-      BOOK_FAN.rows[p.id]={phase:frames.length?'ready':'unavailable',frames:frames,
+      /* the same display-path grammar the idea fan uses: real per-path P/L trajectories */
+      var display=row&&Array.isArray(row.displayPaths)?row.displayPaths:[];
+      var paths=display.map(function(dp){return (dp.steps||[]).map(function(step){var v=authNumber(step.pnlCents);return v==null?null:v/100;});}).filter(function(path){return path.length>1&&path.every(function(v){return v!=null;});});
+      var progress=display.length?(display[0].steps||[]).map(function(step,si){return Number(step.sessionProgress==null?si:step.sessionProgress);}):[];
+      BOOK_FAN.rows[p.id]={phase:frames.length?'ready':'unavailable',frames:frames,paths:paths,progress:progress,
         chance:cmp?authNumber(cmp.chanceOfGainPct):null,
         basis:response&&response.ensemble&&response.ensemble.basis||null,
         error:frames.length?null:'This position has no stored path checkpoints yet. Open its idea and run outcomes once.'};
     }).catch(function(error){
       if(seq!==BOOK_FAN.seq)return;
-      BOOK_FAN.rows[p.id]={phase:'unavailable',frames:[],chance:null,error:error&&error.message||'The stored fan could not be loaded.'};
+      BOOK_FAN.rows[p.id]={phase:'unavailable',frames:[],paths:[],progress:[],chance:null,error:error&&error.message||'The stored fan could not be loaded.'};
     }).then(function(){if(seq!==BOOK_FAN.seq)return;renderAuthoritativeBookFan();next(i+1);});
   })(0);
 }
@@ -4196,22 +4236,40 @@ function authBookFanLegendHTML(){
     return '<button type="button" class="bookfanrow'+(hot?' hot':'')+'" data-fan-pos="'+deskEsc(p.id)+'" aria-label="Open '+deskEsc(p.sym)+'"><i style="background:'+color+'"></i><b>'+deskEsc(p.sym)+'</b><span>'+deskEsc(p.struct)+'</span><em>'+value+'</em></button>';
   }).join('');
 }
+function bookFanPrompt(){return 'Hover a position to inspect its odds and tail · click to open it';}
+function bookFanReadoutText(id){
+  var p=byId[id],slot=BOOK_FAN.rows[id];
+  if(!p||!slot||slot.phase!=='ready'||!slot.frames.length)return bookFanPrompt();
+  var terminal=slot.frames[slot.frames.length-1],parts=[p.sym+' · '+p.struct];
+  parts.push('median '+signed(terminal.p50));
+  if(terminal.p10!=null&&terminal.p90!=null)parts.push('P10 '+signed(terminal.p10)+' → P90 '+signed(terminal.p90));
+  if(slot.chance!=null)parts.push(slot.chance.toFixed(0)+'% chance of gain');
+  parts.push(Math.round(terminal.x)+' sessions · its own stored fan');
+  return parts.join(' · ');
+}
 function renderAuthoritativeBookFan(){
   if(state.level!=='book')return;
   var legend=document.getElementById('authBookFanLegend');
   if(legend)legend.innerHTML=authBookFanLegendHTML();
+  var read=document.getElementById('bookFanReadout');
+  if(read)read.textContent=BOOK_FAN.hot?bookFanReadoutText(BOOK_FAN.hot):bookFanPrompt();
   drawAuthoritativeBookFan();
 }
+/* SAME artifact grammar as the idea fan (dense real paths + quantile bands + probabilities on the
+   chart) — colored by position identity instead of focus, because here the book is the focus. */
 function drawAuthoritativeBookFan(){
   var svg=document.getElementById('authBookFan');if(!svg)return;
-  var W=Math.max(320,Math.round(svg.clientWidth||560)),H=Math.max(170,Math.round(svg.clientHeight||210)),pad={l:52,r:46,t:12,b:22};
+  var W=Math.max(320,Math.round(svg.clientWidth||560)),H=Math.max(170,Math.round(svg.clientHeight||210)),pad={l:52,r:74,t:12,b:22};
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
   var ready=POS.map(function(p){return {p:p,slot:BOOK_FAN.rows[p.id]||{}};}).filter(function(e){return e.slot.phase==='ready'&&e.slot.frames.length>1;});
   var loading=POS.some(function(p){return (BOOK_FAN.rows[p.id]||{}).phase==='loading';});
   if(!ready.length){svg.innerHTML='<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" fill="var(--dim)" font-size="12">'+(loading?'Valuing each position across its own stored fan…':'No stored fans yet — open a position’s idea and run outcomes once.')+'</text>';return;}
-  var maxX=1,values=[0];
-  ready.forEach(function(e){e.slot.frames.forEach(function(f){maxX=Math.max(maxX,f.x);values.push(f.p50);if(f.p25!=null)values.push(f.p25);if(f.p75!=null)values.push(f.p75);});});
-  var lo=Math.min.apply(0,values),hi=Math.max.apply(0,values),span=hi-lo||1;lo-=span*.08;hi+=span*.08;
+  var hot=String(BOOK_FAN.hot||''),maxX=1,values=[0];
+  ready.forEach(function(e){
+    e.slot.frames.forEach(function(f){maxX=Math.max(maxX,f.x);['p10','p25','p50','p75','p90'].forEach(function(k){if(f[k]!=null)values.push(f[k]);});});
+    (e.slot.paths||[]).forEach(function(path){path.forEach(function(v){values.push(v);});});
+  });
+  var lo=Math.min.apply(0,values),hi=Math.max.apply(0,values),span=hi-lo||1;lo-=span*.06;hi+=span*.06;
   var X=function(x){return pad.l+(W-pad.l-pad.r)*x/maxX;},Y=function(v){return pad.t+(H-pad.t-pad.b)*(1-(v-lo)/(hi-lo));};
   var zero=Y(0),g='<line x1="'+pad.l+'" y1="'+zero.toFixed(1)+'" x2="'+(W-pad.r)+'" y2="'+zero.toFixed(1)+'" stroke="var(--line)" stroke-dasharray="3 4"/>'+
     '<text x="'+(pad.l-5)+'" y="'+(zero+3).toFixed(1)+'" text-anchor="end" fill="var(--faint)" font-size="9">$0</text>'+
@@ -4219,36 +4277,54 @@ function drawAuthoritativeBookFan(){
     '<text x="'+(pad.l-5)+'" y="'+(H-pad.b)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+deskEsc(money(lo))+'</text>'+
     '<text x="'+pad.l+'" y="'+(H-6)+'" fill="var(--faint)" font-size="9">now</text>'+
     '<text x="'+(W-pad.r)+'" y="'+(H-6)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+Math.round(maxX)+' sessions</text>';
-  var hot=String(BOOK_FAN.hot||'');
-  /* hot band under every line; median lines above; each line ends at its OWN horizon */
+  /* quantile bands: the hovered position gets its full P10–P90 + P25–P75 story (idea-fan grammar) */
   ready.forEach(function(e){
-    if(String(e.p.id)!==hot)return;var frames=e.slot.frames.filter(function(f){return f.p25!=null&&f.p75!=null;});if(frames.length<2)return;
-    var upper=frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f.p75).toFixed(1);}).join(' ');
-    var lower=frames.slice().reverse().map(function(f){return 'L'+X(f.x).toFixed(1)+' '+Y(f.p25).toFixed(1);}).join(' ');
-    g+='<path d="'+upper+lower+'Z" fill="'+positionColor(e.p.id)+'" fill-opacity=".12"/>';
+    if(String(e.p.id)!==hot)return;var color=positionColor(e.p.id);
+    [['p10','p90','.09'],['p25','p75','.16']].forEach(function(band){
+      var frames=e.slot.frames.filter(function(f){return f[band[0]]!=null&&f[band[1]]!=null;});if(frames.length<2)return;
+      var upper=frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f[band[1]]).toFixed(1);}).join(' ');
+      var lower=frames.slice().reverse().map(function(f){return 'L'+X(f.x).toFixed(1)+' '+Y(f[band[0]]).toFixed(1);}).join(' ');
+      g+='<path d="'+upper+lower+'Z" fill="'+color+'" fill-opacity="'+band[2]+'"/>';
+    });
+  });
+  /* dense real display paths per position — the fan breathes like the idea fan does */
+  ready.forEach(function(e){
+    var color=positionColor(e.p.id),isHot=String(e.p.id)===hot,dim=hot&&!isHot;
+    (e.slot.paths||[]).forEach(function(path){
+      var d=path.map(function(v,i){var x=e.slot.progress&&e.slot.progress[i]!=null?Number(e.slot.progress[i]):maxX*i/Math.max(1,path.length-1);return (i?'L':'M')+X(x).toFixed(1)+' '+Y(v).toFixed(1);}).join(' ');
+      g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width=".8" stroke-opacity="'+(dim?'.05':isHot?'.34':'.14')+'" style="pointer-events:none"/>';
+    });
   });
   var labels=[];
   ready.forEach(function(e){
     var color=positionColor(e.p.id),isHot=String(e.p.id)===hot,dim=hot&&!isHot;
     var d=e.slot.frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f.p50).toFixed(1);}).join(' ');
     var terminal=e.slot.frames[e.slot.frames.length-1];
-    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?3:1.8)+'" stroke-opacity="'+(dim?.3:.95)+'" style="pointer-events:none"/>'+
-       '<path d="'+d+'" fill="none" stroke="'+color+'" stroke-opacity="0" stroke-width="11" data-fan-pos="'+deskEsc(e.p.id)+'" style="cursor:pointer"><title>'+deskEsc(e.p.sym+' · '+e.p.struct+' · median '+signed(terminal.p50)+' at '+Math.round(terminal.x)+' sessions — its own stored fan')+'</title></path>';
-    labels.push({id:e.p.id,x:X(terminal.x),y:Y(terminal.p50),sym:e.p.sym,color:color,dim:dim});
+    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?2.6:1.7)+'" stroke-opacity="'+(dim?.3:.95)+'" style="pointer-events:none"/>'+
+       '<path d="'+d+'" fill="none" stroke="'+color+'" stroke-opacity="0" stroke-width="11" data-fan-pos="'+deskEsc(e.p.id)+'" style="cursor:pointer"><title>'+deskEsc(bookFanReadoutText(e.p.id))+'</title></path>';
+    if(terminal.p10!=null&&terminal.p90!=null){var ty1=Y(terminal.p90),ty2=Y(terminal.p10),tx=X(terminal.x);
+      g+='<line x1="'+tx.toFixed(1)+'" y1="'+ty1.toFixed(1)+'" x2="'+tx.toFixed(1)+'" y2="'+ty2.toFixed(1)+'" stroke="'+color+'" stroke-opacity="'+(dim?.15:.45)+'" stroke-width="1.4" style="pointer-events:none"/>';}
+    labels.push({id:e.p.id,x:X(terminal.x),y:Y(terminal.p50),sym:e.p.sym,color:color,dim:dim,
+      read:(slotChance(e.slot)!=null?slotChance(e.slot).toFixed(0)+'% · ':'')+signed(terminal.p50)});
   });
   labels.sort(function(a,b){return a.y-b.y;});
-  for(var i=1;i<labels.length;i++)if(labels[i].y-labels[i-1].y<11)labels[i].y=labels[i-1].y+11;
-  labels.forEach(function(lb){g+='<circle cx="'+lb.x.toFixed(1)+'" cy="'+lb.y.toFixed(1)+'" r="2.6" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.35:1)+'" style="pointer-events:none"/><text x="'+Math.min(W-4,lb.x+5).toFixed(1)+'" y="'+(lb.y+3).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>';});
+  for(var i=1;i<labels.length;i++)if(labels[i].y-labels[i-1].y<20)labels[i].y=labels[i-1].y+20;
+  labels.forEach(function(lb){
+    g+='<circle cx="'+lb.x.toFixed(1)+'" cy="'+lb.y.toFixed(1)+'" r="2.6" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.35:1)+'" style="pointer-events:none"/>'+
+      '<text x="'+Math.min(W-3,lb.x+5).toFixed(1)+'" y="'+(lb.y-2).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>'+
+      '<text x="'+Math.min(W-3,lb.x+5).toFixed(1)+'" y="'+(lb.y+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.read)+'</text>';
+  });
   svg.innerHTML=g;
 }
+function slotChance(slot){return slot&&slot.chance!=null&&Number.isFinite(Number(slot.chance))?Number(slot.chance):null;}
 function authRenderReadyPanels(empty){var d=BOOK_AUTH.data||{},pf=d.portfolio||{},s=pf.summary||{},h=pf.heat||{},g=pf.greeks||{},br=pf.bookRisk||{},shares=d.sharePositions||[];
   if(empty){
     document.getElementById('riskMain').innerHTML='';
     document.getElementById('bookrisk').innerHTML='';
   }else{
-    document.getElementById('riskMain').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Your book · possible futures</span><span class="hint">each line = that position’s own stored fan · never summed</span></div>'+
-      '<div class="bookfanwrap"><svg id="authBookFan" class="bookfan" aria-label="Median profit and loss of each open position across its own stored path fan"></svg><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div></div>'+
-      '<div class="lenshd sub"><span class="eyebrow">Risk / reward map</span><span class="hint">chance of profit × max loss</span></div><svg id="authBookRiskViz" class="authriskviz" aria-label="Open positions by chance of profit and maximum loss"></svg><div class="authmetricgrid">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div><div class="authpulsefoot"><span>Color shows current P/L</span><span>Choose a position to open it</span></div></div>';
+    document.getElementById('riskMain').innerHTML='<div class="authbookpanel bookfuturespanel"><div class="lenshd"><span class="eyebrow">Your book · possible futures</span><span class="hint">each line = that position’s own stored fan · never summed</span></div>'+
+      '<div class="bookfanwrap"><div class="bookfanstage"><svg id="authBookFan" class="bookfan" aria-label="Profit and loss paths of each open position across its own stored fan"></svg><div class="mcpathread" id="bookFanReadout">'+deskEsc(bookFanPrompt())+'</div></div><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div>'+
+      '<div class="bookmapfacet"><div class="lenshd sub"><span class="eyebrow">Risk / reward</span><span class="hint">odds × loss</span></div><svg id="authBookRiskViz" class="authriskviz compactrisk" aria-label="Open positions by chance of profit and maximum loss"></svg><div class="authmetricgrid onecol">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div></div></div></div>';
     document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Book Risk</span><span class="hint">Practice account only</span></div><div class="authmetricgrid">'+authMetric('Delta',authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2)+' sh')+authMetric('Gamma',authNumber(g.gammaShares)==null?'—':Number(g.gammaShares).toFixed(3)+' sh/$')+authMetric('Theta',authNumber(g.thetaPerDay)==null?'—':money(Number(g.thetaPerDay))+'/day')+authMetric('Vega',authNumber(g.vegaPerPoint)==null?'—':money(Number(g.vegaPerPoint))+'/pt')+'</div><div class="authreceipt" title="'+deskEsc(br.basis||g.note||'')+'">Greeks reflect the current open positions.</div><div class="lenshd authshareshead"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' line'+(shares.length===1?'':'s')+'</span></div>'+authShareInventoryHTML(shares)+'</div>';
   }
   authRenderMarketPanels();
@@ -6028,7 +6104,7 @@ function redrawDecide(){
   if(!_dragActive && document.getElementById('decMap')) drawDecMap();
   if(decide.mcOn) drawMCFan();
   syncCandidatePageSize();
-  if(decide.inspect==='market')drawDecMarketHist();
+  drawDecMarketHist();
 }
 /* Decide "how it reacts" → play the scenario through the HERO payoff (shares the bloom engine) */
 function decSurf(){ var c=activeCand(); return {
@@ -6079,7 +6155,7 @@ function renderDecide(){
   if(decide.mcOn) drawMCFan();
   drawFanIcons();
   wireDecide();
-  window.requestAnimationFrame(function(){ syncCandidatePageSize(); if(decide&&decide.inspect==='market')drawDecMarketHist(); });
+  window.requestAnimationFrame(function(){ syncCandidatePageSize(); drawDecMarketHist(); });
 }
 function renderAuthoritativeDeclarationRequired(){
   var bs=decide.backendState||{},plan=bs.plan||{},market=bs.market||{},identity=market.identity||{};
@@ -6170,7 +6246,7 @@ function strategyCatalogPanel(){var doc=decide.strategyCatalog||decide.backendSt
 /* --- LEFT column: ideas -> exact package -> supporting linked map. --- */
 /* The workbench lives once, directly after its ranked candidates. "Your build" means those
    controls have forked the selected engine package; tap any engine idea to load it back. */
-function ideaComposer(c){var summary=decide.sym+' · '+decide.goal+' · '+decide.view+' · '+decide.horizon,drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint">start broad · add only the detail you want</span></div><div class="composerintro"><b>'+deskEsc(summary)+'</b><br>Choose an underlying and purpose first. A view, horizon, structure, or exact legs can narrow the search without becoming mandatory.</div><div class="objrow">'+underlyingChip()+objChip('Goal',['Income','Hedge','Directional','Acquire','Exit'],decide.goal,'goal')+objChip('View',['Bearish','Neutral','Bullish'],decide.view,'view')+objChip('Horizon',['7 days','30 days','45 days'],decide.horizon,'horizon')+objChip('Risk',['Conservative','Balanced','Aggressive'],decide.riskMode,'riskMode')+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button>'+(c?'<button class="btn" data-dec="editlegs" style="margin-left:6px">Specify exact legs</button>':'')+'</div><div class="composeractions"><button class="btn pri" data-dec="intentdone">Show '+(decide.cands&&decide.cands.length||0)+' ranked ideas</button><button class="btn" data-dec="rescout">Refresh ideas</button></div>'+drawer+'</div>';}
+function ideaComposer(c){var summary=decide.sym+' · '+decide.goal+' · '+decide.view+' · '+decide.horizon,drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+objChip('Goal',['Income','Hedge','Directional','Acquire','Exit'],decide.goal,'goal')+objChip('View',['Bearish','Neutral','Bullish'],decide.view,'view')+objChip('Horizon',['7 days','30 days','45 days'],decide.horizon,'horizon')+objChip('Risk',['Conservative','Balanced','Aggressive'],decide.riskMode,'riskMode')+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button>'+(c?'<button class="btn" data-dec="editlegs" style="margin-left:6px">Specify exact legs</button>':'')+'</div><div class="composeractions"><button class="btn pri" data-dec="intentdone">Show '+(decide.cands&&decide.cands.length||0)+' ranked ideas</button><button class="btn" data-dec="rescout">Refresh ideas</button></div>'+drawer+'</div>';}
 function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
   var fits=decide.cands.filter(function(row){return deskBackendEnabled()?authoritativeEndorsable(row):coherence(row).verdict==='on'&&!candGated(row);}).length,
@@ -6286,7 +6362,7 @@ function centerCol(c){
 /* --- RIGHT column: UNDERSTAND only (coherence · mechanics · evidence · gap · book) — the tall
    scenario spectrum moved to the center, so this column breathes single-column, no scroll. --- */
 function rightCol(c){
-  return '<div class="deccol dcright">'+decUnderstand(c)+'</div>';
+  return '<div class="deccol dcright">'+decUnderstand(c)+decMarketBand(c)+'</div>';
 }
 /* the Decide "how it reacts" panel body — bars + shared playback foot (drives the hero) */
 function decScenInner(c){
@@ -6640,11 +6716,11 @@ function inspectPane(c){
   if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+tailBlock(c)+fitBudgetPanel(c)+'</div>';
   if(decide.inspect==='mechanics') return '<div class="inspectpane">'+greekInspector(c)+'</div>';
   if(decide.inspect==='book') return '<div class="inspectpane">'+bookImpactPanel(c)+'</div>';
-  if(decide.inspect==='market'&&c.authoritative) return '<div class="inspectpane">'+decMarketPane(c)+'</div>';
   return '<div class="inspectpane">'+evidencePanel(c)+'</div>';
 }
-/* ---- Market lens: the idea's underlying as a market object — candles, quote, chain slice, and
-   headlines from the SAME canonical owners Home uses (no second market-data path). ---- */
+/* ---- Market band: the idea's underlying as a market object — candles, quote, chain slice, and
+   headlines from the SAME canonical owners Home uses (no second market-data path). ALWAYS visible
+   in the right column; never gated behind a tab. ---- */
 function decMarketCtx(){
   var ctx=decide._marketCtx;
   if(ctx&&ctx.symbol===decide.sym)return ctx;
@@ -6661,28 +6737,26 @@ function decMarketCtx(){
   } else { ctx.phase='error'; ctx.error='Market context is unavailable.'; }
   return ctx;
 }
-function decMarketPane(c){
+function decMarketBand(c){
+  if(!c||!c.authoritative)return '';
   var bs=decide.backendState||{},market=bs.market||{},research=market.research||{},quote=market.quote||{},chain=market.chain||{};
   var ctx=decMarketCtx(),row=ctx.row||{},history=row.history||{},news=row.news||{};
   var last=authNumber(quote.last),prev=authNumber(quote.prevClose),pct=last!=null&&prev>0?(last/prev-1)*100:null;
   var candles=Array.isArray(history.candles)?history.candles:[],historyStatus=authExceptionStatus(history.freshness);
-  var head='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(decide.sym)+'</span><span class="amh-change '+(pct==null?'':pct>=0?'pos':'neg')+'">'+(pct==null?'—':(pct>=0?'+':'')+pct.toFixed(2)+'% vs close')+'</span><b class="amh-price">'+(last==null?(decide.spot?'$'+Number(decide.spot).toFixed(2):'—'):'$'+last.toFixed(2))+'</b></div>';
-  var facts='<div class="authmarketfacts compact">'+
-    '<div class="authmarketfact"><span>ATM IV</span><b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></div>'+
-    '<div class="authmarketfact"><span>Quote</span><b>'+deskEsc((quote.source||'—')+(quote.freshness?' · '+quote.freshness:''))+'</b></div>'+
-    '<div class="authmarketfact"><span>Expiration</span><b>'+deskEsc(market.expiration||'—')+'</b></div>'+
-    '<div class="authmarketfact"><span>Sessions</span><b>'+(candles.length||'—')+'</b></div></div>';
+  var head='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(decide.sym)+'</span><span class="amh-change '+(pct==null?'':pct>=0?'pos':'neg')+'">'+(pct==null?'—':(pct>=0?'+':'')+pct.toFixed(2)+'% vs close')+'</span>'+
+    '<span class="amh-facts"><span>IV <b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></span><span>'+deskEsc((quote.source||'quote')+(quote.freshness?' · '+quote.freshness:''))+'</span></span>'+
+    '<b class="amh-price">'+(last==null?(decide.spot?'$'+Number(decide.spot).toFixed(2):'—'):'$'+last.toFixed(2))+'</b></div>';
   var historyBlock=ctx.phase==='loading'?'<div class="backendnotice">Loading price history…</div>':
     ctx.phase==='error'?'<div class="backendnotice">'+deskEsc(ctx.error||'Price history unavailable.')+'</div>':
-    candles.length>1?'<svg class="decmarketcandles" id="decMarketHist" aria-label="'+deskEsc(decide.sym)+' candlesticks"></svg><div class="authreceipt">'+deskEsc(history.range||'3m')+' price action'+(historyStatus?' · '+deskEsc(historyStatus):'')+'</div>':
+    candles.length>1?'<svg class="decmarketcandles" id="decMarketHist" aria-label="'+deskEsc(decide.sym)+' candlesticks"></svg><div class="authreceipt">'+deskEsc(history.range||'3m')+' price action · '+candles.length+' sessions'+(historyStatus?' · '+deskEsc(historyStatus):'')+'</div>':
     '<div class="backendnotice">Price history is unavailable for '+deskEsc(decide.sym)+'. Quote, chain, and research remain ready.</div>';
-  var chainBlock='<div class="lenshd sub"><span class="eyebrow">Chain at the market</span><span class="hint">bid / ask</span></div>'+authHomeChainHTML({chain:chain},last||decide.spot||0);
+  var chainBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Chain at the market</span><span class="hint">bid / ask · exp '+deskEsc(market.expiration||'—')+'</span></div>'+authHomeChainHTML({chain:chain},last||decide.spot||0)+'</div>';
   var items=Array.isArray(news.items)?news.items.slice(0,3):[];
-  var newsBlock='<div class="lenshd sub"><span class="eyebrow">Headlines</span><span class="hint">'+items.length+' shown</span></div>'+
+  var newsBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Research &amp; news</span><span class="hint">'+items.length+' headline'+(items.length===1?'':'s')+'</span></div>'+
     (items.length?'<div class="authnews compactnews">'+items.map(function(n){var href=/^https?:\/\//.test(String(n.url||''))?String(n.url):'#';return '<a href="'+deskEsc(href)+'" target="_blank" rel="noopener"><b>'+deskEsc(n.headline||'Untitled headline')+'</b><small>'+deskEsc([n.source,n.classification?authHuman(n.classification):null].filter(Boolean).join(' · '))+'</small></a>';}).join('')+'</div>':
-     ctx.phase==='loading'?'<div class="backendnotice">Headlines are loading…</div>':'<div class="backendnotice">No current headlines for '+deskEsc(decide.sym)+'.</div>');
-  var regime=research.regime&&research.regime.headline?'<div class="mcreceipt"><span>'+deskEsc(research.regime.headline)+'</span></div>':'';
-  return '<div class="upanel marketlens">'+head+facts+historyBlock+chainBlock+newsBlock+regime+'</div>';
+     ctx.phase==='loading'?'<div class="backendnotice">Headlines are loading…</div>':'<div class="backendnotice">No current headlines for '+deskEsc(decide.sym)+'.</div>')+
+    (research.regime&&research.regime.headline?'<div class="mcreceipt"><span>'+deskEsc(research.regime.headline)+'</span></div>':'')+'</div>';
+  return '<div class="upanel marketlens decmarketband"><div class="lenshd"><span class="eyebrow">Market &amp; research</span><span class="hint">always in view · same owners as Home</span></div>'+head+historyBlock+'<div class="marketctx">'+chainBlock+newsBlock+'</div></div>';
 }
 function drawDecMarketHist(){
   var svg=document.getElementById('decMarketHist');if(!svg||!decide)return;
@@ -6694,8 +6768,7 @@ function decUnderstand(c){
     greekLabel=af&&af.greeks&&af.greeks.theta!=null?'Θ '+signed(af.greeks.theta):c.authoritative?'checkpoint':'Θ '+signed(c.theta||0),
     bookLabel=c.authoritative?(source&&source.comparison?source.comparison.length+' compared':'loading'):(sr.diversifies?'diversifies':'adds '+sr.sector),
     tabs=[['paths','path','Paths',(c.pop==null?'—':c.pop+'%')+' profit'],['fit','check','Fit',co.word],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
-  if(c.authoritative){var mq=decide.backendState&&decide.backendState.market&&decide.backendState.market.quote,mLast=authNumber(mq&&mq.last);
-    tabs.push(['market','eye','Market',mLast==null?decide.sym:'$'+mLast.toFixed(2)]);}
+  if(decide.inspect==='market')decide.inspect='paths';  /* market is a standing band now, not a lens */
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
