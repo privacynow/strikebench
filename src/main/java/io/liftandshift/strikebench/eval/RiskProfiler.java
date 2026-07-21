@@ -31,6 +31,7 @@ public final class RiskProfiler {
         RiskProfile.TerminalPayoff terminalPayoff;
         long worstPnl = 0;
         boolean have = false;
+        boolean exactLossBounded = false;
         long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
                 .filter(l -> l.expiration() != null && !l.expiration().isBlank())
                 .map(LegView::expiration).distinct().count();
@@ -42,6 +43,7 @@ public final class RiskProfiler {
                     "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
         } else try {
             PayoffCurve pc = payoffCurve(c, ctx);
+            exactLossBounded = !pc.maxLossUnbounded();
             BigDecimal spot = cents(ctx.underlyingCents());
             for (double m : MOVES) {
                 BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
@@ -65,7 +67,13 @@ public final class RiskProfiler {
             terminalPayoff = unavailableTerminalPayoff(
                     "The exact terminal payoff could not be produced from the captured candidate.");
         }
-        long tailLoss = have ? Math.max(0, -worstPnl) : maxLoss;
+        // The visible +/-20% scenarios are checkpoints, not the complete tail envelope. For an
+        // exact bounded curve the tail receipt is the pre-known maximum loss even when a distant
+        // wing lies outside that scenario grid. Undefined-risk structures retain the modeled
+        // stress loss. This keeps the headline risk from understating the same max-loss receipt.
+        long tailLoss = exactLossBounded
+                ? maxLoss
+                : have ? Math.max(0, -worstPnl) : maxLoss;
         // The HISTORICAL-VOL SCENARIO lane: the same EV integral at REALIZED volatility (zero
         // drift). When implied >> realized, market-implied EV of short premium is negative while
         // this scenario EV is positive — that gap IS the volatility risk premium, and the two

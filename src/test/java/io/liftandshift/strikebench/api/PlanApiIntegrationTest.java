@@ -653,6 +653,16 @@ class PlanApiIntegrationTest {
                 .isEqualTo(0.0833);
         assertThat(fan.at("/preview/canvas/positions/0/days")).hasSize(2);
         assertThat(fan.at("/preview/canvas/positions/0/steps")).hasSize(13);
+        assertThat(fan.at("/preview/canvas/positions/0/stepBands")).hasSize(13);
+        assertThat(fan.at("/preview/canvas/displayPathRule").asText())
+                .isEqualTo("TERMINAL_QUANTILES");
+        assertThat(fan.at("/preview/canvas/displayPathCount").asInt()).isGreaterThan(1);
+        assertThat(fan.at("/preview/sampleSourcePathIndices"))
+                .isEqualTo(fan.at("/preview/canvas/displayPathSourceIndices"));
+        assertThat(fan.at("/preview/sampleFocusIndex").asInt()).isBetween(0,
+                fan.at("/preview/sampleSourcePathIndices").size() - 1);
+        assertThat(fan.at("/preview/canvas/positions/0/displayPaths"))
+                .hasSize(fan.at("/preview/canvas/displayPathCount").asInt());
         assertThat(fan.at("/preview/canvas/positions/0/legs/0/days")).hasSize(2);
         assertThat(fan.at("/preview/canvas/positions/0/legs/0/steps")).hasSize(13);
         assertThat(fan.at("/preview/canvas/positions/0/steps/1").has("focusValueCents")).isTrue();
@@ -1487,6 +1497,16 @@ class PlanApiIntegrationTest {
                 .contains("PROPOSED:" + candidate.get("id").asText());
         assertThat(animation.at("/checkpoints/positions/0/days/0").has("focusValueCents")).isTrue();
         assertThat(animation.at("/checkpoints/positions/0/steps/0").has("focusValueCents")).isTrue();
+        assertThat(animation.at("/checkpoints/positions/0/stepBands"))
+                .hasSize(animation.at("/paths/paths/0/prices").size());
+        assertThat(animation.at("/checkpoints/positions/0/displayPaths")).hasSize(6);
+        assertThat(animation.at("/checkpoints/displayPathRule").asText())
+                .isEqualTo("NEAREST_AUTHORED_WAYPOINTS");
+        for (int pathNo = 0; pathNo < 6; pathNo++) {
+            assertThat(animation.at("/checkpoints/positions/0/displayPaths/" + pathNo
+                            + "/sourcePathIndex").asInt())
+                    .isEqualTo(animation.at("/paths/paths/" + pathNo + "/sourcePathIndex").asInt());
+        }
         assertThat(animation.at("/checkpoints/positions/0/legs/0/days/0").has("state")).isTrue();
         assertThat(animation.at("/checkpoints/positions/0/legs/0/steps/0").has("state")).isTrue();
         assertThat(animation.at("/checkpoints/modelReceipt/selectedCandidateId").asText())
@@ -1494,6 +1514,21 @@ class PlanApiIntegrationTest {
         assertThat(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText()).hasSize(64);
         assertThat(animation.at("/receipt/valuationFingerprint").asText())
                 .isEqualTo(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText());
+        assertThat(animation.at("/receipt/conditioningPathWaypoints")).hasSize(1);
+        assertThat(animation.at("/receipt/conditioningPathWaypoints/0/sessionProgress").asDouble())
+                .isEqualTo(animation.at("/receipt/conditioningAssumptions/waypoints/0/dayIndex").asDouble());
+        assertThat(animation.at("/paths/receipt/waypointCount").asInt()).isEqualTo(1);
+
+        HttpResponse<String> ambiguousConditioning = post(
+                "/api/plans/" + id + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","limit":6,
+                 "waypoints":[{"dayIndex":10,"priceRatio":0.97,"tolerance":0.03}],
+                 "pathWaypoints":[{"sessionProgress":5.5,"priceRatio":0.98,"tolerance":0.03}]}
+                """.formatted(guidedEnsembleId));
+        assertThat(ambiguousConditioning.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(ambiguousConditioning.body()).path("detail").asText())
+                .contains("waypoints and pathWaypoints")
+                .contains("alternative conditioning sources");
 
         JsonNode changedAnimation = json(post("/api/plans/" + id + "/outcomes/ensemble/paths",
                 animationRequest.replace("\"startIv\":0.55", "\"startIv\":0.65")));

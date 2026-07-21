@@ -270,6 +270,56 @@ class PlanStrategyServiceTest {
         assertThat(strategies.selectedCandidate(null, plan.id())).isNull();
     }
 
+    @Test void priorRecommendationSemanticsAreNotReusedAndFreshRunReplacesTheField() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("strategy-economic-version", "AAPL", "INCOME", null, null,
+                        "neutral", 45, null, "conservative", null, null, null, null));
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        result.put("symbol", "AAPL");
+        result.put("thesis", "neutral");
+        result.put("horizon", "45-session");
+        result.put("riskMode", "conservative");
+        result.put("intent", "INCOME");
+        result.putArray("candidates").add(Json.parse("""
+                {"strategy":"CREDIT_PUT_SPREAD","displayName":"Bull put spread",
+                 "structureGroup":"credit_vertical","label":"SELL 250P / BUY 245P","qty":1,
+                 "entryNetPremiumCents":12000,"maxProfitCents":12000,"maxLossCents":38000,
+                 "evaluation":{"available":true,"decisionScore":62.0,"viable":true,
+                   "capital":{},"volatility":{},"risk":{},"evidence":{},"management":{},"score":{},
+                   "assessment":{},"stance":{},"participation":{},"impliedStance":{},
+                   "ivContext":{},"coverage":{},"explanation":{}},
+                 "legs":[
+                   {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-28",
+                    "ratio":1,"multiplier":100,"entryPrice":"3.20","positionEffect":"OPEN"},
+                   {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-28",
+                    "ratio":1,"multiplier":100,"entryPrice":"2.00","positionEffect":"OPEN"}
+                 ]}
+                """));
+
+        PlanStrategyService.SavedRun prior = strategies.saveCompetition(null, plan,
+                Json.parse("{\"filters\":{\"minPop\":0.55}}"), result);
+        String priorCandidateId = prior.result().at("/candidates/0/id").asText();
+        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-5' WHERE id=?", prior.runId());
+
+        assertThat(PlanStrategyService.ENGINE_VERSION).isEqualTo("plan-strategy-6");
+        assertThat(strategies.latestCompetition(null, plan.id())).isNull();
+
+        ObjectNode refreshedResult = result.deepCopy();
+        refreshedResult.put("economicMessage", "Re-evaluated with the current economics and structure quality rules");
+        PlanStrategyService.SavedRun refreshed = strategies.saveCompetition(null, plan,
+                Json.parse("{\"filters\":{\"minPop\":0.60}}"), refreshedResult);
+
+        assertThat(strategies.latestCompetition(null, plan.id()).runId()).isEqualTo(refreshed.runId());
+        assertThat(refreshed.runId()).isNotEqualTo(prior.runId());
+        assertThat(db.query("SELECT engine_version FROM plan_strategy_run WHERE id=?",
+                r -> r.str("engine_version"), refreshed.runId()))
+                .containsExactly(PlanStrategyService.ENGINE_VERSION);
+        assertThat(db.query("SELECT state FROM plan_strategy_run WHERE id=?",
+                r -> r.str("state"), prior.runId())).containsExactly("STALE");
+        assertThat(db.query("SELECT state FROM plan_candidate WHERE id=?",
+                r -> r.str("state"), priorCandidateId)).containsExactly("STALE");
+    }
+
     @Test void obsoleteOrPartialEvaluationPayloadsAreRejectedInsteadOfAdapted() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-current-receipt", "AAPL", "DIRECTIONAL", null, null,

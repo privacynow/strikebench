@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
@@ -35,12 +36,19 @@ public final class SnapshotService {
     private final UniverseService universe;
     private final Db db;
     private final Clock clock;
+    private final MarketDataMaintenanceGate maintenance;
 
     public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock) {
+        this(market, universe, db, clock, new MarketDataMaintenanceGate());
+    }
+
+    public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock,
+                           MarketDataMaintenanceGate maintenance) {
         this.market = market;
         this.universe = universe;
         this.db = db;
         this.clock = clock;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
     }
 
     /** Outcome of one snapshot run — surfaced by the admin endpoint and logged by the scheduler. */
@@ -101,7 +109,7 @@ public final class SnapshotService {
         // date merely because Quote.mark() can display it as a fallback.
         final Quote observedQuote = quote != null && quote.last() != null
                 && snapshotEligible(quote.evidence()) ? quote : null;
-        return db.tx(c -> {
+        return maintenance.write(() -> db.tx(c -> {
             int u = 0, o = 0;
             if (observedQuote != null) {
                 BigDecimal close = observedQuote.last() != null ? observedQuote.last() : observedQuote.mark();
@@ -149,7 +157,7 @@ public final class SnapshotService {
                 }
             }
             return new int[]{u, o};
-        });
+        }));
     }
 
     /** Only attributable, current-enough observed inputs may enter the canonical observed tables. */

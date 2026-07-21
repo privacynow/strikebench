@@ -142,17 +142,34 @@ public final class AppConfig {
     /** Polygon/Massive plans vary. Zero means do not invent a cap; the user's plan remains authoritative. */
     public int polygonDailyRequestLimit() { return getInt("POLYGON_DAILY_REQUEST_LIMIT", 0); }
 
-    // ---- Yahoo Finance keyless equity candles (PERSONAL / LOCAL-CLONE ONLY) ----
-    // Yahoo's chart API is a public JSON endpoint, but its terms restrict automated/commercial reuse.
-    // OFF by default so strikebench.com never enables it implicitly; a self-hosting user opts in and
-    // owns the source terms. Covers EQUITY/ETF/index OHLCV only — NOT options.
-    public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", false); }
-    /** Automated Yahoo access requires both connector enablement and explicit permission confirmation. */
+    // ---- Yahoo Finance keyless equity candles ----
+    // The product owner has authorized this source for the persistent observed-history lane. It is
+    // enabled in Observed by default until explicitly disabled, but remains absent from Fixtures-only
+    // runs. Covers EQUITY/ETF/index OHLCV only — NOT options — and never changes its provenance label.
+    public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", !fixturesOnly()); }
+    /**
+     * Retains an explicit revocation/permission control. The product-owner grant is the built-in
+     * default; either YAHOO_ENABLED=false or YAHOO_AUTOMATION_PERMISSION_CONFIRMED=false stops access.
+     */
     public boolean yahooAutomationPermissionConfirmed() {
-        return getBool("YAHOO_AUTOMATION_PERMISSION_CONFIRMED", false);
+        return getBool("YAHOO_AUTOMATION_PERMISSION_CONFIRMED", yahooEnabled());
     }
-    public int yahooDailyRequestLimit() { return getInt("YAHOO_DAILY_REQUEST_LIMIT", 100); }
+    /** Durable process-independent budget; enough for the curated universe once, not repeated sweeps. */
+    public int yahooDailyRequestLimit() {
+        return Math.max(1, Math.min(500, getInt("YAHOO_DAILY_REQUEST_LIMIT", 160)));
+    }
     public String yahooBaseUrl() { return get("YAHOO_BASE_URL", "https://query1.finance.yahoo.com"); }
+    /** Yahoo is deliberately serial and slow: history is daily, so burst latency has no product value. */
+    public int yahooMaxConcurrency() { return Math.max(1, Math.min(2, getInt("YAHOO_MAX_CONCURRENCY", 1))); }
+    public long yahooMinSpacingMs() { return Math.max(500L, getLong("YAHOO_MIN_SPACING_MS", 1_500L)); }
+    public int yahooCooldownMinutes() { return Math.max(5, getInt("YAHOO_COOLDOWN_MINUTES", 30)); }
+    /** Once-per-completed-session durable enrichment of the canonical observed universe. */
+    public boolean yahooHistorySyncEnabled() {
+        return getBool("YAHOO_HISTORY_SYNC_ENABLED", yahooEnabled() && yahooAutomationPermissionConfirmed());
+    }
+    public int yahooHistorySyncYears() {
+        return Math.max(1, Math.min(20, getInt("YAHOO_HISTORY_SYNC_YEARS", 2)));
+    }
     /** Stooq currently serves an anti-bot interstitial to this client; keep it opt-in, never a noisy default. */
     public boolean stooqEnabled() { return getBool("STOOQ_ENABLED", false); }
     /** Keyless per-symbol news headlines via the Google News RSS search feed. Blank disables it. */
@@ -250,7 +267,7 @@ public final class AppConfig {
     public java.util.List<String> autoUniverse() {
         String raw = fixturesOnly()
                 ? get("AUTO_UNIVERSE", "AAPL,SPY,QQQ,TSLA")
-                : get("AUTO_UNIVERSE", "SPY,QQQ,IWM,AAPL,MSFT,NVDA,TSLA,AMZN,META,GOOGL");
+                : get("AUTO_UNIVERSE", "SPY,QQQ,IWM,AAPL,MSFT,NVDA,TSLA,AMZN,META,GOOGL,SMH,MU,STX,WDC,SNDK");
         return java.util.Arrays.stream(raw.split(","))
                 .map(s -> s.trim().toUpperCase(Locale.ROOT))
                 .filter(s -> !s.isBlank())

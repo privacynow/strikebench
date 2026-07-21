@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.util.EventBus;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Reusable politeness gate for external data providers — the generalization of the discipline
@@ -12,8 +13,8 @@ import java.util.concurrent.Semaphore;
  * <ul>
  *   <li><b>Concurrency cap</b>: at most N in-flight requests per provider.</li>
  *   <li><b>Spacing</b>: a minimum gap between request starts (burst smoothing).</li>
- *   <li><b>Circuit breaker</b>: a rate-limit response (HTTP 429, or Yahoo's 999) trips a
- *       provider-wide cooldown — no request of any kind until it clears. Trips are announced
+ *   <li><b>Circuit breaker</b>: a denial/rate-limit response (HTTP 403/429, or Yahoo's 999), or
+ *       three consecutive ordinary failures, trips a provider-wide cooldown. Trips are announced
  *       on the event bus as {@code provider.cooldown} so the UI can show its calm status chip.</li>
  *   <li><b>Prefetch budget</b>: speculative work is welcome only when the provider is healthy
  *       AND has a free permit — a guess must never queue against real demand.</li>
@@ -28,6 +29,7 @@ public final class ProviderPoliteness {
     private volatile long cooldownUntilMs = 0;
     private long nextAllowedMs = 0; // guarded by `this`
     private EventBus events;        // optional
+    private final AtomicInteger consecutiveFailures = new AtomicInteger();
 
     public ProviderPoliteness(String provider, int maxConcurrency, long spacingMs, long cooldownMs) {
         this.provider = provider;
@@ -41,6 +43,16 @@ public final class ProviderPoliteness {
     public boolean coolingDown() { return System.currentTimeMillis() < cooldownUntilMs; }
 
     public long cooldownUntilMs() { return cooldownUntilMs; }
+
+    /**
+     * Restores an active provider breaker after an ordinary process restart. Expired values are
+     * deliberately ignored, and a shorter stored value can never shorten a breaker already tripped
+     * in this process.
+     */
+    public void seedCooldown(long untilMs) {
+        long now = System.currentTimeMillis();
+        if (untilMs > now) cooldownUntilMs = Math.max(cooldownUntilMs, untilMs);
+    }
 
     /** Healthy AND a permit free — the only state in which speculative (prefetch) work may run. */
     public boolean prefetchBudget() { return !coolingDown() && concurrency.availablePermits() > 0; }
@@ -58,10 +70,13 @@ public final class ProviderPoliteness {
             acquired = true;
             pace();
             if (coolingDown()) return coolingDownFallback; // tripped while we waited
-            return request.call();
+            T value = request.call();
+            consecutiveFailures.set(0);
+            return value;
         } catch (Exception e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
-            if (msg.contains("HTTP 429") || msg.contains("HTTP 999")) trip();
+            boolean denied = msg.contains("HTTP 403") || msg.contains("HTTP 429") || msg.contains("HTTP 999");
+            if (denied || consecutiveFailures.incrementAndGet() >= 3) trip();
             if (e instanceof RuntimeException re) throw re;
             throw new RuntimeException(e);
         } finally {

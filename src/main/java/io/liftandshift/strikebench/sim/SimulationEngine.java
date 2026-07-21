@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.sim;
 
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
@@ -30,14 +31,21 @@ public final class SimulationEngine {
     private final Db db;
     private final Clock clock;
     private final PathEnsembleService ensembles;
+    private final MarketDataMaintenanceGate maintenance;
 
     public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
                             PathEnsembleService ensembles) {
+        this(market, datasets, db, clock, ensembles, new MarketDataMaintenanceGate());
+    }
+
+    public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
+                            PathEnsembleService ensembles, MarketDataMaintenanceGate maintenance) {
         this.market = market;
         this.datasets = datasets;
         this.db = db;
         this.clock = clock;
         this.ensembles = ensembles;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
     }
 
     public record DatasetRun(String datasetId, String name, String symbol, int bars, long seed,
@@ -69,9 +77,6 @@ public final class SimulationEngine {
         int days = spec.totalSteps() / spd;
 
         String name = symbol + " · " + pretty(spec.shape()) + " · " + days + "d · seed " + spec.seed();
-        String id = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),
-                Map.of("pathModelVersion", generated.modelVersion(), "scenario", spec), userId);
-
         // FRAMING: the bars are written as the RECENT PAST, ending today — "imagine this had just
         // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
         // backtests use historical windows), so activating a saved run changed only the banner.
@@ -80,14 +85,19 @@ public final class SimulationEngine {
                 .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
                 .orElseGet(() -> LocalDate.now(clock));
         List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(laneToday, days - 1));
-        db.tx(c -> {
-            for (Candle b : bars) {
-                Db.execOn(c, "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed, dataset_id) "
-                        + "VALUES (?,?,?,?,?,?,?,?,0,?) ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
-                        + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close",
-                        symbol, b.date(), b.open(), b.high(), b.low(), b.close(), b.volume(), "synthetic", id);
-            }
-            return null;
+        String id = maintenance.write(() -> {
+            String created = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),
+                    Map.of("pathModelVersion", generated.modelVersion(), "scenario", spec), userId);
+            db.tx(c -> {
+                for (Candle b : bars) {
+                    Db.execOn(c, "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed, dataset_id) "
+                                    + "VALUES (?,?,?,?,?,?,?,?,0,?) ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
+                                    + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close",
+                            symbol, b.date(), b.open(), b.high(), b.low(), b.close(), b.volume(), "synthetic", created);
+                }
+                return null;
+            });
+            return created;
         });
 
         List<String> notes = new ArrayList<>();
@@ -101,6 +111,14 @@ public final class SimulationEngine {
     }
 
     public record PreviewBand(int day, double p10, double p50, double p90) {}
+
+    /**
+     * Intraday/full-step distribution band for rendering the stored fan without reducing a
+     * one-session ensemble to a two-point triangle.  Session progress is measured in trading
+     * sessions from the anchor (for example 0.5 is halfway through the first session).
+     */
+    public record PreviewStepBand(int step, double sessionProgress,
+                                  double p10, double p25, double p50, double p75, double p90) {}
 
     public record DecisionLevel(String key, double price) {}
 
@@ -132,10 +150,23 @@ public final class SimulationEngine {
                                   String anchorLimitation, String modelVersion, ScenarioSpec spec) {}
 
     public record Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
-                          List<PreviewBand> bands, List<List<Double>> samples,
+                          List<PreviewBand> bands, List<PreviewStepBand> stepBands,
+                          List<List<Double>> samples,
+                          List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
                           double endP10, double endP50, double endP90,
                           DecisionMap decisionMap, MarketImpliedRange marketImplied,
-                          EnsembleReceipt receipt, List<String> notes) {}
+                          EnsembleReceipt receipt, List<String> notes) {
+        /** Source-compatible constructor for stored fixtures and callers that predate step bands. */
+        public Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
+                       List<PreviewBand> bands, List<List<Double>> samples,
+                       double endP10, double endP50, double endP90,
+                       DecisionMap decisionMap, MarketImpliedRange marketImplied,
+                       EnsembleReceipt receipt, List<String> notes) {
+            this(symbol, spot, paths, horizonDays, pathModelVersion, bands, List.of(), samples,
+                    List.of(), samples == null || samples.isEmpty() ? -1 : samples.size() / 2,
+                    endP10, endP50, endP90, decisionMap, marketImplied, receipt, notes);
+        }
+    }
 
     public record PreviewRun(PathEnsembleService.Ensemble ensemble, Preview preview) {}
 
@@ -240,12 +271,36 @@ public final class SimulationEngine {
             java.util.Arrays.sort(sorted);
             bands.add(new PreviewBand(day, round2(q(sorted, 0.10)), round2(q(sorted, 0.50)), round2(q(sorted, 0.90))));
         }
-        // Sample futures render at FULL step resolution: daily points drawn as line segments
-        // read as connect-the-dots, not a market. Intraday steps make the squiggle honest.
+        int[] displaySteps = PathEnsembleService.displayStepIndices(spec.totalSteps());
+        List<PreviewStepBand> stepBands = new ArrayList<>(displaySteps.length);
+        for (int step : displaySteps) {
+            for (int p = 0; p < paths.length; p++) tmp[p] = paths[p][step];
+            double[] sorted = tmp.clone();
+            java.util.Arrays.sort(sorted);
+            stepBands.add(new PreviewStepBand(step, (double) step / spd,
+                    round2(q(sorted, 0.10)), round2(q(sorted, 0.25)),
+                    round2(q(sorted, 0.50)), round2(q(sorted, 0.75)),
+                    round2(q(sorted, 0.90))));
+        }
+        // Representative futures retain the stored rows and full-matrix terminal ranking. Only
+        // their wire representation is deterministically sampled at the same source steps as the
+        // quantile bands, keeping the response bounded without creating browser-side prices.
         List<List<Double>> samples = new ArrayList<>();
-        for (int p = 0; p < Math.min(3, paths.length); p++) {
+        Integer[] terminalOrder = new Integer[paths.length];
+        for (int p = 0; p < paths.length; p++) terminalOrder[p] = p;
+        java.util.Arrays.sort(terminalOrder, java.util.Comparator
+                .comparingDouble((Integer p) -> paths[p][paths[p].length - 1])
+                .thenComparingInt(Integer::intValue));
+        int sampleCount = Math.min(48, paths.length);
+        int sampleFocusIndex = sampleCount == 0 ? -1 : sampleCount / 2;
+        List<Integer> sampleSourcePathIndices = new ArrayList<>(sampleCount);
+        for (int slot = 0; slot < sampleCount; slot++) {
+            int at = sampleCount == 1 || slot == sampleFocusIndex ? (paths.length - 1) / 2
+                    : (int) Math.round((double) slot * (paths.length - 1) / (sampleCount - 1));
+            int p = terminalOrder[at];
+            sampleSourcePathIndices.add(p);
             List<Double> sp = new ArrayList<>();
-            for (int i = 0; i <= spec.totalSteps(); i++) sp.add(round2(paths[p][i]));
+            for (int step : displaySteps) sp.add(round2(paths[p][step]));
             samples.add(sp);
         }
         PreviewBand end = bands.getLast();
@@ -253,10 +308,17 @@ public final class SimulationEngine {
                 ensemble.spot(), spec.horizonDays(), marketVol, riskFreeRate);
         List<String> notes = new ArrayList<>();
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
+        if (displaySteps.length < spec.totalSteps() + 1) {
+            notes.add("The display carries " + displaySteps.length + " deterministic checkpoints from "
+                    + (spec.totalSteps() + 1) + " stored points per path. Full stored paths still own "
+                    + "the ensemble statistics and fingerprint.");
+        }
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
         return new Preview(receipt.symbol(), round2(ensemble.spot()), paths.length, days, ensemble.modelVersion(),
-                bands, samples, end.p10(), end.p50(), end.p90(), decisionMap, marketRange, receipt, notes);
+                bands, stepBands, samples, List.copyOf(sampleSourcePathIndices), sampleFocusIndex,
+                end.p10(), end.p50(), end.p90(), decisionMap, marketRange,
+                receipt, notes);
     }
 
     private static io.liftandshift.strikebench.market.MarketLane lane(String world) {

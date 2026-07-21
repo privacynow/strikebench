@@ -42,6 +42,10 @@
   // Book and Position are independent read surfaces. Their requests must never supersede a
   // New Idea calculation (or one another), so neither lifecycle borrows state.requestSeq.
   var bookRequestSeq = 0;
+  // Home market context has a second, finer-grained owner. A user can retarget its symbol or
+  // sector while the initial ambient hydration (or an earlier focus) is still in flight, without
+  // starting a new Book read. Only the newest context generation may publish into that Book.
+  var bookContextRequestSeq = 0;
   var bookContextLoads = {};
   var recentCommittedTradeId = null;
   var positionRequestSeq = 0;
@@ -138,16 +142,17 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  function quoteMark(quote) {
-    var bid = number(quote && quote.bid), ask = number(quote && quote.ask), last = number(quote && quote.last);
-    var previousClose = number(quote && quote.prevClose);
-    if (bid != null && ask != null && bid > 0 && ask > 0 && ask >= bid) {
-      return { value: (bid + ask) / 2, basis: 'MID' };
+  function researchMark(research) {
+    var value = number(research && research.displayPrice);
+    if (value != null && value > 0) {
+      return {
+        value: value,
+        basis: research.priceIsPreviousClose === true
+          ? 'PREVIOUS_CLOSE' : String(research.markBasis || 'DISPLAY_PRICE').toUpperCase()
+      };
     }
-    if (last != null && last > 0) return { value: last, basis: 'LAST' };
-    if (previousClose != null && previousClose > 0) {
-      return { value: previousClose, basis: 'PREVIOUS_CLOSE' };
-    }
+    // Research owns the public display mark and its fallback basis. Rebuilding a midpoint here
+    // would silently create a second price authority when the canonical mark is unavailable.
     return { value: null, basis: 'UNAVAILABLE' };
   }
 
@@ -450,8 +455,8 @@
       api.getFresh('/api/config'),
       api.getFresh('/api/status'),
       api.getFresh('/api/world'),
-      api.get('/api/research/' + encoded),
-      api.get('/api/research/' + encoded + '/expirations'),
+      api.getFresh('/api/research/' + encoded),
+      api.getFresh('/api/research/' + encoded + '/expirations'),
       optionalFresh('/api/account')
     ]);
     if (seq !== state.requestSeq) return null;
@@ -469,13 +474,13 @@
       throw new Error(symbol + ' has no research-owned quote in the active StrikeBench market.');
     }
     assertEvidenceLane(quote.evidence, identity.marketLane, 'Quote');
-    var mark = quoteMark(quote), spot = mark.value;
-    if (!(spot > 0)) throw new Error(symbol + ' has no usable market-owned mark.');
+    var mark = researchMark(research), spot = mark.value;
+    if (!(spot > 0)) throw new Error(symbol + ' has no canonical market-owned display price.');
     var expirationAsOf = base[4] && base[4].asOfDate || quoteAsOfDate(quote);
     var expiration = chooseExpiration(base[4] && base[4].expirations, targetDays, expirationAsOf);
     if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
     notify('loading', { operation: 'option-chain', symbol: symbol, expiration: expiration });
-    var chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
+    var chain = await api.getFresh('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
     if (seq !== state.requestSeq) return null;
     var optionCount = (chain && Array.isArray(chain.calls) ? chain.calls.length : 0)
       + (chain && Array.isArray(chain.puts) ? chain.puts.length : 0);
@@ -577,15 +582,23 @@
     return (hash >>> 0).toString(36);
   }
 
-  function sessionRequestId(identity) {
+  function sessionRequestKey(identity) {
     var material = JSON.stringify(identity);
-    var key = 'strikebench.desk.planRequest.v2.' + stringHash(material);
-    var existing = null;
-    try { existing = window.sessionStorage.getItem(key); } catch (ignored) { /* storage can be disabled */ }
-    if (existing) return existing;
+    return 'strikebench.desk.planRequest.v2.' + stringHash(material);
+  }
+
+  function newSessionRequestId() {
     var suffix = window.crypto && window.crypto.randomUUID
       ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-    var value = 'desk-' + suffix;
+    return 'desk-' + suffix;
+  }
+
+  function sessionRequestId(identity, rotate) {
+    var key = sessionRequestKey(identity);
+    var existing = null;
+    try { existing = window.sessionStorage.getItem(key); } catch (ignored) { /* storage can be disabled */ }
+    if (existing && !rotate) return existing;
+    var value = newSessionRequestId();
     try { window.sessionStorage.setItem(key, value); } catch (ignored2) { /* idempotency still holds in-memory */ }
     return value;
   }
@@ -622,6 +635,12 @@
       && sameNullable(identity.assignmentPreference, ctx.assignmentPreference);
   }
 
+  function mutableWorkingPlan(plan) {
+    var status = String(plan && plan.status || '').toUpperCase();
+    return !!plan && plan.open !== false && plan.assumptionsEditable !== false
+      && (status === 'DRAFT' || status === 'ACTIVE');
+  }
+
   function samePlanOwner(plan, identity) {
     if (!plan || plan.open === false || plan.status === 'ARCHIVED') return false;
     if (plan.symbol !== identity.symbol) return false;
@@ -647,7 +666,12 @@
   }
 
   async function freshestMatchingPlan(rows, identity, seq) {
-    var candidates = (rows || []).filter(function (row) { return samePlan(row, identity); })
+    // A Position-owned Plan remains open so Manage can retain its exact historical receipt, but
+    // its decision and assumptions are frozen. Global New idea may inherit that Position's symbol;
+    // it must never interpret the otherwise matching frozen Plan as a mutable working inquiry.
+    var candidates = (rows || []).filter(function (row) {
+      return mutableWorkingPlan(row) && samePlan(row, identity);
+    })
       .sort(function (a, b) {
         var time = String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
         return time || Number(b.version || 0) - Number(a.version || 0);
@@ -681,6 +705,9 @@
       if (!samePlanOwner(plan, identity)) {
         throw new Error('The returned Plan does not belong to this Desk account and market.');
       }
+      if (!mutableWorkingPlan(plan)) {
+        throw new Error('This saved Plan is no longer a mutable working idea. Start a new idea without rewriting its decision history.');
+      }
       // The exact Plan owns its mutable declarations. Another tab may have advanced them since
       // Home rendered; adopt the current version instead of turning a legitimate update into a
       // permanent mismatch/retry loop.
@@ -700,10 +727,11 @@
       }
       plan = await freshestMatchingPlan(listed && listed.plans, identity, seq);
     }
-    if (!plan) {
-      var requested = requestedPlanContext(context);
-      plan = await api.post('/api/plans', {
-        clientRequestId: sessionRequestId(identity),
+    var requested = null;
+    async function createPlan(rotateRequestId) {
+      requested = requested || requestedPlanContext(context);
+      return api.post('/api/plans', {
+        clientRequestId: sessionRequestId(identity, rotateRequestId),
         symbol: symbol,
         intent: intent,
         originPlanId: requested.originPlanId,
@@ -718,7 +746,23 @@
         assignmentPreference: requested.assignmentPreference
       });
     }
+    if (!plan) {
+      plan = await createPlan(false);
+      if (seq !== state.requestSeq) return null;
+      if (!samePlan(plan, identity)) {
+        // The session-scoped create key can legitimately outlive the declarations of the Plan it
+        // originally created. Re-list first so a concurrent matching Plan wins; otherwise rotate
+        // the create key exactly once. Reusing the stale key would make Retry a permanent loop.
+        var relisted = await api.getFresh('/api/plans');
+        if (seq !== state.requestSeq) return null;
+        plan = await freshestMatchingPlan(relisted && relisted.plans, identity, seq);
+        if (!plan) plan = await createPlan(true);
+      }
+    }
     if (seq !== state.requestSeq) return null;
+    if (!mutableWorkingPlan(plan)) {
+      throw new Error('The backend did not return a mutable working Plan for this new idea.');
+    }
     if (!samePlan(plan, identity)) {
       throw new Error('The returned Plan does not match this Desk idea, account, and market identity.');
     }
@@ -1289,14 +1333,14 @@
     var combinedMaxLossCents = candidate.combinedMaxLossCents == null
       ? null : Number(candidate.combinedMaxLossCents);
     var displayCapital = incremental != null ? incremental : economic != null ? economic : maxLossCents;
-    var riskExpectedValue = riskProfile.expectedValueCents == null
-      ? candidate.expectedValueCents : riskProfile.expectedValueCents;
-    var afterCostEv = economics.marketEvAfterCostsCents == null
-      ? riskExpectedValue == null ? null : Number(riskExpectedValue)
-      : Number(economics.marketEvAfterCostsCents);
-    var edgeBasis = economics.marketEvAfterCostsCents == null
-      ? riskExpectedValue == null ? null : 'MODEL_PRE_COST'
-      : 'MARKET_AFTER_COSTS';
+    var realisticEv = economics.realizedVolEvAfterCostsCents == null
+      ? null : Number(economics.realizedVolEvAfterCostsCents);
+    var realisticLow = economics.realisticEvLowAfterCostsCents == null
+      ? null : Number(economics.realisticEvLowAfterCostsCents);
+    var realisticHigh = economics.realisticEvHighAfterCostsCents == null
+      ? null : Number(economics.realisticEvHighAfterCostsCents);
+    var marketCostBenchmark = economics.marketEvAfterCostsCents == null
+      ? null : Number(economics.marketEvAfterCostsCents);
     return {
       id: candidate.id,
       short: candidate.displayName || candidate.strategy || candidate.label,
@@ -1332,8 +1376,13 @@
       payoffPoints: payoffPoints,
       usesHeldShares: candidate.usesHeldShares === true,
       sharesNeeded: candidate.sharesNeeded == null ? null : Number(candidate.sharesNeeded),
-      edge: afterCostEv == null ? null : afterCostEv / 100,
-      edgeBasis: edgeBasis,
+      edge: realisticEv == null ? null : realisticEv / 100,
+      edgeLow: realisticLow == null ? null : realisticLow / 100,
+      edgeHigh: realisticHigh == null ? null : realisticHigh / 100,
+      edgeBasis: realisticEv == null ? null : 'REALIZED_VOL_AFTER_COSTS',
+      edgeRangeBasis: economics.realisticEvBasis || null,
+      marketCostBenchmark: marketCostBenchmark == null ? null : marketCostBenchmark / 100,
+      marketEvRole: economics.marketEvRole || null,
       assign: candidate.assignmentProb == null ? null : Math.round(Number(candidate.assignmentProb) * 100),
       why: candidate.whyConsidered || candidate.beginnerExplanation || '',
       analog: candidate.sourceKind ? 'Backend-ranked comparison · ' + candidate.sourceKind : 'Backend-ranked comparison',
@@ -1896,7 +1945,11 @@
         target = 'observed';
       } else {
         if (!symbol) throw new Error('Choose an underlying before creating a simulated market.');
-        var session = await simulatedWorldFor(symbol);
+        var requestedWorldId = requestedContext.targetWorldId == null
+          ? '' : String(requestedContext.targetWorldId).trim();
+        var session = requestedWorldId
+          ? await waitForPreparedWorld(requestedWorldId, symbol)
+          : await simulatedWorldFor(symbol);
         if (seq !== state.requestSeq) return null;
         target = session.id;
         if (String(session.status || '').toUpperCase() !== 'RUNNING') {
@@ -2348,7 +2401,24 @@
     waypoints = Object.keys(byDay).map(function (key) { return byDay[key]; })
       .sort(function (a, b) { return a.dayIndex - b.dayIndex; });
     if (!waypoints.length) throw new Error('A scenario needs at least one valid stored-fan waypoint.');
-    var body = { ensembleId: state.ensemble.ensemble.id, waypoints: waypoints, limit: 9 };
+    var pathWaypoints = scenario && Array.isArray(scenario.pathWaypoints)
+      ? scenario.pathWaypoints.map(function (pin) {
+        return {
+          sessionProgress: number(pin && pin.sessionProgress),
+          priceRatio: number(pin && pin.priceRatio),
+          tolerance: pin && pin.tolerance == null ? null : number(pin.tolerance)
+        };
+      }) : [];
+    if (pathWaypoints.some(function (pin, index) {
+      return !(pin.sessionProgress > (index ? pathWaypoints[index - 1].sessionProgress : 0))
+        || pin.sessionProgress > horizon || !(pin.priceRatio > 0)
+        || (pin.tolerance != null && !(pin.tolerance >= 0));
+    })) throw new Error('Intraday scenario pins must be ordered within the stored session horizon.');
+    var body = { ensembleId: state.ensemble.ensemble.id, limit: 48 };
+    if (pathWaypoints.length) body.pathWaypoints = pathWaypoints;
+    else body.waypoints = waypoints;
+    requestIdentity.waypoints = pathWaypoints.length ? [] : waypoints;
+    requestIdentity.pathWaypoints = pathWaypoints;
     var canvas = transientCanvas(scenario);
     if (canvas) body.canvas = canvas;
     state.error = null;
@@ -2361,6 +2431,9 @@
       if (token !== state.animationSeq) return null;
       var receipt = response && response.receipt || {}, selection = response && response.paths && response.paths.receipt || {};
       var checkpoints = response && response.checkpoints || {}, modelReceipt = checkpoints.modelReceipt || {};
+      var returnedWaypoints = receipt.conditioningAssumptions
+        && receipt.conditioningAssumptions.waypoints || [];
+      var returnedPathWaypoints = receipt.conditioningPathWaypoints || [];
       if (!response || !response.plan || response.plan.id !== requestIdentity.planId
           || response.ensemble.id !== requestIdentity.ensembleId
           || response.ensemble.fingerprint !== requestIdentity.ensembleFingerprint
@@ -2368,6 +2441,11 @@
           || receipt.ensembleFingerprint !== requestIdentity.ensembleFingerprint
           || receipt.selectedCandidateId !== requestIdentity.candidateId
           || requestIdentity.contextRev != null && Number(receipt.contextRev) !== Number(requestIdentity.contextRev)
+          || JSON.stringify(canonicalJson(returnedWaypoints))
+            !== JSON.stringify(canonicalJson(requestIdentity.waypoints))
+          || requestIdentity.pathWaypoints.length
+            && JSON.stringify(canonicalJson(returnedPathWaypoints))
+              !== JSON.stringify(canonicalJson(requestIdentity.pathWaypoints))
           || requestIdentity.worldId && receipt.worldId !== requestIdentity.worldId
           || requestIdentity.datasetId && receipt.datasetId !== requestIdentity.datasetId
           || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
@@ -2429,6 +2507,36 @@
     }).filter(Boolean) : [];
   }
 
+  function describedUniverseSymbols(universe) {
+    var seen = {}, rows = activeUniverseSymbols(universe);
+    (universe && Array.isArray(universe.sectors) ? universe.sectors : []).forEach(function (sector) {
+      (sector && Array.isArray(sector.symbols) ? sector.symbols : []).forEach(function (symbol) {
+        rows.push(String(symbol || '').trim().toUpperCase());
+      });
+    });
+    return rows.filter(function (symbol) {
+      if (!symbol || seen[symbol]) return false;
+      seen[symbol] = true;
+      return true;
+    });
+  }
+
+  function describedSector(universe, raw) {
+    var token = String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    var aliases = {
+      SEMIS: 'SEMICONDUCTORS', CHIPS: 'SEMICONDUCTORS',
+      SOFTWARE: 'TECH', TECHNOLOGY: 'TECH',
+      HEALTH: 'HEALTHCARE', FINANCE: 'FINANCIALS', BANKS: 'FINANCIALS',
+      CONSUMER: 'DISCRETIONARY', MACRO: 'ETFS', INDEX: 'ETFS'
+    };
+    token = aliases[token] || token;
+    return (universe && Array.isArray(universe.sectors) ? universe.sectors : []).find(function (sector) {
+      var key = String(sector && sector.key || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      var label = String(sector && sector.label || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return token && (token === key || token === label);
+    }) || null;
+  }
+
   function homeBookSymbols(rows, trades, sharePositions, ambientSymbols) {
     var seen = {};
     var sources = (rows || []).map(function (row) { return row && row.plan || row; })
@@ -2449,14 +2557,17 @@
       }).slice(0, 4);
   }
 
-  function publishBookContext(seq, data, context) {
+  function publishBookContext(seq, contextSeq, data, context) {
     if (seq !== bookRequestSeq || !state.book || state.book.requestId !== seq
-        || state.book.data !== data) return;
+        || contextSeq !== bookContextRequestSeq || state.book.data !== data) return false;
+    context = Object.assign({}, context, { requestId: contextSeq });
     data.homeContext = context;
     state.book.data = data;
     notify('book-context', {
-      operation: 'book-context', requestId: seq, book: state.book, data: data
+      operation: 'book-context', requestId: seq, contextRequestId: contextSeq,
+      book: state.book, data: data
     });
+    return true;
   }
 
   function loadBookSymbolContext(symbol) {
@@ -2464,19 +2575,37 @@
     var encoded = encodeURIComponent(symbol);
     bookContextLoads[symbol] = Promise.all([
       readCachedSlot('research:' + symbol, '/api/research/' + encoded),
-      readCachedSlot('news:' + symbol, '/api/research/' + encoded + '/news')
-    ]);
+      readCachedSlot('news:' + symbol, '/api/research/' + encoded + '/news'),
+      readCachedSlot('history:' + symbol, '/api/research/' + encoded + '/history?range=3m'),
+      readCachedSlot('expirations:' + symbol, '/api/research/' + encoded + '/expirations')
+    ]).then(async function (base) {
+      var expirationSlot = objectSlot(base[3], symbol + ' option expirations');
+      var envelope = expirationSlot && expirationSlot.available ? expirationSlot.value : {};
+      var expiration = chooseExpiration(envelope.expirations, 30, envelope.asOfDate);
+      var chainSlot = expiration
+        ? await readCachedSlot('chain:' + symbol, '/api/research/' + encoded
+          + '/chain?expiration=' + encodeURIComponent(expiration))
+        : unavailableSlot('chain:' + symbol, '/api/research/' + encoded + '/chain',
+          'No current option expiration was available for the focused market pulse.');
+      return base.concat([chainSlot]);
+    });
     return bookContextLoads[symbol];
   }
 
   function quoteContextRow(symbol, quote, lane) {
     if (!quote) return { symbol: symbol, research: null, news: null, missing: [] };
+    var last = number(quote.last), previousClose = number(quote.prevClose);
     return {
       symbol: symbol,
       research: {
         symbol: symbol,
         marketLane: lane || null,
-        displayPrice: quote.last == null ? null : quote.last,
+        // The bounded watch already owns an authoritative Quote receipt. Use its observed last
+        // directly (or its explicitly labeled previous close) instead of leaving every non-focused
+        // symbol visually blank while the richer Research document remains intentionally unfetched.
+        displayPrice: last != null ? last : previousClose,
+        priceIsPreviousClose: last == null && previousClose != null,
+        markBasis: last != null ? 'LAST' : previousClose != null ? 'PREVIOUS_CLOSE' : null,
         freshness: quote.freshness || null,
         quote: quote,
         evidence: { inputs: { quote: quote.evidence || null } }
@@ -2486,15 +2615,18 @@
     };
   }
 
-  async function hydrateBookFocusedContext(seq, before, data, symbol) {
+  async function hydrateBookFocusedContext(seq, contextSeq, before, data, symbol) {
     try {
       var group = await loadBookSymbolContext(symbol);
-      if (seq !== bookRequestSeq) return;
+      if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return;
       var after = await readIdentitySnapshot();
-      if (seq !== bookRequestSeq) return;
+      if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return;
       assertSameReadIdentity(before, after);
       var researchSlot = objectSlot(group[0], symbol + ' Research');
       var newsSlot = objectSlot(group[1], symbol + ' News');
+      var historySlot = objectSlot(group[2], symbol + ' observed history');
+      var expirationsSlot = objectSlot(group[3], symbol + ' option expirations');
+      var chainSlot = objectSlot(group[4], symbol + ' option chain');
       try {
         if (researchSlot.available) {
           assertDocumentSymbol(researchSlot.value, symbol, 'Home Research');
@@ -2509,9 +2641,17 @@
           before.identity.marketLane, 'Home Research quote');
         }
         if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Home News');
+        if (historySlot.available) assertDocumentSymbol(historySlot.value, symbol, 'Home History');
+        if (chainSlot.available) {
+          assertDocumentSymbol({ symbol: chainSlot.value.underlying }, symbol, 'Home option chain');
+          assertEvidenceLane(chainSlot.value.evidence, before.identity.marketLane, 'Home option chain');
+        }
       } catch (error) {
         researchSlot = unavailableSlot('research:' + symbol, researchSlot.path, error.message);
         newsSlot = unavailableSlot('news:' + symbol, newsSlot.path, error.message);
+        historySlot = unavailableSlot('history:' + symbol, historySlot.path, error.message);
+        expirationsSlot = unavailableSlot('expirations:' + symbol, expirationsSlot.path, error.message);
+        chainSlot = unavailableSlot('chain:' + symbol, chainSlot.path, error.message);
       }
       var current = data.homeContext || {}, rows = (current.rows || []).slice();
       var index = rows.findIndex(function (row) { return row.symbol === symbol; });
@@ -2520,19 +2660,24 @@
         symbol: symbol,
         research: researchSlot.available ? researchSlot.value : prior.research || null,
         news: newsSlot.available ? newsSlot.value : null,
-        missing: missingSlots([researchSlot, newsSlot])
+        history: historySlot.available ? historySlot.value : null,
+        expirations: expirationsSlot.available ? expirationsSlot.value : null,
+        chain: chainSlot.available ? chainSlot.value : null,
+        missing: missingSlots([researchSlot, newsSlot, historySlot, expirationsSlot, chainSlot])
       };
       if (index >= 0) rows[index] = row; else rows.push(row);
-      publishBookContext(seq, data, {
+      publishBookContext(seq, contextSeq, data, {
         phase: 'ready', symbols: current.symbols || [symbol], rows: rows,
         detailSymbol: symbol, detailLoading: null,
+        sectorLens: current.sectorLens || null,
         missing: rows.reduce(function (all, item) { return all.concat(item.missing || []); }, [])
       });
     } catch (error) {
       var fallback = data.homeContext || {};
-      publishBookContext(seq, data, {
+      publishBookContext(seq, contextSeq, data, {
         phase: 'ready', symbols: fallback.symbols || [symbol], rows: fallback.rows || [],
         detailSymbol: symbol, detailLoading: null,
+        sectorLens: fallback.sectorLens || null,
         missing: (fallback.missing || []).concat([{ key: 'context:' + symbol, error: errorReceipt(error) }])
       });
     }
@@ -2543,14 +2688,14 @@
    * account summary behind provider latency. Hydrate the bounded set of Plan symbols after the
    * core Book receipt has rendered, then publish one same-world additive update.
    */
-  async function hydrateBookContext(seq, before, data, symbols) {
+  async function hydrateBookContext(seq, contextSeq, before, data, symbols) {
     if (!symbols.length) return;
     try {
       var quotesPath = '/api/quotes?symbols=' + encodeURIComponent(symbols.join(','));
       var quoteSlot = objectSlot(await readCachedSlot('quotes', quotesPath), 'The ambient market watch');
-      if (seq !== bookRequestSeq) return;
+      if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return;
       var after = await readIdentitySnapshot();
-      if (seq !== bookRequestSeq) return;
+      if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return;
       assertSameReadIdentity(before, after);
       var quoteEnvelope = quoteSlot.available ? quoteSlot.value : {}, quoteRows = quoteEnvelope.quotes;
       if (!Array.isArray(quoteRows)) quoteRows = [];
@@ -2565,19 +2710,21 @@
         });
         return quoteContextRow(symbol, quote, before.identity.marketLane);
       });
-      publishBookContext(seq, data, {
+      publishBookContext(seq, contextSeq, data, {
         phase: 'loading', symbols: symbols, rows: rows,
         detailSymbol: symbols[0], detailLoading: symbols[0],
+        sectorLens: data.homeContext && data.homeContext.sectorLens || null,
         missing: quoteSlot.available ? [] : missingSlots([quoteSlot])
       });
       // The full option/research document is fetched for one focused symbol only. Its response
       // remains in the shared API cache for New Idea, while the bounded watch uses cheap quotes.
       var api = requireApi(), encoded = encodeURIComponent(symbols[0]);
       if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
-      hydrateBookFocusedContext(seq, before, data, symbols[0]);
+      hydrateBookFocusedContext(seq, contextSeq, before, data, symbols[0]);
     } catch (error) {
-      publishBookContext(seq, data, {
+      publishBookContext(seq, contextSeq, data, {
         phase: 'error', symbols: symbols, rows: [],
+        sectorLens: data.homeContext && data.homeContext.sectorLens || null,
         missing: [{ key: 'homeContext', error: errorReceipt(error) }]
       });
     }
@@ -2587,17 +2734,55 @@
     var symbol = String(rawSymbol || '').trim().toUpperCase();
     var book = state.book, data = book && book.data, context = data && data.homeContext;
     if (!symbol || !book || !data || !context
-        || (context.symbols || []).indexOf(symbol) < 0) return null;
-    var seq = book.requestId;
-    publishBookContext(seq, data, Object.assign({}, context, {
-      phase: 'loading', detailSymbol: symbol, detailLoading: symbol
+        || describedUniverseSymbols(data.universe).indexOf(symbol) < 0) return null;
+    var seq = book.requestId, contextSeq = ++bookContextRequestSeq;
+    var symbols = (context.symbols || []).slice();
+    if (symbols.indexOf(symbol) < 0) symbols = [symbol].concat(symbols).slice(0, 4);
+    publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
+      phase: 'loading', symbols: symbols, detailSymbol: symbol, detailLoading: symbol,
+      sectorLens: null
     }));
     var before = await readIdentitySnapshot();
-    if (seq !== bookRequestSeq) return null;
+    if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return null;
     var api = requireApi(), encoded = encodeURIComponent(symbol);
     if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
-    await hydrateBookFocusedContext(seq, before, data, symbol);
-    return data.homeContext;
+    await hydrateBookFocusedContext(seq, contextSeq, before, data, symbol);
+    return contextSeq === bookContextRequestSeq ? data.homeContext : null;
+  }
+
+  async function focusBookSector(rawSector) {
+    var book = state.book, data = book && book.data, context = data && data.homeContext;
+    if (!book || !data || !context) return null;
+    var sector = describedSector(data.universe, rawSector), seq = book.requestId;
+    var contextSeq = ++bookContextRequestSeq;
+    if (!sector) {
+      publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
+        phase: 'ready', detailLoading: null,
+        sectorLens: {
+          available: false, requested: String(rawSector || ''),
+          message: 'That sector is not present in the backend-owned universe catalog.'
+        }
+      }));
+      return data.homeContext;
+    }
+    var symbols = (sector.symbols || []).map(function (symbol) {
+      return String(symbol || '').trim().toUpperCase();
+    }).filter(Boolean).slice(0, 4);
+    publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
+      phase: symbols.length ? 'loading' : 'ready', symbols: symbols,
+      rows: (context.rows || []).filter(function (row) { return symbols.indexOf(row.symbol) >= 0; }),
+      detailSymbol: symbols[0] || null, detailLoading: symbols[0] || null,
+      sectorLens: {
+        available: symbols.length > 0, key: sector.key, label: sector.label,
+        symbols: (sector.symbols || []).slice(),
+        message: symbols.length ? null : 'The backend sector exists but has no symbols.'
+      }
+    }));
+    if (!symbols.length) return data.homeContext;
+    var before = await readIdentitySnapshot();
+    if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return null;
+    await hydrateBookContext(seq, contextSeq, before, data, symbols);
+    return contextSeq === bookContextRequestSeq ? data.homeContext : null;
   }
 
   async function readActiveTradeRoster() {
@@ -2646,6 +2831,7 @@
   async function loadBook() {
     if (!state.enabled) return null;
     var seq = ++bookRequestSeq;
+    var contextSeq = ++bookContextRequestSeq;
     bookContextLoads = {};
     state.book = {
       phase: 'loading', requestId: seq, identity: null, data: null, missing: [], error: null
@@ -2729,7 +2915,7 @@
         }) ? recentCommittedTradeId : null,
         homeContext: {
           phase: homeSymbols.length ? 'loading' : 'empty',
-          symbols: homeSymbols, rows: [], missing: []
+          requestId: contextSeq, symbols: homeSymbols, rows: [], missing: []
         },
         loadedAt: new Date().toISOString()
       };
@@ -2743,7 +2929,7 @@
       });
       // Do not await optional market/news reads: positions and Book actions remain interactive
       // while a cold observed provider or source cache is warming.
-      hydrateBookContext(seq, before, data, data.homeContext.symbols);
+      hydrateBookContext(seq, contextSeq, before, data, data.homeContext.symbols);
       return data;
     } catch (error) {
       if (seq !== bookRequestSeq) return null;
@@ -3067,6 +3253,24 @@
     });
   }
 
+  function exactPositionScenarioPathWaypoints(options, horizon) {
+    var supplied = options && options.pathWaypoints;
+    if (!Array.isArray(supplied) || !supplied.length) return [];
+    return supplied.map(function (pin, index) {
+      var sessionProgress = number(pin && pin.sessionProgress);
+      var priceRatio = number(pin && pin.priceRatio);
+      var tolerance = pin && pin.tolerance == null ? null : number(pin.tolerance);
+      var prior = index ? number(supplied[index - 1] && supplied[index - 1].sessionProgress) : 0;
+      if (!(sessionProgress > prior) || sessionProgress > horizon || !(priceRatio > 0)
+          || (tolerance != null && !(tolerance >= 0))) {
+        throw new Error('Position intraday scenario pins must be ordered within the stored session horizon.');
+      }
+      var result = { sessionProgress: sessionProgress, priceRatio: priceRatio };
+      if (tolerance != null) result.tolerance = tolerance;
+      return result;
+    });
+  }
+
   function positionTransientCanvas(data, options) {
     var stored = data && data.positionEnsemble, preview = stored && stored.preview || {};
     var shift = number(options && options.ivShiftPoints);
@@ -3115,6 +3319,7 @@
     var expectedDataset = requestIdentity.datasetId;
     var returnedWaypoints = receipt.conditioningAssumptions
       && receipt.conditioningAssumptions.waypoints || [];
+    var returnedPathWaypoints = receipt.conditioningPathWaypoints || [];
     var returnedRule = paths.selection || selection.rule;
     var returnedCanvas = receipt.valuationAssumptions || {};
     var focusedPackageFingerprint = String(receipt.focusedPackageFingerprint || '');
@@ -3139,6 +3344,9 @@
         || String(returnedRule || '') !== requestIdentity.pathSelectionRule
         || JSON.stringify(canonicalJson(returnedWaypoints))
           !== JSON.stringify(canonicalJson(requestIdentity.waypoints))
+        || requestIdentity.pathWaypoints && requestIdentity.pathWaypoints.length
+          && JSON.stringify(canonicalJson(returnedPathWaypoints))
+            !== JSON.stringify(canonicalJson(requestIdentity.pathWaypoints))
         || requestIdentity.canvasIvNodes
           && JSON.stringify(canonicalJson(returnedCanvas.ivNodes || []))
             !== JSON.stringify(canonicalJson(requestIdentity.canvasIvNodes))
@@ -3209,11 +3417,13 @@
       if (!planId) throw new Error('The authoritative Position omitted its owning Plan id.');
       tradeId = String(data.trade.id || '');
       if (!tradeId) throw new Error('The authoritative Position omitted its trade id.');
-      var limit = options && options.limit == null ? 9 : number(options.limit);
-      if (!Number.isInteger(limit) || limit < 1 || limit > 24) {
-        throw new Error('Position scenario path limit must be a whole number from 1 through 24.');
+      var limit = options && options.limit == null ? 48 : number(options.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 60) {
+        throw new Error('Position scenario path limit must be a whole number from 1 through 60.');
       }
       var waypoints = exactPositionScenarioWaypoints(options || {});
+      var pathWaypoints = exactPositionScenarioPathWaypoints(options || {},
+        Math.max(1, Number(stored.preview && stored.preview.horizonDays || 1)));
       var storedReceipt = stored.preview && stored.preview.receipt || {};
       var requestIdentity = {
         positionRequestId: positionRequestId,
@@ -3228,17 +3438,19 @@
         datasetId: storedReceipt.datasetId == null
           ? data.identity && data.identity.datasetId : storedReceipt.datasetId,
         positionPackageFingerprint: positionPackageFingerprint(data.trade),
-        waypoints: waypoints,
+        waypoints: pathWaypoints.length ? [] : waypoints,
+        pathWaypoints: pathWaypoints,
         pathSelectionRule: 'NEAREST_AUTHORED_WAYPOINTS',
         anchorSource: storedReceipt.anchorSource || null,
         anchorFreshness: storedReceipt.anchorFreshness || null
       };
       var body = {
         ensembleId: requestIdentity.ensembleId,
-        waypoints: waypoints,
         limit: limit,
         focusPositionKey: tradeId
       };
+      if (pathWaypoints.length) body.pathWaypoints = pathWaypoints;
+      else body.waypoints = waypoints;
       var canvas = positionTransientCanvas(data, options || {});
       if (canvas) {
         body.canvas = canvas;
@@ -3286,6 +3498,32 @@
       });
       throw error;
     }
+  }
+
+  /**
+   * Bounded, explicit opportunity scan for a user-selected market theme.  It reuses the canonical
+   * Universe Scout and never runs automatically while Home paints or warms a broad provider set.
+   */
+  async function scoutOpportunities(options) {
+    if (!state.enabled) return null;
+    options = options || {};
+    var universe = Array.isArray(options.universe) ? options.universe.map(function (symbol) {
+      return String(symbol || '').trim().toUpperCase();
+    }).filter(Boolean) : [];
+    if (!universe.length) throw new Error('Choose at least one symbol for the opportunity scan.');
+    var body = {
+      universe: universe,
+      horizons: Array.isArray(options.horizons) && options.horizons.length
+        ? options.horizons : ['45d'],
+      maxPicks: Math.max(1, Math.min(universe.length, Number(options.maxPicks || universe.length))),
+      riskMode: String(options.riskMode || 'balanced').toLowerCase(),
+      allow0dte: false,
+      intents: Array.isArray(options.intents) && options.intents.length
+        ? options.intents : ['INCOME']
+    };
+    if (options.maxLossCents != null) body.maxLossCents = Number(options.maxLossCents);
+    if (options.filters) body.filters = options.filters;
+    return requireApi().post('/api/research/scout', body);
   }
 
   var governorTimer = null;
@@ -3340,8 +3578,10 @@
     scenarioAnimation: scenarioAnimation,
     loadBook: loadBook,
     focusBookSymbol: focusBookSymbol,
+    focusBookSector: focusBookSector,
     loadPosition: loadPosition,
     positionScenario: positionScenario,
+    scoutOpportunities: scoutOpportunities,
     cancel: function () {
       pendingIdeaContext = null;
       if (state.mutationPending) activeMutationCancelled = true;

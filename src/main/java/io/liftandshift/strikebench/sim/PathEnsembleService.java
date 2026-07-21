@@ -42,19 +42,55 @@ public final class PathEnsembleService {
                                           int returnedPathCount, int sourcePathCount,
                                           int waypointCount, int explicitToleranceCount,
                                           int withinToleranceCount, int selectedWithinToleranceCount,
+                                          int sourcePointCount, int returnedPointCount,
                                           int focusSourcePathIndex,
                                           double focusTerminalQuantile,
                                           double focusWaypointDistance) {}
 
+    /** Step-resolution quantiles over the selected neighborhood, in trading-session units. */
+    public record DisplayBand(int step, double sessionProgress,
+                              double p10, double p25, double p50, double p75, double p90) {}
+
+    /**
+     * A non-persisted display-conditioning pin. Unlike an authored scenario day pin, session
+     * progress may be fractional so a one-session fan can retain an opening, middle, and closing
+     * journey on its stored intraday grid.
+     */
+    public record DisplayWaypoint(double sessionProgress, double priceRatio, Double tolerance) {
+        public DisplayWaypoint {
+            if (!(sessionProgress > 0) || !Double.isFinite(sessionProgress)) {
+                throw new IllegalArgumentException("display waypoint sessionProgress must be positive and finite");
+            }
+            if (!(priceRatio > 0) || !Double.isFinite(priceRatio)) {
+                throw new IllegalArgumentException("display waypoint priceRatio must be positive and finite");
+            }
+            if (tolerance != null && (!(tolerance >= 0) || !Double.isFinite(tolerance))) {
+                throw new IllegalArgumentException("display waypoint tolerance must be non-negative and finite");
+            }
+        }
+    }
+
     public record DisplayProjection(List<DisplayPath> paths, int totalPathCount,
-                                    String selection, DisplaySelectionReceipt receipt,
+                                    String selection, List<DisplayBand> bands,
+                                    String bandBasis, int bandPathCount,
+                                    DisplaySelectionReceipt receipt,
                                     String interpretation) {
-        public DisplayProjection { paths = paths == null ? List.of() : List.copyOf(paths); }
+        public DisplayProjection {
+            paths = paths == null ? List.of() : List.copyOf(paths);
+            bands = bands == null ? List.of() : List.copyOf(bands);
+        }
     }
 
     /** Keep visual motion bounded even when an outcome artifact contains thousands of paths. */
-    public static final int MAX_DISPLAY_PATHS = 24;
-    public static final String DISPLAY_SELECTION_VERSION = "ensemble-display-selection-1";
+    public static final int MAX_DISPLAY_PATHS = 60;
+    /**
+     * A wire/display series is a view over the full stored matrix, not another stored artifact.
+     * Bounding each series prevents a valid high-resolution fan (up to 72,576 source steps) from
+     * expanding into millions of JSON numbers. The source matrix, ranking and quantiles remain at
+     * full authority; only the evenly spaced rendering checkpoints are projected.
+     */
+    public static final int MAX_DISPLAY_POINTS_PER_SERIES = 1_025;
+    public static final String DISPLAY_SELECTION_VERSION = "ensemble-display-selection-2";
 
     public enum Basis { PARAMETRIC, HISTORICAL_ANALOGS, CONDITIONAL_BOOTSTRAP }
 
@@ -111,17 +147,42 @@ public final class PathEnsembleService {
      */
     public DisplayProjection displayPaths(Ensemble ensemble, ScenarioSpec authoredScenario, int requested) {
         if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        ScenarioSpec scenario = authoredScenario == null ? null : authoredScenario.sane();
+        List<DisplayWaypoint> waypoints = scenario == null ? List.of() : scenario.waypoints().stream()
+                .map(pin -> new DisplayWaypoint(pin.dayIndex(), pin.priceRatio(), pin.tolerance()))
+                .toList();
+        return displayPathsAtProgress(ensemble, waypoints, requested);
+    }
+
+    /** Condition a display projection at exact points on the stored intraday session grid. */
+    public DisplayProjection displayPathsAtProgress(Ensemble ensemble,
+                                                     List<DisplayWaypoint> rawWaypoints,
+                                                     int requested) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
         int limit = Math.clamp(requested <= 0 ? 8 : requested, 1, MAX_DISPLAY_PATHS);
         double[][] source = ensemble.paths();
-        ScenarioSpec scenario = authoredScenario == null ? null : authoredScenario.sane();
+        List<DisplayWaypoint> waypoints = rawWaypoints == null ? List.of() : List.copyOf(rawWaypoints);
+        double prior = 0;
+        for (DisplayWaypoint waypoint : waypoints) {
+            if (waypoint.sessionProgress() <= prior) {
+                throw new IllegalArgumentException("display waypoints must be strictly ordered by session progress");
+            }
+            if (waypoint.sessionProgress() > ensemble.spec().horizonDays()) {
+                throw new IllegalArgumentException("display waypoint session progress "
+                        + waypoint.sessionProgress() + " lies beyond the stored ensemble horizon");
+            }
+            prior = waypoint.sessionProgress();
+        }
         List<RankedPath> ranked = new ArrayList<>(source.length);
-        boolean constrained = scenario != null && !scenario.waypoints().isEmpty();
+        boolean constrained = !waypoints.isEmpty();
         for (int index = 0; index < source.length; index++) {
             double[] path = source[index];
             if (path == null || path.length == 0) continue;
-            ranked.add(rank(path, index, ensemble, scenario));
+            ranked.add(rank(path, index, ensemble, waypoints));
         }
         if (ranked.isEmpty()) throw new IllegalArgumentException("ensemble has no displayable paths");
+        int sourceSteps = ranked.stream().mapToInt(path -> path.prices.length).min().orElse(1) - 1;
+        int[] displaySteps = displayStepIndices(sourceSteps);
         List<RankedPath> terminalRanked = new ArrayList<>(ranked);
         terminalRanked.sort(Comparator.comparingDouble(RankedPath::terminal).thenComparingInt(RankedPath::index));
         for (int i = 0; i < terminalRanked.size(); i++) {
@@ -140,7 +201,7 @@ public final class PathEnsembleService {
             int chosenCount = Math.min(limit, ranked.size());
             int focusIndex = constrained ? 0 : (chosenCount - 1) / 2;
             for (int i = 0; i < chosenCount; i++) {
-                chosen.add(ranked.get(i).display(i == focusIndex ? "FOCUS" : "CONTEXT"));
+                chosen.add(ranked.get(i).display(i == focusIndex ? "FOCUS" : "CONTEXT", displaySteps));
             }
         } else {
             int focusSlot = limit / 2;
@@ -149,42 +210,122 @@ public final class PathEnsembleService {
                 int at = limit == 1 ? medianAt
                         : slot == focusSlot ? medianAt
                         : (int) Math.round((double) slot * (ranked.size() - 1) / (limit - 1));
-                chosen.add(ranked.get(at).display(slot == focusSlot ? "FOCUS" : "CONTEXT"));
+                chosen.add(ranked.get(at).display(slot == focusSlot ? "FOCUS" : "CONTEXT", displaySteps));
             }
         }
         String selection = constrained ? "NEAREST_AUTHORED_WAYPOINTS" : "TERMINAL_QUANTILES";
         DisplayPath focus = chosen.stream().filter(path -> "FOCUS".equals(path.role()))
                 .findFirst().orElseThrow();
-        int explicitToleranceCount = scenario == null ? 0 : (int) scenario.waypoints().stream()
+        int explicitToleranceCount = (int) waypoints.stream()
                 .filter(waypoint -> waypoint.tolerance() != null).count();
         int withinToleranceCount = explicitToleranceCount == 0 ? 0
                 : (int) ranked.stream().filter(path -> path.withinExplicitTolerance).count();
         int selectedWithinToleranceCount = explicitToleranceCount == 0 ? 0
                 : (int) chosen.stream().filter(DisplayPath::withinExplicitTolerance).count();
+        // An unconstrained fan's bands describe the complete stored matrix. A conditioned fan's
+        // bands use a statistically sturdier neighborhood than the bounded display-path list:
+        // the nearest quintile plus every path satisfying all explicit tolerances. The basis and
+        // count travel with the projection so that distinction is inspectable, not implied.
+        List<RankedPath> bandNeighborhood;
+        if (constrained) {
+            int nearestCount = Math.min(ranked.size(), Math.max(chosen.size(),
+                    (int) Math.ceil(ranked.size() * .20)));
+            bandNeighborhood = new ArrayList<>(ranked.subList(0, nearestCount));
+            if (explicitToleranceCount > 0) {
+                java.util.Set<Integer> included = bandNeighborhood.stream()
+                        .map(RankedPath::index).collect(java.util.stream.Collectors.toSet());
+                for (RankedPath path : ranked) {
+                    if (path.withinExplicitTolerance && included.add(path.index())) {
+                        bandNeighborhood.add(path);
+                    }
+                }
+            }
+        } else {
+            bandNeighborhood = ranked;
+        }
+        List<double[]> bandPaths = bandNeighborhood.stream().map(path -> path.prices).toList();
+        List<DisplayBand> bands = displayBands(bandPaths,
+                Math.max(1, ensemble.spec().stepsPerDay()), displaySteps);
+        String bandBasis = constrained
+                ? "CONDITIONED_NEAREST_QUINTILE_PLUS_FULL_TOLERANCE_SET"
+                : "FULL_STORED_ENSEMBLE";
         var receipt = new DisplaySelectionReceipt(DISPLAY_SELECTION_VERSION, selection, limit,
-                chosen.size(), ranked.size(), scenario == null ? 0 : scenario.waypoints().size(),
+                chosen.size(), ranked.size(), waypoints.size(),
                 explicitToleranceCount, withinToleranceCount, selectedWithinToleranceCount,
+                sourceSteps + 1, displaySteps.length,
                 focus.sourcePathIndex(),
                 focus.terminalQuantile(), focus.waypointDistance());
+        String sampling = displaySteps.length < sourceSteps + 1
+                ? " The wire projection contains " + displaySteps.length + " deterministic checkpoints from "
+                    + (sourceSteps + 1) + " stored points per path; endpoints are retained."
+                : " All " + displaySteps.length + " stored checkpoints are included.";
         String interpretation = constrained
-                ? "Original stored-fan paths ranked by distance to the authored waypoints; no new paths were generated."
-                : "Representative terminal quantiles selected from the original stored fan; no new paths were generated.";
-        return new DisplayProjection(chosen, source.length, selection, receipt, interpretation);
+                ? "Original stored-fan paths ranked by distance to the authored waypoints; bands use the "
+                        + bandPaths.size() + "-path nearest/tolerance neighborhood and no new paths were generated."
+                        + sampling
+                : "Representative terminal quantiles selected from the original stored fan; bands use all "
+                        + ranked.size() + " stored paths and no new paths were generated." + sampling;
+        return new DisplayProjection(chosen, source.length, selection, bands, bandBasis,
+                bandPaths.size(), receipt, interpretation);
     }
 
-    private static RankedPath rank(double[] path, int index, Ensemble ensemble, ScenarioSpec scenario) {
+    private static List<DisplayBand> displayBands(List<double[]> paths, int stepsPerDay,
+                                                   int[] displaySteps) {
+        if (paths.isEmpty()) return List.of();
+        if (displaySteps.length == 0) return List.of();
+        List<DisplayBand> bands = new ArrayList<>(displaySteps.length);
+        double[] values = new double[paths.size()];
+        for (int step : displaySteps) {
+            for (int i = 0; i < paths.size(); i++) values[i] = paths.get(i)[step];
+            java.util.Arrays.sort(values);
+            bands.add(new DisplayBand(step, (double) step / Math.max(1, stepsPerDay),
+                    roundedQuantile(values, .10), roundedQuantile(values, .25),
+                    roundedQuantile(values, .50), roundedQuantile(values, .75),
+                    roundedQuantile(values, .90)));
+        }
+        return List.copyOf(bands);
+    }
+
+    /** Deterministic source-step projection shared by every serialized path/canvas view. */
+    static int[] displayStepIndices(int totalSteps) {
+        int steps = Math.max(0, totalSteps);
+        int pointCount = Math.min(steps + 1, MAX_DISPLAY_POINTS_PER_SERIES);
+        int[] indices = new int[pointCount];
+        if (pointCount == 1) return indices;
+        for (int slot = 0; slot < pointCount; slot++) {
+            indices[slot] = (int) ((long) slot * steps / (pointCount - 1));
+        }
+        return indices;
+    }
+
+    private static double[] displayPrices(double[] source, int[] displaySteps) {
+        double[] projected = new double[displaySteps.length];
+        for (int i = 0; i < displaySteps.length; i++) projected[i] = source[displaySteps[i]];
+        return projected;
+    }
+
+    private static double roundedQuantile(double[] sorted, double probability) {
+        if (sorted.length == 0) return Double.NaN;
+        int index = Math.clamp((int) Math.round(probability * (sorted.length - 1)),
+                0, sorted.length - 1);
+        return Math.round(sorted[index] * 100.0) / 100.0;
+    }
+
+    private static RankedPath rank(double[] path, int index, Ensemble ensemble,
+                                   List<DisplayWaypoint> waypoints) {
         double spot = ensemble.spot();
         if (!(spot > 0)) throw new IllegalArgumentException("ensemble spot must be positive");
-        if (scenario == null || scenario.waypoints().isEmpty()) {
+        if (waypoints == null || waypoints.isEmpty()) {
             return new RankedPath(index, path, 0, true);
         }
         int stepsPerDay = Math.max(1, ensemble.spec().stepsPerDay());
         double squaredDistance = 0;
         boolean withinAllExplicitTolerances = true;
-        for (ScenarioSpec.Waypoint waypoint : scenario.waypoints()) {
-            int step = waypoint.dayIndex() * stepsPerDay;
+        for (DisplayWaypoint waypoint : waypoints) {
+            int step = (int) Math.round(waypoint.sessionProgress() * stepsPerDay);
             if (step >= path.length) {
-                throw new IllegalArgumentException("scenario waypoint day " + waypoint.dayIndex()
+                throw new IllegalArgumentException("scenario waypoint at session progress "
+                        + waypoint.sessionProgress()
                         + " lies beyond the stored ensemble horizon");
             }
             double ratio = path[step] / spot;
@@ -195,7 +336,7 @@ public final class PathEnsembleService {
                 withinAllExplicitTolerances = false;
             }
         }
-        return new RankedPath(index, path, Math.sqrt(squaredDistance / scenario.waypoints().size()),
+        return new RankedPath(index, path, Math.sqrt(squaredDistance / waypoints.size()),
                 withinAllExplicitTolerances);
     }
 
@@ -216,8 +357,8 @@ public final class PathEnsembleService {
         int index() { return index; }
         double distance() { return distance; }
         double terminal() { return prices[prices.length - 1]; }
-        DisplayPath display(String role) {
-            return new DisplayPath(index, prices, terminalQuantile, distance,
+        DisplayPath display(String role, int[] displaySteps) {
+            return new DisplayPath(index, displayPrices(prices, displaySteps), terminalQuantile, distance,
                     withinExplicitTolerance, role);
         }
     }

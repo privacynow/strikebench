@@ -14,8 +14,8 @@ public record RiskProfile(
         Long maxProfitCents,          // null = uncapped/model-dependent
         Double pop,                   // probability of profit (lognormal), null when model-dependent
         Long expectedValueCents,      // present-value RISK-NEUTRAL approximation (market IV, r, q=0)
-        long tailLossCents,           // loss under the stress move (>= 0)
-        double tailMovePct,           // the stress move used for tailLoss, e.g. 0.20 for -20%/+20%
+        long tailLossCents,           // bounded envelope max loss, otherwise modeled stress loss (>= 0)
+        double tailMovePct,           // base stress grid, e.g. 0.20 for -20%/+20%; bounded envelope may lie beyond it
         List<Scenario> scenarios,     // ordered by underlyingMovePct ascending
         TerminalPayoff terminalPayoff,// exact server-owned curve receipt, explicit when unavailable
         Long evHistVolCents,         // EV at REALIZED vol, zero drift — a HISTORICAL-VOL SCENARIO, not the physical measure; null w/o history

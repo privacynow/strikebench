@@ -60,17 +60,37 @@ public final class ScenarioCanvasValuator {
     /** One package repriced at one stored focus-path step; probability bands remain daily. */
     public record PositionStep(int step, double sessionProgress, String sessionDate,
                                long focusValueCents, Long focusPnlCents, Greeks greeks) {}
+    /**
+     * Full-ensemble package-value quantiles on the bounded display grid.  These are valued by the
+     * same kernel as the daily canvas and focus path; the browser only interpolates them.
+     */
+    public record PositionStepBand(int step, double sessionProgress,
+                                   long pnlP10Cents, long pnlP25Cents, long pnlP50Cents,
+                                   long pnlP75Cents, long pnlP90Cents) {}
+    /** One source-indexed package P/L trajectory from the immutable underlying ensemble. */
+    public record DisplayPositionStep(int step, double sessionProgress, long pnlCents) {}
+    public record DisplayPositionPath(int sourcePathIndex, String role,
+                                      List<DisplayPositionStep> steps) {}
+    /** Controller-supplied path identities from PathEnsembleService's deterministic projection. */
+    public record DisplayPathSelection(int sourcePathIndex, String role) {
+        public DisplayPathSelection {
+            if (sourcePathIndex < 0) throw new IllegalArgumentException("display source path index must be non-negative");
+            role = role == null || role.isBlank() ? "CONTEXT" : role;
+        }
+    }
     public record Transformation(int day, String sessionDate, int legNo, String leg,
                                  String settlementPolicy, String exercisePolicy, String note) {}
     public record PositionPath(String key, String label, String lane, String source, boolean proposed,
                                Long entryCostCents, List<PositionDay> days, List<PositionStep> steps,
+                               List<PositionStepBand> stepBands,
+                               List<DisplayPositionPath> displayPaths,
                                List<LegPath> legs,
                                List<Transformation> transformations) {
         public PositionPath(String key, String label, String lane, String source, boolean proposed,
                             Long entryCostCents, List<PositionDay> days, List<LegPath> legs,
                             List<Transformation> transformations) {
-            this(key, label, lane, source, proposed, entryCostCents, days, List.of(), legs,
-                    transformations);
+            this(key, label, lane, source, proposed, entryCostCents, days, List.of(), List.of(),
+                    List.of(), legs, transformations);
         }
     }
     public record ComparisonRow(String key, String label, String lane, boolean proposed,
@@ -91,7 +111,15 @@ public final class ScenarioCanvasValuator {
     public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
                         ScenarioCanvasSpec rawCanvas, double annualRate,
                         List<PositionInput> rawPositions) {
-        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null);
+        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null, List.of());
+    }
+
+    /** Value a deterministic display subset alongside the full-ensemble bands. */
+    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
+                        ScenarioCanvasSpec rawCanvas, double annualRate,
+                        List<PositionInput> rawPositions,
+                        List<DisplayPathSelection> displayPaths) {
+        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null, displayPaths);
     }
 
     /**
@@ -103,15 +131,25 @@ public final class ScenarioCanvasValuator {
                         ScenarioCanvasSpec rawCanvas, double annualRate,
                         List<PositionInput> rawPositions, int sourcePathIndex) {
         return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
-                Integer.valueOf(sourcePathIndex));
+                Integer.valueOf(sourcePathIndex), List.of());
+    }
+
+    /** Value a selected focus row and the exact deterministic display rows around it. */
+    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
+                        ScenarioCanvasSpec rawCanvas, double annualRate,
+                        List<PositionInput> rawPositions, int sourcePathIndex,
+                        List<DisplayPathSelection> displayPaths) {
+        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
+                Integer.valueOf(sourcePathIndex), displayPaths);
     }
 
     private Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
                          ScenarioCanvasSpec rawCanvas, double annualRate,
-                         List<PositionInput> rawPositions, Integer sourcePathIndex) {
+                         List<PositionInput> rawPositions, Integer sourcePathIndex,
+                         List<DisplayPathSelection> displayPaths) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             return valuePermitted(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
-                    sourcePathIndex);
+                    sourcePathIndex, displayPaths);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -121,7 +159,8 @@ public final class ScenarioCanvasValuator {
 
     private Report valuePermitted(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
                                   ScenarioCanvasSpec rawCanvas, double annualRate,
-                                  List<PositionInput> rawPositions, Integer requestedSourcePathIndex) {
+                                  List<PositionInput> rawPositions, Integer requestedSourcePathIndex,
+                                  List<DisplayPathSelection> rawDisplayPaths) {
         if (ensemble == null) throw new IllegalArgumentException("canvas ensemble is required");
         double[][] paths = ensemble.paths();
         if (rawPositions == null || rawPositions.isEmpty()) {
@@ -136,6 +175,7 @@ public final class ScenarioCanvasValuator {
                     List.of(), List.of(), List.of("No same-symbol positions were available to reprice."));
         }
         if (rawPositions.size() > 32) throw new IllegalArgumentException("at most 32 positions can share one canvas");
+        List<DisplayPathSelection> displayPaths = saneDisplayPaths(rawDisplayPaths, paths.length);
         ScenarioSpec spec = ensemble.spec().sane();
         ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
                 .sane(spec.horizonDays());
@@ -172,7 +212,7 @@ public final class ScenarioCanvasValuator {
         LinkedHashMap<String, long[]> terminalPnl = new LinkedHashMap<>();
         for (PositionInput input : rawPositions) {
             PositionRun run = valuePosition(input, ensemble, canvas, annualRate, elapsed,
-                    legacyPath, sessionDates, representativePath);
+                    legacyPath, sessionDates, representativePath, displayPaths);
             positionPaths.add(run.path());
             terminalPnl.put(input.key(), run.terminalPnl());
         }
@@ -202,6 +242,14 @@ public final class ScenarioCanvasValuator {
                 ? "P&L bands use every stored path. Daily Greeks, focus value, leg detail, and transformation events follow one representative path whose horizon price is the ensemble median. Per-step focus checkpoints reprice that same source path through the identical valuation kernel."
                 : "P&L bands use every stored path. Daily Greeks, focus value, leg detail, and transformation events follow stored source path "
                     + representativePath + ", selected by the animation projection. Per-step focus checkpoints reprice that same source path through the identical valuation kernel.");
+        if (!displayPaths.isEmpty()) {
+            notes.add(displayPaths.size() + " bounded package P/L trajectories retain their source-row identity from the displayed underlying fan.");
+        }
+        int displayPointCount = PathEnsembleService.displayStepIndices(steps).length;
+        if (displayPointCount < steps + 1) {
+            notes.add("Animation output carries " + displayPointCount + " deterministic checkpoints from "
+                    + (steps + 1) + " stored steps. Terminal and daily distributions still use the full ensemble.");
+        }
         notes.add(canvas.dividendBasis());
         if (canvas.template() != null) notes.add(canvas.template().legDayProvenance());
         return new Report(representativePath, List.copyOf(underlying), underlyingSteps,
@@ -211,7 +259,8 @@ public final class ScenarioCanvasValuator {
     private PositionRun valuePosition(PositionInput input, PathEnsembleService.Ensemble ensemble,
                                       ScenarioCanvasSpec canvas, double annualRate, double[] elapsed,
                                       double[] legacyPath, List<LocalDate> sessionDates,
-                                      int representativePath) {
+                                      int representativePath,
+                                      List<DisplayPathSelection> displaySelections) {
         ScenarioSpec spec = ensemble.spec();
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
         double[][] paths = ensemble.paths();
@@ -265,13 +314,34 @@ public final class ScenarioCanvasValuator {
                     focusValue, focusValue - entry,
                     new Greeks(round4(dd), round4(gg), cents(tt), cents(vv))));
         }
-        List<PositionStep> focusSteps = new ArrayList<>();
-        for (int step = 0; step <= steps; step++) {
+        int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
+        List<PositionStep> focusSteps = new ArrayList<>(displaySteps.length);
+        List<PositionStepBand> stepBands = new ArrayList<>(displaySteps.length);
+        List<List<DisplayPositionStep>> selectedSteps = new ArrayList<>(displaySelections.size());
+        for (int i = 0; i < displaySelections.size(); i++) selectedSteps.add(new ArrayList<>(displaySteps.length));
+        for (int step : displaySteps) {
+            long[] displayValues = new long[paths.length];
+            for (int p = 0; p < paths.length; p++) {
+                displayValues[p] = cents(PathValuationKernel.valueCanvas(input.position(),
+                        paths[p], step, steps, spd, elapsed, legacyPath, canvas, annualRate,
+                        resolvedTransformations[p]) * input.qty()) - entry;
+            }
+            long[] sortedDisplayValues = displayValues.clone();
+            Arrays.sort(sortedDisplayValues);
+            double progress = sessionProgress(step, spd);
+            stepBands.add(new PositionStepBand(step, progress,
+                    pct(sortedDisplayValues, .10), pct(sortedDisplayValues, .25),
+                    pct(sortedDisplayValues, .50), pct(sortedDisplayValues, .75),
+                    pct(sortedDisplayValues, .90)));
+            for (int selected = 0; selected < displaySelections.size(); selected++) {
+                int sourceIndex = displaySelections.get(selected).sourcePathIndex();
+                selectedSteps.get(selected).add(new DisplayPositionStep(step, progress,
+                        displayValues[sourceIndex]));
+            }
             long focusValue = cents(PathValuationKernel.valueCanvas(input.position(),
                     paths[representativePath], step, steps, spd, elapsed, legacyPath, canvas,
                     annualRate, resolvedTransformations[representativePath]) * input.qty());
             double dd = 0, gg = 0, tt = 0, vv = 0;
-            double progress = sessionProgress(step, spd);
             for (int legNo = 0; legNo < input.position().legs().size(); legNo++) {
                 Leg leg = input.position().legs().get(legNo);
                 PathValuationKernel.LegPoint point = PathValuationKernel.legPoint(input.position(), leg,
@@ -291,6 +361,12 @@ public final class ScenarioCanvasValuator {
                     dateForStep(step, spd, days, ensemble.anchorDate(), sessionDates),
                     focusValue, focusValue - entry,
                     new Greeks(round4(dd), round4(gg), cents(tt), cents(vv))));
+        }
+        List<DisplayPositionPath> valuedDisplayPaths = new ArrayList<>(displaySelections.size());
+        for (int i = 0; i < displaySelections.size(); i++) {
+            DisplayPathSelection selection = displaySelections.get(i);
+            valuedDisplayPaths.add(new DisplayPositionPath(selection.sourcePathIndex(),
+                    selection.role(), List.copyOf(selectedSteps.get(i))));
         }
         List<LegPath> legs = new ArrayList<>();
         List<Transformation> transformationRows = new ArrayList<>();
@@ -319,7 +395,24 @@ public final class ScenarioCanvasValuator {
         }
         return new PositionRun(new PositionPath(input.key(), input.label(), input.lane(), input.source(),
                 input.proposed(), input.entryCostCents(), List.copyOf(timeline),
-                List.copyOf(focusSteps), List.copyOf(legs), List.copyOf(transformationRows)), terminal);
+                List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
+                List.copyOf(legs), List.copyOf(transformationRows)), terminal);
+    }
+
+    private static List<DisplayPathSelection> saneDisplayPaths(
+            List<DisplayPathSelection> raw, int sourcePathCount) {
+        if (raw == null || raw.isEmpty()) return List.of();
+        LinkedHashMap<Integer, DisplayPathSelection> unique = new LinkedHashMap<>();
+        for (DisplayPathSelection selection : raw) {
+            if (selection == null) continue;
+            if (selection.sourcePathIndex() >= sourcePathCount) {
+                throw new IllegalArgumentException("display source path index "
+                        + selection.sourcePathIndex() + " lies outside this ensemble");
+            }
+            unique.putIfAbsent(selection.sourcePathIndex(), selection);
+            if (unique.size() >= PathEnsembleService.MAX_DISPLAY_PATHS) break;
+        }
+        return List.copyOf(unique.values());
     }
 
     private record PositionRun(PositionPath path, long[] terminalPnl) {}
@@ -380,8 +473,9 @@ public final class ScenarioCanvasValuator {
         double[] stepYears = ensemble.spec().calendarStepYears(ensemble.anchorDate());
         double[] legacy = iv.path(steps, sum(stepYears) / steps, spd);
         List<LocalDate> dates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
-        List<UnderlyingStep> out = new ArrayList<>(steps + 1);
-        for (int step = 0; step <= steps; step++) {
+        int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
+        List<UnderlyingStep> out = new ArrayList<>(displaySteps.length);
+        for (int step : displaySteps) {
             int valuationDay = Math.min(days, step / spd);
             out.add(new UnderlyingStep(step, sessionProgress(step, spd),
                     dateForStep(step, spd, days, ensemble.anchorDate(), dates),

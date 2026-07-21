@@ -76,8 +76,8 @@ public final class Universes {
                 "SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,TSLA,AMZN,GOOGL");
         put(m, "TECH", "Technology",
                 "AAPL,MSFT,NVDA,GOOGL,META,CRM,ORCL,ADBE,NOW,IBM,XLK");
-        put(m, "SEMICONDUCTORS", "Semiconductors",
-                "NVDA,AMD,AVGO,TSM,MU,QCOM,INTC,ARM,SMH");
+        put(m, "SEMICONDUCTORS", "Semiconductors, memory & storage",
+                "NVDA,AMD,AVGO,TSM,MU,QCOM,INTC,ARM,STX,WDC,SNDK,SMH");
         put(m, "HEALTHCARE", "Healthcare",
                 "UNH,LLY,JNJ,PFE,MRK,ABBV,TMO,AMGN,CVS,XLV");
         put(m, "DEFENSE", "Defense & aerospace",

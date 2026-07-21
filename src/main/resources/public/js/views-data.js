@@ -1594,7 +1594,7 @@
         detailConnector ? sourceDetail : null));
       if (!eligible.length) {
         var sourceBridge = alertBox('caution', 'No automated daily-price source is active. Quotes and option chains can still work, but charts, HV, realized-volatility EV, and favorable observed verdicts need daily history.', [
-          'Authorized personal/local use: set YAHOO_ENABLED=true and YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true, then restart. Do not enable this on a hosted service without the required rights.',
+          'Yahoo daily history is enabled in the Observed lane under the product owner\'s standing authorization. Set YAHOO_ENABLED=false to stop requests; Fixtures-only mode never mounts it.',
           'Official path: configure a Polygon or Alpha Vantage key under the terms of your plan.',
           'No automation: import a price-history CSV you already have permission to use.'
         ]);

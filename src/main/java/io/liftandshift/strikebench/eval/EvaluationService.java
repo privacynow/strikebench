@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
@@ -203,8 +204,7 @@ public final class EvaluationService {
     private static Integer horizonSessions(String raw) {
         if (raw == null || raw.isBlank()) return null;
         String value = raw.trim().toLowerCase(java.util.Locale.ROOT);
-        if (value.matches("\\d+d")) return Integer.parseInt(value.substring(0, value.length() - 1));
-        return io.liftandshift.strikebench.model.Horizon.parse(value).tradingSessions();
+        return io.liftandshift.strikebench.model.Horizon.tradingSessions(value);
     }
 
     public List<java.util.Map<String, Object>> recent(String userId, int limit) {
@@ -232,10 +232,16 @@ public final class EvaluationService {
         int dte = frontExp != null ? Math.max(0, (int) ChronoUnit.DAYS.between(today, frontExp)) : 30;
 
         Double atmIv = atmIv(symbol, underlyingCents, frontExp, worldId);
-        Double realizedVol = worldId != null
-                ? realizedVolWorld(symbol, today, worldId)
-                : realizedVol30(symbol, today, actx);
-        List<Double> ivHistory = worldId != null ? List.of() : ivHistory(symbol); // no observed IV history in a world
+        // One lane-specific history artifact owns realized volatility, regime framing,
+        // history-fit closes, and their provenance. Re-reading separate 60/126-day series made
+        // those consumers vulnerable to cache/provider changes and discarded the evidence that
+        // distinguishes observed bars from synthetic/scenario bars.
+        CandleSeries historySeries = market.candleSeries(symbol, today.minusDays(126), today,
+                worldId, actx);
+        Double realizedVol = realizedVol30(historySeries);
+        boolean generatedHistoryLane = worldId != null || (actx != null && actx.synthetic());
+        List<Double> ivHistory = generatedHistoryLane ? List.of() : ivHistory(symbol);
+        // Neither a simulated world nor a synthetic scenario dataset may borrow observed IV rank.
         boolean open = worldId != null || MarketHours.isRegularSession(laneNow);
 
         var rate = market.riskFreeRateQuote(Math.max(1, dte), worldId);
@@ -244,23 +250,36 @@ public final class EvaluationService {
         // context's own inputs, trend/drawdown from this lane's candles (folded Phase 10.3).
         EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol,
                 ivHistory, buyingPowerCents, open, feePerContractCents, feePerOrderCents,
-                rate.annualRate(), rate.evidence(), portfolioExposure, declared);
+                rate.annualRate(), rate.evidence(), portfolioExposure, declared, null, List.of(),
+                historySeries.evidence());
         VolatilityProfile volProfile = new VolatilityProfiler().profile(preRegime);
-        List<Candle> regimeCandles = worldId != null
-                ? market.candleSeries(symbol, today.minusDays(126), today, worldId, null).candles()
-                : market.candles(symbol, today.minusDays(126), today, actx);
+        List<Candle> regimeCandles = historySeries.candles();
         LocalDate eventThrough = lastExpiration(candidates);
         if (eventThrough == null) eventThrough = today.plusDays(Math.max(1, dte));
         EventService.EarningsProximity event = eventProximity(symbol, eventThrough, worldId);
         RegimeSnapshot regime = RegimeProfiler.profile(regimeCandles, volProfile,
                 event.available() ? event.likelyBefore() : null, event.note(),
-                worldId != null ? "this simulated world's sessions" : "observed sessions");
+                historyBasis(historySeries));
         List<Double> trailingCloses = regimeCandles == null ? List.of() : regimeCandles.stream()
                 .map(candle -> candle.close() == null ? null : candle.close().doubleValue())
                 .filter(java.util.Objects::nonNull).toList();
         return new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol, ivHistory,
                 buyingPowerCents, open, feePerContractCents, feePerOrderCents, rate.annualRate(),
-                rate.evidence(), portfolioExposure, declared, regime, trailingCloses);
+                rate.evidence(), portfolioExposure, declared, regime, trailingCloses,
+                historySeries.evidence());
+    }
+
+    private static String historyBasis(CandleSeries series) {
+        var provenance = series == null || series.evidence() == null
+                ? io.liftandshift.strikebench.model.DataProvenance.MISSING
+                : series.evidence().provenance();
+        return switch (provenance) {
+            case SIMULATED -> "this simulated world's sessions";
+            case MODELED -> "this scenario dataset's sessions";
+            case DEMO -> "this Demo market's sessions";
+            case OBSERVED, BROKER -> "observed sessions";
+            case MIXED, MISSING -> "sessions with unavailable provenance";
+        };
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {
@@ -328,18 +347,9 @@ public final class EvaluationService {
                 .orElse(null);
     }
 
-    private Double realizedVolWorld(String symbol, LocalDate today, String worldId) {
-        var series = market.candleSeries(symbol, today.minusDays(60), today, worldId, null);
+    private static Double realizedVol30(CandleSeries series) {
         if (series.isEmpty() || series.candles().size() < 20) return null;
         double v = HistoricalVol.annualized(series.candles(), 30);
-        return Double.isFinite(v) && v > 0 ? v : null;
-    }
-
-    private Double realizedVol30(String symbol, LocalDate today,
-                                 io.liftandshift.strikebench.db.AnalysisContext actx) {
-        List<Candle> candles = market.candles(symbol, today.minusDays(60), today, actx);
-        if (candles == null || candles.size() < 20) return null;
-        double v = HistoricalVol.annualized(candles, 30);
         return Double.isFinite(v) && v > 0 ? v : null;
     }
 

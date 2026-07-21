@@ -314,8 +314,10 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `ENGINE_MAX_TRACKED` / `ENGINE_WARM_FULL_UNIVERSE` / `ENGINE_STREAM_INTERVAL_SECONDS` | `220` / `false` / `3` | Warm-set cap, explicit heavy-provider full warm, and stream interval |
 | `CBOE_BASE_URL` | Cboe CDN | Cboe endpoint override |
 | `CBOE_COOLDOWN_MINUTES` / `CBOE_MAX_CONCURRENCY` / `CBOE_MIN_SPACING_MS` | `15` / `2` / `1200` | Shared Cboe politeness and rate-limit controls |
-| `YAHOO_ENABLED` + `YAHOO_AUTOMATION_PERMISSION_CONFIRMED` | `false` / `false` | **PERSONAL / local-clone only** — both are required; automated Yahoo access remains permission-gated and is never a hosted default |
-| `YAHOO_DAILY_REQUEST_LIMIT` / `YAHOO_BASE_URL` | `100` / Yahoo chart endpoint | Durable local safety cap and testable endpoint; neither grants source rights |
+| `YAHOO_ENABLED` + `YAHOO_AUTOMATION_PERMISSION_CONFIRMED` | observed default on / on | Product-owner-authorized daily history; either explicit `false` revokes access, and Fixtures-only never mounts the source |
+| `YAHOO_DAILY_REQUEST_LIMIT` / `YAHOO_BASE_URL` | `160` / Yahoo chart endpoint | Durable local safety cap and testable endpoint; neither changes source rights or provenance |
+| `YAHOO_MAX_CONCURRENCY` / `YAHOO_MIN_SPACING_MS` / `YAHOO_COOLDOWN_MINUTES` | `1` / `1500` / `30` | Serialized request starts and provider-wide rate-limit cooldown |
+| `YAHOO_HISTORY_SYNC_ENABLED` / `YAHOO_HISTORY_SYNC_YEARS` | observed default on / `2` | Once-per-completed-session missing-range enrichment across the canonical curated universe |
 | `STOOQ_ENABLED` / `STOOQ_BASE_URL` | `false` / Stooq | Opt-in source and endpoint override; automated clients commonly receive an anti-bot response |
 | `NEWS_RSS_BASE_URL` | Google News RSS | Keyless per-symbol headline source; blank disables it |
 | `AUTH_ENABLED` | `false` | Require an authenticated, owner-scoped session |
@@ -391,9 +393,11 @@ Yahoo daily history and attributable forward quote/chain snapshots already store
 `strikebench_dev`. It does not capture Plans, accounts, jobs, request budgets, generated datasets,
 or raw research/news responses, and it is never read by application boot as a hidden fallback.
 
-Start the app with `YAHOO_ENABLED=true` and
-`YAHOO_AUTOMATION_PERMISSION_CONFIRMED=true`, run `sync_underlying` with `source: "yahoo"`, and
-run `snapshot_now` once while the observed market is available. Then:
+Yahoo is enabled in the Observed product lane under the owner's standing authorization. Let the
+durable daily scheduler enrich the canonical universe after a completed session (or run
+`sync_underlying` with `source: "yahoo"` for an explicit initial fill), and run `snapshot_now` once
+while attributable observed option data is available. Set `YAHOO_ENABLED=false` to stop all new
+Yahoo requests without erasing already-attributed stored rows. Then:
 
 ```bash
 scripts/dev-market-snapshot.sh capture
@@ -409,7 +413,11 @@ run:
 scripts/dev-market-snapshot.sh hydrate
 ```
 
-Hydration is idempotent and restricted to the exact `strikebench_dev` schema fingerprint. It stages
-and validates every row before one transactional upsert, rejects generated or mismatched provenance,
-and requires an application restart afterward so saved quotes return as honestly labeled `STALE`
-while daily history is read as stored observed data. Never use this helper for tests or deployment.
+Hydration is idempotent and restricted to `strikebench_dev` plus the exact format-2 market-data
+surface: the selected `underlying_bar`, `option_bar`, and `market_snapshot` columns, PostgreSQL
+types, and nullability are fingerprinted independently from the global application schema. The
+manifest retains the capture's full schema SHA as provenance, while unrelated additive schema
+changes do not strand an otherwise compatible market snapshot. The helper checks exact CSV
+headers, file hashes, row and symbol counts, and observed provenance before one transactional
+upsert. Restart the application afterward so saved quotes return as honestly labeled `STALE` while
+daily history is read as stored observed data. Never use this helper for tests or deployment.

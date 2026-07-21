@@ -26,6 +26,13 @@ class EconomicAssessmentTest {
                 0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
     }
 
+    private EvalContext ctx(int daysToExpiry) {
+        return new EvalContext("AMD", 50_000, java.time.LocalDate.parse("2026-07-22"),
+                daysToExpiry, 0.35, 0.25, List.of(), 10_000_000, true, 65,
+                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                io.liftandshift.strikebench.model.Freshness.EOD), null);
+    }
+
     private EvidenceProfile observed() {
         return EvidenceProfile.of(Map.of("pricing", EvidenceLevel.OBSERVED_DELAYED,
                 "history", EvidenceLevel.OBSERVED_EOD), "test");
@@ -79,6 +86,195 @@ class EconomicAssessmentTest {
 
         assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
         assertThat(a.favorable()).isTrue();
+    }
+
+    @Test void observedMaterialEdgeRemainsFavorableWhenVolatilitySensitivityCrossesZero() {
+        List<Double> closes = java.util.stream.IntStream.range(0, 64)
+                .mapToObj(i -> 100.0 + Math.sin(i / 3.0) * 1.5)
+                .toList();
+        EvalContext withHistory = new EvalContext("AAPL", 10_000,
+                java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
+                List.of(), 1_000_000, true, 65, 0, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                        io.liftandshift.strikebench.model.Freshness.EOD), null,
+                new DeclaredObjective("DIRECTIONAL", "BULLISH", 30, "ACCEPT", "test"),
+                null, closes);
+        RiskProfile pointEstimateClearsMateriality = new RiskProfile(
+                20_000, 30_000L, 0.55, -100L,
+                20_000, 0.20, List.of(), 2_000L, "test");
+
+        EconomicAssessment a = EconomicAssessment.assess(candidate(0.55),
+                pointEstimateClearsMateriality, observed(), pass(), withHistory);
+
+        assertThat(a.realizedVolEvAfterCostsCents()).isGreaterThan(a.realisticEvMaterialityCents());
+        assertThat(a.realisticEvLowAfterCostsCents()).isNotNull().isLessThanOrEqualTo(0);
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(a.summary()).contains("sensitivity range that crosses zero");
+        assertThat(a.reasons()).anyMatch(reason -> reason.contains("model-sensitive"));
+    }
+
+    @Test void materiallyAdversePointRemainsUnfavorableWithSensitivityDisclosed() {
+        List<Double> closes = java.util.stream.IntStream.range(0, 64)
+                .mapToObj(i -> 100.0 + Math.sin(i / 3.0) * 1.5)
+                .toList();
+        EvalContext withHistory = new EvalContext("AAPL", 10_000,
+                java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
+                List.of(), 1_000_000, true, 65, 0, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                        io.liftandshift.strikebench.model.Freshness.EOD), null,
+                new DeclaredObjective("DIRECTIONAL", "BULLISH", 30, "ACCEPT", "test"),
+                null, closes);
+        RiskProfile adversePoint = new RiskProfile(
+                20_000, 30_000L, 0.45, -100L,
+                20_000, 0.20, List.of(), -2_000L, "test");
+
+        EconomicAssessment a = EconomicAssessment.assess(candidate(0.45),
+                adversePoint, observed(), pass(), withHistory);
+
+        assertThat(a.realizedVolEvAfterCostsCents()).isLessThan(-a.realisticEvMaterialityCents());
+        assertThat(a.realisticEvLowAfterCostsCents()).isNotNull();
+        assertThat(a.realisticEvHighAfterCostsCents()).isNotNull();
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.UNFAVORABLE);
+        assertThat(a.reasons()).anyMatch(reason -> reason.contains("Realized-volatility sensitivity"));
+    }
+
+    @Test void riskNeutralCostBenchmarkCannotVetoObservedIncomeEdge() {
+        Candidate income = new Candidate("CASH_SECURED_PUT", "Cash-secured put",
+                "acquisition_income", "SELL 95P 2026-09-04",
+                List.of(new LegView("SELL", "PUT", "95", "2026-09-04", 1,
+                        "3.00", 100, "OPEN")),
+                1, 30_000L, 30_000L, 920_000L, List.of("92"), 0.72,
+                -5_070L, 0.9, "DELAYED", List.of(), 0.8,
+                "income", "premium", "assignment", "volatility expansion", "test",
+                "INCOME", List.of("INCOME", "ACQUIRE"), 0.28, 25.0, "92",
+                "Collect premium or acquire at $92", false, null, null);
+        List<Double> closes = java.util.stream.IntStream.range(0, 64)
+                .mapToObj(i -> 100.0 + Math.sin(i / 4.0) * 2.0 + i * 0.02)
+                .toList();
+        EvalContext observedLike = new EvalContext("AAPL", 10_000,
+                java.time.LocalDate.parse("2026-07-22"), 45, 0.38, 0.20,
+                List.of(), 1_000_000, true, 65, 0, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                        io.liftandshift.strikebench.model.Freshness.EOD), null,
+                new DeclaredObjective("INCOME", "NEUTRAL", 30, "ACCEPT", "test"),
+                null, closes);
+        RiskProfile risk = new RiskProfiler().profile(income, observedLike);
+        EconomicAssessment a = EconomicAssessment.assess(
+                income, risk, observed(), pass(), observedLike);
+
+        assertThat(a.marketEvAfterCostsCents()).isNegative();
+        assertThat(a.realizedVolEvAfterCostsCents()).isGreaterThan(0);
+        assertThat(a.realisticEvMaterialityCents())
+                .as("the 45-day exposure hurdle catches noise without restoring a full-tail EV veto")
+                .isEqualTo(1_595L);
+        assertThat(a.realisticEvLowAfterCostsCents()).isPositive();
+        assertThat(a.realisticEvHighAfterCostsCents())
+                .isGreaterThanOrEqualTo(a.realisticEvLowAfterCostsCents());
+        assertThat(a.marketEvRole()).contains("cost benchmark").contains("not an independent edge test");
+        assertThat(a.realisticEvBasis()).contains("SENSITIVITY").contains("30 returns");
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(a.summary()).contains("cost benchmark").contains("not a second edge vote");
+    }
+
+    @Test void cashSecuredPutNeedsAHorizonMeaningfulEdgeOnItsAsymmetricExposure() {
+        Candidate put = asymmetricIncomeCandidate(false, 100_000L, 5_000_000L);
+        RiskProfile roundingSized = new RiskProfile(5_000_000L, 100_000L, 0.72, -5_000L,
+                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test");
+        RiskProfile material = new RiskProfile(5_000_000L, 100_000L, 0.72, -5_000L,
+                1_000_000L, 0.20, List.of(), 9_330L, "realized-vol test");
+
+        EconomicAssessment small = EconomicAssessment.assess(
+                put, roundingSized, observed(), pass(), ctx(45));
+        EconomicAssessment earned = EconomicAssessment.assess(
+                put, material, observed(), pass(), ctx(45));
+
+        assertThat(small.realizedVolEvAfterCostsCents()).isEqualTo(5_000L);
+        assertThat(small.realisticEvMaterialityCents())
+                .as("5 bps plus a 1%% annualized 45-day hurdle on $50k")
+                .isEqualTo(8_665L);
+        assertThat(small.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(earned.realizedVolEvAfterCostsCents()).isEqualTo(9_200L);
+        assertThat(earned.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+    }
+
+    @Test void heldShareOverlayUsesCombinedCapitalWithoutMakingMaterialIncomeImpossible() {
+        Candidate coveredCall = asymmetricIncomeCandidate(true, 200_000L, 5_000_000L);
+        RiskProfile roundingSized = new RiskProfile(5_000_000L, 200_000L, 0.68, -4_000L,
+                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test");
+        RiskProfile material = new RiskProfile(5_000_000L, 200_000L, 0.68, -4_000L,
+                1_000_000L, 0.20, List.of(), 9_330L, "realized-vol test");
+
+        EconomicAssessment small = EconomicAssessment.assess(
+                coveredCall, roundingSized, observed(), pass(), ctx(45));
+        EconomicAssessment earned = EconomicAssessment.assess(
+                coveredCall, material, observed(), pass(), ctx(45));
+
+        assertThat(small.realisticEvMaterialityCents()).isEqualTo(8_665L);
+        assertThat(small.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(earned.realizedVolEvAfterCostsCents()).isEqualTo(9_200L);
+        assertThat(earned.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+    }
+
+    @Test void knownFortyFiveDayAmdScaleStillAllowsTheObservedMaterialEdge() {
+        Candidate put = asymmetricIncomeCandidate(false, 294_500L, 4_732_500L);
+        RiskProfile risk = new RiskProfile(4_732_500L, 294_500L, 0.73, -5_170L,
+                950_000L, 0.20, List.of(), 9_341L, "observed AMD scale");
+
+        EconomicAssessment assessment = EconomicAssessment.assess(
+                put, risk, observed(), pass(), ctx(45));
+
+        assertThat(assessment.realisticEvMaterialityCents()).isEqualTo(8_835L);
+        assertThat(assessment.realizedVolEvAfterCostsCents()).isEqualTo(9_211L);
+        assertThat(assessment.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+    }
+
+    @Test void scoreComposerDoesNotMagnifySubThresholdEvOnAsymmetricCapital() {
+        Candidate put = asymmetricIncomeCandidate(false, 100_000L, 5_000_000L);
+        RiskProfile risk = new RiskProfile(5_000_000L, 100_000L, 0.72, -5_000L,
+                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test");
+        CapitalProfile capital = new CapitalProfile(5_000_000L, 5_000_000L,
+                2.0, null, 45, "cash collateral", null);
+
+        ScoreBreakdown score = new ScoreComposer().compose(
+                put, capital, risk, observed(), ctx(45));
+        ScoreBreakdown.Component expectedValue = score.components().stream()
+                .filter(component -> component.name().equals("Expected value"))
+                .findFirst().orElseThrow();
+
+        assertThat(expectedValue.value())
+                .as("$50 on $50k should remain close to the neutral 0.5 score")
+                .isBetween(0.50, 0.51);
+        assertThat(expectedValue.note()).contains("structure payoff scale $2888");
+    }
+
+    private Candidate asymmetricIncomeCandidate(boolean heldShares, Long maxProfit, long maxLoss) {
+        String strategy = heldShares ? "COVERED_CALL" : "CASH_SECURED_PUT";
+        String type = heldShares ? "CALL" : "PUT";
+        String strike = heldShares ? "530" : "485";
+        return new Candidate(strategy, heldShares ? "Covered call" : "Cash-secured put",
+                heldShares ? "held_income" : "acquisition_income",
+                "SELL " + strike + type + " 2026-09-04",
+                List.of(new LegView("SELL", type, strike, "2026-09-04", 1,
+                        "10.00", 100, "OPEN")),
+                1, 100_000L, maxProfit, heldShares ? 0 : maxLoss, List.of(), 0.70,
+                -5_000L, 0.9, "DELAYED", List.of(), 0.8,
+                "income", "premium", "tail", "volatility", "test",
+                "INCOME", List.of("INCOME"), 0.25, 15.0, null,
+                "Income test", heldShares, heldShares ? 100 : null,
+                heldShares ? maxLoss : null);
+    }
+
+    @Test void negativeRiskNeutralCostBenchmarkAloneIsNotAnUnfavorableVerdict() {
+        RiskProfile noHistory = new RiskProfile(20_000, 30_000L, 0.55, -5_000L,
+                20_000, 0.20, List.of(), null, "realistic measure unavailable");
+        EconomicAssessment a = EconomicAssessment.assess(
+                candidate(0.55), noHistory, observed(), pass(), ctx());
+
+        assertThat(a.marketEvAfterCostsCents()).isNegative();
+        assertThat(a.realizedVolEvAfterCostsCents()).isNull();
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(a.teachingCase()).isFalse();
+        assertThat(a.reasons()).anyMatch(reason -> reason.contains("not an independent edge test"));
     }
 
     @Test void unrelatedIvRankHistoryDoesNotVetoAnObservedEconomicClaim() {

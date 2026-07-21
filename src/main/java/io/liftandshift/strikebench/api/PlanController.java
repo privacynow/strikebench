@@ -364,6 +364,6 @@ final class PlanController {
     }
 
     static String planHorizon(Integer days) {
-        return io.liftandshift.strikebench.model.Horizon.fromTradingSessions(days).key();
+        return io.liftandshift.strikebench.model.Horizon.exactTradingSessions(days);
     }
 }

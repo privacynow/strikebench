@@ -94,6 +94,7 @@ public final class ApiServer {
     private io.liftandshift.strikebench.db.DataConnectorCatalog dataConnectors;
     private io.liftandshift.strikebench.db.DataSyncState dataSyncState;
     private io.liftandshift.strikebench.db.DataSyncScheduler dataSyncScheduler;
+    private io.liftandshift.strikebench.db.MarketDataMaintenanceGate marketDataMaintenance;
     private io.liftandshift.strikebench.db.ArtifactRetentionService artifactRetention;
     private CboeProvider cboe;                                                  // for Data Center throttle display
     private io.liftandshift.strikebench.db.DatasetService datasets;             // observed + synthetic dataset registry
@@ -164,8 +165,9 @@ public final class ApiServer {
             providers.add(cboeRef[0]);
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg, providerBudget));
             if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg, providerBudget));
-            // Yahoo keyless equity candles — PERSONAL/LOCAL-CLONE opt-in only (see AppConfig.yahooEnabled).
-            // Ahead of Stooq (which is bot-blocked for us) so a self-hoster gets real underlying history.
+            // Owner-authorized Yahoo equity candles. They remain explicitly attributable, persist
+            // through the canonical observed store, and can be revoked with YAHOO_ENABLED=false.
+            // Ahead of Stooq (which is bot-blocked for us) so history does not fall into an outage.
             if (cfg.yahooEnabled() && cfg.yahooAutomationPermissionConfirmed()) {
                 yahooRef[0] = new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg, providerBudget);
                 providers.add(yahooRef[0]);
@@ -184,8 +186,9 @@ public final class ApiServer {
         // Persisted daily bars (Data Center backfills / snapshots / CSV ingest / synthetic datasets)
         // feed the read path; the active-dataset switch decides which dataset serves.
         io.liftandshift.strikebench.db.DatasetService datasetSvc = new io.liftandshift.strikebench.db.DatasetService(db, clock);
+        var marketDataMaintenance = new io.liftandshift.strikebench.db.MarketDataMaintenanceGate();
         MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders,
-                new io.liftandshift.strikebench.db.StoredCandleStore(db));
+                new io.liftandshift.strikebench.db.StoredCandleStore(db, marketDataMaintenance));
         market.setDemoSources(fixture, fixture, fixture);
         AuditLog audit = new AuditLog(db, clock);
         AccountService accounts = new AccountService(db, cfg, audit, clock);
@@ -208,7 +211,9 @@ public final class ApiServer {
         }
         Backtester backtester = new Backtester(market, historical, cfg, db, clock);
         io.liftandshift.strikebench.market.UniverseService universe = new io.liftandshift.strikebench.market.UniverseService(db, cfg, clock);
-        io.liftandshift.strikebench.market.SnapshotService snapshots = new io.liftandshift.strikebench.market.SnapshotService(market, universe, db, clock);
+        io.liftandshift.strikebench.market.SnapshotService snapshots =
+                new io.liftandshift.strikebench.market.SnapshotService(
+                        market, universe, db, clock, marketDataMaintenance);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
         var eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(
@@ -217,6 +222,7 @@ public final class ApiServer {
         AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
                 engine, evaluations, cfg, clock);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
+        server.marketDataMaintenance = marketDataMaintenance;
         marksSource.setEngine(server.marketEngine);
         server.db = db;
         server.portfolioBooks = new io.liftandshift.strikebench.paper.PortfolioAccountingService(db, clock, marksSource);
@@ -236,21 +242,22 @@ public final class ApiServer {
         server.dataConnectors = new io.liftandshift.strikebench.db.DataConnectorCatalog(cfg, providerBudget);
         server.dataSyncState = new io.liftandshift.strikebench.db.DataSyncState(db, clock);
         server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine,
-                snapshots, backfill, universe, cfg, server.dataConnectors);
+                snapshots, backfill, universe, cfg, server.dataConnectors, marketDataMaintenance);
         server.dataSyncScheduler = new io.liftandshift.strikebench.db.DataSyncScheduler(
-                cfg, clock, server.dataSyncState, server.dataJobs);
+                cfg, clock, server.dataSyncState, server.dataJobs, universe);
         server.artifactRetention = new io.liftandshift.strikebench.db.ArtifactRetentionService(db, clock, cfg);
         server.dataCoverage = new io.liftandshift.strikebench.db.DataCoverage(db);
-        server.dataReset = new io.liftandshift.strikebench.db.DataResetService(db, accounts);
+        server.dataReset = new io.liftandshift.strikebench.db.DataResetService(
+                db, accounts, server.dataJobs, server.dataSyncScheduler, marketDataMaintenance);
         server.cboe = cboeRef[0];
         var settingsStore = new io.liftandshift.strikebench.db.SettingsStore(db);
-        var quoteSnapshots = new io.liftandshift.strikebench.db.MarketSnapshotStore(db);
+        var quoteSnapshots = new io.liftandshift.strikebench.db.MarketSnapshotStore(db, marketDataMaintenance);
         market.setQuoteSnapshotStore(quoteSnapshots);
         server.marketEngine.setSnapshotStore(quoteSnapshots);
         server.datasets = datasetSvc;
         server.pathEnsembles = new io.liftandshift.strikebench.sim.PathEnsembleService(market, clock);
         server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(
-                market, datasetSvc, db, clock, server.pathEnsembles);
+                market, datasetSvc, db, clock, server.pathEnsembles, marketDataMaintenance);
         server.worldTransitions = new WorldTransitionService(cfg, clock, db, datasetSvc, market,
                 server.simSessions, server.events,
                 (world, owner) -> server.universeViews.describe(worldParam(world), owner),
@@ -272,21 +279,14 @@ public final class ApiServer {
         datasetSvc.setEvents(server.events);
         if (cboeRef[0] != null) cboeRef[0].setEvents(server.events);
         if (yahooRef[0] != null) yahooRef[0].setEvents(server.events);
-        // The Cboe breaker survives restarts: persist trips, restore at boot (a restart used to
-        // forget an active ban and resume traffic straight back into the rate limiter).
-        if (cboeRef[0] != null) {
-            try {
-                settingsStore.get("cboe_cooldown_until")
-                        .ifPresent(value -> cboeRef[0].seedCooldown(Long.parseLong(value)));
-            } catch (Exception e) { /* best effort */ }
-            server.events.subscribe(e -> {
-                if ("provider.cooldown".equals(e.type()) && "cboe".equals(e.data().get("provider"))) {
-                    try {
-                        settingsStore.put("cboe_cooldown_until", String.valueOf(e.data().get("untilMs")));
-                    } catch (Exception ex) { /* best effort */ }
-                }
-            });
-        }
+        // Provider breakers survive restarts: an ordinary restart must not resume traffic inside
+        // an upstream-requested quiet period. This generalizes the original Cboe-only mechanism to
+        // every mounted provider that publishes the shared provider.cooldown event.
+        var cooldownProviders = new java.util.LinkedHashMap<String, java.util.function.LongConsumer>();
+        if (cboeRef[0] != null) cooldownProviders.put("cboe", cboeRef[0]::seedCooldown);
+        if (yahooRef[0] != null) cooldownProviders.put("yahoo", yahooRef[0]::seedCooldown);
+        io.liftandshift.strikebench.db.ProviderCooldownState.wire(
+                settingsStore, server.events, cooldownProviders);
         return server;
     }
 
@@ -361,7 +361,8 @@ public final class ApiServer {
                 simSessions, events, this::ownerId, this::activeWorld, this::cachedActiveWorldFor,
                 this::currentAccount, this::requireAdmin, () -> !jarChangedHint().isEmpty(), startedAt);
         DataController dataController = new DataController(cfg, clock, db, market, marketEngine,
-                universe, dataJobs, dataCoverage, dataReset, dataConnectors, dataSyncState,
+                universe, dataJobs, dataCoverage, dataReset, marketDataMaintenance,
+                dataConnectors, dataSyncState,
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::activeWorld, this::isAdmin, this::requireAdmin,
                 sparklineController::invalidate, outcomeController::generateDataset);

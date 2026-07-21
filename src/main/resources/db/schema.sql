@@ -543,6 +543,8 @@ CREATE TABLE public.data_sync_schedule (
     last_run_date date,
     last_status text,
     last_job_id text,
+    coverage_hash text NOT NULL,
+    completed_coverage_hash text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 

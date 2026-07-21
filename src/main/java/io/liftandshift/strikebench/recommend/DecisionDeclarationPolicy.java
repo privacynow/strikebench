@@ -34,7 +34,7 @@ public final class DecisionDeclarationPolicy {
         require(operation, required);
         StrategyIntent intent = StrategyIntent.parse(intentRaw);
         requireChoice(operation, "market view", request.thesis(), THESES);
-        requireChoice(operation, "horizon", request.horizon(), HORIZONS);
+        requireHorizon(operation, request.horizon());
         requireRiskMode(operation, request.riskMode());
         return intent;
     }
@@ -48,7 +48,7 @@ public final class DecisionDeclarationPolicy {
         required.put("risk posture", request == null ? null : request.riskMode());
         require(operation, required);
         requireChoice(operation, "market view", request.thesis(), THESES);
-        requireChoice(operation, "horizon", request.horizon(), HORIZONS);
+        requireHorizon(operation, request.horizon());
         requireRiskMode(operation, request.riskMode());
         return StrategyIntent.parse(intentRaw);
     }
@@ -59,7 +59,7 @@ public final class DecisionDeclarationPolicy {
         required.put("horizon", request == null ? null : request.horizons());
         required.put("risk posture", request == null ? null : request.riskMode());
         require(operation, required);
-        for (String horizon : request.horizons()) requireChoice(operation, "horizon", horizon, HORIZONS);
+        for (String horizon : request.horizons()) requireHorizon(operation, horizon);
         for (String intent : request.intents()) {
             if (blank(intent)) throw new IllegalArgumentException(operation + " goal cannot be blank");
             StrategyIntent.parse(intent);
@@ -77,7 +77,7 @@ public final class DecisionDeclarationPolicy {
         required.put("ranking objective", objective);
         require(operation, required);
         requireChoice(operation, "market view", thesis, THESES);
-        requireChoice(operation, "horizon", horizon, HORIZONS);
+        requireHorizon(operation, horizon);
         requireRiskMode(operation, riskMode);
         requireChoice(operation, "ranking objective", objective, OBJECTIVES);
         return StrategyIntent.parse(intent);
@@ -96,6 +96,17 @@ public final class DecisionDeclarationPolicy {
 
     private static void requireRiskMode(String operation, String raw) {
         requireChoice(operation, "risk posture", raw, RISK_MODES);
+    }
+
+    private static void requireHorizon(String operation, String raw) {
+        String normalized = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        if (HORIZONS.contains(normalized)) return;
+        if (normalized.matches("[1-9]\\d{0,2}d")) {
+            int sessions = Integer.parseInt(normalized.substring(0, normalized.length() - 1));
+            if (sessions <= 756) return;
+        }
+        throw new IllegalArgumentException(operation + " horizon must be 0dte, week, month, quarter, "
+                + "or an exact trading-session value such as 30d (maximum 756d)");
     }
 
     private static void requireChoice(String operation, String label, String raw, List<String> allowed) {

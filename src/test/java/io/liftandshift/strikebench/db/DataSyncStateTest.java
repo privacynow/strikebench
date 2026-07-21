@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -39,5 +40,18 @@ class DataSyncStateTest {
         assertThat(state.quarantineSummary("alice@example.com").reasons().getFirst().reason()).isEqualTo("bad close");
         assertThat(state.quarantineSummary("bob@example.com").total()).isEqualTo(1);
         assertThat(state.quarantineSummary(null).total()).isZero();
+    }
+
+    @Test
+    void coverageHashIsOrderStableAndChangesWithCoverageConfiguration() {
+        String base = DataSyncState.coverageHash("yahoo", List.of("AAPL", "QQQ"), 2);
+        assertThat(DataSyncState.coverageHash("YAHOO", List.of("qqq", "aapl", "AAPL"), 2))
+                .isEqualTo(base);
+        assertThat(DataSyncState.coverageHash("yahoo", List.of("AAPL", "QQQ", "AMD"), 2))
+                .isNotEqualTo(base);
+        assertThat(DataSyncState.coverageHash("yahoo", List.of("AAPL", "QQQ"), 3))
+                .isNotEqualTo(base);
+        assertThat(DataSyncState.coverageHash("stooq", List.of("AAPL", "QQQ"), 2))
+                .isNotEqualTo(base);
     }
 }

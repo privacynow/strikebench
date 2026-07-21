@@ -90,7 +90,36 @@ class StrategyEvaluatorTest {
         return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
                 10_000_000L, true, 65, 0, 0.04,
-                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD),
+                null, null, null, List.of(),
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "stored:observed-test", io.liftandshift.strikebench.model.Freshness.EOD));
+    }
+
+    @Test void boundedTailUsesFullMaxLossWhenTwentyPercentGridDoesNotReachTheWideWing() {
+        List<LegView> legs = List.of(
+                new LegView("BUY", "PUT", "575", "2026-09-04", 1, "0.40", 100, "OPEN"),
+                new LegView("SELL", "PUT", "594", "2026-09-04", 1, "1.00", 100, "OPEN"),
+                new LegView("SELL", "CALL", "788", "2026-09-04", 1, "0.70", 100, "OPEN"),
+                new LegView("BUY", "CALL", "792", "2026-09-04", 1, "0.25", 100, "OPEN"));
+        Candidate candidate = new Candidate("IRON_CONDOR", "Iron condor", "range_credit",
+                "SPY wide-put-wing reproduction", legs, 1, 10_500L, 10_500L, 179_500L,
+                List.of("592.95", "789.05"), 0.70, 0L, 0.80, "DELAYED", List.of(),
+                0.70, "range income", "credit", "wide put wing", "breakout",
+                "defined-risk package", "INCOME", List.of("INCOME"), 0.30,
+                null, null, null, false, null, null);
+        EvalContext context = new EvalContext("SPY", 74_813L, java.time.LocalDate.parse("2026-07-21"),
+                45, 0.20, 0.18, ctx().ivHistory(), 10_000_000L, true, 65, 0, 0.04,
+                ctx().rateEvidence(), null);
+
+        RiskProfile risk = new RiskProfiler().profile(candidate, context);
+
+        assertThat(risk.scenarios().stream().mapToLong(RiskProfile.Scenario::pnlCents).min())
+                .hasValue(-29_500L);
+        assertThat(risk.tailLossCents())
+                .as("bounded tail receipt must include the distant put-wing maximum loss")
+                .isEqualTo(179_500L);
+        assertThat(risk.tailLossCents()).isEqualTo(risk.maxLossCents());
     }
 
     @Test void assemblesEveryDimensionCoherently() {
@@ -176,7 +205,9 @@ class StrategyEvaluatorTest {
 
     @Test void demoDataIsHaircutAndLabeled() {
         StrategyEvaluation live = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, ctx());
-        StrategyEvaluation demo = evaluator.evaluate(debitCallSpread("FIXTURE", 0.6), null, ctx());
+        StrategyEvaluation demo = evaluator.evaluate(debitCallSpread("FIXTURE", 0.6), null,
+                withHistoryEvidence(ctx(), io.liftandshift.strikebench.model.DataEvidence.of(
+                        "fixture", io.liftandshift.strikebench.model.Freshness.FIXTURE)));
 
         assertThat(demo.evidenceLevel()).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
         assertThat(demo.evidence().perDimension().get("history")).isEqualTo(EvidenceLevel.DEMO_FIXTURE);
@@ -190,13 +221,39 @@ class StrategyEvaluatorTest {
         EvalContext generated = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
                 10_000_000L, true, 65, 0, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
-                        "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED), null);
+                        "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED),
+                null, null, null, List.of(),
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "simulated", io.liftandshift.strikebench.model.Freshness.SIMULATED));
         StrategyEvaluation simulated = evaluator.evaluate(debitCallSpread("SIMULATED", 0.6), null, generated);
 
         assertThat(simulated.evidence().perDimension().get("pricing")).isEqualTo(EvidenceLevel.SIMULATED);
         assertThat(simulated.evidence().perDimension().get("volatility")).isEqualTo(EvidenceLevel.SIMULATED);
         assertThat(simulated.evidence().perDimension().get("rates")).isEqualTo(EvidenceLevel.SIMULATED);
         assertThat(simulated.evidenceLevel()).isEqualTo(EvidenceLevel.SIMULATED);
+    }
+
+    @Test void observedPricingWithSyntheticHistoryCannotBecomeAnObservedFavorableVerdict() {
+        EvalContext syntheticHistory = withHistoryEvidence(ctx(),
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "synthetic", io.liftandshift.strikebench.model.Freshness.MODELED));
+        Candidate observedCandidate = debitCallSpread("DELAYED", 0.8);
+        EvidenceProfile evidence = new EvidenceAssembler().assemble(observedCandidate, syntheticHistory);
+        RiskProfile materialPositiveRealisticEv = new RiskProfile(
+                20_000, 30_000L, 0.55, -100L,
+                20_000, 0.20, List.of(), 2_000L, "synthetic history test");
+        EconomicAssessment economics = EconomicAssessment.assess(observedCandidate,
+                materialPositiveRealisticEv, evidence,
+                new ScoreBreakdown(true, List.of(), 50, 50, List.of()), syntheticHistory);
+
+        assertThat(evidence.perDimension().get("pricing")).isEqualTo(EvidenceLevel.OBSERVED_DELAYED);
+        assertThat(evidence.perDimension().get("history")).isEqualTo(EvidenceLevel.MODELED);
+        assertThat(evidence.claims().get("endorsement").observed()).isFalse();
+        assertThat(economics.realizedVolEvAfterCostsCents())
+                .isGreaterThan(economics.realisticEvMaterialityCents());
+        assertThat(economics.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        assertThat(economics.actionableFavorable()).isFalse();
+        assertThat(economics.reasons()).anyMatch(reason -> reason.contains("history"));
     }
 
     @Test void gateBlocksInsufficientBuyingPower() {
@@ -433,6 +490,15 @@ class StrategyEvaluatorTest {
                 base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
                 base.marketOpen(), base.feePerContractCents(), base.feePerOrderCents(),
                 base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), declared,
-                base.regime(), base.trailingCloses());
+                base.regime(), base.trailingCloses(), base.historyEvidence());
+    }
+
+    private static EvalContext withHistoryEvidence(EvalContext base,
+                                                   io.liftandshift.strikebench.model.DataEvidence evidence) {
+        return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.daysToExpiry(),
+                base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
+                base.marketOpen(), base.feePerContractCents(), base.feePerOrderCents(),
+                base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), base.declared(),
+                base.regime(), base.trailingCloses(), evidence);
     }
 }

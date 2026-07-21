@@ -624,11 +624,12 @@ wire model does not yet expose:
 
 ### B.10 Market-open data activation and acceptance
 
-The keyless observed baseline is Cboe delayed quote/chain data, Google News RSS, Treasury rates, and
-the market engine. Polygon, Alpha Vantage, FRED, EDGAR, E*TRADE, Yahoo, and Stooq activate only when
-their required configuration or explicit permission is present. This is a local single-user product,
-so personal Yahoo automation may be enabled with both required consent flags; credentials and source
-rights are still facts and are never invented.
+The keyless observed baseline is Cboe delayed quote/chain data, Google News RSS, Treasury rates,
+Yahoo daily history, and the market engine. Yahoo is active under the product owner's standing
+authorization until explicitly revoked with `YAHOO_ENABLED=false`; it remains serialized,
+daily-budgeted, attributable, and absent from Fixtures-only. Polygon, Alpha Vantage, FRED, EDGAR,
+E*TRADE, and Stooq activate only when their required configuration or permission is present.
+Credentials and source rights are still facts and are never invented.
 
 The market-open acceptance boot uses `FIXTURES_ONLY=false`, `ENGINE_ENABLED=true`,
 `ENGINE_WARM_FULL_UNIVERSE=false`, and `SNAPSHOT_ENABLED=false` with the conservative Cboe request

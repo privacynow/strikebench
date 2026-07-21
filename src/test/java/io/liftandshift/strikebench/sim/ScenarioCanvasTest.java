@@ -129,7 +129,9 @@ class ScenarioCanvasTest {
 
         var report = new ScenarioCanvasValuator().value(ensemble, iv, canvas, .04,
                 List.of(new ScenarioCanvasValuator.PositionInput("call", "Two calls", "PLAN",
-                        "PROPOSAL", call, 2, 900L, true)), 2);
+                        "PROPOSAL", call, 2, 900L, true)), 2,
+                List.of(new ScenarioCanvasValuator.DisplayPathSelection(0, "CONTEXT"),
+                        new ScenarioCanvasValuator.DisplayPathSelection(2, "FOCUS")));
 
         assertThat(report.underlying()).hasSize(3);
         assertThat(report.underlyingSteps()).hasSize(7);
@@ -145,6 +147,12 @@ class ScenarioCanvasTest {
         var position = report.positions().getFirst();
         assertThat(position.days()).hasSize(3);
         assertThat(position.steps()).hasSize(7);
+        assertThat(position.stepBands()).hasSize(7);
+        assertThat(position.displayPaths())
+                .extracting(ScenarioCanvasValuator.DisplayPositionPath::sourcePathIndex)
+                .containsExactly(0, 2);
+        assertThat(position.displayPaths().get(1).role()).isEqualTo("FOCUS");
+        assertThat(position.displayPaths().get(1).steps()).hasSize(7);
         assertThat(position.legs().getFirst().days()).hasSize(3);
         assertThat(position.legs().getFirst().steps()).hasSize(7);
         assertThat(position.days().get(1).focusValueCents())
@@ -164,6 +172,12 @@ class ScenarioCanvasTest {
         assertThat(position.steps().get(2).focusValueCents())
                 .isEqualTo(position.legs().getFirst().steps().get(2).valueCents());
         assertThat(position.steps().get(2).focusPnlCents()).isEqualTo(expectedStepTwo - 900L);
+        assertThat(position.displayPaths().get(1).steps().get(2).pnlCents())
+                .isEqualTo(expectedStepTwo - 900L);
+        assertThat(position.stepBands().get(2).pnlP10Cents())
+                .isLessThanOrEqualTo(position.stepBands().get(2).pnlP50Cents());
+        assertThat(position.stepBands().get(2).pnlP50Cents())
+                .isLessThanOrEqualTo(position.stepBands().get(2).pnlP90Cents());
         assertThat(position.steps().get(2).greeks())
                 .isEqualTo(position.legs().getFirst().steps().get(2).greeks());
     }
@@ -220,6 +234,31 @@ class ScenarioCanvasTest {
         assertThat(horizon.optionPrice()).isGreaterThan(0);
         // LegPoint reports contract delta in share-equivalents (100 multiplier), not raw 0..1 delta.
         assertThat(horizon.deltaShares()).isBetween(40.0, 70.0);
+    }
+
+    @Test void maximumResolutionCanvasBoundsOnlyItsWireCheckpoints() {
+        LocalDate anchor = LocalDate.of(2026, 7, 1);
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                756, 96, 0, .25, 0, 0, 0, 6,
+                ScenarioSpec.Heston.fromVol(.25), 93, 20);
+        int steps = spec.totalSteps();
+        double[][] paths = new double[2][steps + 1];
+        for (int step = 0; step <= steps; step++) {
+            paths[0][step] = 100 - step / 100_000.0;
+            paths[1][step] = 100 + step / 100_000.0;
+        }
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
+
+        var report = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.25),
+                ScenarioCanvasSpec.defaults(), .04, List.of());
+
+        assertThat(report.underlying()).hasSize(757); // full daily bands remain authoritative
+        assertThat(report.underlyingSteps())
+                .hasSize(PathEnsembleService.MAX_DISPLAY_POINTS_PER_SERIES);
+        assertThat(report.underlyingSteps().getFirst().step()).isZero();
+        assertThat(report.underlyingSteps().getLast().step()).isEqualTo(steps);
     }
 
     @Test void symbolScopeSharesTheProcessBudgetAndRefusesPathologicalWork() {
