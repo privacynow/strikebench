@@ -19,6 +19,8 @@ public final class RiskProfiler {
 
     private static final double[] MOVES = {-0.20, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20};
     private static final double TAIL_MOVE = 0.20;
+    private static final String TERMINAL_PAYOFF_SCHEMA = "risk-terminal-payoff-1";
+    private static final String TERMINAL_PAYOFF_MODEL = "payoff-curve-1";
 
     public RiskProfile profile(Candidate c, EvalContext ctx) {
         long maxLoss = Math.max(0, c.combinedMaxLossCents() != null
@@ -26,9 +28,19 @@ public final class RiskProfiler {
         Long maxProfit = c.maxProfitCents();
 
         List<RiskProfile.Scenario> scenarios = new ArrayList<>();
+        RiskProfile.TerminalPayoff terminalPayoff;
         long worstPnl = 0;
         boolean have = false;
-        try {
+        long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
+                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
+                .map(LegView::expiration).distinct().count();
+        String expiration = c.legs() == null ? null : c.legs().stream()
+                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
+                .map(LegView::expiration).findFirst().orElse(null);
+        if (distinctExpirations > 1) {
+            terminalPayoff = unavailableTerminalPayoff(
+                    "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
+        } else try {
             PayoffCurve pc = payoffCurve(c, ctx);
             BigDecimal spot = cents(ctx.underlyingCents());
             for (double m : MOVES) {
@@ -38,8 +50,20 @@ public final class RiskProfiler {
                 worstPnl = have ? Math.min(worstPnl, pnl) : pnl;
                 have = true;
             }
+            // A single-expiration package has one exact terminal curve. Time spreads require the
+            // supplied-ensemble valuation model instead, so they deliberately expose no false
+            // single-date polyline here.
+            var points = pc.chartPoints(spot).stream()
+                    .map(p -> new RiskProfile.PayoffPoint(p.price(), p.profitCents()))
+                    .toList();
+            terminalPayoff = new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA,
+                    TERMINAL_PAYOFF_MODEL, !points.isEmpty(), ctx.underlyingCents(), expiration,
+                    "EXPIRATION_INTRINSIC", "CAPTURED_CANDIDATE_NET", false, points,
+                    points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
         } catch (RuntimeException e) {
             // Degrade to extremes-only rather than fail the whole evaluation.
+            terminalPayoff = unavailableTerminalPayoff(
+                    "The exact terminal payoff could not be produced from the captured candidate.");
         }
         long tailLoss = have ? Math.max(0, -worstPnl) : maxLoss;
         // The HISTORICAL-VOL SCENARIO lane: the same EV integral at REALIZED volatility (zero
@@ -49,9 +73,6 @@ public final class RiskProfiler {
         Long evHistVol = null;
         String basisNote = String.format("market EV = present-value risk-neutral approximation "
                 + "(market IV, r=%.2f%%, q=0 assumed); pre-commission", ctx.riskFreeRate() * 100);
-        long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
-                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
-                .map(LegView::expiration).distinct().count();
         if (distinctExpirations <= 1
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
@@ -66,7 +87,12 @@ public final class RiskProfiler {
             basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
         return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
-                scenarios, evHistVol, basisNote);
+                scenarios, terminalPayoff, evHistVol, basisNote);
+    }
+
+    private static RiskProfile.TerminalPayoff unavailableTerminalPayoff(String reason) {
+        return new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA, TERMINAL_PAYOFF_MODEL,
+                false, null, null, null, null, false, List.of(), reason);
     }
 
     /**

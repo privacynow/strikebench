@@ -93,7 +93,16 @@ class EvaluateIntegrationTest {
         assertThat(top.hasNonNull("capital")).isTrue();
         assertThat(top.get("capital").hasNonNull("economicCents")).isTrue();
         assertThat(top.get("risk").get("scenarios").isArray()).isTrue();
-        assertThat(top.get("risk").get("scenarios")).hasSize(7);
+        JsonNode terminalPayoff = top.get("risk").get("terminalPayoff");
+        assertThat(terminalPayoff).isNotNull();
+        if (terminalPayoff.get("available").asBoolean()) {
+            assertThat(top.get("risk").get("scenarios")).hasSize(7);
+            assertThat(terminalPayoff.get("points")).hasSizeGreaterThan(2);
+        } else {
+            assertThat(top.get("risk").get("scenarios")).isEmpty();
+            assertThat(terminalPayoff.get("unavailableReason").asText())
+                    .contains("supplied-path valuation");
+        }
         assertThat(top.get("evidence").hasNonNull("rollup")).isTrue();
         assertThat(top.get("score").hasNonNull("riskAdjustedScore")).isTrue();
         assertThat(top.hasNonNull("decisionScore")).isTrue();

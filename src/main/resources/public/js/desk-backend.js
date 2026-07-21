@@ -34,11 +34,16 @@
   };
   var mutationOwnerSequence = 0;
   var activeMutationOwner = null;
+  var activeMutationKind = null;
+  var activeMutationCancelled = false;
+  var pendingIdeaContext = null;
 
-  function beginMutation() {
+  function beginMutation(kind) {
     if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
     var owner = ++mutationOwnerSequence;
     activeMutationOwner = owner;
+    activeMutationKind = kind || 'plan';
+    activeMutationCancelled = false;
     state.mutationPending = true;
     return owner;
   }
@@ -46,7 +51,21 @@
   function endMutation(owner) {
     if (activeMutationOwner !== owner) return;
     activeMutationOwner = null;
+    activeMutationKind = null;
+    activeMutationCancelled = false;
     state.mutationPending = false;
+    if (pendingIdeaContext) {
+      var queuedIdea = pendingIdeaContext;
+      pendingIdeaContext = null;
+      clearPendingGovernorRefresh();
+      window.setTimeout(function () {
+        openIdea(queuedIdea).catch(function () { /* openIdea publishes its typed failure */ });
+      }, 0);
+      return;
+    }
+    if (pendingGovernorContext && !governorTimer) {
+      governorTimer = window.setTimeout(flushGovernorRefresh, 0);
+    }
   }
 
   function copyState() {
@@ -268,6 +287,17 @@
     }
   }
 
+  function quoteFromResearch(research) {
+    research = research || {};
+    var quote = Object.assign({}, research.quote || {});
+    if (quote.asOf == null && quote.asOfEpochMs != null) quote.asOf = quote.asOfEpochMs;
+    if (!quote.freshness && research.freshness) quote.freshness = research.freshness;
+    if (!quote.evidence && research.evidence && research.evidence.inputs) {
+      quote.evidence = research.evidence.inputs.quote || null;
+    }
+    return quote;
+  }
+
   async function loadMarket(symbol, targetDays, seq) {
     var api = requireApi();
     var encoded = encodeURIComponent(symbol);
@@ -275,7 +305,7 @@
       api.getFresh('/api/config'),
       api.getFresh('/api/status'),
       api.getFresh('/api/world'),
-      api.getFresh('/api/quotes?symbols=' + encoded),
+      api.getFresh('/api/research/' + encoded),
       api.getFresh('/api/research/' + encoded + '/expirations'),
       optionalFresh('/api/account')
     ]);
@@ -285,17 +315,14 @@
         && String(base[0].world) !== String(base[2].world)) {
       throw new Error('Configuration and the active market world do not agree. Reload after the market transition completes.');
     }
-    if (base[3] && base[3].world && identity.world
-        && String(base[3].world) !== String(identity.world)) {
-      throw new Error('The quote belongs to a different market world than the active Desk.');
-    }
     if (base[3] && base[3].marketLane && identity.marketLane
         && String(base[3].marketLane).toUpperCase() !== String(identity.marketLane).toUpperCase()) {
       throw new Error('The quote provenance lane does not match the active market lane.');
     }
-    var quotes = base[3] && base[3].quotes || [];
-    var quote = quotes.find(function (row) { return String(row.symbol).toUpperCase() === symbol; });
-    if (!quote) throw new Error(symbol + ' has no quote in the active StrikeBench market.');
+    var research = base[3], quote = quoteFromResearch(research);
+    if (!quote || String(quote.symbol || '').toUpperCase() !== symbol) {
+      throw new Error(symbol + ' has no research-owned quote in the active StrikeBench market.');
+    }
     assertEvidenceLane(quote.evidence, identity.marketLane, 'Quote');
     var mark = quoteMark(quote), spot = mark.value;
     if (!(spot > 0)) throw new Error(symbol + ' has no usable market-owned mark.');
@@ -320,7 +347,7 @@
     if (seq !== state.requestSeq) return null;
     assertSameMarket(identity, marketIdentity(stable[0], stable[1], base[3], base[5]));
     var market = {
-      config: base[0], status: base[1], world: base[2], quote: quote,
+      config: base[0], status: base[1], world: base[2], research: research, quote: quote,
       expirations: base[4].expirations, expiration: expiration, chain: chain,
       account: base[5] && base[5].account || null,
       identity: identity,
@@ -417,8 +444,11 @@
     if (!sameNullable(identity.originPlanId, plan.originPlanId)) return false;
     var ctx = plan.context || {};
     if (String(ctx.thesis || '').toLowerCase() !== identity.thesis
-        || Number(ctx.horizonDays || 0) !== identity.horizonDays
-        || String(ctx.riskMode || '').toLowerCase() !== identity.riskMode) return false;
+        || Number(ctx.horizonDays || 0) !== identity.horizonDays) return false;
+    // Risk posture is mutable Plan context, not active Plan identity. The Plan service
+    // deliberately resumes the same line of inquiry when a different entry surface supplies a
+    // different header/default posture. Keep the persisted context authoritative; changing it is
+    // an explicit PUT /context mutation, never a reason to reject or duplicate the returned Plan.
     // Optional declarations are compared whenever the Desk supplied them. Server-snapshotted
     // holdings may legitimately populate an otherwise absent field for INCOME/HEDGE/EXIT.
     return sameNullable(identity.targetCents, ctx.targetCents)
@@ -499,7 +529,24 @@
     }
     state.planIdentity = identity;
     state.plan = plan;
+    // A resumed Plan owns its persisted mutable declarations. Hydrate them into the Desk adapter
+    // rather than leaving a prototype/header default in state beside a different backend truth.
+    if (plan.context && plan.context.riskMode) {
+      state.context = Object.assign({}, state.context || context, {
+        riskMode: String(plan.context.riskMode).toLowerCase()
+      });
+    }
     notify('plan', { plan: plan });
+    // The presentation synchronously maps the qualitative Plan posture onto its visible cap
+    // preset. Capture that canonicalized state for an ordinary entry, but retain an explicit
+    // Screens & Caps edit: it is a recommendation filter within the same Plan posture.
+    if (state.context && window.decide && window.decide.govs) {
+      if (context.__deskGovernorOverride === true) {
+        window.decide.govs = Object.assign({}, window.decide.govs, state.context.governors || {});
+      } else {
+        state.context.governors = Object.assign({}, state.context.governors || {}, window.decide.govs);
+      }
+    }
     return plan;
   }
 
@@ -794,8 +841,8 @@
       throw new Error('Load the active outcome ensemble before selecting an exact package.');
     }
     var seq = ++state.requestSeq;
+    var mutationOwner = beginMutation('draft');
     draftPreviewSeq++;
-    state.mutationPending = true;
     state.draft = Object.assign({}, draft, { pending: true, applying: true });
     notify('draft-applying', { operation: 'draft-select', draft: state.draft });
     var presentation = null;
@@ -805,6 +852,7 @@
         expectedVersion: state.plan.version,
         position: draft.position
       });
+      if (seq !== state.requestSeq) return null;
       var custom = response && response.strategy && response.strategy.result
         && response.strategy.result.candidate;
       if (!custom || custom.selected !== true) {
@@ -855,6 +903,7 @@
         expectedEnsemble: ensembleIdentity,
         silent: true
       });
+      if (!outcome || seq !== state.requestSeq) return null;
       notify('draft-selected', {
         operation: 'draft-select',
         plan: state.plan,
@@ -865,12 +914,12 @@
         response: response
       });
       await loadDecisionState(seq);
+      if (seq !== state.requestSeq) return null;
       await previewDecision({ type: 'MARKET', qty: custom.qty || 1 }, seq);
-      state.mutationPending = false;
+      if (seq !== state.requestSeq) return null;
       notify('ready', { operation: 'draft-select' });
       return copyState();
     } catch (error) {
-      state.mutationPending = false;
       if (state.draft) state.draft = Object.assign({}, state.draft, { pending: false, applying: false, error: error.message });
       if (presentation && state.selected) {
         notify('draft-selected', {
@@ -881,6 +930,8 @@
         });
       }
       return fail(seq, 'draft-select', error);
+    } finally {
+      endMutation(mutationOwner);
     }
   }
 
@@ -1008,6 +1059,14 @@
 
   function candidateToDesk(candidate, market) {
     var qty = Math.max(1, Number(candidate.qty || 1));
+    var riskProfile = candidate.evaluation && candidate.evaluation.risk || {};
+    var terminalPayoff = riskProfile.terminalPayoff || {};
+    var payoffPoints = terminalPayoff.available === true && Array.isArray(terminalPayoff.points)
+      ? terminalPayoff.points.map(function (point) {
+          return { price: Number(point.price), profit: Number(point.profitCents) / 100 };
+        }).filter(function (point) {
+          return Number.isFinite(point.price) && Number.isFinite(point.profit);
+        }) : [];
     var economics = candidate.evaluation && candidate.evaluation.assessment
       && candidate.evaluation.assessment.economics || {};
     var capital = candidate.evaluation && candidate.evaluation.capital || {};
@@ -1024,9 +1083,14 @@
     var combinedMaxLossCents = candidate.combinedMaxLossCents == null
       ? null : Number(candidate.combinedMaxLossCents);
     var displayCapital = incremental != null ? incremental : economic != null ? economic : maxLossCents;
+    var riskExpectedValue = riskProfile.expectedValueCents == null
+      ? candidate.expectedValueCents : riskProfile.expectedValueCents;
     var afterCostEv = economics.marketEvAfterCostsCents == null
-      ? candidate.expectedValueCents == null ? null : Number(candidate.expectedValueCents)
+      ? riskExpectedValue == null ? null : Number(riskExpectedValue)
       : Number(economics.marketEvAfterCostsCents);
+    var edgeBasis = economics.marketEvAfterCostsCents == null
+      ? riskExpectedValue == null ? null : 'MODEL_PRE_COST'
+      : 'MARKET_AFTER_COSTS';
     return {
       id: candidate.id,
       short: candidate.label || candidate.displayName || candidate.strategy,
@@ -1045,7 +1109,8 @@
       creditAmount: entry == null ? null : entry > 0 ? entry : 0,
       debitAmount: entry == null ? null : entry < 0 ? -entry : 0,
       entryEconomics: entry == null ? 'UNAVAILABLE' : entry > 0 ? 'CREDIT' : entry < 0 ? 'DEBIT' : 'EVEN',
-      pop: candidate.pop == null ? null : Math.round(Number(candidate.pop) * 100),
+      pop: (candidate.pop == null ? riskProfile.pop : candidate.pop) == null ? null
+        : Math.round(Number(candidate.pop == null ? riskProfile.pop : candidate.pop) * 100),
       maxLoss: maxLossCents == null ? null : maxLossCents / 100,
       combinedMaxLoss: combinedMaxLossCents == null ? null : combinedMaxLossCents / 100,
       maxProfit: candidate.maxProfitCents == null ? null : Number(candidate.maxProfitCents) / 100,
@@ -1056,9 +1121,12 @@
       capitalEconomic: economic == null ? null : economic / 100,
       capitalBasis: capital.basis || null,
       riskProfile: candidate.evaluation && candidate.evaluation.risk || null,
+      terminalPayoff: terminalPayoff,
+      payoffPoints: payoffPoints,
       usesHeldShares: candidate.usesHeldShares === true,
       sharesNeeded: candidate.sharesNeeded == null ? null : Number(candidate.sharesNeeded),
       edge: afterCostEv == null ? null : afterCostEv / 100,
+      edgeBasis: edgeBasis,
       assign: candidate.assignmentProb == null ? null : Math.round(Number(candidate.assignmentProb) * 100),
       why: candidate.whyConsidered || candidate.beginnerExplanation || '',
       analog: candidate.sourceKind ? 'Backend recommendation · ' + candidate.sourceKind : 'Backend recommendation',
@@ -1158,8 +1226,22 @@
     var candidates = result && Array.isArray(result.candidates) ? result.candidates : [];
     var restored = latest && latest.selected;
     var receipt = storedStrategyFingerprint(plan);
+    var currentEvaluationContract = candidates.every(function (candidate) {
+      var evaluation = candidate.evaluation || {};
+      if (evaluation.available === false) return true;
+      var terminal = evaluation.risk && evaluation.risk.terminalPayoff;
+      var expirations = new Set((candidate.legs || []).filter(function (leg) {
+        return String(leg.type || '').toUpperCase() !== 'STOCK';
+      }).map(function (leg) { return leg.expiration; }));
+      if (expirations.size > 1) {
+        return !!(terminal && terminal.available === false && terminal.unavailableReason);
+      }
+      return !!(terminal && terminal.available === true
+        && Array.isArray(terminal.points) && terminal.points.length >= 2);
+    });
     var reusable = strategy && String(strategy.state || 'CURRENT').toUpperCase() === 'CURRENT'
       && result && Array.isArray(result.candidates) && (candidates.length || restored) && !!(receipt
+        && currentEvaluationContract
         && receipt.declarationFingerprint === fingerprint
         && receipt.inputHash
         && strategy.inputHash
@@ -1246,7 +1328,9 @@
     if (!ensemble || !ensemble.ensemble || !ensemble.preview
         || !ensembleMatchesCurrentMarket(ensemble, false)
         || !sameChainReceipt(capturedChain, stableChain)) {
-      throw new Error('Market inputs changed while the outcome fan was being built. Reload this idea on the current quote and option surface.');
+      var rollover = new Error('Market inputs changed while the outcome fan was being built. Reloading this idea on the current quote and option surface.');
+      rollover.code = 'DESK_MARKET_ROLLOVER';
+      throw rollover;
     }
     acceptPlan(ensemble.plan || plan);
     state.ensemble = ensemble;
@@ -1490,10 +1574,20 @@
 
   async function openIdea(context) {
     if (!state.enabled) return null;
-    if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
+    if (state.mutationPending) {
+      if (!activeMutationCancelled) {
+        throw new Error('Wait for the current Plan change to finish.');
+      }
+      pendingIdeaContext = Object.assign({}, context || {});
+      notify('loading', { operation: 'idea-queued' });
+      return null;
+    }
+    var mutationOwner = beginMutation('idea');
     var seq = ++state.requestSeq;
     state.animationSeq++;
+    var marketRolloverRetries = Math.max(0, Number(context && context.__marketRolloverRetries || 0));
     context = Object.assign({}, context || {});
+    delete context.__marketRolloverRetries;
     context.governors = Object.assign({}, window.decide && window.decide.govs || {},
       context.governors || context.govs || {});
     state.context = context;
@@ -1512,24 +1606,19 @@
     state.rejections = [];
     state.animation = null;
     invalidateDecisionPreview('idea-changed');
-    notify('loading', { operation: 'idea' });
     try {
+      notify('loading', { operation: 'idea' });
       var symbol = String(context && context.symbol || '').trim().toUpperCase();
       if (!symbol) throw new Error('Choose an underlying before loading a Desk idea.');
       var market = await loadMarket(symbol, horizonDays(context), seq);
       if (!market || seq !== state.requestSeq) return null;
       var plan = await ensurePlan(context, market, seq);
       if (!plan || seq !== state.requestSeq) return null;
-      var candidates = await loadOrRunStrategy(plan, market, context, seq);
+      var candidates = await loadOrRunStrategy(plan, market, state.context, seq);
       if (!candidates || seq !== state.requestSeq) return null;
       var candidate = state.selected || preferredCandidate(candidates);
       if (!state.selected) {
-        var selectionMutation = beginMutation();
-        try {
-          await selectCandidate(candidate.id, seq);
-        } finally {
-          endMutation(selectionMutation);
-        }
+        await selectCandidate(candidate.id, seq);
         if (seq !== state.requestSeq) return null;
       }
       var result = await loadOrRunEnsembleAndOutcome(seq);
@@ -1541,15 +1630,34 @@
       notify('ready', { operation: 'idea' });
       return copyState();
     } catch (error) {
+      // A cold observed-provider refresh can legitimately replace the quote/chain while the first
+      // fan is being stored. Never display that mixed attempt, but converge automatically on a
+      // newly captured market snapshot instead of stranding the user in a partial error screen.
+      if (error && error.code === 'DESK_MARKET_ROLLOVER'
+          && seq === state.requestSeq && marketRolloverRetries < 2) {
+        notify('loading', { operation: 'market-refresh', retry: marketRolloverRetries + 1 });
+        var queuedIdeaSupersedesRetry = !!pendingIdeaContext;
+        endMutation(mutationOwner);
+        mutationOwner = null;
+        if (queuedIdeaSupersedesRetry) return null;
+        return openIdea(Object.assign({}, state.context || context, {
+          __marketRolloverRetries: marketRolloverRetries + 1
+        }));
+      }
       return fail(seq, 'idea', error);
+    } finally {
+      if (mutationOwner != null) endMutation(mutationOwner);
     }
   }
 
   async function chooseCandidate(candidateId) {
     if (!state.enabled) return null;
     if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
+    if (!state.ensemble || !state.ensemble.ensemble || !state.ensemble.ensemble.id) {
+      throw new Error('Wait for the current outcome ensemble before changing the selected strategy.');
+    }
     var seq = ++state.requestSeq;
-    var mutationOwner = beginMutation();
+    var mutationOwner = beginMutation('candidate');
     state.draft = null;
     draftPreviewSeq++;
     state.error = null;
@@ -1567,11 +1675,9 @@
       await loadDecisionState(seq);
       if (seq !== state.requestSeq) return null;
       await previewDecision({ type: 'MARKET', qty: state.selected && state.selected.qty || 1 }, seq);
-      endMutation(mutationOwner);
       notify('ready', { operation: 'candidate' });
       return copyState();
     } catch (error) {
-      endMutation(mutationOwner);
       return fail(seq, 'candidate', error);
     } finally {
       endMutation(mutationOwner);
@@ -1603,7 +1709,7 @@
       throw new Error('Preview the current execution instruction before committing it.');
     }
     var seq = ++state.requestSeq;
-    state.mutationPending = true;
+    var mutationOwner = beginMutation('order-commit');
     state.error = null;
     notify('loading', { operation: 'order-commit' });
     try {
@@ -1620,15 +1726,20 @@
       var response = await requireApi().post('/api/plans/' + encodeURIComponent(state.plan.id)
         + '/decision/trade', body);
       if (seq !== state.requestSeq) return null;
+      var detached = activeMutationCancelled;
       acceptPlan(response.plan || state.plan);
       state.decisionPreview = null;
       state.decisionPreviewKey = null;
-      state.mutationPending = false;
-      notify('committed', { operation: 'order-commit', response: response });
+      // A successful commitment leaves this decision journey. A cap change queued while the
+      // trade was being recorded belongs to the superseded idea, so it must not replay later
+      // against whichever Plan happens to be active next.
+      clearPendingGovernorRefresh();
+      notify('committed', { operation: 'order-commit', response: response, detached: detached });
       return response;
     } catch (error) {
-      state.mutationPending = false;
       return fail(seq, 'order-commit', error);
+    } finally {
+      endMutation(mutationOwner);
     }
   }
 
@@ -1728,24 +1839,37 @@
   }
 
   var governorTimer = null;
+  var pendingGovernorContext = null;
+
+  function clearPendingGovernorRefresh() {
+    if (governorTimer) window.clearTimeout(governorTimer);
+    governorTimer = null;
+    pendingGovernorContext = null;
+  }
+
+  function flushGovernorRefresh() {
+    governorTimer = null;
+    if (!pendingGovernorContext || state.mutationPending) return;
+    var next = pendingGovernorContext;
+    pendingGovernorContext = null;
+    openIdea(next).catch(function () { /* openIdea publishes its typed failure */ });
+  }
+
   document.addEventListener('change', function (event) {
     var control = event.target && event.target.closest && event.target.closest('[data-gov]');
     if (!control || !state.enabled || !state.context || !window.decide) return;
     var key = control.getAttribute('data-gov');
     if (key !== 'risk' && key !== 'minPop' && key !== 'maxAsn') return;
     if (governorTimer) window.clearTimeout(governorTimer);
-    governorTimer = window.setTimeout(function () {
-      governorTimer = null;
-      if (!window.decide || !state.context) return;
-      var next = Object.assign({}, state.context, {
-        symbol: window.decide.sym,
-        goal: window.decide.goal,
-        view: window.decide.view,
-        horizon: window.decide.horizon,
-        governors: Object.assign({}, window.decide.govs || {})
-      });
-      openIdea(next).catch(function () { /* openIdea publishes its typed failure */ });
-    }, 180);
+    pendingGovernorContext = Object.assign({}, state.context, {
+      __deskGovernorOverride: true,
+      symbol: window.decide.sym,
+      goal: window.decide.goal,
+      view: window.decide.view,
+      horizon: window.decide.horizon,
+      governors: Object.assign({}, window.decide.govs || {})
+    });
+    governorTimer = window.setTimeout(flushGovernorRefresh, 180);
   });
 
   window.DeskBackend = {
@@ -1761,12 +1885,13 @@
     commitOrder: commitOrder,
     scenarioAnimation: scenarioAnimation,
     cancel: function () {
-      if (!state.mutationPending) state.requestSeq++;
+      pendingIdeaContext = null;
+      if (state.mutationPending) activeMutationCancelled = true;
+      if (!state.mutationPending || activeMutationKind !== 'order-commit') state.requestSeq++;
       state.animationSeq++;
       draftPreviewSeq++;
       if (!state.mutationPending) state.draft = null;
-      if (governorTimer) window.clearTimeout(governorTimer);
-      governorTimer = null;
+      clearPendingGovernorRefresh();
       invalidateDecisionPreview('cancelled');
     }
   };

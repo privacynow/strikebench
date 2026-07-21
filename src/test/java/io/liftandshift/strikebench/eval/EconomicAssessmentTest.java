@@ -139,8 +139,34 @@ class EconomicAssessmentTest {
 
         assertThat(profiled.expectedValueCents()).isNull();
         assertThat(profiled.evHistVolCents()).isNull();
+        assertThat(profiled.scenarios()).as("a time spread has no false single-expiration grid").isEmpty();
+        assertThat(profiled.terminalPayoff().available()).isFalse();
+        assertThat(profiled.terminalPayoff().unavailableReason()).contains("supplied-path valuation");
         assertThat(profiled.evBasisNote()).contains("multi-expiration");
         assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
+    }
+
+    @Test void evaluationCarriesExactServerOwnedPayoffCheckpoints() {
+        RiskProfile risk = new RiskProfiler().profile(candidate(0.50), ctx());
+
+        assertThat(risk.terminalPayoff().available()).isTrue();
+        assertThat(risk.terminalPayoff().schemaVersion()).isEqualTo("risk-terminal-payoff-1");
+        assertThat(risk.terminalPayoff().basis()).isEqualTo("EXPIRATION_INTRINSIC");
+        assertThat(risk.terminalPayoff().entryBasis()).isEqualTo("CAPTURED_CANDIDATE_NET");
+        assertThat(risk.terminalPayoff().anchorSpotCents()).isEqualTo(10_000L);
+        assertThat(risk.terminalPayoff().points()).hasSizeGreaterThan(60);
+        assertThat(risk.terminalPayoff().points()).anySatisfy(point -> {
+            assertThat(point.price()).isEqualByComparingTo("100");
+            assertThat(point.profitCents()).isEqualTo(-20_000);
+        });
+        assertThat(risk.terminalPayoff().points()).anySatisfy(point -> {
+            assertThat(point.price()).isEqualByComparingTo("102");
+            assertThat(point.profitCents()).isZero();
+        });
+        assertThat(risk.terminalPayoff().points()).anySatisfy(point -> {
+            assertThat(point.price()).isEqualByComparingTo("105");
+            assertThat(point.profitCents()).isEqualTo(30_000);
+        });
     }
 
     @Test void realizedVolLaneUsesTheExactPackagePrice() {
