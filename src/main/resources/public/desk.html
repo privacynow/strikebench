@@ -4513,6 +4513,7 @@ function deskBackendChanged(payload){
   } else if(phase==='outcome'&&payload.outcome){
     decide.outcome=payload.outcome;
   } else if(phase==='decision-preview'&&payload.preview){
+    decide.deskPickId=payload.deskPickId||null;
     applyAuthoritativePreview(payload.preview);
   } else if(phase==='decision-preview-invalidated'){
     decide.orderPreview=null; decide.order.previewPending=true; decide.order.review=false;

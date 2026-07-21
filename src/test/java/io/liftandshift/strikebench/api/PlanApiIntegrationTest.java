@@ -1645,13 +1645,22 @@ class PlanApiIntegrationTest {
         assertThat(restingLimit.at("/order/presentlyExecutable").asBoolean()).isFalse();
         assertThat(restingLimit.at("/preview/ok").asBoolean()).isFalse();
 
+        JsonNode legacyMarketRoundTrip = json(post("/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1,\"proposedNetCents\":" + naturalNet + "}"));
+        assertThat(legacyMarketRoundTrip.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
+        assertThat(legacyMarketRoundTrip.at("/order/proposedNetCents").asLong()).isEqualTo(naturalNet);
+
         var tradeRequest = Json.MAPPER.createObjectNode();
         tradeRequest.put("expectedVersion", version);
         tradeRequest.put("qty", 1);
-        tradeRequest.set("orderInstruction", preview.at("/order/orderInstruction"));
-        if (preview.has("ackToken")) tradeRequest.put("ackToken", preview.get("ackToken").asText());
+        tradeRequest.put("proposedNetCents", naturalNet);
+        if (legacyMarketRoundTrip.has("ackToken")) {
+            tradeRequest.put("ackToken", legacyMarketRoundTrip.get("ackToken").asText());
+        }
         var acknowledgments = tradeRequest.putArray("acknowledgedRisks");
-        for (JsonNode ack : preview.withArray("requiredAcks")) acknowledgments.add(ack.get("id").asText());
+        for (JsonNode ack : legacyMarketRoundTrip.withArray("requiredAcks")) {
+            acknowledgments.add(ack.get("id").asText());
+        }
         JsonNode opened = json(post("/api/plans/" + tradePlanId + "/decision/trade", tradeRequest.toString()));
         assertThat(opened.at("/plan/status").asText()).isEqualTo("POSITION_OPEN");
         assertThat(opened.at("/plan/furthestStage").asText()).isEqualTo("MANAGE_REVIEW");

@@ -707,6 +707,8 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
   const proposedNetCents = selected.entryNetPremiumCents;
   const executable = instruction.type === 'MARKET' || limit <= proposedNetCents;
   const isCustom = selected.id === CUSTOM_CANDIDATE_ID;
+  const restingReason = executable ? null
+    : 'Your limit is more favorable than the executable market. The order is RESTING and is not presently executable.';
   return {
     plan: plan(version),
     selected,
@@ -717,6 +719,8 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
       reserveCents: selected.maxLossCents,
       popEntry: selected.evaluation?.risk?.pop ?? selected.pop,
       breakevens: selected.breakevens,
+      ok: executable,
+      blockReasons: restingReason ? [restingReason] : [],
       freshness: 'FRESH',
       evidence: { source: 'BACKEND_TEST_RECEIPT', lane: 'OBSERVED' },
       payoff: isCustom ? customTradePreview({ legs: selected.legs }).preview.payoff : [
@@ -726,7 +730,8 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
       ]
     },
     evaluation: {},
-    guardrails: { level: 'PASS', blockReasons: [], warnings: [] },
+    guardrails: { level: executable ? 'PASS' : 'BLOCK',
+      blockReasons: restingReason ? [restingReason] : [], warnings: [] },
     requiredAcks: [],
     ackToken: 'ack-desk-test',
     order: {
@@ -2679,7 +2684,10 @@ test('unavailable execution preserves candidate economics without promoting zero
         quoteFreshness: state.market.quote.freshness,
         chainFreshness: state.market.chain.freshness,
         ensembleAnchorFreshness: state.ensemble.preview.receipt.anchorFreshness,
-        previewFreshness: window.decide.orderPreview.preview.freshness
+        previewFreshness: window.decide.orderPreview.preview.freshness,
+        deskPickId: window.decide.deskPickId,
+        pickBadges: document.querySelectorAll('.fanr .pickbadge').length,
+        rankRead: document.querySelector('.dcleft .modebar .hint')?.textContent
       };
     }, CANDIDATE_ID);
 
@@ -2696,6 +2704,10 @@ test('unavailable execution preserves candidate economics without promoting zero
     assert.equal(rendered.ensembleAnchorFreshness, 'STALE',
       'analysis retains the prior-close anchor provenance through the ensemble');
     assert.equal(rendered.previewFreshness, 'STALE');
+    assert.equal(rendered.deskPickId, null,
+      'an unavailable exact package cannot retain the Desk Pick endorsement');
+    assert.equal(rendered.pickBadges, 0);
+    assert.match(rendered.rankRead, /no endorsable pick/i);
     assert.match(rendered.dockText, /candidate −\$123 debit · execution unavailable/i);
     assert.match(rendered.dockText, /book unavailable/i);
     assert.match(rendered.dockText, /Cannot execute AMD from a stale observed option book/i);
@@ -3039,13 +3051,21 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
         maxLoss: row.maxLoss,
         maxProfit: row.maxProfit,
         pop: row.pop,
-        instruction: window.decide.orderPreview.order.orderInstruction.type
+        instruction: window.decide.orderPreview.order.orderInstruction.type,
+        deskPickId: window.decide.deskPickId,
+        pickBadges: document.querySelectorAll('.fanr .pickbadge').length
       };
     }, CANDIDATE_ID);
-    assert.deepEqual(Object.assign({}, candidateAfter, { instruction: undefined }),
-      Object.assign({}, candidateBefore, { instruction: undefined }),
+    const economicsAfter = Object.assign({}, candidateAfter);
+    delete economicsAfter.instruction;
+    delete economicsAfter.deskPickId;
+    delete economicsAfter.pickBadges;
+    assert.deepEqual(economicsAfter, candidateBefore,
       'LIMIT preview stays in the execution dock and cannot replace candidate/outcome economics');
     assert.equal(candidateAfter.instruction, 'LIMIT');
+    assert.equal(candidateAfter.deskPickId, CANDIDATE_ID,
+      'a resting limit changes execution timing without demoting the analytical Desk Pick');
+    assert.equal(candidateAfter.pickBadges, 1);
 
     const race = await page.evaluate(async () => {
       const first = window.DeskBackend.scenarioAnimation({ movePct: -5, days: 10 });
@@ -3383,7 +3403,9 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
       risk: document.querySelector('.fanr.sel .rchip')?.textContent.trim(),
       riskTitle: document.querySelector('.fanr.sel .fanicon')?.getAttribute('title'),
       reviewDisabled: document.querySelector('[data-dec="review"]')?.disabled,
-      dock: document.querySelector('.execute')?.textContent
+      dock: document.querySelector('.execute')?.textContent,
+      deskPickId: window.decide.deskPickId,
+      pickBadges: document.querySelectorAll('.fanr .pickbadge').length
     }));
     assert.equal(rendered.risk, 'unknown');
     assert.match(rendered.riskTitle, /classification unavailable/i);
@@ -3391,6 +3413,9 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
     assert.match(rendered.dock, /guardrails block this exact package/i,
       'execution pricing and placement guardrails remain separately visible');
     assert.match(rendered.dock, /exceeds the backend loss limit/i);
+    assert.equal(rendered.deskPickId, null,
+      'a final exact-package guardrail block removes the Desk Pick endorsement');
+    assert.equal(rendered.pickBadges, 0);
 
     const guard = await page.evaluate(() => {
       window.decAction('review');

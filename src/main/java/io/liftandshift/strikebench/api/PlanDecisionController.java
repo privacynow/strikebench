@@ -106,6 +106,7 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
+        body = normalizeLegacyMarketRoundTrip(ctx, plan, candidate, body);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),

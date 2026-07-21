@@ -2625,7 +2625,24 @@ test('Plan Decide freezes one server-owned package and opens the linked paper po
     await checkbox.check();
   }
   await page.click('#plan-place-trade');
-  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id, { timeout: 30000 });
+  await page.waitForFunction(id => location.hash === '#/plan/' + id + '/manage-review', plan.id,
+    { timeout: 30000 }).catch(async error => {
+      const state = await page.evaluate(async id => {
+        let decision = null;
+        try { decision = await API.getFresh('/api/plans/' + id + '/decision/latest'); }
+        catch (requestError) { decision = { error: requestError.message }; }
+        return {
+          hash: location.hash,
+          ready: document.getElementById('app')?.dataset.ready,
+          routeError: document.getElementById('route-error')?.textContent || null,
+          toast: document.getElementById('toast-region')?.textContent || null,
+          review: document.getElementById('plan-decision-review')?.textContent || null,
+          decision
+        };
+      }, plan.id);
+      throw new Error('paper decision did not advance atomically: ' + JSON.stringify(state)
+        + ' :: ' + error.message);
+    });
   const frozen = await page.evaluate(async id => API.getFresh('/api/plans/' + id + '/decision/latest'), plan.id);
   assert.equal(frozen.plan.status, 'POSITION_OPEN');
   assert.equal(frozen.plan.furthestStage, 'MANAGE_REVIEW');
@@ -5213,9 +5230,13 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByLabel('Broker text', { exact: true }).fill(brokerPaste);
   await page.getByRole('button', { name: 'Preview broker facts', exact: true }).click();
   await page.waitForSelector('.broker-import-group');
-  assert.match(await page.textContent('.broker-import-preview'),
-    /4 packages ready for explicit verification[\s\S]*EXACT FILLS[\s\S]*PACKAGE NET — PENDING/,
-    'one preview separates exact fills from package-net-only groups before any write');
+  const brokerPreviewText = await page.textContent('.broker-import-preview');
+  assert.match(brokerPreviewText, /4 packages ready for explicit verification/,
+    'one statement-wide preview accounts for every package before any write');
+  assert.match(brokerPreviewText, /EXACT FILLS/,
+    'the preview identifies packages with exact broker fills');
+  assert.match(brokerPreviewText, /PACKAGE NET — PENDING/,
+    'the preview separates package-net-only groups for explicit resolution');
   assert.match(await page.textContent('.broker-import-preview'),
     /Pasted snapshot[\s\S]*(Observed re-mark|No eligible Observed current mark)/,
     'pasted statement marks stay visibly stale beside a provenance-qualified independent re-mark');
@@ -5470,6 +5491,7 @@ test('tracked portfolios preserve external accounting, performance, tax, exports
   await page.getByRole('spinbutton', { name: 'Total account value $', exact: true }).fill('101000');
   await page.getByRole('spinbutton', { name: 'Cash $ (optional)', exact: true }).fill('99004');
   await page.getByRole('spinbutton', { name: 'Securities $ (optional)', exact: true }).fill('1996');
+  await page.getByLabel('As of date and time', { exact: true }).fill('2026-07-13T10:30');
   await page.getByRole('textbox', { name: 'Statement reference', exact: true }).fill('dom-value-later');
   await page.getByRole('textbox', { name: 'Notes', exact: true }).fill('Manual statement value');
   await page.getByRole('button', { name: 'Record reconciliation', exact: true }).click();
