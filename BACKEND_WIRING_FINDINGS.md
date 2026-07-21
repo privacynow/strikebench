@@ -79,6 +79,26 @@ disabled Review, and did not promote the backend's legacy zero sentinel into a `
 -20% scenario again displayed a bounded set of original noisy paths with one focus trajectory and
 server-valued progression. No trade was submitted.
 
+A later fresh-tab check exposed an analysis/execution boundary bug rather than a missing option
+surface. AMD still had a large two-sided Cboe chain, but its enclosing observed receipt had aged to
+`STALE`; Strategy required execution freshness before it would even form an analytical competition.
+That returned a valid empty competition, which the Desk then incorrectly promoted to a fatal screen
+while discarding the backend notes. The corrected boundary now permits same-lane `STALE` observations
+for explicitly labeled prior-close analysis and retains the ordinary placement gate for preview and
+commitment. The rebuilt closed-market AMD flow returned nine ranked packages, selected an exact
+four-leg condor, loaded its 500-path ensemble and same-ensemble outcome, and rendered noisy stored
+paths. The Practice preview remained `UNAVAILABLE`, retained the candidate's +$2,560 credit as
+analysis rather than an executable quote, and kept Review disabled. No trade was submitted.
+
+The same Desk then exercised the canonical closed-market teaching flow instead of a browser fixture.
+It created `simw_0a4pg75hnb2q8p6m` through `/api/sim/market` using AMD's server-owned stale observed
+anchor, waited for preparation, started it, selected it through `/api/world`, and verified both the
+world and config receipts before reloading the declaration. StrikeBench created the separate
+SIMULATED Plan `plan_qvqbga4ffes4j6rw`; the screen returned eight ranked packages, a new authoritative
+fan/outcome, simulated provenance, and an executable Practice preview. Returning through the same
+world API resumed observed Plan `plan_ef6bks1dmngsq7ah`; neither Plan was copied across worlds or
+mutated into the other. No order was submitted.
+
 This proves the quote/expiration/chain seam while the market is open. It does not prove order
 placement, fill state, historical coverage, or that every contract is executable. Those retain
 their existing gates.
@@ -181,12 +201,40 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
   more width and the risk map more useful height; intermediate and mobile widths retain their
   structural breakpoints. Scenario receipt text updates in place when Outcomes arrive, preserving
   the same scenario DOM node without leaving a stale “loading” label.
+- Same-lane stale observations are now an analysis input, not an execution claim. Recommendation
+  and signal evaluation use the existing evidence receipt's `usableIn` contract, while normal
+  `Guardrails.check`, decision preview, and trade placement still require executable observations.
+  The analysis-only guardrail path adds an explicit prior-close warning instead of silently
+  weakening the placement gate.
+- A fingerprinted zero-candidate competition is a stable Desk result. The declaration, quote/chain
+  provenance, backend notes, and canonical family `reasons[]` remain visible with explicit horizon,
+  intent, and simulated-market actions; selection, ensemble, outcome, and preview are not called,
+  and no prototype package is substituted. The same empty receipt may be reused for its identical
+  declaration rather than rerunning on every retry.
+- Screens & Caps no longer submit undeclared defaults. A one-session horizon does not imply 0DTE,
+  and fixed prototype POP, assignment, or numeric loss thresholds are omitted until the user moves
+  the corresponding control. Explicit edits retain the existing unit conversions and rerun the
+  canonical competition. The qualitative Plan posture remains the backend-owned default budget.
+- The Observed/Simulated control now uses the existing durable simulation and world-transition
+  owners. It creates or resumes a symbol-bearing non-rehearsal world, waits for server-side anchor
+  resolution, refuses an excluded underlying, starts the session, PUTs and verifies the selected
+  world/config, clears every old financial receipt, and reloads the same declaration into a
+  world-owned Plan. Returning to Observed performs the inverse transition and resumes the observed
+  Plan rather than rewriting the simulated one.
 - Backend rank remains visible and unmodified. Desk Pick is a separate candidate identity and is
-  shown only for a mechanically usable `COHERENT` backend assessment; if no such candidate exists,
-  the Desk does not invent an endorsement. Screened alternatives keep readable names and verdicts
-  while secondary metrics remain visually quiet. Authoritative candidates are no longer re-screened
-  by browser-only caps, eliminating the contradictory “Desk Pick / screened” state and the mass
-  dimming seen in the interim review.
+  shown only when the backend assessment is mechanically eligible, `COHERENT`, and economically
+  `FAVORABLE`; an adverse `LEARN_FROM` comparison can never become the endorsement merely because
+  it ranked first. If no package clears all three gates, the Desk says `no endorsable pick` and
+  keeps the ranked packages available as comparisons. Screened alternatives keep readable names
+  and verdicts while secondary metrics remain visually quiet. Authoritative candidates are no
+  longer re-screened by browser-only caps, eliminating the contradictory “Desk Pick / screened”
+  state and the mass dimming seen in the interim review.
+- Iron-condor construction is now package-aware. The existing vertical builder is reused, but each
+  condor short must remain strictly on its own side of spot and the final strikes must satisfy
+  `long put < short put < short call < long call`. Crossed four-leg packages stay analyzable as
+  `CUSTOM`; they cannot inherit iron-condor range-income names or explanations. The Plan strategy
+  engine version changed so persisted competitions created by the old geometry are not silently
+  restored into the corrected Desk.
 - Ranked and restored candidates now carry `StrategyCatalog.PositionIdentity`, including the
   canonical defined-risk classification. Nullable or model-dependent maximum-profit fields no
   longer force the browser to guess a structure's risk class. If catalog classification is
@@ -226,6 +274,12 @@ not. The map retains useful height instead of becoming a tiny sidecar on wide sc
   surface can result. A financially completed trade remains committed after navigation, but its
   detached receipt cannot close the replacement idea; a canceled exact-package application stops
   before publishing selection, outcome, or preview state into that replacement journey.
+- Exact-leg editing is a pure preview until the edited package is explicitly applied. Pending,
+  blocked, and valid-but-unapplied drafts keep the selected package's payoff, conditioned paths,
+  scenario checkpoints, probabilities, and animation together as one authoritative artifact while
+  the leg workbench independently shows the draft and its backend preview status. Canceling the
+  draft explicitly restores the selected order preview; no zero-valued draft shell or generic-path /
+  conditioned-payoff mixture can appear.
 - The current HTTP Book/Position surface is still a labeled visual fixture and does not yet call the
   Desk bridge. A persistent compact position context strip prevents quote/event/news orientation
   from disappearing during Mechanics/Book pane changes or leg adjustment; its mobile detail rail

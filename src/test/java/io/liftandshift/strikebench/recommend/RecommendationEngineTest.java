@@ -62,6 +62,62 @@ class RecommendationEngineTest {
                 true, false, null, null, null);
     }
 
+    private static MarketDataProvider staleObservedProvider(Clock clock) {
+        FixtureProvider fixture = new FixtureProvider(clock);
+        return new MarketDataProvider() {
+            @Override public String name() { return "cboe-test"; }
+            @Override public Set<io.liftandshift.strikebench.market.Domain> domains() { return fixture.domains(); }
+            @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) {
+                return fixture.lookup(q);
+            }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String symbol) {
+                return fixture.quote(symbol).map(q -> new io.liftandshift.strikebench.model.Quote(
+                        q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
+                        q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(),
+                        "cboe-test", io.liftandshift.strikebench.model.Freshness.STALE));
+            }
+            @Override public List<LocalDate> expirations(String symbol) { return fixture.expirations(symbol); }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(
+                    String symbol, LocalDate expiration) {
+                return fixture.chain(symbol, expiration).map(chain -> new io.liftandshift.strikebench.model.OptionChain(
+                        chain.underlying(), chain.expiration(), chain.underlyingPrice(),
+                        chain.calls().stream().map(this::stale).toList(),
+                        chain.puts().stream().map(this::stale).toList(), chain.asOfEpochMs(),
+                        "cboe-test", io.liftandshift.strikebench.model.Freshness.STALE));
+            }
+            private io.liftandshift.strikebench.model.OptionQuote stale(
+                    io.liftandshift.strikebench.model.OptionQuote quote) {
+                return new io.liftandshift.strikebench.model.OptionQuote(
+                        quote.underlying(), quote.occSymbol(), quote.type(), quote.strike(), quote.expiration(),
+                        quote.bid(), quote.ask(), quote.last(), quote.volume(), quote.openInterest(), quote.iv(),
+                        quote.delta(), quote.gamma(), quote.theta(), quote.vega(), quote.asOfEpochMs(),
+                        "cboe-test", io.liftandshift.strikebench.model.Freshness.STALE);
+            }
+            @Override public List<io.liftandshift.strikebench.model.Candle> candles(
+                    String symbol, LocalDate from, LocalDate to) {
+                return List.of();
+            }
+        };
+    }
+
+    @Test
+    void staleObservedCloseSupportsLabeledStrategyAnalysis() {
+        Clock closed = Clock.fixed(Instant.parse("2026-07-08T22:00:00Z"), ZoneId.of("America/New_York"));
+        MarketDataProvider provider = staleObservedProvider(closed);
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(provider), List.of(), List.of()), closed);
+
+        RecommendationEngine.Result result = observed.recommend(
+                req("AAPL", "neutral", "week", "conservative"), BP);
+
+        assertThat(result.candidates())
+                .as("notes=%s rejected=%s", result.notes(), result.rejected()).isNotEmpty();
+        assertThat(result.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.freshness()).isEqualTo("STALE"));
+        assertThat(result.notes()).anySatisfy(note ->
+                assertThat(note).contains("market is closed").contains("PRIOR CLOSE"));
+    }
+
     private static RecommendationEngine.Request intentReq(String intent, RecommendationEngine.Holdings holdings,
                                                           RecommendationEngine.Filters filters) {
         return new RecommendationEngine.Request("AAPL", null, "month", "balanced", null, null, null, null,

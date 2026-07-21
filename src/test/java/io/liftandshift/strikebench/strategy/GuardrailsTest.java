@@ -72,6 +72,22 @@ class GuardrailsTest {
     }
 
     @Test
+    void staleSameLaneQuoteWarnsForAnalysisButStillBlocksPlacement() {
+        Guardrails.Proposal p = proposal(StrategyFamily.LONG_CALL,
+                List.of(leg(LegAction.BUY, OptionType.CALL, "100")),
+                List.of(quote(OptionType.CALL, "100", "2.40", "2.60", 5000, 300, Freshness.STALE)));
+
+        Verdict analysis = Guardrails.checkForAnalysis(p);
+        Verdict placement = Guardrails.check(p);
+
+        assertThat(analysis.blocked()).isFalse();
+        assertThat(analysis.warnings()).anySatisfy(warning -> assertThat(warning)
+                .contains("STALE").contains("not executable"));
+        assertThat(placement.blocked()).isTrue();
+        assertThat(placement.blockReasons()).anySatisfy(reason -> assertThat(reason).contains("STALE"));
+    }
+
+    @Test
     void missingQuoteBlocksAsChainless() {
         List<OptionQuote> quotes = new ArrayList<>();
         quotes.add(null);

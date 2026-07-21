@@ -30,6 +30,7 @@
     animation: null,
     context: null,
     rejections: [],
+    strategyNotes: [],
     error: null
   };
   var mutationOwnerSequence = 0;
@@ -738,7 +739,9 @@
     var sourceCandidate = draftSourceCandidate(sourceCandidateId);
     var position;
     state.animationSeq++;
-    state.animation = null;
+    /* Editing is a pure preview until the user applies the exact package. Preserve the last
+       accepted selected-candidate animation while canceling any in-flight projection request;
+       otherwise the UI can mix a generic fan with the still-selected conditioned valuation. */
     invalidateDecisionPreview('draft-changed');
     try {
       position = canonicalDraftPosition(legs, sourceCandidate);
@@ -938,19 +941,29 @@
   function strategyControls(context) {
     var governors = Object.assign({}, window.decide && window.decide.govs || {},
       context && (context.governors || context.govs) || {});
-    var controls = { allow0dte: horizonDays(context) <= 1 };
+    var explicit = Object.assign({}, window.decide && window.decide.govExplicit || {},
+      context && (context.governorExplicit || context.govExplicit) || {});
+    // A one-session decision horizon is not consent to same-day gamma exposure. Keep 0DTE behind
+    // an explicit declaration when the Desk adds that control; the backend will otherwise select
+    // the nearest live expiration while retaining the Plan's one-session outcome horizon.
+    var controls = {};
+    if (context && context.allow0dte === true) controls.allow0dte = true;
     var maxLoss = number(governors.risk);
-    if (maxLoss != null && maxLoss > 0 && Number.isFinite(maxLoss)) {
+    if (explicit.risk === true && maxLoss != null && maxLoss > 0 && Number.isFinite(maxLoss)) {
       controls.maxLossCents = Math.round(maxLoss * 100);
     }
     var filters = {};
     var minPop = number(governors.minPop), maxAssignment = number(governors.maxAsn);
     var maxCost = number(governors.maxCost);
-    if (minPop != null && minPop > 0) filters.minPop = Math.max(0, Math.min(1, minPop / 100));
-    if (maxAssignment != null && maxAssignment >= 0) {
+    if (explicit.minPop === true && minPop != null && minPop > 0) {
+      filters.minPop = Math.max(0, Math.min(1, minPop / 100));
+    }
+    if (explicit.maxAsn === true && maxAssignment != null && maxAssignment >= 0) {
       filters.maxAssignmentProb = Math.max(0, Math.min(1, maxAssignment / 100));
     }
-    if (maxCost != null && maxCost > 0) filters.maxCostCents = Math.round(maxCost * 100);
+    if (explicit.maxCost === true && maxCost != null && maxCost > 0) {
+      filters.maxCostCents = Math.round(maxCost * 100);
+    }
     if (Object.keys(filters).length) controls.filters = filters;
     return controls;
   }
@@ -1050,6 +1063,9 @@
   function rejectionText(rejection) {
     if (!rejection) return null;
     if (rejection.reason) return String(rejection.reason);
+    if (Array.isArray(rejection.reasons) && rejection.reasons.length) {
+      return rejection.reasons.map(String).join('; ');
+    }
     if (Array.isArray(rejection.blockReasons) && rejection.blockReasons.length) {
       return rejection.blockReasons.map(String).join('; ');
     }
@@ -1153,17 +1169,23 @@
     var result = strategy && strategy.result;
     var ranked = result && Array.isArray(result.candidates) ? result.candidates : [];
     var rejected = result && Array.isArray(result.rejected) ? result.rejected : [];
+    var notes = result && Array.isArray(result.notes) ? result.notes.map(String) : [];
     var visible = mergeSelectedCandidate(ranked, selected);
     if (!ranked.length && !selected) {
-      var reasons = rejected.map(rejectionText).filter(Boolean).slice(0, 3);
       state.strategy = strategy;
       state.candidates = [];
       state.selected = null;
       state.rejections = rejected.slice();
+      state.strategyNotes = notes.slice();
       state.deskPickId = null;
-      notify('strategy-rejected', { plan: state.plan, strategy: strategy, rejected: rejected });
-      throw new Error('StrikeBench produced no eligible strategy for this declared idea.'
-        + (reasons.length ? ' ' + reasons.join(' ') : ''));
+      notify('strategy-empty', {
+        plan: state.plan,
+        strategy: strategy,
+        notes: notes,
+        rejected: rejected,
+        reasons: rejected.map(rejectionText).filter(Boolean)
+      });
+      return [];
     }
     await classifyCandidates(visible);
     if (seq !== state.requestSeq) return null;
@@ -1171,6 +1193,7 @@
     state.candidates = visible;
     state.selected = selected || null;
     state.rejections = rejected.slice();
+    state.strategyNotes = notes.slice();
     var deskPick = deskPickCandidate(ranked);
     state.deskPickId = deskPick && deskPick.id || null;
     notify('strategy', Object.assign({
@@ -1240,7 +1263,7 @@
         && Array.isArray(terminal.points) && terminal.points.length >= 2);
     });
     var reusable = strategy && String(strategy.state || 'CURRENT').toUpperCase() === 'CURRENT'
-      && result && Array.isArray(result.candidates) && (candidates.length || restored) && !!(receipt
+      && result && Array.isArray(result.candidates) && !!(receipt
         && currentEvaluationContract
         && receipt.declarationFingerprint === fingerprint
         && receipt.inputHash
@@ -1269,9 +1292,20 @@
       && candidate.evaluation.assessment.coherence.verdict || 'UNAVAILABLE').toUpperCase();
   }
 
+  function candidateEconomics(candidate) {
+    return String(candidate.evaluation && candidate.evaluation.assessment
+      && candidate.evaluation.assessment.economics
+      && candidate.evaluation.assessment.economics.verdict || 'UNAVAILABLE').toUpperCase();
+  }
+
   function deskPickCandidate(candidates) {
     return candidates.find(function (candidate) {
-      return mechanicallyUsable(candidate) && candidateCoherence(candidate) === 'COHERENT';
+      // COHERENT answers whether the package expresses the declaration; it is not an
+      // endorsement. Only the backend's favorable after-cost economic verdict may promote a
+      // mechanically usable, coherent package to Desk Pick. Mixed, unavailable, and adverse
+      // packages remain ranked comparisons and may still be selected explicitly.
+      return mechanicallyUsable(candidate) && candidateCoherence(candidate) === 'COHERENT'
+        && candidateEconomics(candidate) === 'FAVORABLE';
     }) || null;
   }
 
@@ -1572,6 +1606,136 @@
     return body;
   }
 
+  function pause(milliseconds) {
+    return new Promise(function (resolve) { window.setTimeout(resolve, milliseconds); });
+  }
+
+  function sessionSupportsSymbol(session, symbol) {
+    var betas = session && session.config && session.config.symbolBetas || {};
+    return Object.keys(betas).some(function (key) {
+      return String(key).toUpperCase() === String(symbol).toUpperCase();
+    });
+  }
+
+  async function waitForPreparedWorld(worldId, symbol) {
+    var deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      var rows = (await requireApi().getFresh('/api/sim/market')).sessions || [];
+      var session = rows.find(function (row) { return String(row.id) === String(worldId); });
+      if (!session) throw new Error('The new simulated market could not be found.');
+      var status = String(session.status || '').toUpperCase();
+      if (status === 'CREATED' || status === 'PAUSED' || status === 'RUNNING') {
+        if (!sessionSupportsSymbol(session, symbol)) {
+          var anchors = await requireApi().getFresh('/api/sim/market/' + encodeURIComponent(worldId) + '/anchors');
+          var exclusion = (anchors.excluded || []).find(function (row) {
+            return String(row.symbol || '').toUpperCase() === String(symbol).toUpperCase();
+          });
+          throw new Error(symbol + ' could not enter the simulated market'
+            + (exclusion && exclusion.reason ? ': ' + exclusion.reason : ' because no server-owned anchor was available.'));
+        }
+        return session;
+      }
+      if (status === 'FAILED' || status === 'FINISHED') {
+        throw new Error('The simulated market is ' + status.toLowerCase()
+          + '. Its durable anchor receipt remains available in Data.');
+      }
+      await pause(500);
+    }
+    throw new Error('The simulated market is still preparing. It remains saved in Data; enter it when its status becomes ready.');
+  }
+
+  async function simulatedWorldFor(symbol) {
+    var api = requireApi();
+    var rows = (await api.getFresh('/api/sim/market')).sessions || [];
+    var unique = [];
+    rows.forEach(function (row) {
+      if (!row || row.rehearsal || unique.some(function (saved) { return String(saved.id) === String(row.id); })) return;
+      var status = String(row.status || '').toUpperCase();
+      if (status !== 'FAILED' && status !== 'FINISHED' && sessionSupportsSymbol(row, symbol)) unique.push(row);
+    });
+    var running = unique.filter(function (row) { return String(row.status || '').toUpperCase() === 'RUNNING'; });
+    if (running.length === 1) return running[0];
+    if (unique.length > 1) {
+      throw new Error('More than one ' + symbol + ' simulated market is available. Choose the exact world in Data so its provenance is explicit.');
+    }
+    if (unique.length === 1) return waitForPreparedWorld(unique[0].id, symbol);
+    var created = await api.post('/api/sim/market', {
+      name: symbol + ' Desk simulation',
+      symbols: Object.fromEntries([[symbol, 1.0]]),
+      scenario: 'CHOP',
+      speed: 26,
+      allowFictional: false
+    });
+    return waitForPreparedWorld(created.worldId, symbol);
+  }
+
+  function clearAuthoritativeArtifacts() {
+    state.market = null;
+    state.plan = null;
+    state.planIdentity = null;
+    state.strategy = null;
+    state.candidates = [];
+    state.deskPickId = null;
+    state.selected = null;
+    state.ensemble = null;
+    state.outcome = null;
+    state.decision = null;
+    state.decisionPreview = null;
+    state.decisionPreviewKey = null;
+    state.draft = null;
+    state.rejections = [];
+    state.strategyNotes = [];
+    state.animation = null;
+  }
+
+  async function transitionWorld(mode, context) {
+    if (!state.enabled) return null;
+    if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
+    var mutationOwner = beginMutation('world');
+    var seq = ++state.requestSeq;
+    state.animationSeq++;
+    var requestedContext = Object.assign({}, context || state.context || {});
+    var symbol = String(requestedContext.symbol || state.context && state.context.symbol || '').trim().toUpperCase();
+    var target = null, verification = null;
+    try {
+      state.error = null;
+      notify('loading', { operation: 'market-transition' });
+      if (String(mode || '').toLowerCase() === 'observed') {
+        target = 'observed';
+      } else {
+        if (!symbol) throw new Error('Choose an underlying before creating a simulated market.');
+        var session = await simulatedWorldFor(symbol);
+        if (seq !== state.requestSeq) return null;
+        target = session.id;
+        if (String(session.status || '').toUpperCase() !== 'RUNNING') {
+          await requireApi().post('/api/sim/market/' + encodeURIComponent(target) + '/start', {});
+        }
+      }
+      var transitioned = await requireApi().put('/api/world', { world: target });
+      var checked = await Promise.all([
+        requireApi().getFresh('/api/world'), requireApi().getFresh('/api/config')
+      ]);
+      if (seq !== state.requestSeq) return null;
+      var world = checked[0] || {}, config = checked[1] || {};
+      var expectedLane = target === 'observed' ? 'OBSERVED' : 'SIMULATED';
+      if (String(world.world || '') !== String(target)
+          || String(config.world || '') !== String(target)
+          || String(config.marketLane || '').toUpperCase() !== expectedLane) {
+        throw new Error('The server did not confirm one coherent ' + expectedLane.toLowerCase() + ' market transition.');
+      }
+      clearAuthoritativeArtifacts();
+      verification = { target: target, world: world, config: config, transition: transitioned };
+      notify('world-transition', verification);
+    } catch (error) {
+      return fail(seq, 'market-transition', error);
+    } finally {
+      endMutation(mutationOwner);
+    }
+    if (!verification) return null;
+    if (!symbol || requestedContext.reopen === false) return verification;
+    return openIdea(requestedContext);
+  }
+
   async function openIdea(context) {
     if (!state.enabled) return null;
     if (state.mutationPending) {
@@ -1590,6 +1754,8 @@
     delete context.__marketRolloverRetries;
     context.governors = Object.assign({}, window.decide && window.decide.govs || {},
       context.governors || context.govs || {});
+    context.governorExplicit = Object.assign({}, window.decide && window.decide.govExplicit || {},
+      context.governorExplicit || context.govExplicit || {});
     state.context = context;
     state.error = null;
     state.plan = null;
@@ -1604,6 +1770,7 @@
     state.draft = null;
     draftPreviewSeq++;
     state.rejections = [];
+    state.strategyNotes = [];
     state.animation = null;
     invalidateDecisionPreview('idea-changed');
     try {
@@ -1616,6 +1783,10 @@
       if (!plan || seq !== state.requestSeq) return null;
       var candidates = await loadOrRunStrategy(plan, market, state.context, seq);
       if (!candidates || seq !== state.requestSeq) return null;
+      // A current, fingerprinted competition with no candidates is a valid backend result. The
+      // Desk keeps the declaration, evidence, and screening receipts visible and waits for an
+      // explicit assumption change instead of fabricating a package or entering outcome/preview.
+      if (!candidates.length) return copyState();
       var candidate = state.selected || preferredCandidate(candidates);
       if (!state.selected) {
         await selectCandidate(candidate.id, seq);
@@ -1867,7 +2038,8 @@
       goal: window.decide.goal,
       view: window.decide.view,
       horizon: window.decide.horizon,
-      governors: Object.assign({}, window.decide.govs || {})
+      governors: Object.assign({}, window.decide.govs || {}),
+      governorExplicit: Object.assign({}, window.decide.govExplicit || {})
     });
     governorTimer = window.setTimeout(flushGovernorRefresh, 180);
   });
@@ -1883,6 +2055,7 @@
     useDraft: useDraft,
     repreviewOrder: repreviewOrder,
     commitOrder: commitOrder,
+    transitionWorld: transitionWorld,
     scenarioAnimation: scenarioAnimation,
     cancel: function () {
       pendingIdeaContext = null;

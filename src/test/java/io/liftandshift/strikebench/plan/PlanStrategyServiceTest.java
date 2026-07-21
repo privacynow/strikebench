@@ -195,6 +195,28 @@ class PlanStrategyServiceTest {
         assertThat(selectedId).isNotBlank();
     }
 
+    @Test void obsoleteCompetitionEngineIsNotRestoredAsCurrentAnalysis() {
+        Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                new Plan.CreateRequest("strategy-engine-version", "AAPL", "INCOME", null, null,
+                        "neutral", 30, null, "conservative", null, null, null, null));
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        result.put("symbol", "AAPL");
+        result.put("thesis", "neutral");
+        result.put("horizon", "month");
+        result.put("riskMode", "conservative");
+        result.put("intent", "INCOME");
+        result.putArray("candidates");
+
+        PlanStrategyService.SavedRun saved = strategies.saveCompetition(null, plan,
+                Json.parse("{}"), result);
+        assertThat(strategies.latestCompetition(null, plan.id())).isNotNull();
+
+        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-obsolete' WHERE id=?",
+                saved.runId());
+
+        assertThat(strategies.latestCompetition(null, plan.id())).isNull();
+    }
+
     @Test void obsoleteOrPartialEvaluationPayloadsAreRejectedInsteadOfAdapted() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-current-receipt", "AAPL", "DIRECTIONAL", null, null,
