@@ -1610,10 +1610,30 @@
     }
     assertOrderEcho(preview.order, body);
     acceptPlan(preview.plan);
+    var previewGuardrails = preview.guardrails || {};
+    var previewInstruction = String(preview.order && preview.order.orderInstruction
+      && preview.order.orderInstruction.type || body.orderInstruction && body.orderInstruction.type || '')
+      .toUpperCase();
+    var exactPackageUnavailable = String(preview.order && preview.order.executability || '').toUpperCase()
+      === 'UNAVAILABLE';
+    var exactPackageBlocked = previewInstruction === 'MARKET'
+      && (String(previewGuardrails.level || '').toUpperCase() === 'BLOCK'
+        || (Array.isArray(previewGuardrails.blockReasons) && previewGuardrails.blockReasons.length > 0)
+        || (Array.isArray(preview.preview && preview.preview.blockReasons)
+          && preview.preview.blockReasons.length > 0));
+    if (state.deskPickId != null
+        && String(state.deskPickId) === String(preview.selected.id)
+        && (exactPackageUnavailable || exactPackageBlocked)) {
+      // Ranking-time economics can identify an attractive package, but the badge is an
+      // endorsement of the exact package the user can act on. Reconcile a missing executable
+      // book immediately and final structural guardrails with the MARKET package preview. A
+      // merely resting LIMIT is an instruction choice and does not demote the idea.
+      state.deskPickId = null;
+    }
     preview.deskRequestKey = requestKey;
     state.decisionPreview = preview;
     state.decisionPreviewKey = requestKey;
-    notify('decision-preview', { plan: state.plan, preview: preview });
+    notify('decision-preview', { plan: state.plan, preview: preview, deskPickId: state.deskPickId });
     return preview;
   }
 
