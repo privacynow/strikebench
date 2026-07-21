@@ -16,6 +16,8 @@
     market: null,
     plan: null,
     planIdentity: null,
+    strategyCatalog: null,
+    strategyCatalogError: null,
     strategy: null,
     candidates: [],
     deskPickId: null,
@@ -34,12 +36,14 @@
     book: null,
     position: null,
     positionScenario: null,
+    presentationError: null,
     error: null
   };
   // Book and Position are independent read surfaces. Their requests must never supersede a
   // New Idea calculation (or one another), so neither lifecycle borrows state.requestSeq.
   var bookRequestSeq = 0;
   var bookContextLoads = {};
+  var recentCommittedTradeId = null;
   var positionRequestSeq = 0;
   var positionScenarioRequestSeq = 0;
   var mutationOwnerSequence = 0;
@@ -89,8 +93,31 @@
   function notify(phase, detail) {
     var payload = Object.assign({ phase: phase, state: copyState() }, detail || {});
     var owner = bridge();
-    if (owner && typeof owner.backendChanged === 'function') owner.backendChanged(payload);
-    document.dispatchEvent(new CustomEvent('strikebench:desk-backend', { detail: payload }));
+    var observerErrors = [];
+    // Presentation is a consumer of the financial workflow, never its transaction boundary. A
+    // bad chart/layout render must not prevent the already-stored ensemble from reaching the
+    // canonical outcome and decision services (or mask the original API failure in fail()).
+    try {
+      if (owner && typeof owner.backendChanged === 'function') owner.backendChanged(payload);
+    } catch (error) {
+      observerErrors.push(error);
+    }
+    try {
+      document.dispatchEvent(new CustomEvent('strikebench:desk-backend', { detail: payload }));
+    } catch (error) {
+      observerErrors.push(error);
+    }
+    if (observerErrors.length) {
+      var first = observerErrors[0];
+      state.presentationError = {
+        phase: phase,
+        message: first && first.message ? String(first.message) : 'The Desk presentation observer failed.',
+        stack: first && first.stack ? String(first.stack) : null
+      };
+      if (window.console && typeof window.console.error === 'function') {
+        window.console.error('StrikeBench Desk presentation observer failed during ' + phase + '.', first);
+      }
+    }
   }
 
   function fail(seq, phase, error) {
@@ -134,8 +161,11 @@
 
   function intentOf(goal) {
     var key = String(goal || '').trim().toUpperCase();
-    if (key === 'HEDGE' || key === 'DIRECTIONAL' || key === 'ACQUIRE' || key === 'EXIT') return key;
-    return 'INCOME';
+    if (key === 'INCOME' || key === 'HEDGE' || key === 'DIRECTIONAL'
+        || key === 'ACQUIRE' || key === 'EXIT') return key;
+    // Absence is a declaration fact. A draft Plan with no goal must never silently become
+    // Income merely because this adapter needs a string for presentation.
+    return null;
   }
 
   function thesisOf(view) {
@@ -147,6 +177,7 @@
   function riskModeOf(context) {
     var explicit = String(context && context.riskMode || '').trim().toLowerCase();
     if (explicit === 'conservative' || explicit === 'balanced' || explicit === 'aggressive') return explicit;
+    if (context && Object.prototype.hasOwnProperty.call(context, 'riskMode')) return null;
     var risk = number(context && context.governors && context.governors.risk);
     if (risk == null && window.decide && window.decide.govs) risk = number(window.decide.govs.risk);
     if (risk == null && window.POSTURE) risk = number(window.POSTURE.risk);
@@ -351,6 +382,14 @@
     });
   }
 
+  function readCachedSlot(key, path) {
+    return requireApi().get(path).then(function (value) {
+      return { key: key, path: path, available: true, value: value, error: null };
+    }).catch(function (error) {
+      return { key: key, path: path, available: false, value: null, error: errorReceipt(error, path) };
+    });
+  }
+
   function unavailableSlot(key, path, message) {
     return {
       key: key,
@@ -365,6 +404,24 @@
     if (!slot || !slot.available) return slot;
     if (slot.value && typeof slot.value === 'object' && !Array.isArray(slot.value)) return slot;
     return unavailableSlot(slot.key, slot.path, label + ' did not return its typed object.');
+  }
+
+  function optionalValidatedSlot(slot, label, validator) {
+    slot = objectSlot(slot, label);
+    if (!slot || !slot.available) return slot;
+    try {
+      validator(slot.value);
+      return slot;
+    } catch (error) {
+      return unavailableSlot(slot.key, slot.path, error && error.message
+        ? error.message : label + ' could not be validated.');
+    }
+  }
+
+  function missingEvidence(evidence) {
+    var provenance = String(evidence && evidence.provenance || '').toUpperCase();
+    var age = String(evidence && (evidence.age || evidence.freshness) || '').toUpperCase();
+    return provenance === 'MISSING' || age === 'MISSING';
   }
 
   function assertDocumentSymbol(documentValue, symbol, label) {
@@ -388,12 +445,13 @@
   async function loadMarket(symbol, targetDays, seq) {
     var api = requireApi();
     var encoded = encodeURIComponent(symbol);
+    notify('loading', { operation: 'quote-expirations', symbol: symbol });
     var base = await Promise.all([
       api.getFresh('/api/config'),
       api.getFresh('/api/status'),
       api.getFresh('/api/world'),
-      api.getFresh('/api/research/' + encoded),
-      api.getFresh('/api/research/' + encoded + '/expirations'),
+      api.get('/api/research/' + encoded),
+      api.get('/api/research/' + encoded + '/expirations'),
       optionalFresh('/api/account')
     ]);
     if (seq !== state.requestSeq) return null;
@@ -416,7 +474,8 @@
     var expirationAsOf = base[4] && base[4].asOfDate || quoteAsOfDate(quote);
     var expiration = chooseExpiration(base[4] && base[4].expirations, targetDays, expirationAsOf);
     if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
-    var chain = await api.getFresh('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
+    notify('loading', { operation: 'option-chain', symbol: symbol, expiration: expiration });
+    var chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
     if (seq !== state.requestSeq) return null;
     var optionCount = (chain && Array.isArray(chain.calls) ? chain.calls.length : 0)
       + (chain && Array.isArray(chain.puts) ? chain.puts.length : 0);
@@ -492,6 +551,23 @@
     };
   }
 
+  function contextFromPlan(context, plan) {
+    var exact = plan && plan.context || {};
+    return Object.assign({}, context || {}, {
+      symbol: plan && plan.symbol || context && context.symbol,
+      goal: !plan || plan.intent == null ? null : String(plan.intent),
+      view: exact.thesis == null ? null : String(exact.thesis),
+      horizon: exact.horizonDays == null ? null : String(exact.horizonDays) + ' days',
+      riskMode: exact.riskMode == null ? null : String(exact.riskMode).toLowerCase(),
+      targetCents: exact.targetCents == null ? null : exact.targetCents,
+      holdingsShares: exact.holdingsShares == null ? null : exact.holdingsShares,
+      costBasisCents: exact.costBasisCents == null ? null : exact.costBasisCents,
+      priceAssumptionCents: exact.priceAssumptionCents == null ? null : exact.priceAssumptionCents,
+      assignmentPreference: exact.assignmentPreference == null ? null : exact.assignmentPreference,
+      originPlanId: !plan || plan.originPlanId == null ? null : plan.originPlanId
+    });
+  }
+
   function stringHash(value) {
     var hash = 2166136261;
     for (var i = 0; i < value.length; i++) {
@@ -522,7 +598,8 @@
 
   function samePlan(plan, identity) {
     if (!plan || plan.open === false || plan.status === 'ARCHIVED') return false;
-    if (plan.symbol !== identity.symbol || String(plan.intent || '').toUpperCase() !== identity.intent) return false;
+    var planIntent = plan.intent == null ? null : String(plan.intent).toUpperCase();
+    if (plan.symbol !== identity.symbol || !sameNullable(identity.intent, planIntent)) return false;
     if (String(plan.marketKind || '').toUpperCase() !== identity.marketKind) return false;
     if (identity.marketKind === 'SIMULATED' && String(plan.worldId || '') !== String(identity.world || '')) return false;
     if (identity.marketKind !== 'SIMULATED' && plan.worldId != null
@@ -543,6 +620,18 @@
       && (identity.costBasisCents == null || Number(ctx.costBasisCents) === identity.costBasisCents)
       && sameNullable(identity.priceAssumptionCents, ctx.priceAssumptionCents)
       && sameNullable(identity.assignmentPreference, ctx.assignmentPreference);
+  }
+
+  function samePlanOwner(plan, identity) {
+    if (!plan || plan.open === false || plan.status === 'ARCHIVED') return false;
+    if (plan.symbol !== identity.symbol) return false;
+    if (String(plan.marketKind || '').toUpperCase() !== identity.marketKind) return false;
+    if (identity.marketKind === 'SIMULATED'
+        && String(plan.worldId || '') !== String(identity.world || '')) return false;
+    if (identity.marketKind !== 'SIMULATED' && plan.worldId != null
+        && String(plan.worldId) !== String(identity.world || '').toLowerCase()) return false;
+    if (identity.accountId && String(plan.accountId || '') !== String(identity.accountId)) return false;
+    return sameNullable(identity.originPlanId, plan.originPlanId);
   }
 
   function acceptPlan(plan) {
@@ -589,6 +678,16 @@
       // match the active account and market; an id is never permission to cross those seams.
       plan = await api.getFresh('/api/plans/' + encodeURIComponent(requestedPlanId));
       if (seq !== state.requestSeq) return null;
+      if (!samePlanOwner(plan, identity)) {
+        throw new Error('The returned Plan does not belong to this Desk account and market.');
+      }
+      // The exact Plan owns its mutable declarations. Another tab may have advanced them since
+      // Home rendered; adopt the current version instead of turning a legitimate update into a
+      // permanent mismatch/retry loop.
+      context = contextFromPlan(context, plan);
+      state.context = context;
+      intent = intentOf(context.goal);
+      identity = planIdentity(symbol, intent, context, market);
     } else {
       var listed = await api.getFresh('/api/plans');
       if (seq !== state.requestSeq) return null;
@@ -625,13 +724,9 @@
     }
     state.planIdentity = identity;
     state.plan = plan;
-    // A resumed Plan owns its persisted mutable declarations. Hydrate them into the Desk adapter
-    // rather than leaving a prototype/header default in state beside a different backend truth.
-    if (plan.context && plan.context.riskMode) {
-      state.context = Object.assign({}, state.context || context, {
-        riskMode: String(plan.context.riskMode).toLowerCase()
-      });
-    }
+    // A resumed Plan owns its persisted mutable declarations. Hydrate all of them into the Desk
+    // adapter rather than leaving a header default beside a different backend truth.
+    state.context = contextFromPlan(state.context || context, plan);
     notify('plan', { plan: plan });
     // The presentation synchronously maps the qualitative Plan posture onto its visible cap
     // preset. Capture that canonicalized state for an ordinary entry, but retain an explicit
@@ -1204,7 +1299,8 @@
       : 'MARKET_AFTER_COSTS';
     return {
       id: candidate.id,
-      short: candidate.label || candidate.displayName || candidate.strategy,
+      short: candidate.displayName || candidate.strategy || candidate.label,
+      exactPackage: candidate.label || null,
       name: candidate.displayName || candidate.strategy,
       sym: candidate.symbol || market.quote.symbol,
       spot: market.spot,
@@ -1240,7 +1336,7 @@
       edgeBasis: edgeBasis,
       assign: candidate.assignmentProb == null ? null : Math.round(Number(candidate.assignmentProb) * 100),
       why: candidate.whyConsidered || candidate.beginnerExplanation || '',
-      analog: candidate.sourceKind ? 'Backend recommendation · ' + candidate.sourceKind : 'Backend recommendation',
+      analog: candidate.sourceKind ? 'Backend-ranked comparison · ' + candidate.sourceKind : 'Backend-ranked comparison',
       ivnote: candidate.freshness ? String(candidate.freshness) + ' market inputs' : 'Market input receipt attached',
       breakevens: candidate.breakevens || [],
       evaluation: candidate.evaluation || null,
@@ -1404,13 +1500,6 @@
     }) || null;
   }
 
-  function preferredCandidate(candidates) {
-    return deskPickCandidate(candidates) || candidates.find(function (candidate) {
-      var verdict = candidateCoherence(candidate);
-      return mechanicallyUsable(candidate) && (verdict === 'MIXED' || verdict === 'UNAVAILABLE');
-    }) || candidates.find(mechanicallyUsable) || candidates[0];
-  }
-
   async function selectCandidate(candidateId, seq) {
     var api = requireApi(), plan = state.plan;
     if (!plan) throw new Error('A Plan is required before selecting a strategy.');
@@ -1439,6 +1528,10 @@
     acceptPlan(out.plan || plan);
     // PUT /strategy/select returns a mutation receipt, not the candidate. Keep the exact full
     // candidate loaded from the canonical strategy state for outcome, preview, and rendering.
+    // The market ensemble is deliberately reusable across packages, but an outcome is the
+    // valuation of one exact package. Clear it only after the new selection is accepted so a
+    // rejected mutation retains the prior package and its still-valid result.
+    state.outcome = null;
     state.selected = Object.assign({}, local, { selected: true });
     notify('selection', { plan: state.plan, selected: state.selected, receipt: receipt, response: out });
     return out;
@@ -1450,13 +1543,8 @@
       expectedVersion: plan.version
     });
     if (seq !== state.requestSeq) return null;
-    var capturedChain = state.market && state.market.chain;
-    var stableChain = await api.getFresh('/api/research/' + encodeURIComponent(plan.symbol)
-      + '/chain?expiration=' + encodeURIComponent(state.market && state.market.expiration || ''));
-    if (seq !== state.requestSeq) return null;
     if (!ensemble || !ensemble.ensemble || !ensemble.preview
-        || !ensembleMatchesCurrentMarket(ensemble, false)
-        || !sameChainReceipt(capturedChain, stableChain)) {
+        || !ensembleMatchesCurrentMarket(ensemble, false, true)) {
       var rollover = new Error('Market inputs changed while the outcome fan was being built. Reloading this idea on the current quote and option surface.');
       rollover.code = 'DESK_MARKET_ROLLOVER';
       throw rollover;
@@ -1519,30 +1607,7 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  function sameChainReceipt(captured, current) {
-    captured = captured || {};
-    current = current || {};
-    var capturedSource = String(captured.source || captured.evidence && captured.evidence.source || '')
-      .trim().toLowerCase();
-    var currentSource = String(current.source || current.evidence && current.evidence.source || '')
-      .trim().toLowerCase();
-    var capturedFreshness = String(captured.freshness || captured.evidence && captured.evidence.age || '')
-      .trim().toUpperCase();
-    var currentFreshness = String(current.freshness || current.evidence && current.evidence.age || '')
-      .trim().toUpperCase();
-    var capturedAsOf = normalizedInstant(captured.asOfEpochMs == null ? captured.asOf : captured.asOfEpochMs);
-    var currentAsOf = normalizedInstant(current.asOfEpochMs == null ? current.asOf : current.asOfEpochMs);
-    if (!capturedSource || !currentSource || !capturedFreshness || !currentFreshness
-        || capturedAsOf == null || currentAsOf == null) return false;
-    return String(captured.underlying || '').toUpperCase() === String(current.underlying || '').toUpperCase()
-      && String(captured.expiration || '') === String(current.expiration || '')
-      && capturedSource === currentSource
-      && capturedFreshness === currentFreshness
-      && capturedAsOf === currentAsOf
-      && chainSurfaceIdentity(captured) === chainSurfaceIdentity(current);
-  }
-
-  function ensembleMatchesCurrentMarket(envelope, requireCalibrationReceipt) {
+  function ensembleMatchesCurrentMarket(envelope, requireCalibrationReceipt, acceptNewerServerObservation) {
     var preview = envelope && envelope.preview || {};
     var receipt = preview.receipt || {};
     var market = state.market || {}, identity = market.identity || {};
@@ -1564,12 +1629,18 @@
         || String(receipt.worldId) !== String(identity.world || '')
         || ((receipt.datasetId != null || identity.datasetId != null)
           && String(receipt.datasetId || '') !== String(identity.datasetId || ''))
-        || Math.round(anchorSpot * 100) !== Math.round(currentSpot * 100)
         || anchorSource !== quoteSource
         || anchorFreshness !== quoteFreshness
-        || anchorAsOf !== quoteAsOf
         || (storedVol != null && currentMarketIv != null
           && Math.abs(storedVol - currentMarketIv) > 0.000001)) return false;
+    // A POST /outcomes/ensemble response is itself the newer authoritative observation. During
+    // an open market the provider can advance between the Desk's initial quote read and that
+    // server-owned build; accepting a newer receipt preserves one exact stored artifact instead
+    // of chasing a moving quote with repeated full-chain reads. Stored artifacts loaded on a
+    // later visit still require the exact current observation and are rebuilt when it changes.
+    if (acceptNewerServerObservation) return anchorAsOf >= quoteAsOf;
+    if (Math.round(anchorSpot * 100) !== Math.round(currentSpot * 100)
+        || anchorAsOf !== quoteAsOf) return false;
     return true;
   }
 
@@ -1878,6 +1949,7 @@
     context.governorExplicit = Object.assign({}, window.decide && window.decide.govExplicit || {},
       context.governorExplicit || context.govExplicit || {});
     state.context = context;
+    state.presentationError = null;
     state.error = null;
     state.plan = null;
     state.planIdentity = null;
@@ -1899,17 +1971,69 @@
       var symbol = String(context && context.symbol || '').trim().toUpperCase();
       if (!symbol) throw new Error('Choose an underlying before loading a Desk idea.');
       var declaredHorizon = horizonDays(context);
+      /* Recommendations are a context-specific competition, not the product's capability
+         catalog. Load the existing server-owned catalog additively so the Desk can show which
+         supported families were compared, screened, blocked, or simply belong to another
+         intent without forcing every family into the ranking. */
+      var catalogRequest = state.strategyCatalog
+        ? Promise.resolve(state.strategyCatalog)
+        : optionalFresh('/api/strategies').catch(function (error) {
+            // Catalog disclosure is additive to the exact Plan calculation. A transient failure
+            // must not turn a valid quote/chain/recommendation flow into a blank Desk, but the
+            // missing receipt remains explicit when the user opens the catalog rail.
+            state.strategyCatalogError = error && error.message
+              ? String(error.message) : 'The StrategyCatalog receipt is unavailable.';
+            return null;
+          });
+      catalogRequest.then(function (strategyCatalog) {
+        if (strategyCatalog && Array.isArray(strategyCatalog.catalog)) {
+          state.strategyCatalog = strategyCatalog;
+          state.strategyCatalogError = null;
+        }
+        // Catalog disclosure cannot gate Plan/recommendation work. Its independent receipt
+        // updates the rail when it arrives without changing or restarting the financial phase.
+        if (seq === state.requestSeq) notify('strategy-catalog', {
+          operation: 'strategy-catalog', strategyCatalog: state.strategyCatalog
+        });
+      });
       var market = await loadMarket(symbol, declaredHorizon == null ? 45 : declaredHorizon, seq);
       if (!market || seq !== state.requestSeq) return null;
       var plan = await ensurePlan(context, market, seq);
       if (!plan || seq !== state.requestSeq) return null;
+      var planContext = plan.context || {};
+      var missingDeclarations = [];
+      if (plan.intent == null || String(plan.intent).trim() === '') missingDeclarations.push('goal');
+      if (planContext.thesis == null || String(planContext.thesis).trim() === '') missingDeclarations.push('view');
+      if (!(Number(planContext.horizonDays) > 0)) missingDeclarations.push('horizon');
+      if (planContext.riskMode == null || String(planContext.riskMode).trim() === '') missingDeclarations.push('risk posture');
+      if (missingDeclarations.length) {
+        state.strategyNotes = ['Declare the missing Plan assumptions before ranking: '
+          + missingDeclarations.join(', ') + '.'];
+        notify('declaration-required', {
+          operation: 'declaration', plan: plan,
+          missingDeclarations: missingDeclarations.slice(), notes: state.strategyNotes.slice()
+        });
+        return copyState();
+      }
       var candidates = await loadOrRunStrategy(plan, market, state.context, seq);
       if (!candidates || seq !== state.requestSeq) return null;
       // A current, fingerprinted competition with no candidates is a valid backend result. The
       // Desk keeps the declaration, evidence, and screening receipts visible and waits for an
       // explicit assumption change instead of fabricating a package or entering outcome/preview.
       if (!candidates.length) return copyState();
-      var candidate = state.selected || preferredCandidate(candidates);
+      var candidate = state.selected || deskPickCandidate(candidates);
+      // Ranking is not endorsement. If no mechanically usable, coherent package earns a
+      // FAVORABLE after-cost verdict, keep the full comparison field visible but do not write a
+      // durable Plan selection merely because one row must occupy the center preview. An explicit
+      // user click can still select and evaluate any teaching comparison through the same flow.
+      if (!candidate) {
+        notify('comparison-required', {
+          operation: 'comparison-selection', plan: state.plan,
+          candidates: state.candidates, notes: state.strategyNotes,
+          message: 'No package earned an endorsement. Choose a ranked comparison explicitly to analyze it.'
+        });
+        return copyState();
+      }
       if (!state.selected) {
         await selectCandidate(candidate.id, seq);
         if (seq !== state.requestSeq) return null;
@@ -1943,12 +2067,92 @@
     }
   }
 
+  /**
+   * Mutates the declarations of the exact active Plan through its canonical APIs, then rebuilds
+   * the recommendation/outcome flow from that returned version. The Desk never forks a hidden
+   * replacement Plan merely because the user changed a visible declaration control.
+   */
+  async function updatePlanDeclaration(context) {
+    if (!state.enabled || !state.plan || !state.market) return openIdea(context || {});
+    if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
+    var mutationOwner = beginMutation('declaration');
+    var seq = ++state.requestSeq;
+    state.animationSeq++;
+    state.error = null;
+    var next = Object.assign({}, state.context || {}, context || {}, { planId: state.plan.id });
+    var updated = state.plan;
+    try {
+      notify('loading', { operation: 'declaration' });
+      var nextIntent = intentOf(next.goal);
+      var currentIntent = updated.intent == null ? null : String(updated.intent).toUpperCase();
+      if (!sameNullable(nextIntent, currentIntent)) {
+        updated = await requireApi().put('/api/plans/' + encodeURIComponent(updated.id) + '/intent', {
+          expectedVersion: updated.version, intent: nextIntent
+        });
+        if (seq !== state.requestSeq) return null;
+      }
+
+      var current = updated.context || {};
+      var desired = {
+        thesis: thesisOf(next.view),
+        horizonDays: horizonDays(next),
+        riskMode: riskModeOf(next)
+      };
+      var patch = { expectedVersion: updated.version };
+      var clear = [];
+      Object.keys(desired).forEach(function (key) {
+        if (sameNullable(desired[key], current[key])) return;
+        if (desired[key] == null) clear.push(key);
+        else patch[key] = desired[key];
+      });
+      if (clear.length) patch.clear = clear;
+      if (Object.keys(patch).length > 1) {
+        updated = await requireApi().put('/api/plans/' + encodeURIComponent(updated.id) + '/context', patch);
+        if (seq !== state.requestSeq) return null;
+      }
+
+      if (!updated || String(updated.id) !== String(state.plan.id)) {
+        throw new Error('The declaration response did not retain the active Plan identity.');
+      }
+      var identity = planIdentity(String(next.symbol || updated.symbol || '').toUpperCase(),
+        intentOf(next.goal), next, state.market);
+      if (!samePlan(updated, identity)
+          || !sameNullable(riskModeOf(next), updated.context && updated.context.riskMode)) {
+        throw new Error('The returned Plan does not match the declarations accepted by the Desk.');
+      }
+      state.plan = updated;
+      state.planIdentity = identity;
+      state.context = next;
+      notify('declaration', { operation: 'declaration', plan: updated, context: next });
+    } catch (error) {
+      if (error && error.status === 409 && updated && updated.id) {
+        try {
+          var currentPlan = await requireApi().getFresh('/api/plans/'
+            + encodeURIComponent(updated.id));
+          if (seq !== state.requestSeq) return null;
+          if (!samePlanOwner(currentPlan, planIdentity(String(updated.symbol || next.symbol || '').toUpperCase(),
+              currentPlan.intent == null ? null : String(currentPlan.intent).toUpperCase(), next, state.market))) {
+            throw new Error('The current Plan no longer belongs to this Desk account and market.');
+          }
+          state.plan = currentPlan;
+          state.context = contextFromPlan(next, currentPlan);
+          state.planIdentity = planIdentity(String(currentPlan.symbol || '').toUpperCase(),
+            intentOf(state.context.goal), state.context, state.market);
+        } catch (refreshError) {
+          // Preserve the original version-conflict receipt. Retry performs a fresh exact-Plan read;
+          // no prototype value is substituted if that read is temporarily unavailable.
+        }
+      }
+      return fail(seq, 'declaration', error);
+    } finally {
+      endMutation(mutationOwner);
+    }
+    return openIdea(next);
+  }
+
   async function chooseCandidate(candidateId) {
     if (!state.enabled) return null;
     if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
-    if (!state.ensemble || !state.ensemble.ensemble || !state.ensemble.ensemble.id) {
-      throw new Error('Wait for the current outcome ensemble before changing the selected strategy.');
-    }
     var seq = ++state.requestSeq;
     var mutationOwner = beginMutation('candidate');
     state.draft = null;
@@ -1958,12 +2162,21 @@
     try {
       await selectCandidate(candidateId, seq);
       if (seq !== state.requestSeq) return null;
-      // Candidate/package changes are child valuations over the same stored market ensemble.
-      // Do not regenerate the fan; rerun the exact outcome against its immutable id.
-      var outcome = await runOutcome(seq, {
-        expectedCandidateId: candidateId,
-        expectedEnsemble: state.ensemble && state.ensemble.ensemble
-      });
+      var outcome;
+      if (!state.ensemble || !state.ensemble.ensemble || !state.ensemble.ensemble.id) {
+        // A comparison field with no endorsed Desk Pick deliberately has no automatic Plan
+        // selection or simulation. The first explicit selection now creates/restores the one
+        // canonical fan and values this exact package against it.
+        var firstEvaluation = await loadOrRunEnsembleAndOutcome(seq);
+        outcome = firstEvaluation && firstEvaluation.outcome;
+      } else {
+        // Candidate/package changes are child valuations over the same stored market ensemble.
+        // Do not regenerate the fan; rerun the exact outcome against its immutable id.
+        outcome = await runOutcome(seq, {
+          expectedCandidateId: candidateId,
+          expectedEnsemble: state.ensemble && state.ensemble.ensemble
+        });
+      }
       if (!outcome || seq !== state.requestSeq) return null;
       await loadDecisionState(seq);
       if (seq !== state.requestSeq) return null;
@@ -2027,7 +2240,50 @@
       // trade was being recorded belongs to the superseded idea, so it must not replay later
       // against whichever Plan happens to be active next.
       clearPendingGovernorRefresh();
-      notify('committed', { operation: 'order-commit', response: response, detached: detached });
+      recentCommittedTradeId = response && response.trade && response.trade.id
+        ? String(response.trade.id) : null;
+      var committedTradeId = recentCommittedTradeId;
+      notify('committed', {
+        operation: 'order-commit', response: response, detached: detached,
+        reconciling: !!committedTradeId
+      });
+      // A committed transaction is already final. Reconcile its independent Book read without
+      // letting a presentation/read failure turn the successful write into a reported failure.
+      // The UI leaves Decide only after the roster proves the new package is visible.
+      if (committedTradeId) {
+        (async function reconcileCommit() {
+          try {
+            var data = await loadBook();
+            var found = data && (data.activeTrades || []).some(function (trade) {
+              return String(trade && trade.id) === committedTradeId;
+            });
+            if (!found) {
+              await new Promise(function (resolve) { window.setTimeout(resolve, 180); });
+              data = await loadBook();
+              found = data && (data.activeTrades || []).some(function (trade) {
+                return String(trade && trade.id) === committedTradeId;
+              });
+            }
+            if (!found) throw new Error('The committed trade has not appeared in the authoritative Book roster yet.');
+            notify('commit-reconciled', {
+              operation: 'order-commit', response: response,
+              tradeId: committedTradeId, detached: detached
+            });
+            if (recentCommittedTradeId === committedTradeId) recentCommittedTradeId = null;
+          } catch (error) {
+            notify('commit-reconcile-error', {
+              operation: 'order-commit', response: response,
+              tradeId: committedTradeId, detached: detached, error: error
+            });
+            if (recentCommittedTradeId === committedTradeId) recentCommittedTradeId = null;
+          }
+        })();
+      } else {
+        loadBook().catch(function () { /* the commit receipt remains authoritative */ });
+        notify('commit-reconciled', {
+          operation: 'order-commit', response: response, tradeId: null, detached: detached
+        });
+      }
       return response;
     } catch (error) {
       return fail(seq, 'order-commit', error);
@@ -2095,6 +2351,7 @@
     var body = { ensembleId: state.ensemble.ensemble.id, waypoints: waypoints, limit: 9 };
     var canvas = transientCanvas(scenario);
     if (canvas) body.canvas = canvas;
+    state.error = null;
     notify('loading', { operation: 'scenario-animation' });
     try {
       var response = window.PlanStore && typeof window.PlanStore.scenarioAnimation === 'function'
@@ -2121,6 +2378,7 @@
       if (!state.selected || state.selected.id !== requestIdentity.candidateId
           || !state.ensemble || state.ensemble.ensemble.id !== requestIdentity.ensembleId) return null;
       state.animation = response;
+      state.error = null;
       notify('animation', { animation: response, scenario: Object.assign({ day: day }, scenario || {}) });
       return response;
     } catch (error) {
@@ -2164,14 +2422,27 @@
     }
   }
 
-  function homeBookSymbols(rows, trades, sharePositions) {
+  function activeUniverseSymbols(universe) {
+    var symbols = universe && universe.active && universe.active.symbols;
+    return Array.isArray(symbols) ? symbols.map(function (symbol) {
+      return String(symbol || '').trim().toUpperCase();
+    }).filter(Boolean) : [];
+  }
+
+  function homeBookSymbols(rows, trades, sharePositions, ambientSymbols) {
     var seen = {};
     var sources = (rows || []).map(function (row) { return row && row.plan || row; })
+      .filter(function (plan) {
+        var status = String(plan && plan.status || '').toUpperCase();
+        return plan && plan.open !== false && plan.assumptionsEditable !== false
+          && (status === 'DRAFT' || status === 'ACTIVE');
+      })
       .concat(trades || []).concat(sharePositions || []);
-    return sources.map(function (source) {
+    var owned = sources.map(function (source) {
       return String(source && source.symbol || '').trim().toUpperCase();
-    })
-      .filter(function (symbol) {
+    });
+    return owned.concat(ambientSymbols || []).filter(function (symbol) {
+        symbol = String(symbol || '').trim().toUpperCase();
         if (!symbol || seen[symbol]) return false;
         seen[symbol] = true;
         return true;
@@ -2192,10 +2463,79 @@
     if (bookContextLoads[symbol]) return bookContextLoads[symbol];
     var encoded = encodeURIComponent(symbol);
     bookContextLoads[symbol] = Promise.all([
-      readSlot('research:' + symbol, '/api/research/' + encoded),
-      readSlot('news:' + symbol, '/api/research/' + encoded + '/news')
+      readCachedSlot('research:' + symbol, '/api/research/' + encoded),
+      readCachedSlot('news:' + symbol, '/api/research/' + encoded + '/news')
     ]);
     return bookContextLoads[symbol];
+  }
+
+  function quoteContextRow(symbol, quote, lane) {
+    if (!quote) return { symbol: symbol, research: null, news: null, missing: [] };
+    return {
+      symbol: symbol,
+      research: {
+        symbol: symbol,
+        marketLane: lane || null,
+        displayPrice: quote.last == null ? null : quote.last,
+        freshness: quote.freshness || null,
+        quote: quote,
+        evidence: { inputs: { quote: quote.evidence || null } }
+      },
+      news: null,
+      missing: []
+    };
+  }
+
+  async function hydrateBookFocusedContext(seq, before, data, symbol) {
+    try {
+      var group = await loadBookSymbolContext(symbol);
+      if (seq !== bookRequestSeq) return;
+      var after = await readIdentitySnapshot();
+      if (seq !== bookRequestSeq) return;
+      assertSameReadIdentity(before, after);
+      var researchSlot = objectSlot(group[0], symbol + ' Research');
+      var newsSlot = objectSlot(group[1], symbol + ' News');
+      try {
+        if (researchSlot.available) {
+          assertDocumentSymbol(researchSlot.value, symbol, 'Home Research');
+          if (researchSlot.value.marketLane
+              && String(researchSlot.value.marketLane).toUpperCase()
+                !== String(before.identity.marketLane).toUpperCase()) {
+            throw new Error(symbol + ' Research belongs to another market lane.');
+          }
+          assertEvidenceLane(researchSlot.value.quote && researchSlot.value.quote.evidence
+            || researchSlot.value.evidence && researchSlot.value.evidence.inputs
+              && researchSlot.value.evidence.inputs.quote,
+          before.identity.marketLane, 'Home Research quote');
+        }
+        if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Home News');
+      } catch (error) {
+        researchSlot = unavailableSlot('research:' + symbol, researchSlot.path, error.message);
+        newsSlot = unavailableSlot('news:' + symbol, newsSlot.path, error.message);
+      }
+      var current = data.homeContext || {}, rows = (current.rows || []).slice();
+      var index = rows.findIndex(function (row) { return row.symbol === symbol; });
+      var prior = index >= 0 ? rows[index] : { symbol: symbol };
+      var row = {
+        symbol: symbol,
+        research: researchSlot.available ? researchSlot.value : prior.research || null,
+        news: newsSlot.available ? newsSlot.value : null,
+        missing: missingSlots([researchSlot, newsSlot])
+      };
+      if (index >= 0) rows[index] = row; else rows.push(row);
+      publishBookContext(seq, data, {
+        phase: 'ready', symbols: current.symbols || [symbol], rows: rows,
+        detailSymbol: symbol, detailLoading: null,
+        missing: rows.reduce(function (all, item) { return all.concat(item.missing || []); }, [])
+      });
+    } catch (error) {
+      var fallback = data.homeContext || {};
+      publishBookContext(seq, data, {
+        phase: 'ready', symbols: fallback.symbols || [symbol], rows: fallback.rows || [],
+        detailSymbol: symbol, detailLoading: null,
+        missing: (fallback.missing || []).concat([{ key: 'context:' + symbol, error: errorReceipt(error) }])
+      });
+    }
   }
 
   /**
@@ -2206,52 +2546,58 @@
   async function hydrateBookContext(seq, before, data, symbols) {
     if (!symbols.length) return;
     try {
-      var groups = await Promise.all(symbols.map(loadBookSymbolContext));
-      var slots = [];
-      groups.forEach(function (group) { slots = slots.concat(group); });
+      var quotesPath = '/api/quotes?symbols=' + encodeURIComponent(symbols.join(','));
+      var quoteSlot = objectSlot(await readCachedSlot('quotes', quotesPath), 'The ambient market watch');
       if (seq !== bookRequestSeq) return;
       var after = await readIdentitySnapshot();
       if (seq !== bookRequestSeq) return;
       assertSameReadIdentity(before, after);
-      var byKey = slotsByKey(slots);
+      var quoteEnvelope = quoteSlot.available ? quoteSlot.value : {}, quoteRows = quoteEnvelope.quotes;
+      if (!Array.isArray(quoteRows)) quoteRows = [];
+      if (quoteEnvelope.marketLane
+          && String(quoteEnvelope.marketLane).toUpperCase()
+            !== String(before.identity.marketLane).toUpperCase()) {
+        throw new Error('The ambient market watch belongs to another market lane.');
+      }
       var rows = symbols.map(function (symbol) {
-        var researchSlot = objectSlot(byKey['research:' + symbol], symbol + ' Research');
-        var newsSlot = objectSlot(byKey['news:' + symbol], symbol + ' News');
-        try {
-          if (researchSlot.available) {
-            assertDocumentSymbol(researchSlot.value, symbol, 'Home Research');
-            if (researchSlot.value.marketLane
-                && String(researchSlot.value.marketLane).toUpperCase()
-                  !== String(before.identity.marketLane).toUpperCase()) {
-              throw new Error(symbol + ' Research belongs to another market lane.');
-            }
-            assertEvidenceLane(researchSlot.value.quote && researchSlot.value.quote.evidence
-              || researchSlot.value.evidence && researchSlot.value.evidence.inputs
-                && researchSlot.value.evidence.inputs.quote,
-            before.identity.marketLane, 'Home Research quote');
-          }
-          if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Home News');
-        } catch (error) {
-          return { symbol: symbol, research: null, news: null,
-            missing: [{ key: 'context:' + symbol, error: errorReceipt(error) }] };
-        }
-        return {
-          symbol: symbol,
-          research: researchSlot.available ? researchSlot.value : null,
-          news: newsSlot.available ? newsSlot.value : null,
-          missing: missingSlots([researchSlot, newsSlot])
-        };
+        var quote = quoteRows.find(function (item) {
+          return String(item && item.symbol || '').toUpperCase() === symbol;
+        });
+        return quoteContextRow(symbol, quote, before.identity.marketLane);
       });
       publishBookContext(seq, data, {
-        phase: 'ready', symbols: symbols, rows: rows,
-        missing: rows.reduce(function (all, row) { return all.concat(row.missing || []); }, [])
+        phase: 'loading', symbols: symbols, rows: rows,
+        detailSymbol: symbols[0], detailLoading: symbols[0],
+        missing: quoteSlot.available ? [] : missingSlots([quoteSlot])
       });
+      // The full option/research document is fetched for one focused symbol only. Its response
+      // remains in the shared API cache for New Idea, while the bounded watch uses cheap quotes.
+      var api = requireApi(), encoded = encodeURIComponent(symbols[0]);
+      if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
+      hydrateBookFocusedContext(seq, before, data, symbols[0]);
     } catch (error) {
       publishBookContext(seq, data, {
         phase: 'error', symbols: symbols, rows: [],
         missing: [{ key: 'homeContext', error: errorReceipt(error) }]
       });
     }
+  }
+
+  async function focusBookSymbol(rawSymbol) {
+    var symbol = String(rawSymbol || '').trim().toUpperCase();
+    var book = state.book, data = book && book.data, context = data && data.homeContext;
+    if (!symbol || !book || !data || !context
+        || (context.symbols || []).indexOf(symbol) < 0) return null;
+    var seq = book.requestId;
+    publishBookContext(seq, data, Object.assign({}, context, {
+      phase: 'loading', detailSymbol: symbol, detailLoading: symbol
+    }));
+    var before = await readIdentitySnapshot();
+    if (seq !== bookRequestSeq) return null;
+    var api = requireApi(), encoded = encodeURIComponent(symbol);
+    if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
+    await hydrateBookFocusedContext(seq, before, data, symbol);
+    return data.homeContext;
   }
 
   async function readActiveTradeRoster() {
@@ -2315,7 +2661,8 @@
         readSlot('heat', '/api/portfolio/heat'),
         readSlot('greeks', '/api/portfolio/greeks'),
         readSlot('bookRisk', '/api/portfolio/book-risk'),
-        readSlot('planPortfolio', '/api/plans/portfolio')
+        readSlot('planPortfolio', '/api/plans/portfolio'),
+        readSlot('universe', '/api/universe')
       ]);
       if (seq !== bookRequestSeq) return null;
       var after = await readIdentitySnapshot();
@@ -2329,7 +2676,8 @@
         heat: 'The portfolio heat receipt',
         greeks: 'The portfolio Greeks receipt',
         bookRisk: 'The Book risk receipt',
-        planPortfolio: 'The Plan portfolio'
+        planPortfolio: 'The Plan portfolio',
+        universe: 'The active market universe'
       };
       slots = slots.map(function (slot) { return objectSlot(slot, bookLabels[slot.key]); });
       var values = slotsByKey(slots);
@@ -2359,7 +2707,8 @@
           && String(plan.accountId) === String(before.identity.accountId);
       });
       var missing = missingSlots(slots);
-      var homeSymbols = homeBookSymbols(accountPlans || [], tradePage.trades, positionBook.positions);
+      var homeSymbols = homeBookSymbols(accountPlans || [], tradePage.trades, positionBook.positions,
+        values.universe.available ? activeUniverseSymbols(values.universe.value) : []);
       var data = {
         identity: before.identity,
         account: before.account,
@@ -2374,6 +2723,10 @@
         planPortfolio: values.planPortfolio.available ? values.planPortfolio.value : null,
         plans: planRows,
         accountPlans: accountPlans,
+        universe: values.universe.available ? values.universe.value : null,
+        recentTradeId: recentCommittedTradeId && tradePage.trades.some(function (trade) {
+          return String(trade && trade.id) === String(recentCommittedTradeId);
+        }) ? recentCommittedTradeId : null,
         homeContext: {
           phase: homeSymbols.length ? 'loading' : 'empty',
           symbols: homeSymbols, rows: [], missing: []
@@ -2562,12 +2915,10 @@
       var before = await readIdentitySnapshot();
       if (seq !== positionRequestSeq) return null;
 
-      var detailPromise = readSlot('tradeDetail', '/api/trades/' + encodeURIComponent(descriptor.id));
       var auxiliaryPromise = descriptor.symbol
-        ? positionAuxiliarySlots(descriptor, descriptor.symbol) : Promise.resolve(null);
-      var loaded = await Promise.all([detailPromise, auxiliaryPromise]);
+        ? positionAuxiliarySlots(descriptor, descriptor.symbol) : null;
+      var detailSlot = await readSlot('tradeDetail', '/api/trades/' + encodeURIComponent(descriptor.id));
       if (seq !== positionRequestSeq) return null;
-      var detailSlot = loaded[0];
       var detail = requireSlot(detailSlot, 'The position detail');
       if (!detail || !detail.trade || String(detail.trade.id) !== descriptor.id) {
         throw new Error('The position detail did not return the requested authoritative trade.');
@@ -2578,7 +2929,35 @@
         throw new Error('The requested position symbol does not match the authoritative trade.');
       }
       descriptor.symbol = symbol;
-      var auxiliary = loaded[1] || await positionAuxiliarySlots(descriptor, symbol);
+      var hintedPlan = descriptor.planHint && descriptor.planHint.plan || null;
+      // Mark, payoff, and exact legs are the structural Position receipt. Publish them as soon as
+      // they are available; a cold Research provider or absent daily-history store is decoration
+      // and must not hold the Bloom behind an indefinite skeleton.
+      var coreData = {
+        identity: before.identity,
+        account: before.account,
+        trade: detail.trade,
+        tradeDetail: detail,
+        research: null,
+        history: null,
+        news: null,
+        plan: hintedPlan,
+        management: null,
+        planWorkspace: null,
+        positionEnsemble: null,
+        auxiliaryPending: true,
+        missing: [],
+        loadedAt: new Date().toISOString()
+      };
+      state.position = {
+        phase: 'partial', requestId: seq, identity: before.identity,
+        data: coreData, missing: [], error: null
+      };
+      notify('position-partial', {
+        operation: 'position-core', requestId: seq, position: state.position, data: coreData
+      });
+
+      var auxiliary = await (auxiliaryPromise || positionAuxiliarySlots(descriptor, symbol));
       if (seq !== positionRequestSeq) return null;
       var after = await readIdentitySnapshot();
       if (seq !== positionRequestSeq) return null;
@@ -2591,36 +2970,46 @@
       };
       auxiliary = auxiliary.map(function (slot) { return objectSlot(slot, positionLabels[slot.key]); });
       var values = slotsByKey(auxiliary);
-      if (values.research.available) {
-        assertDocumentSymbol(values.research.value, symbol, 'Research');
-        if (values.research.value && values.research.value.marketLane
-            && String(values.research.value.marketLane).toUpperCase()
-              !== String(before.identity.marketLane).toUpperCase()) {
+      values.research = optionalValidatedSlot(values.research, 'Research', function (research) {
+        assertDocumentSymbol(research, symbol, 'Research');
+        if (research.marketLane && String(research.marketLane).toUpperCase()
+            !== String(before.identity.marketLane).toUpperCase()) {
           throw new Error('Research belongs to another market lane.');
         }
-        assertEvidenceLane(values.research.value && values.research.value.quote
-          && values.research.value.quote.evidence, before.identity.marketLane, 'Research quote');
-      }
-      if (values.history.available) {
-        assertDocumentSymbol(values.history.value, symbol, 'History');
-        assertEvidenceLane(values.history.value && values.history.value.evidence,
-          before.identity.marketLane, 'History');
-      }
-      if (values.news.available) assertDocumentSymbol(values.news.value, symbol, 'News');
-      if (values.planWorkspace && values.planWorkspace.available) {
-        assertPlanWorkspaceIdentity(values.planWorkspace.value, descriptor,
-          before.identity, descriptor.id);
+        assertEvidenceLane(research.quote && research.quote.evidence,
+          before.identity.marketLane, 'Research quote');
+      });
+      values.history = optionalValidatedSlot(values.history, 'History', function (history) {
+        assertDocumentSymbol(history, symbol, 'History');
+        if (missingEvidence(history.evidence)) {
+          throw new Error('Observed daily history is not stored for ' + symbol
+            + '. Open Data Sources to acquire eligible bars.');
+        }
+        assertEvidenceLane(history.evidence, before.identity.marketLane, 'History');
+      });
+      values.news = optionalValidatedSlot(values.news, 'News', function (news) {
+        assertDocumentSymbol(news, symbol, 'News');
+      });
+      if (values.planWorkspace) {
+        values.planWorkspace = optionalValidatedSlot(values.planWorkspace,
+          'The linked Plan workspace', function (workspace) {
+            assertPlanWorkspaceIdentity(workspace, descriptor, before.identity, descriptor.id);
+          });
       }
 
-      var missing = missingSlots(auxiliary);
       var workspace = values.planWorkspace && values.planWorkspace.available
         ? values.planWorkspace.value : null;
       var linkedPlan = workspace ? workspace.plan : descriptor.planHint && descriptor.planHint.plan || null;
+      if (values.positionEnsemble) {
+        values.positionEnsemble = optionalValidatedSlot(values.positionEnsemble,
+          'The stored Position outcome ensemble', function (positionEnsemble) {
+            assertPositionEnsembleIdentity(positionEnsemble, descriptor, before.identity, linkedPlan);
+          });
+      }
+      auxiliary = auxiliary.map(function (slot) { return values[slot.key] || slot; });
+      var missing = missingSlots(auxiliary);
       var positionEnsemble = values.positionEnsemble && values.positionEnsemble.available
         ? values.positionEnsemble.value : null;
-      if (positionEnsemble) {
-        assertPositionEnsembleIdentity(positionEnsemble, descriptor, before.identity, linkedPlan);
-      }
       var data = {
         identity: before.identity,
         account: before.account,
@@ -2633,6 +3022,8 @@
         management: workspace ? workspace.management : null,
         planWorkspace: workspace,
         positionEnsemble: positionEnsemble,
+        auxiliaryPending: false,
+        missing: missing,
         loadedAt: new Date().toISOString()
       };
       var phase = missing.length ? 'partial' : 'ready';
@@ -2937,6 +3328,7 @@
     enabled: function () { return state.enabled; },
     state: copyState,
     openIdea: openIdea,
+    updatePlanDeclaration: updatePlanDeclaration,
     chooseCandidate: chooseCandidate,
     draftCatalog: draftCatalog,
     previewDraft: previewDraft,
@@ -2947,6 +3339,7 @@
     transitionWorld: transitionWorld,
     scenarioAnimation: scenarioAnimation,
     loadBook: loadBook,
+    focusBookSymbol: focusBookSymbol,
     loadPosition: loadPosition,
     positionScenario: positionScenario,
     cancel: function () {

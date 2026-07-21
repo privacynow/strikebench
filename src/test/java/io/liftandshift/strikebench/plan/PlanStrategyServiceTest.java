@@ -107,6 +107,20 @@ class PlanStrategyServiceTest {
         assertThat(strategies.latestCompetition(null, plan.id()).result()
                 .at("/candidates/0/selected").asBoolean()).isTrue();
 
+        Plan.View selectedPlan = plans.get(null, plan.id());
+        PlanStrategyService.SavedRun refreshed = strategies.saveCompetition(null, selectedPlan,
+                Json.parse("{\"filters\":{\"minPop\":0.60}}"), result.deepCopy());
+        assertThat(refreshed.runId()).isNotEqualTo(saved.runId());
+        assertThat(strategies.latestCompetition(null, plan.id()).runId()).isEqualTo(refreshed.runId());
+        assertThat(strategies.selectedCandidate(null, plan.id()).at("/id").asText()).isEqualTo(candidateId);
+        assertThat(db.query("SELECT state FROM plan_candidate WHERE id=?", r -> r.str("state"), candidateId))
+                .containsExactly("CURRENT");
+        assertThat(db.query("SELECT state FROM plan_strategy_run WHERE id=?", r -> r.str("state"), saved.runId()))
+                .containsExactly("STALE");
+        assertThat(plans.get(null, plan.id()).version()).isEqualTo(selection.planVersion());
+        assertThat(strategies.select(null, plan.id(), candidateId, selection.planVersion()).planVersion())
+                .isEqualTo(selection.planVersion());
+
         PlanStrategyService.Selection cleared = strategies.clearSelection(null, plan.id(), selection.planVersion());
         assertThat(cleared.candidateId()).isNull();
         assertThat(cleared.planVersion()).isEqualTo(selection.planVersion() + 1);
@@ -193,9 +207,21 @@ class PlanStrategyServiceTest {
         assertThat(db.query("SELECT COUNT(*) n FROM plan_candidate WHERE selected=1", r -> r.lng("n")))
                 .containsExactly(0L);
         assertThat(selectedId).isNotBlank();
+
+        PlanStrategyService.SavedRun obsoleteCustom = strategies.saveCustom(null, afterConstraint,
+                Json.parse("{\"source\":\"BUILDER\"}"), candidate.deepCopy(), afterConstraint.version(), true);
+        String obsoleteCustomId = obsoleteCustom.result().at("/candidate/id").asText();
+        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-obsolete' WHERE id=?",
+                obsoleteCustom.runId());
+        Plan.View beforeEngineRefresh = plans.get(null, plan.id());
+        strategies.saveCompetition(null, beforeEngineRefresh,
+                Json.parse("{\"filters\":{\"minPop\":0.50}}"), refreshedField);
+        assertThat(strategies.selectedCandidate(null, plan.id())).isNull();
+        assertThat(db.query("SELECT state FROM plan_candidate WHERE id=?", r -> r.str("state"), obsoleteCustomId))
+                .containsExactly("STALE");
     }
 
-    @Test void obsoleteCompetitionEngineIsNotRestoredAsCurrentAnalysis() {
+    @Test void obsoleteCompetitionEngineCannotRestoreAnalysisOrSelectedCandidate() {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("strategy-engine-version", "AAPL", "INCOME", null, null,
                         "neutral", 30, null, "conservative", null, null, null, null));
@@ -205,16 +231,43 @@ class PlanStrategyServiceTest {
         result.put("horizon", "month");
         result.put("riskMode", "conservative");
         result.put("intent", "INCOME");
-        result.putArray("candidates");
+        result.putArray("candidates").add(Json.parse("""
+                {"strategy":"CREDIT_PUT_SPREAD","displayName":"Bull put spread",
+                 "structureGroup":"credit_vertical","label":"SELL 250P / BUY 245P","qty":1,
+                 "entryNetPremiumCents":12000,"maxProfitCents":12000,"maxLossCents":38000,
+                 "evaluation":{"available":true,"decisionScore":62.0,"viable":true,
+                   "capital":{},"volatility":{},"risk":{},"evidence":{},"management":{},"score":{},
+                   "assessment":{},"stance":{},"participation":{},"impliedStance":{},
+                   "ivContext":{},"coverage":{},"explanation":{}},
+                 "legs":[
+                   {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-14",
+                    "ratio":1,"multiplier":100,"entryPrice":"3.20","positionEffect":"OPEN"},
+                   {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-14",
+                    "ratio":1,"multiplier":100,"entryPrice":"2.00","positionEffect":"OPEN"}
+                 ]}
+                """));
 
         PlanStrategyService.SavedRun saved = strategies.saveCompetition(null, plan,
                 Json.parse("{}"), result);
         assertThat(strategies.latestCompetition(null, plan.id())).isNotNull();
+        String candidateId = saved.result().at("/candidates/0/id").asText();
+
+        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-obsolete' WHERE id=?",
+                saved.runId());
+        assertThatThrownBy(() -> strategies.select(null, plan.id(), candidateId, plan.version()))
+                .hasMessageContaining("no current candidate");
+        assertThat(plans.get(null, plan.id()).version()).isEqualTo(plan.version());
+
+        db.exec("UPDATE plan_strategy_run SET engine_version=? WHERE id=?",
+                PlanStrategyService.ENGINE_VERSION, saved.runId());
+        strategies.select(null, plan.id(), candidateId, plan.version());
+        assertThat(strategies.selectedCandidate(null, plan.id())).isNotNull();
 
         db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-obsolete' WHERE id=?",
                 saved.runId());
 
         assertThat(strategies.latestCompetition(null, plan.id())).isNull();
+        assertThat(strategies.selectedCandidate(null, plan.id())).isNull();
     }
 
     @Test void obsoleteOrPartialEvaluationPayloadsAreRejectedInsteadOfAdapted() {
@@ -288,6 +341,16 @@ class PlanStrategyServiceTest {
                 new Plan.CreateRequest("strategy-scout-child", "SPY", "DIRECTIONAL", origin.id(), null,
                         "bullish", 30, null, "conservative", null, null, null, null));
         plans.linkRelated(null, origin.id(), child.id(), "PEER");
+
+        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-obsolete' WHERE id=?",
+                saved.runId());
+        assertThat(strategies.latestScout(null, origin.id(), "PEERS")).isNull();
+        assertThatThrownBy(() -> strategies.copyScoutSelection(null, origin.id(), candidateId, child))
+                .hasMessageContaining("no current scouted candidate");
+        assertThat(plans.get(null, child.id()).version()).isEqualTo(child.version());
+
+        db.exec("UPDATE plan_strategy_run SET engine_version=? WHERE id=?",
+                PlanStrategyService.ENGINE_VERSION, saved.runId());
         strategies.copyScoutSelection(null, origin.id(), candidateId, child);
 
         JsonNode selected = strategies.selectedCandidate(null, child.id());

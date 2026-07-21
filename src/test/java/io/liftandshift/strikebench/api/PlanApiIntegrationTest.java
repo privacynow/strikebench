@@ -429,6 +429,50 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":999,\"strategy\":\"DEBIT_CALL_SPREAD\"}").statusCode()).isEqualTo(409);
     }
 
+    @Test void refreshedRankedFieldKeepsTheExactSelectionAvailableToScenarioPaths() throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"rank-refresh-keeps-selection","symbol":"AAPL","intent":"INCOME",
+                 "title":"Refresh around a selected package","thesis":"neutral","horizonDays":5,
+                 "riskMode":"conservative"}
+                """));
+        String planId = plan.get("id").asText();
+        JsonNode firstField = json(post("/api/plans/" + planId + "/strategy/run", "{}"));
+        JsonNode selectedCandidate = firstField.at("/strategy/result/candidates/0");
+        String selectedId = selectedCandidate.get("id").asText();
+        JsonNode selection = json(put("/api/plans/" + planId + "/strategy/select",
+                "{\"candidateId\":\"" + selectedId + "\",\"expectedVersion\":"
+                        + firstField.at("/plan/version").asLong() + "}"));
+        long selectedVersion = selection.at("/plan/version").asLong();
+
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble",
+                "{\"expectedVersion\":" + selectedVersion + "}"));
+        String ensembleId = ensemble.at("/ensemble/id").asText();
+        JsonNode outcome = json(post("/api/plans/" + planId + "/outcomes/run",
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"basis\":\"PARAMETRIC\",\"ensembleId\":\"" + ensembleId + "\"}"));
+        assertThat(outcome.at("/outcome/candidateId").asText()).isEqualTo(selectedId);
+        JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+        assertThat(preview.at("/selected/id").asText()).isEqualTo(selectedId);
+
+        JsonNode refreshedField = json(post("/api/plans/" + planId + "/strategy/run", "{}"));
+        assertThat(refreshedField.at("/strategy/runId").asText())
+                .isNotEqualTo(firstField.at("/strategy/runId").asText());
+        JsonNode restored = json(get("/api/plans/" + planId + "/strategy/latest"));
+        assertThat(restored.at("/selected/id").asText()).isEqualTo(selectedId);
+        assertThat(restored.at("/selected/selected").asBoolean()).isTrue();
+
+        JsonNode animation = json(post("/api/plans/" + planId + "/outcomes/ensemble/paths",
+                "{\"ensembleId\":\"" + ensembleId
+                        + "\",\"waypoints\":[{\"dayIndex\":3,\"priceRatio\":1.03,\"tolerance\":0.03}],\"limit\":5}"));
+        assertThat(animation.at("/receipt/selectedCandidateId").asText()).isEqualTo(selectedId);
+        assertThat(animation.at("/checkpoints/modelReceipt/selectedCandidateId").asText())
+                .isEqualTo(selectedId);
+        assertThat(animation.path("checkpoints").path("positions"))
+                .anySatisfy(position -> assertThat(position.path("key").asText())
+                        .isEqualTo("PROPOSED:" + selectedId));
+    }
+
     @Test void customBuilderAndScoutPicksRemainExactPlanOwnedStructures() throws Exception {
         JsonNode customPlan = json(post("/api/plans", """
                 {"clientRequestId":"custom-plan-api-1","symbol":"AAPL","intent":"DIRECTIONAL","title":"Custom builder plan",
@@ -836,7 +880,7 @@ class PlanApiIntegrationTest {
     @Test void storedEnsembleRestoresByteCompatiblyForTheCurrentContext() throws Exception {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"ensemble-restore-plan","symbol":"AAPL","intent":"DIRECTIONAL",
-                 "title":"Stored fan restore plan","thesis":"bullish","horizonDays":30,"riskMode":"conservative"}
+                 "title":"Stored fan restore plan","thesis":"bullish","horizonDays":31,"riskMode":"conservative"}
                 """));
         String id = plan.get("id").asText();
         assertThat(get("/api/plans/" + id + "/outcomes/ensemble/latest").statusCode()).isEqualTo(404);

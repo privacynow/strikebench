@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
+import io.liftandshift.strikebench.util.Money;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -204,6 +205,30 @@ class RecommendationEngineTest {
                 .filter(c -> !StrategyFamily.valueOf(c.strategy()).needsStock()
                         && !c.strategy().equals("CASH_SECURED_PUT"))
                 .forEach(c -> assertThat(c.annualizedYieldPct()).isNull());
+    }
+
+    @Test
+    void beginnerCopySeparatesBuyWritePackageDebitFromOptionCredit() {
+        RecommendationEngine.Result result = engine.recommend(intentReq("income", null, null), BP);
+        Candidate coveredCall = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("COVERED_CALL"))
+                .filter(candidate -> candidate.legs().stream().anyMatch(leg -> leg.type().equals("STOCK")))
+                .findFirst().orElseThrow();
+        long optionCredit = coveredCall.legs().stream()
+                .filter(leg -> !leg.type().equals("STOCK"))
+                .mapToLong(leg -> {
+                    long cents = Money.centsFromPrice(new BigDecimal(leg.entryPrice()),
+                            Math.multiplyExact((long) leg.ratio() * coveredCall.qty(), leg.multiplier()));
+                    return leg.action().equals("SELL") ? cents : -cents;
+                }).sum();
+
+        assertThat(coveredCall.entryNetPremiumCents()).isNegative();
+        assertThat(optionCredit).isPositive();
+        assertThat(coveredCall.beginnerExplanation())
+                .contains("complete stock-plus-options package costs "
+                        + Money.fmt(-coveredCall.entryNetPremiumCents()))
+                .contains("option legs collect " + Money.fmt(optionCredit) + " net")
+                .doesNotContain("most you can lose on the options portion");
     }
 
     @Test

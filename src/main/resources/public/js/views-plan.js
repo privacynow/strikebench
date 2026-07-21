@@ -1937,6 +1937,10 @@
               ui.selectedCandidate = null;
             }
             mountedPanels.compare = false;
+            // The proposal field is deliberately co-visible with this editor. Refresh only that
+            // panel now so a rejected replacement cannot leave the prior package looking selected
+            // or keep its Outcomes action beside a truthful "Not selected" editor receipt.
+            await paint(false);
             return out;
           }
         });
@@ -4021,22 +4025,31 @@
 
   async function renderPlanLibrary(host, options) {
     options = options || {};
+    var owner = host;
     // The library has one mounted owner, but several legitimate data signals can ask it to
     // reconcile at once (for example the archive command and its plan.updated SSE event).
     // Both renders await server reads; without an owner generation, an older render can
     // resume after the newer one cleared the host and append a second set of groups. Only
     // the newest render for this exact owner may commit after an async boundary.
-    var renderGeneration = (host._planLibraryRenderGeneration || 0) + 1;
-    host._planLibraryRenderGeneration = renderGeneration;
+    var renderGeneration = (owner._planLibraryRenderGeneration || 0) + 1;
+    owner._planLibraryRenderGeneration = renderGeneration;
     function isCurrentRender() {
-      return host._planLibraryRenderGeneration === renderGeneration;
+      return owner._planLibraryRenderGeneration === renderGeneration;
     }
     async function repaintOwner() {
-      if (host.isConnected) await renderPlanLibrary(host, options);
+      if (owner.isConnected) await renderPlanLibrary(owner, options);
+    }
+    // Build off-DOM across every awaited market/portfolio read. An SSE refresh may legitimately
+    // start a newer render while this one is waiting; keeping the prior complete tree mounted
+    // preserves row identity and clickability until the newest generation commits atomically.
+    host = document.createElement('div');
+    function commit() {
+      if (!isCurrentRender()) return false;
+      owner.replaceChildren.apply(owner, Array.from(host.childNodes));
+      return true;
     }
     var full = options.full === true;
     var compact = options.compact === true;
-    host.innerHTML = '';
     var countLabel = el('span', { class: 'muted small plan-library-count' }, 'Loading…');
     host.appendChild(UI.cardHeader(options.title || 'Plans',
       el('div', { class: 'btn-row plan-library-commands' },
@@ -4054,6 +4067,7 @@
       if (!isCurrentRender()) return;
       loading.remove();
       host.appendChild(alertBox('warn', 'Plan library unavailable', [e.message]));
+      commit();
       return;
     }
     if (!isCurrentRender()) return;
@@ -4096,10 +4110,11 @@
     var compactShown = compactOrdered.slice(0, 3);
     if ((compact && !compactWorking.length && !looseAlerts.length)
         || (!compact && !working.length && !archived.length && !closedTabs.length)) {
-      if (options.removeWhenEmpty) { host.remove(); return; }
+      if (options.removeWhenEmpty) { if (isCurrentRender()) owner.remove(); return; }
       host.appendChild(UI.emptyState('No working Plans yet',
         'Choose a stock in Research, then carry one Plan through evidence, strategy, outcomes, and a decision.',
         'Open Research', function () { App.navigate('#/research'); }));
+      commit();
       return;
     }
 
@@ -4291,6 +4306,7 @@
           (compactOrdered.length - compactShown.length) + ' more in ',
           el('a', { href: '#/home', onclick: function () { App.state.openPlanDrawer = true; } }, 'the Plan library'), '.'));
       }
+      commit();
       return;
     }
 
@@ -4356,6 +4372,7 @@
           el('span', { class: 'badge badge-dim' }, planMarketLabel(plan)), actions);
       }));
     }, { stateKey: 'plans-closed-tabs' }));
+    commit();
   }
 
 
