@@ -118,6 +118,49 @@ class RecommendationEngineTest {
                 assertThat(note).contains("market is closed").contains("PRIOR CLOSE"));
     }
 
+    @Test
+    void everyViableExpiryReachesDecisionPolicyBeforePerFamilySelection() {
+        MarketDataProvider provider = staleObservedProvider(CLOCK);
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(provider), List.of(), List.of()), CLOCK);
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "aggressive", null, null, null,
+                List.of("LONG_CALL"), true, false, "DIRECTIONAL", null, null);
+
+        RecommendationEngine.Result result = observed.recommend(request, BP);
+        Set<String> expirations = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("LONG_CALL"))
+                .flatMap(candidate -> candidate.legs().stream())
+                .map(LegView::expiration)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertThat(expirations)
+                .as("raw EV/max-loss must not collapse expiry alternatives before DecisionPolicy")
+                .hasSizeGreaterThan(1);
+    }
+
+    @Test
+    void ironCondorRejectsPennyCreditAgainstTenDollarWings() {
+        Candidate pennyCondor = condorCandidate(100L, 99_900L); // $1 total credit / $1,000 gross width
+        Candidate viableCondor = condorCandidate(10_000L, 90_000L); // $100 / $1,000 = 10%
+
+        assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, pennyCondor))
+                .contains("only 0.1%")
+                .contains("at least 5%")
+                .contains("economically meaningful");
+        assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, viableCondor))
+                .isNull();
+    }
+
+    private static Candidate condorCandidate(long creditCents, long maxLossCents) {
+        return new Candidate("IRON_CONDOR", "Iron condor", "range_credit", "four-leg package",
+                List.of(), 1, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
+                0.50, "DELAYED", List.of(), 0.50, "range income", "credit", "wing risk",
+                "breakout", "four defined-risk legs", "INCOME", List.of("INCOME"),
+                0.20, null, null, null, false, null, null);
+    }
+
     private static RecommendationEngine.Request intentReq(String intent, RecommendationEngine.Holdings holdings,
                                                           RecommendationEngine.Filters filters) {
         return new RecommendationEngine.Request("AAPL", null, "month", "balanced", null, null, null, null,
@@ -524,5 +567,36 @@ class RecommendationEngineTest {
                 }
             }
         }
+    }
+
+    @Test
+    void incomeCatalogNamesUndefinedRiskFamiliesAsExcludedInsteadOfSilentlyDroppingThem() {
+        RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
+                "AAPL", "neutral", "month", "balanced", null, null, null, null,
+                true, false, "INCOME", null, null), BP);
+
+        assertThat(result.candidates()).extracting(Candidate::strategy)
+                .doesNotContain("NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+        assertThat(result.rejected()).extracting(Rejection::strategy)
+                .contains("NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+        assertThat(result.rejected())
+                .filteredOn(rejection -> java.util.Set.of(
+                        "NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE")
+                        .contains(rejection.strategy()))
+                .allSatisfy(rejection -> assertThat(rejection.reasons())
+                        .anySatisfy(reason -> assertThat(reason)
+                                .contains("undefined risk").contains("blocked by default")));
+
+        var accounted = new java.util.HashSet<String>();
+        result.candidates().forEach(candidate -> accounted.add(candidate.strategy()));
+        result.rejected().forEach(rejection -> accounted.add(rejection.strategy()));
+        var applicableCatalog = java.util.Arrays.stream(StrategyFamily.values())
+                .filter(family -> family.servesIntent(
+                        io.liftandshift.strikebench.strategy.StrategyIntent.INCOME))
+                .map(Enum::name)
+                .toList();
+        assertThat(accounted)
+                .as("every income family is either offered or returned with an exact exclusion reason")
+                .containsAll(applicableCatalog);
     }
 }

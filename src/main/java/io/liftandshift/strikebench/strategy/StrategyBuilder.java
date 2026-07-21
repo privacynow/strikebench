@@ -142,14 +142,22 @@ public final class StrategyBuilder {
                 "SELL " + strikeLabel(bestShort) + " / BUY " + strikeLabel(bestLong) + " " + chain.expiration());
     }
 
+    private static final double CONDOR_SHORT_DELTA = 0.20;
+
     /**
-     * Builds the canonical range-credit shape as one package. The two component spreads share the
-     * same executable search, but their short strikes must bracket spot and their four strikes must
-     * remain strictly ordered: long put < short put < short call < long call.
+     * Builds the canonical range-credit shape as one package. A condor is not merely the two
+     * highest-return credit verticals: optimizing each side independently pulls both short strikes
+     * toward spot and can leave an implausibly narrow profit interval. Choose each short near the
+     * conventional 20-delta probability boundary, then buy a nearby executable wing. The complete
+     * package still goes through the authoritative payoff, EV, liquidity and decision assessment;
+     * this construction rule only gives that assessment a genuine range-income shape to judge.
+     *
+     * <p>The four strikes must remain strictly ordered:
+     * long put &lt; short put &lt; short call &lt; long call.</p>
      */
     private static Built ironCondor(OptionChain chain, BigDecimal spot) {
-        Built put = creditVertical(chain, OptionType.PUT, spot, true);
-        Built call = creditVertical(chain, OptionType.CALL, spot, true);
+        Built put = condorSide(chain, OptionType.PUT, spot);
+        Built call = condorSide(chain, OptionType.CALL, spot);
         if (put == null || call == null) return null;
 
         BigDecimal shortPut = put.legs().get(0).strike();
@@ -162,6 +170,63 @@ public final class StrategyBuilder {
             return null;
         }
         return combine(put, call);
+    }
+
+    /**
+     * One executable side of a probability-aware condor. Prefer two listed strikes between the
+     * short and protective wing (a restrained, readable width), then fall back to one/three/four
+     * when the chain is sparse. A side that cannot collect a credit at bid/ask is not a credit side.
+     */
+    private static Built condorSide(OptionChain chain, OptionType type, BigDecimal spot) {
+        if (spot == null || spot.signum() <= 0) return null;
+        double s = spot.doubleValue();
+        List<OptionQuote> side = (type == OptionType.CALL ? chain.calls() : chain.puts()).stream()
+                .filter(StrategyBuilder::hasExecutableBook)
+                .sorted(Comparator.comparing(OptionQuote::strike))
+                .toList();
+        if (side.size() < 2) return null;
+
+        List<OptionQuote> shorts = side.stream()
+                .filter(q -> type == OptionType.CALL
+                        ? q.strike().doubleValue() > s : q.strike().doubleValue() < s)
+                .sorted(Comparator
+                        .comparingDouble((OptionQuote q) -> condorDeltaDistance(q, type, s))
+                        .thenComparingDouble(q -> Math.abs(q.strike().doubleValue() - s)))
+                .toList();
+        int direction = type == OptionType.CALL ? 1 : -1;
+        for (OptionQuote shortLeg : shorts) {
+            int shortIndex = side.indexOf(shortLeg);
+            for (int steps : new int[] {2, 1, 3, 4}) {
+                int wingIndex = shortIndex + direction * steps;
+                if (wingIndex < 0 || wingIndex >= side.size()) continue;
+                OptionQuote longLeg = side.get(wingIndex);
+                BigDecimal credit = shortLeg.bid().subtract(longLeg.ask());
+                if (credit.signum() <= 0) continue;
+                return new Built(List.of(leg(LegAction.SELL, shortLeg), leg(LegAction.BUY, longLeg)),
+                        List.of(shortLeg, longLeg),
+                        "SELL " + strikeLabel(shortLeg) + " / BUY " + strikeLabel(longLeg)
+                                + " " + chain.expiration());
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasExecutableBook(OptionQuote quote) {
+        return quote != null && quote.strike() != null && quote.bid() != null && quote.ask() != null
+                && quote.bid().signum() > 0 && quote.ask().signum() > 0
+                && quote.ask().compareTo(quote.bid()) >= 0;
+    }
+
+    /** Delta is the probability-aware selector when supplied. A disclosed moneyness proxy keeps
+     * fixture/imported chains without Greeks deterministic instead of silently dropping the family. */
+    private static double condorDeltaDistance(OptionQuote quote, OptionType type, double spot) {
+        if (quote.delta() != null && Double.isFinite(quote.delta())) {
+            return Math.abs(Math.abs(quote.delta()) - CONDOR_SHORT_DELTA);
+        }
+        double otmFraction = type == OptionType.CALL
+                ? (quote.strike().doubleValue() - spot) / spot
+                : (spot - quote.strike().doubleValue()) / spot;
+        return 1.0 + Math.abs(otmFraction - 0.05);
     }
 
     private static Built vertical(OptionChain chain, OptionType type, LegAction anchorAction, double targetDelta, int hedgeSteps) {

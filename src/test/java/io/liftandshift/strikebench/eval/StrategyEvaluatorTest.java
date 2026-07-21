@@ -16,9 +16,13 @@ class StrategyEvaluatorTest {
 
     /** A $250/$255 debit call spread on AAPL: $2.00 debit, $3.00 max profit, $2.00 max loss. */
     private Candidate debitCallSpread(String freshness, double confidence) {
+        return debitCallSpread(freshness, confidence, "2026-08-21");
+    }
+
+    private Candidate debitCallSpread(String freshness, double confidence, String expiration) {
         List<LegView> legs = List.of(
-                new LegView("BUY", "CALL", "250", "2026-08-21", 1, "4.00", 100, "OPEN"),
-                new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00", 100, "OPEN"));
+                new LegView("BUY", "CALL", "250", expiration, 1, "4.00", 100, "OPEN"),
+                new LegView("SELL", "CALL", "255", expiration, 1, "2.00", 100, "OPEN"));
         // $2.00 debit and $5.00 width per share -> $200 debit / $300 profit / $200 loss PER CONTRACT (cents).
         return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
                 legs, 1, -20_000L, 30_000L, 20_000L, List.of("252.00"),
@@ -28,6 +32,58 @@ class StrategyEvaluatorTest {
                 "AAPL closes below $250 at expiry", "You risk $200 to make up to $300",
                 "DIRECTIONAL", List.of("DIRECTIONAL"),
                 0.30, null, null, null, false, null, null);
+    }
+
+    @Test void perFamilyExpirySelectionUsesEconomicVerdictBeforeRawQuality() {
+        Candidate near = debitCallSpread("DELAYED", 0.9, "2026-08-21");
+        Candidate later = debitCallSpread("DELAYED", 0.5, "2026-09-18");
+        StrategyEvaluation rawWinner = evaluatedPackage(
+                "near", near, EconomicAssessment.Verdict.UNFAVORABLE, 100.0);
+        StrategyEvaluation favorable = evaluatedPackage(
+                "later", later, EconomicAssessment.Verdict.FAVORABLE, 1.0);
+
+        assertThat(rawWinner.rankScore()).isGreaterThan(favorable.rankScore());
+        assertThat(favorable.decisionScore()).isGreaterThan(rawWinner.decisionScore());
+        assertThat(StrategyEvaluator.bestPackagePerFamily(List.of(rawWinner, favorable)))
+                .as("the favorable after-cost expiry must survive a misleading raw-quality winner")
+                .containsExactly(favorable);
+        assertThat(favorable.candidate().legs()).allSatisfy(leg ->
+                assertThat(leg.expiration()).isEqualTo("2026-09-18"));
+    }
+
+    @Test void competitionPersistsTheExactFamilyRecipeForEveryCandidate() {
+        Candidate candidate = debitCallSpread("DELAYED", 0.8);
+        StrategySpec competition = new StrategySpec("AAPL", "COVERED_CALL", "DIRECTIONAL",
+                "month", "BULLISH", "BALANCED", "decision");
+
+        StrategyEvaluation evaluated = new StrategyEvaluator()
+                .evaluateAndRank(List.of(candidate), competition, ctx()).getFirst();
+
+        assertThat(evaluated.spec().family()).isEqualTo(candidate.strategy());
+        assertThat(evaluated.family()).isEqualTo(candidate.strategy());
+        assertThat(evaluated.spec()).extracting(StrategySpec::symbol, StrategySpec::intent,
+                StrategySpec::horizon, StrategySpec::thesis, StrategySpec::riskMode,
+                StrategySpec::objective)
+                .containsExactly("AAPL", "DIRECTIONAL", "month", "BULLISH", "BALANCED",
+                        "decision");
+    }
+
+    private static StrategyEvaluation evaluatedPackage(String id, Candidate candidate,
+                                                        EconomicAssessment.Verdict verdict,
+                                                        double rawQuality) {
+        EconomicAssessment economics = new EconomicAssessment(verdict, verdict.name(), verdict.name(),
+                "test economic tier", 0L, 0L, 0L, 0.0, true, List.of());
+        FourOutputAssessment assessment = new FourOutputAssessment(
+                new FourOutputAssessment.MechanicalAssessment(true, List.of()), economics,
+                new FourOutputAssessment.ObjectiveCoherence(FourOutputAssessment.Coherence.UNDECLARED,
+                        "undeclared", "undeclared", List.of()),
+                new FourOutputAssessment.PortfolioImpacts(null, null, List.of()));
+        return new StrategyEvaluation(id,
+                new StrategySpec("AAPL", candidate.strategy(), candidate.intent(), "month",
+                        "BULLISH", "BALANCED", "decision"),
+                candidate, null, null, null, null, null,
+                new ScoreBreakdown(true, List.of(), rawQuality, rawQuality, List.of()), assessment,
+                null, null, null, null, null, null);
     }
 
     private EvalContext ctx() {
@@ -322,12 +378,42 @@ class StrategyEvaluatorTest {
         assertThat(adverseEval.decisionScore()).isBetween(1.0, 25.0);
     }
 
+    @Test void declaredObjectiveCoherenceTiltsWithinButNeverAcrossEconomicTiers() {
+        var score = new ScoreBreakdown(true, List.of(), 80, 80, List.of());
+        var mixedEconomics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED, "COMPARE_CAREFULLY",
+                "Mixed", "Same economics", 10L, 10L, 0, 1.0, true, List.of());
+        var unfavorableEconomics = new EconomicAssessment(EconomicAssessment.Verdict.UNFAVORABLE, "LEARN_FROM",
+                "Unfavorable", "Known adverse economics", -10L, -10L, 0, -1.0, true, List.of());
+
+        var coherent = evaluationForRanking("coherent", score, mixedEconomics,
+                FourOutputAssessment.Coherence.COHERENT);
+        var mixed = evaluationForRanking("mixed", score, mixedEconomics,
+                FourOutputAssessment.Coherence.MIXED);
+        var incoherent = evaluationForRanking("incoherent", score, mixedEconomics,
+                FourOutputAssessment.Coherence.INCOHERENT);
+        var adverseCoherent = evaluationForRanking("adverse", score, unfavorableEconomics,
+                FourOutputAssessment.Coherence.COHERENT);
+
+        assertThat(coherent.decisionScore()).isGreaterThan(mixed.decisionScore());
+        assertThat(mixed.decisionScore()).isGreaterThan(incoherent.decisionScore());
+        assertThat(incoherent.decisionScore()).isGreaterThan(adverseCoherent.decisionScore());
+        assertThat(java.util.stream.Stream.of(incoherent, coherent, mixed, adverseCoherent)
+                .sorted(StrategyEvaluator.RANKING).map(StrategyEvaluation::id).toList())
+                .containsExactly("coherent", "mixed", "incoherent", "adverse");
+    }
+
     private static StrategyEvaluation evaluationForRanking(String id, ScoreBreakdown score,
                                                             EconomicAssessment economics) {
+        return evaluationForRanking(id, score, economics, FourOutputAssessment.Coherence.UNDECLARED);
+    }
+
+    private static StrategyEvaluation evaluationForRanking(String id, ScoreBreakdown score,
+                                                            EconomicAssessment economics,
+                                                            FourOutputAssessment.Coherence coherence) {
         var assessment = new FourOutputAssessment(
                 new FourOutputAssessment.MechanicalAssessment(score.gatePassed(), score.gateFailures()),
                 economics,
-                new FourOutputAssessment.ObjectiveCoherence(FourOutputAssessment.Coherence.UNDECLARED,
+                new FourOutputAssessment.ObjectiveCoherence(coherence,
                         "test", "test", List.of()),
                 new FourOutputAssessment.PortfolioImpacts(null, null, List.of("not selected")));
         return new StrategyEvaluation(id, null, null, null, null, null, null, null, score, assessment,

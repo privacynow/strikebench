@@ -46,6 +46,31 @@ class StrategyBuilderTest {
         assertThat(shortCall.strike()).isLessThan(longCall.strike());
     }
 
+    @Test
+    void ironCondorUsesProbabilityBoundariesInsteadOfCollapsingAroundSpotForMaximumCredit() {
+        OptionChain chain = new OptionChain("AMD", EXPIRATION, bd("100"),
+                List.of(
+                        quote(OptionType.CALL, "102", "5.00", "5.10", 0.48),
+                        quote(OptionType.CALL, "105", "2.00", "2.10", 0.20),
+                        quote(OptionType.CALL, "110", "0.50", "0.60", 0.05)
+                ),
+                List.of(
+                        quote(OptionType.PUT, "90", "0.50", "0.60", -0.05),
+                        quote(OptionType.PUT, "95", "2.00", "2.10", -0.20),
+                        quote(OptionType.PUT, "98", "5.00", "5.10", -0.48)
+                ),
+                1L, "test", Freshness.REALTIME);
+
+        StrategyBuilder.Built built = StrategyBuilder.build(
+                StrategyFamily.IRON_CONDOR, chain, null, bd("100"));
+
+        assertThat(built).isNotNull();
+        assertThat(leg(built, OptionType.PUT, LegAction.SELL).strike()).isEqualByComparingTo("95");
+        assertThat(leg(built, OptionType.CALL, LegAction.SELL).strike()).isEqualByComparingTo("105");
+        assertThat(leg(built, OptionType.PUT, LegAction.BUY).strike()).isEqualByComparingTo("90");
+        assertThat(leg(built, OptionType.CALL, LegAction.BUY).strike()).isEqualByComparingTo("110");
+    }
+
     private static Leg leg(StrategyBuilder.Built built, OptionType type, LegAction action) {
         return built.legs().stream()
                 .filter(leg -> leg.type() == type && leg.action() == action)
@@ -54,8 +79,12 @@ class StrategyBuilderTest {
     }
 
     private static OptionQuote quote(OptionType type, String strike, String bid, String ask) {
+        return quote(type, strike, bid, ask, null);
+    }
+
+    private static OptionQuote quote(OptionType type, String strike, String bid, String ask, Double delta) {
         return new OptionQuote("AMD", "AMD-" + type + '-' + strike, type, bd(strike), EXPIRATION,
-                bd(bid), bd(ask), null, 100L, 100L, 0.35, null, null, null, null,
+                bd(bid), bd(ask), null, 100L, 100L, 0.35, delta, null, null, null,
                 1L, "test", Freshness.REALTIME);
     }
 

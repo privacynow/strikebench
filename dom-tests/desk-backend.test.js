@@ -81,13 +81,16 @@ function plan(version, overrides = {}) {
     open: true,
     status: 'ACTIVE',
     symbol: overrides.symbol || 'AMD',
-    intent: 'INCOME',
+    intent: overrides.intent || 'INCOME',
     marketKind: overrides.marketKind || 'OBSERVED',
     worldId: overrides.worldId === undefined ? null : overrides.worldId,
-    accountId: ACCOUNT_ID,
+    accountId: Object.prototype.hasOwnProperty.call(overrides, 'accountId')
+      ? overrides.accountId : ACCOUNT_ID,
     context: {
-      thesis: 'neutral',
-      horizonDays: 1,
+      thesis: Object.prototype.hasOwnProperty.call(overrides, 'thesis')
+        ? overrides.thesis : 'neutral',
+      horizonDays: Object.prototype.hasOwnProperty.call(overrides, 'horizonDays')
+        ? overrides.horizonDays : 1,
       riskMode: overrides.riskMode || 'balanced',
       rev: 7
     }
@@ -553,6 +556,29 @@ function unfavorableCandidate() {
   return row;
 }
 
+function fourLegCandidate() {
+  const row = candidate();
+  row.id = 'candidate_backend_four_leg';
+  row.label = 'Backend canonical iron condor';
+  row.displayName = 'Backend canonical iron condor';
+  row.strategy = 'IRON_CONDOR';
+  row.identity = positionIdentity({
+    family: 'IRON_CONDOR', label: 'Iron condor',
+    summary: 'A defined-risk range package with strictly ordered protective wings.'
+  });
+  row.legs = [
+    { type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 90, expiration: '2026-08-21', entryPrice: 1 },
+    { type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 95, expiration: '2026-08-21', entryPrice: 2 },
+    { type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 105, expiration: '2026-08-21', entryPrice: 2 },
+    { type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 110, expiration: '2026-08-21', entryPrice: 1 }
+  ];
+  return row;
+}
+
 function customCandidate(position) {
   const preview = customTradePreview(position).preview;
   return {
@@ -988,6 +1014,7 @@ function positionScenarioResponse(body, options = {}) {
 async function installBackend(page, options = {}) {
   const requests = [];
   let scenarioCalls = 0;
+  let scenarioFailuresRemaining = Number(options.scenarioFailures || 0);
   let planVersion = 10;
   let selectedCandidate = null;
   let activeWorld = 'observed';
@@ -1029,10 +1056,10 @@ async function installBackend(page, options = {}) {
   let storedEnsemble = null;
   let storedOutcomes = [];
   let researchFailuresRemaining = options.failResearchOnce ? 1 : 0;
-  const planOverrides = {
+  const planOverrides = Object.assign({
     worldId: options.observedWorldId === undefined ? null : options.observedWorldId,
     riskMode: options.planRiskMode || 'balanced'
-  };
+  }, options.activePlanOverrides || {});
 
   function currentPlanId() {
     return activeWorld === 'observed' ? PLAN_ID : SIM_PLAN_ID;
@@ -1174,6 +1201,9 @@ async function installBackend(page, options = {}) {
           ? 'Authoritative Practice share positions.' : 'No Practice share positions.'
       };
     } else if (method === 'GET' && url.pathname === '/api/portfolio/summary') {
+      if (options.bookCoreDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.bookCoreDelayMs));
+      }
       response = bookDocuments.summary;
     } else if (method === 'GET' && url.pathname === '/api/portfolio/heat') {
       response = bookDocuments.heat;
@@ -1187,12 +1217,18 @@ async function installBackend(page, options = {}) {
       response = tradeDetails[tradeDetailId];
     } else if (method === 'GET' && url.pathname === '/api/research/AAPL'
         && bookDocuments.research) {
+      if (options.homeContextDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.homeContextDelayMs));
+      }
       response = bookDocuments.research;
     } else if (method === 'GET' && url.pathname === '/api/research/AAPL/history'
         && bookDocuments.history) {
       response = bookDocuments.history;
     } else if (method === 'GET' && url.pathname === '/api/research/AAPL/news'
         && bookDocuments.news) {
+      if (options.homeContextDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.homeContextDelayMs));
+      }
       response = bookDocuments.news;
     } else if (method === 'GET' && managePlanId && managementByPlan[managePlanId]) {
       response = managementByPlan[managePlanId];
@@ -1333,16 +1369,32 @@ async function installBackend(page, options = {}) {
       };
     } else if (method === 'POST' && url.pathname === `${activePlanPath}/outcomes/ensemble/paths`) {
       scenarioCalls += 1;
+      if (scenarioFailuresRemaining > 0) {
+        scenarioFailuresRemaining -= 1;
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'scenario_conditioning_unavailable',
+            detail: 'The stored ensemble could not be conditioned for this selected scenario.'
+          })
+        });
+        return;
+      }
       const terminal = body.waypoints[body.waypoints.length - 1].priceRatio;
+      const scenarioCandidateId = selectedCandidate?.id || CANDIDATE_ID;
       if (terminal < 1) {
         await new Promise(resolve => setTimeout(resolve, 180));
-        response = scenarioResponse('first');
+        response = scenarioResponse('first', { receipt: { selectedCandidateId: scenarioCandidateId } });
       } else if (terminal > 1.08) {
         response = scenarioResponse('invalid', {
-          receipt: { ensembleFingerprint: 'wrong-ensemble-fingerprint' }
+          receipt: {
+            selectedCandidateId: scenarioCandidateId,
+            ensembleFingerprint: 'wrong-ensemble-fingerprint'
+          }
         });
       } else {
-        response = scenarioResponse('second');
+        response = scenarioResponse('second', { receipt: { selectedCandidateId: scenarioCandidateId } });
       }
     } else if (method === 'GET' && url.pathname === `${activePlanPath}/outcomes/ensemble/latest`) {
       if (!options.latestEnsembleEnabled || !storedEnsemble) {
@@ -1411,7 +1463,11 @@ async function installBackend(page, options = {}) {
         outcome: savedOutcome
       };
     } else if (method === 'POST' && url.pathname === `${activePlanPath}/decision/preview`) {
+      if (options.decisionPreviewDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.decisionPreviewDelayMs));
+      }
       response = decisionPreview(body, selectedCandidate, planVersion);
+      response.plan = currentPlan(planVersion);
       response.preview.freshness = quote.freshness;
       response.preview.evidence = { source: quote.source, lane: activeMarketLane };
       if (options.unavailableDecisionPreview) {
@@ -1540,13 +1596,40 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
-  const backend = await installBackend(page);
+  const marketDocuments = populatedBookDocuments();
+  const bookDocuments = emptyBookDocuments();
+  bookDocuments.planPortfolio = marketDocuments.planPortfolio;
+  bookDocuments.planPortfolio[0].plan.originPlanId = 'plan_home_origin';
+  Object.assign(bookDocuments.planPortfolio[0].plan.context, {
+    targetCents: 23000,
+    holdingsShares: 100,
+    costBasisCents: 20000,
+    priceAssumptionCents: 22100,
+    assignmentPreference: 'AVOID'
+  });
+  bookDocuments.research = marketDocuments.research;
+  bookDocuments.news = marketDocuments.news;
+  const backend = await installBackend(page, {
+    bookDocuments, bookCoreDelayMs: 150, homeContextDelayMs: 250
+  });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
+    await page.waitForSelector('#stage[data-book-authority="loading"]');
+    assert.deepEqual(await page.evaluate(() => [
+      'book', 'riskMain', 'bookrisk', 'chainBand', 'univBand', 'sectorBand', 'newsBand'
+    ].map(id => ({ id, rects: document.getElementById(id).getClientRects().length }))), [
+      { id: 'book', rects: 0 }, { id: 'riskMain', rects: 0 }, { id: 'bookrisk', rects: 0 },
+      { id: 'chainBand', rects: 0 }, { id: 'univBand', rects: 0 },
+      { id: 'sectorBand', rects: 0 }, { id: 'newsBand', rects: 0 }
+    ], 'the loading authority layer cannot leave hidden cockpit panels in layout');
     await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready',
       null, { timeout: 10000 });
     await page.waitForSelector('#stage[data-book-authority="empty"]', { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.DeskBackend.state().book.data.homeContext.phase),
+      'loading', 'the account and Plan actions render before a cold Research source finishes');
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready',
+      null, { timeout: 10000 });
 
     for (const viewport of [
       { width: 1280, height: 800 },
@@ -1567,6 +1650,19 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
           text: stage && stage.textContent.replace(/\s+/g, ' ').trim(),
           visibleCards: Array.from(document.querySelectorAll('#book .card[data-id]'))
             .filter(card => card.getClientRects().length).map(card => card.dataset.id),
+          cockpitPanels: ['book', 'riskMain', 'bookrisk', 'chainBand', 'univBand', 'sectorBand', 'newsBand']
+            .map(id => {
+              const node = document.getElementById(id);
+              const rect = node.getBoundingClientRect();
+              return { id, visible: node.getClientRects().length > 0, width: rect.width, height: rect.height };
+            }),
+          planActions: document.querySelectorAll('[data-auth-plan-id]').length,
+          planActionTags: Array.from(document.querySelectorAll('[data-auth-plan-id]'))
+            .map(node => node.tagName),
+          marketRows: document.querySelectorAll('[data-auth-market-symbol]').length,
+          newsLinks: document.querySelectorAll('#newsBand .authhomenews a').length,
+          authorityOverlayVisible: document.getElementById('bookAuthState').getClientRects().length > 0,
+          fullHeightEmptyOverlay: document.querySelectorAll('#bookAuthState .authempty').length,
           fixtureFlagVisible: !!fixtureFlag && fixtureFlag.getClientRects().length > 0,
           documentOverflow: document.documentElement.scrollWidth
             > document.documentElement.clientWidth
@@ -1581,19 +1677,313 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         `${viewport.width}px HTTP Home does not render the six offline fixture positions`);
       assert.equal(rendered.fixtureFlagVisible, false,
         'served Home is not labeled as a fixture after its authoritative empty receipt arrives');
-      assert.match(rendered.text, /No active Practice positions/i);
+      assert.match(rendered.text, /No open Practice positions/i);
+      assert.match(rendered.text, /Market evidence[\s\S]*AAPL[\s\S]*BOOK_TEST_RESEARCH_RECEIPT/i,
+        'the empty account retains current source-owned market evidence');
+      assert.match(rendered.text, /Research & news[\s\S]*Backend research sentinel headline/i,
+        'the empty account retains source-backed research headlines');
+      assert.equal(rendered.planActions, 1, 'the owning Plan remains an explicit action');
+      assert.deepEqual(rendered.planActionTags, ['BUTTON'],
+        'Plans are controls, not inert receipt rows');
+      assert.equal(rendered.marketRows, 1, 'the Plan-symbol market watch remains available');
+      assert.equal(rendered.newsLinks, 1, 'the source-backed headline remains a real link');
+      assert.equal(rendered.authorityOverlayVisible, false,
+        'the empty Book does not leave a full-board authority overlay over Home');
+      assert.equal(rendered.fullHeightEmptyOverlay, 0,
+        'the screenshot-era three-column empty receipt canvas is absent');
+      rendered.cockpitPanels.forEach(panel => {
+        assert.equal(panel.visible, true, `${viewport.width}px ${panel.id} remains visible`);
+        assert.ok(panel.width >= (viewport.width <= 500 ? 350 : 200),
+          `${viewport.width}px ${panel.id} keeps useful width (${panel.width}px)`);
+        assert.ok(panel.height >= 180,
+          `${viewport.width}px ${panel.id} keeps useful height (${panel.height}px)`);
+      });
       assert.doesNotMatch(rendered.text, /Covered strangle|Short-put campaign|Past stop/i,
         'offline position stories cannot survive in the served empty book');
+      assert.doesNotMatch(rendered.text, /six staged design positions|Optional gaps|Loaded 20/i,
+        'implementation receipts do not replace the Home experience');
       assert.equal(rendered.documentOverflow, false,
         `${viewport.width}px authoritative empty Home remains horizontally contained`);
     }
 
+    await page.evaluate(() => {
+      window.__homeResumeContext = null;
+      window.__homeOpenIdea = window.DeskBackend.openIdea;
+      window.DeskBackend.openIdea = context => {
+        window.__homeResumeContext = context;
+        return Promise.resolve(null);
+      };
+    });
+    await page.locator(`[data-auth-plan-id="${BOOK_PLAN_ID}"]`).click();
+    await page.waitForFunction(() => window.__homeResumeContext != null);
+    assert.deepEqual(await page.evaluate(() => ({
+      planId: window.__homeResumeContext.planId,
+      symbol: window.__homeResumeContext.symbol,
+      goal: window.__homeResumeContext.goal,
+      horizon: window.__homeResumeContext.horizon,
+      originPlanId: window.__homeResumeContext.originPlanId,
+      targetCents: window.__homeResumeContext.targetCents,
+      holdingsShares: window.__homeResumeContext.holdingsShares,
+      costBasisCents: window.__homeResumeContext.costBasisCents,
+      priceAssumptionCents: window.__homeResumeContext.priceAssumptionCents,
+      assignmentPreference: window.__homeResumeContext.assignmentPreference
+    })), {
+      planId: BOOK_PLAN_ID, symbol: 'AAPL', goal: 'INCOME', horizon: '1 days',
+      originPlanId: 'plan_home_origin', targetCents: 23000, holdingsShares: 100,
+      costBasisCents: 20000, priceAssumptionCents: 22100, assignmentPreference: 'AVOID'
+    }, 'Home resumes the exact clicked Plan instead of minting or guessing another one');
+    await page.evaluate(() => {
+      window.DeskBackend.openIdea = window.__homeOpenIdea;
+      if (window.decide) window.exitDecide();
+    });
+
     assert.equal(backend.count('GET', '/api/trades'), 1);
     assert.equal(backend.count('GET', '/api/positions'), 1);
     assert.equal(backend.count('GET', '/api/portfolio/summary'), 1);
+    assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
+    assert.equal(backend.count('GET', '/api/research/AAPL/news'), 1);
     assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 0,
       'an empty roster cannot trigger a fixture or speculative position-detail read');
     assert.deepEqual(pageErrors, [], `empty Practice book emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('HTTP Home resumes the exact clicked Plan in the authoritative Desk', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const bookDocuments = emptyBookDocuments();
+  bookDocuments.planPortfolio = [{ plan: plan(10, { id: PLAN_ID, symbol: 'AMD' }) }];
+  const backend = await installBackend(page, { bookDocuments });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForSelector(`#stage[data-book-authority="empty"] [data-auth-plan-id="${PLAN_ID}"]`);
+    await page.locator(`[data-auth-plan-id="${PLAN_ID}"]`).click();
+    await page.waitForFunction(planId => window.decide?.backendPhase === 'ready'
+      && window.DeskBackend.state().plan?.id === planId, PLAN_ID, { timeout: 10000 });
+
+    assert.equal(await page.locator('#decideStage.on').count(), 1,
+      'the saved Plan opens in the approved Desk surface');
+    assert.equal(await page.evaluate(() => window.decide.resumePlanId), PLAN_ID);
+    assert.equal(backend.count('GET', `/api/plans/${PLAN_ID}`), 1,
+      'the bridge loads the exact clicked Plan');
+    assert.equal(backend.count('GET', '/api/plans'), 0,
+      'exact resume does not guess among similar active Plans');
+    assert.equal(backend.count('POST', '/api/plans'), 0,
+      'exact resume cannot mint a replacement Plan');
+    assert.deepEqual(pageErrors, [], `exact Home Plan resume emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including absent thesis and horizon', async () => {
+  for (const intent of ['ACQUIRE', 'EXIT']) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    const exact = { id: PLAN_ID, symbol: 'AMD', intent, thesis: null, horizonDays: null };
+    const bookDocuments = emptyBookDocuments();
+    bookDocuments.planPortfolio = [{ plan: plan(10, exact) }];
+    const backend = await installBackend(page, {
+      bookDocuments,
+      activePlanOverrides: exact
+    });
+    try {
+      await page.goto(deskUrl);
+      await waitForDeskBoot(page);
+      await page.waitForSelector(`[data-auth-plan-id="${PLAN_ID}"]`);
+      await page.locator(`[data-auth-plan-id="${PLAN_ID}"]`).click();
+      await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
+        || window.decide?.backendPhase === 'error', null, { timeout: 10000 });
+      const diagnosis = await page.evaluate(() => ({
+        phase: window.decide?.backendPhase,
+        error: window.decide?.backendError,
+        bridgeError: window.DeskBackend.state().error?.message,
+        plan: window.DeskBackend.state().plan,
+        planIdentity: window.DeskBackend.state().planIdentity,
+        context: window.DeskBackend.state().context
+      }));
+      assert.equal(diagnosis.phase, 'ready',
+        `${intent} exact resume failed: ${JSON.stringify(diagnosis)}; requests=${JSON.stringify(backend.requests)}`);
+      assert.equal(diagnosis.plan?.id, PLAN_ID);
+      await page.locator('[data-dec="intent"]').click();
+      assert.equal(await page.locator(`[data-obj="goal"][data-val="${intent[0] + intent.slice(1).toLowerCase()}"]`).getAttribute('class'),
+        'on', `${intent} remains visibly selected in the complete canonical intent control`);
+
+      assert.deepEqual(await page.evaluate(() => ({
+        visibleGoal: window.decide.goal,
+        visibleView: window.decide.view,
+        visibleHorizon: window.decide.horizon,
+        requested: {
+          goal: window.DeskBackend.state().context.goal,
+          view: window.DeskBackend.state().context.view,
+          horizon: window.DeskBackend.state().context.horizon
+        },
+        plan: {
+          intent: window.DeskBackend.state().plan.intent,
+          thesis: window.DeskBackend.state().plan.context.thesis,
+          horizonDays: window.DeskBackend.state().plan.context.horizonDays
+        }
+      })), {
+        visibleGoal: intent[0] + intent.slice(1).toLowerCase(),
+        visibleView: 'Undeclared',
+        visibleHorizon: 'Undeclared',
+        requested: { goal: intent, view: null, horizon: null },
+        plan: { intent, thesis: null, horizonDays: null }
+      }, `${intent} resumes its exact canonical declarations without UI defaults becoming backend facts`);
+      assert.equal(backend.count('GET', `/api/plans/${PLAN_ID}`), 1);
+      assert.equal(backend.count('GET', '/api/plans'), 0);
+      assert.equal(backend.count('POST', '/api/plans'), 0,
+        `${intent} resume cannot create a defaulted INCOME Plan`);
+      assert.deepEqual(pageErrors, [], `${intent} exact resume emitted page errors: ${pageErrors.join('\n')}`);
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test('HTTP Home lists and hydrates only Plans owned by the active account', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const bookDocuments = emptyBookDocuments();
+  const marketDocuments = populatedBookDocuments();
+  const ownPlan = plan(31, { id: BOOK_PLAN_ID, symbol: 'AAPL' });
+  const otherPlan = plan(32, { id: 'plan_other_account', symbol: 'NVDA', accountId: 'account_other' });
+  bookDocuments.planPortfolio = [{ plan: otherPlan }, { plan: ownPlan }];
+  bookDocuments.research = marketDocuments.research;
+  bookDocuments.news = marketDocuments.news;
+  const backend = await installBackend(page, { bookDocuments });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready',
+      null, { timeout: 10000 });
+
+    assert.deepEqual(await page.evaluate(() => ({
+      planIds: Array.from(document.querySelectorAll('[data-auth-plan-id]'))
+        .map(node => node.getAttribute('data-auth-plan-id')),
+      symbols: window.DeskBackend.state().book.data.homeContext.symbols,
+      accountPlanIds: window.DeskBackend.state().book.data.accountPlans
+        .map(row => row.plan.id)
+    })), {
+      planIds: [BOOK_PLAN_ID],
+      symbols: ['AAPL'],
+      accountPlanIds: [BOOK_PLAN_ID]
+    });
+    assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
+    assert.equal(backend.count('GET', '/api/research/NVDA'), 0,
+      'another account\'s Plan cannot drive this Home market context');
+    assert.deepEqual(pageErrors, [], `account-scoped Home emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('HTTP Home keeps active trades, share inventory, and market research usable without a Plan', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const bookDocuments = populatedBookDocuments();
+  bookDocuments.planPortfolio = [];
+  bookDocuments.sharePositions = [{
+    symbol: 'AAPL', shares: 100, freeShares: 75, lockedShares: 25,
+    avgCostCents: 20000, lastCents: 22222, marketValueCents: 2222200,
+    unrealizedCents: 222200, gainPct: 0.1111
+  }];
+  bookDocuments.summary.sharesPositions = 1;
+  bookDocuments.summary.sharesValueCents = 2222200;
+  const backend = await installBackend(page, { bookDocuments });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready',
+      null, { timeout: 10000 });
+
+    const home = await page.evaluate(tradeId => ({
+      plans: document.querySelectorAll('[data-auth-plan-id]').length,
+      cardVisible: document.querySelector(`#book [data-id="${tradeId}"]`)?.getClientRects().length > 0,
+      shareText: document.querySelector('#bookrisk')?.textContent.replace(/\s+/g, ' ').trim(),
+      analyzeShares: document.querySelectorAll('#bookrisk [data-auth-newidea-symbol="AAPL"]').length,
+      contextSymbols: window.DeskBackend.state().book.data.homeContext.symbols,
+      researchText: document.querySelector('#newsBand')?.textContent
+    }), BOOK_TRADE_ID);
+    assert.equal(home.plans, 0);
+    assert.equal(home.cardVisible, true, 'an active trade remains a first-class clickable Home row');
+    assert.match(home.shareText, /Share inventory[\s\S]*AAPL · 100 shares[\s\S]*75 free · 25 locked/i);
+    assert.equal(home.analyzeShares, 1, 'share inventory retains an analysis action without an owning Plan');
+    assert.deepEqual(home.contextSymbols, ['AAPL'],
+      'owned trade/share symbols drive market context when no Plan exists');
+    assert.match(home.researchText, /Backend research sentinel headline/i);
+
+    await page.locator(`#book [data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(tradeId => window.state?.level === 'position'
+      && window.DeskBackend.state().position?.data?.trade?.id === tradeId,
+    BOOK_TRADE_ID, { timeout: 10000 });
+    assert.equal(backend.count('GET', `/api/trades/${BOOK_TRADE_ID}`), 1);
+    assert.equal(backend.requests.some(row => row.path.includes('/manage')), false,
+      'a usable unplanned position never fabricates an owning Plan request');
+    assert.deepEqual(pageErrors, [], `Plan-free Home emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('delayed Home context preserves roster and Plan DOM identity, focus, and scroll', async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 520 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const bookDocuments = populatedBookDocuments();
+  const backend = await installBackend(page, { bookDocuments, homeContextDelayMs: 800 });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'loading'
+      && document.querySelector('[data-auth-plan-id]'), null, { timeout: 10000 });
+    await page.locator(`[data-auth-plan-id="${BOOK_PLAN_ID}"]`).focus();
+    await page.evaluate(tradeId => {
+      const board = document.querySelector('#stage .board');
+      board.scrollTop = Math.min(120, Math.max(0, board.scrollHeight - board.clientHeight));
+      window.__homeStable = {
+        card: document.querySelector(`#book [data-id="${tradeId}"]`),
+        plan: document.querySelector('[data-auth-plan-id]'),
+        focused: document.activeElement,
+        scrollTop: board.scrollTop
+      };
+    }, BOOK_TRADE_ID);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready',
+      null, { timeout: 10000 });
+
+    assert.deepEqual(await page.evaluate(tradeId => {
+      const stable = window.__homeStable;
+      const board = document.querySelector('#stage .board');
+      return {
+        sameCard: stable.card === document.querySelector(`#book [data-id="${tradeId}"]`),
+        samePlan: stable.plan === document.querySelector('[data-auth-plan-id]'),
+        sameFocus: stable.focused === document.activeElement,
+        scrollBefore: stable.scrollTop,
+        scrollAfter: board.scrollTop,
+        newsReady: /Backend research sentinel headline/i.test(document.querySelector('#newsBand').textContent)
+      };
+    }, BOOK_TRADE_ID), {
+      sameCard: true,
+      samePlan: true,
+      sameFocus: true,
+      scrollBefore: await page.evaluate(() => window.__homeStable.scrollTop),
+      scrollAfter: await page.evaluate(() => window.__homeStable.scrollTop),
+      newsReady: true
+    }, 'optional Research hydration patches its panels without remounting the interactive Book');
+    assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
+    assert.deepEqual(pageErrors, [], `delayed Home patch emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -2886,6 +3276,9 @@ test('adverse coherent economics stay visible as a selected comparison without b
       selectedId: window.decide.candId,
       deskPickId: window.decide.deskPickId,
       badges: document.querySelectorAll('.fanr .pickbadge').length,
+      sectionLabel: document.querySelector('.modebar .eyebrow')?.textContent.trim(),
+      qualityLabel: document.querySelector('.fanr .ffit')?.textContent.trim(),
+      qualityReason: document.querySelector('.fanr .why')?.textContent.trim(),
       rankRead: document.querySelector('.modebar .hint')?.textContent.trim(),
       payoffTitle: document.querySelector('#decideStage .dccenter .paytitle .lbl')?.textContent.trim(),
       economicVerdict: window.DeskBackend.state().selected.evaluation.assessment.economics.verdict
@@ -2898,6 +3291,11 @@ test('adverse coherent economics stay visible as a selected comparison without b
     assert.equal(view.deskPickId, null,
       'a coherent declaration fit is not promoted over an unfavorable economic verdict');
     assert.equal(view.badges, 0);
+    assert.equal(view.sectionLabel, 'Engine comparisons');
+    assert.equal(view.qualityLabel, 'Unfavorable',
+      'a coherent intent fit with adverse economics is never presented as merely coherent');
+    assert.match(view.qualityReason, /modeled after-cost economics are adverse/i,
+      'the ranked row itself explains why this is not a recommendation');
     assert.equal(view.rankRead, 'no endorsable pick · 1 comparison');
     assert.match(view.payoffTitle, /^Selected comparison payoff/,
       'the selected adverse package is labeled as a comparison rather than the recommendation');
@@ -2906,6 +3304,157 @@ test('adverse coherent economics stay visible as a selected comparison without b
     assert.equal(selection.body.candidateId, adverse.id,
       'selection identity stays backend-owned even when no Desk Pick exists');
     assert.deepEqual(pageErrors, [], `adverse comparison flow emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('four-leg decisions keep readable stacked legs, a useful risk map, and balanced analysis columns', async () => {
+  const condor = fourLegCandidate();
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    strategyCandidates: [condor], expectedCandidateId: condor.id
+  });
+  try {
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 1440, height: 900 },
+      { width: 1920, height: 1080 },
+      { width: 2560, height: 1440 }
+    ]) {
+      await page.setViewportSize(viewport);
+      const geometry = await page.evaluate(() => {
+        const rect = selector => document.querySelector(selector)?.getBoundingClientRect();
+        const left = rect('#decideStage .dcleft');
+        const center = rect('#decideStage .dccenter');
+        const right = rect('#decideStage .dcright');
+        const map = rect('#decideStage .pickmap');
+        const rail = document.querySelector('#decideStage .declegpanel .declegs');
+        const rows = Array.from(rail?.querySelectorAll('.legr') || []);
+        const selectedName = document.querySelector('#decideStage .fanr.sel .fnm');
+        const selectedHeader = selectedName?.closest('.fr1');
+        return {
+          left: left?.width || 0,
+          center: center?.width || 0,
+          right: right?.width || 0,
+          mapHeight: map?.height || 0,
+          legCount: rows.length,
+          legRailScrolls: !!rail && rail.scrollHeight > rail.clientHeight + 2,
+          legsContained: rows.every(row => {
+            const box = row.getBoundingClientRect();
+            const parent = rail.getBoundingClientRect();
+            return box.left >= parent.left - 1 && box.right <= parent.right + 1;
+          }),
+          metadataFits: rows.every(row => {
+            const meta = row.querySelector('.lgm');
+            return !meta || meta.scrollWidth <= meta.clientWidth + 1;
+          }),
+          metadataWidths: rows.map(row => {
+            const meta = row.querySelector('.lgm');
+            return meta ? { client: meta.clientWidth, scroll: meta.scrollWidth } : null;
+          }),
+          selectedNameFits: !!selectedName && selectedName.scrollWidth <= selectedName.clientWidth + 1
+            && selectedName.getBoundingClientRect().bottom <= selectedHeader.getBoundingClientRect().bottom + 1,
+          selectedNameWraps: selectedName ? getComputedStyle(selectedName).whiteSpace === 'normal' : false,
+          documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+        };
+      });
+      assert.equal(geometry.legCount, 4);
+      assert.equal(geometry.legRailScrolls, false,
+        `${viewport.width}px shows a canonical four-leg package without hiding rows in a rail`);
+      assert.equal(geometry.legsContained, true,
+        `${viewport.width}px keeps every full-width leg inside the workbench`);
+      assert.equal(geometry.metadataFits, true,
+        `${viewport.width}px keeps exact contract metadata readable on its single line: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.left >= viewport.width * .32,
+        `${viewport.width}px reserves useful width for ideas and legs: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.right >= viewport.width * .26,
+        `${viewport.width}px reserves useful width for evidence and paths: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.center <= viewport.width * .42,
+        `${viewport.width}px payoff remains the center without consuming the canvas: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.mapHeight >= 170,
+        `${viewport.width}px keeps the risk/reward map legible: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.selectedNameFits, true,
+        `${viewport.width}px keeps the selected exact package name fully visible: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.selectedNameWraps, true,
+        `${viewport.width}px wraps rather than ellipsizes the selected exact package name`);
+      assert.equal(geometry.documentOverflow, false);
+    }
+    assert.deepEqual(pageErrors, [], `four-leg responsive decision emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('920 and 1000 pixel decisions stack structurally with contained scenario controls', async () => {
+  const condor = fourLegCandidate();
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    strategyCandidates: [condor], expectedCandidateId: condor.id
+  });
+  try {
+    for (const viewport of [{ width: 920, height: 820 }, { width: 1000, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      if (await page.locator('#decideStage .srow-ctl').count() === 0) {
+        await page.locator('#decideStage .srow[data-si="5"]').click();
+        await page.waitForFunction(() => window.decide?.animation
+          && document.querySelector('#decideStage .srow-ctl'), null, { timeout: 10000 });
+      }
+      const geometry = await page.evaluate(() => {
+        const wrap = document.querySelector('#decideStage .decwrap');
+        const grid = document.querySelector('#decideStage .decgrid');
+        const columns = ['.dcleft', '.dccenter', '.dcright'].map(selector =>
+          document.querySelector(`#decideStage ${selector}`)?.getBoundingClientRect());
+        const control = document.querySelector('#decideStage .srow-ctl');
+        const controlBox = control?.getBoundingClientRect();
+        const controlParts = Array.from(control?.children || [])
+          .filter(element => getComputedStyle(element).display !== 'none')
+          .map(element => ({ className: element.className, box: element.getBoundingClientRect() }));
+        const selectedName = document.querySelector('#decideStage .fanr.sel .fnm');
+        return {
+          layout: getComputedStyle(grid).display,
+          direction: getComputedStyle(grid).flexDirection,
+          columnWidths: columns.map(rect => rect?.width || 0),
+          columnTops: columns.map(rect => rect?.top || 0),
+          columnsContained: columns.every(rect => rect && rect.left >= -1 && rect.right <= innerWidth + 1),
+          controlContained: !!controlBox && controlBox.left >= -1 && controlBox.right <= innerWidth + 1
+            && controlParts.every(row => row.box.left >= controlBox.left - 1
+              && row.box.right <= controlBox.right + 1),
+          controlParts: controlParts.map(row => ({
+            className: row.className,
+            left: Math.round(row.box.left),
+            right: Math.round(row.box.right)
+          })),
+          selectedNameVisible: !!selectedName
+            && selectedName.scrollWidth <= selectedName.clientWidth + 1
+            && getComputedStyle(selectedName).textOverflow !== 'ellipsis',
+          wrapContained: wrap.scrollWidth <= wrap.clientWidth + 1,
+          documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          scenarioPinned: document.querySelector('#decideStage .srow.pinned')?.getAttribute('data-si'),
+          scenarioControls: {
+            scrub: !!control?.querySelector('.scrub'),
+            move: !!control?.querySelector('[data-asm="mag"]'),
+            vol: !!control?.querySelector('[data-asm="iv"]'),
+            time: !!control?.querySelector('[data-asm="days"]')
+          }
+        };
+      });
+      assert.equal(geometry.layout, 'flex');
+      assert.equal(geometry.direction, 'column');
+      assert.equal(geometry.columnsContained, true);
+      assert.ok(geometry.columnWidths.every(width => width >= viewport.width - 20),
+        `${viewport.width}px gives each decision surface full readable width: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.columnTops[0] < geometry.columnTops[1]
+        && geometry.columnTops[1] < geometry.columnTops[2],
+      `${viewport.width}px orders ideas/legs, payoff/scenarios, then evidence: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.controlContained, true,
+        `${viewport.width}px scenario toolbar stays inside its panel: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.selectedNameVisible, true,
+        `${viewport.width}px selected exact package remains readable`);
+      assert.equal(geometry.wrapContained, true);
+      assert.equal(geometry.documentOverflow, false);
+      assert.equal(geometry.scenarioPinned, '5');
+      assert.deepEqual(geometry.scenarioControls, { scrub: true, move: true, vol: true, time: true });
+    }
+    assert.deepEqual(pageErrors, [], `intermediate decision layout emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -3002,6 +3551,136 @@ test('stored ensembles are reused only for the same authoritative quote and mark
     assert.equal(recalibrated.storedVol, 0.37);
     assert.equal(recalibrated.outcomeEnsembleId, recalibrated.ensembleId);
     assert.deepEqual(pageErrors, [], `ensemble freshness emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a scenario chosen while the exact preview is pending is conditioned after the Plan mutation releases', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, { decisionPreviewDelayMs: 900 });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(() => window.decide?.ensemble
+      && window.DeskBackend.state().mutationPending === true
+      && document.querySelector('#decideStage .srow[data-si="5"]'),
+    null, { timeout: 10000 });
+
+    await page.locator('#decideStage .srow[data-si="5"]').click();
+    await page.waitForFunction(candidateId => {
+      const candidate = window.decide?.cands.find(row => row.id === candidateId);
+      return candidate?._authoritativeScenarioQueued === true
+        && Object.prototype.hasOwnProperty.call(window.pinnedScen, candidateId);
+    }, CANDIDATE_ID, { timeout: 3000 });
+    const queued = await page.evaluate(candidateId => ({
+      pinned: window.pinnedScen[candidateId],
+      mutationPending: window.DeskBackend.state().mutationPending,
+      conditionedCalls: window.DeskBackend.state().animation ? 1 : 0,
+      pathStatus: document.querySelector('.evsimstage')?.textContent.replace(/\s+/g, ' ').trim()
+    }), CANDIDATE_ID);
+    assert.equal(queued.pinned, 5,
+      'the user-selected hypothesis remains visibly pinned during the exact preview');
+    assert.equal(queued.mutationPending, true);
+    assert.equal(queued.conditionedCalls, 0,
+      'no scenario request races the still-owned Plan mutation');
+    assert.match(queued.pathStatus, /scenario selected.*current evaluation.*conditioning.*stored paths/i,
+      'the path panel explains the queued lifecycle instead of appearing inert');
+
+    await page.waitForFunction(() => window.DeskBackend.state().animation?.testMarker === 'second',
+      null, { timeout: 10000 });
+    const completed = await page.evaluate(candidateId => {
+      const candidate = window.decide.cands.find(row => row.id === candidateId);
+      return {
+        mutationPending: window.DeskBackend.state().mutationPending,
+        queued: candidate._authoritativeScenarioQueued,
+        marker: candidate.authoritativeAnimation?.testMarker,
+        pathCount: window.decide._mc?.paths?.length
+      };
+    }, CANDIDATE_ID);
+    assert.equal(completed.mutationPending, false);
+    assert.equal(completed.queued, false);
+    assert.equal(completed.marker, 'second');
+    assert.ok(completed.pathCount > 1,
+      'the queued selection resolves to its backend path neighborhood without another click');
+    assert.equal(backend.scenarioCalls(), 1,
+      'one early click becomes exactly one conditioned-path request after readiness');
+    const request = backend.requests.find(row => row.method === 'POST'
+      && row.path === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`);
+    assert.equal(request.body.ensembleId, ENSEMBLE_ID);
+    assert.ok(Array.isArray(request.body.waypoints) && request.body.waypoints.length > 0);
+    assert.equal(Object.hasOwn(request.body, 'paths'), false,
+      'the queued browser intent still supplies constraints only, never trajectories');
+    assert.deepEqual(pageErrors, [], `queued scenario lifecycle emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a rejected conditioned-path request stays unavailable until an explicit retry succeeds', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ scenarioFailures: 1 });
+  try {
+    const ensembleBuilds = backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`);
+    await page.locator('#decideStage .srow[data-si="5"]').click();
+    await page.waitForSelector('[data-conditioned-paths="unavailable"]', { timeout: 10000 });
+
+    const rejected = await page.evaluate(candidateId => {
+      const candidate = window.decide.cands.find(row => row.id === candidateId);
+      return {
+        pinned: window.pinnedScen[candidateId],
+        error: candidate._authoritativeScenarioError,
+        localAnimation: window.decide.animation,
+        visibleFan: window.decide._mc,
+        genericFanSvg: !!document.querySelector('#decideStage #mcFan'),
+        errorText: document.querySelector('[data-conditioned-paths="unavailable"]')?.textContent
+          .replace(/\s+/g, ' ').trim(),
+        scenarioRead: document.querySelector('#decideStage .srow-ctl .wf-main')?.textContent
+          .replace(/\s+/g, ' ').trim(),
+        scenarioHint: document.querySelector('#decideStage .scenpanel .lenshd .hint')?.textContent.trim()
+      };
+    }, CANDIDATE_ID);
+    assert.equal(rejected.pinned, 5, 'the rejected hypothesis remains selected for retry');
+    assert.match(rejected.error, /stored ensemble could not be conditioned/i);
+    assert.equal(rejected.localAnimation, null);
+    assert.equal(rejected.visibleFan, null,
+      'the unconditioned ensemble is not substituted after the selected projection fails');
+    assert.equal(rejected.genericFanSvg, false);
+    assert.match(rejected.errorText, /selected scenario paths are unavailable/i);
+    assert.match(rejected.errorText, /no generic ensemble fan has been substituted/i);
+    assert.match(rejected.errorText, /retry conditioned paths/i);
+    assert.match(rejected.scenarioRead, /conditioned paths unavailable.*no generic fan substituted/i);
+    assert.match(rejected.scenarioHint, /conditioned paths unavailable/i);
+    assert.equal(backend.scenarioCalls(), 1);
+
+    await page.getByRole('button', { name: 'Retry conditioned paths' }).click();
+    await page.waitForFunction(() => window.DeskBackend.state().animation?.testMarker === 'second'
+      && document.querySelector('#decideStage #mcFan'), null, { timeout: 10000 });
+    const recovered = await page.evaluate(candidateId => {
+      const candidate = window.decide.cands.find(row => row.id === candidateId);
+      return {
+        error: candidate._authoritativeScenarioError,
+        marker: candidate.authoritativeAnimation?.testMarker,
+        pathCount: window.decide._mc?.paths?.length,
+        valuationFingerprint: window.decide._mc?.valuationFingerprint,
+        errorPanel: !!document.querySelector('[data-conditioned-paths="unavailable"]'),
+        scenarioHint: document.querySelector('#decideStage .scenpanel .lenshd .hint')?.textContent.trim()
+      };
+    }, CANDIDATE_ID);
+    assert.equal(recovered.error, null);
+    assert.equal(recovered.marker, 'second');
+    assert.ok(recovered.pathCount > 1);
+    assert.ok(recovered.valuationFingerprint,
+      'the retry displays the server-valued conditioned projection, not the generic fan');
+    assert.equal(recovered.errorPanel, false);
+    assert.match(recovered.scenarioHint, /conditioned paths.*server-valued steps/i);
+    assert.equal(backend.scenarioCalls(), 2);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), ensembleBuilds,
+      'retry conditions the existing ensemble instead of generating a replacement');
+    assert.deepEqual(pageErrors, [], `conditioned-path rejection emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }

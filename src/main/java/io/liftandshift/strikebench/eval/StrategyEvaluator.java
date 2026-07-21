@@ -259,8 +259,44 @@ public final class StrategyEvaluator {
      */
     public List<StrategyEvaluation> evaluateAndRank(List<Candidate> candidates, StrategySpec spec, EvalContext ctx) {
         return candidates.stream()
-                .map(c -> evaluate(c, spec, ctx))
+                // A competition shares its declared symbol/intent/horizon, but each exact package
+                // owns its family. Reusing the first candidate's family in every persisted recipe
+                // makes an otherwise correct rank impossible to reproduce or audit later.
+                .map(c -> evaluate(c, exactCandidateSpec(c, spec), ctx))
                 .sorted(RANKING)
                 .toList();
+    }
+
+    private static StrategySpec exactCandidateSpec(Candidate candidate, StrategySpec competition) {
+        if (competition == null) return null;
+        String family = candidate != null && candidate.strategy() != null
+                && !candidate.strategy().isBlank() ? candidate.strategy() : competition.family();
+        return new StrategySpec(competition.symbol(), family, competition.intent(),
+                competition.horizon(), competition.thesis(), competition.riskMode(),
+                competition.objective());
+    }
+
+    /**
+     * Chooses the authoritative representative for each strategy family only after every exact
+     * expiry/package has passed through DecisionPolicy. The input may be unsorted; the economic
+     * tier encoded by {@link StrategyEvaluation#decisionScore()} always wins before within-tier
+     * quality. This prevents a raw pre-cost EV/max-loss heuristic from discarding a favorable
+     * expiry before fees, realized-volatility evidence, objective coherence, and tail risk exist.
+     */
+    public static List<StrategyEvaluation> bestPackagePerFamily(List<StrategyEvaluation> evaluations) {
+        if (evaluations == null || evaluations.isEmpty()) return List.of();
+        java.util.LinkedHashMap<String, StrategyEvaluation> best = new java.util.LinkedHashMap<>();
+        evaluations.stream().sorted(RANKING).forEach(evaluation -> {
+            String family = evaluation.family();
+            if (family == null || family.isBlank()) {
+                family = evaluation.candidate() == null ? null : evaluation.candidate().strategy();
+            }
+            String key = family == null || family.isBlank()
+                    ? "candidate:" + (evaluation.candidate() == null ? evaluation.id()
+                            : evaluation.candidate().label())
+                    : family;
+            best.putIfAbsent(key, evaluation);
+        });
+        return List.copyOf(best.values());
     }
 }
