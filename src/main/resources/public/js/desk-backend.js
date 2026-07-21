@@ -3081,6 +3081,66 @@
   }
 
   /**
+   * One position's UNCONDITIONED stored-fan valuation for the book-level overlay: the owning
+   * Plan's latest stored ensemble valued for that exact held package (focusPositionKey), with no
+   * scenario waypoints. Read-only against stored artifacts. Each position stays an independent
+   * projection — callers overlay these fans and never sum them.
+   */
+  async function positionFutures(options) {
+    if (!state.enabled) return null;
+    var planId = options && options.planId != null ? String(options.planId).trim() : '';
+    var tradeId = options && options.tradeId != null ? String(options.tradeId).trim() : '';
+    if (!planId || !tradeId) throw new Error('Book futures need the owning Plan and trade identity.');
+    var limit = options && options.limit == null ? 1 : number(options.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 60) {
+      throw new Error('Book futures path limit must be a whole number from 1 through 60.');
+    }
+    var response = await requireApi().post('/api/plans/' + encodeURIComponent(planId)
+      + '/outcomes/ensemble/paths', { limit: limit, focusPositionKey: tradeId });
+    var receipt = response && response.receipt || {};
+    if (String(receipt.focusPositionKey || '') !== tradeId) {
+      throw new Error('The stored fan response names another focused position.');
+    }
+    var rows = response && response.checkpoints && response.checkpoints.positions;
+    var focused = Array.isArray(rows) && rows.find(function (row) {
+      return row && String(row.key || '') === tradeId;
+    });
+    if (!focused) throw new Error('The stored fan response omitted the focused position row.');
+    return response;
+  }
+
+  /**
+   * One symbol's canonical market context (research, news, history, expirations, chain) through
+   * the same cached slot reads Home uses, so the Decide Market lens never grows a second data path.
+   */
+  async function symbolContext(symbol) {
+    if (!state.enabled) return null;
+    symbol = String(symbol || '').trim().toUpperCase();
+    if (!symbol) throw new Error('Choose a symbol before loading its market context.');
+    var group = await loadBookSymbolContext(symbol);
+    var researchSlot = objectSlot(group[0], symbol + ' Research');
+    var newsSlot = objectSlot(group[1], symbol + ' News');
+    var historySlot = objectSlot(group[2], symbol + ' observed history');
+    var expirationsSlot = objectSlot(group[3], symbol + ' option expirations');
+    var chainSlot = objectSlot(group[4], symbol + ' option chain');
+    if (researchSlot.available) assertDocumentSymbol(researchSlot.value, symbol, 'Market lens Research');
+    if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Market lens News');
+    if (historySlot.available) assertDocumentSymbol(historySlot.value, symbol, 'Market lens History');
+    if (chainSlot.available) {
+      assertDocumentSymbol({ symbol: chainSlot.value.underlying }, symbol, 'Market lens option chain');
+    }
+    return {
+      symbol: symbol,
+      research: researchSlot.available ? researchSlot.value : null,
+      news: newsSlot.available ? newsSlot.value : null,
+      history: historySlot.available ? historySlot.value : null,
+      expirations: expirationsSlot.available ? expirationsSlot.value : null,
+      chain: chainSlot.available ? chainSlot.value : null,
+      missing: missingSlots([researchSlot, newsSlot, historySlot, expirationsSlot, chainSlot])
+    };
+  }
+
+  /**
    * Load one server-owned position receipt plus its same-world Research context. Supplying the
    * trade row (or options.symbol) lets detail, Research, history, news, and Plan/manage read in
    * parallel; a bare id first discovers its server-owned symbol, then performs the same reads.
@@ -3581,6 +3641,8 @@
     focusBookSector: focusBookSector,
     loadPosition: loadPosition,
     positionScenario: positionScenario,
+    positionFutures: positionFutures,
+    symbolContext: symbolContext,
     scoutOpportunities: scoutOpportunities,
     cancel: function () {
       pendingIdeaContext = null;

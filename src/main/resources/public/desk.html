@@ -2511,6 +2511,49 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .fixtureflag{flex:none;border:1px solid rgba(227,179,65,.34);border-radius:999px;padding:3px 8px;color:var(--caution);
   background:rgba(227,179,65,.07);font:600 9px/1.2 var(--mono);letter-spacing:.045em;text-transform:uppercase;white-space:nowrap}
 @media(max-width:900px){.fixtureflag{max-width:112px;overflow:hidden;text-overflow:ellipsis}}
+
+/* ===== convergence increment: book fan · Market lens · compact ranked rows ===== */
+/* the map's region captions must survive gridlines beneath them */
+.decmap text.maplab{paint-order:stroke;stroke:var(--panel-2);stroke-width:3.5px;stroke-linejoin:round}
+/* an empty dock is no dock: comparison-required narrates once, above the ranked list */
+.decdock.empty{display:none}
+/* ranked rows: chip + one number at rest; prose lives on hover and in the Understand brief */
+.fanr .fev{margin-left:auto;flex:none;font-family:var(--mono);font-weight:700;font-size:var(--f-sm)}
+.fanr .fev.pos{color:var(--profit)} .fanr .fev.neg{color:var(--loss)}
+.fanr .fmet .bad{color:var(--loss)} .fanr .fmet .warn{color:var(--caution)} .fanr .fmet .ok{color:var(--profit)}
+/* below ~1080px of height the ranked list keeps priority: support panes compress first */
+@media (max-height:1079px){
+  .dcleft .pickmap{flex-basis:clamp(150px,17vh,190px);min-height:146px}
+  .dcleft .decmap{min-height:94px}
+  .dcleft .pickmap .fanleg{display:none}
+  .declegpanel .legr{padding:3px 6px}
+}
+/* book-level possible futures — the fan hero above the risk map */
+.bookfanwrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(168px,222px);gap:9px;align-items:stretch}
+.bookfan{width:100%;height:clamp(180px,22vh,250px);display:block;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
+.bookfanlegend{display:flex;flex-direction:column;gap:4px;min-width:0}
+.bookfanrow{display:grid;grid-template-columns:auto auto minmax(0,1fr);grid-template-areas:"dot sym val" "dot struct val";
+  column-gap:7px;align-items:center;text-align:left;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);
+  padding:5px 8px;cursor:pointer;color:var(--dim);transition:border-color var(--mo-quick) var(--mo-ease)}
+.bookfanrow:hover,.bookfanrow.hot{border-color:var(--accent-2);background:var(--row-hover)}
+.bookfanrow i{grid-area:dot;width:9px;height:9px;border-radius:50%;flex:none}
+.bookfanrow b{grid-area:sym;color:var(--text);font-size:var(--f-sm);line-height:1.15}
+.bookfanrow span{grid-area:struct;font-size:var(--f-2xs);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bookfanrow em{grid-area:val;justify-self:end;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;line-height:1.25}
+.bookfanrow em b{font-size:var(--f-xs)} .bookfanrow em .pos{color:var(--profit)} .bookfanrow em .neg{color:var(--loss)}
+.bookfanrow em small{display:block;color:var(--faint);font-size:var(--f-2xs)} .bookfanrow em small.warn{color:var(--caution)}
+.card.fanhot{outline:1px solid var(--accent-2);outline-offset:1px}
+@media (max-width:1200px){.bookfanwrap{grid-template-columns:minmax(0,1fr)}.bookfanlegend{flex-direction:row;flex-wrap:wrap}.bookfanrow{flex:1 1 150px}}
+/* Decide Market lens */
+.inspectrail.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media (max-width:1500px){.inspectrail.five{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.marketlens .authmarkethero{margin-bottom:6px}
+.marketlens .decmarketcandles{width:100%;height:clamp(110px,13vh,150px);display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);margin-top:6px}
+.marketlens .authreceipt{margin-top:3px}
+.marketlens .authnews.compactnews a{padding:5px 7px}
+.marketlens .lenshd.sub{margin-top:8px}
+/* position management actions */
+.authmanageacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
 </style>
 </head>
 <body>
@@ -3089,6 +3132,14 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
     if(back){ev.preventDefault();ev.stopPropagation();go('book');return;}
     var focusPath=ev.target.closest&&ev.target.closest('[data-auth-focus-path]');
     if(focusPath){ev.preventDefault();ev.stopPropagation();if(p._positionScenarioPhase==='ready')toggleScenPlay(positionSurf(p));return;}
+    var manageAct=ev.target.closest&&ev.target.closest('[data-auth-manage]');
+    if(manageAct){ev.preventDefault();ev.stopPropagation();var manageKind=manageAct.getAttribute('data-auth-manage');
+      if(manageKind==='resume'){var owningPlan=p._positionData&&p._positionData.plan||p._plan;if(owningPlan)authOpenPlan(owningPlan,manageAct.getBoundingClientRect());return;}
+      if(manageKind==='forward'){var stage=document.getElementById('authScenStage-'+p.id);if(stage)stage.scrollIntoView({behavior:'smooth',block:'center'});
+        if(p._positionScenarioPhase==='ready'){var st=scenSt(p.id);st.t=0;playScen(positionSurf(p));}
+        else if(!(p.id in pinnedScen)){p._positionDefaultScenarioRequested=false;authPrimePositionScenario(p);}
+        return;}
+      return;}
     var pathView=ev.target.closest&&ev.target.closest('[data-auth-path-view]');
     if(pathView){ev.preventDefault();ev.stopPropagation();var nextView=pathView.getAttribute('data-auth-path-view');if(nextView==='price'||nextView==='pnl'){p._positionPathView=nextView;patchAuthoritativePositionScenario(p);}return;}
     var row=ev.target.closest&&ev.target.closest('[data-auth-scenario]');
@@ -3110,7 +3161,11 @@ function authNewsHTML(data){var items=data&&data.news&&data.news.items||[];if(!i
 function authStageLabel(value){var key=String(value||'').toUpperCase();if(key==='MANAGE_REVIEW')return 'Manage & review';return authHuman(value||'—');}
 function authManagementHTML(p,data){var plan=data&&data.plan||p._plan,mg=data&&data.management,rows=[];if(plan)rows.push(['Idea',plan.title||((p.sym||p.symbol||'Position')+' working idea')],['Stage',authStageLabel(plan.furthestStage)]);
   if(mg){if(mg.status)rows.push(['Review',mg.status]);if(mg.note)rows.push(['Note',mg.note]);}
-  if(!rows.length)return '<div class="backendnotice">No linked idea or management review is available for this position.</div>';return '<div class="authlist">'+rows.map(function(r){return '<div class="authlistrow"><b>'+deskEsc(r[0])+'</b><span>'+deskEsc(r[1])+'</span></div>';}).join('')+'</div>';}
+  var acts='<div class="authmanageacts">'+
+    (plan?'<button type="button" class="btn xs pri" data-auth-manage="resume">Analyze &amp; adjust in its idea →</button>':'')+
+    '<button type="button" class="btn xs" data-auth-manage="forward" title="Play this position through its stored market fan — the honest forward test">▶ Forward test</button></div>';
+  var list=rows.length?'<div class="authlist">'+rows.map(function(r){return '<div class="authlistrow"><b>'+deskEsc(r[0])+'</b><span>'+deskEsc(r[1])+'</span></div>';}).join('')+'</div>':'<div class="backendnotice">No linked idea or management review is available for this position.</div>';
+  return list+acts;}
 function authPositionEnsemble(p){return p&&p._positionData&&p._positionData.positionEnsemble||null;}
 function authPositionFocusedScenario(p){var response=p&&p.authoritativeAnimation,rows=response&&response.checkpoints&&response.checkpoints.positions||[];return rows.find(function(row){return String(row&&row.key||'')===String(p.id);})||null;}
 function authPositionScenarioTargetIndex(p,steps){steps=steps||[];if(!steps.length)return -1;var pins=p&&p.authoritativeAnimation&&p.authoritativeAnimation.receipt&&p.authoritativeAnimation.receipt.conditioningAssumptions&&p.authoritativeAnimation.receipt.conditioningAssumptions.waypoints||[],target=pins.length?pins.reduce(function(max,row){return Math.max(max,Number(row.dayIndex||0));},0):Infinity,best=0;steps.forEach(function(row,index){var progress=Number(row.sessionProgress==null?row.step==null?index:row.step:row.sessionProgress);if(progress<=target)best=index;});return best;}
@@ -3163,9 +3218,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Idea &amp; management</span><span class="hint">position context</span></div>'+authManagementHTML(p,data)+'</section></div>';
   window.requestAnimationFrame(function(){if(payoffReady){var svg=document.getElementById('authPay-'+p.id);if(svg)drawPayoff(svg,p,true,null,{hideScenarios:true,pinM:scrubMag(p),labelRails:true});}drawAuthoritativeHistory(p);drawAuthoritativePositionScenario(p);});
 }
-function drawAuthoritativeHistory(p){var svg=document.getElementById('authHist-'+p.id);if(!svg)return;var candles=p._positionData&&p._positionData.history&&p._positionData.history.candles||[],vals=candles.map(function(c){return authNumber(c.close!=null?c.close:c.c);}).filter(function(v){return v!=null;});
-  var W=Math.max(260,Math.round(svg.clientWidth||360)),H=Math.max(90,Math.round(svg.clientHeight||105));svg.setAttribute('viewBox','0 0 '+W+' '+H);if(vals.length<2){svg.innerHTML='<line class="emptyline" x1="8" y1="'+H/2+'" x2="'+(W-8)+'" y2="'+H/2+'"/><text x="'+W/2+'" y="'+(H/2-9)+'" text-anchor="middle" fill="var(--dim)" font-size="11">Price history unavailable</text>';return;}
-  var lo=Math.min.apply(0,vals),hi=Math.max.apply(0,vals),pad=(hi-lo)*.12||1;lo-=pad;hi+=pad;var d='';vals.forEach(function(v,i){var x=5+(W-10)*i/(vals.length-1),y=5+(H-10)*(1-(v-lo)/(hi-lo));d+=(i?' L ':'M ')+x.toFixed(1)+' '+y.toFixed(1);});svg.innerHTML='<path d="'+d+'" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';}
+function drawAuthoritativeHistory(p){var svg=document.getElementById('authHist-'+p.id);if(!svg)return;var candles=p._positionData&&p._positionData.history&&p._positionData.history.candles||[];drawCandleSeries(svg,candles,{minW:260,minH:90,defaultW:360,defaultH:105});}
 function authPositionPnlFan(p){
   var response=p&&p.authoritativeAnimation,canvas=response&&response.checkpoints||{},position=authPositionFocusedScenario(p)||((canvas.positions||[]).find(function(row){return row&&row.proposed===true;}));if(!position)return null;
   var stepBands=Array.isArray(position.stepBands)?position.stepBands:[],daily=Array.isArray(position.days)?position.days:[],bands=stepBands.length?stepBands:daily;
@@ -4023,7 +4076,10 @@ function authHomeHistoryRead(row){var history=row&&row.history||{},candles=authH
 function authHomeOptionRows(row,spot){var chain=row&&row.chain||{},calls=Array.isArray(chain.calls)?chain.calls:[],puts=Array.isArray(chain.puts)?chain.puts:[],strikes={},key=function(value){return Number(value).toFixed(4);};calls.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).call=q;});puts.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).put=q;});var rows=Object.keys(strikes).map(function(k){return strikes[k];});rows.sort(function(a,b){return Math.abs(a.strike-spot)-Math.abs(b.strike-spot);});rows=rows.slice(0,5);rows.sort(function(a,b){return a.strike-b.strike;});return rows;}
 function authHomeBook(q){var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask);return bid==null||ask==null?'—':bid.toFixed(2)+' / '+ask.toFixed(2);}
 function authHomeChainHTML(row,spot){var chain=row&&row.chain||{},rows=authHomeOptionRows(row,spot),exp=chain.expiration||row&&row.expirations&&row.expirations.expirations&&row.expirations.expirations[0],status=authExceptionStatus(chain.freshness);if(!rows.length)return '<div class="backendnotice">No current option-book rows are available for this symbol. Price history and research remain ready.</div>';return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows">'+rows.map(function(r){return '<div class="authchainrow"><span>'+deskEsc(authHomeBook(r.call))+'</span><b class="'+(Math.abs(r.strike-spot)<=Math.max(1,spot*.006)?'atm':'')+'">'+Number(r.strike).toFixed(r.strike%1?1:0)+'</b><span>'+deskEsc(authHomeBook(r.put))+'</span></div>';}).join('')+'</div><div class="authreceipt">Five strikes nearest spot'+(status?' · '+deskEsc(status):'')+'</div>';}
-function drawAuthoritativeHomeHistory(row){var svg=document.getElementById('authHomeHistory');if(!svg)return;var candles=authHomeCandles(row),W=Math.max(360,Math.round(svg.clientWidth||620)),H=Math.max(116,Math.round(svg.clientHeight||150)),x0=5,x1=W-6,y0=8,y1=H-18;svg.setAttribute('viewBox','0 0 '+W+' '+H);if(candles.length<2){svg.innerHTML='<line x1="'+x0+'" y1="'+(H/2)+'" x2="'+x1+'" y2="'+(H/2)+'" stroke="var(--line)" stroke-dasharray="3 4"/><text x="'+(W/2)+'" y="'+(H/2-9)+'" text-anchor="middle">Price history unavailable</text>';return;}var lows=[],highs=[];candles.forEach(function(c){var close=authNumber(c.close==null?c.c:c.close),open=authNumber(c.open==null?c.o:c.open),low=authNumber(c.low==null?c.l:c.low),high=authNumber(c.high==null?c.h:c.high);lows.push(low==null?Math.min(open,close):low);highs.push(high==null?Math.max(open,close):high);});var lo=Math.min.apply(0,lows),hi=Math.max.apply(0,highs),pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;var Y=function(v){return y1-(y1-y0)*(v-lo)/(hi-lo);},slot=(x1-x0)/candles.length,body=Math.max(1,Math.min(5,slot*.58)),g='';candles.forEach(function(c,i){var close=authNumber(c.close==null?c.c:c.close),open=authNumber(c.open==null?c.o:c.open),low=lows[i],high=highs[i],x=x0+slot*(i+.5),up=close>=open,col=up?'var(--profit)':'var(--loss)',top=Y(Math.max(open,close)),bottom=Y(Math.min(open,close));g+='<line x1="'+x.toFixed(1)+'" y1="'+Y(high).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+Y(low).toFixed(1)+'" stroke="'+col+'" stroke-opacity=".62"/><rect x="'+(x-body/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+body.toFixed(1)+'" height="'+Math.max(1,bottom-top).toFixed(1)+'" rx=".7" fill="'+col+'" fill-opacity="'+(up?'.48':'.62')+'"/>';});var last=candles[candles.length-1],lastClose=authNumber(last.close==null?last.c:last.close);g+='<line x1="'+x0+'" y1="'+Y(lastClose).toFixed(1)+'" x2="'+x1+'" y2="'+Y(lastClose).toFixed(1)+'" stroke="var(--accent)" stroke-opacity=".35" stroke-dasharray="2 3"/><text x="'+x0+'" y="'+(H-4)+'">'+deskEsc(String(candles[0].date||''))+'</text><text x="'+x1+'" y="'+(H-4)+'" text-anchor="end">'+deskEsc(String(last.date||''))+'</text>';svg.innerHTML=g;}
+/* ONE candlestick renderer for every history surface (Home pulse, Decide Market lens, Position
+   history) — sizes from its own box, so each surface stays a lens over the same component. */
+function drawCandleSeries(svg,candles,opts){if(!svg)return;opts=opts||{};var W=Math.max(opts.minW||260,Math.round(svg.clientWidth||opts.defaultW||620)),H=Math.max(opts.minH||96,Math.round(svg.clientHeight||opts.defaultH||150)),x0=5,x1=W-6,y0=8,y1=H-18;svg.setAttribute('viewBox','0 0 '+W+' '+H);candles=(candles||[]).filter(function(c){return authNumber(c.close==null?c.c:c.close)!=null;});if(candles.length<2){svg.innerHTML='<line x1="'+x0+'" y1="'+(H/2)+'" x2="'+x1+'" y2="'+(H/2)+'" stroke="var(--line)" stroke-dasharray="3 4"/><text x="'+(W/2)+'" y="'+(H/2-9)+'" text-anchor="middle" fill="var(--dim)" font-size="11">Price history unavailable</text>';return;}var lows=[],highs=[];candles.forEach(function(c){var close=authNumber(c.close==null?c.c:c.close),open=authNumber(c.open==null?c.o:c.open),low=authNumber(c.low==null?c.l:c.low),high=authNumber(c.high==null?c.h:c.high);if(open==null)open=close;lows.push(low==null?Math.min(open,close):low);highs.push(high==null?Math.max(open,close):high);});var lo=Math.min.apply(0,lows),hi=Math.max.apply(0,highs),pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;var Y=function(v){return y1-(y1-y0)*(v-lo)/(hi-lo);},slot=(x1-x0)/candles.length,body=Math.max(1,Math.min(5,slot*.58)),g='';candles.forEach(function(c,i){var close=authNumber(c.close==null?c.c:c.close),open=authNumber(c.open==null?c.o:c.open),up;if(open==null)open=close;up=close>=open;var low=lows[i],high=highs[i],x=x0+slot*(i+.5),col=up?'var(--profit)':'var(--loss)',top=Y(Math.max(open,close)),bottom=Y(Math.min(open,close));g+='<line x1="'+x.toFixed(1)+'" y1="'+Y(high).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+Y(low).toFixed(1)+'" stroke="'+col+'" stroke-opacity=".62"/><rect x="'+(x-body/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+body.toFixed(1)+'" height="'+Math.max(1,bottom-top).toFixed(1)+'" rx=".7" fill="'+col+'" fill-opacity="'+(up?'.48':'.62')+'"/>';});var last=candles[candles.length-1],lastClose=authNumber(last.close==null?last.c:last.close);g+='<line x1="'+x0+'" y1="'+Y(lastClose).toFixed(1)+'" x2="'+x1+'" y2="'+Y(lastClose).toFixed(1)+'" stroke="var(--accent)" stroke-opacity=".35" stroke-dasharray="2 3"/><text x="'+x0+'" y="'+(H-4)+'">'+deskEsc(String(candles[0].date||''))+'</text><text x="'+x1+'" y="'+(H-4)+'" text-anchor="end">'+deskEsc(String(last.date||''))+'</text>';svg.innerHTML=g;}
+function drawAuthoritativeHomeHistory(row){var svg=document.getElementById('authHomeHistory');if(!svg)return;drawCandleSeries(svg,authHomeCandles(row),{minW:360,minH:116});}
 function authHomeUrl(raw){var value=String(raw||'');return /^https?:\/\//i.test(value)?value:'';}
 function authOpportunityHTML(){
   var state=HOME_OPPORTUNITY;
@@ -4063,6 +4119,7 @@ async function authOpenPlan(plan,origin){if(!plan||AUTH_PLAN_OPEN_PENDING)return
   finally{AUTH_PLAN_OPEN_PENDING=false;}}
 function authOpenSymbol(symbol,origin){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase());}
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
+    var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(fanPos){ev.preventDefault();go('position',fanPos.getAttribute('data-fan-pos'));return;}
     var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(riskPoint){ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));return;}
     var planButton=ev.target.closest&&ev.target.closest('[data-auth-plan-id]');if(planButton){ev.preventDefault();authOpenPlan(authPlanById(BOOK_AUTH.data,planButton.getAttribute('data-auth-plan-id')),planButton.getBoundingClientRect());return;}
     var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){focusSymbol(marketButton.getAttribute('data-auth-market-symbol'));return;}
@@ -4070,7 +4127,9 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var opportunityScan=ev.target.closest&&ev.target.closest('[data-auth-opportunity-scan]');if(opportunityScan){authRunOpportunityScan();return;}
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
     var emptyImport=ev.target.closest&&ev.target.closest('#authEmptyImport');if(emptyImport){openImport(emptyImport.getBoundingClientRect());return;}
-  });boardEl.addEventListener('keydown',function(ev){if(ev.key!=='Enter'&&ev.key!==' ')return;var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(!riskPoint)return;ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));});}
+  });boardEl.addEventListener('keydown',function(ev){if(ev.key!=='Enter'&&ev.key!==' ')return;var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(!riskPoint)return;ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));});
+  boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;BOOK_FAN.hot=id;renderAuthoritativeBookFan();var card=cardEl[id];if(card)card.classList.add('fanhot');});
+  boardEl.addEventListener('mouseout',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(ev.relatedTarget&&ev.relatedTarget.closest&&ev.relatedTarget.closest('[data-fan-pos]'))return;BOOK_FAN.hot=null;renderAuthoritativeBookFan();var card=cardEl[id];if(card)card.classList.remove('fanhot');});}
 function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=authWorkingPlanRows(d),ctx=d.homeContext||{},rows=authHomeContextRows(d),symbols=ctx.symbols||rows.map(function(row){return row.symbol;}),available=rows.map(function(row){return row.symbol;});
   if(!HOME_AUTH_SYMBOL||available.indexOf(HOME_AUTH_SYMBOL)<0)HOME_AUTH_SYMBOL=available[0]||symbols[0]||null;
   var active=authHomeContextRow(d,HOME_AUTH_SYMBOL),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
@@ -4090,16 +4149,111 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   wireAuthoritativeHome();if(active)window.requestAnimationFrame(function(){drawAuthoritativeHomeHistory(active);});}
 function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};});authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
 function authShareInventoryHTML(shares){if(!shares.length)return '<div class="backendnotice">No share inventory in this Practice account.</div>';return '<div class="authlist">'+shares.map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),last=authDollarsFromCents(row.lastCents),unreal=authDollarsFromCents(row.unrealizedCents);return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(String(row.symbol||'—').toUpperCase())+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+(last==null?'':' · mark '+authMoney(last))+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(String(row.symbol||'').toUpperCase())+'">Analyze</button></div>';}).join('')+'</div>';}
+/* ===== Book-level possible futures — Phase 1 of the book fan (owner decision on record):
+   each position's OWN stored ensemble, valued for that exact package with no scenario
+   conditioning, overlaid in the shared position colors. Independent projections — the lines are
+   NEVER summed into a book total; an honest joint multi-symbol ensemble is a backend increment. */
+var BOOK_FAN={key:null,seq:0,rows:{},hot:null};
+var POSITION_COLORS=['#39C7D4','#9B8CFF','#41C892','#E7AC44','#F08CD0','#6B96EF','#D3C86B','#FF9B6B'];
+function positionColor(id){var index=POS.findIndex(function(p){return String(p.id)===String(id);});return POSITION_COLORS[(index<0?0:index)%POSITION_COLORS.length];}
+function authBookFanKey(){return POS.map(function(p){return p.id+':'+(p._plan&&p._plan.id||'')+':'+String(p._trade&&p._trade.updatedAt||'');}).join('|');}
+function authBookFanBands(row){var bands=row&&(Array.isArray(row.stepBands)&&row.stepBands.length?row.stepBands:Array.isArray(row.days)?row.days:[])||[];
+  return bands.map(function(step,i){function cents(key){var v=authNumber(step[key]);return v==null?null:v/100;}
+    return {x:Number(step.sessionProgress==null?step.day==null?i:step.day:step.sessionProgress),p10:cents('pnlP10Cents'),p25:cents('pnlP25Cents'),p50:cents('pnlP50Cents')==null?cents('focusPnlCents'):cents('pnlP50Cents'),p75:cents('pnlP75Cents'),p90:cents('pnlP90Cents')};
+  }).filter(function(step){return step.p50!=null;});}
+function authLoadBookFan(){
+  if(!deskBackendEnabled()||!window.DeskBackend||!window.DeskBackend.positionFutures||!POS.length)return;
+  var key=authBookFanKey();if(BOOK_FAN.key===key)return;
+  var seq=++BOOK_FAN.seq;BOOK_FAN.key=key;BOOK_FAN.rows={};BOOK_FAN.hot=null;
+  POS.forEach(function(p){var linked=p._plan&&p._plan.id;
+    BOOK_FAN.rows[p.id]={phase:linked?'loading':'unavailable',frames:[],chance:null,error:linked?null:'No owning idea, so no stored fan exists for this position yet.'};});
+  renderAuthoritativeBookFan();
+  var queue=POS.filter(function(p){return p._plan&&p._plan.id;});
+  (function next(i){
+    if(seq!==BOOK_FAN.seq||i>=queue.length)return;
+    var p=queue[i];
+    window.DeskBackend.positionFutures({planId:p._plan.id,tradeId:p.id,limit:1}).then(function(response){
+      if(seq!==BOOK_FAN.seq)return;
+      var rows=response&&response.checkpoints&&response.checkpoints.positions||[];
+      var row=rows.find(function(r){return String(r&&r.key||'')===String(p.id);});
+      var comparison=response&&response.checkpoints&&response.checkpoints.comparison||[];
+      var cmp=Array.isArray(comparison)?comparison.find(function(r){return String(r&&r.key||'')===String(p.id);}):null;
+      var frames=authBookFanBands(row);
+      BOOK_FAN.rows[p.id]={phase:frames.length?'ready':'unavailable',frames:frames,
+        chance:cmp?authNumber(cmp.chanceOfGainPct):null,
+        basis:response&&response.ensemble&&response.ensemble.basis||null,
+        error:frames.length?null:'This position has no stored path checkpoints yet. Open its idea and run outcomes once.'};
+    }).catch(function(error){
+      if(seq!==BOOK_FAN.seq)return;
+      BOOK_FAN.rows[p.id]={phase:'unavailable',frames:[],chance:null,error:error&&error.message||'The stored fan could not be loaded.'};
+    }).then(function(){if(seq!==BOOK_FAN.seq)return;renderAuthoritativeBookFan();next(i+1);});
+  })(0);
+}
+function authBookFanLegendHTML(){
+  return POS.map(function(p){var slot=BOOK_FAN.rows[p.id]||{},color=positionColor(p.id),hot=String(BOOK_FAN.hot||'')===String(p.id);
+    var value=slot.phase==='ready'?(function(){var terminal=slot.frames[slot.frames.length-1];return '<b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(slot.chance==null?'':' <small>'+slot.chance.toFixed(0)+'% gain odds</small>');})():
+      slot.phase==='loading'?'<small>loading…</small>':'<small class="warn" title="'+deskEsc(slot.error||'unavailable')+'">no stored fan</small>';
+    return '<button type="button" class="bookfanrow'+(hot?' hot':'')+'" data-fan-pos="'+deskEsc(p.id)+'" aria-label="Open '+deskEsc(p.sym)+'"><i style="background:'+color+'"></i><b>'+deskEsc(p.sym)+'</b><span>'+deskEsc(p.struct)+'</span><em>'+value+'</em></button>';
+  }).join('');
+}
+function renderAuthoritativeBookFan(){
+  if(state.level!=='book')return;
+  var legend=document.getElementById('authBookFanLegend');
+  if(legend)legend.innerHTML=authBookFanLegendHTML();
+  drawAuthoritativeBookFan();
+}
+function drawAuthoritativeBookFan(){
+  var svg=document.getElementById('authBookFan');if(!svg)return;
+  var W=Math.max(320,Math.round(svg.clientWidth||560)),H=Math.max(170,Math.round(svg.clientHeight||210)),pad={l:52,r:46,t:12,b:22};
+  svg.setAttribute('viewBox','0 0 '+W+' '+H);
+  var ready=POS.map(function(p){return {p:p,slot:BOOK_FAN.rows[p.id]||{}};}).filter(function(e){return e.slot.phase==='ready'&&e.slot.frames.length>1;});
+  var loading=POS.some(function(p){return (BOOK_FAN.rows[p.id]||{}).phase==='loading';});
+  if(!ready.length){svg.innerHTML='<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" fill="var(--dim)" font-size="12">'+(loading?'Valuing each position across its own stored fan…':'No stored fans yet — open a position’s idea and run outcomes once.')+'</text>';return;}
+  var maxX=1,values=[0];
+  ready.forEach(function(e){e.slot.frames.forEach(function(f){maxX=Math.max(maxX,f.x);values.push(f.p50);if(f.p25!=null)values.push(f.p25);if(f.p75!=null)values.push(f.p75);});});
+  var lo=Math.min.apply(0,values),hi=Math.max.apply(0,values),span=hi-lo||1;lo-=span*.08;hi+=span*.08;
+  var X=function(x){return pad.l+(W-pad.l-pad.r)*x/maxX;},Y=function(v){return pad.t+(H-pad.t-pad.b)*(1-(v-lo)/(hi-lo));};
+  var zero=Y(0),g='<line x1="'+pad.l+'" y1="'+zero.toFixed(1)+'" x2="'+(W-pad.r)+'" y2="'+zero.toFixed(1)+'" stroke="var(--line)" stroke-dasharray="3 4"/>'+
+    '<text x="'+(pad.l-5)+'" y="'+(zero+3).toFixed(1)+'" text-anchor="end" fill="var(--faint)" font-size="9">$0</text>'+
+    '<text x="'+(pad.l-5)+'" y="'+(pad.t+6)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+deskEsc(money(hi))+'</text>'+
+    '<text x="'+(pad.l-5)+'" y="'+(H-pad.b)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+deskEsc(money(lo))+'</text>'+
+    '<text x="'+pad.l+'" y="'+(H-6)+'" fill="var(--faint)" font-size="9">now</text>'+
+    '<text x="'+(W-pad.r)+'" y="'+(H-6)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+Math.round(maxX)+' sessions</text>';
+  var hot=String(BOOK_FAN.hot||'');
+  /* hot band under every line; median lines above; each line ends at its OWN horizon */
+  ready.forEach(function(e){
+    if(String(e.p.id)!==hot)return;var frames=e.slot.frames.filter(function(f){return f.p25!=null&&f.p75!=null;});if(frames.length<2)return;
+    var upper=frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f.p75).toFixed(1);}).join(' ');
+    var lower=frames.slice().reverse().map(function(f){return 'L'+X(f.x).toFixed(1)+' '+Y(f.p25).toFixed(1);}).join(' ');
+    g+='<path d="'+upper+lower+'Z" fill="'+positionColor(e.p.id)+'" fill-opacity=".12"/>';
+  });
+  var labels=[];
+  ready.forEach(function(e){
+    var color=positionColor(e.p.id),isHot=String(e.p.id)===hot,dim=hot&&!isHot;
+    var d=e.slot.frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f.p50).toFixed(1);}).join(' ');
+    var terminal=e.slot.frames[e.slot.frames.length-1];
+    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?3:1.8)+'" stroke-opacity="'+(dim?.3:.95)+'" style="pointer-events:none"/>'+
+       '<path d="'+d+'" fill="none" stroke="'+color+'" stroke-opacity="0" stroke-width="11" data-fan-pos="'+deskEsc(e.p.id)+'" style="cursor:pointer"><title>'+deskEsc(e.p.sym+' · '+e.p.struct+' · median '+signed(terminal.p50)+' at '+Math.round(terminal.x)+' sessions — its own stored fan')+'</title></path>';
+    labels.push({id:e.p.id,x:X(terminal.x),y:Y(terminal.p50),sym:e.p.sym,color:color,dim:dim});
+  });
+  labels.sort(function(a,b){return a.y-b.y;});
+  for(var i=1;i<labels.length;i++)if(labels[i].y-labels[i-1].y<11)labels[i].y=labels[i-1].y+11;
+  labels.forEach(function(lb){g+='<circle cx="'+lb.x.toFixed(1)+'" cy="'+lb.y.toFixed(1)+'" r="2.6" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.35:1)+'" style="pointer-events:none"/><text x="'+Math.min(W-4,lb.x+5).toFixed(1)+'" y="'+(lb.y+3).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>';});
+  svg.innerHTML=g;
+}
 function authRenderReadyPanels(empty){var d=BOOK_AUTH.data||{},pf=d.portfolio||{},s=pf.summary||{},h=pf.heat||{},g=pf.greeks||{},br=pf.bookRisk||{},shares=d.sharePositions||[];
   if(empty){
     document.getElementById('riskMain').innerHTML='';
     document.getElementById('bookrisk').innerHTML='';
   }else{
-    document.getElementById('riskMain').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Risk / reward map</span><span class="hint">chance of profit × max loss</span></div><svg id="authBookRiskViz" class="authriskviz" aria-label="Open positions by chance of profit and maximum loss"></svg><div class="authmetricgrid">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div><div class="authpulsefoot"><span>Color shows current P/L</span><span>Choose a position to open it</span></div></div>';
+    document.getElementById('riskMain').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Your book · possible futures</span><span class="hint">each line = that position’s own stored fan · never summed</span></div>'+
+      '<div class="bookfanwrap"><svg id="authBookFan" class="bookfan" aria-label="Median profit and loss of each open position across its own stored path fan"></svg><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div></div>'+
+      '<div class="lenshd sub"><span class="eyebrow">Risk / reward map</span><span class="hint">chance of profit × max loss</span></div><svg id="authBookRiskViz" class="authriskviz" aria-label="Open positions by chance of profit and maximum loss"></svg><div class="authmetricgrid">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div><div class="authpulsefoot"><span>Color shows current P/L</span><span>Choose a position to open it</span></div></div>';
     document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Book Risk</span><span class="hint">Practice account only</span></div><div class="authmetricgrid">'+authMetric('Delta',authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2)+' sh')+authMetric('Gamma',authNumber(g.gammaShares)==null?'—':Number(g.gammaShares).toFixed(3)+' sh/$')+authMetric('Theta',authNumber(g.thetaPerDay)==null?'—':money(Number(g.thetaPerDay))+'/day')+authMetric('Vega',authNumber(g.vegaPerPoint)==null?'—':money(Number(g.vegaPerPoint))+'/pt')+'</div><div class="authreceipt" title="'+deskEsc(br.basis||g.note||'')+'">Greeks reflect the current open positions.</div><div class="lenshd authshareshead"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' line'+(shares.length===1?'':'s')+'</span></div>'+authShareInventoryHTML(shares)+'</div>';
   }
   authRenderMarketPanels();
-  if(!empty)window.requestAnimationFrame(drawAuthoritativeBookRisk);}
+  if(!empty)window.requestAnimationFrame(function(){drawAuthoritativeBookRisk();drawAuthoritativeBookFan();});
+  if(!empty)authLoadBookFan();}
 function drawAuthoritativeBookRisk(){var svg=document.getElementById('authBookRiskViz');if(!svg)return;var W=Math.max(260,Math.round(svg.clientWidth||440)),H=Math.max(150,Math.round(svg.clientHeight||210)),pad={l:44,r:20,t:20,b:31},plotW=W-pad.l-pad.r,plotH=H-pad.t-pad.b,max=Math.max.apply(0,POS.map(function(p){return Number(p.cap||0);}).concat([1]));svg.setAttribute('viewBox','0 0 '+W+' '+H);var g='<rect x="'+(pad.l+plotW*.55).toFixed(1)+'" y="'+(pad.t+plotH*.5).toFixed(1)+'" width="'+(plotW*.45).toFixed(1)+'" height="'+(plotH*.5).toFixed(1)+'" rx="5" fill="var(--profit)" fill-opacity=".045"/><text x="'+(W-pad.r-4)+'" y="'+(H-pad.b-6)+'" text-anchor="end" fill="var(--profit)">higher odds · lower loss</text>';
   [25,50,75].forEach(function(v){var x=pad.l+plotW*v/100,y=pad.t+plotH*v/100;g+='<line class="riskgrid" x1="'+x.toFixed(1)+'" y1="'+pad.t+'" x2="'+x.toFixed(1)+'" y2="'+(H-pad.b)+'"/><line class="riskgrid" x1="'+pad.l+'" y1="'+y.toFixed(1)+'" x2="'+(W-pad.r)+'" y2="'+y.toFixed(1)+'"/>';});g+='<line x1="'+pad.l+'" y1="'+(H-pad.b)+'" x2="'+(W-pad.r)+'" y2="'+(H-pad.b)+'" stroke="var(--line)"/><line x1="'+pad.l+'" y1="'+pad.t+'" x2="'+pad.l+'" y2="'+(H-pad.b)+'" stroke="var(--line)"/><text x="'+(W-pad.r)+'" y="'+(H-7)+'" text-anchor="end">chance of profit →</text><text x="8" y="'+(pad.t+3)+'">max loss</text>'+(POS.length?'':'<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle">No open positions to plot</text>');
   var missing=0;POS.forEach(function(p){if(p.pop==null){missing++;return;}var pop=Math.max(0,Math.min(100,p.pop)),x=pad.l+plotW*pop/100,y=H-pad.b-plotH*Number(p.cap||0)/max,col=p.pnl==null?'var(--accent)':p.pnl>=0?'var(--profit)':'var(--loss)';g+='<g class="riskpoint" tabindex="0" role="button" data-auth-risk-position="'+deskEsc(p.id)+'" aria-label="Open '+deskEsc(p.sym+' '+p.struct+', '+p.pop.toFixed(0)+'% chance of profit, maximum loss '+authMoney(p.cap))+'"><title>'+deskEsc(p.sym+' · '+p.struct+' · choose to open')+'</title><circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="7" fill="'+col+'" fill-opacity=".35" stroke="'+col+'" stroke-width="1.4"/>'+(W>360&&POS.length<8?'<text x="'+(x+10).toFixed(1)+'" y="'+(y+3).toFixed(1)+'">'+deskEsc(p.sym)+'</text>':'')+'</g>';});if(missing)g+='<text x="'+(W-pad.r)+'" y="'+(pad.t+3)+'" text-anchor="end">'+missing+' chance estimate'+(missing===1?'':'s')+' unavailable</text>';svg.innerHTML=g;}
@@ -4593,7 +4747,7 @@ function redraw(){
   if(decide){ redrawDecide(); }
   if(importOpen && imp.p){ var ip=document.getElementById('impPay'); if(ip) drawPayoff(ip, imp.p, true); }
   if(deskBackendEnabled()){
-    if(state.level==='book')drawAuthoritativeBookRisk();
+    if(state.level==='book'){drawAuthoritativeBookRisk();drawAuthoritativeBookFan();}
     else if(state.level==='position'&&byId[state.focus]){var ap=byId[state.focus],pay=document.getElementById('authPay-'+ap.id);if(pay)drawPayoff(pay,ap,true,null,{hideScenarios:true,labelRails:true});drawAuthoritativeHistory(ap);drawAuthoritativePositionScenario(ap);}
     return;
   }
@@ -5873,6 +6027,8 @@ function redrawDecide(){
   if(decide.bookFocusKey)drawBookFocusChart(c);
   if(!_dragActive && document.getElementById('decMap')) drawDecMap();
   if(decide.mcOn) drawMCFan();
+  syncCandidatePageSize();
+  if(decide.inspect==='market')drawDecMarketHist();
 }
 /* Decide "how it reacts" → play the scenario through the HERO payoff (shares the bloom engine) */
 function decSurf(){ var c=activeCand(); return {
@@ -5910,9 +6066,10 @@ function renderDecide(){
      retain identity instead of flashing every time another part of the screen updates. */
   var oldScen=decideEl.querySelector('.scenpanel'), keepScen=null, skey=scenSurfaceKey(c);
   if(oldScen&&oldScen.getAttribute('data-scen-key')===skey){ keepScen=oldScen; oldScen.parentNode.removeChild(oldScen); }
+  var execHtml=decExecute(c);
   decideEl.innerHTML='<div class="decwrap">'+decTop(c)+
     '<div class="decgrid">'+leftCol(c)+centerCol(c)+rightCol(c)+'</div>'+
-    '<div class="decdock'+(decide.order.review?' reviewdock':'')+'"><span></span>'+decExecute(c)+'</div>'+
+    '<div class="decdock'+(decide.order.review?' reviewdock':'')+(execHtml?'':' empty')+'"><span></span>'+execHtml+'</div>'+
   '</div>';
   if(keepScen){ var freshScen=decideEl.querySelector('.scenpanel'); if(freshScen)freshScen.parentNode.replaceChild(keepScen,freshScen); }
   refreshDecScenHeader(c);
@@ -5922,6 +6079,7 @@ function renderDecide(){
   if(decide.mcOn) drawMCFan();
   drawFanIcons();
   wireDecide();
+  window.requestAnimationFrame(function(){ syncCandidatePageSize(); if(decide&&decide.inspect==='market')drawDecMarketHist(); });
 }
 function renderAuthoritativeDeclarationRequired(){
   var bs=decide.backendState||{},plan=bs.plan||{},market=bs.market||{},identity=market.identity||{};
@@ -6231,7 +6389,38 @@ function setUnderlying(sym){
   if(decide.kind==='idea'&&deskBackendEnabled())loadAuthoritativeIdea();else renderAfterDecisionChange();updateThread();
 }
 function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc==='collat'?'secured':rc==='unknown'?'unknown':'defined'; }
-function candidatePageSize(){var h=window.innerHeight||900;if(h>=1200)return 7;if(h>=880)return 5;if(h>=760)return 4;return 3;}
+function candidatePageSize(){
+  if(decide&&Number.isInteger(decide._candPageSize)&&decide._candPageSize>1)return decide._candPageSize;
+  var h=window.innerHeight||900;if(h>=1200)return 7;if(h>=880)return 5;if(h>=760)return 4;return 3;}
+/* The pager promises WHOLE rows, so the page size must come from the candidate list's own share of
+   the left column after the workbench and map take theirs — never from the viewport. Available
+   space is derived from sibling geometry (not the fan's content height, which shrinks to fit at
+   wide breakpoints), so this converges in one pass and cannot oscillate. */
+function syncCandidatePageSize(){
+  if(!decide||!decide.cands||!decide.cands.length)return;
+  var fan=decideEl.querySelector('.dcleft .fan'),col=decideEl.querySelector('.dcleft');
+  if(!fan||!col)return;
+  var rows=fan.querySelectorAll('.fanr'); if(!rows.length)return;
+  var colStyle=window.getComputedStyle(col),colGap=parseFloat(colStyle.rowGap||colStyle.gap)||9;
+  var colRect=col.getBoundingClientRect(),fanRect=fan.getBoundingClientRect();
+  var below=0,siblings=col.querySelectorAll(':scope > .leftsupport, :scope > .raildrawer');
+  for(var i=0;i<siblings.length;i++)below+=siblings[i].getBoundingClientRect().height+colGap;
+  var avail=colRect.bottom-(parseFloat(colStyle.paddingBottom)||0)-fanRect.top-below;
+  var capRaw=parseFloat(window.getComputedStyle(fan).maxHeight);
+  if(Number.isFinite(capRaw)&&capRaw>0)avail=Math.min(avail,capRaw);
+  var fanStyle=window.getComputedStyle(fan),fanGap=parseFloat(fanStyle.rowGap||fanStyle.gap)||4;
+  var pager=fan.querySelector('.fitpager'),pagerH=pager?pager.getBoundingClientRect().height+fanGap:0;
+  var rowH=0;for(var r=0;r<rows.length;r++)rowH=Math.max(rowH,rows[r].getBoundingClientRect().height);
+  if(!(rowH>0)||!(avail>rowH))return;
+  var fit=Math.max(2,Math.min(9,Math.floor((avail-pagerH+fanGap)/(rowH+fanGap))));
+  if(!pager&&fit<decide.cands.length)fit=Math.max(2,Math.min(9,Math.floor((avail-(31+fanGap)+fanGap)/(rowH+fanGap))));
+  if(fit===candidatePageSize())return;
+  var firstVisible=Math.max(0,Number(decide.candidatePage||0))*candidatePageSize();
+  decide._candPageSize=fit;decide.candidatePage=Math.floor(firstVisible/fit);
+  var wrap=document.createElement('div');wrap.innerHTML=fanList();
+  fan.parentNode.replaceChild(wrap.firstElementChild,fan);
+  drawFanIcons();
+}
 function candidatePageFor(id){var index=(decide.cands||[]).findIndex(function(row){return String(row.id)===String(id);});return index<0?0:Math.floor(index/candidatePageSize());}
 function fitPager(page,pages,total,label){if(pages<=1)return '';var dots='';for(var i=0;i<pages;i++)dots+='<i class="'+(i===page?'on':'')+'"></i>';var first=page*candidatePageSize()+1,last=Math.min(total,(page+1)*candidatePageSize());return '<div class="fitpager" aria-label="'+deskEsc(label)+' pages"><button data-dec="candpage" data-page="'+(page-1)+'" '+(page<=0?'disabled':'')+' aria-label="Previous '+deskEsc(label)+'">←</button><span class="fitread">'+first+'–'+last+' of '+total+' whole rows <span class="fitdots">'+dots+'</span></span><button data-dec="candpage" data-page="'+(page+1)+'" '+(page>=pages-1?'disabled':'')+' aria-label="Next '+deskEsc(label)+'">→</button></div>';}
 function fanList(){
@@ -6239,18 +6428,25 @@ function fanList(){
   var rows=decide.cands.slice(page*size,(page+1)*size).map(function(c){var co=coherence(c),gt=candGated(c),ft=co.verdict, isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'), gl=gapLoss(c);
     var gcls=gl==null?'':gl<=-15000?'bad':gl<=-6000?'warn':'ok', rcCol=riskCharCol(c), fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=c.authoritative?co.prose:c.why;
     var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),evidence=evaluation.evidence&&evaluation.evidence.rollup,exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
-    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-cand="'+c.id+'" aria-label="Analyze '+deskEsc(c.short)+'">'+
+    var evNum=c.authoritative&&c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
+    /* Resting rows stay compact: verdict chip + the one number that ranks them (realistic
+       after-cost EV). The full sentence lives on hover and, for the selected row, in the
+       Understand brief — never inline where it would multiply row height. */
+    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-cand="'+c.id+'" title="'+deskEsc(whyRead)+'" aria-label="Analyze '+deskEsc(c.short)+'">'+
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
       '<div class="fanmain">'+
         '<div class="fr1"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span>'+
           (isPick?'<span class="badge pickbadge">desk pick</span>':'')+
-          '<span class="ffit '+ft+'" title="'+co.prose+'">'+co.word+'</span></div>'+
+          '<span class="ffit '+ft+'" title="'+co.prose+'">'+co.word+'</span>'+
+          (evNum==null?'':'<span class="fev '+(evNum>=0?'pos':'neg')+'" title="Realistic after-cost EV">'+signed(evNum)+'</span>')+'</div>'+
         (exact?'<div class="fexact">'+deskEsc(exact)+'</div>':'')+
         '<div class="fr2"><span class="rchip" style="color:'+rcCol+';border-color:'+rcCol+'">'+riskCharShort(c)+'</span>'+
           '<span class="fmet '+(c.credit>=0?'pos':'')+'"><small>'+(c.credit>=0?'collect':'cost')+'</small>'+signed(c.credit)+'</span>'+
-          '<span class="fmet"><small>risk</small>'+maxLossDisp(c)+'</span>'+(score==null?'':'<span class="fmet"><small>score</small>'+score.toFixed(1)+'</span>')+(evidence?'<span class="fscr">'+deskEsc(evidence)+'</span>':'')+(gt?'<span class="fscr">screened</span>':'')+'</div>'+
-        '<div class="fr3"><span>chance <b>'+(c.pop==null?'—':c.pop+'%')+'</b></span><span>stress <b class="'+gcls+'">'+(gl==null?'—':money(gl))+'</b></span><span>capital <b>'+money(c.cap)+'</b></span>'+
-          '<span class="why">'+deskEsc(whyRead)+'</span></div>'+
+          '<span class="fmet"><small>risk</small>'+maxLossDisp(c)+'</span>'+
+          '<span class="fmet"><small>chance</small>'+(c.pop==null?'—':c.pop+'%')+'</span>'+
+          '<span class="fmet"><small>stress</small><span class="'+gcls+'">'+(gl==null?'—':money(gl))+'</span></span>'+
+          '<span class="fmet"><small>capital</small>'+money(c.cap)+'</span>'+
+          (score==null?'':'<span class="fmet"><small>score</small>'+score.toFixed(1)+'</span>')+(evidence?'<span class="fscr">'+deskEsc(evidence)+'</span>':'')+(gt?'<span class="fscr">screened</span>':'')+'</div>'+
       '</div></button>';
   }).join('');
   return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+'">'+rows+fitPager(page,pages,decide.cands.length,'ranked ideas')+'</div>';
@@ -6444,15 +6640,64 @@ function inspectPane(c){
   if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+tailBlock(c)+fitBudgetPanel(c)+'</div>';
   if(decide.inspect==='mechanics') return '<div class="inspectpane">'+greekInspector(c)+'</div>';
   if(decide.inspect==='book') return '<div class="inspectpane">'+bookImpactPanel(c)+'</div>';
+  if(decide.inspect==='market'&&c.authoritative) return '<div class="inspectpane">'+decMarketPane(c)+'</div>';
   return '<div class="inspectpane">'+evidencePanel(c)+'</div>';
+}
+/* ---- Market lens: the idea's underlying as a market object — candles, quote, chain slice, and
+   headlines from the SAME canonical owners Home uses (no second market-data path). ---- */
+function decMarketCtx(){
+  var ctx=decide._marketCtx;
+  if(ctx&&ctx.symbol===decide.sym)return ctx;
+  ctx={symbol:decide.sym,phase:'loading',row:null,error:null};
+  decide._marketCtx=ctx;
+  if(window.DeskBackend&&window.DeskBackend.symbolContext){
+    window.DeskBackend.symbolContext(decide.sym).then(function(row){
+      if(!decide||decide._marketCtx!==ctx)return;ctx.phase='ready';ctx.row=row;
+      if(decide.inspect==='market')renderDecide();
+    }).catch(function(error){
+      if(!decide||decide._marketCtx!==ctx)return;ctx.phase='error';ctx.error=error&&error.message||'Market context is unavailable.';
+      if(decide.inspect==='market')renderDecide();
+    });
+  } else { ctx.phase='error'; ctx.error='Market context is unavailable.'; }
+  return ctx;
+}
+function decMarketPane(c){
+  var bs=decide.backendState||{},market=bs.market||{},research=market.research||{},quote=market.quote||{},chain=market.chain||{};
+  var ctx=decMarketCtx(),row=ctx.row||{},history=row.history||{},news=row.news||{};
+  var last=authNumber(quote.last),prev=authNumber(quote.prevClose),pct=last!=null&&prev>0?(last/prev-1)*100:null;
+  var candles=Array.isArray(history.candles)?history.candles:[],historyStatus=authExceptionStatus(history.freshness);
+  var head='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(decide.sym)+'</span><span class="amh-change '+(pct==null?'':pct>=0?'pos':'neg')+'">'+(pct==null?'—':(pct>=0?'+':'')+pct.toFixed(2)+'% vs close')+'</span><b class="amh-price">'+(last==null?(decide.spot?'$'+Number(decide.spot).toFixed(2):'—'):'$'+last.toFixed(2))+'</b></div>';
+  var facts='<div class="authmarketfacts compact">'+
+    '<div class="authmarketfact"><span>ATM IV</span><b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></div>'+
+    '<div class="authmarketfact"><span>Quote</span><b>'+deskEsc((quote.source||'—')+(quote.freshness?' · '+quote.freshness:''))+'</b></div>'+
+    '<div class="authmarketfact"><span>Expiration</span><b>'+deskEsc(market.expiration||'—')+'</b></div>'+
+    '<div class="authmarketfact"><span>Sessions</span><b>'+(candles.length||'—')+'</b></div></div>';
+  var historyBlock=ctx.phase==='loading'?'<div class="backendnotice">Loading price history…</div>':
+    ctx.phase==='error'?'<div class="backendnotice">'+deskEsc(ctx.error||'Price history unavailable.')+'</div>':
+    candles.length>1?'<svg class="decmarketcandles" id="decMarketHist" aria-label="'+deskEsc(decide.sym)+' candlesticks"></svg><div class="authreceipt">'+deskEsc(history.range||'3m')+' price action'+(historyStatus?' · '+deskEsc(historyStatus):'')+'</div>':
+    '<div class="backendnotice">Price history is unavailable for '+deskEsc(decide.sym)+'. Quote, chain, and research remain ready.</div>';
+  var chainBlock='<div class="lenshd sub"><span class="eyebrow">Chain at the market</span><span class="hint">bid / ask</span></div>'+authHomeChainHTML({chain:chain},last||decide.spot||0);
+  var items=Array.isArray(news.items)?news.items.slice(0,3):[];
+  var newsBlock='<div class="lenshd sub"><span class="eyebrow">Headlines</span><span class="hint">'+items.length+' shown</span></div>'+
+    (items.length?'<div class="authnews compactnews">'+items.map(function(n){var href=/^https?:\/\//.test(String(n.url||''))?String(n.url):'#';return '<a href="'+deskEsc(href)+'" target="_blank" rel="noopener"><b>'+deskEsc(n.headline||'Untitled headline')+'</b><small>'+deskEsc([n.source,n.classification?authHuman(n.classification):null].filter(Boolean).join(' · '))+'</small></a>';}).join('')+'</div>':
+     ctx.phase==='loading'?'<div class="backendnotice">Headlines are loading…</div>':'<div class="backendnotice">No current headlines for '+deskEsc(decide.sym)+'.</div>');
+  var regime=research.regime&&research.regime.headline?'<div class="mcreceipt"><span>'+deskEsc(research.regime.headline)+'</span></div>':'';
+  return '<div class="upanel marketlens">'+head+facts+historyBlock+chainBlock+newsBlock+regime+'</div>';
+}
+function drawDecMarketHist(){
+  var svg=document.getElementById('decMarketHist');if(!svg||!decide)return;
+  var ctx=decide._marketCtx,candles=ctx&&ctx.row&&ctx.row.history&&ctx.row.history.candles||[];
+  drawCandleSeries(svg,candles,{minW:300,minH:110,defaultW:520,defaultH:130});
 }
 function decUnderstand(c){
   var co=coherence(c),source=c.authoritative?authoritativeCanvas(c):null,af=c.authoritative?authoritativeFrame(c,0):null,sr=c.authoritative?null:candidateSectorRead(c),
     greekLabel=af&&af.greeks&&af.greeks.theta!=null?'Θ '+signed(af.greeks.theta):c.authoritative?'checkpoint':'Θ '+signed(c.theta||0),
     bookLabel=c.authoritative?(source&&source.comparison?source.comparison.length+' compared':'loading'):(sr.diversifies?'diversifies':'adds '+sr.sector),
     tabs=[['paths','path','Paths',(c.pop==null?'—':c.pop+'%')+' profit'],['fit','check','Fit',co.word],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
+  if(c.authoritative){var mq=decide.backendState&&decide.backendState.market&&decide.backendState.market.quote,mLast=authNumber(mq&&mq.last);
+    tabs.push(['market','eye','Market',mLast==null?decide.sym:'$'+mLast.toFixed(2)]);}
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
-  return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
+  return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
 function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv '+(good?'pos':'neg')+'">'+v+'</span></div>'; }
 function estPrice(c){
@@ -6507,9 +6752,9 @@ function seg3(cur,opts,attr){ return '<div class="seg" role="group">'+opts.map(f
 /* EXECUTE — the final journey step: order controls grouped together + a single live summary
    line (no restating credit/max-loss/capital — those live on the candidate numbers). */
 function decExecute(c){
-  if(c.authoritative&&decide.backendPhase==='comparison-required'){
-    return '<div class="execute"><div class="usechead">Selection</div><div class="execbox draftlocked"><div class="dockrow"><div class="dockorder"><b>Comparison in view · nothing selected</b><span>Choose any ranked row once to analyze it. No market distribution or order instruction exists before that explicit selection.</span></div></div></div></div>';
-  }
+  /* Comparison-required carries no action, so the dock stays out of the way entirely — the single
+     notice above the ranked list already states this state once. */
+  if(c.authoritative&&decide.backendPhase==='comparison-required')return '';
   if(c.authoritative&&decide.mode==='build'){
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox draftlocked"><div class="dockrow">'+
       '<div class="dockorder"><b>Exact package not selected yet</b><span>Use the backend preview above to replace the selected strategy before reviewing an instruction.</span></div>'+
@@ -6603,12 +6848,15 @@ function drawDecMap(){
   var Y=function(v){return H-padB-(H-padB-padT)*(v-cLo)/((cHi-cLo)||1);};
   var g='';
   var ix=X(popLo+(popHi-popLo)*0.5), iy=Y(cLo+(cHi-cLo)*0.5);
-  g+='<rect x="'+ix.toFixed(1)+'" y="'+padT+'" width="'+Math.max(0,W-padR-ix).toFixed(1)+'" height="'+Math.max(0,iy-padT).toFixed(1)+'" fill="var(--profit)" opacity=".055"/>';
-  g+='<text x="'+(W-padR-4)+'" y="'+(padT+12)+'" fill="var(--profit)" opacity=".75" font-size="12.5" text-anchor="end">ideal ↗ likely &amp; '+(authoritative?'positive realistic EV':'rich')+'</text>';
-  g+='<text x="'+(padL+3)+'" y="'+(padT+12)+'" fill="var(--faint)" font-size="12">'+(authoritative?'positive realistic EV, long-shot':'rich, long-shot')+'</text>';
-  g+='<text x="'+(W-padR-4)+'" y="'+(H-padB-5)+'" fill="var(--faint)" font-size="12" text-anchor="end">'+(authoritative?'likely, adverse realistic EV':'safe, thin')+'</text>';
+  /* Paint order matters: gridlines first, then the ideal-region wash, then haloed captions —
+     a reference line must never strike through the region label. */
   pfTicks(popLo,popHi,4).forEach(function(p){var xx=X(p);if(xx<padL-1||xx>W-padR+1)return;g+='<line x1="'+xx.toFixed(1)+'" y1="'+padT+'" x2="'+xx.toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line-soft)"/>';g+='<text x="'+xx.toFixed(1)+'" y="'+(H-padB+12)+'" fill="var(--faint)" font-size="12" text-anchor="middle" font-family="ui-monospace">'+Math.round(p)+'</text>';});
   pfTicks(cLo,cHi,3).forEach(function(v){var yy=Y(v);if(yy<padT-1||yy>H-padB+1)return;g+='<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)"/>';g+='<text x="'+(padL-5)+'" y="'+(yy+3).toFixed(1)+'" fill="var(--faint)" font-size="12" text-anchor="end" font-family="ui-monospace">'+(v>=1000?'$'+(v/1000).toFixed(v%1000?1:0)+'k':'$'+Math.round(v))+'</text>';});
+  if(authoritative&&cLo<0&&cHi>0){var zy=Y(0);g+='<line x1="'+padL+'" y1="'+zy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+zy.toFixed(1)+'" stroke="var(--line)" stroke-dasharray="3 4"/>';}
+  g+='<rect x="'+ix.toFixed(1)+'" y="'+padT+'" width="'+Math.max(0,W-padR-ix).toFixed(1)+'" height="'+Math.max(0,iy-padT).toFixed(1)+'" fill="var(--profit)" opacity=".055"/>';
+  g+='<text class="maplab" x="'+(W-padR-4)+'" y="'+(padT+12)+'" fill="var(--profit)" opacity=".85" font-size="12.5" text-anchor="end">ideal ↗ likely &amp; '+(authoritative?'positive realistic EV':'rich')+'</text>';
+  g+='<text class="maplab" x="'+(padL+3)+'" y="'+(padT+12)+'" fill="var(--faint)" font-size="12">'+(authoritative?'positive realistic EV, long-shot':'rich, long-shot')+'</text>';
+  g+='<text class="maplab" x="'+(W-padR-4)+'" y="'+(H-padB-5)+'" fill="var(--faint)" font-size="12" text-anchor="end">'+(authoritative?'likely, adverse realistic EV':'safe, thin')+'</text>';
   g+='<text x="'+((W+padL)/2)+'" y="'+(H-3)+'" fill="var(--dim)" font-size="12.5" text-anchor="middle">chance of profit →</text>';
   g+='<text transform="translate(11,'+(H/2)+') rotate(-90)" fill="var(--dim)" font-size="12.5" text-anchor="middle">'+(authoritative?'realized-vol EV · after costs ↑':'premium collected ↑')+'</text>';
   DEC_MPOS=[];
