@@ -79,18 +79,18 @@ class PositionLifecycleReceiptTest {
                         PositionLifecycleReceipt.STANCE_REF,
                         "One current choice; history does not vote.", limitations),
                 new PositionLifecycleReceipt.CarryCollateral(4_700L, 5.96, 16,
-                        new PositionLifecycleReceipt.MoneyFact(1_800_000L,
+                        new AuthorityFacts.MoneyFact(1_800_000L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "Cash-secured strike obligation."),
-                        PositionLifecycleReceipt.RateFact.unavailable(
+                        AuthorityFacts.RateFact.unavailable(
                                 "No broker-reported settlement-fund rate is linked."),
-                        new PositionLifecycleReceipt.MoneyFact(1_800_000L,
+                        new AuthorityFacts.MoneyFact(1_800_000L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "Theoretical encumbrance."),
-                        new PositionLifecycleReceipt.MoneyFact(1_800_000L,
+                        new AuthorityFacts.MoneyFact(1_800_000L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "Theoretical release, not broker buying power."),
                         0L, "Premium carry and collateral income are separate.", limitations),
                 new PositionLifecycleReceipt.AssignmentExit(assignmentLegs,
-                        PositionLifecycleReceipt.MoneyFact.unavailable("Tax-lot basis is not linked."),
-                        PositionLifecycleReceipt.MoneyFact.unavailable("Campaign basis is not linked."),
+                        AuthorityFacts.MoneyFact.unavailable("Tax-lot basis is not linked."),
+                        AuthorityFacts.MoneyFact.unavailable("Campaign basis is not linked."),
                         List.of(), "UNAVAILABLE", "bookActionProjections",
                         "Assignment is exact geometry, not a probability verdict.", limitations),
                 new PositionLifecycleReceipt.Evidence(OffsetDateTime.parse("2031-07-22T12:00:00Z"),
@@ -110,7 +110,7 @@ class PositionLifecycleReceiptTest {
     }
 
     @Test void authorityAndCashReconciliationCannotBeFaked() {
-        assertThatThrownBy(() -> new PositionLifecycleReceipt.MoneyFact(100L,
+        assertThatThrownBy(() -> new AuthorityFacts.MoneyFact(100L,
                 PositionDomain.FactAuthority.UNAVAILABLE, "Unknown."))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unavailable money fact");

@@ -165,10 +165,10 @@ public record PositionLifecycleReceipt(
             Long grossRemainingPremiumCents,
             Double grossAnnualizedRemainingPremiumPct,
             Integer calendarDaysRemaining,
-            MoneyFact collateral,
-            RateFact concurrentCollateralIncome,
-            MoneyFact encumbrance,
-            MoneyFact capitalReleasedByClosing,
+            AuthorityFacts.MoneyFact collateral,
+            AuthorityFacts.RateFact concurrentCollateralIncome,
+            AuthorityFacts.MoneyFact encumbrance,
+            AuthorityFacts.MoneyFact capitalReleasedByClosing,
             Long sharesReleasedByClosing,
             String basis,
             List<String> limitations
@@ -186,49 +186,11 @@ public record PositionLifecycleReceipt(
         }
     }
 
-    public record MoneyFact(Long cents, PositionDomain.FactAuthority authority, String basis) {
-        public MoneyFact {
-            if (authority == null) throw new IllegalArgumentException("money-fact authority is required");
-            required(basis, "money-fact basis");
-            if (authority == PositionDomain.FactAuthority.UNAVAILABLE && cents != null) {
-                throw new IllegalArgumentException("an unavailable money fact cannot claim an amount");
-            }
-            if (authority != PositionDomain.FactAuthority.UNAVAILABLE && cents == null) {
-                throw new IllegalArgumentException("an available money fact needs an amount");
-            }
-            nonNegative(cents, "money fact");
-        }
-
-        public static MoneyFact unavailable(String reason) {
-            return new MoneyFact(null, PositionDomain.FactAuthority.UNAVAILABLE, reason);
-        }
-    }
-
-    public record RateFact(Double annualRatePct, Long concurrentIncomeCents,
-                           PositionDomain.FactAuthority authority, String basis) {
-        public RateFact {
-            if (authority == null) throw new IllegalArgumentException("rate-fact authority is required");
-            required(basis, "rate-fact basis");
-            if (authority == PositionDomain.FactAuthority.UNAVAILABLE
-                    && (annualRatePct != null || concurrentIncomeCents != null)) {
-                throw new IllegalArgumentException("an unavailable rate fact cannot claim a rate or income");
-            }
-            if (authority != PositionDomain.FactAuthority.UNAVAILABLE && annualRatePct == null) {
-                throw new IllegalArgumentException("an available rate fact needs a rate");
-            }
-            nonNegative(concurrentIncomeCents, "concurrent income");
-        }
-
-        public static RateFact unavailable(String reason) {
-            return new RateFact(null, null, PositionDomain.FactAuthority.UNAVAILABLE, reason);
-        }
-    }
-
     /** Assignment/call-away quantities are explicit per short contract geometry. */
     public record AssignmentExit(
             List<AssignmentLeg> legs,
-            MoneyFact taxLotBasisPerShare,
-            MoneyFact campaignBasisPerShare,
+            AuthorityFacts.MoneyFact taxLotBasisPerShare,
+            AuthorityFacts.MoneyFact campaignBasisPerShare,
             List<EventCrossing> eventCrossings,
             String eventEvidenceStatus,
             String bookImpactRef,

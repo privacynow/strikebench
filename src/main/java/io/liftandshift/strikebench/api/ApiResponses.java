@@ -382,7 +382,8 @@ public final class ApiResponses {
                                    int sharesPositions, int openTradesCount,
                                    long openTradesValueCents, long openTradesUnrealizedCents,
                                    long totalValueCents, long totalPnlCents, boolean complete,
-                                   String freshness, String note) {}
+                                   String freshness, String note,
+                                   io.liftandshift.strikebench.position.AccountLiquidityReceipt liquidity) {}
 
     private ApiResponses() {}
 }

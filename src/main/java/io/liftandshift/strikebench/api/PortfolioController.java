@@ -16,6 +16,8 @@ import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 
 import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.Year;
 import java.util.ArrayList;
 import java.util.List;
@@ -245,7 +247,11 @@ final class PortfolioController {
                 account.buyingPowerCents(), account.startingCashCents(), sharesValue, sharesCount,
                 open.openTradesCount(), open.valueCents(), open.unrealizedCents(), total,
                 total - account.startingCashCents(), complete, open.freshness(),
-                "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted."));
+                "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted.",
+                io.liftandshift.strikebench.position.AccountLiquidityReceipt.practice(account.id(),
+                        account.cashCents(), account.reservedCents(), account.buyingPowerCents(),
+                        trades.theoreticalShortPutObligationCents(account.id()),
+                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC))));
     }
 
     private void riskBudget(Context ctx) {
