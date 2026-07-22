@@ -46,13 +46,14 @@ final class TrackedPackageAnalysisService {
         var preview = trades.previewTracked(request, summary.bookCashCents());
         var candidate = TradeController.exactPreviewCandidate(request, preview);
         var current = books.portfolioDollarDelta(ownerId, accountId, request.symbol());
+        AccountObjectiveService.Revision objectiveRevision = objectives.latest(ownerId, accountId);
         var exposure = new PortfolioExposureContext(PositionDomain.ExecutionLane.REAL,
                 current.grossCents(), current.netCents(), current.focusSymbolGrossCents(),
                 current.complete(), current.basis());
         var evaluation = evaluations.assessExact(request.symbol(), candidate, summary.bookCashCents(),
                 AnalysisContext.OBSERVED, null, preview.ok(), preview.blockReasons(),
                 Math.multiplyExact(preview.feesOpenCents(), 2L), exposure,
-                declaredAccountObjective(ownerId, accountId));
+                declaredAccountObjective(objectiveRevision));
         String lane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
         var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
         var lifecycleReceipt = lifecycle.compose(request, preview, evaluation);
@@ -64,11 +65,12 @@ final class TrackedPackageAnalysisService {
                         + " evidence and this tracked account's cash. It never changes tracked lots,"
                         + " tracked tax basis, campaign accounting, or the Practice account.",
                 lifecycleReceipt,
-                bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary));
+                bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary),
+                AccountObjectiveService.capacityContext(objectiveRevision,
+                        lifecycleReceipt.positionFingerprint()));
     }
 
-    private DeclaredObjective declaredAccountObjective(String ownerId, String accountId) {
-        AccountObjectiveService.Revision revision = objectives.latest(ownerId, accountId);
+    private DeclaredObjective declaredAccountObjective(AccountObjectiveService.Revision revision) {
         if (revision == null) return null;
         String thesis = revision.direction() == null || "NON_DIRECTIONAL".equals(revision.direction())
                 ? null : revision.direction();

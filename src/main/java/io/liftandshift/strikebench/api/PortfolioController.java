@@ -103,7 +103,9 @@ final class PortfolioController {
 
     /** What this account is FOR — the declared side of the coherence diagnostic (§3.7). */
     public record ObjectiveDeclaration(String objective, String direction, Long targetExposureCents,
-                                       String assignmentPreference) {}
+                                       String assignmentPreference,
+                                       List<AccountObjectiveService.PackageCapacity> packageCapacities,
+                                       AccountObjectiveService.AccountCapacityPolicy capacityPolicy) {}
 
     private void getObjective(Context ctx) {
         String owner = ownerId.apply(ctx);
@@ -116,7 +118,7 @@ final class PortfolioController {
         var input = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, ObjectiveDeclaration.class));
         ctx.status(201).json(objectives.declare(ownerId.apply(ctx), ctx.pathParam("id"),
                 input.objective(), input.direction(), input.targetExposureCents(),
-                input.assignmentPreference()));
+                input.assignmentPreference(), input.packageCapacities(), input.capacityPolicy()));
     }
 
     private void createAccount(Context ctx) {

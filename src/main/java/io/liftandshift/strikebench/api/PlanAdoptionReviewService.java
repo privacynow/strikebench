@@ -212,7 +212,7 @@ final class PlanAdoptionReviewService {
         return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
                 analysis.identity(), analysis.accountId(), analysis.accountName(),
                 analysis.availableCashCents(), analysis.marketLane(), analysis.note(), enriched,
-                analysis.bookActions());
+                analysis.bookActions(), analysis.capacity());
     }
 
     private List<PortfolioAccountingService.LotAllocation> currentLotAllocations(String structureId) {
