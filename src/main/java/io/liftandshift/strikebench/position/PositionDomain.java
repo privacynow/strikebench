@@ -11,6 +11,13 @@ public final class PositionDomain {
     }
     public enum ReceiptKind { DECISION, ADOPTION, TRANSFORMATION, RESOLUTION }
     public enum ReceiptAuthority { SYSTEM_ANALYSIS, BROKER_REPORTED, USER_ALLOCATED }
+    /** Authority for one derived or reported fact. This is deliberately separate from the
+     * receipt's authorship and a market price's authority: a broker may author a receipt while
+     * StrikeBench still derives one particular collateral number. */
+    public enum FactAuthority {
+        SYSTEM_CALCULATED, OBSERVED_MARKET, BROKER_REPORTED, USER_REPORTED,
+        MODEL_DERIVED, UNAVAILABLE
+    }
     public enum Objective { INCOME, ACCUMULATE, HEDGE, DIRECTIONAL, CAPITAL_PRESERVATION }
     public enum Direction { BULLISH, BEARISH, NEUTRAL, NON_DIRECTIONAL }
     public enum AssignmentPreference { AVOID, ACCEPT, PREFER_BELOW_BASIS, SEEK }

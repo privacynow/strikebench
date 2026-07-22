@@ -6,7 +6,11 @@ import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.CampaignService;
+import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.TradeService;
+import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
+import io.liftandshift.strikebench.position.PositionDomain;
+import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.util.OwnerScope;
 
@@ -65,13 +69,18 @@ final class PlanAdoptionReviewService {
     private final Analyzer analyzer;
     private final CampaignService campaigns;
     private final AccountObjectiveService objectives;
+    private final PortfolioAccountingService books;
+    private final HeldPositionEconomicsService lifecycle;
 
     PlanAdoptionReviewService(Db db, Analyzer analyzer, CampaignService campaigns,
-                              AccountObjectiveService objectives) {
+                              AccountObjectiveService objectives, PortfolioAccountingService books,
+                              HeldPositionEconomicsService lifecycle) {
         this.db = db;
         this.analyzer = analyzer;
         this.campaigns = campaigns;
         this.objectives = objectives;
+        this.books = books;
+        this.lifecycle = lifecycle;
     }
 
     List<AdoptionReview> reviews(String ownerId, String planId) {
@@ -106,6 +115,7 @@ final class PlanAdoptionReviewService {
                 row.positionState(), row.authority(), row.marksAsOf(), row.evidenceLevel(),
                 row.objectiveRevisionId(), baseline);
         AccountObjectiveService.Revision currentObjective = objectives.latest(owner, row.accountId());
+        List<CampaignService.CampaignView> matching = matchingCampaigns(owner, planId, row.structureId());
 
         FreshEyesLens freshEyes;
         if (!"OPEN".equals(row.structureStatus()) && !"PARTIALLY_CLOSED".equals(row.positionState())) {
@@ -122,10 +132,14 @@ final class PlanAdoptionReviewService {
                     var request = new TradeService.OpenRequest(row.accountId(), row.symbol(), strategy, 1,
                             current, null, null, null, null, false, null, null,
                             "ADOPTION_REVIEW", "PROPOSED");
+                    ApiResponses.TrackedPackageAnalysis analysis = analyzer.analyze(owner, row.accountId(), request);
+                    if (analysis != null && analysis.lifecycle() != null) {
+                        analysis = withHistory(owner, row, baseline, matching, analysis);
+                    }
                     freshEyes = new FreshEyesLens(true, FRESH_EYES_QUESTION,
                             "Current observed executable marks; sunk campaign cash excluded. "
                                     + "The account's latest objective revision supplies coherence only.",
-                            analyzer.analyze(owner, row.accountId(), request), null);
+                            analysis, null);
                 }
             } catch (RuntimeException e) {
                 freshEyes = unavailableFreshEyes(e.getMessage() == null
@@ -133,7 +147,6 @@ final class PlanAdoptionReviewService {
             }
         }
 
-        List<CampaignService.CampaignView> matching = matchingCampaigns(owner, planId, row.structureId());
         CampaignLens campaignLens = matching.isEmpty()
                 ? new CampaignLens(false, CAMPAIGN_QUESTION,
                 "CampaignService accounting uses the full history of explicitly confirmed members. Adoption receipt "
@@ -147,6 +160,66 @@ final class PlanAdoptionReviewService {
                         + "Tracked tax basis remains separate.",
                 matching, null);
         return new AdoptionReview(anchor, currentObjective, freshEyes, campaignLens);
+    }
+
+    private ApiResponses.TrackedPackageAnalysis withHistory(String owner, AnchorRow row,
+                                                             List<BaselineLeg> baseline,
+                                                             List<CampaignService.CampaignView> matching,
+                                                             ApiResponses.TrackedPackageAnalysis analysis) {
+        List<HeldPositionEconomicsService.OpeningLeg> opening = baseline.stream()
+                .filter(leg -> leg.openingFill() != null)
+                .map(leg -> new HeldPositionEconomicsService.OpeningLeg(
+                        LegAction.valueOf(leg.action()), leg.instrumentType(), leg.quantity(),
+                        leg.multiplier(), leg.openingFill(),
+                        "positionReceipt:" + row.receiptId() + "#leg-" + leg.legNo()))
+                .toList();
+        var stockBasis = books.allocatedStockBasis(owner, row.accountId(),
+                currentLotAllocations(row.structureId()));
+        PositionLifecycleReceipt.MoneyFact taxBasis = stockBasis.available()
+                ? new PositionLifecycleReceipt.MoneyFact(stockBasis.trackedTaxBasisPerShareCents(),
+                    PositionDomain.FactAuthority.SYSTEM_CALCULATED, stockBasis.basis())
+                : PositionLifecycleReceipt.MoneyFact.unavailable(stockBasis.basis());
+
+        PositionLifecycleReceipt.MoneyFact campaignBasis;
+        Long campaignResult = null;
+        List<String> refs = new ArrayList<>();
+        refs.add("positionReceipt:" + row.receiptId());
+        if (matching.size() == 1) {
+            CampaignService.CampaignView campaign = matching.getFirst();
+            refs.add("campaign:" + campaign.id());
+            campaignResult = campaign.yield() == null ? null : campaign.yield().realizedPnlCents();
+            campaignBasis = campaign.economicBasis() != null && campaign.economicBasis().available()
+                    ? new PositionLifecycleReceipt.MoneyFact(campaign.economicBasis().perShareCents(),
+                        PositionDomain.FactAuthority.SYSTEM_CALCULATED,
+                        "CampaignService campaign-adjusted economic basis; never tracked tax basis.")
+                    : PositionLifecycleReceipt.MoneyFact.unavailable(
+                        "The one linked campaign has no defined per-share campaign-adjusted basis.");
+        } else if (matching.isEmpty()) {
+            campaignBasis = PositionLifecycleReceipt.MoneyFact.unavailable(
+                    "No explicitly linked campaign supplies a campaign-adjusted basis.");
+        } else {
+            matching.forEach(campaign -> refs.add("campaign:" + campaign.id()));
+            campaignBasis = PositionLifecycleReceipt.MoneyFact.unavailable(
+                    "Multiple campaigns are linked; StrikeBench will not merge their interpretation-layer bases.");
+        }
+        var context = new HeldPositionEconomicsService.HistoryContext(opening, null,
+                campaignResult, null, taxBasis, campaignBasis,
+                "Frozen adoption fills supply opening history. Opening commissions are unavailable in the "
+                        + "adoption receipt, so net-after-all-cost history stays unavailable. CampaignService "
+                        + "and tracked accounting remain separate owners.", refs);
+        var enriched = lifecycle.withHistory(analysis.lifecycle(), context);
+        return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
+                analysis.identity(), analysis.accountId(), analysis.accountName(),
+                analysis.availableCashCents(), analysis.marketLane(), analysis.note(), enriched);
+    }
+
+    private List<PortfolioAccountingService.LotAllocation> currentLotAllocations(String structureId) {
+        return db.with(c -> Db.queryOn(c,
+                "SELECT psm.lot_id,psm.allocated_quantity FROM portfolio_structure ps "
+                        + "JOIN portfolio_structure_member psm ON psm.revision_id=ps.current_revision_id "
+                        + "WHERE ps.id=? ORDER BY psm.leg_no",
+                r -> new PortfolioAccountingService.LotAllocation(
+                        r.str("lot_id"), r.lng("allocated_quantity")), structureId));
     }
 
     private FreshEyesLens unavailableFreshEyes(String reason) {

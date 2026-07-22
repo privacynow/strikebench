@@ -9,6 +9,7 @@ import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.position.PositionDomain;
+import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 
 /**
@@ -22,13 +23,16 @@ final class TrackedPackageAnalysisService {
     private final TradeService trades;
     private final EvaluationService evaluations;
     private final AccountObjectiveService objectives;
+    private final HeldPositionEconomicsService lifecycle;
 
     TrackedPackageAnalysisService(PortfolioAccountingService books, TradeService trades,
-                                  EvaluationService evaluations, AccountObjectiveService objectives) {
+                                  EvaluationService evaluations, AccountObjectiveService objectives,
+                                  HeldPositionEconomicsService lifecycle) {
         this.books = books;
         this.trades = trades;
         this.evaluations = evaluations;
         this.objectives = objectives;
+        this.lifecycle = lifecycle;
     }
 
     ApiResponses.TrackedPackageAnalysis analyze(String ownerId, String accountId,
@@ -46,13 +50,15 @@ final class TrackedPackageAnalysisService {
                 Math.multiplyExact(preview.feesOpenCents(), 2L), exposure,
                 declaredAccountObjective(ownerId, accountId));
         String lane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
+        var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
         return new ApiResponses.TrackedPackageAnalysis(preview,
                 ApiResponses.EvaluationReceipt.of(evaluation),
-                StrategyCatalog.identify(request.symbol(), request.qty(), request.legs()),
+                identity,
                 accountId, account.name(), summary.bookCashCents(), lane,
                 "Read-only analysis uses " + lane.toLowerCase(java.util.Locale.ROOT)
                         + " evidence and this tracked account's cash. It never changes tracked lots,"
-                        + " tracked tax basis, campaign accounting, or the Practice account.");
+                        + " tracked tax basis, campaign accounting, or the Practice account.",
+                lifecycle.compose(request, preview, evaluation));
     }
 
     private DeclaredObjective declaredAccountObjective(String ownerId, String accountId) {

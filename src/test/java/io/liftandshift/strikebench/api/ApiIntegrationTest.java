@@ -1563,6 +1563,14 @@ class ApiIntegrationTest {
         assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/grossExposureBeforeCents").asLong())
                 .isZero();
         assertThat(analyzed.at("/evaluation/coverage/inputs/pricing/level").asText()).isNotBlank();
+        assertThat(analyzed.at("/lifecycle/schemaVersion").asText()).isEqualTo("position-lifecycle-v1");
+        assertThat(analyzed.at("/lifecycle/currentChoice/freshEyesEconomicsRef").asText())
+                .isEqualTo("evaluation.assessment.economics");
+        assertThat(analyzed.at("/lifecycle/currentChoice/stanceRef").asText()).isEqualTo("evaluation.stance");
+        assertThat(analyzed.at("/lifecycle/evidence/policyFingerprint").asText()).isEqualTo("FACTS_ONLY");
+        assertThat(analyzed.at("/lifecycle/positionFingerprint").asText()).hasSize(64);
+        assertThat(analyzed.at("/lifecycle/carryCollateral/concurrentCollateralIncome/authority").asText())
+                .isEqualTo("UNAVAILABLE");
 
         HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
                 {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",

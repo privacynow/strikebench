@@ -325,8 +325,9 @@ public final class ApiServer {
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
         var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
                 db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades);
+        var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(clock);
         var trackedPackageAnalyses = new TrackedPackageAnalysisService(
-                portfolioBooks, trades, evaluations, accountObjectives);
+                portfolioBooks, trades, evaluations, accountObjectives, heldPositionEconomics);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, trackedPackageAnalyses,
                 accountObjectives, bookRisk,
@@ -353,7 +354,8 @@ public final class ApiServer {
         var planAdoptions = new io.liftandshift.strikebench.plan.PlanAdoptionService(
                 db, clock, planSvc, positionArtifacts, portfolioMarks);
         var planAdoptionReviews = new PlanAdoptionReviewService(db,
-                trackedPackageAnalyses::analyze, campaigns, accountObjectives);
+                trackedPackageAnalyses::analyze, campaigns, accountObjectives,
+                portfolioBooks, heldPositionEconomics);
         planController = new PlanController(cfg, clock, db, market, eventCalendar,
                 positions, trades, backtester, auto, evaluations, planSvc, planEvidence,
                 planStrategy, planOutcomes, planRehearsals, planDecisions, planManagement,

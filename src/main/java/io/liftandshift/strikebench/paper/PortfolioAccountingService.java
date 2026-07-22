@@ -119,6 +119,25 @@ public final class PortfolioAccountingService {
                           long economicOriginalOpenAmountCents,
                           long economicRemainingOpenAmountCents) {}
 
+    /** Exact allocation request used by structure/adoption composers; accounting stays the owner. */
+    public record LotAllocation(String lotId, long quantity) {
+        public LotAllocation {
+            if (lotId == null || lotId.isBlank() || quantity <= 0) {
+                throw new IllegalArgumentException("lot allocation needs an id and positive quantity");
+            }
+        }
+    }
+
+    public record StockBasisView(boolean available, long shares,
+                                 Long trackedTaxBasisPerShareCents,
+                                 Long economicBasisPerShareCents,
+                                 String basis, List<String> sourceLotIds) {
+        public StockBasisView {
+            if (basis == null || basis.isBlank()) throw new IllegalArgumentException("stock-basis basis is required");
+            sourceLotIds = sourceLotIds == null ? List.of() : List.copyOf(sourceLotIds);
+        }
+    }
+
     public record RealizedLotView(long id, String lotId, String symbol, String instrumentType,
                                   String side, long quantity, String openedAt, String closedAt,
                                   long openAmountCents, long closeAmountCents,
@@ -539,6 +558,59 @@ public final class PortfolioAccountingService {
                 + "WHERE l.portfolio_account_id=?" + (includeClosed ? "" : " AND l.status='OPEN'")
                 + " ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id";
         return db.query(sql, PortfolioAccountingService::mapLotView, account.id());
+    }
+
+    /**
+     * Allocates the canonical tracked tax and economic bases for the exact long-stock lots in a
+     * structure. Callers never reproduce FIFO/wash-sale/rounding arithmetic outside accounting.
+     */
+    public StockBasisView allocatedStockBasis(String ownerId, String accountId,
+                                              List<LotAllocation> allocations) {
+        List<LotAllocation> requested = allocations == null ? List.of() : List.copyOf(allocations);
+        if (requested.isEmpty()) {
+            return new StockBasisView(false, 0, null, null,
+                    "No long-stock lot allocation is linked to this position.", List.of());
+        }
+        Map<String, Long> quantities = new LinkedHashMap<>();
+        for (LotAllocation allocation : requested) {
+            quantities.merge(allocation.lotId(), allocation.quantity(), Math::addExact);
+        }
+        Map<String, LotView> open = lots(ownerId, accountId, false).stream()
+                .collect(java.util.stream.Collectors.toMap(LotView::id, x -> x));
+        long shares = 0, tax = 0, economic = 0;
+        List<String> ids = new ArrayList<>();
+        for (Map.Entry<String, Long> entry : quantities.entrySet()) {
+            LotView lot = open.get(entry.getKey());
+            if (lot == null) {
+                throw new IllegalArgumentException("lot " + entry.getKey()
+                        + " is not an open lot in tracked account " + accountId);
+            }
+            if (!"STOCK".equals(lot.instrumentType()) || !"LONG".equals(lot.side())) {
+                continue; // option lots are intentionally excluded from per-share stock basis
+            }
+            long quantity = entry.getValue();
+            if (quantity > lot.remainingQuantity()) {
+                throw new IllegalArgumentException("lot " + lot.id() + " has only "
+                        + lot.remainingQuantity() + " open shares; " + quantity + " were allocated");
+            }
+            shares = Math.addExact(shares, quantity);
+            tax = Math.addExact(tax, allocate(lot.remainingOpenAmountCents(), quantity,
+                    lot.remainingQuantity()));
+            economic = Math.addExact(economic, allocate(lot.economicRemainingOpenAmountCents(), quantity,
+                    lot.remainingQuantity()));
+            ids.add(lot.id());
+        }
+        if (shares == 0) {
+            return new StockBasisView(false, 0, null, null,
+                    "The linked structure has no open long-stock allocation; option premium is not stock basis.", ids);
+        }
+        long taxPerShare = BigDecimal.valueOf(tax).divide(BigDecimal.valueOf(shares), 0,
+                RoundingMode.HALF_UP).longValueExact();
+        long economicPerShare = BigDecimal.valueOf(economic).divide(BigDecimal.valueOf(shares), 0,
+                RoundingMode.HALF_UP).longValueExact();
+        return new StockBasisView(true, shares, taxPerShare, economicPerShare,
+                "Allocated by the accounting owner's exact remaining lot amounts; tracked tax basis and "
+                        + "economic lot basis remain separate.", ids);
     }
 
     public List<RealizedLotView> realizedLots(String ownerId, String accountId, int year) {
