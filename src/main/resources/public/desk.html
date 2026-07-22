@@ -2593,6 +2593,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* the bloom's standing chain panel (same component as Home and the Decide market band) */
 .authposchain .authchainrows{min-height:0}
 .authposchain .backendnotice{margin-top:2px}
+/* ONE fan interaction grammar: chart-wide surface, nearest-path hover, accent-hot highlight —
+   identical on the idea fan, the position chart, and the book fan */
+.authpathchart [data-auth-line]{transition:stroke-opacity var(--mo-quick) var(--mo-ease),stroke-width var(--mo-quick) var(--mo-ease)}
+.authpathchart [data-auth-line].hot{stroke:var(--accent)!important;stroke-opacity:1!important;stroke-width:2.3!important}
+.authpathchart .mcinteraction,.bookfan .mcinteraction{fill:transparent;pointer-events:all;cursor:crosshair}
+.authpathpanel .mcpathread{min-height:15px}
 /* a chosen future (exact fan path) is the active story — the tiles stay unpinned, this strip says why */
 .customstory{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--accent-2);border-radius:8px;background:var(--accent-wash)}
 .customstory .csdot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;box-shadow:0 0 0 3px rgba(57,199,212,.15)}
@@ -3179,6 +3185,12 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
     if(focusPath){ev.preventDefault();ev.stopPropagation();if(p._positionScenarioPhase==='ready')toggleScenPlay(positionSurf(p));return;}
     var anyPath=ev.target.closest&&ev.target.closest('[data-auth-any-path]');
     if(anyPath){ev.preventDefault();ev.stopPropagation();pinPositionFanPath(p,+anyPath.getAttribute('data-auth-any-path'));return;}
+    var pathSurface=ev.target.closest&&ev.target.closest('[data-auth-surface]');
+    if(pathSurface){ev.preventDefault();ev.stopPropagation();if(p._positionScenarioPhase!=='ready')return;
+      var nearest=nearestPositionPath(p,ev),shownFan=authPositionScenarioFan(p);
+      if(nearest<0)return;
+      if(shownFan&&nearest===shownFan.focusPathIndex)toggleScenPlay(positionSurf(p));else pinPositionFanPath(p,nearest);
+      return;}
     var manageAct=ev.target.closest&&ev.target.closest('[data-auth-manage]');
     if(manageAct){ev.preventDefault();ev.stopPropagation();var manageKind=manageAct.getAttribute('data-auth-manage');
       if(manageKind==='resume'){var owningPlan=p._positionData&&p._positionData.plan||p._plan;if(owningPlan)authOpenPlan(owningPlan,manageAct.getBoundingClientRect());return;}
@@ -3201,6 +3213,9 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
     if(state.level==='position'&&state.focus===p.id)return;go('position',p.id);
   });
   el.addEventListener('input',function(ev){var scrub=ev.target.closest&&ev.target.closest('.authscenstage .scrub[data-wf="scrub"]');if(scrub)scenScrub(positionSurf(p),+scrub.value/100);});
+  /* the idea fan's hover grammar, verbatim: nearest path lights up and the readout narrates it */
+  el.addEventListener('mousemove',function(ev){var surface=ev.target.closest&&ev.target.closest('[data-auth-surface]');if(!surface)return;var next=nearestPositionPath(p,ev);if(next===p._pathHover)return;p._pathHover=next;hoverPositionPath(p,next,next>=0);});
+  el.addEventListener('mouseout',function(ev){var surface=ev.target.closest&&ev.target.closest('[data-auth-surface]');if(!surface||(ev.relatedTarget&&surface.contains(ev.relatedTarget)))return;p._pathHover=-1;hoverPositionPath(p,-1,false);});
   return el;}
 function authPositionLegsHTML(p){if(!p.legs.length)return '<div class="backendnotice">This package has no legs to show.</div>';return '<div class="authleglist">'+p.legs.map(function(l){var qty=Math.max(1,Math.abs(l.q)),contract=l.type==='STOCK'?qty+' shares':qty+'× '+Number(l.k).toLocaleString()+(l.type==='CALL'?'C':'P');return '<div class="authleg"><span class="side '+(l.action==='SELL'?'sell':'buy')+'">'+deskEsc(l.action)+'</span><span>'+deskEsc(contract)+'</span><span class="contract">'+deskEsc(l.expiration||'stock')+' · '+deskEsc(l.positionEffect||'OPEN')+'</span><span class="mark">entry '+(l.entryPrice==null?'—':'$'+Number(l.entryPrice).toFixed(2))+'</span></div>';}).join('')+'</div>';}
 function authEvidenceLabel(e){if(!e)return 'unavailable';return [e.provenance,e.age,e.source].filter(Boolean).join(' · ')||'unavailable';}
@@ -3248,6 +3263,7 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
   return '<section class="authscenstage" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="'+deskEsc(phase)+'" data-ensemble-fingerprint="'+deskEsc(ensemble.fingerprint||'')+'" data-valuation-fingerprint="'+deskEsc(modelReceipt.valuationFingerprint||'')+'"><div class="lenshd"><span class="eyebrow">Position scenarios</span><span class="hint">one market fan · this position’s response</span></div><div class="authscenarioarea">'+
     '<div class="authscenpanel"><div class="authscengrid">'+tiles+'</div>'+customStrip+controls+'</div>'+
     '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">What happens if — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the same paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
+      '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(positionPathPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null))+'</div>'+
       '<div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div><div class="authscenmetric"><span>Net delta</span><b data-live="delta">'+(authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2))+'</b></div><div class="authscenmetric"><span>Theta / day</span><b data-live="theta">'+(authNumber(g.thetaCentsPerDay)==null?'—':money(Number(g.thetaCentsPerDay)/100))+'</b></div><div class="authscenmetric"><span>Gamma</span><b data-live="gamma">'+(authNumber(g.gammaSharesPerDollar)==null?'—':Number(g.gammaSharesPerDollar).toFixed(3))+'</b></div><div class="authscenmetric"><span>Vega / pt</span><b data-live="vega">'+(authNumber(g.vegaCentsPerPoint)==null?'—':money(Number(g.vegaCentsPerPoint)/100))+'</b></div></div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     '<div class="authscenreceipt" id="authScenReceipt-'+deskEsc(p.id)+'">'+authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</div></section>';}
 function authPayKeyHTML(p){var unchanged=payFor(p,p.spot),bes=breakevens(p),be=bes.length?bes.slice(0,2).map(function(value){return '$'+Number(value).toLocaleString(undefined,{maximumFractionDigits:2});}).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',authSigned(unchanged),unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':authMoney(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':authMoney(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
@@ -3324,16 +3340,43 @@ function drawAuthoritativePositionPaths(p){var svg=document.getElementById('auth
   var progress=authPositionScenarioProgress(p,fan),horizonDay=Math.max(.0001,Number(fan.horizonDays||fan.targetDay||fan.steps||1)),storyDay=Number(fan.targetDay||0),frames=fan.frames||[];
   fan.paths.forEach(function(path){path.forEach(function(v){var n=authNumber(v);if(n!=null)values.push(n);});});frames.forEach(function(row){['p10','p25','p50','p75','p90','focus'].forEach(function(k){var n=authNumber(row[k]);if(n!=null)values.push(n);});});if(values.length<2)return;
   var lo=Math.min.apply(0,values),hi=Math.max.apply(0,values);pad=(hi-lo)*.1||Math.max(1,Math.abs(lo)*.01);lo-=pad;hi+=pad;
+  /* same continuity rule as the idea fan: an exact-path pin keeps the prior frame of reference */
+  if(p._fanCarry&&p._fanCarry.space===(fan.space||'price')){lo=Math.min(lo,p._fanCarry.lo);hi=Math.max(hi,p._fanCarry.hi);}
   var XDay=function(day){return x0+(x1-x0)*Math.max(0,Math.min(horizonDay,Number(day)))/horizonDay;},pathDay=function(i,path){return fan.pathProgress&&fan.pathProgress[i]!=null?Number(fan.pathProgress[i]):horizonDay*i/Math.max(1,path.length-1);},Y=function(v){return y1-(y1-y0)*(Number(v)-lo)/(hi-lo);},revealX=x0+(x1-x0)*progress.revealFraction,clipId='authPathClip-'+String(p.id).replace(/[^a-zA-Z0-9_-]/g,'');
   function line(path){var d='';path.forEach(function(v,i){d+=(d?' L ':'M ')+XDay(pathDay(i,path)).toFixed(1)+' '+Y(v).toFixed(1);});return d;}
   var g='<defs><clipPath id="'+clipId+'"><rect x="'+x0+'" y="'+y0+'" width="'+Math.max(1,revealX-x0).toFixed(1)+'" height="'+(y1-y0)+'"/></clipPath></defs>'+
     '<line class="grid" x1="'+x0+'" y1="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'" x2="'+x1+'" y2="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'"/><text x="'+x0+'" y="'+(H-5)+'">now</text><text x="'+x1+'" y="'+(H-5)+'" text-anchor="end">'+Math.round(horizonDay)+' session'+(Math.round(horizonDay)===1?'':'s')+'</text>';
   if(storyDay>0&&storyDay<horizonDay*.99)g+='<line x1="'+XDay(storyDay).toFixed(1)+'" y1="'+y0+'" x2="'+XDay(storyDay).toFixed(1)+'" y2="'+y1+'" stroke="var(--accent)" stroke-opacity=".32" stroke-dasharray="3 3"/><text x="'+XDay(storyDay).toFixed(1)+'" y="'+(y0+8)+'" fill="var(--accent)" font-size="9" text-anchor="middle">story lands · '+Math.round(storyDay)+'</text>';
   if(isPnl){g+='<text x="'+(x0-5)+'" y="'+(y0+6)+'" text-anchor="end">'+deskEsc(money(hi))+'</text><text x="'+(x0-5)+'" y="'+y1+'" text-anchor="end">'+deskEsc(money(lo))+'</text>';if(lo<=0&&hi>=0)g+='<text x="'+(x0-5)+'" y="'+(Y(0)+3).toFixed(1)+'" text-anchor="end">$0</text>';}
-  if(frames.length>1){var upper='',lower='',innerUpper='',innerLower='',hasInner=frames.every(function(row){return row.p25!=null&&row.p75!=null;});frames.forEach(function(row,i){var xx=XDay(row.day==null?targetDay*i/(frames.length-1):row.day);upper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p90).toFixed(1);if(hasInner)innerUpper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p75).toFixed(1);});for(var ri=frames.length-1;ri>=0;ri--){var row=frames[ri],xx=XDay(row.day==null?targetDay*ri/(frames.length-1):row.day);lower+=' L '+xx.toFixed(1)+' '+Y(row.p10).toFixed(1);if(hasInner)innerLower+=' L '+xx.toFixed(1)+' '+Y(row.p25).toFixed(1);}g+='<path class="pathband" d="'+upper+lower+' Z"/>'+(hasInner?'<path class="pathband inner" d="'+innerUpper+innerLower+' Z"/>':'');}
-  fan.paths.forEach(function(path,i){var d=line(path),terminal=path.length?Number(path[path.length-1]):null,title=(i===fan.focusPathIndex?'Focus path':'Nearby path')+(terminal==null?'':' · ends '+(isPnl?money(terminal):'$'+terminal.toFixed(2)));if(i===fan.focusPathIndex)g+='<path class="focusghost" d="'+d+'"><title>'+deskEsc(title)+'</title></path><path class="focuspath" d="'+d+'" clip-path="url(#'+clipId+')"/><path class="pathhit" data-auth-focus-path="true" d="'+d+'"><title>Play or pause this scenario</title></path>';else g+='<path class="context" d="'+d+'"><title>'+deskEsc(title)+'</title></path><path class="pathhit" data-auth-any-path="'+i+'" d="'+d+'"><title>'+deskEsc(title)+' · click to pin this exact future</title></path>';});
+  if(frames.length>1){var upper='',lower='',innerUpper='',innerLower='',hasInner=frames.every(function(row){return row.p25!=null&&row.p75!=null;});frames.forEach(function(row,i){var xx=XDay(row.day==null?horizonDay*i/(frames.length-1):row.day);upper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p90).toFixed(1);if(hasInner)innerUpper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p75).toFixed(1);});for(var ri=frames.length-1;ri>=0;ri--){var row=frames[ri],xx=XDay(row.day==null?horizonDay*ri/(frames.length-1):row.day);lower+=' L '+xx.toFixed(1)+' '+Y(row.p10).toFixed(1);if(hasInner)innerLower+=' L '+xx.toFixed(1)+' '+Y(row.p25).toFixed(1);}
+    g+='<defs><linearGradient id="pfBand-'+clipId+'" x1="0" y1="0" x2="1" y2="0"><stop stop-color="var(--accent-2)" stop-opacity=".08"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".24"/></linearGradient><linearGradient id="pfInner-'+clipId+'" x1="0" y1="0" x2="1" y2="0"><stop stop-color="var(--accent-2)" stop-opacity=".13"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".34"/></linearGradient></defs>'+
+      '<path d="'+upper+lower+' Z" fill="url(#pfBand-'+clipId+')"/>'+(hasInner?'<path d="'+innerUpper+innerLower+' Z" fill="url(#pfInner-'+clipId+')"/>':'');}
+  fan.paths.forEach(function(path,i){var d=line(path),terminal=path.length?Number(path[path.length-1]):null,title=(i===fan.focusPathIndex?'Focus path':'Nearby path')+(terminal==null?'':' · ends '+(isPnl?money(terminal):'$'+terminal.toFixed(2)));if(i===fan.focusPathIndex)g+='<path class="focusghost" d="'+d+'"><title>'+deskEsc(title)+'</title></path><path class="focuspath" data-auth-line="'+i+'" d="'+d+'" clip-path="url(#'+clipId+')"/>';else g+='<path class="context" data-auth-line="'+i+'" d="'+d+'"><title>'+deskEsc(title)+'</title></path>';});
   var frame=authoritativeFrame(p,progress.t),marker=frame&&authNumber(isPnl?frame.pnl:frame.price);if(marker!=null){var mx=Math.max(x0,Math.min(x1,revealX)),my=Y(marker);g+='<line x1="'+mx.toFixed(1)+'" y1="'+y0+'" x2="'+mx.toFixed(1)+'" y2="'+y1+'" stroke="var(--accent)" stroke-opacity=".28"/><circle cx="'+mx.toFixed(1)+'" cy="'+my.toFixed(1)+'" r="4.2" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/><text x="'+Math.max(x0+30,Math.min(x1-30,mx)).toFixed(1)+'" y="'+Math.max(y0+10,my-8).toFixed(1)+'" text-anchor="middle">'+deskEsc(isPnl?money(marker):'$'+Number(marker).toFixed(2))+'</text>';}
+  /* ONE interaction grammar with the idea fan: a chart-wide surface, nearest-path hover, click
+     pins that exact future (or plays/pauses when it is already the focus). */
+  g+='<rect class="mcinteraction" data-auth-surface="'+deskEsc(p.id)+'" role="button" aria-label="Hover a possible future to inspect it; choose one to pin it" x="'+x0+'" y="'+y0+'" width="'+(x1-x0)+'" height="'+(y1-y0)+'"/>';
+  svg._pfmap={W:W,H:H,x0:x0,x1:x1,y0:y0,y1:y1,lo:lo,hi:hi,horizon:horizonDay};
+  var pathRead=document.getElementById('authPathRead-'+p.id);if(pathRead&&!pathRead._hot)pathRead.textContent=positionPathPrompt(fan);
   svg.setAttribute('aria-label',isPnl?'Position profit and loss across the selected market scenario':'Price paths for the selected market scenario');svg.setAttribute('data-path-space',isPnl?'pnl':'price');svg.setAttribute('data-ensemble-fingerprint',fan.fingerprint||'');if(fan.valuationFingerprint)svg.setAttribute('data-valuation-fingerprint',fan.valuationFingerprint);svg.setAttribute('viewBox','0 0 '+W+' '+H);svg.innerHTML=g;}
+function nearestPositionPath(p,e){
+  var svg=document.getElementById('authPath-'+p.id),map=svg&&svg._pfmap,fan=authPositionScenarioFan(p),paths=fan&&fan.paths||[];
+  if(!svg||!map||!paths.length)return -1;
+  var rect=svg.getBoundingClientRect(),vx=(Number(e.clientX)-rect.left)*map.W/Math.max(1,rect.width),vy=(Number(e.clientY)-rect.top)*map.H/Math.max(1,rect.height);
+  var day=Math.max(0,Math.min(map.horizon,map.horizon*(vx-map.x0)/Math.max(1,map.x1-map.x0))),progress=fan.pathProgress||[],best=-1,bestDistance=Infinity;
+  function valueAt(path){if(!path.length)return null;if(progress.length===path.length){if(day<=Number(progress[0]))return Number(path[0]);for(var i=1;i<progress.length;i++){var right=Number(progress[i]);if(day<=right){var left=Number(progress[i-1]),f=right===left?0:(day-left)/(right-left);return authLerp(Number(path[i-1]),Number(path[i]),Math.max(0,Math.min(1,f)));}}return Number(path[path.length-1]);}var cursor=map.horizon?day/map.horizon*Math.max(0,path.length-1):0,loIndex=Math.floor(cursor),hiIndex=Math.min(path.length-1,loIndex+1);return authLerp(Number(path[loIndex]),Number(path[hiIndex]),cursor-loIndex);}
+  paths.forEach(function(path,index){var value=valueAt(path);if(!Number.isFinite(value))return;var y=map.y1-(map.y1-map.y0)*(value-map.lo)/Math.max(.000001,map.hi-map.lo),distance=Math.abs(y-vy);if(distance<bestDistance){bestDistance=distance;best=index;}});
+  return best;}
+function hoverPositionPath(p,index,on){
+  var svg=document.getElementById('authPath-'+p.id),read=document.getElementById('authPathRead-'+p.id),fan=authPositionScenarioFan(p);
+  if(svg){var lines=svg.querySelectorAll('[data-auth-line]');for(var i=0;i<lines.length;i++)lines[i].classList.toggle('hot',on&&lines[i].getAttribute('data-auth-line')===String(index));}
+  if(!read)return;
+  var path=on&&fan&&fan.paths&&fan.paths[index];
+  if(!path||path.length<2){read._hot=false;read.textContent=positionPathPrompt(fan);return;}
+  var terminal=Number(path[path.length-1]),isPnl=fan.space==='pnl';
+  read._hot=true;
+  read.textContent=(index===fan.focusPathIndex?'Focus path · ends ':'Ends ')+(isPnl?money(terminal):'$'+terminal.toFixed(2))+(index===fan.focusPathIndex?' · click to play or pause':' · click to pin this exact future');}
+function positionPathPrompt(fan){return (fan&&fan.space==='pnl'?'Hover a possible future to inspect its P/L · click to pin that exact path':'Hover a possible future to inspect it · click to pin that exact path')+fanSaturationNote(fan);}
 function drawAuthoritativePositionRisk(p){var svg=document.getElementById('authScenarioRisk-'+p.id),row=authPositionFocusedScenario(p),steps=row&&row.steps||[];if(!svg)return;var W=Math.max(300,Math.round(svg.clientWidth||500)),H=44,points=steps.map(function(step){var d=step&&step.greeks&&authNumber(step.greeks.deltaShares),pl=authNumber(step&&step.focusPnlCents);return d==null||pl==null?null:{d:d,pl:pl/100};}).filter(Boolean);svg.setAttribute('viewBox','0 0 '+W+' '+H);
   if(!points.length){svg.innerHTML='<line class="track" x1="8" y1="22" x2="'+(W-8)+'" y2="22"/><text x="'+W/2+'" y="17" text-anchor="middle" fill="var(--faint)" font-size="9">Risk journey unavailable</text>';return;}
   var ds=points.map(function(x){return x.d;}),pls=points.map(function(x){return x.pl;}),dlo=Math.min.apply(0,ds),dhi=Math.max.apply(0,ds),plo=Math.min.apply(0,pls),phi=Math.max.apply(0,pls);if(dhi===dlo){dlo-=1;dhi+=1;}if(phi===plo){plo-=1;phi+=1;}var X=function(v){return 10+(W-20)*(v-dlo)/(dhi-dlo);},Y=function(v){return 37-30*(v-plo)/(phi-plo);},g='<line class="track" x1="10" y1="37" x2="'+(W-10)+'" y2="37"/>';
@@ -3882,6 +3925,9 @@ function pinScen(s, si){
   var queueAuthoritative=!!(p.authoritative&&!p.isHeld&&deskBackendEnabled()
     &&window.DeskBackend.state().mutationPending);
   if(queueAuthoritative)toast('Market story selected — matching paths load when this idea finishes.');
+  /* a named story or an unpin is a NEW frame of reference; only exact-path pins carry the domain */
+  if(decide&&!p.isHeld)decide._fanCarry=null;
+  if(p.isHeld)p._fanCarry=null;
   stopScen(s);
   if(si==null || String(cur)===String(si)){ delete pinnedScen[p.id]; delete pinMag[p.id]; delete pinIV[p.id]; delete pinDays[p.id]; delete pinTUnit[p.id]; p._authoritativeScenarioQueued=false;p._authoritativeScenarioError=null;p.authoritativeAnimation=null;if(p.isHeld){window.clearTimeout(p._positionScenarioTimer);p._positionScenarioUiSeq=(p._positionScenarioUiSeq||0)+1;p._positionScenarioRequestId=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;}
     if(p.authoritative&&decide&&decide.ensemble){decide.animation=null;decide._mc=authoritativeFanFromEnsemble(decide.ensemble);} s.refresh(); renderAtPrice(s); }
@@ -4225,6 +4271,7 @@ async function authOpenPlan(plan,origin){if(!plan||AUTH_PLAN_OPEN_PENDING)return
   finally{AUTH_PLAN_OPEN_PENDING=false;}}
 function authOpenSymbol(symbol,origin){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase());}
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
+    var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(fanSurface){ev.preventDefault();var nearestSeries=nearestBookFanSeries(ev);if(nearestSeries)go('position',nearestSeries);return;}
     var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(fanPos){ev.preventDefault();go('position',fanPos.getAttribute('data-fan-pos'));return;}
     var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(riskPoint){ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));return;}
     var planButton=ev.target.closest&&ev.target.closest('[data-auth-plan-id]');if(planButton){ev.preventDefault();authOpenPlan(authPlanById(BOOK_AUTH.data,planButton.getAttribute('data-auth-plan-id')),planButton.getBoundingClientRect());return;}
@@ -4234,8 +4281,15 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
     var emptyImport=ev.target.closest&&ev.target.closest('#authEmptyImport');if(emptyImport){openImport(emptyImport.getBoundingClientRect());return;}
   });boardEl.addEventListener('keydown',function(ev){if(ev.key!=='Enter'&&ev.key!==' ')return;var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(!riskPoint)return;ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));});
-  boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;BOOK_FAN.hot=id;renderAuthoritativeBookFan();var card=cardEl[id];if(card)card.classList.add('fanhot');});
-  boardEl.addEventListener('mouseout',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(ev.relatedTarget&&ev.relatedTarget.closest&&ev.relatedTarget.closest('[data-fan-pos]'))return;BOOK_FAN.hot=null;renderAuthoritativeBookFan();var card=cardEl[id];if(card)card.classList.remove('fanhot');});}
+  boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;setBookFanHot(id);});
+  boardEl.addEventListener('mouseout',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;if(ev.relatedTarget&&ev.relatedTarget.closest&&ev.relatedTarget.closest('[data-fan-pos]'))return;setBookFanHot(null);});
+  boardEl.addEventListener('mousemove',function(ev){if(state.level!=='book')return;var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(!fanSurface)return;var id=nearestBookFanSeries(ev);if(String(BOOK_FAN.hot||'')!==String(id||''))setBookFanHot(id);});
+  boardEl.addEventListener('mouseout',function(ev){if(state.level!=='book')return;var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(!fanSurface||(ev.relatedTarget&&fanSurface.contains(ev.relatedTarget)))return;setBookFanHot(null);});}
+function setBookFanHot(id){
+  var prior=BOOK_FAN.hot;BOOK_FAN.hot=id||null;
+  if(prior&&cardEl[prior])cardEl[prior].classList.remove('fanhot');
+  if(id&&cardEl[id])cardEl[id].classList.add('fanhot');
+  renderAuthoritativeBookFan();}
 function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=authWorkingPlanRows(d),ctx=d.homeContext||{},rows=authHomeContextRows(d),symbols=ctx.symbols||rows.map(function(row){return row.symbol;}),available=rows.map(function(row){return row.symbol;});
   if(!HOME_AUTH_SYMBOL||available.indexOf(HOME_AUTH_SYMBOL)<0)HOME_AUTH_SYMBOL=available[0]||symbols[0]||null;
   var active=authHomeContextRow(d,HOME_AUTH_SYMBOL),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
@@ -4370,8 +4424,7 @@ function drawAuthoritativeBookFan(){
     var color=positionColor(e.p.id),isHot=String(e.p.id)===hot,dim=hot&&!isHot;
     var d=e.slot.frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f.p50).toFixed(1);}).join(' ');
     var terminal=e.slot.frames[e.slot.frames.length-1];
-    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?2.6:1.7)+'" stroke-opacity="'+(dim?.3:.95)+'" style="pointer-events:none"/>'+
-       '<path d="'+d+'" fill="none" stroke="'+color+'" stroke-opacity="0" stroke-width="11" data-fan-pos="'+deskEsc(e.p.id)+'" style="cursor:pointer"><title>'+deskEsc(bookFanReadoutText(e.p.id))+'</title></path>';
+    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?2.6:1.7)+'" stroke-opacity="'+(dim?.3:.95)+'" style="pointer-events:none"/>';
     if(terminal.p10!=null&&terminal.p90!=null){var ty1=Y(terminal.p90),ty2=Y(terminal.p10),tx=X(terminal.x);
       g+='<line x1="'+tx.toFixed(1)+'" y1="'+ty1.toFixed(1)+'" x2="'+tx.toFixed(1)+'" y2="'+ty2.toFixed(1)+'" stroke="'+color+'" stroke-opacity="'+(dim?.15:.45)+'" stroke-width="1.4" style="pointer-events:none"/>';}
     labels.push({id:e.p.id,x:X(terminal.x),y:Y(terminal.p50),sym:e.p.sym,color:color,dim:dim,
@@ -4384,7 +4437,23 @@ function drawAuthoritativeBookFan(){
       '<text x="'+Math.min(W-3,lb.x+5).toFixed(1)+'" y="'+(lb.y-2).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>'+
       '<text x="'+Math.min(W-3,lb.x+5).toFixed(1)+'" y="'+(lb.y+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.read)+'</text>';
   });
+  /* same chart-wide hover/click surface as the other fans: nearest position lights up, click opens it */
+  g+='<rect class="mcinteraction" data-fan-surface="1" role="button" aria-label="Hover a position to inspect its fan; choose one to open it" x="'+pad.l+'" y="'+pad.t+'" width="'+(W-pad.l-pad.r)+'" height="'+(H-pad.t-pad.b)+'"/>';
+  svg._bfmap={W:W,H:H,padL:pad.l,padT:pad.t,plotW:W-pad.l-pad.r,plotH:H-pad.t-pad.b,lo:lo,hi:hi,maxX:maxX,
+    entries:ready.map(function(e){return {id:e.p.id,frames:e.slot.frames};})};
   svg.innerHTML=g;
+}
+function nearestBookFanSeries(e){
+  var svg=document.getElementById('authBookFan'),map=svg&&svg._bfmap;if(!svg||!map||!map.entries.length)return null;
+  var rect=svg.getBoundingClientRect(),vx=(Number(e.clientX)-rect.left)*map.W/Math.max(1,rect.width),vy=(Number(e.clientY)-rect.top)*map.H/Math.max(1,rect.height);
+  var day=Math.max(0,Math.min(map.maxX,map.maxX*(vx-map.padL)/Math.max(1,map.plotW))),best=null,bestDistance=Infinity;
+  map.entries.forEach(function(entry){var frames=entry.frames;if(!frames.length)return;var clamped=Math.min(day,frames[frames.length-1].x),value=null;
+    if(clamped<=frames[0].x)value=frames[0].p50;
+    else for(var i=1;i<frames.length;i++){if(clamped<=frames[i].x){var l=frames[i-1],r=frames[i],f=r.x===l.x?0:(clamped-l.x)/(r.x-l.x);value=authLerp(l.p50,r.p50,f);break;}}
+    if(value==null)value=frames[frames.length-1].p50;
+    var y=map.padT+map.plotH*(1-(value-map.lo)/Math.max(.000001,map.hi-map.lo)),distance=Math.abs(y-vy);
+    if(distance<bestDistance){bestDistance=distance;best=entry.id;}});
+  return best;
 }
 function slotChance(slot){return slot&&slot.chance!=null&&Number.isFinite(Number(slot.chance))?Number(slot.chance):null;}
 function authRenderReadyPanels(empty){var d=BOOK_AUTH.data||{},pf=d.portfolio||{},s=pf.summary||{},h=pf.heat||{},g=pf.greeks||{},br=pf.bookRisk||{},shares=d.sharePositions||[];
@@ -6019,6 +6088,9 @@ function drawMCFan(){ var svg=document.getElementById('mcFan'),live=decide&&auth
   (res.paths||[]).forEach(function(p){p.forEach(function(v){vals.push(v);});});
   vals=vals.filter(function(v){return Number.isFinite(Number(v));});if(!vals.length){svg.innerHTML='';return;}
   var lo=Math.min.apply(0,vals),hi=Math.max.apply(0,vals),span=(hi-lo)||1, ypad=span*.055; lo-=ypad; hi+=ypad; span=hi-lo;
+  /* Pinning an exact path re-selects the neighbor set; keep the previous frame of reference so
+     the chosen path stays visually IN PLACE (the domain may grow to fit new data, never jump). */
+  if(decide&&decide._fanCarry&&decide._fanCarry.space===(res.space||'price')){lo=Math.min(lo,decide._fanCarry.lo);hi=Math.max(hi,decide._fanCarry.hi);span=hi-lo||1;}
   var XDay=function(day){return padL+(W-padL-padR)*(Number(day)/horizon);};
   var Y=function(v){return padT+(H-padT-padB)*(hi-v)/span;};
   function pathDay(i,path){return res.pathProgress&&res.pathProgress[i]!=null?Number(res.pathProgress[i]):horizon*i/Math.max(1,path.length-1);}
@@ -6052,7 +6124,17 @@ function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)re
 function nearestMCPath(e){var svg=document.getElementById('mcFan'),map=svg&&svg._mcmap,shown=decide&&decisionFan(authoritativeCandidate()),paths=shown&&shown.paths||[];if(!svg||!map||!paths.length)return -1;var rect=svg.getBoundingClientRect(),vx=(Number(e.clientX)-rect.left)*map.W/Math.max(1,rect.width),vy=(Number(e.clientY)-rect.top)*map.H/Math.max(1,rect.height),day=Math.max(0,Math.min(map.horizon,map.horizon*(vx-map.padL)/Math.max(1,map.W-map.padL-map.padR))),progress=shown.pathProgress||[],best=-1,bestDistance=Infinity;
   function valueAt(path){if(!path.length)return null;if(progress.length===path.length){if(day<=Number(progress[0]))return Number(path[0]);for(var i=1;i<progress.length;i++){var right=Number(progress[i]);if(day<=right){var left=Number(progress[i-1]),f=right===left?0:(day-left)/(right-left);return authLerp(Number(path[i-1]),Number(path[i]),Math.max(0,Math.min(1,f)));}}return Number(path[path.length-1]);}var cursor=map.horizon?day/map.horizon*Math.max(0,path.length-1):0,loIndex=Math.floor(cursor),hiIndex=Math.min(path.length-1,loIndex+1);return authLerp(Number(path[loIndex]),Number(path[hiIndex]),cursor-loIndex);}
   paths.forEach(function(path,index){var value=valueAt(path);if(!Number.isFinite(value))return;var y=map.padT+(map.H-map.padT-map.padB)*(map.hi-value)/Math.max(.000001,map.hi-map.lo),distance=Math.abs(y-vy);if(distance<bestDistance){bestDistance=distance;best=index;}});return best;}
-function mcPathPrompt(shown){return shown&&shown.space==='pnl'?'Hover a possible future to inspect its P/L · click to play it across the desk':'Hover a possible future to inspect it · click to play it across the desk';}
+/* Flat P/L tails on bounded structures are REAL: once a path settles beyond the strikes the
+   payoff saturates (or tracks intrinsic), so late checkpoints barely move at fan scale. Say it
+   once, quietly, instead of letting honest data read as a rendering fault. */
+function fanSaturationNote(fan){
+  if(!fan||fan.space!=='pnl'||!fan.paths||fan.paths.length<6)return '';
+  var lo=Infinity,hi=-Infinity;fan.paths.forEach(function(p){p.forEach(function(v){var n=Number(v);if(n<lo)lo=n;if(n>hi)hi=n;});});
+  var span=hi-lo||1,flat=0;
+  fan.paths.forEach(function(p){var tail=p.slice(Math.floor(p.length/2)),mn=Infinity,mx=-Infinity;tail.forEach(function(v){var n=Number(v);if(n<mn)mn=n;if(n>mx)mx=n;});if((mx-mn)/span<.03)flat++;});
+  return flat/fan.paths.length>=.4?' · flat tails are real: settled paths sit where this payoff saturates (Price view keeps full texture)':'';
+}
+function mcPathPrompt(shown){return (shown&&shown.space==='pnl'?'Hover a possible future to inspect its P/L · click to pin that exact path':'Hover a possible future to inspect it · click to pin that exact path')+fanSaturationNote(shown);}
 function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex],line=svg&&svg.querySelector('[data-mc-line="'+index+'"]');if(line)line.classList.toggle('hot',!!on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=mcPathPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+money(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length>1){var start=Number(pricePath[0]),end=Number(pricePath[pricePath.length-1]),move=start?((end/start-1)*100):0;parts.push((shown.space==='pnl'?'underlying ':'')+'$'+end.toFixed(2)+' · '+(move>=0?'+':'')+move.toFixed(1)+'%');}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
 /* ONE builder for "pin this exact stored path" (idea fan AND position fan): sample the clicked
    price polyline into ordered pins the backend's nearest-path selection recovers exactly. */
@@ -6087,6 +6169,8 @@ function playMCPath(index){
   var pins=buildExactPathPins(path,progress,spot,days);
   c._customStoryPins={waypoints:pins.waypoints,pathWaypoints:pins.pathWaypoints,movePct:pins.movePct,days:days,
     sourcePathIndex:res.sourcePathIndices?res.sourcePathIndices[priceIndex]:null};
+  var fanSvg=document.getElementById('mcFan'),fanMap=fanSvg&&fanSvg._mcmap;
+  decide._fanCarry=fanMap?{lo:fanMap.lo,hi:fanMap.hi,space:(decisionFan(c)&&decisionFan(c).space)||'price'}:null;
   var s=decSurf();
   stopScen(s);
   pinnedScen[c.id]=FAN_STORY;pinMag[c.id]=pins.movePct;pinIV[c.id]=0;pinDays[c.id]=days;
@@ -6109,6 +6193,8 @@ function pinPositionFanPath(p,index){
   var pins=buildExactPathPins(path,progress,spot,days);
   p._customStoryPins={waypoints:pins.waypoints,pathWaypoints:pins.pathWaypoints,movePct:pins.movePct,days:days,
     sourcePathIndex:source!=null?source:(priceFan.sourcePathIndices?priceFan.sourcePathIndices[priceIndex]:null)};
+  var chartSvg=document.getElementById('authPath-'+p.id),chartMap=chartSvg&&chartSvg._pfmap;
+  p._fanCarry=chartMap?{lo:chartMap.lo,hi:chartMap.hi,space:(shown&&shown.space)||'price'}:null;
   var s=positionSurf(p);
   stopScen(s);
   pinnedScen[p.id]=FAN_STORY;pinMag[p.id]=pins.movePct;pinIV[p.id]=0;pinDays[p.id]=days;
@@ -7346,7 +7432,7 @@ function loadCand(id){
        screen until the receipt arrives; an optimistic id swap can otherwise strand the UI on B
        while the ensemble, outcome, and preview still belong to A. */
     if(window.DeskBackend.state().mutationPending){toast('Wait for the current Plan change to finish.');return;}
-    stopDecScen(); decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id;decide.candidatePage=candidatePageFor(id); DEC_HOT=id;
+    stopDecScen(); decide._fanCarry=null; decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id;decide.candidatePage=candidatePageFor(id); DEC_HOT=id;
     decide.backendPhase='loading'; decide.mcRunning=true; decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
     renderDecide();
