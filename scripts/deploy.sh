@@ -126,7 +126,10 @@ deploy() {
     git checkout -q "$BRANCH"
     git pull --ff-only origin "$BRANCH"
   fi
-  mvn -q package -DskipTests
+  # `clean` is not optional: an incremental build leaves deleted/renamed resources behind in
+  # target/classes, and the shade plugin bundles whatever it finds. A stale V1__init.sql once
+  # shipped alongside V1__baseline.sql and crash-looped Flyway on "more than one migration".
+  mvn -q clean package -DskipTests
   sudo cp target/strikebench.jar "${APP_DIR}/strikebench.jar.new"
   sudo mv "${APP_DIR}/strikebench.jar.new" "${APP_DIR}/strikebench.jar"   # atomic swap
   sudo systemctl restart "$SERVICE"
