@@ -23,6 +23,7 @@ public final class DataResetService {
     // Storage targets stay internal. Product-facing responses use areas, never schema names.
     public enum Tier {
         MARKET_DATA(List.of("option_bar", "underlying_bar", "market_snapshot",
+                "market_event_evidence WHERE source_kind IN ('SEC_CADENCE','UNAVAILABLE')",
                 "dataset WHERE id NOT IN ('observed','demo-fixture')", "settings WHERE k LIKE 'active_dataset%'",
                 "data_quarantine", "data_sync_cursor", "data_job_item", "data_job"), List.of(
                         "Market history and snapshots", "Generated datasets", "Background data jobs", "Active data selection"), false),
@@ -32,7 +33,8 @@ public final class DataResetService {
                 "settings WHERE k LIKE 'active_world:%'"), List.of(
                 "Practice trades and marks", "Share positions", "Practice orders", "Practice ledger and account",
                 "Simulation practice sessions"), true),
-        EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "dataset WHERE id NOT IN ('observed','demo-fixture')",
+        EVERYTHING(List.of("option_bar", "underlying_bar", "market_snapshot", "market_event_evidence",
+                "dataset WHERE id NOT IN ('observed','demo-fixture')",
                 "data_quarantine", "data_sync_cursor", "data_sync_schedule", "data_job_item", "data_job",
                 "plans", "ensemble_artifact", "recommendation", "strategy_evaluation", "backtests", "research_note", "workspace",
                 "trade_marks", "ledger", "positions", "live_orders", "audit", "trades",

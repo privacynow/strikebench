@@ -19,7 +19,6 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,7 +43,7 @@ class AlertCenterServiceTest {
     private PortfolioAccountingService books;
     private PaperCoreTest.StubMarks marks;
     private EventBus events;
-    private Optional<EventService.EarningsEstimate> earnings = Optional.empty();
+    private EventService.EventEvidence earnings = unavailableEvent();
     private AlertCenterService alerts;
     private Account account;
 
@@ -209,8 +208,12 @@ class AlertCenterServiceTest {
     @Test
     void earningsProximityIsInfoLabeledEstimatedAndNeverConfirmed() {
         creditPutSpread(EXP);
-        earnings = Optional.of(new EventService.EarningsEstimate(
-                TODAY.plusDays(6), 7, "SEC filing cadence (8 quarterly reports, ~91-day rhythm)", false));
+        earnings = new EventService.EventEvidence("AAPL", EventService.EventType.EARNINGS,
+                EventService.EvidenceStatus.ESTIMATED, TODAY.plusDays(6), EventService.EventSession.UNKNOWN,
+                TODAY.minusDays(1), TODAY.plusDays(13), EventService.SourceKind.SEC_CADENCE,
+                "SEC EDGAR", "https://www.sec.gov/example", java.time.OffsetDateTime.ofInstant(
+                        CLOCK.instant(), java.time.ZoneOffset.UTC), "b".repeat(64),
+                "SEC filing cadence (8 quarterly reports, ~91-day rhythm)", "estimated event test receipt");
         AlertCenterService.AlertSet set = alerts.compute("local");
         List<AlertCenterService.Alert> rows = ofKind(set, "EARNINGS");
         assertThat(rows).hasSize(1);
@@ -223,10 +226,16 @@ class AlertCenterServiceTest {
         assertThat(a.meta().get("confirmed")).isEqualTo(false);
         assertThat(a.deepLink()).isEqualTo("#/research/AAPL?view=evidence");
 
-        // A confirmed=true estimate would come from a licensed calendar; until the surface
-        // supplies one, the estimate label is mandatory — and no estimate means no row.
-        earnings = Optional.empty();
+        earnings = unavailableEvent();
         assertThat(ofKind(alerts.compute("local"), "EARNINGS")).isEmpty();
+    }
+
+    private static EventService.EventEvidence unavailableEvent() {
+        return new EventService.EventEvidence("AAPL", EventService.EventType.EARNINGS,
+                EventService.EvidenceStatus.UNAVAILABLE, null, EventService.EventSession.UNKNOWN,
+                null, null, EventService.SourceKind.UNAVAILABLE, "StrikeBench event evidence", null,
+                java.time.OffsetDateTime.ofInstant(CLOCK.instant(), java.time.ZoneOffset.UTC),
+                "a".repeat(64), "test event availability", "no event evidence in this test");
     }
 
     @Test

@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.recommend;
 
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -124,12 +125,18 @@ public final class RecommendationEngine {
 
     private final MarketDataService market;
     private final Clock clock;
+    private final EventService events;
     private long feePerContractCents;
     private long feePerOrderCents;
 
     public RecommendationEngine(MarketDataService market, Clock clock) {
+        this(market, clock, new EventService(market, clock));
+    }
+
+    public RecommendationEngine(MarketDataService market, Clock clock, EventService events) {
         this.market = market;
         this.clock = clock;
+        this.events = java.util.Objects.requireNonNull(events, "events");
     }
 
     /** Candidate income/effective-price metrics use the same opening commission as the ticket. */
@@ -237,13 +244,10 @@ public final class RecommendationEngine {
         double riskFreeRate = anchorCtx.riskFreeRate();
         LocalDate near = anchorCtx.near();
         BigDecimal spot = anchorCtx.spot();
-        // Generated-lane catalyst copy is UI teaching material, not market evidence. Only
-        // observed headlines may add an event advisory or affect candidate ranking.
-        boolean earningsSoon = lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
-                && market.news(symbol, worldId).stream().anyMatch(n -> {
-            String h = n.headline() == null ? "" : n.headline().toLowerCase(Locale.ROOT);
-            return h.contains("earnings") || h.contains("guidance") || h.contains("results");
-        });
+        // One canonical event receipt owns candidate timing. Generated worlds never borrow it.
+        EventService.EventEvidence eventEvidence = lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
+                ? events.earnings(symbol) : events.unavailableForContext(symbol,
+                    "simulated and Demo candidates do not borrow Observed issuer events");
 
         // Intent-flow context: hold-based intents can write against shares the user already owns.
         boolean holdBasedIntent = intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE;
@@ -332,6 +336,11 @@ public final class RecommendationEngine {
                     long coverSharesPerUnit = builtOnHeldShares
                             ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs()))
                             : 0;
+                    LocalDate packageEnd = built.legs().stream().filter(leg -> !leg.isStock())
+                            .map(Leg::expiration).max(LocalDate::compareTo).orElse(null);
+                    boolean earningsSoon = eventEvidence.available() && packageEnd != null
+                            && !eventEvidence.confidenceStart().isAfter(packageEnd)
+                            && !eventEvidence.confidenceEnd().isBefore(today);
                     Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
                             family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
                             buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));

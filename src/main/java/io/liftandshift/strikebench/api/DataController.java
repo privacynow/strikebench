@@ -18,6 +18,7 @@ import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.db.UnderlyingCsvIngest;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.UniverseService;
@@ -29,6 +30,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -45,11 +47,16 @@ final class DataController {
     record JobRequest(String kind, Map<String, Object> params) {}
     record ActiveDatasetRequest(String id) {}
     record DataResetRequest(String tier, Boolean confirm) {}
+    record EventImportRequest(String symbol, String status, String date, String session,
+                              String confidenceStart, String confidenceEnd, String authority,
+                              String source, String sourceUrl, String observedAt,
+                              String basis, String rawPayload) {}
 
     private final AppConfig cfg;
     private final Clock clock;
     private final Db db;
     private final MarketDataService market;
+    private final EventService events;
     private final MarketDataEngine marketEngine;
     private final UniverseService universe;
     private final DataJobService dataJobs;
@@ -71,6 +78,7 @@ final class DataController {
     private final Handler generateDataset;
 
     DataController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
+                   EventService events,
                    MarketDataEngine marketEngine, UniverseService universe,
                    DataJobService dataJobs, DataCoverage dataCoverage,
                    DataResetService dataReset, MarketDataMaintenanceGate marketDataMaintenance,
@@ -88,6 +96,7 @@ final class DataController {
         this.clock = clock;
         this.db = db;
         this.market = market;
+        this.events = events;
         this.marketEngine = marketEngine;
         this.universe = universe;
         this.dataJobs = dataJobs;
@@ -113,7 +122,7 @@ final class DataController {
         DataRoutes.register(config, new DataRoutes.Handlers(
                 this::overview, this::coverage, this::sources,
                 this::syncStatus, this::planSync, this::updateSyncSchedule,
-                this::importUnderlying, this::listJobs, this::getJob,
+                this::importUnderlying, this::importEvent, this::listJobs, this::getJob,
                 this::startJob, this::cancelJob, this::retryJob, this::reset,
                 ctx -> ctx.json(datasets.describe(ownerId.apply(ctx))), this::activateDataset,
                 this::deleteDataset, generateDataset));
@@ -155,8 +164,11 @@ final class DataController {
         sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", edgarOn,
                 "public · contact required",
                 edgarOn
-                        ? "Configured with this installation's contact User-Agent. Corporate filings feed Research."
+                        ? "Configured with this installation's contact User-Agent. Corporate filings feed the canonical estimated-event receipt."
                         : "Set EDGAR_USER_AGENT to your app name and contact email, then restart. StrikeBench never sends another person's identity."));
+        sources.add(source("Reviewed issuer events", "Confirmed earnings date + session", true,
+                "issuer-published · reviewed import",
+                "Admin-reviewed issuer evidence is persisted with its source URL, observation time, and payload fingerprint; it outranks estimates everywhere."));
         sources.add(source("Google News RSS", "Headlines", !fixtures && !cfg.newsRssBaseUrl().isBlank(),
                 "keyless · public", "Keyless per-symbol headlines."));
         sources.add(source("Treasury / FRED", "Risk-free rates", !fixtures,
@@ -257,6 +269,31 @@ final class DataController {
                 ownerId.apply(ctx)));
         invalidateHistoricalViews.run();
         ctx.json(result);
+    }
+
+    /** One reviewed issuer-event import through the existing Data owner; never a second calendar API. */
+    private void importEvent(Context ctx) {
+        requireAdmin.accept(ctx);
+        EventImportRequest body = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, EventImportRequest.class));
+        EventService.EvidenceStatus status;
+        EventService.EventSession session;
+        EventService.SourceKind authority;
+        try {
+            status = EventService.EvidenceStatus.valueOf(required(body.status(), "status").toUpperCase(Locale.ROOT));
+            session = EventService.EventSession.valueOf(required(body.session(), "session").toUpperCase(Locale.ROOT));
+            authority = EventService.SourceKind.valueOf(required(body.authority(), "authority").toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("status, session, or authority is invalid: " + invalid.getMessage());
+        }
+        LocalDate date = LocalDate.parse(required(body.date(), "date"));
+        LocalDate confidenceStart = blank(body.confidenceStart()) ? null : LocalDate.parse(body.confidenceStart());
+        LocalDate confidenceEnd = blank(body.confidenceEnd()) ? null : LocalDate.parse(body.confidenceEnd());
+        OffsetDateTime observedAt = blank(body.observedAt()) ? null : OffsetDateTime.parse(body.observedAt());
+        ctx.status(201).json(events.importReviewed(new EventService.ReviewedEvent(
+                body.symbol(), status, date, session, confidenceStart, confidenceEnd, authority,
+                body.source(), body.sourceUrl(), observedAt, body.basis(), ownerId.apply(ctx),
+                body.rawPayload())));
     }
 
     private void listJobs(Context ctx) {
@@ -365,5 +402,12 @@ final class DataController {
     private static ApiResponses.DataSource source(String name, String covers, boolean enabled,
                                                    String license, String hint) {
         return new ApiResponses.DataSource(name, covers, enabled, license, hint);
+    }
+
+    private static boolean blank(String value) { return value == null || value.isBlank(); }
+
+    private static String required(String value, String label) {
+        if (blank(value)) throw new IllegalArgumentException(label + " is required");
+        return value.trim();
     }
 }
