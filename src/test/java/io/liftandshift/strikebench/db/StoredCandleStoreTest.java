@@ -244,6 +244,52 @@ class StoredCandleStoreTest {
     }
 
     @Test
+    void localOnlyReadReturnsPersistedPartialHistoryWithoutCallingProvider() {
+        db = TestDb.fresh();
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed) "
+                + "VALUES ('AAPL','2026-04-01',250,'yahoo',1)");
+        db.exec("INSERT INTO underlying_bar(symbol,d,close,source,observed) "
+                + "VALUES ('AAPL','2026-04-02',252,'yahoo',1)");
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var delegate = new io.liftandshift.strikebench.support.ObservedFixtureProvider(clock);
+        MarketDataProvider counted = new MarketDataProvider() {
+            @Override public String name() { return delegate.name(); }
+            @Override public java.util.Set<io.liftandshift.strikebench.market.Domain> domains() {
+                return delegate.domains();
+            }
+            @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String query) {
+                return delegate.lookup(query);
+            }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String symbol) {
+                return delegate.quote(symbol);
+            }
+            @Override public List<LocalDate> expirations(String symbol) {
+                return delegate.expirations(symbol);
+            }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(
+                    String symbol, LocalDate expiration) {
+                return delegate.chain(symbol, expiration);
+            }
+            @Override public List<io.liftandshift.strikebench.model.Candle> candles(
+                    String symbol, LocalDate requestedFrom, LocalDate requestedTo) {
+                calls.incrementAndGet();
+                return delegate.candles(symbol, requestedFrom, requestedTo);
+            }
+        };
+        MarketDataService reader = new MarketDataService(List.of(counted),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(), new StoredCandleStore(db));
+
+        var local = reader.localCandleSeries("AAPL", from, to, "observed",
+                AnalysisContext.OBSERVED);
+
+        assertThat(local.series().source()).isEqualTo("stored:yahoo");
+        assertThat(local.series().candles()).hasSize(2);
+        assertThat(local.coverage().complete()).isFalse();
+        assertThat(local.basis()).contains("no provider acquisition");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void generatedReadThroughCanNeverEnterObservedStorage() {
         db = TestDb.fresh();
         var store = new StoredCandleStore(db);

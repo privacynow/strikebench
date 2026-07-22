@@ -2,6 +2,12 @@ package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.market.EtfLookThroughService;
+import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.ports.MarketDataProvider;
+import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
+import io.liftandshift.strikebench.market.ports.RatesProvider;
+import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
@@ -285,6 +291,34 @@ class BookRiskServiceTest {
     }
 
     @Test
+    void reviewedEtfLookThroughIsComposedWithoutReplacingDirectClassification() {
+        risk = new BookRiskService(db, CLOCK, MARKS, books, objectives, trades,
+                null, null, new EtfLookThroughService(CLOCK));
+        String[] ids = seedVanguardBook();
+
+        var taxable = risk.lane("local", practice.id()).accounts().stream()
+                .filter(account -> account.accountId().equals(ids[1])).findFirst().orElseThrow();
+        var themes = taxable.themes();
+
+        assertThat(themes.rows()).isNotEmpty(); // original direct-symbol receipt survives
+        assertThat(themes.etfLookThrough()).isNotNull();
+        assertThat(themes.etfLookThrough().funds())
+                .extracting(EtfLookThroughService.FundReceipt::fund).containsExactly("JEPQ");
+        assertThat(themes.etfLookThrough().components())
+                .extracting(EtfLookThroughService.ComponentExposure::symbol)
+                .contains("NVDA", "AAPL", "MSFT", "AVGO");
+        assertThat(themes.etfLookThrough().residualNotionalCents()).isPositive();
+        assertThat(themes.lookThroughRows()).extracting(BookRiskService.ThemeRow::label)
+                .contains("Semiconductors, memory & storage", "ETF residual / undisclosed holdings");
+        assertThat(themes.lookThroughRows().stream()
+                .mapToLong(BookRiskService.ThemeRow::notionalCents).sum())
+                .isEqualTo(themes.symbolNotionals().stream()
+                        .mapToLong(BookRiskService.SymbolNotional::notionalCents).sum());
+        assertThat(themes.classificationLabel()).contains("reviewed issuer holdings")
+                .contains("never imply measured correlation");
+    }
+
+    @Test
     void intraThemeContradictionQuotesTheDeclaredObjectiveRevision() {
         String[] ids = seedVanguardBook();
         var lane = risk.lane("local", practice.id());
@@ -372,6 +406,50 @@ class BookRiskServiceTest {
         assertThat(practiceLane.basis()).contains("never numerically netted");
         assertThat(practiceLane.dollarDeltaNetCents()).isZero(); // empty practice book, honestly zero
         assertThat(lane.basis()).contains("from open tracked lots directly");
+    }
+
+    @Test
+    void practiceLanePublishesOneSynchronizedBookArtifactFromLocalHistory() {
+        seedObservedBars();
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        MarketDataService market = new MarketDataService(List.<MarketDataProvider>of(fixture),
+                List.<NewsFilingsProvider>of(fixture), List.<RatesProvider>of(fixture),
+                new io.liftandshift.strikebench.db.StoredCandleStore(db));
+        market.setDemoSources(fixture, fixture, fixture);
+        var audit = new AuditLog(db, CLOCK);
+        var cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
+        var positionOwner = new PositionsService(db, MARKS, audit, CLOCK, true);
+        var pathOwner = new io.liftandshift.strikebench.sim.PathEnsembleService(market, CLOCK);
+        risk = new BookRiskService(db, CLOCK, MARKS, books, objectives, trades,
+                positionOwner, pathOwner, new EtfLookThroughService(CLOCK));
+        db.exec("INSERT INTO positions(id,account_id,symbol,shares,avg_cost_cents,created_at,updated_at) "
+                        + "VALUES('pos-amd',?,'AMD',100,15000,?::timestamptz,?::timestamptz)",
+                practice.id(), CLOCK.instant().toString(), CLOCK.instant().toString());
+        List<Leg> legs = List.of(Leg.option(io.liftandshift.strikebench.model.LegAction.SELL,
+                io.liftandshift.strikebench.model.OptionType.PUT, new BigDecimal("160"),
+                LocalDate.parse("2026-08-07"), 1, new BigDecimal("4")));
+        db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon," +
+                        "risk_mode,entry_underlying_cents,entry_net_premium_cents,max_loss_cents," +
+                        "breakevens_json,entry_snapshot_json,is_live,created_at,updated_at) " +
+                        "VALUES('trade-amd',?,'AMD','CASH_SECURED_PUT','ACTIVE',1,?::jsonb,'income'," +
+                        "'month','conservative',16000,-40000,1560000,'[]'::jsonb,'{}'::jsonb,0," +
+                        "?::timestamptz,?::timestamptz)",
+                practice.id(), io.liftandshift.strikebench.util.Json.write(legs),
+                CLOCK.instant().toString(), CLOCK.instant().toString());
+
+        var measured = risk.lane("local", practice.id()).practice().measuredBook();
+
+        assertThat(measured.available()).as(measured.unavailableReason()).isTrue();
+        assertThat(measured.unavailableReason()).isNull();
+        assertThat(measured.correlation().available()).isTrue();
+        assertThat(measured.scenario().pathCount()).isEqualTo(600);
+        assertThat(measured.scenario().positionCount()).isEqualTo(2); // shares + option package
+        assertThat(measured.scenario().stepBands()).isNotEmpty();
+        assertThat(measured.scenario().displayPaths()).isNotEmpty();
+        assertThat(measured.scenario().notes()).anySatisfy(note ->
+                assertThat(note).contains("never summed"));
+        assertThat(measured.basis()).contains("aligned realized volatility")
+                .contains("no live chain IV or provider history was acquired automatically");
     }
 
     @Test
