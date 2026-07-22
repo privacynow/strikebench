@@ -953,7 +953,14 @@
 .ideacomposer{gap:10px;overflow:hidden}.ideacomposer .lenshd .hint.num{font-family:var(--mono);color:var(--accent);font-weight:700}.ideacomposer .objrow{display:flex;flex-direction:column;align-items:stretch;gap:7px;overflow:auto;padding-right:2px}.ideacomposer .objchip{display:grid;grid-template-columns:88px minmax(0,1fr);width:100%;min-width:0}.ideacomposer .objchip>.ok{display:flex;align-items:center}.ideacomposer .objchip .oseg{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));min-width:0}.ideacomposer .objchip .oseg button{min-height:31px;padding:4px 6px}.ideacomposer .pickchip{position:relative}.ideacomposer .pickchip .pickbtn{width:100%;text-align:left}
 /* In the composer the symbol picker flows IN PLACE (the floating variant clipped against the
    scrolling declaration column — the "clipped search" defect). Rows push down instead. */
-.ideacomposer .pickchip .univpop{position:static;width:100%;margin-top:6px;box-shadow:none}
+.ideacomposer .pickchip .univpop{position:static;grid-column:1/-1;width:100%;margin-top:6px;box-shadow:none}
+.ideacomposer.replacementcomposer{justify-content:flex-start;gap:12px}
+.ideacomposer .replacementintro{padding:11px 12px;border:1px solid var(--accent-2);border-radius:9px;background:var(--accent-wash);color:var(--dim);font-size:var(--f-sm);line-height:1.45}
+.ideacomposer .replacementintro b{display:block;margin-bottom:3px;color:var(--text)}
+.ideacomposer .replacementactions{display:flex;align-items:center;gap:7px}
+.decgrid.replacing-idea .dccenter,.decgrid.replacing-idea .dcright{opacity:.25;filter:saturate(.25);pointer-events:none;user-select:none}
+.decgrid.replacing-idea .dccenter::after,.decgrid.replacing-idea .dcright::after{content:'Previous idea · kept until you choose';position:absolute;z-index:4;top:10px;right:10px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--dim);font-size:var(--f-2xs);font-weight:700;letter-spacing:.03em}
+.decgrid.replacing-idea .dccenter,.decgrid.replacing-idea .dcright{position:relative}
 .ideacomposer .composerstructure{padding:8px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}.ideacomposer .composeractions{display:flex;align-items:center;gap:6px;margin-top:2px}.ideacomposer .composeractions .btn:first-child{flex:1}.ideacomposer .catalogdrawer{position:absolute;z-index:25;inset:42px 0 0;padding:10px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
 .dectop .rec{flex:1;min-width:0;padding:7px 12px}
 .dectop .rec .recmain{font-size:var(--f-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1292,7 +1299,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .dccenter:has(.srow-ctl) .decpay{height:108px;min-height:108px}
   .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:95px;min-height:95px}
 }
-@media (min-width:1001px) and (min-height:851px) and (max-height:1150px){
+@media (min-width:1001px) and (max-width:1899px) and (min-height:851px) and (max-height:1150px){
   /* desk heights at ANY width: the hero flexes, scenario tiles compress, and the market band
      keeps a fixed honest strip — the three never overlap and the column never scrolls */
   .dccenter .dcctop{flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,1.35fr) minmax(210px,.85fr);gap:7px;margin-bottom:0}
@@ -6794,7 +6801,7 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride){
       costBasisCents:planContext.costBasisCents,priceAssumptionCents:planContext.priceAssumptionCents,
       assignmentPreference:planContext.assignmentPreference}:null,
     /* free New idea (not tied to a held line) lets you pick the underlying; anything else is fixed by context */
-    canPick:(kind==='idea'&&!posId&&!planOverride), pickOpen:false, pickq:'',
+    canPick:(kind==='idea'&&!posId&&!planOverride), pickOpen:false, pickq:'',replacingIdea:false,
     mode:'engine', intentOpen:false, leftTool:null, inspect:'paths', pathView:authoritativeIdea?'pnl':'price', orderOpen:false, mcRunning:false,
     candidatePage:0,
     cands:fan, candId:fan.length?fan[0].id:null, deskPickId:fan.length?fan[0].id:null,
@@ -6936,11 +6943,13 @@ function renderDecide(){
      retain identity instead of flashing every time another part of the screen updates. */
   var oldScen=decideEl.querySelector('.scenpanel'), keepScen=null, skey=scenSurfaceKey(c);
   if(oldScen&&oldScen.getAttribute('data-scen-key')===skey){ keepScen=oldScen; oldScen.parentNode.removeChild(oldScen); }
-  var execHtml=decExecute(c);
+  var replacingIdea=decide.kind==='idea'&&!!decide.replacingIdea;
+  var execHtml=replacingIdea?'':decExecute(c);
   decideEl.innerHTML='<div class="decwrap">'+decTop(c)+
-    '<div class="decgrid">'+leftCol(c)+centerCol(c)+rightCol(c)+'</div>'+
+    '<div class="decgrid'+(replacingIdea?' replacing-idea':'')+'">'+leftCol(c)+centerCol(c)+rightCol(c)+'</div>'+
     '<div class="decdock'+(decide.order.review?' reviewdock':'')+(execHtml?'':' empty')+'"><span></span>'+execHtml+'</div>'+
   '</div>';
+  if(replacingIdea){decideEl.querySelectorAll('.dccenter,.dcright').forEach(function(panel){panel.setAttribute('inert','');panel.setAttribute('aria-hidden','true');});}
   if(keepScen){ var freshScen=decideEl.querySelector('.scenpanel'); if(freshScen)freshScen.parentNode.replaceChild(keepScen,freshScen); }
   refreshDecScenHeader(c);
   drawPayoff(decideEl.querySelector('#decPay'), c, true, null, {interactive:!c.authoritative, pinM:scrubMag(c)});
@@ -7039,7 +7048,12 @@ function strategyCatalogPanel(){var doc=decide.strategyCatalog||decide.backendSt
 /* --- LEFT column: ideas -> exact package -> supporting linked map. --- */
 /* The workbench lives once, directly after its ranked candidates. "Your build" means those
    controls have forked the selected engine package; tap any engine idea to load it back. */
-function ideaComposer(c){var summary=decide.sym+' · '+decide.goal+' · '+decide.view+' · '+decide.horizon,drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+objChip('Goal',['Income','Hedge','Directional','Acquire','Exit'],decide.goal,'goal')+objChip('View',['Bearish','Neutral','Bullish'],decide.view,'view')+objChip('Horizon',['7 days','30 days','45 days'],decide.horizon,'horizon')+objChip('Risk',['Conservative','Balanced','Aggressive'],decide.riskMode,'riskMode')+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button>'+(c?'<button class="btn" data-dec="editlegs" style="margin-left:6px">Specify exact legs</button>':'')+'</div><div class="composeractions"><button class="btn pri" data-dec="intentdone">Show '+(decide.cands&&decide.cands.length||0)+' ranked ideas</button><button class="btn" data-dec="rescout">Refresh ideas</button></div>'+drawer+'</div>';}
+function ideaComposer(c){
+  var summary=decide.sym+' · '+decide.goal+' · '+decide.view+' · '+decide.horizon;
+  if(decide.replacingIdea)return '<div class="deccol dcleft ideacomposer replacementcomposer"><div class="lenshd"><span class="eyebrow">Start another idea</span><span class="hint num">current · '+deskEsc(decide.sym)+'</span></div><div class="replacementintro"><b>Choose the next underlying.</b>Your '+deskEsc(decide.sym)+' idea remains intact until you choose. The new idea will inherit your current goal, view, horizon, and risk posture; you can refine them after it loads.</div><div class="objrow">'+underlyingChip()+'</div><div class="replacementactions"><button class="btn" data-dec="cancelreplacement">Keep '+deskEsc(decide.sym)+'</button></div></div>';
+  var drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
+  return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+objChip('Goal',['Income','Hedge','Directional','Acquire','Exit'],decide.goal,'goal')+objChip('View',['Bearish','Neutral','Bullish'],decide.view,'view')+objChip('Horizon',['7 days','30 days','45 days'],decide.horizon,'horizon')+objChip('Risk',['Conservative','Balanced','Aggressive'],decide.riskMode,'riskMode')+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button>'+(c?'<button class="btn" data-dec="editlegs" style="margin-left:6px">Specify exact legs</button>':'')+'</div><div class="composeractions"><button class="btn pri" data-dec="intentdone">Show '+(decide.cands&&decide.cands.length||0)+' ranked ideas</button><button class="btn" data-dec="rescout">Refresh ideas</button></div>'+drawer+'</div>';
+}
 function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
   var fits=decide.cands.filter(function(row){return deskBackendEnabled()?authoritativeEndorsable(row):coherence(row).verdict==='on'&&!candGated(row);}).length,
@@ -7233,27 +7247,44 @@ function underlyingChip(){
   var pop='';
   if(decide.pickOpen){
     var q=(decide.pickq||'').toLowerCase();
-    var rows=UNIV.filter(function(x){return !q||x.sym.toLowerCase().indexOf(q)>=0||x.name.toLowerCase().indexOf(q)>=0;})
+    var matches=q?UNIV.filter(function(x){return x.sym.toLowerCase().indexOf(q)>=0||x.name.toLowerCase().indexOf(q)>=0;}):[];
+    var rows=matches
       .map(function(x){var held=byId2Sym(x.sym);
-        return '<button class="univrow'+(x.sym===u.sym?' on':'')+'" data-pick="'+x.sym+'">'+
+        return '<button class="univrow'+(x.sym===u.sym?' on':'')+'" role="option" aria-selected="'+(x.sym===u.sym)+'" data-pick="'+x.sym+'">'+
           '<span class="us">'+x.sym+'</span><span class="un">'+x.name+(held?' <span class="uheld">held</span>':'')+'</span>'+
           (deskBackendEnabled()?'<span class="uv">load quote</span><span class="ue">—</span>':'<span class="uv">'+x.spot.toFixed(x.spot>=100?0:2)+'</span><span class="ue '+(x.chg>=0?'pos':'neg')+'">'+(x.chg>=0?'+':'')+x.chg+'%</span>')+'</button>';
-      }).join('')||'<div class="hint" style="padding:9px 10px">no symbol matches “'+decide.pickq+'”</div>';
+      }).join('')||(q?'<div class="hint" style="padding:9px 10px">No symbol matches “'+deskEsc(decide.pickq)+'”.</div>':'<div class="hint" style="padding:12px 10px">Type a symbol or company name. Results appear here.</div>');
     pop='<div class="univpop"><div class="univsearch">'+
         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>'+
-        '<input id="univq" placeholder="search symbol…" autocomplete="off" spellcheck="false" value="'+(decide.pickq||'')+'"></div>'+
-      '<div class="univlist">'+rows+'</div></div>';
+        '<input id="univq" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="univresults" placeholder="Search symbol or company…" autocomplete="off" spellcheck="false" value="'+deskEsc(decide.pickq||'')+'"></div>'+
+      '<div class="univlist" id="univresults" role="listbox">'+rows+'</div></div>';
   }
   return '<span class="objchip pickchip"><span class="ok">Underlying</span>'+
     '<button class="ostatic pickbtn" data-dec="pick">'+u.sym+'<span class="uxspot"> '+(deskBackendEnabled()&&!decide.provenance?'quote loading':u.spot.toFixed(u.spot>=100?0:2))+'</span> <span class="pcar">▾</span></button>'+pop+'</span>';
 }
 function byId2Sym(sym){ for(var i=0;i<POS.length;i++) if(POS[i].sym===sym) return true; return false; }
+function beginIdeaReplacement(){
+  if(!decide||decide.kind!=='idea'||!decide.canPick)return;
+  stopDecScen();
+  decide.replacingIdea=true;decide.intentOpen=true;decide.composerKeepOpen=true;
+  decide.pickOpen=true;decide.pickq='';decide.leftTool=null;decide.order.review=false;
+  renderDecide();
+  var q=document.getElementById('univq');if(q)q.focus();
+}
+function cancelIdeaReplacement(){
+  if(!decide||!decide.replacingIdea)return;
+  decide.replacingIdea=false;decide.intentOpen=false;decide.composerKeepOpen=false;
+  decide.pickOpen=false;decide.pickq='';renderDecide();
+}
 function setUnderlying(sym){
   var u=univBy[sym]; if(!u)return;
+  var replacing=!!decide.replacingIdea;
   decide.sym=u.sym; decide.u=u; decide.spot=u.spot; decide.em=u.em;
   decide.cands=deskBackendEnabled()&&decide.kind==='idea'?[]:candsFor(decide.kind,u); decide.candId=decide.cands.length?decide.cands[0].id:null; decide.deskPickId=decide.candId;
   decide.provenance=null;decide.candidatePage=0;
-  decide.buildLegs=null; decide.mode='engine'; decide.pickOpen=false;if(!decide.composerKeepOpen)decide.intentOpen=false; decide.pickq=''; DEC_HOT=-1;
+  decide.buildLegs=null; decide.mode='engine'; decide.pickOpen=false;decide.replacingIdea=false;
+  if(replacing){decide.composerKeepOpen=false;decide.intentOpen=false;}else if(!decide.composerKeepOpen)decide.intentOpen=false;
+  decide.pickq=''; DEC_HOT=-1;
   if(decide.kind==='idea'&&deskBackendEnabled())loadAuthoritativeIdea();else renderAfterDecisionChange();updateThread();
 }
 function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc==='collat'?'secured':rc==='unknown'?'unknown':'defined'; }
@@ -7924,6 +7955,7 @@ function decAction(a,el){
   if(a==='emptyintent'){decide.intentOpen=true;decide.composerKeepOpen=true;renderDecide();return;}
   if(a==='empty-sim'){setMktMode('sim',true);return;}
   if(a==='back'){ exitDecide(); return; }
+  if(a==='cancelreplacement'){cancelIdeaReplacement();return;}
   if(a==='intent'){ decide.intentOpen=!decide.intentOpen;decide.composerKeepOpen=decide.intentOpen; if(!decide.intentOpen)decide.pickOpen=false; renderDecide(); return; }
   if(a==='intentdone'){decide.intentOpen=false;decide.composerKeepOpen=false;decide.pickOpen=false;renderDecide();return;}
   if(a==='rescout'){decide.composerKeepOpen=true;loadAuthoritativeIdea();return;}
@@ -8086,6 +8118,10 @@ function wireDecide(){
     var k=g.getAttribute('data-gov'), lab=document.getElementById('gv-'+k); if(lab)lab.textContent=govFmt(k,+g.value); });
   decideEl.addEventListener('keydown',function(e){
     if(decide&&decide.order&&decide.order.committing){e.preventDefault();return;}
+    if(e.target.id==='univq'&&e.key==='Escape'&&decide&&decide.replacingIdea){e.preventDefault();e.stopPropagation();cancelIdeaReplacement();return;}
+    if(e.target.id==='univq'&&e.key==='ArrowDown'){
+      var first=decideEl.querySelector('.univlist .univrow');if(first){e.preventDefault();first.focus();}return;
+    }
     if(e.target.id!=='univq'||e.key!=='Enter')return;
     var raw=(e.target.value||'').trim(), exact=univBy[raw.toUpperCase()], pick=exact;
     if(!pick){ var q=raw.toLowerCase(); pick=UNIV.filter(function(x){return x.sym.toLowerCase().indexOf(q)===0||x.name.toLowerCase().indexOf(q)>=0;})[0]; }
@@ -8715,7 +8751,10 @@ function boot(){
     if(e.key!=='Escape')return;
     if(learnOpen){ closeLearn(); e.stopPropagation(); e.preventDefault(); return; }
     if(importOpen){ closeImport(); e.stopPropagation(); e.preventDefault(); return; }
-    if(decide){ exitDecide(); e.stopPropagation(); e.preventDefault(); }
+    if(decide){
+      if(decide.replacingIdea)cancelIdeaReplacement();else exitDecide();
+      e.stopPropagation();e.preventDefault();
+    }
   },true);
 
   for(var i=0;i<POS.length;i++){ cardEl[POS[i].id]=makeCard(POS[i]); }
@@ -8738,9 +8777,7 @@ function boot(){
     /* already composing a fresh idea? don't re-animate the same screen — open the underlying picker so
        'New idea' means start over on a new symbol (or Esc to keep this one). */
     if(decide && decide.kind==='idea' && !decide.posId){
-      decide.intentOpen=true;decide.composerKeepOpen=true; decide.pickOpen=true; renderDecide();
-      var q=document.getElementById('univq'); if(q){ q.focus(); if(q.select)q.select(); }
-      toast('Pick an underlying to start a fresh idea'); return; }
+      beginIdeaReplacement();toast('Choose an underlying; this idea stays until you do.');return; }
     var wasOpen=!!(decide||importOpen), ctx=currentContextSym();
     if(importOpen)closeImport(); if(decide)exitDecide();
     var open=function(){ enterDecide('idea',null,'New idea', tni.getBoundingClientRect(), ctx); };
@@ -8754,6 +8791,7 @@ function boot(){
 
   document.addEventListener('keydown',function(e){
     if(e.key==='Escape'){
+      if(decide&&decide.replacingIdea){e.preventDefault();cancelIdeaReplacement();return;}
       if(document.activeElement===cmdEl){ cmdEl.blur(); return; }
       var i=LEVELS.indexOf(state.level);
       if(i>0) go(LEVELS[i-1]);
