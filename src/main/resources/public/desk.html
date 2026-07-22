@@ -2590,6 +2590,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 /* position management actions */
 .authmanageacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+/* a chosen future (exact fan path) is the active story — the tiles stay unpinned, this strip says why */
+.customstory{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--accent-2);border-radius:8px;background:var(--accent-wash)}
+.customstory .csdot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;box-shadow:0 0 0 3px rgba(57,199,212,.15)}
+.customstory .cslbl{display:flex;align-items:baseline;gap:7px;min-width:0;font-size:var(--f-xs);color:var(--dim)}
+.customstory .cslbl b{color:var(--text)}
+.customstory .cslbl span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -3374,7 +3380,7 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
   var pinProb=p.authoritative?(ar&&ar.sourcePathCount?Math.round(ar.withinToleranceCount/ar.sourcePathCount*100):null):Math.round((scenProbs(p)[pin]||0)*100);
   var af=authoritativeFrame(p,t),curPx=af?af.price:p.spot*(1+mag*t/100),curM=(curPx/p.spot-1)*100,ivsh=p.isHeld?0:iv*t,dfwd=af?af.day:days*t,pv=af&&af.pnl!=null?af.pnl:(p.authoritative?null:scenPL(p,curPx,ivsh,dfwd));
   var statusRead=authError?'<b class="neg">market story unavailable</b>':
-    (p.authoritative?(pinProb==null?'<b>finding matching paths…</b>':'<b>'+pinProb+'%</b> of paths fit this story'):'<b>'+pinProb+'%</b> likely')+' · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv);
+    (p.authoritative?(pin===FAN_STORY?'<b>one exact stored path</b>':pinProb==null?'<b>finding matching paths…</b>':'<b>'+pinProb+'%</b> of paths fit this story'):'<b>'+pinProb+'%</b> likely')+' · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv);
   function stp(key,lbl,val,cls){ return '<span class="mstp" data-asm="'+key+'"><span class="ml">'+lbl+'</span><button data-wf="'+key+'dn">−</button><span class="mv '+(cls||'')+'">'+val+'</span><button data-wf="'+key+'up">+</button></span>'; }
   var timeStp='<span class="mstp" data-asm="days"><span class="ml">time</span><button data-wf="daysdn">−</button><span class="mv">+'+tDisp(days,tu)+'</span><button data-wf="daysup">+</button>'+
     (p.authoritative?'<span class="tunit"><button class="on" data-wf="tu-d" title="trading sessions">d</button></span>':'<span class="tunit">'+['d','h','m'].map(function(u){return '<button class="'+(tu===u?'on':'')+'" data-wf="tu-'+u+'" title="'+({d:'days',h:'hours',m:'minutes'}[u])+'">'+u+'</button>';}).join('')+'</span>')+'</span>';
@@ -3676,6 +3682,9 @@ function adjNums(p,c){
 }
 /* draw the bloom payoff — interactive strike handles + before/after ghost + pinned scenario */
 var pinnedScen={};
+/* sentinel pin: the active scenario is an EXACT path chosen from the market fan, not a named
+   story tile — its authored waypoints live on the candidate as _customStoryPins */
+var FAN_STORY=-9;
 function redrawBloomPayoff(p, animate){
   var svg=cardEl[p.id]&&cardEl[p.id].querySelector('.cbig'); if(!svg)return;
   var opts={interactive:true, pinM:scrubMag(p), animate:!!animate};
@@ -3738,6 +3747,11 @@ function authoritativeHorizon(p){var stored=p&&p.isHeld&&authPositionEnsemble(p)
    select real trajectories from the immutable ensemble; it remains the sole path generator. */
 function authoredScenarioWaypoints(p){
   var index=+(pinnedScen[p.id]||0),days=Math.max(1,Math.round(daysOf(p))),move=magOf(p)/100;
+  if(index===FAN_STORY){var cs=p._customStoryPins;
+    /* the exact chosen path holds only while its assumptions stand; stepping move/time forks it
+       into the generic story shape below, built from the adjusted magnitude */
+    if(cs&&cs.waypoints&&cs.waypoints.length&&Math.abs((magOf(p)||0)-cs.movePct)<.05&&days===cs.days)return cs.waypoints;
+  }
   var shape={0:[-.03,-.10,move],1:[move,move*.92,move],2:[move*.25,move*.58,move],3:[-.025,.015,move],
     4:[.01,-.008,move],5:[move*.22,move*.58,move],6:[move*.15,move*.55,move],7:[move*.08,move*.38,move]}[index]||[move*.25,move*.6,move];
   var at=[Math.max(1,Math.round(days/3)),Math.max(1,Math.round(days*2/3)),days],byDay={};
@@ -3750,6 +3764,9 @@ function authoredScenarioWaypoints(p){
 function authoredScenarioPathWaypoints(p){
   if(authoritativeHorizon(p)>1)return null;
   var index=+(pinnedScen[p.id]||0),move=magOf(p)/100;
+  if(index===FAN_STORY){var cs=p._customStoryPins;
+    if(cs&&cs.pathWaypoints&&cs.pathWaypoints.length&&Math.abs((magOf(p)||0)-cs.movePct)<.05)return cs.pathWaypoints;
+  }
   var shape={0:[-.03,-.10,move],1:[move,move*.92,move],2:[move*.25,move*.58,move],3:[-.025,.015,move],
     4:[.01,-.008,move],5:[move*.22,move*.58,move],6:[move*.15,move*.55,move],7:[move*.08,move*.38,move]}[index]||[move*.25,move*.6,move];
   return [.333333,.666667,1].map(function(progress,i){return {sessionProgress:progress,priceRatio:Math.max(.01,1+shape[i]),tolerance:i===2?.02:.035};});
@@ -3924,7 +3941,7 @@ function renderAtPrice(s){
     var m=root.querySelector('.wf-main'), psi=(p.id in pinnedScen)?+pinnedScen[p.id]:0, pp,lead;
     if(p.authoritative){var rr=p.authoritativeAnimation&&p.authoritativeAnimation.paths&&p.authoritativeAnimation.paths.receipt;
       pp=rr&&rr.sourcePathCount?Math.round(rr.withinToleranceCount/rr.sourcePathCount*100):null;
-      lead=p._authoritativeScenarioError?'<b class="neg">market story unavailable</b>':pp==null?'<b>finding matching paths…</b>':'<b>'+pp+'%</b> of paths fit this story';}
+      lead=p._authoritativeScenarioError?'<b class="neg">market story unavailable</b>':psi===FAN_STORY?'<b>one exact stored path</b>':pp==null?'<b>finding matching paths…</b>':'<b>'+pp+'%</b> of paths fit this story';}
     else {pp=Math.round((scenProbs(p)[psi]||0)*100);lead='<b>'+pp+'%</b> likely';}
     if(m) m.innerHTML=lead+(p._authoritativeScenarioError?'':p.authoritative&&!auth?' · <span>valuing this path…</span>':' · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv));
     var sc=root.querySelector('.scenplay .scrub'); if(sc && document.activeElement!==sc) sc.value=Math.round(st.t*100);
@@ -5039,6 +5056,17 @@ function deskBackendChanged(payload){
      exact stored artifacts instead of leaving the screen on an obsolete loading shell. */
   if(phase!=='ensemble'&&bs.ensemble&&(!decide.ensemble||String(decide.ensemble.ensemble&&decide.ensemble.ensemble.id)!==String(bs.ensemble.ensemble&&bs.ensemble.ensemble.id))){
     decide.ensemble=bs.ensemble;decide._mc=authoritativeFanFromEnsemble(bs.ensemble);decide._mcId=decide.candId;decide.mcOn=true;decide.mcRunning=false;
+  } else if(phase!=='ensemble'&&bs.ensemble&&decide.ensemble&&decide.mcRunning){
+    /* Re-selecting a candidate reuses the same candidate-invariant stored ensemble, so the bridge
+       never re-emits `ensemble` and nothing else would clear the loading flag — the fan wedged on
+       "building one market fan" forever. The already-adopted artifact IS current; clear the flag
+       unless a scenario request is genuinely in flight for the active candidate. */
+    var mcCandidate=activeCand();
+    if(!(mcCandidate&&Object.prototype.hasOwnProperty.call(pinnedScen,mcCandidate.id))){
+      decide.mcRunning=false;
+      if(!decide._mc)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
+      decide._mcId=decide.candId;
+    }
   }
   if(phase!=='outcome'&&bs.outcome&&!decide.outcome)decide.outcome=bs.outcome;
   if(phase==='world-transition'){
@@ -5968,7 +5996,39 @@ function nearestMCPath(e){var svg=document.getElementById('mcFan'),map=svg&&svg.
   paths.forEach(function(path,index){var value=valueAt(path);if(!Number.isFinite(value))return;var y=map.padT+(map.H-map.padT-map.padB)*(map.hi-value)/Math.max(.000001,map.hi-map.lo),distance=Math.abs(y-vy);if(distance<bestDistance){bestDistance=distance;best=index;}});return best;}
 function mcPathPrompt(shown){return shown&&shown.space==='pnl'?'Hover a possible future to inspect its P/L · click to play it across the desk':'Hover a possible future to inspect it · click to play it across the desk';}
 function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex],line=svg&&svg.querySelector('[data-mc-line="'+index+'"]');if(line)line.classList.toggle('hot',!!on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=mcPathPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+money(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length>1){var start=Number(pricePath[0]),end=Number(pricePath[pricePath.length-1]),move=start?((end/start-1)*100):0;parts.push((shown.space==='pnl'?'underlying ':'')+'$'+end.toFixed(2)+' · '+(move>=0?'+':'')+move.toFixed(1)+'%');}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
-function playMCPath(index){var c=authoritativeCandidate(),shown=decisionFan(c),res=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),path=res&&res.paths&&res.paths[priceIndex];if(!c||!path||path.length<2)return;var start=Number(path[0]),end=Number(path[path.length-1]);if(!(start>0)||!Number.isFinite(end))return;var move=(end/start-1)*100,best=0;for(var i=1;i<SCEN.length;i++)if(Math.abs(SCEN[i].m-move)<Math.abs(SCEN[best].m-move))best=i;if(String(pinnedScen[c.id])===String(best)){scenSt(c.id).t=0;requestAuthoritativeScenario(decSurf(),true);}else pinScen(decSurf(),best);}
+/* Clicking a possible future pins THAT exact path — its own checkpoints become the scenario
+   waypoints, so the backend's nearest-path selection returns the same source row as the focus
+   and the desk animates the future the user actually chose, not a nearby named story. */
+function playMCPath(index){
+  var c=authoritativeCandidate(),shown=decisionFan(c),res=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),path=res&&res.paths&&res.paths[priceIndex];
+  if(!c||!path||path.length<2)return;
+  var start=Number(path[0]),end=Number(path[path.length-1]);
+  if(!(start>0)||!Number.isFinite(end))return;
+  var spot=authNumber(decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.spot)||start;
+  var days=Math.max(1,Math.round(Number(res.horizonDays||res.targetDay||authoritativeHorizon(c)||1)));
+  var progress=res.pathProgress&&res.pathProgress.length===path.length?res.pathProgress.map(Number):null;
+  function valueAtDay(day){
+    if(progress){
+      if(day<=progress[0])return Number(path[0]);
+      for(var i=1;i<progress.length;i++){if(day<=progress[i]){var l=progress[i-1],r=progress[i],f=r===l?0:(day-l)/(r-l);return authLerp(Number(path[i-1]),Number(path[i]),Math.max(0,Math.min(1,f)));}}
+      return Number(path[path.length-1]);
+    }
+    var cursor=days?day/days*(path.length-1):0,lo=Math.floor(cursor),hi=Math.min(path.length-1,lo+1);
+    return authLerp(Number(path[lo]),Number(path[hi]),cursor-lo);
+  }
+  var fractions=days>=4?[.25,.5,.75,1]:days>=3?[1/3,2/3,1]:days>=2?[.5,1]:[1],seen={},dayPins=[];
+  fractions.forEach(function(f){var day=Math.max(1,Math.min(days,Math.round(f*days)));if(seen[day])return;seen[day]=1;
+    dayPins.push({dayIndex:day,priceRatio:Math.max(.01,valueAtDay(day)/spot),tolerance:f===1?.015:.03});});
+  var pathPins=days<=1?[1/3,2/3,1].map(function(f,i){return {sessionProgress:f,priceRatio:Math.max(.01,valueAtDay(f*days)/spot),tolerance:i===2?.015:.03};}):null;
+  var movePct=Math.round((end/spot-1)*1000)/10;
+  c._customStoryPins={waypoints:dayPins,pathWaypoints:pathPins,movePct:movePct,days:days,
+    sourcePathIndex:res.sourcePathIndices?res.sourcePathIndices[priceIndex]:null};
+  var s=decSurf();
+  stopScen(s);
+  pinnedScen[c.id]=FAN_STORY;pinMag[c.id]=movePct;pinIV[c.id]=0;pinDays[c.id]=days;
+  scenSt(c.id).t=0;s.refresh();
+  if(!requestAuthoritativeScenario(s,true))playScen(s);
+}
 
 /* ---- enter / exit + the BREATHING transition (FLIP from the origin control, reusing the
    bloom's First→Last→invert→animate vocabulary — book↔position↔decide feel continuous) ---- */
@@ -6401,6 +6461,8 @@ function decScenSpectrum(c){
   }).join('');
   var sum='<div class="scensum"><div class="e"><span class="lbl"><span class="sumfull">'+(d.authoritative?'Median terminal neighborhood':'Most likely')+' · '+d.ml.s.n+'</span><span class="sumshort">'+(d.authoritative?'Median':'Likely')+' · '+(shortNames[d.ml.i]||d.ml.s.n)+'</span></span><span class="v '+(d.ml.pl>=0?'pos':'neg')+'">'+(d.authoritative?'':Math.round(d.ml.prob*100)+'% · ')+money(d.ml.pl)+'</span></div>'+
     '<div class="e range"><span class="lbl"><span class="sumfull">Outcome range</span><span class="sumshort">Range</span></span><span class="v"><b class="neg">'+money(d.worst.pl)+'</b> → <b class="pos">'+money(d.best.pl)+'</b></span></div></div>';
+  if(pin===FAN_STORY){var mag=magOf(c);
+    ctl='<div class="customstory"><span class="csdot"></span><span class="cslbl"><b>Chosen future</b><span>a real path from the market fan · ends <b class="'+(mag>=0?'pos':'neg')+'">'+(mag>0?'+':'')+(mag==null?'—':mag)+'%</b></span></span></div>'+scenExpand(c);}
   return '<div class="smx barmode">'+tiles+ctl+'</div>'+sum;
 }
 function renderClose(){
