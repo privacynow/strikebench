@@ -931,7 +931,8 @@ class ApiIntegrationTest {
         JsonNode sourceDoc = Json.parse(get("/api/data/sources").body());
         assertThat(sourceDoc.get("connectors").toString())
                 .contains("Yahoo Finance").contains("standing authorization").contains("Your price-history CSV");
-        assertThat(sourceDoc.get("feeds").toString()).contains("Cboe").contains("SEC EDGAR");
+        assertThat(sourceDoc.get("feeds").toString()).contains("Cboe").contains("SEC EDGAR")
+                .contains("Reviewed issuer events").contains("payload fingerprint");
         assertThat(sourceDoc.get("feeds").toString()).doesNotContain("Yahoo Finance");
         JsonNode sync = Json.parse(get("/api/data/sync").body());
         assertThat(sync.get("note").asText()).contains("once after a completed market session");
@@ -951,6 +952,22 @@ class ApiIntegrationTest {
                         .POST(HttpRequest.BodyPublishers.ofString(multipart)).build(), HttpResponse.BodyHandlers.ofString());
         assertThat(imported.statusCode()).isEqualTo(200);
         assertThat(Json.parse(imported.body()).get("barBasis").asText()).isEqualTo("CLOSE_ONLY");
+        // Reviewed issuer evidence enters through the same Data owner and becomes the one event
+        // receipt consumed by Research (and, by construction, evaluation/alerts/scenarios/Scout).
+        HttpResponse<String> importedEvent = post("/api/data/import/event", """
+                {"symbol":"AAPL","status":"CONFIRMED","date":"2026-07-22",
+                 "session":"AFTER_CLOSE","authority":"ISSUER_CONFIRMED",
+                 "source":"Apple Investor Relations","sourceUrl":"https://investor.apple.com/events",
+                 "basis":"issuer-published earnings call","rawPayload":"reviewed fixture receipt"}
+                """);
+        assertThat(importedEvent.statusCode()).isEqualTo(201);
+        JsonNode event = Json.parse(importedEvent.body());
+        assertThat(event.get("status").asText()).isEqualTo("CONFIRMED");
+        assertThat(event.get("session").asText()).isEqualTo("AFTER_CLOSE");
+        assertThat(event.get("payloadFingerprint").asText()).hasSize(64);
+        JsonNode researchEvent = Json.parse(get("/api/research/AAPL").body()).get("earningsEstimate");
+        assertThat(researchEvent.get("status").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(researchEvent.get("note").asText()).contains("demo market");
         // Coverage responds with a matrix + summary.
         assertThat(get("/api/data/coverage").statusCode()).isEqualTo(200);
         // Reset without confirm is refused.
@@ -966,6 +983,11 @@ class ApiIntegrationTest {
                         .PUT(HttpRequest.BodyPublishers.ofString("{\"enabled\":true,\"source\":\"auto\",\"symbols\":[\"AAPL\"],\"years\":1}"))
                         .build(), HttpResponse.BodyHandlers.ofString());
         assertThat(proxiedSchedule.statusCode()).isEqualTo(403);
+        HttpResponse<String> proxiedEvent = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/import/event"))
+                        .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
+                        .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                        .build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(proxiedEvent.statusCode()).isEqualTo(403);
         HttpResponse<String> proxiedSync = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/jobs"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .POST(HttpRequest.BodyPublishers.ofString("{\"kind\":\"sync_underlying\",\"params\":{\"symbols\":[\"AAPL\"]}}"))

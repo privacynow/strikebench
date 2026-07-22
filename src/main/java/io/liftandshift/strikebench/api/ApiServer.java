@@ -206,7 +206,8 @@ public final class ApiServer {
         MarketDataMarks marksSource = new MarketDataMarks(market, cfg.fixturesOnly());
         TradeService trades = new TradeService(db, cfg, marksSource, audit, clock);
         PositionsService positions = new PositionsService(db, marksSource, audit, clock, cfg.fixturesOnly());
-        RecommendationEngine engine = new RecommendationEngine(market, clock)
+        var eventCalendar = new io.liftandshift.strikebench.market.EventService(market, db, clock);
+        RecommendationEngine engine = new RecommendationEngine(market, clock, eventCalendar)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents());
         BrokerService broker = new BrokerService(etrade, db, audit, clock);
         // Historical option data for backtests: real chains (Polygon) in live mode,
@@ -226,7 +227,6 @@ public final class ApiServer {
                 new io.liftandshift.strikebench.market.SnapshotService(
                         market, universe, db, clock, marketDataMaintenance);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
-        var eventCalendar = new io.liftandshift.strikebench.market.EventService(market, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(
                 market, db, clock, eventCalendar)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents()); // decision EV matches the REAL commission
@@ -243,7 +243,7 @@ public final class ApiServer {
         // The alert center reuses the trade/marks services the Manage band uses — one trigger
         // evaluator, no second math — and announces material changes on the existing event bus.
         server.alertCenter = new io.liftandshift.strikebench.paper.AlertCenterService(db, clock,
-                trades, marksSource, server.eventCalendar::nextEarnings, server.events,
+                trades, marksSource, server.eventCalendar::earnings, server.events,
                 cfg.feePerContractCents());
         audit.setAccountChangedHook(server.alertCenter::invalidateAccount);
         server.portfolioBooks.setOwnerChangedHook(server.alertCenter::invalidateOwner);
@@ -325,7 +325,8 @@ public final class ApiServer {
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
         var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
                 db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades);
-        var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(clock);
+        var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(
+                clock, eventCalendar);
         var trackedPackageAnalyses = new TrackedPackageAnalysisService(
                 portfolioBooks, trades, evaluations, accountObjectives, heldPositionEconomics);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
@@ -373,7 +374,7 @@ public final class ApiServer {
                 universeViews, datasets, workspaceSvc, accounts, auth, cboe, sparklineController,
                 simSessions, events, this::ownerId, this::activeWorld, this::cachedActiveWorldFor,
                 this::currentAccount, this::requireAdmin, () -> !jarChangedHint().isEmpty(), startedAt);
-        DataController dataController = new DataController(cfg, clock, db, market, marketEngine,
+        DataController dataController = new DataController(cfg, clock, db, market, eventCalendar, marketEngine,
                 universe, dataJobs, dataCoverage, dataReset, marketDataMaintenance,
                 dataConnectors, dataSyncState,
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,

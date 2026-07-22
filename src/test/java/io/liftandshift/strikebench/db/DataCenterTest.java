@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.db;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.SnapshotService;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
@@ -147,6 +149,24 @@ class DataCenterTest {
         assertThat(underlyingRows("AAPL")).isZero();
         // the account is untouched by a market-data reset
         assertThat(db.query("SELECT count(*) c FROM accounts", r -> r.lng("c")).getFirst()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void marketResetClearsDerivedEventsButPreservesReviewedEvidence() {
+        Ctx c = wire();
+        var market = new MarketDataService(List.of(), List.of(), List.of());
+        var events = new EventService(market, db, clock);
+        events.earnings("ZZZZZZ"); // persists an honest UNAVAILABLE derived receipt
+        events.importReviewed(new EventService.ReviewedEvent("AAPL",
+                EventService.EvidenceStatus.CONFIRMED, LocalDate.of(2026, 7, 22),
+                EventService.EventSession.AFTER_CLOSE, null, null,
+                EventService.SourceKind.ISSUER_CONFIRMED, "Issuer IR", "https://issuer.example/events",
+                null, "reviewed issuer evidence", "local", "issuer receipt"));
+
+        c.reset().reset(DataResetService.Tier.MARKET_DATA);
+
+        assertThat(db.query("SELECT source_kind FROM market_event_evidence ORDER BY source_kind",
+                r -> r.str("source_kind"))).containsExactly("ISSUER_CONFIRMED");
     }
 
     @Test

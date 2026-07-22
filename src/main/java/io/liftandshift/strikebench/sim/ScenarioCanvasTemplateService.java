@@ -53,12 +53,15 @@ public final class ScenarioCanvasTemplateService {
         if (!"observed".equalsIgnoreCase(world)) {
             throw new IllegalArgumentException("The SEC filing-cadence earnings template is available only in the Observed market; observed issuer events are never borrowed into Demo or simulated worlds.");
         }
-        EventService.EarningsEstimate estimate = events.nextEarnings(symbol).orElseThrow(() ->
-                new IllegalArgumentException("No SEC filing-cadence earnings estimate is available for "
-                        + symbol + "; this template will not invent an event date."));
-        int eventDay = MarketHours.tradingDaysBetween(anchor, estimate.estimated());
+        EventService.EventEvidence event = events.earnings(symbol);
+        if (!event.available()) {
+            throw new IllegalArgumentException("No canonical earnings evidence is available for "
+                    + symbol + "; this template will not invent an event date.");
+        }
+        int eventDay = MarketHours.tradingDaysBetween(anchor, event.date());
         if (eventDay < 1 || eventDay > spec.horizonDays()) {
-            throw new IllegalArgumentException("The estimated earnings window near " + estimate.estimated()
+            throw new IllegalArgumentException("The " + event.status().name().toLowerCase(java.util.Locale.ROOT)
+                    + " earnings date near " + event.date()
                     + " is outside this " + spec.horizonDays()
                     + "-session canvas; extend the Plan horizon instead of moving the event into view.");
         }
@@ -108,8 +111,10 @@ public final class ScenarioCanvasTemplateService {
                 series.evidence().provenance().name(), anchor, candles.isEmpty() ? null : candles.getFirst().date(),
                 candles.isEmpty() ? null : candles.getLast().date(), gaps.size(), observed(series.evidence().provenance()),
                 "Underlying gap magnitude is the 75th percentile of " + gaps.size()
-                        + " filing-window analogs (largest close-to-open move in the 10 calendar days before each 10-Q/10-K); these are proxies because the filing is not a confirmed release timestamp. Event date is ESTIMATED near "
-                        + estimate.estimated() + " (±" + estimate.windowDays() + " days) from " + estimate.basis()
+                        + " filing-window analogs (largest close-to-open move in the 10 calendar days before each 10-Q/10-K); these are proxies because the filing is not a confirmed release timestamp. Event date is "
+                        + event.status().name() + " near "
+                        + event.date() + (event.confirmed() ? " " + event.session().name().toLowerCase(java.util.Locale.ROOT)
+                            : " (±" + event.windowDays() + " days)") + " from " + event.basis()
                         + ". IV crush is an authored assumption anchored to current ATM IV, not an observed forecast.");
         return new Seed(seeded, with(canvas, nodes, receipt));
     }

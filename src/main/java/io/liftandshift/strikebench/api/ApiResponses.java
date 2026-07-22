@@ -193,9 +193,6 @@ public final class ApiResponses {
     public record Account<T>(T account) {}
     public record AccountLedger<T, U>(T account, U ledger) {}
     public record Expirations<T>(String symbol, String asOfDate, T expirations) {}
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record ResearchEvent(Boolean available, String date, Integer windowDays,
-                                String basis, Boolean confirmed, String note) {}
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
     public record ResearchDetail<T, U, V, W>(String symbol, T quote, BigDecimal displayPrice,
@@ -204,8 +201,8 @@ public final class ApiResponses {
                                               boolean ivRankAvailable, Double ivRankPct,
                                               Double ivPercentilePct, int ivHistoryDays,
                                               int ivRankRequiredDays, String ivRankNote,
-                                              ResearchEvent earningsEstimate,
-                                              ResearchEvent exDividend, Double hv30,
+                                              io.liftandshift.strikebench.market.EventService.EventEvidence earningsEstimate,
+                                              io.liftandshift.strikebench.market.EventService.EventEvidence exDividend, Double hv30,
                                               int hvHistoryDays, int hvRequiredDays,
                                               boolean historyDemo, String historyBarBasis,
                                               String historyPriceBasis, U evidence,

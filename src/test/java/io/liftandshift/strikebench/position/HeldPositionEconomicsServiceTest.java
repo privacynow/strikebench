@@ -5,6 +5,9 @@ import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
 import io.liftandshift.strikebench.eval.FourOutputAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
+import io.liftandshift.strikebench.market.EventService;
+import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.ProviderPoliteness;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
@@ -22,6 +25,7 @@ import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -109,6 +113,33 @@ class HeldPositionEconomicsServiceTest {
             assertThat(leg.freshEyesEffectivePricePerShareCents()).isEqualTo(22_210L);
             assertThat(leg.consequence()).contains("SELL");
         });
+    }
+
+    @Test void canonicalConfirmedEventCrossingFlowsIntoTheLifecycleReceipt() {
+        EventService.IssuerEventProvider issuer = symbol -> Optional.of(new EventService.IssuerEvent(
+                LocalDate.parse("2031-08-04"), EventService.EventSession.AFTER_CLOSE,
+                "NVIDIA Investor Relations", "https://investor.nvidia.com/events",
+                CLOCK.instant(), "confirmed-event"));
+        EventService events = new EventService(new MarketDataService(List.of(), List.of(), List.of()),
+                null, CLOCK, List.of(issuer),
+                new ProviderPoliteness("issuer-test", 1, 0, 60_000),
+                new ProviderPoliteness("sec-test", 1, 0, 60_000));
+        var service = new HeldPositionEconomicsService(CLOCK, events);
+
+        PositionLifecycleReceipt receipt = service.compose(request(Leg.option(LegAction.SELL, OptionType.PUT,
+                        new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO)),
+                preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L), evaluation());
+
+        assertThat(receipt.assignmentExit().eventEvidenceStatus()).isEqualTo("CONFIRMED");
+        assertThat(receipt.assignmentExit().eventCrossings()).singleElement().satisfies(event -> {
+            assertThat(event.eventDate()).isEqualTo(LocalDate.parse("2031-08-04"));
+            assertThat(event.session()).isEqualTo("AFTER_CLOSE");
+            assertThat(event.source()).isEqualTo("NVIDIA Investor Relations");
+            assertThat(event.payloadFingerprint()).hasSize(64);
+        });
+        assertThat(receipt.evidence().sourceRefs()).anyMatch(ref -> ref.startsWith("event:"));
+        assertThat(receipt.assignmentExit().limitations())
+                .noneMatch(note -> note.contains("Event crossings remain unavailable"));
     }
 
     private static TradeService.OpenRequest request(Leg leg) {

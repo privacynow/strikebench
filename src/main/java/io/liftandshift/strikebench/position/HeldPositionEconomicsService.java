@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.position;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.market.ExecutablePrice;
+import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
@@ -36,9 +37,15 @@ public final class HeldPositionEconomicsService {
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
 
     private final Clock clock;
+    private final EventService events;
 
     public HeldPositionEconomicsService(Clock clock) {
+        this(clock, null);
+    }
+
+    public HeldPositionEconomicsService(Clock clock, EventService events) {
         this.clock = clock == null ? Clock.systemUTC() : clock;
+        this.events = events;
     }
 
     /** Adapter facts supplied by the adoption/campaign composer; no accounting value is inferred here. */
@@ -120,10 +127,11 @@ public final class HeldPositionEconomicsService {
                 "Theoretical encumbrance removed by a full close; this is not a broker buying-power claim.");
 
         List<PositionLifecycleReceipt.AssignmentLeg> assignmentLegs = assignmentLegs(request, preview);
+        EventFacts eventFacts = eventFacts(request);
         List<String> assignmentLimitations = new ArrayList<>();
         assignmentLimitations.add("Tax-lot and campaign-adjusted bases require a linked tracked structure or campaign.");
         assignmentLimitations.add("Book impacts remain unavailable until the read-only Book action projection is composed.");
-        assignmentLimitations.add("Event crossings remain unavailable until the canonical EventService receipt is composed.");
+        assignmentLimitations.addAll(eventFacts.limitations());
 
         String positionFingerprint = positionFingerprint(request);
         String marketFingerprint = snapshotFingerprint(preview);
@@ -152,14 +160,53 @@ public final class HeldPositionEconomicsService {
                 new PositionLifecycleReceipt.AssignmentExit(assignmentLegs,
                         PositionLifecycleReceipt.MoneyFact.unavailable("No linked tracked tax-lot basis receipt."),
                         PositionLifecycleReceipt.MoneyFact.unavailable("No linked campaign-adjusted basis receipt."),
-                        List.of(), "UNAVAILABLE", "UNAVAILABLE",
-                        "Short-contract geometry supplies exact shares and strike dollars; intent and probability remain separate.",
+                        eventFacts.crossings(), eventFacts.status(), "UNAVAILABLE",
+                        "Short-contract geometry supplies exact shares and strike dollars; the canonical EventService "
+                                + "supplies event evidence; intent and probability remain separate.",
                         assignmentLimitations),
                 new PositionLifecycleReceipt.Evidence(now, "PARTIAL", marketFingerprint,
                         modelFingerprint, "FACTS_ONLY",
-                        List.of("preview", "evaluation", PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
-                                PositionLifecycleReceipt.STANCE_REF),
-                        List.of("History, events, broker reserve, settlement income, and Book projections are not linked yet.")));
+                        eventFacts.sourceRefs().isEmpty()
+                                ? List.of("preview", "evaluation", PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
+                                    PositionLifecycleReceipt.STANCE_REF)
+                                : java.util.stream.Stream.concat(
+                                        List.of("preview", "evaluation",
+                                                PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
+                                                PositionLifecycleReceipt.STANCE_REF).stream(),
+                                        eventFacts.sourceRefs().stream()).distinct().toList(),
+                        List.of("History, broker reserve, settlement income, and Book projections are not linked yet.")));
+    }
+
+    private record EventFacts(List<PositionLifecycleReceipt.EventCrossing> crossings,
+                              String status, List<String> limitations, List<String> sourceRefs) {}
+
+    private EventFacts eventFacts(TradeService.OpenRequest request) {
+        if (events == null) {
+            return new EventFacts(List.of(), "UNAVAILABLE",
+                    List.of("Canonical EventService evidence was not supplied to this composer."), List.of());
+        }
+        EventService.EventEvidence event;
+        try {
+            event = events.earnings(request.symbol());
+        } catch (RuntimeException unavailable) {
+            return new EventFacts(List.of(), "UNAVAILABLE",
+                    List.of("Canonical event evidence could not be read; this is not a no-event claim."), List.of());
+        }
+        List<String> refs = List.of("event:" + event.payloadFingerprint());
+        if (!event.available()) {
+            return new EventFacts(List.of(), event.status().name(), List.of(event.note()), refs);
+        }
+        LocalDate today = LocalDate.ofInstant(clock.instant(), MARKET_ZONE);
+        LocalDate lastExpiration = request.legs().stream().filter(leg -> !leg.isStock())
+                .map(Leg::expiration).max(LocalDate::compareTo).orElse(null);
+        boolean crosses = lastExpiration != null
+                && !event.confidenceStart().isAfter(lastExpiration)
+                && !event.confidenceEnd().isBefore(today);
+        if (!crosses) return new EventFacts(List.of(), event.status().name(), List.of(), refs);
+        return new EventFacts(List.of(new PositionLifecycleReceipt.EventCrossing(
+                event.eventType().name(), event.date(), event.session().name(), event.status().name(),
+                event.source(), event.sourceUrl(), event.observedAt(), event.payloadFingerprint())),
+                event.status().name(), List.of(), refs);
     }
 
     /**

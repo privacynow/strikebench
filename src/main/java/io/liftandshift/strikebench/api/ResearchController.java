@@ -205,19 +205,15 @@ final class ResearchController {
                     volatilityHorizonDays, worldParam(world));
             boolean demoHistory = candles.evidence().provenance() == DataProvenance.DEMO;
 
-            ApiResponses.ResearchEvent earnings;
+            EventService.EventEvidence earnings;
             if ("demo".equals(world)) {
-                earnings = new ApiResponses.ResearchEvent(false, null, null, null, null,
+                earnings = events.unavailableForContext(symbol,
                         "demo market — its companies and events are fabricated teaching data");
             } else if (!"observed".equals(world)) {
-                earnings = new ApiResponses.ResearchEvent(false, null, null, null, null,
+                earnings = events.unavailableForContext(symbol,
                         "simulated market — no earnings exist in this world");
             } else {
-                earnings = events.nextEarnings(symbol).<ApiResponses.ResearchEvent>map(event ->
-                        new ApiResponses.ResearchEvent(null, event.estimated().toString(),
-                                event.windowDays(), event.basis(), event.confirmed(), null))
-                        .orElseGet(() -> new ApiResponses.ResearchEvent(false, null, null, null,
-                                null, "not enough SEC quarterly filings to project a cadence"));
+                earnings = events.earnings(symbol);
             }
             Map<String, DataEvidence> inputs = new LinkedHashMap<>();
             inputs.put("quote", current.evidence());
@@ -258,7 +254,7 @@ final class ResearchController {
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
                     volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
                     volatility.source(), earnings,
-                    new ApiResponses.ResearchEvent(false, null, null, null, null,
+                    events.unavailableForContext(symbol, EventService.EventType.EX_DIVIDEND,
                             "no keyless ex-dividend source — connect a licensed calendar for confirmed dates"),
                     realizedVol30, candles.candles().size(), HistoricalVol.MIN_OBSERVATIONS,
                     demoHistory, candles.barBasis(), candles.priceBasis(), evidence,

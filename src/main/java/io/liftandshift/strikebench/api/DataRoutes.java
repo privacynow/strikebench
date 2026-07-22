@@ -13,6 +13,7 @@ public final class DataRoutes {
             Handler planSync,
             Handler updateSyncSchedule,
             Handler importUnderlying,
+            Handler importEvent,
             Handler listJobs,
             Handler getJob,
             Handler startJob,
@@ -35,6 +36,7 @@ public final class DataRoutes {
         config.routes.post("/api/data/sync/plan", h.planSync());
         config.routes.put("/api/data/sync/schedule", h.updateSyncSchedule());
         config.routes.post("/api/data/import/underlying", h.importUnderlying());
+        config.routes.post("/api/data/import/event", h.importEvent());
         config.routes.get("/api/data/jobs", h.listJobs());
         config.routes.get("/api/data/jobs/{id}", h.getJob());
         config.routes.post("/api/data/jobs", h.startJob());

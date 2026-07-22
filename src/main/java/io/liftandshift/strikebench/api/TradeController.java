@@ -642,12 +642,16 @@ final class TradeController {
             verdict = Verdict.of(blocks, verdict.warnings());
         }
         if (earningsSoon) {
-            EventService.EarningsEstimate estimate = eventCalendar.nextEarnings(request.symbol()).orElse(null);
-            if (estimate != null) {
+            EventService.EventEvidence event = eventCalendar.earnings(request.symbol());
+            if (event.available()) {
                 List<String> warnings = new ArrayList<>(verdict.warnings());
-                warnings.add("Earnings ESTIMATED around " + estimate.estimated() + " ±"
-                        + estimate.windowDays() + "d (" + estimate.basis()
-                        + ") — not a confirmed date, but it lands inside this trade");
+                String timing = event.session() == EventService.EventSession.BEFORE_OPEN ? " before open"
+                        : event.session() == EventService.EventSession.AFTER_CLOSE ? " after close" : "";
+                warnings.add(event.status() == EventService.EvidenceStatus.CONFIRMED
+                        ? "Earnings CONFIRMED " + event.date() + timing + " by " + event.source()
+                            + " — it lands inside this trade"
+                        : "Earnings ESTIMATED around " + event.date() + " ±" + event.windowDays()
+                            + "d (" + event.basis() + ") — not a confirmed date, but it lands inside this trade");
                 verdict = Verdict.of(verdict.blockReasons(), warnings);
             }
         } else if (eventLikeNews) {

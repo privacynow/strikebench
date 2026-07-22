@@ -22,7 +22,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -54,10 +53,10 @@ public final class AlertCenterService implements AutoCloseable {
     /** Assignment/expiry attention window in trading sessions. */
     static final int EXPIRY_SESSIONS = 5;
 
-    /** Narrow seam over {@link EventService#nextEarnings} so tests stub estimates directly. */
+    /** Narrow seam over the canonical event owner so tests can supply one authority receipt. */
     @FunctionalInterface
     public interface EarningsSource {
-        Optional<EventService.EarningsEstimate> nextEarnings(String symbol);
+        EventService.EventEvidence earnings(String symbol);
     }
 
     public record Alert(String id, String kind, String severity, String severityLabel,
@@ -397,21 +396,28 @@ public final class AlertCenterService implements AutoCloseable {
     private void earningsAlerts(LocalDate today, List<Alert> out, Map<String, String> symbolLinks) {
         for (Map.Entry<String, String> entry : symbolLinks.entrySet()) {
             String symbol = entry.getKey();
-            EventService.EarningsEstimate estimate = earnings.nextEarnings(symbol).orElse(null);
-            if (estimate == null || estimate.confirmed()) continue; // confirmed feeds arrive later; today all are estimates
-            LocalDate windowStart = estimate.estimated().minusDays(estimate.windowDays());
-            LocalDate windowEnd = estimate.estimated().plusDays(estimate.windowDays());
+            EventService.EventEvidence event = earnings.earnings(symbol);
+            if (event == null || !event.available()) continue;
+            LocalDate windowStart = event.confidenceStart();
+            LocalDate windowEnd = event.confidenceEnd();
             if (windowStart.isAfter(today.plusDays(14)) || windowEnd.isBefore(today)) continue;
+            boolean confirmed = event.status() == EventService.EvidenceStatus.CONFIRMED;
+            String timing = event.session() == EventService.EventSession.BEFORE_OPEN ? " before open"
+                    : event.session() == EventService.EventSession.AFTER_CLOSE ? " after close" : "";
             out.add(new Alert("earnings:" + symbol, "EARNINGS", INFO, severityLabel(INFO),
-                    symbol + ": earnings estimated near " + estimate.estimated()
+                    symbol + ": earnings " + (confirmed ? "confirmed " : "estimated near ") + event.date()
+                            + timing
                             + " — prices and option values can gap around it.",
-                    "Estimated window (±" + estimate.windowDays() + " days) projected from "
-                            + estimate.basis() + ". This is an estimate, not a confirmed calendar date.",
+                    confirmed
+                            ? "Confirmed by " + event.source() + ". " + event.basis() + "."
+                            : "Estimated window (±" + event.windowDays() + " days) projected from "
+                                + event.basis() + ". This is an estimate, not a confirmed calendar date.",
                     symbol, null, "SYMBOL", null, null, null, null, null,
                     "#/research/" + symbol + "?view=evidence", clock.instant().toString(),
-                    Map.of("estimated", true, "confirmed", false,
-                            "estimatedDate", estimate.estimated().toString(),
-                            "windowDays", estimate.windowDays())));
+                    Map.of("status", event.status().name(), "confirmed", confirmed,
+                            "date", event.date().toString(), "session", event.session().name(),
+                            "windowDays", event.windowDays(), "source", event.source(),
+                            "payloadFingerprint", event.payloadFingerprint())));
         }
     }
 

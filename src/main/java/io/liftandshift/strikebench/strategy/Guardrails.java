@@ -194,8 +194,8 @@ public final class Guardrails {
             warnings.add("0DTE position: gamma risk is extreme and the value can go to zero within hours");
         }
         if (p.earningsSoon()) {
-            warnings.add("Event-like news detected (earnings/guidance keywords in recent headlines) — "
-                    + "implied volatility and price can gap around events. This is a news signal, not a confirmed calendar date.");
+            warnings.add("Earnings evidence falls inside this position's life — implied volatility and price can gap "
+                    + "around the event. The event receipt identifies whether the date is confirmed or estimated.");
         }
         if (p.exDividendSoon()) {
             warnings.add("Ex-dividend date falls before expiration");
