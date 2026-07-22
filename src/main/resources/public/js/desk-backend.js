@@ -3141,6 +3141,23 @@
   }
 
   /**
+   * The COMPLETE stored daily history for one symbol (range=max), read once and cached. Stored
+   * ranges are zero-upstream-call reads under the politeness engine, so every chart range is a
+   * client-side window over this one artifact — no per-range refetching, no provider spend.
+   */
+  async function symbolHistory(symbol) {
+    if (!state.enabled) return null;
+    symbol = String(symbol || '').trim().toUpperCase();
+    if (!symbol) throw new Error('Choose a symbol before loading its stored history.');
+    var slot = await readCachedSlot('history:max:' + symbol,
+      '/api/research/' + encodeURIComponent(symbol) + '/history?range=max');
+    var doc = objectSlot(slot, symbol + ' stored history');
+    if (!doc.available) throw new Error(doc.reason || 'Stored history is unavailable for ' + symbol + '.');
+    assertDocumentSymbol(doc.value, symbol, 'Stored history');
+    return doc.value;
+  }
+
+  /**
    * Load one server-owned position receipt plus its same-world Research context. Supplying the
    * trade row (or options.symbol) lets detail, Research, history, news, and Plan/manage read in
    * parallel; a bare id first discovers its server-owned symbol, then performs the same reads.
@@ -3643,6 +3660,7 @@
     positionScenario: positionScenario,
     positionFutures: positionFutures,
     symbolContext: symbolContext,
+    symbolHistory: symbolHistory,
     scoutOpportunities: scoutOpportunities,
     cancel: function () {
       pendingIdeaContext = null;
