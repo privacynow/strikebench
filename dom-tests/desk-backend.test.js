@@ -6627,6 +6627,89 @@ test('New Idea pages whole rows, composes in the left rail, and focuses Book wit
   }
 });
 
+test('New Idea from an active idea stages the old subject and opens one full-width typeahead', async () => {
+  const { context, page, pageErrors } = await openAuthoritativeDesk();
+  try {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    const scenarioOverlaps = await page.evaluate(() => Array.from(
+      document.querySelectorAll('#decideStage .scenpanel .srow')
+    ).flatMap((row, index) => {
+      const name = row.querySelector('.snfull');
+      if (!name || getComputedStyle(name).display === 'none') return [];
+      const a = name.getBoundingClientRect();
+      return Array.from(row.querySelectorAll('.smv,.sprob')).filter(node => {
+        if (getComputedStyle(node).display === 'none') return false;
+        const b = node.getBoundingClientRect();
+        return Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
+          && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+      }).map(node => `${index}:${node.className}`);
+    }));
+    assert.deepEqual(scenarioOverlaps, [],
+      '1920×1080 has one scenario-tile media owner and no name/value collisions');
+    await page.locator('#threadNewIdea').click();
+    await page.waitForSelector('.replacementcomposer #univq');
+    const staged = await page.evaluate(() => {
+      const composer = document.querySelector('.replacementcomposer');
+      const chip = composer?.querySelector('.pickchip');
+      const pop = composer?.querySelector('.univpop');
+      const center = document.querySelector('#decideStage .dccenter');
+      const right = document.querySelector('#decideStage .dcright');
+      const popBox = pop?.getBoundingClientRect();
+      const chipBox = chip?.getBoundingClientRect();
+      return {
+        replacing: window.decide?.replacingIdea,
+        query: window.decide?.pickq,
+        resultRows: composer?.querySelectorAll('.univrow').length,
+        prompt: composer?.querySelector('.univlist')?.textContent,
+        popWidth: popBox?.width || 0,
+        chipWidth: chipBox?.width || 0,
+        popContained: !!popBox && !!chipBox && popBox.left >= chipBox.left - 1
+          && popBox.right <= chipBox.right + 1,
+        staleActions: composer?.querySelectorAll('[data-dec="intentdone"],[data-dec="rescout"]').length,
+        centerInert: center?.hasAttribute('inert') && center?.getAttribute('aria-hidden') === 'true',
+        rightInert: right?.hasAttribute('inert') && right?.getAttribute('aria-hidden') === 'true',
+        dockEmpty: document.querySelector('#decideStage .decdock')?.classList.contains('empty')
+      };
+    });
+    assert.equal(staged.replacing, true);
+    assert.equal(staged.query, '');
+    assert.equal(staged.resultRows, 0, 'opening the picker does not dump the full universe');
+    assert.match(staged.prompt, /type a symbol or company name/i);
+    assert.ok(staged.popWidth > 280 && staged.popWidth > staged.chipWidth * 0.9,
+      'the in-flow picker spans the composer instead of the 88px label track');
+    assert.equal(staged.popContained, true);
+    assert.equal(staged.staleActions, 0,
+      'the abandoned idea cannot expose Show/Refresh actions during replacement');
+    assert.equal(staged.centerInert, true);
+    assert.equal(staged.rightInert, true);
+    assert.equal(staged.dockEmpty, true, 'execution is unavailable while choosing a replacement');
+
+    await page.locator('#univq').fill('AMD');
+    assert.equal(await page.locator('.univrow').count(), 1);
+    await page.keyboard.press('Escape');
+    const canceled = await page.evaluate(() => ({
+      replacing: window.decide?.replacingIdea,
+      intentOpen: window.decide?.intentOpen,
+      active: document.activeElement?.id,
+      composers: document.querySelectorAll('.replacementcomposer').length
+    }));
+    assert.equal(canceled.composers, 0, JSON.stringify(canceled));
+    assert.equal(await page.locator('#decPay').count(), 1,
+      'cancel restores the prior idea without recreating its financial surface');
+
+    await page.locator('#threadNewIdea').click();
+    await page.locator('#univq').fill('AMD');
+    await page.locator('#univq').press('Enter');
+    await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
+      && window.decide?.replacingIdea === false && !window.decide?.intentOpen,
+    null, { timeout: 10000 });
+    assert.equal(await page.locator('.replacementcomposer').count(), 0);
+    assert.deepEqual(pageErrors, [], `Idea replacement emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('the initial ensemble build keeps candidate changes behind one coherent mutation', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
