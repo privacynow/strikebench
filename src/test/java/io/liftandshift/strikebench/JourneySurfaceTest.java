@@ -37,7 +37,7 @@ class JourneySurfaceTest {
     }
 
     @Test void researchHasAnExplicitViewModuleBoundary() throws Exception {
-        String html = source("index.html");
+        String html = source("workspace.html");
         String views = source("js/views.js");
         String research = source("js/views-research.js");
         String plan = source("js/views-plan.js");
@@ -74,7 +74,7 @@ class JourneySurfaceTest {
     }
 
     @Test void planJourneyHasAnExplicitViewModuleBoundary() throws Exception {
-        String html = source("index.html");
+        String html = source("workspace.html");
         String views = source("js/views.js");
         String research = source("js/views-research.js");
         String plan = source("js/views-plan.js");
@@ -98,7 +98,7 @@ class JourneySurfaceTest {
     }
 
     @Test void portfolioHasAnExplicitViewModuleBoundary() throws Exception {
-        String html = source("index.html");
+        String html = source("workspace.html");
         String views = source("js/views.js");
         String plan = source("js/views-plan.js");
         String portfolio = source("js/views-portfolio.js");
@@ -120,7 +120,7 @@ class JourneySurfaceTest {
     }
 
     @Test void dataCenterHasAnExplicitViewModuleBoundary() throws Exception {
-        String html = source("index.html");
+        String html = source("workspace.html");
         String views = source("js/views.js");
         String data = source("js/views-data.js");
 
@@ -133,8 +133,8 @@ class JourneySurfaceTest {
     }
 
     @Test void browserAssetsAreBuildStampedAndRevalidated() throws Exception {
-        String sourceHtml = source("index.html");
-        String builtHtml = Files.readString(Path.of("target/classes/public/index.html"));
+        String sourceHtml = source("workspace.html");
+        String builtHtml = Files.readString(Path.of("target/classes/public/workspace.html"));
         String server = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
 
@@ -143,12 +143,21 @@ class JourneySurfaceTest {
         assertThat(builtHtml).doesNotContain("@asset.version@")
                 .containsPattern("/css/app\\.css\\?v=\\d{14}")
                 .containsPattern("/js/app\\.js\\?v=\\d{14}");
+        // The desk shell is the site root now — it must carry the same build stamp so a
+        // browser can never pair desk JavaScript from one jar with HTML from another.
+        String deskSource = source("index.html");
+        String deskBuilt = Files.readString(Path.of("target/classes/public/index.html"));
+        assertThat(deskSource).contains("app.css?v=@asset.version@",
+                "js/desk-backend.js?v=@asset.version@");
+        assertThat(deskBuilt).doesNotContain("@asset.version@")
+                .containsPattern("app\\.css\\?v=\\d{14}")
+                .containsPattern("js/desk-backend\\.js\\?v=\\d{14}");
         assertThat(server).contains("public, max-age=0, must-revalidate")
                 .doesNotContain("sf.headers = Map.of(\"Cache-Control\", \"no-store\")");
     }
 
     @Test void navigationAndRoutesHaveOnePlanCenteredOwnershipModel() throws Exception {
-        String html = source("index.html");
+        String html = source("workspace.html");
         String views = viewSource();
         String app = source("js/app.js");
         String workspace = source("js/workspace.js");
@@ -401,7 +410,7 @@ class JourneySurfaceTest {
         String views = viewSource();
         String client = source("js/api.js");
         String ui = source("js/ui.js");
-        String html = source("index.html");
+        String html = source("workspace.html");
         String server = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/ApiServer.java"));
         String engine = Files.readString(Path.of(
@@ -636,7 +645,7 @@ class JourneySurfaceTest {
     }
 
     @Test void onePositionEditorOwnsHypotheticalAnalysisAndTrackedRecording() throws Exception {
-        String html = source("index.html");
+        String html = source("workspace.html");
         String editor = source("js/position-editor.js");
         String plan = source("js/views-plan.js");
         String portfolio = source("js/views-portfolio.js");
@@ -675,7 +684,7 @@ class JourneySurfaceTest {
         String learn = source("js/learn.js");
         String ui = source("js/ui.js");
         String app = source("js/app.js");
-        String productCopy = source("index.html") + "\n" + viewSource() + "\n" + source("js/builder.js");
+        String productCopy = source("workspace.html") + "\n" + viewSource() + "\n" + source("js/builder.js");
 
         assertThat(learn).contains("var VOCABULARY = Object.freeze({",
                 "assignmentCapital: { label: 'Assignment capital'",
