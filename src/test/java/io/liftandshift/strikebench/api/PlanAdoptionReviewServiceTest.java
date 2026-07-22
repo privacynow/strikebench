@@ -9,6 +9,9 @@ import io.liftandshift.strikebench.plan.Plan;
 import io.liftandshift.strikebench.plan.PlanAdoptionService;
 import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.position.PositionArtifactStore;
+import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
+import io.liftandshift.strikebench.position.PositionDomain;
+import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +21,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -73,8 +77,8 @@ class PlanAdoptionReviewServiceTest {
         AtomicReference<TradeService.OpenRequest> analyzed = new AtomicReference<>();
         var service = new PlanAdoptionReviewService(db, (owner, account, request) -> {
             analyzed.set(request);
-            return null; // the composer owns lineage; the production analyzer owns this payload
-        }, campaigns, objectives);
+            return analysisStub(account, request.symbol());
+        }, campaigns, objectives, books, new HeldPositionEconomicsService(CLOCK));
 
         var review = service.reviews("local", adopted.plan().id()).getFirst();
 
@@ -92,6 +96,15 @@ class PlanAdoptionReviewServiceTest {
         assertThat(review.freshEyes().available()).isTrue();
         assertThat(review.freshEyes().question()).contains("open").contains("today");
         assertThat(review.freshEyes().basis()).contains("sunk campaign cash excluded");
+        assertThat(review.freshEyes().analysis().lifecycle().history().available()).isTrue();
+        assertThat(review.freshEyes().analysis().lifecycle().history().signedOpeningCashCents())
+                .isEqualTo(-1_200_000L);
+        assertThat(review.freshEyes().analysis().lifecycle().assignmentExit()
+                .taxLotBasisPerShare().cents()).isEqualTo(12_000L);
+        assertThat(review.freshEyes().analysis().lifecycle().assignmentExit()
+                .campaignBasisPerShare().cents()).isEqualTo(12_000L);
+        assertThat(review.freshEyes().analysis().lifecycle().evidence().sourceRefs())
+                .contains("positionReceipt:" + adopted.artifacts().receiptId(), "campaign:" + campaign.id());
         assertThat(analyzed.get().accountId()).isEqualTo(accountId);
         assertThat(analyzed.get().source()).isEqualTo("ADOPTION_REVIEW");
         assertThat(analyzed.get().fillNature()).isEqualTo("PROPOSED");
@@ -121,7 +134,7 @@ class PlanAdoptionReviewServiceTest {
                 new PlanAdoptionService.Request("adopt-without-campaign", accountId, "MU",
                         "Unlinked MU position", List.of(new PlanAdoptionService.Allocation(lotId, 100L))));
         var service = new PlanAdoptionReviewService(db, (owner, account, request) -> null,
-                campaigns, objectives);
+                campaigns, objectives, books, new HeldPositionEconomicsService(CLOCK));
 
         var review = service.reviews("local", adopted.plan().id()).getFirst();
 
@@ -132,5 +145,40 @@ class PlanAdoptionReviewServiceTest {
                 .contains("No campaign is linked")
                 .contains("remains frozen")
                 .contains("explicitly confirmed");
+    }
+
+    private static ApiResponses.TrackedPackageAnalysis analysisStub(String accountId, String symbol) {
+        var close = new PositionLifecycleReceipt.CloseQuote(true, 1_100_000L,
+                1_100_000L, 0L, 0L, 1_100_000L, PositionDomain.PriceAuthority.OBSERVED,
+                "Observed executable stock bid.", null);
+        var lifecycle = new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION,
+                symbol, "position-fingerprint",
+                PositionLifecycleReceipt.History.unavailable("Not linked yet.", "No inferred history."),
+                new PositionLifecycleReceipt.CurrentChoice(close,
+                        HeldPositionEconomicsService.FRESH_EYES_QUESTION,
+                        PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
+                        PositionLifecycleReceipt.ForwardEconomics.unavailable(
+                                "Stub has no economics.", "Canonical economics reference only."),
+                        null, null, PositionLifecycleReceipt.STANCE_REF,
+                        "Canonical current choice.", List.of()),
+                new PositionLifecycleReceipt.CarryCollateral(0L, null, null,
+                        new PositionLifecycleReceipt.MoneyFact(0L,
+                                PositionDomain.FactAuthority.MODEL_DERIVED, "No option reserve."),
+                        PositionLifecycleReceipt.RateFact.unavailable("No settlement receipt."),
+                        new PositionLifecycleReceipt.MoneyFact(0L,
+                                PositionDomain.FactAuthority.MODEL_DERIVED, "No option encumbrance."),
+                        new PositionLifecycleReceipt.MoneyFact(0L,
+                                PositionDomain.FactAuthority.MODEL_DERIVED, "No option release."),
+                        0L, "No option carry.", List.of()),
+                new PositionLifecycleReceipt.AssignmentExit(List.of(),
+                        PositionLifecycleReceipt.MoneyFact.unavailable("Not linked yet."),
+                        PositionLifecycleReceipt.MoneyFact.unavailable("Not linked yet."),
+                        List.of(), "UNAVAILABLE", "UNAVAILABLE", "No short option geometry.", List.of()),
+                new PositionLifecycleReceipt.Evidence(
+                        OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC), "PARTIAL",
+                        "market-fingerprint", "model-fingerprint", "FACTS_ONLY",
+                        List.of("preview", "evaluation"), List.of()));
+        return new ApiResponses.TrackedPackageAnalysis(null, null, null, accountId,
+                "Existing-position IRA", 0L, "OBSERVED", "Read only.", lifecycle);
     }
 }

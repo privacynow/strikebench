@@ -335,7 +335,8 @@ public final class ApiResponses {
                                          io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
                                          String accountId,
                                          String accountName, long availableCashCents,
-                                         String marketLane, String note) {}
+                                         String marketLane, String note,
+                                         io.liftandshift.strikebench.position.PositionLifecycleReceipt lifecycle) {}
     public record PayoffPoint(String price, long profitCents) {}
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
                                            List<PayoffPoint> payoff) {}

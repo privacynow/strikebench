@@ -95,6 +95,31 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void allocatedStockBasisStaysInAccountingAndIgnoresOptionPremium() {
+        var account = books.createAccount("local", account("Basis book", "TAXABLE", null));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "INTC", null, null, null, 100, 1, "140.00")));
+        books.record("local", account.id(), trade("2026-01-03", 0L,
+                leg("OPTION", "SELL", "OPEN", "INTC", "CALL", "130", "2026-08-21", 1, 100, "2.00")));
+        var lots = books.lots("local", account.id(), false);
+        String stock = lots.stream().filter(lot -> "STOCK".equals(lot.instrumentType()))
+                .findFirst().orElseThrow().id();
+        String option = lots.stream().filter(lot -> "OPTION".equals(lot.instrumentType()))
+                .findFirst().orElseThrow().id();
+
+        var basis = books.allocatedStockBasis("local", account.id(), List.of(
+                new PortfolioAccountingService.LotAllocation(stock, 40),
+                new PortfolioAccountingService.LotAllocation(option, 1)));
+
+        assertThat(basis.available()).isTrue();
+        assertThat(basis.shares()).isEqualTo(40L);
+        assertThat(basis.trackedTaxBasisPerShareCents()).isEqualTo(14_000L);
+        assertThat(basis.economicBasisPerShareCents()).isEqualTo(14_000L);
+        assertThat(basis.sourceLotIds()).containsExactly(stock);
+        assertThat(basis.basis()).contains("accounting owner").contains("separate");
+    }
+
+    @Test
     void sameTimestampLotsUseAppendSequenceForDeterministicFifoAndLifo() {
         var fifo = books.createAccount("local", account("FIFO", "TAXABLE", null));
         books.record("local", fifo.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "fifo-first",

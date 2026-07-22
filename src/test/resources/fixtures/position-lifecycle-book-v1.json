@@ -1,0 +1,45 @@
+{
+  "fixtureVersion": "position-lifecycle-book-v1",
+  "synthetic": true,
+  "ownerAccountRecord": false,
+  "account": {
+    "settlementBalanceCents": 102011128,
+    "pendingDebitCents": 361099,
+    "shortPutObligationCents": 101650000,
+    "genuinelyFreeCents": 29,
+    "collateralIncomeAuthority": "BROKER_REPORTED"
+  },
+  "shortPutGroups": [
+    {"symbol": "AMD", "contracts": 8, "strikeCents": 45000, "expiration": "2031-08-07"},
+    {"symbol": "AMD", "contracts": 1, "strikeCents": 50000, "expiration": "2031-08-07"},
+    {"symbol": "AVGO", "contracts": 1, "strikeCents": 33000, "expiration": "2031-08-07"},
+    {"symbol": "AVGO", "contracts": 1, "strikeCents": 35000, "expiration": "2031-08-07"},
+    {"symbol": "INTC", "contracts": 10, "strikeCents": 8000, "expiration": "2031-08-07"},
+    {"symbol": "INTC", "contracts": 10, "strikeCents": 8500, "expiration": "2031-08-07"},
+    {"symbol": "INTC", "contracts": 1, "strikeCents": 9500, "expiration": "2031-08-07"},
+    {"symbol": "MU", "contracts": 1, "strikeCents": 70000, "expiration": "2031-08-07"},
+    {"symbol": "MU", "contracts": 1, "strikeCents": 75000, "expiration": "2031-08-07"},
+    {"symbol": "NVDA", "contracts": 1, "strikeCents": 18000, "expiration": "2031-08-07"},
+    {"symbol": "QQQ", "contracts": 3, "strikeCents": 67000, "expiration": "2031-08-07"}
+  ],
+  "coveredCallCases": [
+    {"symbol": "INTC", "contracts": 1, "strikeCents": 13000, "taxLotBasisCents": 14000,
+      "case": "BELOW_TAX_LOT_BASIS"},
+    {"symbol": "JEPQ", "contracts": 12, "strikeCents": 6000, "spotCents": 6000,
+      "case": "ATM_ON_COVERED_CALL_FUND"}
+  ],
+  "confirmedEventCrossings": [
+    {"symbol": "GOOGL", "date": "2031-07-22", "session": "AFTER_CLOSE"},
+    {"symbol": "INTC", "date": "2031-07-23", "session": "AFTER_CLOSE"},
+    {"symbol": "MSFT", "date": "2031-07-29", "session": "AFTER_CLOSE"},
+    {"symbol": "AMD", "date": "2031-08-04", "session": "AFTER_CLOSE"}
+  ],
+  "workspaceStress": {
+    "bookRows": 18,
+    "candidateRows": 14,
+    "positionLegs": 6,
+    "eventRows": 8,
+    "newsRows": 12,
+    "longVerdictCharacters": 180
+  }
+}
