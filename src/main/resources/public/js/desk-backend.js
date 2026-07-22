@@ -2913,6 +2913,9 @@
         plans: planRows,
         accountPlans: accountPlans,
         universe: values.universe.available ? values.universe.value : null,
+        positionAnalyses: {},
+        lifecycle: { phase: tradePage.trades.length ? 'loading' : 'empty',
+          available: 0, unavailable: 0 },
         recentTradeId: recentCommittedTradeId && tradePage.trades.some(function (trade) {
           return String(trade && trade.id) === String(recentCommittedTradeId);
         }) ? recentCommittedTradeId : null,
@@ -2933,6 +2936,7 @@
       // Do not await optional market/news reads: positions and Book actions remain interactive
       // while a cold observed provider or source cache is warming.
       hydrateBookContext(seq, contextSeq, before, data, data.homeContext.symbols);
+      hydrateBookLifecycle(seq, before, data, tradePage.trades);
       return data;
     } catch (error) {
       if (seq !== bookRequestSeq) return null;
@@ -2945,6 +2949,59 @@
       });
       throw error;
     }
+  }
+
+  /**
+   * Enrich the already-published Book with the canonical lifecycle receipt carried by each
+   * existing trade-detail response. Three bounded readers avoid a request burst; failures stay
+   * explicit per position and never block the roster, market context, or Book risk.
+   */
+  async function hydrateBookLifecycle(bookSeq, identitySnapshot, data, trades) {
+    var rows = Array.isArray(trades) ? trades.slice() : [];
+    if (!rows.length || bookSeq !== bookRequestSeq) return;
+    var cursor = 0, analyses = {}, unavailable = {};
+    async function worker() {
+      while (bookSeq === bookRequestSeq) {
+        var index = cursor++;
+        if (index >= rows.length) return;
+        var trade = rows[index] || {}, id = trade.id == null ? '' : String(trade.id);
+        if (!id) continue;
+        var slot = await readSlot('positionLifecycle:' + id,
+          '/api/trades/' + encodeURIComponent(id));
+        if (bookSeq !== bookRequestSeq) return;
+        if (!slot.available || !slot.value || !slot.value.trade
+            || String(slot.value.trade.id) !== id || !slot.value.analysis) {
+          unavailable[id] = slot.error && slot.error.message
+            || 'The current lifecycle receipt is unavailable.';
+          continue;
+        }
+        analyses[id] = slot.value.analysis;
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(3, rows.length) }, worker));
+    if (bookSeq !== bookRequestSeq) return;
+    try {
+      var after = await readIdentitySnapshot();
+      if (bookSeq !== bookRequestSeq) return;
+      assertSameReadIdentity(identitySnapshot, after);
+    } catch (error) {
+      if (bookSeq !== bookRequestSeq) return;
+      data.lifecycle = { phase: 'unavailable', available: 0,
+        unavailable: rows.length, reason: errorReceipt(error).message };
+      notify('book-lifecycle', { operation: 'book-lifecycle', requestId: bookSeq,
+        book: state.book, data: data });
+      return;
+    }
+    data.positionAnalyses = analyses;
+    data.positionAnalysisErrors = unavailable;
+    data.lifecycle = { phase: Object.keys(unavailable).length ? 'partial' : 'ready',
+      available: Object.keys(analyses).length, unavailable: Object.keys(unavailable).length };
+    if (state.book && state.book.requestId === bookSeq) {
+      state.book.data = data;
+      if (Object.keys(unavailable).length) state.book.phase = 'partial';
+    }
+    notify('book-lifecycle', { operation: 'book-lifecycle', requestId: bookSeq,
+      book: state.book, data: data });
   }
 
   function tradeHintFromBook(tradeId) {

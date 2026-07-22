@@ -342,9 +342,18 @@ public final class ApiResponses {
                                          io.liftandshift.strikebench.paper.BookActionProjectionService.ProjectionSet bookActions,
                                          io.liftandshift.strikebench.paper.AccountObjectiveService.CapacityContext capacity,
                                          io.liftandshift.strikebench.position.PositionLifecycleDecisionService.SurfacedReceipt decision) {}
+    public record PracticePositionAnalysis(EvaluationReceipt evaluation,
+                                           io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
+                                           String accountId, String accountName, long availableCashCents,
+                                           String marketLane, String note,
+                                           io.liftandshift.strikebench.position.PositionLifecycleReceipt lifecycle,
+                                           io.liftandshift.strikebench.paper.BookActionProjectionService.ProjectionSet bookActions,
+                                           io.liftandshift.strikebench.paper.AccountObjectiveService.CapacityContext capacity,
+                                           io.liftandshift.strikebench.position.PositionLifecycleDecisionService.DecisionAnalysis decision) {}
     public record PayoffPoint(String price, long profitCents) {}
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
-                                           List<PayoffPoint> payoff) {}
+                                           List<PayoffPoint> payoff,
+                                           PracticePositionAnalysis analysis) {}
     public record OptionLifecycleProjection(String action, int legIndex, String contract,
                                             String expiration, long settlementUnderlyingCents,
                                             String settlementPriceBasis,

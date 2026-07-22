@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.position.AuthorityFacts;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
+import io.liftandshift.strikebench.position.PositionTransformation;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
@@ -25,21 +26,217 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Read-only lifecycle projections over copies of canonical tracked lots. Lot matching and basis
- * allocation mirror tracked accounting; collateral and every risk block are delegated back to
- * {@link PortfolioAccountingService} and {@link BookRiskService}. No projection writes a row.
+ * One read-only projection contract for held-package lifecycle actions. Tracked projections copy
+ * canonical lots and delegate collateral/risk to their existing owners; Practice projections
+ * delegate exact closes and contractual conversions to {@link TradeService}. No projection writes
+ * an accounting, ledger, trade, reserve, or position row.
  */
 public final class BookActionProjectionService {
     public static final String SCHEMA_VERSION = "book-action-projection-v1";
 
     private final PortfolioAccountingService books;
     private final BookRiskService risk;
+    private final AccountService practiceAccounts;
+    private final TradeService practiceTrades;
+    private final PositionsService practicePositions;
     private final Clock clock;
 
     public BookActionProjectionService(PortfolioAccountingService books, BookRiskService risk, Clock clock) {
+        this(books, risk, null, null, null, clock);
+    }
+
+    public BookActionProjectionService(PortfolioAccountingService books, BookRiskService risk,
+                                       AccountService practiceAccounts, TradeService practiceTrades,
+                                       PositionsService practicePositions, Clock clock) {
         this.books = books;
         this.risk = risk;
+        this.practiceAccounts = practiceAccounts;
+        this.practiceTrades = practiceTrades;
+        this.practicePositions = practicePositions;
         this.clock = clock == null ? Clock.systemUTC() : clock;
+    }
+
+    /**
+     * Practice adapter over the same projection contract. Every monetary transition comes from
+     * TradeService's existing unwind/partial-close/lifecycle previews; this method only composes
+     * their already-calculated account snapshots and never writes the Practice ledger.
+     */
+    public ProjectionSet projectPractice(String tradeId, PositionLifecycleReceipt lifecycle) {
+        requirePracticeDependencies();
+        TradeRecord trade = practiceTrades.get(tradeId);
+        if (!TradeRecord.ACTIVE.equals(trade.status())) {
+            throw new IllegalStateException("trade is " + trade.status()
+                    + "; only ACTIVE Practice positions can be projected");
+        }
+        if (lifecycle == null) throw new IllegalArgumentException("lifecycle receipt is required");
+        Account account = practiceAccounts.get(trade.accountId());
+        Map<String, Long> shares = practiceShareQuantities(trade.accountId());
+        long obligation = practiceTrades.theoreticalShortPutObligationCents(trade.accountId());
+        long packagePutObligation = lifecycle.assignmentExit().legs().stream()
+                .filter(leg -> leg.optionType() == OptionType.PUT)
+                .mapToLong(PositionLifecycleReceipt.AssignmentLeg::strikeDollarsCents).sum();
+        List<ActionProjection> actions = new ArrayList<>();
+        actions.add(practiceSnapshot("HOLD", 0, trade.qty(), account.cashCents(),
+                account.reservedCents(), obligation, shares, BasisEffect.none(),
+                ExecutableCost.none(), true, null,
+                List.of(new ActionStep("HOLD", "AVAILABLE",
+                        "The Practice ledger, reserve, and share inventory remain unchanged."))));
+
+        ActionProjection closeAll = null;
+        for (int quantity = 1; quantity <= trade.qty(); quantity++) {
+            String action = quantity == trade.qty() ? "CLOSE_ALL"
+                    : quantity == 1 ? "CLOSE_ONE" : "CLOSE_K";
+            try {
+                long closingCash;
+                long closingFees;
+                long reserveRelease;
+                if (quantity == trade.qty()) {
+                    var unwind = practiceTrades.previewUnwind(tradeId);
+                    closingCash = unwind.closingCashCents();
+                    closingFees = unwind.closingFeesCents();
+                    reserveRelease = unwind.current().risk().reserveCents();
+                } else {
+                    var partial = practiceTrades.previewPartialClose(tradeId, quantity);
+                    closingCash = partial.closingCashCents();
+                    closingFees = partial.closingFeesCents();
+                    reserveRelease = partial.reserveReleaseCents();
+                }
+                long cashAfter = Math.subtractExact(Math.addExact(account.cashCents(), closingCash), closingFees);
+                long reserveAfter = Math.max(0, Math.subtractExact(account.reservedCents(), reserveRelease));
+                long obligationReleased = proportional(packagePutObligation, quantity, trade.qty());
+                long obligationAfter = Math.max(0, Math.subtractExact(obligation, obligationReleased));
+                Long optionCash = lifecycle.currentChoice().close().signedOptionExecutableCloseCashCents();
+                long proportionalOptionCash = optionCash == null ? closingCash
+                        : proportional(optionCash, quantity, trade.qty());
+                ExecutableCost cost = new ExecutableCost(closingCash, proportionalOptionCash,
+                        closingFees, Math.subtractExact(closingCash, closingFees),
+                        lifecycle.currentChoice().close().priceAuthority(),
+                        "Canonical Practice executable close sides and configured closing fees; no order is placed.");
+                ActionProjection projected = practiceSnapshot(action, quantity, trade.qty() - quantity,
+                        cashAfter, reserveAfter, obligationAfter, shares,
+                        new BasisEffect(0, 0, 0, 0,
+                                "Practice opening basis remains in the append-only trade record; this read performs no tax-lot mutation."),
+                        cost, true, null,
+                        List.of(new ActionStep("CLOSE_EXISTING", "AVAILABLE",
+                                "TradeService reprices and recomputes the exact surviving Practice package.")));
+                actions.add(projected);
+                if (quantity == trade.qty()) closeAll = projected;
+            } catch (RuntimeException unavailable) {
+                ActionProjection projected = practiceUnavailable(action, quantity,
+                        trade.qty() - quantity, unavailable.getMessage(), trade);
+                actions.add(projected);
+                if (quantity == trade.qty()) closeAll = projected;
+            }
+        }
+
+        addPracticeConversion(actions, trade, lifecycle, account, shares, obligation,
+                OptionType.PUT, "ASSIGNMENT", PositionTransformation.Action.ASSIGNMENT);
+        addPracticeConversion(actions, trade, lifecycle, account, shares, obligation,
+                OptionType.CALL, "CALL_AWAY", PositionTransformation.Action.ASSIGNMENT);
+        if (closeAll != null) {
+            actions.add(new ActionProjection("ROLL", trade.qty(), 0, false,
+                    "A roll is two decisions. The existing close is priced; exact replacement contracts are required before the open can be projected.",
+                    closeAll.snapshot(), closeAll.basisEffect(), closeAll.executableCost(),
+                    List.of(new ActionStep("CLOSE_EXISTING", closeAll.available() ? "AVAILABLE" : "UNAVAILABLE",
+                                    closeAll.available() ? "Uses the canonical Practice close preview."
+                                            : closeAll.unavailableReason()),
+                            new ActionStep("OPEN_REPLACEMENT", "UNAVAILABLE",
+                                    "No exact replacement package was supplied.")),
+                    fingerprint("ROLL:PRACTICE", trade.id(), closeAll.fingerprint())));
+        }
+        return new ProjectionSet(SCHEMA_VERSION, trade.accountId(), lifecycle.positionFingerprint(),
+                OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), List.copyOf(actions),
+                "Read-only Practice projections reuse TradeService transformations and AccountService balances. "
+                        + "No ledger, trade, reserve, position, or tracked-account row is changed; tracked tax accounting is not inferred.");
+    }
+
+    private void addPracticeConversion(List<ActionProjection> actions, TradeRecord trade,
+                                       PositionLifecycleReceipt lifecycle, Account account,
+                                       Map<String, Long> shares, long obligation,
+                                       OptionType type, String action,
+                                       PositionTransformation.Action transformation) {
+        List<Integer> candidates = new ArrayList<>();
+        for (int i = 0; i < trade.legs().size(); i++) {
+            Leg leg = trade.legs().get(i);
+            if (!leg.isStock() && leg.action() == LegAction.SELL && leg.type() == type) candidates.add(i);
+        }
+        if (candidates.isEmpty()) return;
+        if (candidates.size() != 1) {
+            actions.add(practiceUnavailable(action, trade.qty(), 0,
+                    "Multiple short " + type.name().toLowerCase(Locale.ROOT)
+                            + " legs require choosing the exact contract before conversion.", trade));
+            return;
+        }
+        int legIndex = candidates.getFirst();
+        try {
+            var converted = practiceTrades.previewLifecycleConversion(trade.id(), transformation, legIndex);
+            Map<String, Long> afterShares = new LinkedHashMap<>(shares);
+            afterShares.merge(trade.symbol(), converted.sharesDelta(), Math::addExact);
+            afterShares.entrySet().removeIf(entry -> entry.getValue() == 0);
+            long selectedObligation = type == OptionType.PUT
+                    ? lifecycle.assignmentExit().legs().stream()
+                        .filter(leg -> leg.optionType() == type).findFirst()
+                        .map(PositionLifecycleReceipt.AssignmentLeg::strikeDollarsCents).orElse(0L)
+                    : 0L;
+            long cashDelta = Math.subtractExact(converted.projectedCashAfterCents(), account.cashCents());
+            ActionProjection projected = practiceSnapshot(action, trade.qty(),
+                    converted.exactSurvivorRequest() == null ? 0 : converted.exactSurvivorRequest().qty(),
+                    converted.projectedCashAfterCents(), converted.projectedReservedAfterCents(),
+                    Math.max(0, Math.subtractExact(obligation, selectedObligation)), afterShares,
+                    new BasisEffect(0, 0, 0, 0,
+                            "Practice does not infer tracked tax-lot basis. "
+                                    + String.join(" ", converted.basisNotes())),
+                    new ExecutableCost(cashDelta, converted.optionSettlementCashCents(), 0L, cashDelta,
+                            PositionDomain.PriceAuthority.MODELED,
+                            "Contractual lifecycle conversion from TradeService; broker-specific fees remain unavailable."),
+                    true, null, List.of(new ActionStep(action, "AVAILABLE",
+                            "TradeService projected the exact option leg through the current Practice lane.")));
+            actions.add(projected);
+        } catch (RuntimeException unavailable) {
+            actions.add(practiceUnavailable(action, trade.qty(), 0, unavailable.getMessage(), trade));
+        }
+    }
+
+    private ActionProjection practiceSnapshot(String action, int quantityAffected, int quantityRemaining,
+                                                long cash, long reserve, long shortPutObligation,
+                                                Map<String, Long> shares, BasisEffect basis,
+                                                ExecutableCost cost, boolean available,
+                                                String unavailableReason, List<ActionStep> steps) {
+        BookSnapshot snapshot = new BookSnapshot(
+                new AuthorityFacts.SignedMoneyFact(cash, PositionDomain.FactAuthority.SYSTEM_CALCULATED,
+                        "Canonical Practice AccountService cash after the read-only action projection."),
+                new AuthorityFacts.MoneyFact(reserve, PositionDomain.FactAuthority.SYSTEM_CALCULATED,
+                        "Canonical Practice reserve after the read-only TradeService projection."),
+                new AuthorityFacts.MoneyFact(shortPutObligation, PositionDomain.FactAuthority.SYSTEM_CALCULATED,
+                        "Gross short-put strike obligation from the canonical Practice portfolio-heat calculation."),
+                Map.copyOf(shares), null, null);
+        return new ActionProjection(action, quantityAffected, quantityRemaining, available,
+                unavailableReason, snapshot, basis, cost, List.copyOf(steps),
+                fingerprint("PRACTICE:" + action + ":" + quantityAffected, snapshot, basis, cost));
+    }
+
+    private static ActionProjection practiceUnavailable(String action, int quantityAffected,
+                                                        int quantityRemaining, String reason,
+                                                        TradeRecord trade) {
+        String message = reason == null || reason.isBlank()
+                ? "The canonical Practice transformation is unavailable." : reason;
+        return new ActionProjection(action, quantityAffected, quantityRemaining, false, message,
+                null, BasisEffect.none(), ExecutableCost.unavailable(message), List.of(),
+                fingerprint("PRACTICE:" + action + ":UNAVAILABLE", trade.id(), message));
+    }
+
+    private Map<String, Long> practiceShareQuantities(String accountId) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        for (PositionsService.Position position : practicePositions.records(accountId)) {
+            out.put(position.symbol(), position.shares());
+        }
+        return out;
+    }
+
+    private void requirePracticeDependencies() {
+        if (practiceAccounts == null || practiceTrades == null || practicePositions == null) {
+            throw new IllegalStateException("Practice projection dependencies were not configured");
+        }
     }
 
     public ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,

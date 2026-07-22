@@ -330,11 +330,11 @@ public final class ApiServer {
         var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(
                 clock, eventCalendar);
         var bookActionProjections = new io.liftandshift.strikebench.paper.BookActionProjectionService(
-                portfolioBooks, bookRisk, clock);
+                portfolioBooks, bookRisk, accounts, trades, positions, clock);
         var lifecycleDecisions = new io.liftandshift.strikebench.position.PositionLifecycleDecisionService(
                 db, clock);
         var trackedPackageAnalyses = new TrackedPackageAnalysisService(
-                portfolioBooks, trades, evaluations, accountObjectives, heldPositionEconomics,
+                portfolioBooks, accounts, trades, evaluations, accountObjectives, heldPositionEconomics,
                 bookActionProjections, lifecycleDecisions);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, trackedPackageAnalyses,
@@ -344,7 +344,7 @@ public final class ApiServer {
         tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin,
-                exactAssessmentOverride);
+                exactAssessmentOverride, trackedPackageAnalyses);
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
         var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
         discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,
