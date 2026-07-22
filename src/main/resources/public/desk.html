@@ -2597,7 +2597,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .histwrap{display:flex;flex-direction:column;gap:4px;min-width:0}
 .histctl{display:flex;flex-wrap:wrap;align-items:center;gap:3px;row-gap:3px}
 .histspacer{flex:1}
-.histpill{border:1px solid var(--line-soft);background:var(--panel-2);color:var(--dim);border-radius:5px;font:700 var(--f-2xs) var(--mono);padding:1px 5px;cursor:pointer}
+.histpill{border:1px solid var(--line-soft);background:var(--panel-2);color:var(--dim);border-radius:5px;font:700 var(--f-2xs) var(--mono);padding:1px 4px;cursor:pointer}
 .histpill:hover:not(.off){color:var(--text);border-color:var(--accent-2)}
 .histpill.on{color:var(--accent);border-color:var(--accent-2);background:var(--accent-wash)}
 .histpill.off{opacity:.35;cursor:default}
@@ -2606,24 +2606,59 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .histseg button.on{background:var(--accent-wash);color:var(--accent)}
 .histchip{border:1px solid var(--line-soft);background:var(--panel-2);color:var(--faint);border-radius:5px;font:600 var(--f-2xs) var(--mono);padding:1px 5px;cursor:pointer;margin-left:2px}
 .histchip.on{color:var(--violet);border-color:var(--violet);background:var(--violet-wash)}
-.histchart{width:100%;height:132px;min-height:0;display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
-.histchart text{font-family:var(--mono);font-size:9px;fill:var(--faint)}
+.histchart{width:100%;height:172px;min-height:0;display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
+.histchart text{font-family:var(--mono);font-size:10px;fill:var(--faint)}
 .histstrip{width:100%;height:14px;min-height:0;display:block;cursor:grab}
-.histread{min-height:14px}
-.authhomehistory .histchart{min-height:0;height:110px}
-.authhomehistory .histstrip{min-height:0;height:12px}
-.decmarketband .histchart{height:clamp(96px,11vh,136px)}
-.authresearchpanel .histchart{height:86px}
-.authresearchpanel .histstrip{height:11px}
+.histread{min-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.authhomehistory .histchart{min-height:0;height:168px}
+.authhomehistory .histstrip{min-height:0;height:13px}
+/* the pulse panel: chart and chain side by side where the cell is wide; stacked (and the panel
+   grows, the board already scrolls) below the wide layout. Columns are hard-contained — they can
+   NEVER paint over the footer, and the chart flexes to whatever height the cell provides. */
+.authmarketpulse .pulsecols{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-height:0}
+.authmarketpulse .pulsecols>*{min-height:0;min-width:0;overflow:hidden;display:flex;flex-direction:column}
+.authmarketpulse .amh-facts{margin-left:auto;display:inline-flex;gap:11px;align-items:baseline;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
+.authmarketpulse .amh-facts b{color:var(--dim);font-family:var(--mono)}
+.authmarketpulse .amh-facts .pos{color:var(--profit)} .authmarketpulse .amh-facts .neg{color:var(--loss)}
+@media (min-width:1701px){
+  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(236px,272px);grid-template-rows:minmax(0,1fr);align-items:stretch;flex:1;overflow:hidden}
+  .authmarketpulse .authmarkethero{display:flex;align-items:baseline;gap:10px;flex:none}
+  .authmarketpulse .authhomehistory{flex:1;min-height:0}
+  .authmarketpulse .authhomehistory .histwrap{flex:1;min-height:0}
+  .authmarketpulse .authhomehistory .histchart{height:auto;flex:1;min-height:96px}
+  .authmarketpulse .authchainslice .authchainrows{min-height:0;overflow:hidden}
+  .authmarketpulse .authchainslice .lenshd.sub{margin:0 0 3px;flex-wrap:nowrap;overflow:hidden}
+  .authmarketpulse .authchainslice .lenshd.sub .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .authmarketpulse .authchainslice .lenshd.sub .eyebrow{white-space:nowrap}
+  .authmarketpulse .authchainhead,.authmarketpulse .authchainrow{grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:4px;font-size:var(--f-2xs);padding:0 5px;margin:0;min-height:0;line-height:1.4}
+  .authmarketpulse .authchainrow{height:21px;align-items:center;overflow:hidden}
+  .authmarketpulse .authchainhead{height:15px}
+  .authmarketpulse .authchainrows{gap:1px}
+  .authmarketpulse .authhomehistory .histchart{min-height:84px}
+  .authmarketpulse .authpulsefoot{margin:0;padding-top:4px}
+  .authmarketpulse .authchainrow span,.authmarketpulse .authchainhead span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .authmarketpulse .authchainslice .authreceipt{display:none}
+  .authmarketpulse{padding:9px 12px}
+}
+@media (max-width:1700px){
+  .lv-book #chainBand .authbookpanel{height:auto;min-height:100%}
+}
+/* compact hosts keep every behavior (pills, toggles, hover, drag-zoom) — the context strip is
+   the one enhancement reserved for hosts with room */
+.decmarketband .histchart{height:clamp(120px,14vh,150px)}
+.decmarketband .histstrip{display:none}
+.authresearchpanel .histchart{height:116px}
+.authresearchpanel .histstrip{display:none}
 @media (max-height:1079px){
-  .decmarketband .histstrip{display:none}
-  .decmarketband .histchart{height:clamp(84px,9vh,110px)}
+  .decmarketband .histchart{height:clamp(104px,11vh,128px)}
 }
 /* ONE fan interaction grammar: chart-wide surface, nearest-path hover, accent-hot highlight —
    identical on the idea fan, the position chart, and the book fan */
 .authpathchart [data-auth-line]{transition:stroke-opacity var(--mo-quick) var(--mo-ease),stroke-width var(--mo-quick) var(--mo-ease)}
 .authpathchart [data-auth-line].hot{stroke:var(--accent)!important;stroke-opacity:1!important;stroke-width:2.3!important}
-.authpathchart .mcinteraction,.bookfan .mcinteraction{fill:transparent;pointer-events:all;cursor:crosshair}
+/* the interaction surface is ONE class and must be transparent EVERYWHERE — an unscoped SVG rect
+   defaults to BLACK fill and paints out the whole chart beneath it */
+.mcinteraction{fill:transparent;pointer-events:all;cursor:crosshair}
 .authpathpanel .mcpathread{min-height:15px}
 /* a chosen future (exact fan path) is the active story — the tiles stay unpinned, this strip says why */
 .customstory{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--accent-2);border-radius:8px;background:var(--accent-wash)}
@@ -3362,7 +3397,7 @@ function authPositionPnlFan(p){
   if(!frames.length||!paths.length)return null;var priceFan=authoritativeFanFromAnimation(response),targetDay=Number(priceFan.targetDay||priceFan.horizonDays||frames[frames.length-1].day||1),targetStep=pathProgress.reduce(function(best,day,index){return day<=targetDay?index:best;},0);
   return {n:Number(response&&response.paths&&response.paths.totalPathCount||0),steps:Math.max(0,...paths.map(function(path){return path.length-1;})),horizonDays:Number(priceFan.horizonDays||targetDay),targetDay:targetDay,targetStep:targetStep,frames:frames,paths:paths,pathProgress:pathProgress,focusPathIndex:focusIndex>=0?focusIndex:0,sourcePathIndices:display.map(function(row){return row.sourcePathIndex;}),displayPathRule:canvas.displayPathRule||response&&response.paths&&response.paths.selection||null,fingerprint:response&&response.ensemble&&response.ensemble.fingerprint,valuationFingerprint:response&&response.receipt&&response.receipt.valuationFingerprint,space:'pnl'};
 }
-function authPositionScenarioFan(p){if(!p||!p.authoritativeAnimation)return null;if(p._positionPathView!=='price'){var pnl=authPositionPnlFan(p);if(pnl)return pnl;}return authoritativeFanFromAnimation(p.authoritativeAnimation);}
+function authPositionScenarioFan(p){if(!p||!p.authoritativeAnimation)return null;if(p._positionPathView!=='price'){var pnl=authPositionPnlFan(p);if(pnl)return authFanForLife(pnl,p);}return authFanForLife(authoritativeFanFromAnimation(p.authoritativeAnimation),p);}
 function authPositionScenarioProgress(p,fan){var st=scenSt(p.id),steps=Math.max(1,Number(fan&&fan.steps||1)),target=Math.max(1,Math.min(steps,Number(fan&&fan.targetStep==null?steps:fan.targetStep)));return {t:st.t,targetStep:target,revealFraction:st.t};}
 function drawAuthoritativePositionPaths(p){var svg=document.getElementById('authPath-'+p.id),fan=authPositionScenarioFan(p);if(!svg||!fan||!fan.paths||!fan.paths.length)return;
   var isPnl=fan.space==='pnl',W=Math.max(360,Math.round(svg.clientWidth||520)),H=Math.max(165,Math.round(svg.clientHeight||190)),x0=isPnl?48:13,x1=W-9,y0=11,y1=H-21,pad=0,values=[];
@@ -3377,7 +3412,7 @@ function drawAuthoritativePositionPaths(p){var svg=document.getElementById('auth
   var XDay=function(day){return x0+(x1-x0)*Math.max(0,Math.min(horizonDay,Number(day)))/horizonDay;},pathDay=function(i,path){return fan.pathProgress&&fan.pathProgress[i]!=null?Number(fan.pathProgress[i]):horizonDay*i/Math.max(1,path.length-1);},Y=function(v){return y1-(y1-y0)*(Number(v)-lo)/(hi-lo);},revealX=x0+(x1-x0)*progress.revealFraction,clipId='authPathClip-'+String(p.id).replace(/[^a-zA-Z0-9_-]/g,'');
   function line(path){var d='';path.forEach(function(v,i){d+=(d?' L ':'M ')+XDay(pathDay(i,path)).toFixed(1)+' '+Y(v).toFixed(1);});return d;}
   var g='<defs><clipPath id="'+clipId+'"><rect x="'+x0+'" y="'+y0+'" width="'+Math.max(1,revealX-x0).toFixed(1)+'" height="'+(y1-y0)+'"/></clipPath></defs>'+
-    '<line class="grid" x1="'+x0+'" y1="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'" x2="'+x1+'" y2="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'"/><text x="'+x0+'" y="'+(H-5)+'">now</text><text x="'+x1+'" y="'+(H-5)+'" text-anchor="end">'+Math.round(horizonDay)+' session'+(Math.round(horizonDay)===1?'':'s')+'</text>';
+    '<line class="grid" x1="'+x0+'" y1="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'" x2="'+x1+'" y2="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'"/><text x="'+x0+'" y="'+(H-5)+'">now</text><text x="'+x1+'" y="'+(H-5)+'" text-anchor="end">'+(fan.lifeSessions&&fan.packageExpiration?'exp '+deskEsc(String(fan.packageExpiration).slice(5))+' · ':'')+Math.round(horizonDay)+' session'+(Math.round(horizonDay)===1?'':'s')+'</text>';
   if(storyDay>0&&storyDay<horizonDay*.99)g+='<line x1="'+XDay(storyDay).toFixed(1)+'" y1="'+y0+'" x2="'+XDay(storyDay).toFixed(1)+'" y2="'+y1+'" stroke="var(--accent)" stroke-opacity=".32" stroke-dasharray="3 3"/><text x="'+XDay(storyDay).toFixed(1)+'" y="'+(y0+8)+'" fill="var(--accent)" font-size="9" text-anchor="middle">story lands · '+Math.round(storyDay)+'</text>';
   if(isPnl){g+='<text x="'+(x0-5)+'" y="'+(y0+6)+'" text-anchor="end">'+deskEsc(money(hi))+'</text><text x="'+(x0-5)+'" y="'+y1+'" text-anchor="end">'+deskEsc(money(lo))+'</text>';if(lo<=0&&hi>=0)g+='<text x="'+(x0-5)+'" y="'+(Y(0)+3).toFixed(1)+'" text-anchor="end">$0</text>';}
   if(frames.length>1){var upper='',lower='',innerUpper='',innerLower='',hasInner=frames.every(function(row){return row.p25!=null&&row.p75!=null;});frames.forEach(function(row,i){var xx=XDay(row.day==null?horizonDay*i/(frames.length-1):row.day);upper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p90).toFixed(1);if(hasInner)innerUpper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p75).toFixed(1);});for(var ri=frames.length-1;ri>=0;ri--){var row=frames[ri],xx=XDay(row.day==null?horizonDay*ri/(frames.length-1):row.day);lower+=' L '+xx.toFixed(1)+' '+Y(row.p10).toFixed(1);if(hasInner)innerLower+=' L '+xx.toFixed(1)+' '+Y(row.p25).toFixed(1);}
@@ -3409,7 +3444,8 @@ function hoverPositionPath(p,index,on){
   read._hot=true;
   read.textContent=(index===fan.focusPathIndex?'Focus path · ends ':'Ends ')+(isPnl?money(terminal):'$'+terminal.toFixed(2))+(index===fan.focusPathIndex?' · click to play or pause':' · click to pin this exact future');}
 function positionPathPrompt(fan){return (fan&&fan.space==='pnl'?'Hover a possible future to inspect its P/L · click to pin that exact path':'Hover a possible future to inspect it · click to pin that exact path')+fanSaturationNote(fan);}
-function drawAuthoritativePositionRisk(p){var svg=document.getElementById('authScenarioRisk-'+p.id),row=authPositionFocusedScenario(p),steps=row&&row.steps||[];if(!svg)return;var W=Math.max(300,Math.round(svg.clientWidth||500)),H=44,points=steps.map(function(step){var d=step&&step.greeks&&authNumber(step.greeks.deltaShares),pl=authNumber(step&&step.focusPnlCents);return d==null||pl==null?null:{d:d,pl:pl/100};}).filter(Boolean);svg.setAttribute('viewBox','0 0 '+W+' '+H);
+function drawAuthoritativePositionRisk(p){var svg=document.getElementById('authScenarioRisk-'+p.id),row=authPositionFocusedScenario(p),steps=row&&row.steps||[];if(!svg)return;
+  var lifeS=authLifeSessions(p);steps=steps.filter(function(step,i){return Number(step&&step.sessionProgress==null?i:step.sessionProgress)<=lifeS+1e-6;});var W=Math.max(300,Math.round(svg.clientWidth||500)),H=44,points=steps.map(function(step){var d=step&&step.greeks&&authNumber(step.greeks.deltaShares),pl=authNumber(step&&step.focusPnlCents);return d==null||pl==null?null:{d:d,pl:pl/100};}).filter(Boolean);svg.setAttribute('viewBox','0 0 '+W+' '+H);
   if(!points.length){svg.innerHTML='<line class="track" x1="8" y1="22" x2="'+(W-8)+'" y2="22"/><text x="'+W/2+'" y="17" text-anchor="middle" fill="var(--faint)" font-size="9">Risk journey unavailable</text>';return;}
   var ds=points.map(function(x){return x.d;}),pls=points.map(function(x){return x.pl;}),dlo=Math.min.apply(0,ds),dhi=Math.max.apply(0,ds),plo=Math.min.apply(0,pls),phi=Math.max.apply(0,pls);if(dhi===dlo){dlo-=1;dhi+=1;}if(phi===plo){plo-=1;phi+=1;}var X=function(v){return 10+(W-20)*(v-dlo)/(dhi-dlo);},Y=function(v){return 37-30*(v-plo)/(phi-plo);},g='<line class="track" x1="10" y1="37" x2="'+(W-10)+'" y2="37"/>';
   points.forEach(function(pt){g+='<circle class="checkpoint" cx="'+X(pt.d).toFixed(1)+'" cy="'+Y(pt.pl).toFixed(1)+'" r="2.6"/>';});var frame=authoritativeFrame(p,scenSt(p.id).t),fd=frame&&frame.greeks&&authNumber(frame.greeks.delta),fp=frame&&authNumber(frame.pnl);if(fd!=null&&fp!=null)g+='<circle class="live" cx="'+X(fd).toFixed(1)+'" cy="'+Y(fp).toFixed(1)+'" r="4.5"><title>'+deskEsc(p.sym)+' · Δ '+Number(fd).toFixed(2)+' · '+authSigned(fp)+'</title></circle>';svg.innerHTML=g;}
@@ -3514,7 +3550,7 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
       '<span class="tk now">now</span>'+
       '<input class="scrub" type="range" min="0" max="100" value="'+Math.round(st.t*100)+'" data-wf="scrub" aria-label="scrub through the move" '+(authReady?'':'disabled')+'>'+
       (p.authoritative
-        ?'<span class="tk end" title="Playback runs the whole stored path; the story lands at its own marked day">+'+Math.round(authoritativeHorizon(p))+'d</span>'
+        ?'<span class="tk end" title="Playback runs the stored path through the package’s life; the story lands at its own marked day">+'+Math.round(authLifeSessions(p))+'d</span>'
         :'<span class="tk end '+(mag>=0?'pos':'neg')+'">'+(mag>0?'+':'')+Math.round(mag)+'% · +'+tDisp(days,tu)+'</span>')+
       '<span class="spd">'+[1,2,4].map(function(s){return '<button class="'+(st.speed===s?'on':'')+'" data-wf="spd" data-s="'+s+'">'+s+'×</button>';}).join('')+'</span></div>'+
     '<div class="smstps">'+stp('mag','move',(mag>0?'+':'')+mag+'%',mag>=0?'pos':'neg')+(p.isHeld?'':stp('iv','vol',(iv>0?'+':'')+iv+' IV',iv>0?'warn':''))+timeStp+'</div>'+
@@ -3963,15 +3999,15 @@ function pinScen(s, si){
   stopScen(s);
   if(si==null || String(cur)===String(si)){ delete pinnedScen[p.id]; delete pinMag[p.id]; delete pinIV[p.id]; delete pinDays[p.id]; delete pinTUnit[p.id]; p._authoritativeScenarioQueued=false;p._authoritativeScenarioError=null;p.authoritativeAnimation=null;if(p.isHeld){window.clearTimeout(p._positionScenarioTimer);p._positionScenarioUiSeq=(p._positionScenarioUiSeq||0)+1;p._positionScenarioRequestId=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;}
     if(p.authoritative&&decide&&decide.ensemble){decide.animation=null;decide._mc=authoritativeFanFromEnsemble(decide.ensemble);} s.refresh(); renderAtPrice(s); }
-  else { var sc=SCEN[+si]||{}, maxDays=authoritativeHorizon(p);if(p.isHeld){p.authoritativeAnimation=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;} pinnedScen[p.id]=+si; pinMag[p.id]=sc.m||0; pinIV[p.id]=sc.iv||0; pinDays[p.id]=Math.min(maxDays,sc.d||0); scenSt(p.id).t=0; s.refresh();
+  else { var sc=SCEN[+si]||{}, maxDays=authLifeSessions(p);if(p.isHeld){p.authoritativeAnimation=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;} pinnedScen[p.id]=+si; pinMag[p.id]=sc.m||0; pinIV[p.id]=sc.iv||0; pinDays[p.id]=Math.min(maxDays,sc.d||0); scenSt(p.id).t=0; s.refresh();
     if(!requestAuthoritativeScenario(s,true))playScen(s); }
 }
 /* edit an assumption on the pinned scenario (mag / iv / days), clamped to sane ranges */
 function adjustAsm(s, key, d){ var p=s.obj(); if(!(p.id in pinnedScen))return;
   if(key==='mag'){ pinMag[p.id]=Math.max(-40,Math.min(40,magOf(p)+d)); }
   else if(key==='iv'){ pinIV[p.id]=Math.max(-30,Math.min(60,ivOf(p)+d)); }
-  else if(key==='days'){ var maxDays=authoritativeHorizon(p);
-    pinDays[p.id]=Math.max(p.authoritative?1:0,Math.min(maxDays,daysOf(p)+d*tStep(tUnitOf(p)))); }   /* stored fans use whole sessions */
+  else if(key==='days'){ var maxDays=authLifeSessions(p);
+    pinDays[p.id]=Math.max(p.authoritative?1:0,Math.min(maxDays,daysOf(p)+d*tStep(tUnitOf(p)))); }   /* stored fans use whole sessions, bounded by the package's life */
   patchScenarioAssumptions(s);
 }
 function setTUnit(s, u){ var p=s.obj(); if(!(p.id in pinnedScen))return; var d=daysOf(p); pinTUnit[p.id]=u;
@@ -4029,6 +4065,49 @@ function authoritativePosition(source,p){
   var key=p&&p.isHeld?String(p.id):'PROPOSED:'+p.id;
   return source&&Array.isArray(source.positions)?source.positions.find(function(row){return row.key===key;}):null;
 }
+/* The scenario timeline ends when the PACKAGE's life ends, not when the ensemble does. A plan's
+   stored fan may run 45 sessions while its package expires at 22 — after expiry the position no
+   longer exists, its P/L is settled, and drawing or animating the afterlife reads as a frozen
+   chart against a still-moving market. Life = last checkpoint at or before the earliest leg
+   expiration (session dates from the same canvas; calendar approximation as the fallback). */
+function authPackageExpiration(p){
+  var dates=(p&&p.legs||[]).map(function(l){return l.expiration;}).filter(Boolean).sort();
+  return dates[0]||p&&p.exp||null;}
+function authLifeIndex(p){
+  var source=authoritativeCanvas(p);
+  if(!source)return null;
+  var detailed=Array.isArray(source.underlyingSteps)&&source.underlyingSteps.length>1;
+  var rows=detailed?source.underlyingSteps:(source.underlying||[]);
+  if(!rows.length)return null;
+  var expiration=authPackageExpiration(p);
+  if(!expiration)return {index:rows.length-1,sessions:Number(rows[rows.length-1].sessionProgress==null?rows.length-1:rows[rows.length-1].sessionProgress)};
+  var index=rows.length-1,dated=rows.some(function(r){return r.sessionDate;});
+  if(dated){index=0;for(var i=0;i<rows.length;i++){if(!rows[i].sessionDate||String(rows[i].sessionDate)<=String(expiration))index=i;else break;}}
+  else {var receipt=p.authoritativeAnimation&&p.authoritativeAnimation.receipt,anchor=receipt&&receipt.anchorDate;
+    if(anchor){var sessions=histSessionsUntil(expiration,anchor);if(sessions!=null){index=0;for(var k=0;k<rows.length;k++){var pr=Number(rows[k].sessionProgress==null?k:rows[k].sessionProgress);if(pr<=sessions+1e-6)index=k;else break;}}}}
+  var row=rows[index];
+  return {index:index,sessions:Number(row.sessionProgress==null?index:row.sessionProgress)};}
+function authLifeSessions(p){var life=authLifeIndex(p);return life&&life.sessions>0?life.sessions:Math.max(1,Number(authoritativeHorizon(p)||1));}
+/* one truncation for every fan consumer: a SHALLOW copy of the fan cut at the package's life —
+   cached artifacts are never mutated, and the uniform step grid keeps every mapping exact */
+function authFanForLife(fan,p){
+  if(!fan||!p)return fan;
+  var life=authLifeIndex(p);if(!life||!(life.sessions>0))return fan;
+  var lifeS=life.sessions,full=Number(fan.horizonDays||0);
+  if(!(full>0)||lifeS>=full-1e-6)return fan;
+  var cut=Object.assign({},fan);
+  cut.horizonDays=lifeS;cut.targetDay=Math.min(Number(fan.targetDay||lifeS),lifeS);
+  if(Array.isArray(fan.frames))cut.frames=fan.frames.filter(function(f){return Number(f.day||0)<=lifeS+1e-6;});
+  var lastIdx=null;
+  if(Array.isArray(fan.pathProgress)&&fan.pathProgress.length){lastIdx=0;for(var i=0;i<fan.pathProgress.length;i++){if(Number(fan.pathProgress[i])<=lifeS+1e-6)lastIdx=i;else break;}cut.pathProgress=fan.pathProgress.slice(0,lastIdx+1);}
+  if(Array.isArray(fan.paths)&&fan.paths.length){
+    var keep=lastIdx!=null?lastIdx+1:Math.max(2,Math.round((fan.paths[0].length-1)*lifeS/full)+1);
+    cut.paths=fan.paths.map(function(path){return path.slice(0,Math.min(path.length,keep));});
+    cut.steps=Math.max(1,keep-1);}
+  cut.targetStep=Math.min(cut.steps||0,Number(fan.targetStep==null?(cut.steps||0):fan.targetStep));
+  cut.lifeSessions=lifeS;cut.packageExpiration=authPackageExpiration(p);
+  return cut;
+}
 function authoritativeFrame(p,t){
   if(!p||!p.authoritative)return null;
   var source=authoritativeCanvas(p);
@@ -4036,10 +4115,7 @@ function authoritativeFrame(p,t){
   var detailed=Array.isArray(source.underlyingSteps)&&source.underlyingSteps.length>1;
   var rows=detailed?source.underlyingSteps:source.underlying;
   function progress(row,idx){return Number(detailed?(row.sessionProgress==null?idx:row.sessionProgress):(row.day==null?idx:row.day));}
-  /* Playback traverses the WHOLE stored path — the story's waypoints condition which paths were
-     selected, but the future does not stop when the story lands; the chart marks that day and
-     the cursor keeps walking the same backend checkpoints to the horizon. Nothing is invented. */
-  var lastIndex=rows.length-1;
+  var life=authLifeIndex(p),lastIndex=life?life.index:rows.length-1;
   var x=Math.max(0,Math.min(lastIndex,t*lastIndex)), i=Math.floor(x), j=Math.min(lastIndex,i+1), w=x-i;
   var ua=rows[i],ub=rows[j],pos=authoritativePosition(source,p);
   var positionRows=pos&&(detailed&&Array.isArray(pos.steps)&&pos.steps.length?pos.steps:pos.days)||[];
@@ -4361,7 +4437,7 @@ function drawHistChart(wrap){
   var rvFull=MKT_CHART.ov.band?histRV(bars,20):null,ma20Full=MKT_CHART.ov.band?(maFull?maFull.m20:histSMA(bars,20)):null;
   var hasVol=MKT_CHART.ov.vol&&daily.some(function(b){return b.v>0;});
   var padL=46,padR=spec.strikes.length||spec.bes.length?52:14,padT=9,padB=15;
-  var volH=hasVol?Math.round((H-padT-padB)*.18):0,plotB=H-padB-volH-(hasVol?3:0);
+  var volH=hasVol?Math.round((H-padT-padB)*.14):0,plotB=H-padB-volH-(hasVol?3:0);
   var rowUnit=weekly?5:1,coneUnits=coneS/rowUnit,U=rows.length+coneUnits;
   var x0=padL,x1=W-padR,plotW=x1-x0;
   var xU=function(u){return x0+plotW*u/Math.max(.0001,U);},barX=function(i){return xU(i+0.5);};
@@ -4376,25 +4452,25 @@ function drawHistChart(wrap){
   var isPct=MKT_CHART.scale==='%',lnLo=Math.log(Math.max(1e-9,lo));
   var Yv=function(v){if(isPct){var t=(Math.log(Math.max(1e-9,v))-lnLo)/Math.max(1e-9,(Math.log(hi)-lnLo));return plotB-(plotB-padT)*t;}return plotB-(plotB-padT)*(v-lo)/Math.max(1e-9,hi-lo);};
   var g='';
-  var ticks=pfTicks(lo,hi,4);
+  var ticks=pfTicks(lo,hi,3);
   ticks.forEach(function(v){var yy=Yv(v);if(yy<padT-1||yy>plotB+1)return;g+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+x1+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)" stroke-dasharray="2 4"/><text x="'+(x0-4)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end">'+(v>=1000?'$'+(v/1000).toFixed(1)+'k':'$'+Math.round(v))+'</text>';});
-  [0,.5,1].forEach(function(f){var idx=Math.round(f*(rows.length-1)),b=rows[idx];if(!b)return;g+='<text x="'+barX(idx).toFixed(1)+'" y="'+(H-3)+'" text-anchor="'+(f===0?'start':f===1&&!coneS?'end':'middle')+'">'+deskEsc(String(b.date).slice(5))+'</text>';});
+  [0,1].forEach(function(f){var idx=Math.round(f*(rows.length-1)),b=rows[idx];if(!b)return;g+='<text x="'+barX(idx).toFixed(1)+'" y="'+(H-3)+'" text-anchor="'+(f===0?'start':(coneS?'middle':'end'))+'">'+deskEsc(String(b.date).slice(5))+'</text>';});
   /* realized ±1σ month envelope (engine vocabulary, not TA decoration) */
   if(rvFull){var bandPts=[];for(var bi=0;bi<rows.length;bi++){var gIdx=weekly?Math.min(bars.length-1,win.start+Math.round((bi+0.5)*rowUnit)):win.start+bi;var m=ma20Full[gIdx],rv=rvFull[gIdx];if(m==null||rv==null){bandPts.push(null);continue;}bandPts.push({x:barX(bi),up:Yv(m*Math.exp(rv*Math.sqrt(21))),dn:Yv(m*Math.exp(-rv*Math.sqrt(21)))});}
     var seg=bandPts.filter(Boolean);if(seg.length>2){var up='',dn='';seg.forEach(function(pt,ix){up+=(ix?' L ':'M ')+pt.x.toFixed(1)+' '+pt.up.toFixed(1);});for(var ri=seg.length-1;ri>=0;ri--)dn+=' L '+seg[ri].x.toFixed(1)+' '+seg[ri].dn.toFixed(1);g+='<path d="'+up+dn+' Z" fill="var(--violet)" fill-opacity=".07"/>';}}
   if(hasVol){var vmax=Math.max.apply(0,rows.map(function(b){return b.v||0;}))||1,vy0=H-padB,vh=volH;
-    rows.forEach(function(b,i){if(!(b.v>0))return;var bw=Math.max(1,Math.min(6,plotW/U*.6)),vhh=Math.max(1,vh*(b.v/vmax));g+='<rect x="'+(barX(i)-bw/2).toFixed(1)+'" y="'+(vy0-vhh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+vhh.toFixed(1)+'" fill="'+(b.c>=b.o?'var(--profit)':'var(--loss)')+'" fill-opacity=".28"/>';});}
+    rows.forEach(function(b,i){if(!(b.v>0))return;var bw=Math.max(1.2,Math.min(8,plotW/U*.7)),vhh=Math.max(1,vh*(b.v/vmax));g+='<rect x="'+(barX(i)-bw/2).toFixed(1)+'" y="'+(vy0-vhh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+vhh.toFixed(1)+'" fill="'+(b.c>=b.o?'var(--profit)':'var(--loss)')+'" fill-opacity=".38"/>';});}
   if(maFull){[['m20','var(--violet)'],['m50','var(--caution)']].forEach(function(cfg){var d='';for(var mi=0;mi<rows.length;mi++){var gi=weekly?Math.min(bars.length-1,win.start+Math.round((mi+0.5)*rowUnit)):win.start+mi;var v=maFull[cfg[0]][gi];if(v==null)continue;d+=(d?' L ':'M ')+barX(mi).toFixed(1)+' '+Yv(v).toFixed(1);}if(d)g+='<path d="'+d+'" fill="none" stroke="'+cfg[1]+'" stroke-width="1.1" stroke-opacity=".75"/>';});}
-  if(view==='candles'){var bw=Math.max(1.2,Math.min(6,plotW/U*.6));
+  if(view==='candles'){var bw=Math.max(1.6,Math.min(9,plotW/U*.72));
     rows.forEach(function(b,i){var x=barX(i),up=b.c>=b.o,col=up?'var(--profit)':'var(--loss)',top=Yv(Math.max(b.o,b.c)),bot=Yv(Math.min(b.o,b.c));
-      g+='<line x1="'+x.toFixed(1)+'" y1="'+Yv(b.h).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+Yv(b.l).toFixed(1)+'" stroke="'+col+'" stroke-opacity=".62"/><rect x="'+(x-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,bot-top).toFixed(1)+'" rx=".7" fill="'+col+'" fill-opacity="'+(up?'.5':'.62')+'"/>';});}
+      g+='<line x1="'+x.toFixed(1)+'" y1="'+Yv(b.h).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+Yv(b.l).toFixed(1)+'" stroke="'+col+'" stroke-opacity=".8"/><rect x="'+(x-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1.2,bot-top).toFixed(1)+'" rx=".7" fill="'+col+'" fill-opacity="'+(up?'.85':'.95')+'"/>';});}
   else {var ld='';rows.forEach(function(b,i){ld+=(ld?' L ':'M ')+barX(i).toFixed(1)+' '+Yv(b.c).toFixed(1);});
-    if(ld){g+='<path d="'+ld+' L '+barX(rows.length-1).toFixed(1)+' '+plotB+' L '+barX(0).toFixed(1)+' '+plotB+' Z" fill="var(--accent)" fill-opacity=".05"/><path d="'+ld+'" fill="none" stroke="var(--accent)" stroke-width="1.6"/><circle cx="'+barX(rows.length-1).toFixed(1)+'" cy="'+Yv(rows[rows.length-1].c).toFixed(1)+'" r="2.4" fill="var(--accent)"/>';}}
+    if(ld){g+='<path d="'+ld+' L '+barX(rows.length-1).toFixed(1)+' '+plotB+' L '+barX(0).toFixed(1)+' '+plotB+' Z" fill="var(--accent)" fill-opacity=".06"/><path d="'+ld+'" fill="none" stroke="var(--accent)" stroke-width="1.8"/><circle cx="'+barX(rows.length-1).toFixed(1)+'" cy="'+Yv(rows[rows.length-1].c).toFixed(1)+'" r="2.6" fill="var(--accent)"/>';}}
   if(coneS&&spec.iv>0){var todayX=xU(rows.length);
-    g+='<line x1="'+todayX.toFixed(1)+'" y1="'+padT+'" x2="'+todayX.toFixed(1)+'" y2="'+plotB+'" stroke="var(--line)" stroke-dasharray="3 3"/><text x="'+todayX.toFixed(1)+'" y="'+(padT+7)+'" text-anchor="middle">today</text>';
+    g+='<line x1="'+todayX.toFixed(1)+'" y1="'+padT+'" x2="'+todayX.toFixed(1)+'" y2="'+plotB+'" stroke="var(--line)" stroke-dasharray="3 3"/>'+(W>=380?'<text x="'+todayX.toFixed(1)+'" y="'+(padT+8)+'" text-anchor="middle">today</text>':'');
     var steps=8,upD='',dnD='';for(var ci=0;ci<=steps;ci++){var t=coneS*ci/steps,cx=xU(rows.length+ (t/rowUnit)),cu=lastClose*Math.exp(spec.iv*Math.sqrt(t/252)),cd=lastClose*Math.exp(-spec.iv*Math.sqrt(t/252));upD+=(ci?' L ':'M ')+cx.toFixed(1)+' '+Yv(cu).toFixed(1);dnD=' L '+cx.toFixed(1)+' '+Yv(cd).toFixed(1)+dnD;}
     g+='<path d="'+upD+dnD+' Z" fill="var(--accent)" fill-opacity=".07"/><path d="'+upD+'" fill="none" stroke="var(--accent-2)" stroke-dasharray="3 3" stroke-width="1"/>';
-    g+='<text x="'+(x1+3)+'" y="'+(Yv(lastClose*Math.exp(spec.iv*Math.sqrt(coneS/252)))+3).toFixed(1)+'" fill="var(--accent-2)">IV ±1σ</text>';
+    if(W>=520)g+='<text x="'+(x1+3)+'" y="'+(Yv(lastClose*Math.exp(spec.iv*Math.sqrt(coneS/252)))+3).toFixed(1)+'" fill="var(--accent-2)">IV ±1σ</text>';
     if(spec.expiry)g+='<text x="'+xU(U).toFixed(1)+'" y="'+(H-3)+'" text-anchor="end" fill="var(--accent-2)">exp '+deskEsc(String(spec.expiry).slice(5))+'</text>';}
   spec.strikes.forEach(function(r){if(r.k<lo||r.k>hi)return;var yy=Yv(r.k);g+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+xU(U).toFixed(1)+'" y2="'+yy.toFixed(1)+'" stroke="'+(r.short?'var(--caution)':'var(--dim)')+'" stroke-opacity=".55" stroke-dasharray="5 4"/><text x="'+(W-2)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end" fill="'+(r.short?'var(--caution)':'var(--dim)')+'">'+deskEsc(r.label)+'</text>';});
   spec.bes.forEach(function(b){if(b<lo||b>hi)return;var yy=Yv(b);g+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+xU(U).toFixed(1)+'" y2="'+yy.toFixed(1)+'" stroke="var(--violet)" stroke-opacity=".55" stroke-dasharray="2 4"/><text x="'+(W-2)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end" fill="var(--violet)">B/E '+Math.round(b)+'</text>';});
@@ -4578,8 +4654,12 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   var active=authHomeContextRow(d,HOME_AUTH_SYMBOL),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
   var marketBody;if(phase==='loading'&&(!active||!active.research))marketBody='<div class="backendnotice">Loading the active market watch in the background. Book actions are ready now.</div>';
   else if(!active||!active.research)marketBody='<div class="backendnotice">Market context is unavailable for '+deskEsc(HOME_AUTH_SYMBOL||'the active universe')+'. Your account and working ideas remain usable.</div>';
-  else {var ch=quote.pct==null?'—':(quote.pct>=0?'+':'')+quote.pct.toFixed(2)+'%',chcls=quote.pct==null?'':quote.pct>=0?'pos':'neg',historyRead=authHomeHistoryRead(active),historyChange=historyRead.change==null?'—':(historyRead.change>=0?'+':'')+historyRead.change.toFixed(1)+'%',historyStatus=authExceptionStatus(historyRead.freshness);marketBody='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(active.symbol)+'</span><span class="amh-change '+chcls+'">'+deskEsc(ch)+' vs close</span><b class="amh-price">'+deskEsc(authHomePrice(quote.price))+'</b></div><div class="authmarketfacts compact">'+
-      '<div class="authmarketfact"><span>Price basis</span><b>'+deskEsc(quote.basis)+'</b></div><div class="authmarketfact"><span>ATM IV</span><b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></div><div class="authmarketfact"><span>3M move</span><b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></div><div class="authmarketfact"><span>Price history</span><b>'+historyRead.sessions+' sessions</b></div></div><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain at the market</span><span class="hint">bid / ask</span></div>'+authHomeChainHTML(active,quote.price||0)+'</div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Analyze '+deskEsc(active.symbol)+'</button></div>';}
+  else {var ch=quote.pct==null?'—':(quote.pct>=0?'+':'')+quote.pct.toFixed(2)+'%',chcls=quote.pct==null?'':quote.pct>=0?'pos':'neg',historyRead=authHomeHistoryRead(active),historyChange=historyRead.change==null?'—':(historyRead.change>=0?'+':'')+historyRead.change.toFixed(1)+'%';
+    /* one hero line carries the facts inline — the chart is this panel's body and gets the height */
+    marketBody='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(active.symbol)+'</span><span class="amh-change '+chcls+'">'+deskEsc(ch)+' vs close</span>'+
+      '<span class="amh-facts"><span>IV <b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></span><span>3M <b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></span><span>'+deskEsc(quote.basis)+'</span></span>'+
+      '<b class="amh-price">'+deskEsc(authHomePrice(quote.price))+'</b></div>'+
+      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain at the market</span><span class="hint">bid / ask · five nearest'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+authHomeChainHTML(active,quote.price||0)+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Analyze '+deskEsc(active.symbol)+'</button></div>';}
   document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market pulse &amp; chain</span><span class="hint">price action · volatility · options</span></div>'+marketBody+'</div>';
   var planRows=plans.slice(0,12).map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});
   if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+authRowsHTML(planRows,'No working ideas. Start a new idea when you are ready.')+'</div>';
@@ -4666,7 +4746,9 @@ function renderAuthoritativeBookFan(){
    chart) — colored by position identity instead of focus, because here the book is the focus. */
 function drawAuthoritativeBookFan(){
   var svg=document.getElementById('authBookFan');if(!svg)return;
-  var W=Math.max(320,Math.round(svg.clientWidth||560)),H=Math.max(170,Math.round(svg.clientHeight||210)),pad={l:52,r:74,t:12,b:22};
+  var W=Math.max(320,Math.round(svg.clientWidth||560)),H=Math.max(170,Math.round(svg.clientHeight||210));
+  /* the right-edge label column only exists where it has room; narrow fans keep sym-only labels */
+  var wideLabels=W>=430,pad={l:52,r:wideLabels?74:26,t:12,b:22};
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
   var ready=POS.map(function(p){return {p:p,slot:BOOK_FAN.rows[p.id]||{}};}).filter(function(e){return e.slot.phase==='ready'&&e.slot.frames.length>1;});
   var loading=POS.some(function(p){return (BOOK_FAN.rows[p.id]||{}).phase==='loading';});
@@ -4715,17 +4797,17 @@ function drawAuthoritativeBookFan(){
   });
   /* ONE consistent label column at the right edge — every ticker reads in the same place, with a
      quiet leader back to its line's true endpoint (lines still end at their own honest horizon) */
-  var labelX=W-pad.r+6;
+  var labelX=W-pad.r+6,labelGap=wideLabels?20:12;
   labels.sort(function(a,b){return a.y-b.y;});
-  labels.forEach(function(lb,i){lb.ly=lb.y;});
-  for(var i=1;i<labels.length;i++)if(labels[i].ly-labels[i-1].ly<20)labels[i].ly=labels[i-1].ly+20;
+  labels.forEach(function(lb){lb.ly=lb.y;});
+  for(var i=1;i<labels.length;i++)if(labels[i].ly-labels[i-1].ly<labelGap)labels[i].ly=labels[i-1].ly+labelGap;
   var overflow=labels.length?labels[labels.length-1].ly-(H-pad.b-4):0;
   if(overflow>0)labels.forEach(function(lb){lb.ly-=overflow;});
   labels.forEach(function(lb){
     g+='<circle cx="'+lb.x.toFixed(1)+'" cy="'+lb.y.toFixed(1)+'" r="2.6" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.35:1)+'" style="pointer-events:none"/>'+
       '<path d="M'+lb.x.toFixed(1)+' '+lb.y.toFixed(1)+' L'+(labelX-3).toFixed(1)+' '+lb.ly.toFixed(1)+'" fill="none" stroke="'+lb.color+'" stroke-opacity="'+(lb.dim?.12:.3)+'" stroke-dasharray="2 3" style="pointer-events:none"/>'+
-      '<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly-2).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>'+
-      '<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.read)+'</text>';
+      '<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+(wideLabels?-2:3)).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>'+
+      (wideLabels?'<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.read)+'</text>':'');
   });
   /* same chart-wide hover/click surface as the other fans: nearest position lights up, click opens it */
   g+='<rect class="mcinteraction" data-fan-surface="1" role="button" aria-label="Hover a position to inspect its fan; choose one to open it" x="'+pad.l+'" y="'+pad.t+'" width="'+(W-pad.l-pad.r)+'" height="'+(H-pad.t-pad.b)+'"/>';
@@ -5359,7 +5441,7 @@ function authoritativePnlFan(c){
   var horizon=Number(result.horizonDays||decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.horizonDays||frames[frames.length-1].day||1),targetDay=Number(decide._mc&&decide._mc.targetDay!=null?decide._mc.targetDay:horizon),targetStep=pathProgress.length?pathProgress.reduce(function(best,day,index){return day<=targetDay?index:best;},0):paths.length?paths[0].length-1:null;
   return {n:Number(result.paths||decide._mc&&decide._mc.n||0),steps:Math.max(0,...paths.map(function(path){return path.length-1;}),frames.length-1),horizonDays:horizon,targetDay:targetDay,targetStep:targetStep,frames:frames,paths:paths,pathProgress:pathProgress,focusPathIndex:focusIndex>=0?focusIndex:paths.length?Math.floor(paths.length/2):0,sourcePathIndices:display.map(function(row){return row.sourcePathIndex;}),displayPathRule:canvas.displayPathRule||null,fingerprint:decide.ensemble&&decide.ensemble.ensemble&&decide.ensemble.ensemble.fingerprint,valuationFingerprint:animation&&animation.receipt&&animation.receipt.valuationFingerprint||saved.valuationFingerprint||saved.ensembleFingerprint,space:'pnl',interpretation:'The selected package valued across the shared market fan.'};
 }
-function decisionFan(c){if(decide&&decide.pathView==='pnl'){var pnl=authoritativePnlFan(c);if(pnl)return pnl;}return decide&&decide._mc||null;}
+function decisionFan(c){if(decide&&decide.pathView==='pnl'){var pnl=authoritativePnlFan(c);if(pnl)return authFanForLife(pnl,c);}var priceFan=decide&&decide._mc||null;return c&&c.authoritative?authFanForLife(priceFan,c):priceFan;}
 function applyAuthoritativePreview(envelope){
   if(!decide||!envelope||!envelope.preview)return;
   decide.orderPreview=envelope;
@@ -6407,7 +6489,7 @@ function drawMCFan(){ var svg=document.getElementById('mcFan'),live=decide&&auth
   if(targetDay>0&&targetDay<horizon)g+='<line x1="'+XDay(targetDay).toFixed(1)+'" y1="'+padT+'" x2="'+XDay(targetDay).toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--accent)" stroke-opacity=".32" stroke-dasharray="3 3"/><text x="'+XDay(targetDay).toFixed(1)+'" y="'+(H-3)+'" fill="var(--accent)" font-size="9" text-anchor="middle">story lands · '+Math.round(targetDay)+'</text>';
   var terminals=(res.paths||[]).map(function(path){return Number(path[path.length-1]);}).filter(Number.isFinite);terminals.forEach(function(value){g+='<line x1="'+(W-padR-4)+'" y1="'+Y(value).toFixed(1)+'" x2="'+(W-padR)+'" y2="'+Y(value).toFixed(1)+'" stroke="var(--dim)" stroke-opacity=".36"/>';});
   if(isPnl){var zero=Y(0);if(zero>=padT&&zero<=H-padB)g+='<line x1="'+padL+'" y1="'+zero.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+zero.toFixed(1)+'" stroke="var(--line)" stroke-dasharray="3 4"/><text x="'+(padL-4)+'" y="'+(zero+3).toFixed(1)+'" fill="var(--faint)" font-size="9" text-anchor="end">$0</text>';g+='<text x="'+(padL-4)+'" y="'+(padT+5)+'" fill="var(--faint)" font-size="9" text-anchor="end">'+deskEsc(money(hi))+'</text><text x="'+(padL-4)+'" y="'+(H-padB)+'" fill="var(--faint)" font-size="9" text-anchor="end">'+deskEsc(money(lo))+'</text>';}
-  g+='<text x="'+padL+'" y="'+(H-3)+'" fill="var(--faint)" font-size="9">now</text><text x="'+(W-padR)+'" y="'+(H-3)+'" fill="var(--faint)" font-size="9" text-anchor="end">'+Math.round(horizon)+' sessions</text>';
+  g+='<text x="'+padL+'" y="'+(H-3)+'" fill="var(--faint)" font-size="9">now</text><text x="'+(W-padR)+'" y="'+(H-3)+'" fill="var(--faint)" font-size="9" text-anchor="end">'+(res.lifeSessions&&res.packageExpiration?'exp '+deskEsc(String(res.packageExpiration).slice(5))+' · ':'')+Math.round(horizon)+' session'+(Math.round(horizon)===1?'':'s')+'</text>';
   g+='<rect class="mcinteraction" data-mc-surface="true" role="button" aria-label="Hover a possible future to inspect it; choose one to play it across the desk" x="'+padL+'" y="'+padT+'" width="'+(W-padL-padR)+'" height="'+(H-padT-padB)+'"/>';
   svg._mcmap={W:W,H:H,padL:padL,padR:padR,padT:padT,padB:padB,horizon:horizon,lo:lo,hi:hi};svg.innerHTML=g; }
 function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)return -1;var source=shown&&shown.sourcePathIndices&&shown.sourcePathIndices[index];if(source!=null&&price.sourcePathIndices&&price.sourcePathIndices.length){var matched=price.sourcePathIndices.indexOf(source);if(matched>=0)return matched;}return index<price.paths.length?index:-1;}
@@ -6449,7 +6531,7 @@ function buildExactPathPins(path,progress,spot,days){
    waypoints, so the backend's nearest-path selection returns the same source row as the focus
    and the desk animates the future the user actually chose, not a nearby named story. */
 function playMCPath(index){
-  var c=authoritativeCandidate(),shown=decisionFan(c),res=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),path=res&&res.paths&&res.paths[priceIndex];
+  var c=authoritativeCandidate(),shown=decisionFan(c),resFull=decide&&decide._mc,res=c&&resFull?(authFanForLife(resFull,c)||resFull):resFull,priceIndex=mcPricePathIndex(index,shown),path=res&&res.paths&&res.paths[priceIndex];
   if(!c||!path||path.length<2)return;
   var start=Number(path[0]),end=Number(path[path.length-1]);
   if(!(start>0)||!Number.isFinite(end))return;
@@ -6470,7 +6552,7 @@ function playMCPath(index){
 /* The same gesture on the Position stage: click ANY drawn path → pin that exact stored future. */
 function pinPositionFanPath(p,index){
   if(!p||!p.isHeld||p._positionScenarioPhase!=='ready'||!p.authoritativeAnimation)return;
-  var priceFan=authoritativeFanFromAnimation(p.authoritativeAnimation),shown=authPositionScenarioFan(p);
+  var priceFan=authFanForLife(authoritativeFanFromAnimation(p.authoritativeAnimation),p),shown=authPositionScenarioFan(p);
   if(!priceFan||!priceFan.paths||!priceFan.paths.length)return;
   var source=shown&&shown.sourcePathIndices?shown.sourcePathIndices[index]:null,priceIndex=index;
   if(source!=null&&priceFan.sourcePathIndices){var matched=priceFan.sourcePathIndices.indexOf(source);if(matched>=0)priceIndex=matched;}
@@ -6478,7 +6560,7 @@ function pinPositionFanPath(p,index){
   var stored=authPositionEnsemble(p),preview=stored&&stored.preview||{};
   var spot=authNumber(preview.spot)||authNumber(preview.receipt&&preview.receipt.anchorSpot)||Number(path[0]);
   if(!(spot>0))return;
-  var days=Math.max(1,Math.round(Number(preview.horizonDays||priceFan.horizonDays||authoritativeHorizon(p)||1)));
+  var days=Math.max(1,Math.round(Number(priceFan.horizonDays||preview.horizonDays||authoritativeHorizon(p)||1)));
   var progress=priceFan.pathProgress&&priceFan.pathProgress.length===path.length?priceFan.pathProgress.map(Number):null;
   var pins=buildExactPathPins(path,progress,spot,days);
   p._customStoryPins={waypoints:pins.waypoints,pathWaypoints:pins.pathWaypoints,movePct:pins.movePct,days:days,
