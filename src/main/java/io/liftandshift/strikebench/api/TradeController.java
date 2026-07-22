@@ -66,6 +66,7 @@ final class TradeController {
     private final PositionsService positions;
     private final EvaluationService evaluations;
     private final ExactAssessment exactAssessment;
+    private final TrackedPackageAnalysisService lifecycleAnalyses;
     private final SnapshotService snapshots;
     private final io.liftandshift.strikebench.auth.AuthService auth;
     private final Function<Context, Account> currentAccount;
@@ -85,7 +86,8 @@ final class TradeController {
                     Function<Context, String> activeWorld,
                     Function<Context, AnalysisContext> analysisContext,
                     Consumer<Context> requireAdmin,
-                    ExactAssessment exactAssessment) {
+                    ExactAssessment exactAssessment,
+                    TrackedPackageAnalysisService lifecycleAnalyses) {
         this.cfg = cfg;
         this.clock = clock;
         this.db = db;
@@ -97,6 +99,7 @@ final class TradeController {
         this.positions = positions;
         this.evaluations = evaluations;
         this.exactAssessment = exactAssessment == null ? evaluations::assessExact : exactAssessment;
+        this.lifecycleAnalyses = lifecycleAnalyses;
         this.snapshots = snapshots;
         this.auth = auth;
         this.currentAccount = currentAccount;
@@ -464,8 +467,17 @@ final class TradeController {
                 log.debug("Paper-trade mark detail for " + id, e);
             }
         }
+        ApiResponses.PracticePositionAnalysis analysis = null;
+        if (TradeRecord.ACTIVE.equals(trade.status()) && lifecycleAnalyses != null) {
+            try {
+                analysis = lifecycleAnalyses.analyzePractice(id);
+            } catch (RuntimeException e) {
+                log.warn("Practice lifecycle analysis is unavailable for {}", id);
+                log.debug("Practice lifecycle analysis detail for " + id, e);
+            }
+        }
         return new ApiResponses.TradeDetail<>(TradeView.of(trade), current,
-                trades.marksHistory(id, 50), audit.forTrade(id, 50), payoffPoints(trade));
+                trades.marksHistory(id, 50), audit.forTrade(id, 50), payoffPoints(trade), analysis);
     }
 
     static long decisionPnl(TradeRecord trade, long packagePnlCents) {

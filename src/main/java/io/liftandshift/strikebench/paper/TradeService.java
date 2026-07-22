@@ -361,6 +361,19 @@ public final class TradeService {
         return new PositionAssessment(assessed.position(), assessed.preview(), bookRisk);
     }
 
+    /**
+     * The exact current package request used by every Practice fresh-eyes and transformation read.
+     * Lifecycle composition consumes this adapter instead of rebuilding persisted trade geometry.
+     */
+    public OpenRequest activePositionRequest(String tradeId) {
+        TradeRecord trade = get(tradeId);
+        if (!TradeRecord.ACTIVE.equals(trade.status())) {
+            throw new IllegalStateException("trade is " + trade.status()
+                    + "; only ACTIVE trades have a current position request");
+        }
+        return activePositionRequest(trade, trade.qty(), trade.sharesLocked());
+    }
+
     /** Adapts an exact proposed package to the shared position contract through this service's one pricing path. */
     public PositionAssessment analyzePositionPackage(String packageId, PositionDomain.PackageSource source,
                                                      PositionDomain.ExecutionLane lane, OpenRequest request) {

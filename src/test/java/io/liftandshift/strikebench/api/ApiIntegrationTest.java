@@ -334,10 +334,27 @@ class ApiIntegrationTest {
         // List / detail
         JsonNode list = Json.parse(get("/api/trades?status=ACTIVE").body());
         assertThat(list.get("total").asLong()).isEqualTo(1);
+        JsonNode beforeLifecycleRead = Json.parse(get("/api/account").body());
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/trade/id").asText()).isEqualTo(tradeId);
         assertThat(detail.get("payoff").size()).isGreaterThan(30);
         assertThat(detail.at("/current/popNow").asDouble()).isBetween(0.0, 1.0);
+        assertThat(detail.at("/analysis/lifecycle/history/available").asBoolean()).isTrue();
+        assertThat(detail.at("/analysis/lifecycle/currentChoice/freshEyesQuestion").asText())
+                .contains("Would you open the exact position");
+        assertThat(detail.at("/analysis/bookActions/positionFingerprint").asText())
+                .isEqualTo(detail.at("/analysis/lifecycle/positionFingerprint").asText());
+        assertThat(detail.at("/analysis/bookActions/actions").findValuesAsText("action"))
+                .contains("HOLD", "CLOSE_ALL", "ROLL");
+        assertThat(detail.at("/analysis/capacity/objectiveDeclared").asBoolean()).isFalse();
+        assertThat(detail.at("/analysis/decision/verdict").asText()).isNotBlank();
+        assertThat(detail.at("/analysis/bookActions/actions/0/snapshot/encumbrance/cents").asLong())
+                .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
+        JsonNode afterLifecycleRead = Json.parse(get("/api/account").body());
+        assertThat(afterLifecycleRead.at("/account/cashCents").asLong())
+                .isEqualTo(beforeLifecycleRead.at("/account/cashCents").asLong());
+        assertThat(afterLifecycleRead.at("/account/reservedCents").asLong())
+                .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
 
         // Refresh writes a mark
         assertThat(post("/api/trades/" + tradeId + "/refresh", "{}").statusCode()).isEqualTo(200);

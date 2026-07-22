@@ -237,7 +237,9 @@
   gap:11px;overflow:hidden}
 .lv-book .book{grid-area:roster;grid-template-columns:1fr;
   grid-template-rows:auto repeat(var(--home-position-count,6),minmax(42px,1fr));grid-auto-rows:minmax(42px,1fr);
-  overflow-x:hidden;overflow-y:auto}
+  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:none;position:relative}
+.lv-book .book>.rosterhd{position:sticky;top:0;z-index:3;background:var(--panel);padding-block:2px}
+.bookoverflowmeta{margin-left:auto;min-width:112px;max-width:150px}.bookoverflowmeta .overflowhair{min-width:58px}
 #riskMain,#bookrisk,#chainBand,#univBand,#sectorBand,#newsBand{display:none}
 #riskMain{position:relative}
 .lv-book #riskMain{display:flex;grid-area:map;flex-direction:column;min-height:0}
@@ -1005,6 +1007,8 @@
 .authmetric span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.06em}.authmetric b{color:var(--text);font-family:var(--mono);font-size:var(--f-sm);overflow-wrap:anywhere}.authmetric b.pos{color:var(--profit)}.authmetric b.neg{color:var(--loss)}
 .authreceipt{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:var(--f-2xs);line-height:1.45;overflow-wrap:anywhere}
 .authlist{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
+.lv-book .authlist,.lv-book .authhomenews,.lv-book .authmarketwatch,.lv-book .opportunityrows{overflow:hidden}
+.authmore{padding:3px 2px;color:var(--faint);font-size:var(--f-2xs);font-family:var(--mono)}
 .authlistrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);font-size:var(--f-xs);color:var(--dim)}
 .authlistrow b{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authlistrow span:last-child{font-family:var(--mono);color:var(--faint);white-space:nowrap}
 .authsharerow{grid-template-columns:minmax(0,1fr) auto auto;align-items:center}.authsharerow .authrowmain{min-width:0;display:flex;flex-direction:column;gap:2px}.authsharerow .authrowmain small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authshareshead{margin-top:4px}
@@ -1041,6 +1045,11 @@
 .authpaypanel{display:flex;flex-direction:column}.authpayoff{width:100%;flex:1;min-height:150px;display:block}
 .authpaykey{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin-top:7px}.authpaykey span{min-width:0;padding:5px 6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--faint);font-size:var(--f-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.authpaykey b{display:block;margin-top:2px;color:var(--text);font-family:var(--mono);font-size:var(--f-xs);overflow:hidden;text-overflow:ellipsis}.authpaykey b.pos{color:var(--profit)}.authpaykey b.neg{color:var(--loss)}
 .authposside{display:flex;flex-direction:column;gap:8px}.authposside .authmetricgrid{grid-template-columns:1fr 1fr}
+.authlifecycle{border-left:3px solid var(--accent-2);border-radius:7px;background:var(--panel);padding:7px 9px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 8px;align-items:start}
+.authlifecycle.bad{border-left-color:var(--loss)}.authlifecycle.warn{border-left-color:var(--caution)}.authlifecycle.ok{border-left-color:var(--profit)}
+.authlifecycle .badge{grid-row:1/3;align-self:start}.authlifecycle b{font-size:var(--f-sm);line-height:1.2}.authlifecycle p{margin:0;color:var(--dim);font-size:var(--f-2xs);line-height:1.3;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.authlifefacts{grid-column:1/-1;display:flex;gap:9px;flex-wrap:wrap;color:var(--faint);font:600 var(--f-2xs)/1.2 var(--mono)}
+.lifebadge{white-space:nowrap}.lifebadge.bad{color:var(--loss);border-color:var(--loss)}.lifebadge.warn{color:var(--caution);border-color:var(--caution)}.lifebadge.ok{color:var(--profit);border-color:var(--profit)}.lifebadge.pick{color:var(--accent);border-color:var(--accent-2)}.lifebadge.violet{color:var(--violet);border-color:var(--violet)}
 .authleglist{display:flex;flex-direction:column;gap:5px;max-height:155px;overflow:auto;padding-right:2px}
 .authleg{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:7px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);font-family:var(--mono);font-size:var(--f-xs);min-width:0}
 .authleg .side{font-weight:800}.authleg .side.buy{color:var(--profit)}.authleg .side.sell{color:var(--loss)}.authleg .contract{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authleg .mark{color:var(--dim);white-space:nowrap}
@@ -1115,9 +1124,10 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 /* content basis (NOT flex:1 = basis 0): the ranked field claims the height its rows need,
    the support strip absorbs what's left — both always visible, map runs to the column foot */
 .dcleft .fan{flex:1 1 auto;min-height:150px;overflow:hidden;padding-right:2px}
-.fitpager{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;min-height:28px;margin-top:3px;padding:3px 6px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--faint);font-size:var(--f-2xs)}
-.fitpager button{min-width:24px;height:22px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--dim);cursor:pointer}.fitpager button:hover:not(:disabled){color:var(--text);border-color:var(--accent-2)}.fitpager button:disabled{opacity:.28;cursor:default}
-.fitpager .fitread{min-width:0;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.fitpager .fitdots{display:inline-flex;gap:4px;margin-left:6px;vertical-align:middle}.fitpager .fitdots i{width:4px;height:4px;border-radius:50%;background:var(--line)}.fitpager .fitdots i.on{background:var(--accent)}
+.fanrows{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:none;mask-image:linear-gradient(to bottom,transparent 0,#000 0,#000 100%,transparent 100%)}
+.fanrows::-webkit-scrollbar,.elegantscroll::-webkit-scrollbar{width:0;height:0}.fanrows:hover,.fanrows:focus-within,.elegantscroll:hover,.elegantscroll:focus-within{scrollbar-width:thin;scrollbar-color:var(--line) transparent}.fanrows:hover::-webkit-scrollbar,.elegantscroll:hover::-webkit-scrollbar{width:4px}.fanrows:hover::-webkit-scrollbar-thumb,.elegantscroll:hover::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+.fanrows .fanr,.elegantscroll>[data-scroll-row],.elegantscroll>.card{scroll-snap-align:start;scroll-snap-stop:normal;flex:none}
+.overflowmeta{display:none;flex:none;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;height:15px;color:var(--faint);font-size:9px;line-height:1}.hasoverflow+.overflowmeta,.overflowmeta.on{display:grid}.overflowhair{height:2px;border-radius:2px;background:var(--line-soft);overflow:hidden}.overflowhair i{display:block;height:100%;width:20%;background:var(--accent-2);transform:translateX(0);border-radius:2px}.overflowread{white-space:nowrap;font-family:var(--mono)}
 /* the support strip absorbs the column's leftover so the risk/reward map grows to the bottom —
    no dead band under the map */
 .dcleft .leftsupport{flex:1 1 clamp(186px,20vh,260px);min-height:0;display:flex;flex-direction:column;gap:9px}
@@ -1131,7 +1141,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   /* Keep the decision sequence spatially honest on tall wide canvases: the selected package
      follows its ranked alternatives immediately instead of being pushed to the bottom by an
      expanding empty fan rail. Shorter canvases let the list flex to the full column instead. */
-  .dcleft .fan{flex:0 1 auto;max-height:min(56vh,660px)}
+  .dcleft .fan{flex:0 1 auto;height:min(56vh,660px);max-height:min(56vh,660px)}
   .dcleft .leftsupport{display:flex;flex-direction:column;gap:9px}
   .dcleft .pickmap{flex-basis:clamp(220px,22vh,300px);min-height:210px;height:auto;border-top:1px solid var(--line-soft);border-left:0;padding:7px 0 0}
   .dcleft .decmap{min-height:175px}
@@ -3298,6 +3308,10 @@ function authMoney(v){return v==null?'—':money(v);}
 function authSigned(v){return v==null?'—':signed(v);}
 function authPct(v,digits){var n=authNumber(v);return n==null?'—':(n*100).toFixed(digits==null?0:digits)+'%';}
 function authHuman(value){return String(value||'Position').toLowerCase().replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});}
+function authLifecycleAnalysis(data,id){var rows=data&&data.positionAnalyses||{};return rows&&rows[id]||null;}
+function authLifecyclePriority(verdict){return {DEFEND:0,REDUCE:1,HARVEST:2,ACCEPT_ASSIGNMENT:3,KEEP:4}[String(verdict||'').toUpperCase()]??9;}
+function authLifecycleClass(verdict){var v=String(verdict||'').toUpperCase();return v==='DEFEND'?'bad':v==='REDUCE'?'warn':v==='HARVEST'?'pick':v==='ACCEPT_ASSIGNMENT'?'violet':'ok';}
+function authLifecycleRead(analysis){var decision=analysis&&analysis.decision||{},life=analysis&&analysis.lifecycle||{},carry=life.carryCollateral||{},history=life.history||{},close=life.currentChoice&&life.currentChoice.close||{},events=life.assignmentExit&&life.assignmentExit.eventCrossings||[];return {verdict:decision.verdict||null,summary:decision.summary||null,remaining:authDollarsFromCents(carry.grossRemainingPremiumCents),annualized:authNumber(carry.grossAnnualizedRemainingPremiumPct),captured:authNumber(history.grossPremiumCapturedPct),closeCost:authDollarsFromCents(close.signedNetCloseCashCents==null?null:Math.max(0,-Number(close.signedNetCloseCashCents))),events:Array.isArray(events)?events:[],reduction:decision.reduction||null,dimensions:Array.isArray(decision.dimensions)?decision.dimensions:[]};}
 function authAccount(data){var a=data&&data.account||{};return a.account||a;}
 function authPlanRows(data){if(data&&Array.isArray(data.accountPlans))return data.accountPlans;var src=data&&data.planPortfolio&&data.planPortfolio.plans||data&&data.plans||[];return Array.isArray(src)?src:[];}
 function authWorkingPlanRows(data){return authPlanRows(data).filter(function(row){var p=row&&row.plan||row,status=String(p&&p.status||'').toUpperCase();return p&&p.open!==false&&p.assumptionsEditable!==false&&(status==='DRAFT'||status==='ACTIVE');});}
@@ -3307,25 +3321,25 @@ function authLegs(trade){return (trade.legs||[]).map(function(l){var sign=String
   q:sign*Math.max(1,Number(l.ratio||1))*Math.max(1,Number(trade.qty||1))*(type==='STOCK'?Math.max(1,Number(l.multiplier||1)):1),action:String(l.action||''),type:type,
   ratio:Number(l.ratio||1),multiplier:Number(l.multiplier||1),expiration:l.expiration||null,entryPrice:authNumber(l.entryPrice),positionEffect:l.positionEffect||'OPEN'};});}
 function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portfolio.heat||{},total=Math.max(0,Number(heat.totalMaxLossCents||0)),loss=Math.max(0,Number(trade.maxLossCents||0));
-  var planRow=authPlanForTrade(data,trade),plan=planRow&&planRow.plan||null,pnl=authDollarsFromCents(trade.unrealizedPnlCents),spot=authDollarsFromCents(trade.entryUnderlyingCents);
+  var planRow=authPlanForTrade(data,trade),plan=planRow&&planRow.plan||null,pnl=authDollarsFromCents(trade.unrealizedPnlCents),spot=authDollarsFromCents(trade.entryUnderlyingCents),lifecycle=authLifecycleAnalysis(data,String(trade.id));
   return {id:String(trade.id),sym:String(trade.symbol||'').toUpperCase(),struct:authHuman(trade.strategy),spot:spot||0,em:0,pnl:pnl,
     riskPct:total>0?Math.max(0,Math.min(100,loss/total*100)):0,cap:authDollarsFromCents(trade.maxLossCents),net:authDollarsFromCents(trade.entryNetPremiumCents),
     pop:authNumber(trade.popEntry)==null?null:Number(trade.popEntry)*100,maxLoss:authDollarsFromCents(trade.maxLossCents),maxProfit:authDollarsFromCents(trade.maxProfitCents),
     breakevens:(trade.breakevens||[]).map(Number).filter(Number.isFinite),need:false,tone:'ok',attn:String(trade.dataAge||trade.dataProvenance||'backend'),
     legs:authLegs(trade),legStr:'',authoritative:true,isHeld:true,lane:trade.isLive?'real':'paper',_trade:trade,_plan:plan,_planRow:planRow,
-    provenance:{lane:trade.dataProvenance||null,freshness:trade.dataAge||null,source:trade.dataSource||null},_positionPhase:'idle'};}
+    provenance:{lane:trade.dataProvenance||null,freshness:trade.dataAge||null,source:trade.dataSource||null},lifecycle:lifecycle,_positionPhase:'idle'};}
 function authClearPositionCards(){Object.keys(cardEl||{}).forEach(function(id){var el=cardEl[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});cardEl={};}
 function authTradeRevision(t){return JSON.stringify({id:t&&t.id,status:t&&t.status,qty:t&&t.qty,entry:t&&t.entryNetPremiumCents,updated:t&&t.updatedAt,legs:(t&&t.legs||[]).map(function(l){return [l.action,l.type,l.ratio,l.multiplier,l.strike,l.expiration,l.entryPrice,l.positionEffect];})});}
-function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},next=[],nextById={},nextCards={};(data.activeTrades||[]).forEach(function(t){var fresh=authTradePosition(t,data),p=priorById[fresh.id];fresh._openedJustNow=String(data.recentTradeId||'')===fresh.id;if(p){var samePackage=authTradeRevision(p._trade)===authTradeRevision(t),heldState=samePackage?{_positionPhase:p._positionPhase,_positionData:p._positionData,_positionError:p._positionError,_positionScenarioPhase:p._positionScenarioPhase,_positionScenarioError:p._positionScenarioError,authoritativeAnimation:p.authoritativeAnimation,_positionScenarioTimer:p._positionScenarioTimer,_positionScenarioUiSeq:p._positionScenarioUiSeq,_positionScenarioRequestId:p._positionScenarioRequestId,_positionDefaultScenarioRequested:p._positionDefaultScenarioRequested}:{};if(!samePackage){window.clearTimeout(p._positionScenarioTimer);var st=scenPlay[p.id];if(st&&st.raf)cancelAnimationFrame(st.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];}Object.keys(fresh).forEach(function(key){p[key]=fresh[key];});Object.keys(heldState).forEach(function(key){if(heldState[key]!==undefined)p[key]=heldState[key];});}else p=fresh;next.push(p);nextById[p.id]=p;nextCards[p.id]=priorCards[p.id]||makeCard(p);nextCards[p.id].classList.toggle('justopened',p._openedJustNow===true);var face=nextCards[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);});Object.keys(priorCards).forEach(function(id){if(nextCards[id])return;var el=priorCards[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});POS=next;byId=nextById;cardEl=nextCards;if(!state.focus||!byId[state.focus])state.focus=POS.length?POS[0].id:null;
+function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},next=[],nextById={},nextCards={},trades=(data.activeTrades||[]).slice().sort(function(a,b){var aa=authLifecycleAnalysis(data,String(a.id)),bb=authLifecycleAnalysis(data,String(b.id)),av=aa&&aa.decision&&aa.decision.verdict,bv=bb&&bb.decision&&bb.decision.verdict;return authLifecyclePriority(av)-authLifecyclePriority(bv)||String(a.symbol||'').localeCompare(String(b.symbol||''));});trades.forEach(function(t){var fresh=authTradePosition(t,data),p=priorById[fresh.id];fresh._openedJustNow=String(data.recentTradeId||'')===fresh.id;if(p){var samePackage=authTradeRevision(p._trade)===authTradeRevision(t),heldState=samePackage?{_positionPhase:p._positionPhase,_positionData:p._positionData,_positionError:p._positionError,_positionScenarioPhase:p._positionScenarioPhase,_positionScenarioError:p._positionScenarioError,authoritativeAnimation:p.authoritativeAnimation,_positionScenarioTimer:p._positionScenarioTimer,_positionScenarioUiSeq:p._positionScenarioUiSeq,_positionScenarioRequestId:p._positionScenarioRequestId,_positionDefaultScenarioRequested:p._positionDefaultScenarioRequested}:{};if(!samePackage){window.clearTimeout(p._positionScenarioTimer);var st=scenPlay[p.id];if(st&&st.raf)cancelAnimationFrame(st.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];}Object.keys(fresh).forEach(function(key){p[key]=fresh[key];});Object.keys(heldState).forEach(function(key){if(heldState[key]!==undefined)p[key]=heldState[key];});}else p=fresh;next.push(p);nextById[p.id]=p;nextCards[p.id]=priorCards[p.id]||makeCard(p);nextCards[p.id].classList.toggle('justopened',p._openedJustNow===true);var face=nextCards[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);});Object.keys(priorCards).forEach(function(id){if(nextCards[id])return;var el=priorCards[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});POS=next;byId=nextById;cardEl=nextCards;if(!state.focus||!byId[state.focus])state.focus=POS.length?POS[0].id:null;
   /* faces render once more AFTER the roster order exists, so each card's identity color matches
      its fan line from the very first paint */
   POS.forEach(function(row){var face=cardEl[row.id]&&cardEl[row.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(row);});}
-function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{};
+function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{},lr=authLifecycleRead(p.lifecycle),verdict=lr.verdict;
   /* the dot is the position's CANONICAL identity color — the same color its fan line, legend
      row, and every future surface use. One palette, matched everywhere. */
-  var exception=authExceptionStatus(prov.freshness);return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
+  var exception=authExceptionStatus(prov.freshness);return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(verdict?'<span class="badge lifebadge '+authLifecycleClass(verdict)+'">'+deskEsc(authHuman(verdict))+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
     '<div class="cshareRow"><span class="cshare" title="share of maximum loss"><i style="width:'+share.toFixed(1)+'%"></i></span><span class="csharev">'+(share?share.toFixed(0)+'%':'—')+'</span><svg class="cplspark" id="plsp-'+deskEsc(p.id)+'" title="mark history"></svg></div>'+
-    '<div class="cpeek"><span class="ccap">'+authMoney(p.cap)+' max loss</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
+    '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?authMoney(p.cap)+' max loss':authMoney(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
 }
 function makeAuthoritativeCard(p){var el=document.createElement('div');el.className='card authoritative';el.setAttribute('data-id',p.id);el.setAttribute('data-authoritative-position','true');
   el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div></div></div>';
@@ -3402,6 +3416,7 @@ function authManagementHTML(p,data){var plan=data&&data.plan||p._plan,mg=data&&d
     '<button type="button" class="btn xs" data-auth-manage="forward" title="Play this position through its stored market fan — the honest forward test">▶ Forward test</button></div>';
   var list=rows.length?'<div class="authlist">'+rows.map(function(r){return '<div class="authlistrow"><b>'+deskEsc(r[0])+'</b><span>'+deskEsc(r[1])+'</span></div>';}).join('')+'</div>':'<div class="backendnotice">No linked idea or management review is available for this position.</div>';
   return list+acts;}
+function authLifecycleReceiptHTML(analysis,compact){if(!analysis)return '<div class="backendnotice">Today’s lifecycle receipt is unavailable. P/L remains history, not a hold signal.</div>';var r=authLifecycleRead(analysis),verdict=r.verdict||'KEEP',facts=[];if(r.remaining!=null)facts.push(authMoney(r.remaining)+' gross premium left');if(r.closeCost!=null)facts.push(authMoney(r.closeCost)+' executable close');if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');if(r.reduction)facts.push('close '+r.reduction.quantityToClose+' restores policy');return '<div class="authlifecycle '+authLifecycleClass(verdict)+'"><span class="badge lifebadge '+authLifecycleClass(verdict)+'">'+deskEsc(authHuman(verdict))+'</span><b>'+deskEsc(compact?'Today’s decision':(analysis.lifecycle&&analysis.lifecycle.currentChoice&&analysis.lifecycle.currentChoice.freshEyesQuestion||'Would you open this position today?'))+'</b><p>'+deskEsc(r.summary||'The named lifecycle policy keeps economics, events, capacity, and history separate.')+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';}
 function authPositionEnsemble(p){return p&&p._positionData&&p._positionData.positionEnsemble||null;}
 function authPositionFocusedScenario(p){var response=p&&p.authoritativeAnimation,rows=response&&response.checkpoints&&response.checkpoints.positions||[];return rows.find(function(row){return String(row&&row.key||'')===String(p.id);})||null;}
 function authPositionScenarioTargetIndex(p,steps){steps=steps||[];if(!steps.length)return -1;var pins=p&&p.authoritativeAnimation&&p.authoritativeAnimation.receipt&&p.authoritativeAnimation.receipt.conditioningAssumptions&&p.authoritativeAnimation.receipt.conditioningAssumptions.waypoints||[],target=pins.length?pins.reduce(function(max,row){return Math.max(max,Number(row.dayIndex||0));},0):Infinity,best=0;steps.forEach(function(row,index){var progress=Number(row.sessionProgress==null?row.step==null?index:row.step:row.sessionProgress);if(progress<=target)best=index;});return best;}
@@ -3462,7 +3477,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
   var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authExceptionStatus(cur.freshness||p.provenance.freshness||ev.quote&&ev.quote.age)||'current';
   host.innerHTML='<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>The chart will appear when its position values are ready.</div>')+'</section>'+
-    '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div><div class="authmetricgrid">'+
+    '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
       '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div><div class="authmetric"><span>Close cost</span><b>'+authMoney(authDollarsFromCents(cur.closeCostCents))+'</b></div>'+
       '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span>POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
       '<div class="authmetric"><span>Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span>Theta / day</span><b>'+(authNumber(greeks.thetaPerDay)==null?'—':money(Number(greeks.thetaPerDay)))+'</b></div></div>'+
@@ -4439,18 +4454,19 @@ function authSetBookPanels(hidden){AUTH_BOOK_PANEL_IDS.forEach(function(id){var 
 function authMetric(label,value,cls){return '<div class="authmetric"><span>'+deskEsc(label)+'</span><b class="'+(cls||'')+'">'+deskEsc(value==null?'—':value)+'</b></div>';}
 function authExceptionStatus(value){var raw=String(value||'').trim(),upper=raw.toUpperCase();if(!raw)return '';if(upper.indexOf('STALE')>=0)return 'stale';if(upper.indexOf('DELAYED')>=0)return 'delayed';if(upper.indexOf('MISSING')>=0)return 'missing';if(upper.indexOf('INCOMPLETE')>=0||upper.indexOf('PARTIAL')>=0)return 'partial';if(upper.indexOf('UNAVAILABLE')>=0||upper.indexOf('ERROR')>=0)return 'unavailable';return '';}
 function authExceptionChip(value){var status=authExceptionStatus(value);return status?'<span class="pchip static '+(status==='stale'||status==='missing'||status==='unavailable'?'warn':'')+'">'+deskEsc(status)+'</span>':'';}
-function authBookSummary(){var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.summary||{},a=authAccount(d),pnl=authDollarsFromCents(s.totalPnlCents),complete=s.complete===true;
+function authBookSummary(){var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.summary||{},a=authAccount(d),pnl=authDollarsFromCents(s.totalPnlCents),complete=s.complete===true,liq=s.liquidity||{};
   if(!BOOK_AUTH.data){summaryEl.innerHTML='<div class="bookline"><div class="sblock"><div class="lbl">Practice book</div><div class="sv">Loading account…</div></div></div>';return;}
   /* ONE compact line in the established sblock grammar — no oversized card band */
   function sb(label,value,cls){return '<div class="sblock"><div class="lbl">'+deskEsc(label)+'</div><div class="sv'+(cls?' '+cls:'')+'">'+value+'</div></div>';}
-  summaryEl.innerHTML='<div class="bookline authsummary">'+
+  function fact(path,fallback){var cents=path&&path.cents;return cents==null?fallback:authMoney(authDollarsFromCents(cents));}
+  summaryEl.innerHTML='<div class="bookline authsummary" title="'+deskEsc(liq.reconciliationReason||s.note||'Practice liquidity receipt')+'">'+
     '<div class="sblock lead"><div class="lbl">Practice equity</div><div class="sv big '+(pnl==null?'':pnl>=0?'pos':'neg')+'">'+authMoney(authDollarsFromCents(s.totalValueCents))+'<small class="'+(pnl==null?'':pnl>=0?'pos':'neg')+'"> '+authSigned(pnl)+' since funding</small></div></div>'+
-    sb('Cash',authMoney(authDollarsFromCents(s.cashCents)))+
-    sb('Buying power',authMoney(authDollarsFromCents(s.buyingPowerCents)))+
-    sb('Reserved',authMoney(authDollarsFromCents(s.reservedCents)))+
+    sb('Settlement',fact(liq.settlementBalance,authMoney(authDollarsFromCents(s.cashCents))))+
+    sb('Encumbered',fact(liq.recordedOrReportedReserve,authMoney(authDollarsFromCents(s.reservedCents))))+
+    sb('Pending',fact(liq.pendingActivity,'unavailable'))+
+    sb('Genuinely free',fact(liq.genuinelyFreeBuyingPower,authMoney(authDollarsFromCents(s.buyingPowerCents))))+
     sb('Packages',Number(s.openTradesCount||0)+(Number(s.sharesPositions||0)?' · '+Number(s.sharesPositions)+' shares':''))+
-    sb('Priced',complete?'all':'some unavailable',complete?'pos':'neg')+
-    sb('Account',deskEsc(a.name||'Practice'))+
+    sb('Cash truth',liq.reconciliationStatus?authHuman(liq.reconciliationStatus):(complete?'priced':'partial'),String(liq.reconciliationStatus||'').toUpperCase()==='RECONCILED'?'pos':'neg')+
     '<div class="posture">'+authExceptionChip(s.freshness)+'</div><div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div></div>';
   wireLanding();}
 function authBookLoading(){stageEl.setAttribute('data-book-authority','loading');authSetBookPanels(true);var host=document.getElementById('bookAuthState');host.hidden=false;authBookSummary();host.innerHTML='<div class="authpending" role="status" aria-live="polite"><section class="authpane"><span class="eyebrow">Practice positions</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section><section class="authpane hero"><span class="eyebrow">Your book</span><div class="authline chart"></div><div class="authmessage"><b>Loading the Practice book.</b>Positions, shares, prices, risk, and linked ideas will appear as each part is ready.</div></section><section class="authpane"><span class="eyebrow">Market &amp; risk</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section></div>';}
@@ -4823,17 +4839,17 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
       '<b class="amh-price">'+deskEsc(authHomePrice(quote.price))+'</b></div>'+
       '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask · five nearest'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+authHomeChainHTML(active,quote.price||0,active.symbol)+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Analyze '+deskEsc(active.symbol)+'</button></div>';}
   document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market pulse &amp; chain</span><span class="hint">price action · volatility · options</span></div>'+marketBody+'</div>';
-  var planRows=plans.slice(0,12).map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});
+  var planRows=plans.slice(0,4).map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});if(plans.length>4)planRows.push('<div class="authmore">+'+(plans.length-4)+' more working ideas · open New idea to search them</div>');
   if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+authRowsHTML(planRows,'No working ideas. Start a new idea when you are ready.')+'</div>';
-  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchRows=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})).map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness);return '<button type="button" class="authmarketrow'+(on?' on':'')+'" data-auth-market-symbol="'+deskEsc(row.symbol)+'"><b>'+deskEsc(row.symbol)+'</b><span>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(authHomePrice(q.price))+'</em></button>';});
+  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.slice(0,5).map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness);return '<button type="button" class="authmarketrow'+(on?' on':'')+'" data-auth-market-symbol="'+deskEsc(row.symbol)+'"><b>'+deskEsc(row.symbol)+'</b><span>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(authHomePrice(q.price))+'</em></button>';});if(watchSource.length>5)watchRows.push('<div class="authmore">+'+(watchSource.length-5)+' more in the active watch</div>');
   document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Market watch</span><span class="hint">'+deskEsc(sectorLens&&sectorLens.available?sectorLens.label:'Book first · active universe follows')+'</span></div>'+sectorNotice+'<div class="authmarketwatch">'+(watchRows.join('')||'<div class="backendnotice">No prices are available for the active market watch.</div>')+'</div>'+authOpportunityHTML()+'</div>';
   /* a news panel is HEADLINES — no stat cards counting what we loaded */
-  var newsItems=authHomeNewsItems(active).slice(0,10),newsRows=newsItems.map(function(item){var url=authHomeUrl(item.url),meta=[item.source,item.classification?authHuman(item.classification):null].filter(Boolean).join(' · ');return url?'<a href="'+deskEsc(url)+'" target="_blank" rel="noopener noreferrer">'+deskEsc(item.headline||'Untitled source item')+'<small>'+deskEsc(meta)+'</small></a>':'<div class="authlistrow"><span class="authrowmain"><b>'+deskEsc(item.headline||'Untitled source item')+'</b><small>'+deskEsc(meta)+'</small></span><span></span></div>';});
+  var allNews=authHomeNewsItems(active),newsItems=allNews.slice(0,5),newsRows=newsItems.map(function(item){var url=authHomeUrl(item.url),meta=[item.source,item.classification?authHuman(item.classification):null].filter(Boolean).join(' · ');return url?'<a href="'+deskEsc(url)+'" target="_blank" rel="noopener noreferrer">'+deskEsc(item.headline||'Untitled source item')+'<small>'+deskEsc(meta)+'</small></a>':'<div class="authlistrow"><span class="authrowmain"><b>'+deskEsc(item.headline||'Untitled source item')+'</b><small>'+deskEsc(meta)+'</small></span><span></span></div>';});if(allNews.length>5)newsRows.push('<div class="authmore">+'+(allNews.length-5)+' more headlines · open Market in New idea</div>');
   var newsEmpty=phase==='loading'?'Research headlines are loading without blocking the Book.':active?'No current headlines were returned for '+active.symbol+'.':'Choose a market symbol to see its research.';
   document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research &amp; news</span><span class="hint">'+deskEsc(HOME_AUTH_SYMBOL||'market context')+(active&&active.research&&active.research.regime&&active.research.regime.headline?'':'')+'</span></div><div class="authhomenews">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+'</div>')+'</div></div>';
   wireAuthoritativeHome();if(active)window.requestAnimationFrame(function(){drawAuthoritativeHomeHistory(active);});}
 function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};});authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
-function authShareInventoryHTML(shares){if(!shares.length)return '<div class="backendnotice">No share inventory in this Practice account.</div>';return '<div class="authlist">'+shares.map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),last=authDollarsFromCents(row.lastCents),unreal=authDollarsFromCents(row.unrealizedCents);return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(String(row.symbol||'—').toUpperCase())+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+(last==null?'':' · mark '+authMoney(last))+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(String(row.symbol||'').toUpperCase())+'">Analyze</button></div>';}).join('')+'</div>';}
+function authShareInventoryHTML(shares){if(!shares.length)return '<div class="backendnotice">No share inventory in this Practice account.</div>';var rows=shares.slice(0,3).map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),last=authDollarsFromCents(row.lastCents),unreal=authDollarsFromCents(row.unrealizedCents);return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(String(row.symbol||'—').toUpperCase())+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+(last==null?'':' · mark '+authMoney(last))+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(String(row.symbol||'').toUpperCase())+'">Analyze</button></div>';});if(shares.length>3)rows.push('<div class="authmore">+'+(shares.length-3)+' more share lines · Book keeps the complete inventory</div>');return '<div class="authlist">'+rows.join('')+'</div>';}
 /* ===== Book-level possible futures — one renderer, two explicitly different artifacts:
    the Book total comes only from the synchronized multi-symbol artifact in BookRiskService;
    colored position overlays retain their OWN stored ensembles and are NEVER summed. */
@@ -5027,7 +5043,7 @@ function authRenderReadyPanels(empty){var d=BOOK_AUTH.data||{},pf=d.portfolio||{
     document.getElementById('riskMain').innerHTML='<div class="authbookpanel bookfuturespanel"><div class="lenshd"><span class="eyebrow">Your book · possible futures</span><span class="hint">'+deskEsc(bookFanHeaderHint())+'</span></div>'+
       '<div class="bookfanwrap"><div class="bookfanstage"><svg id="authBookFan" class="bookfan" aria-label="Synchronized total Book profit and loss paths with independent per-position projections"></svg><div class="mcpathread" id="bookFanReadout">'+deskEsc(bookFanPrompt())+'</div></div><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div>'+
       '<div class="bookmapfacet"><div class="lenshd sub"><span class="eyebrow">Risk / reward</span><span class="hint">odds × loss</span></div><svg id="authBookRiskViz" class="authriskviz compactrisk" aria-label="Open positions by chance of profit and maximum loss"></svg><div class="authmetricgrid onecol">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div></div></div></div>';
-    document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Book Risk</span><span class="hint" title="'+deskEsc(br.basis||g.note||'Greeks reflect the current open positions.')+'">live greeks · practice account</span></div>'+
+    document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Today’s book</span><span class="hint">positions ordered by lifecycle urgency</span></div>'+authLifecycleReceiptHTML(POS[0]&&POS[0].lifecycle,true)+'<div class="lenshd sub"><span class="eyebrow">Book Risk</span><span class="hint" title="'+deskEsc(br.basis||g.note||'Greeks reflect the current open positions.')+'">live greeks · practice account</span></div>'+
       '<div class="kgrid boxed numrow calm bookriskrow">'+
         kcell('Delta',authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2)+' sh','')+
         kcell('Gamma',authNumber(g.gammaShares)==null?'—':Number(g.gammaShares).toFixed(3),'')+
@@ -5043,7 +5059,7 @@ function drawAuthoritativeBookRisk(){var svg=document.getElementById('authBookRi
   [25,50,75].forEach(function(v){var x=pad.l+plotW*v/100,y=pad.t+plotH*v/100;g+='<line class="riskgrid" x1="'+x.toFixed(1)+'" y1="'+pad.t+'" x2="'+x.toFixed(1)+'" y2="'+(H-pad.b)+'"/><line class="riskgrid" x1="'+pad.l+'" y1="'+y.toFixed(1)+'" x2="'+(W-pad.r)+'" y2="'+y.toFixed(1)+'"/>';});g+='<line x1="'+pad.l+'" y1="'+(H-pad.b)+'" x2="'+(W-pad.r)+'" y2="'+(H-pad.b)+'" stroke="var(--line)"/><line x1="'+pad.l+'" y1="'+pad.t+'" x2="'+pad.l+'" y2="'+(H-pad.b)+'" stroke="var(--line)"/><text x="'+(W-pad.r)+'" y="'+(H-7)+'" text-anchor="end">chance of profit →</text><text x="8" y="'+(pad.t+3)+'">max loss</text>'+(POS.length?'':'<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle">No open positions to plot</text>');
   var missing=0;POS.forEach(function(p){if(p.pop==null){missing++;return;}var pop=Math.max(0,Math.min(100,p.pop)),x=pad.l+plotW*pop/100,y=H-pad.b-plotH*Number(p.cap||0)/max,col=p.pnl==null?'var(--accent)':p.pnl>=0?'var(--profit)':'var(--loss)';g+='<g class="riskpoint" tabindex="0" role="button" data-auth-risk-position="'+deskEsc(p.id)+'" aria-label="Open '+deskEsc(p.sym+' '+p.struct+', '+p.pop.toFixed(0)+'% chance of profit, maximum loss '+authMoney(p.cap))+'"><title>'+deskEsc(p.sym+' · '+p.struct+' · choose to open')+'</title><circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="7" fill="'+col+'" fill-opacity=".35" stroke="'+col+'" stroke-width="1.4"/>'+(W>360&&POS.length<8?'<text x="'+(x+10).toFixed(1)+'" y="'+(y+3).toFixed(1)+'">'+deskEsc(p.sym)+'</text>':'')+'</g>';});if(missing)g+='<text x="'+(W-pad.r)+'" y="'+(pad.t+3)+'" text-anchor="end">'+missing+' chance estimate'+(missing===1?'':'s')+' unavailable</text>';svg.innerHTML=g;}
 function authBookReady(){var d=BOOK_AUTH.data||{},empty=!(d.activeTrades||[]).length&&!(d.sharePositions||[]).length;stageEl.setAttribute('data-book-authority',empty?'empty':'ready');authSetBookPanels(false);var host=document.getElementById('bookAuthState');host.hidden=true;host.innerHTML='';authBookSummary();
-  bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length));bookEl.innerHTML='';var hd=document.createElement('div');hd.className='lenshd rosterhd';hd.innerHTML='<span class="eyebrow">Practice positions</span><span class="hint">'+POS.length+' open package'+(POS.length===1?'':'s')+'</span>';bookEl.appendChild(hd);if(POS.length)POS.forEach(function(p){bookEl.appendChild(cardEl[p.id]);drawPlSpark(p);});else {var emptyNode=document.createElement('div');emptyNode.className='authrosterempty';emptyNode.innerHTML='<b>No open Practice positions</b><p>Your working ideas, market pulse, and research remain available. Start a new idea or import a tracked trade when it belongs in the book.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ New idea</button><button class="btn xs" id="authEmptyImport">↧ Import trade</button></div>';bookEl.appendChild(emptyNode);}authRenderReadyPanels(empty);}
+  bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length));bookEl.classList.add('elegantscroll');bookEl.innerHTML='';var hd=document.createElement('div');hd.className='lenshd rosterhd';hd.innerHTML='<span class="eyebrow">Practice positions</span><span class="hint">'+POS.length+' open package'+(POS.length===1?'':'s')+'</span><span class="overflowmeta bookoverflowmeta" aria-live="polite"><span class="overflowhair"><i></i></span><span class="overflowread"></span></span>';bookEl.appendChild(hd);if(POS.length)POS.forEach(function(p){cardEl[p.id].setAttribute('data-scroll-row','');bookEl.appendChild(cardEl[p.id]);drawPlSpark(p);});else {var emptyNode=document.createElement('div');emptyNode.className='authrosterempty';emptyNode.innerHTML='<b>No open Practice positions</b><p>Your working ideas, market pulse, and research remain available. Start a new idea or import a tracked trade when it belongs in the book.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ New idea</button><button class="btn xs" id="authEmptyImport">↧ Import trade</button></div>';bookEl.appendChild(emptyNode);}authRenderReadyPanels(empty);if(POS.length)window.requestAnimationFrame(function(){bindElegantList(bookEl,'.card',hd.querySelector('.overflowmeta'));});}
 function layoutAuthoritativeBook(){if(BOOK_AUTH.phase==='loading'||BOOK_AUTH.phase==='fixture'){authBookLoading();return;}if(BOOK_AUTH.phase==='error'){authBookError();return;}authBookReady();}
 function authStartPositionLoad(p){if(!p)return;var bridge=window.DeskBackend.state().position||{},owned=bridge.data&&bridge.data.trade&&String(bridge.data.trade.id)===String(p.id)&&(bridge.phase==='ready'||bridge.phase==='partial'),samePending=bridge.phase==='loading'&&p._positionRequestId!=null&&Number(p._positionRequestId)===Number(bridge.requestId);if(owned&&(p._positionPhase==='ready'||p._positionPhase==='partial')||samePending)return;p._positionPhase='loading';p._positionError=null;renderAuthoritativePosition(p);window.DeskBackend.loadPosition(p._trade,{symbol:p.sym,planId:p._plan&&p._plan.id,historyRange:'3M'}).catch(function(){});}
 function layoutAuthoritativePosition(focus){var p=byId[focus];if(!p){state.level='book';state.focus=null;layoutAuthoritativeBook();return;}var host=document.getElementById('bookAuthState');host.hidden=true;for(var i=0;i<POS.length;i++){var row=POS[i],el=cardEl[row.id];if(row.id===focus){el.classList.add('is-focus');focusEl.appendChild(el);}else{el.classList.remove('is-focus');el.querySelector('.cdetail').classList.remove('reveal');recedeEl.appendChild(el);}}renderAuthoritativePosition(p);authStartPositionLoad(p);}
@@ -5702,7 +5718,7 @@ function authPositionScenarioEvent(payload){var slot=payload.positionScenario||{
 function authPositionEvent(payload){var phase=payload.phase,ps=payload.position||{},data=payload.data||ps.data,id=authPositionIdentity(payload,data),p=byId[id];if(!p&&state.level==='position')p=byId[state.focus];if(!p)return;
   if(phase==='position-loading'){p._positionRequestId=payload.requestId||ps.requestId;p._positionPhase='loading';p._positionError=null;renderAuthoritativePosition(p);return;}
   if(phase==='position-error'){p._positionPhase='error';p._positionError=payload.error&&payload.error.message||ps.error&&ps.error.message||'The position request failed.';renderAuthoritativePosition(p);return;}
-  if(!data)return;var detail=data.tradeDetail||{},trade=detail.trade||data.trade||p._trade,cur=detail.current||{};p._positionRequestId=payload.requestId||ps.requestId;p._trade=trade;p._positionData=data;p._positionPhase=phase==='position-partial'?'partial':'ready';p._positionError=null;p._plan=data.plan||p._plan;
+  if(!data)return;var detail=data.tradeDetail||{},trade=detail.trade||data.trade||p._trade,cur=detail.current||{};p._positionRequestId=payload.requestId||ps.requestId;p._trade=trade;p._positionData=data;p._positionPhase=phase==='position-partial'?'partial':'ready';p._positionError=null;p._plan=data.plan||p._plan;p.lifecycle=detail.analysis||p.lifecycle;
   p.spot=authDollarsFromCents(cur.underlyingCents)||authDollarsFromCents(trade.entryUnderlyingCents)||p.spot;p.pnl=authDollarsFromCents(cur.unrealizedCents);if(p.pnl==null)p.pnl=authDollarsFromCents(trade.unrealizedPnlCents);p.pop=authNumber(cur.popNow)==null?(authNumber(trade.popEntry)==null?null:Number(trade.popEntry)*100):Number(cur.popNow)*100;p.greeks=cur.greeks||null;p.marksHistory=Array.isArray(detail.marksHistory)?detail.marksHistory:[];p.payoffPoints=(detail.payoff||[]).map(function(pt){return {price:Number(pt.price),profit:Number(pt.profitCents)/100};}).filter(function(pt){return Number.isFinite(pt.price)&&Number.isFinite(pt.profit);});p.breakevens=(trade.breakevens||[]).map(Number).filter(Number.isFinite);p.legs=authLegs(trade);p.provenance={lane:trade.dataProvenance||p.provenance.lane,freshness:cur.freshness||trade.dataAge||p.provenance.freshness,source:trade.dataSource||p.provenance.source};
   var face=cardEl[p.id]&&cardEl[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);drawPlSpark(p);if(state.level==='position'&&state.focus===p.id){renderAuthoritativePosition(p);updateThread();window.setTimeout(function(){authEnsurePositionFutures(p);},0);}}
 function deskBackendChanged(payload){
@@ -5794,7 +5810,7 @@ function deskBackendChanged(payload){
   } else if(phase==='strategy'){
     decide.pendingCandidateId=null;
     decide.missingDeclarations=[];
-    decide.cands=payload.candidates||[]; decide.deskPickId=payload.deskPickId||null;decide.candidatePage=0;
+    decide.cands=payload.candidates||[]; decide.deskPickId=payload.deskPickId||null;
     decide.backendNotes=bs.strategyNotes||[];decide.backendRejections=bs.rejections||[];
     decide.candId=decide.deskPickId||(decide.cands.length?decide.cands[0].id:null);
     var initial=decide.cands.find(function(row){return String(row.id)===String(decide.candId);})||decide.cands[0];
@@ -5832,7 +5848,7 @@ function deskBackendChanged(payload){
       decide.mcRunning=false;
       decide.outcome=null;decide.animation=null;decide.orderPreview=null;
     }
-    decide.candId=bs.selected.id;decide.candidatePage=candidatePageFor(bs.selected.id); decide.mode='engine';
+    decide.candId=bs.selected.id; decide.mode='engine';
     decide.order.qty=Math.max(1,Number(bs.selected.qty||1)); decide.order.price=null; decide.order.type='market';
   } else if(phase==='draft-pending'||phase==='draft-applying'){
     decide.mode='build'; decide.draftPending=true; decide.draftValid=false; decide.draftError=null;
@@ -5859,7 +5875,7 @@ function deskBackendChanged(payload){
     decide.cands=customRows.map(function(row){return String(row.id)===String(custom.id)?custom:row;});
     if(!decide.cands.some(function(row){return String(row.id)===String(custom.id);}))decide.cands.unshift(custom);
     if(!decide.cands.some(function(row){return String(row.id)===String(decide.deskPickId);}))decide.deskPickId=null;
-    decide.candId=custom.id; decide.candidatePage=candidatePageFor(custom.id); decide.mode='engine'; decide.buildLegs=null; decide.buildSourceId=null; decide.draftCand=null;
+    decide.candId=custom.id; decide.mode='engine'; decide.buildLegs=null; decide.buildSourceId=null; decide.draftCand=null;
     decide.draftPending=false; decide.draftValid=false; decide.draftError=null; decide.orderPreview=null;
     decide.outcome=payload.outcome||bs.outcome||null;decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
@@ -6803,7 +6819,6 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride){
     /* free New idea (not tied to a held line) lets you pick the underlying; anything else is fixed by context */
     canPick:(kind==='idea'&&!posId&&!planOverride), pickOpen:false, pickq:'',replacingIdea:false,
     mode:'engine', intentOpen:false, leftTool:null, inspect:'paths', pathView:authoritativeIdea?'pnl':'price', orderOpen:false, mcRunning:false,
-    candidatePage:0,
     cands:fan, candId:fan.length?fan[0].id:null, deskPickId:fan.length?fan[0].id:null,
     buildLegs:null,buildSourceId:null,draftCand:null,draftPending:false,draftValid:false,draftError:null,
     govs:{risk:POSTURE.risk,bp:POSTURE.bp,minPop:55,maxAsn:60,gapLoss:POSTURE.gapLoss||25000},govExplicit:{},
@@ -6904,7 +6919,7 @@ function redrawDecide(){
   drawPayoff(decideEl.querySelector('#decPay'), c, true, null, {interactive:!c.authoritative, pinM:scrubMag(c)});
   if(!_dragActive && document.getElementById('decMap')) drawDecMap();
   if(decide.mcOn) drawMCFan();
-  syncCandidatePageSize();
+  syncCandidateOverflow();
   drawDecMarketHist();
 }
 /* Decide "how it reacts" → play the scenario through the HERO payoff (shares the bloom engine) */
@@ -6957,7 +6972,7 @@ function renderDecide(){
   if(decide.mcOn) drawMCFan();
   drawFanIcons();
   wireDecide();
-  window.requestAnimationFrame(function(){ syncCandidatePageSize(); drawDecMarketHist(); });
+  window.requestAnimationFrame(function(){ syncCandidateOverflow(); drawDecMarketHist(); });
 }
 function renderAuthoritativeDeclarationRequired(){
   var bs=decide.backendState||{},plan=bs.plan||{},market=bs.market||{},identity=market.identity||{};
@@ -7281,50 +7296,18 @@ function setUnderlying(sym){
   var replacing=!!decide.replacingIdea;
   decide.sym=u.sym; decide.u=u; decide.spot=u.spot; decide.em=u.em;
   decide.cands=deskBackendEnabled()&&decide.kind==='idea'?[]:candsFor(decide.kind,u); decide.candId=decide.cands.length?decide.cands[0].id:null; decide.deskPickId=decide.candId;
-  decide.provenance=null;decide.candidatePage=0;
+  decide.provenance=null;
   decide.buildLegs=null; decide.mode='engine'; decide.pickOpen=false;decide.replacingIdea=false;
   if(replacing){decide.composerKeepOpen=false;decide.intentOpen=false;}else if(!decide.composerKeepOpen)decide.intentOpen=false;
   decide.pickq=''; DEC_HOT=-1;
   if(decide.kind==='idea'&&deskBackendEnabled())loadAuthoritativeIdea();else renderAfterDecisionChange();updateThread();
 }
 function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc==='collat'?'secured':rc==='unknown'?'unknown':'defined'; }
-function candidatePageSize(){
-  if(decide&&Number.isInteger(decide._candPageSize)&&decide._candPageSize>1)return decide._candPageSize;
-  var h=window.innerHeight||900;if(h>=1200)return 14;if(h>=880)return 10;if(h>=760)return 7;return 5;}
-/* The pager promises WHOLE rows, so the page size must come from the candidate list's own share of
-   the left column after the workbench and map take theirs — never from the viewport. Available
-   space is derived from sibling geometry (not the fan's content height, which shrinks to fit at
-   wide breakpoints), so this converges in one pass and cannot oscillate. */
-function syncCandidatePageSize(){
-  if(!decide||!decide.cands||!decide.cands.length)return;
-  var fan=decideEl.querySelector('.dcleft .fan'),col=decideEl.querySelector('.dcleft');
-  if(!fan||!col)return;
-  var rows=fan.querySelectorAll('.fanr'); if(!rows.length)return;
-  var colStyle=window.getComputedStyle(col),colGap=parseFloat(colStyle.rowGap||colStyle.gap)||9;
-  var colRect=col.getBoundingClientRect(),fanRect=fan.getBoundingClientRect();
-  var below=0,siblings=col.querySelectorAll(':scope > .leftsupport, :scope > .raildrawer');
-  for(var i=0;i<siblings.length;i++){var sib=siblings[i],sibH=sib.getBoundingClientRect().height;
-    if(sib.classList.contains('leftsupport')){var sibStyle=window.getComputedStyle(sib),basis=parseFloat(sibStyle.flexBasis);
-      if(Number.isFinite(basis)&&basis>0)sibH=Math.max(basis,parseFloat(sibStyle.minHeight)||0);}
-    below+=sibH+colGap;}
-  var avail=colRect.bottom-(parseFloat(colStyle.paddingBottom)||0)-fanRect.top-below;
-  var capRaw=parseFloat(window.getComputedStyle(fan).maxHeight);
-  if(Number.isFinite(capRaw)&&capRaw>0)avail=Math.min(avail,capRaw);
-  var fanStyle=window.getComputedStyle(fan),fanGap=parseFloat(fanStyle.rowGap||fanStyle.gap)||4;
-  var pager=fan.querySelector('.fitpager'),pagerH=pager?pager.getBoundingClientRect().height+fanGap:0;
-  var rowH=0;for(var r=0;r<rows.length;r++)rowH=Math.max(rowH,rows[r].getBoundingClientRect().height);
-  if(!(rowH>0)||!(avail>rowH))return;
-  var fit=Math.max(2,Math.min(16,Math.floor((avail-pagerH+fanGap)/(rowH+fanGap))));
-  if(!pager&&fit<decide.cands.length)fit=Math.max(2,Math.min(16,Math.floor((avail-(31+fanGap)+fanGap)/(rowH+fanGap))));
-  if(fit===candidatePageSize())return;
-  var firstVisible=Math.max(0,Number(decide.candidatePage||0))*candidatePageSize();
-  decide._candPageSize=fit;decide.candidatePage=Math.floor(firstVisible/fit);
-  var wrap=document.createElement('div');wrap.innerHTML=fanList();
-  fan.parentNode.replaceChild(wrap.firstElementChild,fan);
-  drawFanIcons();
-}
-function candidatePageFor(id){var index=(decide.cands||[]).findIndex(function(row){return String(row.id)===String(id);});return index<0?0:Math.floor(index/candidatePageSize());}
-function fitPager(page,pages,total,label){if(pages<=1)return '';var dots='';for(var i=0;i<pages;i++)dots+='<i class="'+(i===page?'on':'')+'"></i>';var first=page*candidatePageSize()+1,last=Math.min(total,(page+1)*candidatePageSize());return '<div class="fitpager" aria-label="'+deskEsc(label)+' pages"><button data-dec="candpage" data-page="'+(page-1)+'" '+(page<=0?'disabled':'')+' aria-label="Previous '+deskEsc(label)+'">←</button><span class="fitread">'+first+'–'+last+' of '+total+' whole rows <span class="fitdots">'+dots+'</span></span><button data-dec="candpage" data-page="'+(page+1)+'" '+(page>=pages-1?'disabled':'')+' aria-label="Next '+deskEsc(label)+'">→</button></div>';}
+/* One overflow grammar for every primary roster. It measures the list's own content box after
+   layout, snaps whole rows, names what remains, and never invents viewport breakpoints. */
+function updateElegantList(node,rowSelector,readNode){if(!node)return;var rows=Array.prototype.slice.call(node.querySelectorAll(rowSelector));if(!rows.length)return;var first=rows[0],style=window.getComputedStyle(node),gap=parseFloat(style.rowGap||style.gap)||0,stride=first.getBoundingClientRect().height+gap,sticky=node.querySelector(':scope > .rosterhd'),usable=node.clientHeight-(sticky?sticky.getBoundingClientRect().height+gap:0),visible=Math.max(1,Math.floor((usable+gap)/Math.max(1,stride))),overflow=node.scrollHeight>node.clientHeight+2,firstIndex=Math.max(0,Math.min(rows.length-1,Math.floor((node.scrollTop+gap)/Math.max(1,stride)))),above=firstIndex,below=Math.max(0,rows.length-Math.min(rows.length,firstIndex+visible));node.classList.toggle('hasoverflow',overflow);var topFade=overflow&&node.scrollTop>2?14:0,bottomFade=overflow&&node.scrollTop+node.clientHeight<node.scrollHeight-2?14:0;node.style.maskImage='linear-gradient(to bottom,transparent 0,#000 '+topFade+'px,#000 calc(100% - '+bottomFade+'px),transparent 100%)';var meta=readNode||node.parentElement&&node.parentElement.querySelector('.overflowmeta'),read=meta&&meta.querySelector('.overflowread'),hair=meta&&meta.querySelector('.overflowhair i');if(meta)meta.classList.toggle('on',overflow);if(read)read.textContent=!overflow?'':above&&below?above+' above · +'+below+' more':above?above+' above': '+'+below+' more';if(hair){var fraction=Math.min(1,node.clientHeight/Math.max(1,node.scrollHeight)),travel=100-Math.max(12,fraction*100),progress=node.scrollHeight<=node.clientHeight?0:node.scrollTop/(node.scrollHeight-node.clientHeight);hair.style.width=Math.max(12,fraction*100)+'%';hair.style.transform='translateX('+(travel*progress)+'%)';}}
+function bindElegantList(node,rowSelector,readNode){if(!node)return;node._elegantConfig={rowSelector:rowSelector,readNode:readNode};if(!node._elegantBound){node._elegantBound=true;node.addEventListener('scroll',function(){var c=node._elegantConfig;updateElegantList(node,c.rowSelector,c.readNode);},{passive:true});if(window.ResizeObserver){node._elegantResize=new ResizeObserver(function(){var c=node._elegantConfig;updateElegantList(node,c.rowSelector,c.readNode);});node._elegantResize.observe(node);}}updateElegantList(node,rowSelector,readNode);}
+function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fanrows');if(!rows)return;bindElegantList(rows,'.fanr',rows.parentElement.querySelector('.overflowmeta'));var selected=rows.querySelector('.fanr.sel');if(selected)selected.scrollIntoView({block:'nearest'});}
 /* the verdict is a GLYPH, not grey prose: ✓ endorsable · ✕ blocked/doesn't fit · ▾ unfavorable
    economics (the red EV beside it says why) · dashed ring = evidence incomplete (selecting the
    row runs its comparison and completes it) · ~ mixed. The full sentence stays on hover. */
@@ -7338,7 +7321,6 @@ function fanVerdictIcon(co,gated){
   return '<span class="fvd '+kind+'" title="'+deskEsc(tip)+'">'+glyph+'</span>';
 }
 function fanList(){
-  var size=candidatePageSize(),pages=Math.max(1,Math.ceil(decide.cands.length/size)),page=Math.max(0,Math.min(pages-1,Number(decide.candidatePage||0)));decide.candidatePage=page;
   /* ONE row per idea. Labels live ONCE in the header; rows are the numbers, colored by meaning. */
   var head='<div class="fanhead" aria-hidden="true"><span></span><span class="fh-name">idea</span><span class="fh-i" title="fit verdict — hover any glyph">fit</span>'+
     '<span class="fnum" title="Cash at open — negative means you pay to open">collect</span>'+
@@ -7347,7 +7329,7 @@ function fanList(){
     '<span class="fnum fcol-stress" title="P/L under a sector gap shock">stress</span>'+
     '<span class="fnum fcol-cap" title="Capital or collateral this ties up">capital</span>'+
     '<span class="fnum" title="Realistic after-cost expected value — the ranking number">EV</span></div>';
-  var rows=decide.cands.slice(page*size,(page+1)*size).map(function(c){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'), gl=gapLoss(c);
+  var rows=decide.cands.map(function(c){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'), gl=gapLoss(c);
     var gcls=gl==null?'':gl<=-15000?'bad':gl<=-6000?'warn':'ok', fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=c.authoritative?co.prose:c.why;
     var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
     var evNum=c.authoritative&&c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
@@ -7363,7 +7345,7 @@ function fanList(){
       '<span class="fev '+(evNum==null?'':evNum>=0?'pos':'neg')+'" title="Realistic after-cost EV">'+(evNum==null?'—':signed(evNum))+'</span>'+
       '</button>';
   }).join('');
-  return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+'">'+head+rows+fitPager(page,pages,decide.cands.length,'ranked ideas')+'</div>';
+  return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+'">'+head+'<div class="fanrows" tabindex="0" aria-label="'+decide.cands.length+' ranked ideas · scroll for genuine overflow">'+rows+'</div><div class="overflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div></div>';
 }
 /* each engine idea's own payoff SHAPE is its strategy icon (condor = plateau, put spread = step,
    CSP = ramp) — drawn tiny with the same engine, so the icon is always true to the trade. */
@@ -7959,7 +7941,6 @@ function decAction(a,el){
   if(a==='intent'){ decide.intentOpen=!decide.intentOpen;decide.composerKeepOpen=decide.intentOpen; if(!decide.intentOpen)decide.pickOpen=false; renderDecide(); return; }
   if(a==='intentdone'){decide.intentOpen=false;decide.composerKeepOpen=false;decide.pickOpen=false;renderDecide();return;}
   if(a==='rescout'){decide.composerKeepOpen=true;loadAuthoritativeIdea();return;}
-  if(a==='candpage'){var requestedPage=Number(el&&el.getAttribute('data-page'));if(Number.isFinite(requestedPage)){decide.candidatePage=Math.max(0,requestedPage);renderDecide();}return;}
   if(a==='lefttool'){ var tool=el&&el.getAttribute('data-tool'); decide.leftTool=decide.leftTool===tool?null:tool; renderDecide(); return; }
   if(a==='inspect'){ var pane=el&&el.getAttribute('data-inspect'); if(pane)decide.inspect=pane; renderDecide();
     var selected=decideEl.querySelector('[data-inspect="'+decide.inspect+'"]'); if(selected)selected.focus(); return; }
@@ -8029,14 +8010,14 @@ function loadCand(id){
        screen until the receipt arrives; an optimistic id swap can otherwise strand the UI on B
        while the ensemble, outcome, and preview still belong to A. */
     if(window.DeskBackend.state().mutationPending){toast('Wait for the current Plan change to finish.');return;}
-    stopDecScen(); decide._fanCarry=null; decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id;decide.candidatePage=candidatePageFor(id); DEC_HOT=id;
+    stopDecScen(); decide._fanCarry=null; decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id; DEC_HOT=id;
     decide.backendPhase='loading'; decide.mcRunning=true; decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
     renderDecide();
     window.DeskBackend.chooseCandidate(id).catch(function(){ /* typed error is rendered by the bridge */ });
     return;
   }
-  stopDecScen(); decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=null; decide.candId=id;decide.candidatePage=candidatePageFor(id); DEC_HOT=id;
+  stopDecScen(); decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=null; decide.candId=id; DEC_HOT=id;
   renderAfterDecisionChange();
 }
 function wireDecide(){
