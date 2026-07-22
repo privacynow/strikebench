@@ -916,6 +916,11 @@ class ApiIntegrationTest {
         assertThat(sum.get("note").asText()).contains("BEFORE close fees");
         assertThat(sum.get("freshness").asText()).isNotEmpty();
         assertThat(sum.has("complete")).isTrue();
+        assertThat(sum.at("/liquidity/reconciliationStatus").asText()).isEqualTo("RECONCILED");
+        assertThat(sum.at("/liquidity/genuinelyFreeBuyingPower/cents").asLong())
+                .isEqualTo(sum.get("buyingPowerCents").asLong());
+        assertThat(sum.at("/liquidity/recordedOrReportedReserve/cents").asLong())
+                .isEqualTo(sum.get("reservedCents").asLong());
     }
 
     @Test

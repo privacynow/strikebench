@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
+import io.liftandshift.strikebench.position.AuthorityFacts;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.util.OwnerScope;
 
@@ -175,12 +176,12 @@ final class PlanAdoptionReviewService {
                 .toList();
         var stockBasis = books.allocatedStockBasis(owner, row.accountId(),
                 currentLotAllocations(row.structureId()));
-        PositionLifecycleReceipt.MoneyFact taxBasis = stockBasis.available()
-                ? new PositionLifecycleReceipt.MoneyFact(stockBasis.trackedTaxBasisPerShareCents(),
+        AuthorityFacts.MoneyFact taxBasis = stockBasis.available()
+                ? new AuthorityFacts.MoneyFact(stockBasis.trackedTaxBasisPerShareCents(),
                     PositionDomain.FactAuthority.SYSTEM_CALCULATED, stockBasis.basis())
-                : PositionLifecycleReceipt.MoneyFact.unavailable(stockBasis.basis());
+                : AuthorityFacts.MoneyFact.unavailable(stockBasis.basis());
 
-        PositionLifecycleReceipt.MoneyFact campaignBasis;
+        AuthorityFacts.MoneyFact campaignBasis;
         Long campaignResult = null;
         List<String> refs = new ArrayList<>();
         refs.add("positionReceipt:" + row.receiptId());
@@ -189,17 +190,17 @@ final class PlanAdoptionReviewService {
             refs.add("campaign:" + campaign.id());
             campaignResult = campaign.yield() == null ? null : campaign.yield().realizedPnlCents();
             campaignBasis = campaign.economicBasis() != null && campaign.economicBasis().available()
-                    ? new PositionLifecycleReceipt.MoneyFact(campaign.economicBasis().perShareCents(),
+                    ? new AuthorityFacts.MoneyFact(campaign.economicBasis().perShareCents(),
                         PositionDomain.FactAuthority.SYSTEM_CALCULATED,
                         "CampaignService campaign-adjusted economic basis; never tracked tax basis.")
-                    : PositionLifecycleReceipt.MoneyFact.unavailable(
+                    : AuthorityFacts.MoneyFact.unavailable(
                         "The one linked campaign has no defined per-share campaign-adjusted basis.");
         } else if (matching.isEmpty()) {
-            campaignBasis = PositionLifecycleReceipt.MoneyFact.unavailable(
+            campaignBasis = AuthorityFacts.MoneyFact.unavailable(
                     "No explicitly linked campaign supplies a campaign-adjusted basis.");
         } else {
             matching.forEach(campaign -> refs.add("campaign:" + campaign.id()));
-            campaignBasis = PositionLifecycleReceipt.MoneyFact.unavailable(
+            campaignBasis = AuthorityFacts.MoneyFact.unavailable(
                     "Multiple campaigns are linked; StrikeBench will not merge their interpretation-layer bases.");
         }
         var context = new HeldPositionEconomicsService.HistoryContext(opening, null,

@@ -62,8 +62,8 @@ public final class HeldPositionEconomicsService {
 
     public record HistoryContext(List<OpeningLeg> openingLegs, Long openingFeesCents,
                                  Long campaignRealizedCents, Long campaignUnrealizedCents,
-                                 PositionLifecycleReceipt.MoneyFact taxLotBasisPerShare,
-                                 PositionLifecycleReceipt.MoneyFact campaignBasisPerShare,
+                                 AuthorityFacts.MoneyFact taxLotBasisPerShare,
+                                 AuthorityFacts.MoneyFact campaignBasisPerShare,
                                  String basis, List<String> sourceRefs) {
         public HistoryContext {
             openingLegs = openingLegs == null ? List.of() : List.copyOf(openingLegs);
@@ -116,13 +116,13 @@ public final class HeldPositionEconomicsService {
 
         long sharesReleased = request.heldShares()
                 ? Math.multiplyExact(CoverageCheck.shareContextUnitsNeeded(request.legs()), request.qty()) : 0;
-        var collateral = new PositionLifecycleReceipt.MoneyFact(modeledCollateral,
+        var collateral = new AuthorityFacts.MoneyFact(modeledCollateral,
                 PositionDomain.FactAuthority.MODEL_DERIVED,
                 "The exact package's canonical reserve model; not a broker buying-power claim.");
-        var encumbrance = new PositionLifecycleReceipt.MoneyFact(modeledCollateral,
+        var encumbrance = new AuthorityFacts.MoneyFact(modeledCollateral,
                 PositionDomain.FactAuthority.MODEL_DERIVED,
                 "Theoretical cash encumbrance from the exact package geometry.");
-        var release = new PositionLifecycleReceipt.MoneyFact(modeledCollateral,
+        var release = new AuthorityFacts.MoneyFact(modeledCollateral,
                 PositionDomain.FactAuthority.MODEL_DERIVED,
                 "Theoretical encumbrance removed by a full close; this is not a broker buying-power claim.");
 
@@ -152,14 +152,14 @@ public final class HeldPositionEconomicsService {
                 new PositionLifecycleReceipt.CarryCollateral(
                         close.executable() ? grossRemaining : null,
                         grossAnnualized, days < 0 ? null : days, collateral,
-                        PositionLifecycleReceipt.RateFact.unavailable(
+                        AuthorityFacts.RateFact.unavailable(
                                 "No broker-reported settlement-fund rate/income receipt is linked to this analysis."),
                         encumbrance, release, sharesReleased,
                         "Gross remaining premium is the executable close debit avoided if the net-short package expires worthless; "
                                 + "it is not an expected return and it never replaces EV.", carryLimitations),
                 new PositionLifecycleReceipt.AssignmentExit(assignmentLegs,
-                        PositionLifecycleReceipt.MoneyFact.unavailable("No linked tracked tax-lot basis receipt."),
-                        PositionLifecycleReceipt.MoneyFact.unavailable("No linked campaign-adjusted basis receipt."),
+                        AuthorityFacts.MoneyFact.unavailable("No linked tracked tax-lot basis receipt."),
+                        AuthorityFacts.MoneyFact.unavailable("No linked campaign-adjusted basis receipt."),
                         eventFacts.crossings(), eventFacts.status(), "UNAVAILABLE",
                         "Short-contract geometry supplies exact shares and strike dollars; the canonical EventService "
                                 + "supplies event evidence; intent and probability remain separate.",

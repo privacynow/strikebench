@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.position.PositionArtifactStore;
 import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
+import io.liftandshift.strikebench.position.AuthorityFacts;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -162,17 +163,17 @@ class PlanAdoptionReviewServiceTest {
                         null, null, PositionLifecycleReceipt.STANCE_REF,
                         "Canonical current choice.", List.of()),
                 new PositionLifecycleReceipt.CarryCollateral(0L, null, null,
-                        new PositionLifecycleReceipt.MoneyFact(0L,
+                        new AuthorityFacts.MoneyFact(0L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "No option reserve."),
-                        PositionLifecycleReceipt.RateFact.unavailable("No settlement receipt."),
-                        new PositionLifecycleReceipt.MoneyFact(0L,
+                        AuthorityFacts.RateFact.unavailable("No settlement receipt."),
+                        new AuthorityFacts.MoneyFact(0L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "No option encumbrance."),
-                        new PositionLifecycleReceipt.MoneyFact(0L,
+                        new AuthorityFacts.MoneyFact(0L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "No option release."),
                         0L, "No option carry.", List.of()),
                 new PositionLifecycleReceipt.AssignmentExit(List.of(),
-                        PositionLifecycleReceipt.MoneyFact.unavailable("Not linked yet."),
-                        PositionLifecycleReceipt.MoneyFact.unavailable("Not linked yet."),
+                        AuthorityFacts.MoneyFact.unavailable("Not linked yet."),
+                        AuthorityFacts.MoneyFact.unavailable("Not linked yet."),
                         List.of(), "UNAVAILABLE", "UNAVAILABLE", "No short option geometry.", List.of()),
                 new PositionLifecycleReceipt.Evidence(
                         OffsetDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC), "PARTIAL",

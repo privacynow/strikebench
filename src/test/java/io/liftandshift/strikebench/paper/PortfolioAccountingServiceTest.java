@@ -1059,6 +1059,7 @@ class PortfolioAccountingServiceTest {
         assertThat(summary.totalValueCents()).isEqualTo(10_014_900L);
         assertThat(summary.unrealizedPnlCents()).isEqualTo(14_900L);
         assertThat(summary.collateral().knownBlockedCashCents()).isEqualTo(4_500_000L);
+        assertThat(summary.collateral().cashSecuredPutObligationCents()).isEqualTo(4_500_000L);
         assertThat(summary.collateral().availableCashCents()).isEqualTo(5_420_000L);
         assertThat(summary.collateral().cashSecuredPutContracts()).isEqualTo(1);
         assertThat(summary.positions()).allMatch(PortfolioAccountingService.PositionView::complete);
@@ -1066,6 +1067,9 @@ class PortfolioAccountingServiceTest {
         assertThat(summary.allocation().shortExposureCents()).isEqualTo(15_000L);
         assertThat(summary.allocation().grossExposureCents()).isEqualTo(124_900L);
         assertThat(summary.allocation().netExposureCents()).isEqualTo(94_900L);
+        assertThat(summary.liquidity().theoreticalShortPutObligation().cents()).isEqualTo(4_500_000L);
+        assertThat(summary.liquidity().genuinelyFreeBuyingPower().authority())
+                .isEqualTo(io.liftandshift.strikebench.position.PositionDomain.FactAuthority.UNAVAILABLE);
         assertThat(summary.allocation().byAssetClass())
                 .extracting(PortfolioAccountingService.ExposureRow::label,
                         PortfolioAccountingService.ExposureRow::longExposureCents,
@@ -1087,6 +1091,31 @@ class PortfolioAccountingServiceTest {
                 .containsExactly(org.assertj.core.groups.Tuple.tuple("Long", 109_900L, 109_900L),
                         org.assertj.core.groups.Tuple.tuple("Short", 15_000L, -15_000L));
         assertThat(summary.valuationBasis()).contains("executable closing sides");
+    }
+
+    @Test
+    void brokerValuationIsTheOnlyTrackedAuthorityForFreeBuyingPowerAndPersistsReconciliation() {
+        var account = books.createAccount("local", account("Brokerage", "TAXABLE", 102_011_128L));
+        var valuation = books.addValuation("local", account.id(),
+                new PortfolioAccountingService.ValuationInput("2026-07-13T15:00:00Z",
+                        102_011_128L, 0L, 102_011_128L, "BROKER", "synthetic-statement",
+                        "Synthetic broker liquidity acceptance fixture.", 361_099L,
+                        101_650_000L, 29L, 5.10, null));
+
+        assertThat(valuation.pendingDebitCents()).isEqualTo(361_099L);
+        assertThat(valuation.brokerReserveCents()).isEqualTo(101_650_000L);
+        assertThat(valuation.brokerBuyingPowerCents()).isEqualTo(29L);
+        var liquidity = books.summary("local", account.id()).liquidity();
+        assertThat(liquidity.genuinelyFreeBuyingPower().cents()).isEqualTo(29L);
+        assertThat(liquidity.reconciliationStatus()).isEqualTo("RECONCILED");
+        assertThat(liquidity.reconciliationDifference().cents()).isZero();
+
+        assertThatThrownBy(() -> books.addValuation("local", account.id(),
+                new PortfolioAccountingService.ValuationInput("2026-07-13T16:00:00Z",
+                        102_011_128L, 0L, 102_011_128L, "MANUAL", null, null,
+                        0L, 0L, 102_011_128L, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BROKER valuation authority");
     }
 
     @Test

@@ -1616,6 +1616,37 @@ public final class TradeService {
      * loss or becoming a stock position in StrikeBench's settlement model.
      */
     public Map<String, Object> portfolioHeat(String accountId) {
+        PortfolioHeatFacts facts = portfolioHeatFacts(accountId);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("activeTrades", facts.activeTrades());
+        out.put("totalMaxLossCents", facts.totalMaxLossCents());
+        out.put("reservedCents", facts.reservedCents());
+        out.put("shortVolTrades", facts.shortVolTrades());
+        out.put("bySymbolMaxLossCents", facts.bySymbolMaxLossCents());
+        long worstSymbol = facts.bySymbolMaxLossCents().values().stream()
+                .mapToLong(Long::longValue).max().orElse(0);
+        out.put("concentrationPct", facts.totalMaxLossCents() > 0
+                ? Math.round(100.0 * worstSymbol / facts.totalMaxLossCents()) : 0);
+        out.put("earlyAssignmentLiquidityCents", facts.theoreticalShortPutObligationCents());
+        out.put("physicalAssignmentCashCents", facts.physicalAssignmentCashCents());
+        out.put("assignmentReserveReleasedCents", facts.assignmentReserveReleasedCents());
+        out.put("postPhysicalAssignmentBuyingPowerCents", facts.postPhysicalAssignmentBuyingPowerCents());
+        return out;
+    }
+
+    /** Gross strike obligation across active short puts; the same canonical fact used by heat. */
+    public long theoreticalShortPutObligationCents(String accountId) {
+        return portfolioHeatFacts(accountId).theoreticalShortPutObligationCents();
+    }
+
+    private record PortfolioHeatFacts(int activeTrades, long totalMaxLossCents, long reservedCents,
+                                      int shortVolTrades, Map<String, Long> bySymbolMaxLossCents,
+                                      long theoreticalShortPutObligationCents,
+                                      long physicalAssignmentCashCents,
+                                      long assignmentReserveReleasedCents,
+                                      long postPhysicalAssignmentBuyingPowerCents) {}
+
+    private PortfolioHeatFacts portfolioHeatFacts(String accountId) {
         List<TradeRecord> active = activeTrades(accountId);
         Account acct = db.with(c -> AccountService.get(c, accountId));
         Map<String, Long> reserveByTrade = new java.util.HashMap<>();
@@ -1650,20 +1681,10 @@ public final class TradeService {
                 assignmentReserveReleased += tradeReserve;
             }
         }
-        long worstSymbol = bySymbol.values().stream().mapToLong(Long::longValue).max().orElse(0);
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("activeTrades", active.size());
-        out.put("totalMaxLossCents", totalMaxLoss);
-        out.put("reservedCents", acct.reservedCents());
-        out.put("shortVolTrades", shortVol);
-        out.put("bySymbolMaxLossCents", bySymbol);
-        out.put("concentrationPct", totalMaxLoss > 0 ? Math.round(100.0 * worstSymbol / totalMaxLoss) : 0);
-        out.put("earlyAssignmentLiquidityCents", earlyAssignmentLiquidity);
-        out.put("physicalAssignmentCashCents", physicalAssignmentCash);
-        out.put("assignmentReserveReleasedCents", assignmentReserveReleased);
-        out.put("postPhysicalAssignmentBuyingPowerCents",
+        return new PortfolioHeatFacts(active.size(), totalMaxLoss, acct.reservedCents(), shortVol,
+                Map.copyOf(bySymbol), earlyAssignmentLiquidity, physicalAssignmentCash,
+                assignmentReserveReleased,
                 acct.buyingPowerCents() - physicalAssignmentCash + assignmentReserveReleased);
-        return out;
     }
 
     private static boolean cashSecuredPutAssignsPhysically(TradeRecord t, long tradeReserve) {

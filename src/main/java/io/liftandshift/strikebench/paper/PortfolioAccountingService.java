@@ -9,6 +9,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.position.PositionDomain;
+import io.liftandshift.strikebench.position.AccountLiquidityReceipt;
 import io.liftandshift.strikebench.position.RecordingPolicy;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
@@ -149,12 +150,24 @@ public final class PortfolioAccountingService {
 
     public record ValuationInput(String asOf, Long cashCents, Long securitiesValueCents,
                                  Long totalValueCents, String source, String externalRef,
-                                 String notes) {}
+                                 String notes, Long pendingDebitCents, Long brokerReserveCents,
+                                 Long brokerBuyingPowerCents, Double collateralIncomeAnnualRatePct,
+                                 Long collateralIncomeCents) {
+        public ValuationInput(String asOf, Long cashCents, Long securitiesValueCents,
+                              Long totalValueCents, String source, String externalRef,
+                              String notes) {
+            this(asOf, cashCents, securitiesValueCents, totalValueCents, source, externalRef,
+                    notes, null, null, null, null, null);
+        }
+    }
 
     public record ValuationView(String id, String accountId, String asOf, Long cashCents,
                                 Long securitiesValueCents, long totalValueCents,
                                 String source, String externalRef, String notes,
-                                boolean complete, List<String> missingMarks) {}
+                                boolean complete, List<String> missingMarks,
+                                Long pendingDebitCents, Long brokerReserveCents,
+                                Long brokerBuyingPowerCents, Double collateralIncomeAnnualRatePct,
+                                Long collateralIncomeCents) {}
 
     public record BenchmarkPoint(String asOf, long portfolioValueCents,
                                  long normalizedBenchmarkValueCents) {}
@@ -225,7 +238,8 @@ public final class PortfolioAccountingService {
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
                                       boolean complete, String basis) {}
 
-    public record CollateralView(long knownBlockedCashCents, Long availableCashCents,
+    public record CollateralView(long knownBlockedCashCents, long cashSecuredPutObligationCents,
+                                 Long availableCashCents,
                                  long cashSecuredPutContracts, long definedRiskPutContracts,
                                  long coveredCallContracts, long definedRiskCallContracts,
                                  long uncoveredShortCallShares, boolean complete,
@@ -236,7 +250,8 @@ public final class PortfolioAccountingService {
                                    long realizedPnlCents, Long unrealizedPnlCents,
                                    long interestIncomeCents, long dividendIncomeCents,
                                    long feesCents, long netExternalFlowsCents,
-                                   CollateralView collateral, List<PositionView> positions,
+                                   CollateralView collateral, AccountLiquidityReceipt liquidity,
+                                   List<PositionView> positions,
                                    AllocationView allocation, List<String> missingMarks,
                                    boolean complete, String valuationBasis) {}
 
@@ -299,7 +314,7 @@ public final class PortfolioAccountingService {
     private record SummaryLedgerSnapshot(AccountProfile account, List<LotView> openLots,
                                          long cashCents, long realizedCents, long feesCents,
                                          long externalFlowsCents, long interestCents,
-                                         long dividendCents) {}
+                                         long dividendCents, ValuationView brokerLiquidity) {}
 
     // ---- Accounts ----
 
@@ -634,18 +649,41 @@ public final class PortfolioAccountingService {
         }
         String source = input.source() == null || input.source().isBlank() ? "MANUAL"
                 : enumValue(input.source(), List.of("MANUAL", "BROKER", "CALCULATED", "IMPORT"), "valuation source");
+        validateNonNegative(input.pendingDebitCents(), "pending debit");
+        validateNonNegative(input.brokerReserveCents(), "broker reserve");
+        validateNonNegative(input.collateralIncomeCents(), "collateral income");
+        if (input.collateralIncomeAnnualRatePct() != null
+                && (!Double.isFinite(input.collateralIncomeAnnualRatePct())
+                || input.collateralIncomeAnnualRatePct() < 0
+                || input.collateralIncomeAnnualRatePct() > 100)) {
+            throw new IllegalArgumentException("collateral-income annual rate must be between 0 and 100 percent");
+        }
+        boolean hasBrokerLiquidity = input.pendingDebitCents() != null || input.brokerReserveCents() != null
+                || input.brokerBuyingPowerCents() != null || input.collateralIncomeAnnualRatePct() != null
+                || input.collateralIncomeCents() != null;
+        if (hasBrokerLiquidity && !"BROKER".equals(source)) {
+            throw new IllegalArgumentException("liquidity and settlement-fund facts require BROKER valuation authority");
+        }
+        if (input.collateralIncomeCents() != null && input.collateralIncomeAnnualRatePct() == null) {
+            throw new IllegalArgumentException("collateral income needs its broker-reported annual rate");
+        }
         String id = Ids.newId("pval");
         String owner = owner(ownerId);
         return db.tx(c -> {
             AccountProfile account = requireAccount(c, owner, accountId, true);
             requireActive(account);
             Db.execOn(c, "INSERT INTO portfolio_valuation(id,portfolio_account_id,as_of,cash_cents,securities_value_cents,total_value_cents,"
-                            + "source,external_ref,notes) VALUES (?,?,?,?,?,?,?,?,?)",
+                            + "source,external_ref,notes,pending_debit_cents,broker_reserve_cents,broker_buying_power_cents,"
+                            + "collateral_income_annual_rate_pct,collateral_income_cents) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     id, account.id(), asOf, input.cashCents(), input.securitiesValueCents(), input.totalValueCents(),
-                    source, trim(input.externalRef(), 160), trim(input.notes(), 1000));
+                    source, trim(input.externalRef(), 160), trim(input.notes(), 1000),
+                    input.pendingDebitCents(), input.brokerReserveCents(), input.brokerBuyingPowerCents(),
+                    input.collateralIncomeAnnualRatePct(), input.collateralIncomeCents());
             return new ValuationView(id, account.id(), asOf.toString(), input.cashCents(), input.securitiesValueCents(),
                     input.totalValueCents(), source, trim(input.externalRef(), 160), trim(input.notes(), 1000),
-                    true, List.of());
+                    true, List.of(), input.pendingDebitCents(), input.brokerReserveCents(),
+                    input.brokerBuyingPowerCents(), input.collateralIncomeAnnualRatePct(),
+                    input.collateralIncomeCents());
         });
     }
 
@@ -1236,13 +1274,21 @@ public final class PortfolioAccountingService {
                         + "WHERE l.portfolio_account_id=? AND l.status='OPEN' "
                         + "ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id",
                 PortfolioAccountingService::mapLotView, account.id());
+        ValuationView brokerLiquidity = Db.queryOn(c,
+                valuationSelect("v.portfolio_account_id=? AND v.source='BROKER' "
+                                + "AND (v.pending_debit_cents IS NOT NULL OR v.broker_reserve_cents IS NOT NULL "
+                                + "OR v.broker_buying_power_cents IS NOT NULL "
+                                + "OR v.collateral_income_annual_rate_pct IS NOT NULL)",
+                        "ORDER BY v.as_of DESC,v.id DESC LIMIT 1"),
+                PortfolioAccountingService::mapValuation, account.id()).stream().findFirst().orElse(null);
         return new SummaryLedgerSnapshot(account, openLots,
                 scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
                 scalarOn(c, "SELECT COALESCE(SUM(economic_realized_gain_cents),0) n FROM portfolio_lot_match WHERE portfolio_account_id=?", account.id()),
                 scalarOn(c, "SELECT COALESCE(SUM(fees_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=?", account.id()),
                 scalarOn(c, "SELECT COALESCE(SUM(cash_effect_cents),0) n FROM portfolio_transaction WHERE portfolio_account_id=? "
                         + "AND event_type IN ('DEPOSIT','WITHDRAWAL','TRANSFER_IN','TRANSFER_OUT')", account.id()),
-                incomeOn(c, account.id(), "INTEREST", null), incomeOn(c, account.id(), "DIVIDEND", null));
+                incomeOn(c, account.id(), "INTEREST", null), incomeOn(c, account.id(), "DIVIDEND", null),
+                brokerLiquidity);
     }
 
     private PortfolioSummary assembleSummary(SummaryLedgerSnapshot ledger) {
@@ -1303,13 +1349,20 @@ public final class PortfolioAccountingService {
         long fees = ledger.feesCents();
         long flows = ledger.externalFlowsCents();
         CollateralView collateral = collateral(open, cash);
+        ValuationView broker = ledger.brokerLiquidity();
+        AccountLiquidityReceipt liquidity = AccountLiquidityReceipt.tracked(account.id(), cash,
+                collateral.cashSecuredPutObligationCents(), broker == null ? null
+                        : new AccountLiquidityReceipt.BrokerEvidence(broker.id(),
+                        OffsetDateTime.parse(broker.asOf()), broker.cashCents(), broker.pendingDebitCents(),
+                        broker.brokerReserveCents(), broker.brokerBuyingPowerCents(),
+                        broker.collateralIncomeAnnualRatePct(), broker.collateralIncomeCents()));
         AllocationView allocation = allocation(positions, cash);
         Long securities = complete ? knownSecurities : null;
         Long total = complete ? Math.addExact(cash, knownSecurities) : null;
         Long unrealized = complete ? knownUnrealized : null;
         return new PortfolioSummary(account, cash, securities, total, realized, unrealized,
                 ledger.interestCents(), ledger.dividendCents(), fees, flows,
-                collateral, positions, allocation, List.copyOf(missing), complete,
+                collateral, liquidity, positions, allocation, List.copyOf(missing), complete,
                 "Current liquidation uses observed or broker marks at executable closing sides. Demo, simulated, and modeled marks are never applied to tracked external accounts. Fees to close and broker-specific margin rules are not modeled. Missing marks never become zero.");
     }
 
@@ -1331,6 +1384,7 @@ public final class PortfolioAccountingService {
 
     private CollateralView collateral(List<LotView> lots, long cash) {
         long blocked = 0;
+        long cashSecuredPutObligation = 0;
         long cashSecuredPuts = 0, spreadPuts = 0, coveredCalls = 0, spreadCalls = 0;
         long uncoveredCallShares = 0;
         List<String> notes = new ArrayList<>();
@@ -1357,8 +1411,10 @@ public final class PortfolioAccountingService {
                 protective.quantity -= paired;
             }
             if (remaining > 0) {
-                blocked = Math.addExact(blocked, Money.centsFromPrice(shortPut.strike,
-                        Math.multiplyExact(remaining, (long) shortPut.multiplier)));
+                long obligation = Money.centsFromPrice(shortPut.strike,
+                        Math.multiplyExact(remaining, (long) shortPut.multiplier));
+                blocked = Math.addExact(blocked, obligation);
+                cashSecuredPutObligation = Math.addExact(cashSecuredPutObligation, obligation);
                 cashSecuredPuts += remaining;
             }
         }
@@ -1389,7 +1445,8 @@ public final class PortfolioAccountingService {
         if (uncoveredCallShares > 0) notes.add(uncoveredCallShares
                 + " short-call shares are not covered by recorded shares or same-expiration long calls; their broker margin is not estimated.");
         notes.add("Cash blocked is a cash-secured/defined-risk estimate from recorded lots, not a broker margin quote.");
-        return new CollateralView(blocked, complete ? Math.subtractExact(cash, blocked) : null,
+        return new CollateralView(blocked, cashSecuredPutObligation,
+                complete ? Math.subtractExact(cash, blocked) : null,
                 cashSecuredPuts, spreadPuts, coveredCalls, spreadCalls, uncoveredCallShares,
                 complete, List.copyOf(notes));
     }
@@ -2123,7 +2180,11 @@ public final class PortfolioAccountingService {
         return new ValuationView(r.str("id"), r.str("portfolio_account_id"), iso(r.odt("as_of")),
                 r.lngOrNull("cash_cents"), r.lngOrNull("securities_value_cents"), r.lng("total_value_cents"),
                 r.str("source"), r.str("external_ref"), r.str("notes"), r.bool("complete"),
-                r.strings("missing_mark_list"));
+                r.strings("missing_mark_list"), r.lngOrNull("pending_debit_cents"),
+                r.lngOrNull("broker_reserve_cents"), r.lngOrNull("broker_buying_power_cents"),
+                r.bd("collateral_income_annual_rate_pct") == null ? null
+                        : r.bd("collateral_income_annual_rate_pct").doubleValue(),
+                r.lngOrNull("collateral_income_cents"));
     }
 
     private static String valuationSelect(String where, String order) {
@@ -2259,6 +2320,10 @@ public final class PortfolioAccountingService {
 
     private static void validateRate(Integer bps, String label) {
         if (bps != null && (bps < 0 || bps > 10_000)) throw new IllegalArgumentException(label + " must be 0..10000 basis points");
+    }
+
+    private static void validateNonNegative(Long value, String label) {
+        if (value != null && value < 0) throw new IllegalArgumentException(label + " cannot be negative");
     }
 
     private OffsetDateTime parseTime(String raw) {
