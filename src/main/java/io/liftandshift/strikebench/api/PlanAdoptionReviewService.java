@@ -211,7 +211,8 @@ final class PlanAdoptionReviewService {
         var enriched = lifecycle.withHistory(analysis.lifecycle(), context);
         return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
                 analysis.identity(), analysis.accountId(), analysis.accountName(),
-                analysis.availableCashCents(), analysis.marketLane(), analysis.note(), enriched);
+                analysis.availableCashCents(), analysis.marketLane(), analysis.note(), enriched,
+                analysis.bookActions());
     }
 
     private List<PortfolioAccountingService.LotAllocation> currentLotAllocations(String structureId) {

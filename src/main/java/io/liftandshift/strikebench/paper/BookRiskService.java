@@ -151,6 +151,25 @@ public final class BookRiskService {
     private AccountRisk accountRisk(String ownerId, PortfolioAccountingService.AccountProfile profile) {
         List<PortfolioAccountingService.LotView> lots = books.lots(ownerId, profile.id(), false);
         long cash = bookCash(profile.id());
+        return accountRisk(ownerId, profile, lots, cash);
+    }
+
+    /**
+     * Runs the one canonical Book-risk engine over a hypothetical lot/cash snapshot. Callers own
+     * only the transformation of copied lots; this method performs no write and retains every
+     * observed-evidence and missing-data rule of the live account lane.
+     */
+    public AccountRisk projectAccount(String ownerId, String accountId,
+                                      List<PortfolioAccountingService.LotView> hypotheticalLots,
+                                      long hypotheticalCashCents) {
+        var profile = books.account(ownerId, accountId);
+        return accountRisk(ownerId, profile,
+                hypotheticalLots == null ? List.of() : List.copyOf(hypotheticalLots),
+                hypotheticalCashCents);
+    }
+
+    private AccountRisk accountRisk(String ownerId, PortfolioAccountingService.AccountProfile profile,
+                                    List<PortfolioAccountingService.LotView> lots, long cash) {
         Map<String, Long> spots = spotCents(lots);
         Map<String, MarksSource.LegMark> optionMarks = optionMarks(lots);
         BetaSet betas = betas(optionUnderlyings(lots));
