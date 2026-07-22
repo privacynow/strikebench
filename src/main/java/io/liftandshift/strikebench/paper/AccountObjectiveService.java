@@ -171,6 +171,36 @@ public final class AccountObjectiveService {
             String basis
     ) {}
 
+    /**
+     * Canonical monetary usage presented to the account-capacity policy. Calculation owners
+     * (Book risk, collateral, or a hypothetical action) supply the maps; this policy owner only
+     * compares them with the immutable declaration. Missing encumbrance remains unavailable.
+     */
+    public record CapacityUsage(
+            Map<String, Long> symbolCents,
+            Map<String, Long> themeCents,
+            Map<String, Long> expiryCents,
+            Long encumbranceCents,
+            String basis
+    ) {
+        public CapacityUsage {
+            symbolCents = normalizeUsage(symbolCents);
+            themeCents = normalizeUsage(themeCents);
+            expiryCents = normalizeUsage(expiryCents);
+            if (encumbranceCents != null && encumbranceCents < 0) {
+                throw new IllegalArgumentException("capacity encumbrance cannot be negative");
+            }
+            if (basis == null || basis.isBlank()) {
+                throw new IllegalArgumentException("capacity usage basis is required");
+            }
+        }
+    }
+
+    /** One declared ceiling evaluated against one canonical usage receipt. */
+    public record CapacityCheck(String scope, String key, long maxCents,
+                                Enforcement enforcement, Long currentCents,
+                                boolean available, boolean breached, String basis) {}
+
     private final Db db;
     private final Clock clock;
 
@@ -279,6 +309,42 @@ public final class AccountObjectiveService {
                         + "; it affects fit and policy only, never valuation or EV.");
     }
 
+    /**
+     * The single ceiling-comparison implementation shared by held-position policy and Scout.
+     * It does not calculate exposure, alter economics, or infer a missing broker value.
+     */
+    public static List<CapacityCheck> assessCapacity(AccountCapacityPolicy policy,
+                                                     CapacityUsage usage) {
+        if (policy == null || usage == null) return List.of();
+        List<CapacityCheck> out = new ArrayList<>();
+        for (ScopedCeiling ceiling : policy.symbolCeilings()) {
+            out.add(check("SYMBOL", ceiling, usage.symbolCents().getOrDefault(ceiling.key(), 0L),
+                    usage.basis()));
+        }
+        for (ScopedCeiling ceiling : policy.themeCeilings()) {
+            out.add(check("THEME", ceiling, usage.themeCents().getOrDefault(ceiling.key(), 0L),
+                    usage.basis()));
+        }
+        for (ScopedCeiling ceiling : policy.expiryCeilings()) {
+            out.add(check("EXPIRY", ceiling, usage.expiryCents().getOrDefault(ceiling.key(), 0L),
+                    usage.basis()));
+        }
+        if (policy.encumbranceCeiling() != null) {
+            Long value = usage.encumbranceCents();
+            out.add(new CapacityCheck("ENCUMBRANCE", "ACCOUNT",
+                    policy.encumbranceCeiling().maxCents(),
+                    policy.encumbranceCeiling().enforcement(), value, value != null,
+                    value != null && value > policy.encumbranceCeiling().maxCents(), usage.basis()));
+        }
+        return List.copyOf(out);
+    }
+
+    private static CapacityCheck check(String scope, ScopedCeiling ceiling,
+                                       Long value, String basis) {
+        return new CapacityCheck(scope, ceiling.key(), ceiling.maxCents(), ceiling.enforcement(),
+                value, value != null, value != null && value > ceiling.maxCents(), basis);
+    }
+
     private static List<PackageCapacity> normalizePackages(List<PackageCapacity> raw) {
         if (raw == null || raw.isEmpty()) return List.of();
         ArrayList<PackageCapacity> out = new ArrayList<>(raw.size());
@@ -293,6 +359,20 @@ public final class AccountObjectiveService {
         }
         out.sort(Comparator.comparing(PackageCapacity::positionFingerprint));
         return List.copyOf(out);
+    }
+
+    private static Map<String, Long> normalizeUsage(Map<String, Long> raw) {
+        if (raw == null || raw.isEmpty()) return Map.of();
+        Map<String, Long> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Long> entry : raw.entrySet()) {
+            String key = clean(entry.getKey()).toUpperCase(Locale.ROOT);
+            Long value = entry.getValue();
+            if (value == null || value < 0) {
+                throw new IllegalArgumentException("capacity usage values must be non-negative");
+            }
+            out.merge(key, value, Math::addExact);
+        }
+        return java.util.Collections.unmodifiableMap(out);
     }
 
     private static List<ScopedCeiling> normalizeScoped(List<ScopedCeiling> raw, String scope) {

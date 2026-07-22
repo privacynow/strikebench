@@ -10,6 +10,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -94,5 +95,32 @@ class AccountObjectiveServiceTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("ISO date");
         assertThat(db.query("SELECT COUNT(*) n FROM account_objective_revision",
                 r -> r.lng("n"))).containsExactly(0L);
+    }
+
+    @Test
+    void oneCapacityComparatorServesCurrentAndHypotheticalBookUsage() {
+        var policy = new AccountObjectiveService.AccountCapacityPolicy(
+                List.of(new AccountObjectiveService.ScopedCeiling("AMD", 10_000L,
+                        AccountObjectiveService.Enforcement.HARD)),
+                List.of(new AccountObjectiveService.ScopedCeiling("TECHNOLOGY", 20_000L,
+                        AccountObjectiveService.Enforcement.ADVISORY)),
+                List.of(new AccountObjectiveService.ScopedCeiling("2026-08-07", 15_000L,
+                        AccountObjectiveService.Enforcement.HARD)),
+                new AccountObjectiveService.CapacityCeiling(12_000L,
+                        AccountObjectiveService.Enforcement.HARD));
+        var usage = new AccountObjectiveService.CapacityUsage(
+                Map.of("amd", 11_000L), Map.of("technology", 19_000L),
+                Map.of("2026-08-07", 16_000L), null, "canonical hypothetical Book snapshot");
+
+        var checks = AccountObjectiveService.assessCapacity(policy, usage);
+        assertThat(checks).extracting(AccountObjectiveService.CapacityCheck::scope,
+                        AccountObjectiveService.CapacityCheck::key,
+                        AccountObjectiveService.CapacityCheck::available,
+                        AccountObjectiveService.CapacityCheck::breached)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("SYMBOL", "AMD", true, true),
+                        org.assertj.core.groups.Tuple.tuple("THEME", "TECHNOLOGY", true, false),
+                        org.assertj.core.groups.Tuple.tuple("EXPIRY", "2026-08-07", true, true),
+                        org.assertj.core.groups.Tuple.tuple("ENCUMBRANCE", "ACCOUNT", false, false));
     }
 }

@@ -119,6 +119,20 @@ public final class TradeService {
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
                                       boolean complete, String basis) {}
 
+    /** One pass over the Practice book, retaining every symbol subtotal for cross-symbol Scout. */
+    public record DollarDeltaBook(long grossCents, long netCents,
+                                  Map<String, Long> symbolGrossCents,
+                                  boolean complete, String basis) {
+        public DollarDeltaBook {
+            symbolGrossCents = symbolGrossCents == null ? Map.of() : Map.copyOf(symbolGrossCents);
+        }
+        public DollarDeltaExposure focus(String symbol) {
+            return new DollarDeltaExposure(grossCents, netCents,
+                    symbolGrossCents.getOrDefault(symbol == null ? "" : symbol.toUpperCase(java.util.Locale.ROOT), 0L),
+                    complete, basis);
+        }
+    }
+
     public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
                            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
                            PositionGreeks greeks, List<Map<String, Object>> legGreeks) {}
@@ -1878,11 +1892,21 @@ public final class TradeService {
     /** Current Practice exposure with one position omitted, used for before/after transformations. */
     public DollarDeltaExposure portfolioDollarDelta(String accountId, String focusSymbol,
                                                      String excludedTradeId) {
+        return portfolioDollarDeltaBook(accountId, excludedTradeId).focus(focusSymbol);
+    }
+
+    public DollarDeltaBook portfolioDollarDeltaBook(String accountId) {
+        return portfolioDollarDeltaBook(accountId, null);
+    }
+
+    /** Current Practice exposure in one canonical mark pass, optionally omitting one trade. */
+    public DollarDeltaBook portfolioDollarDeltaBook(String accountId, String excludedTradeId) {
         List<TradeRecord> active = activeTrades(accountId).stream()
                 .filter(trade -> excludedTradeId == null || !excludedTradeId.equals(trade.id()))
                 .toList();
         Map<String, MarkView> marksByTrade = accountMarkSnapshot(accountId);
-        long gross = 0, net = 0, focusGross = 0;
+        long gross = 0, net = 0;
+        Map<String, Long> bySymbol = new LinkedHashMap<>();
         boolean complete = true;
         for (TradeRecord trade : active) {
             MarkView mark = marksByTrade.get(trade.id());
@@ -1900,11 +1924,9 @@ public final class TradeService {
             long magnitude = safeAbsolute(delta);
             gross = Math.addExact(gross, magnitude);
             net = Math.addExact(net, delta);
-            if (trade.symbol().equalsIgnoreCase(focusSymbol)) {
-                focusGross = Math.addExact(focusGross, magnitude);
-            }
+            bySymbol.merge(trade.symbol().toUpperCase(java.util.Locale.ROOT), magnitude, Math::addExact);
         }
-        return new DollarDeltaExposure(gross, net, focusGross, complete,
+        return new DollarDeltaBook(gross, net, Map.copyOf(bySymbol), complete,
                 "Current executable Practice marks in this account's market; dollar delta uses the disclosed option model."
                         + " This is exposure, not P&L or broker reserve.");
     }

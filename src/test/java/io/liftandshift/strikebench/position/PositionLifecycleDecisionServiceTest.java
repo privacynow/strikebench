@@ -131,6 +131,18 @@ class PositionLifecycleDecisionServiceTest {
                 AccountObjectiveService.capacityContext(cheapRevision, POSITION));
         assertThat(surfaced.analysis().verdict())
                 .isEqualTo(PositionLifecycleDecisionService.Verdict.HARVEST);
+        var redeploy = decisions.resolveAction("local", account.id(), surfaced.receiptId(),
+                "CLOSE_K", 2);
+        assertThat(redeploy.symbol()).isEqualTo("QQQ");
+        assertThat(redeploy.executableCloseCostCents()).isEqualTo(10_200L);
+        assertThat(redeploy.capitalReleasedCents()).isEqualTo(9_000_000L);
+        assertThat(redeploy.closingPnlCents()).isEqualTo(9_800L);
+        assertThat(redeploy.postActionBook().risk().themes().symbolNotionals())
+                .extracting(BookRiskService.SymbolNotional::notionalCents)
+                .containsExactly(4_500_000L);
+        assertThatThrownBy(() -> decisions.resolveAction("local", account.id(), surfaced.receiptId(),
+                "CLOSE_K", 1)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not available in the frozen receipt");
         var personal = decisions.recordUserDecision("local", account.id(),
                 new PositionLifecycleDecisionService.DecisionInput(surfaced.receiptId(), "KEEP",
                         "HOLD", null, "I accept the assigned shares and prefer to retain this premium."));

@@ -43,7 +43,7 @@ function contentType(file) {
 
 function servePublic(req, res) {
   const requestUrl = new URL(req.url, 'http://127.0.0.1');
-  const pathname = requestUrl.pathname === '/' ? '/desk.html' : decodeURIComponent(requestUrl.pathname);
+  const pathname = requestUrl.pathname === '/' ? '/index.html' : decodeURIComponent(requestUrl.pathname);
   const file = path.resolve(PUBLIC, `.${pathname}`);
   if (file !== PUBLIC && !file.startsWith(`${PUBLIC}${path.sep}`)) {
     res.writeHead(403).end('forbidden');
@@ -66,7 +66,7 @@ before(async () => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
   });
-  deskUrl = `http://127.0.0.1:${server.address().port}/desk.html`;
+  deskUrl = `http://127.0.0.1:${server.address().port}/index.html`;
 });
 
 after(async () => {
@@ -6756,16 +6756,33 @@ test('a newer server-owned option calibration is accepted without a second full-
   }
 });
 
-test('the Desk requests an explicit bounded memory and storage opportunity scan', async () => {
+test('Home asks the canonical Scout for the configured-universe redeployment frontier', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   const scoutResponse = {
-    searched: 5,
+    searched: 105,
     picks: [{
       symbol: 'MU',
       opportunity: { score: 84, summary: 'Rich volatility with liquid income structures.' },
-      bestIdea: { displayName: 'Cash-secured put', realizedVolEvAfterCostsCents: 16100 }
-    }]
+      bestIdea: {
+        family: 'CASH_SECURED_PUT', displayName: 'Cash-secured put',
+        economicVerdict: 'FAVORABLE', realizedVolEvAfterCostsCents: 16100
+      }
+    }],
+    compensation: [{ symbol: 'MU', strategy: 'CASH_SECURED_PUT', score: 77.4 }],
+    frontier: {
+      schemaVersion: 'redeployment-frontier-v1',
+      universe: { source: 'CONFIGURED', label: 'Active optionable universe', symbols: ['MU', 'AMD', 'NVDA'] },
+      destinationAccountId: 'acct-practice',
+      decisionRanking: [{
+        evaluationId: 'eval-mu', symbol: 'MU', strategy: 'CASH_SECURED_PUT',
+        decisionScore: 84, economicVerdict: 'FAVORABLE', qualification: 'QUALIFIED',
+        dataCompleteness: { status: 'OBSERVED_COMPLETE' },
+        bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
+      }],
+      compensationRanking: [{ symbol: 'MU', strategy: 'CASH_SECURED_PUT', score: 77.4 }],
+      notes: ['Decision economics and compensation are independent rankings.']
+    }
   };
   const backend = await installBackend(page, { scoutResponse });
   try {
@@ -6779,12 +6796,14 @@ test('the Desk requests an explicit bounded memory and storage opportunity scan'
     assert.deepEqual(result, scoutResponse,
       'the bridge preserves the canonical Scout response for the Home lens');
     assert.match(await page.locator('.opportunityrow').textContent(),
-      /MU.*Cash-secured put.*\+\$161.*EV/i,
-      'Home turns the scan into a useful package-level opportunity lens');
+      /MU.*Cash-secured put.*favorable.*qualified.*Book improves.*\+\$161.*EV/i,
+      'Home turns the canonical frontier into a useful package and Book-fit lens');
+    assert.match(await page.locator('.opportunitycomp').textContent(),
+      /Compensation.*separate view.*MU 77.*never overrides decision economics/i,
+      'carry compensation remains visibly separate from the decision order');
     const request = backend.requests.find(row => row.method === 'POST'
       && row.path === '/api/research/scout');
     assert.deepEqual(request.body, {
-      universe: ['MU', 'SMH', 'STX', 'WDC', 'SNDK'],
       horizons: ['45d'],
       maxPicks: 5,
       riskMode: 'balanced',

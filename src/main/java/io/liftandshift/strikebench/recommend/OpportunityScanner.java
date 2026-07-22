@@ -21,10 +21,18 @@ public final class OpportunityScanner {
     private static final int CONCURRENCY = 8;
 
     public record ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned,
-                             List<CompensationView.CompensationEntry> compensation, String compensationBasis) {
+                             List<CompensationView.CompensationEntry> compensation, String compensationBasis,
+                             RedeploymentFrontier.Result frontier) {
         /** Pre-compensation-view constructor keeps existing callers' shape. */
         public ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned) {
-            this(ranked, notes, scanned, List.of(), null);
+            this(ranked, notes, scanned, List.of(), null, null);
+        }
+
+        /** Compatibility shape for callers that predate the Book-aware frontier. */
+        public ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned,
+                          List<CompensationView.CompensationEntry> compensation,
+                          String compensationBasis) {
+            this(ranked, notes, scanned, compensation, compensationBasis, null);
         }
     }
 
@@ -41,6 +49,34 @@ public final class OpportunityScanner {
     public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon,
                            String riskMode, long buyingPowerCents, String userId, int topN,
                            String worldId, Long maxLossCents) {
+        return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
+                userId, topN, worldId, maxLossCents, null);
+    }
+
+    public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon,
+                           String riskMode, long buyingPowerCents, String userId, int topN,
+                           String worldId, Long maxLossCents,
+                           RedeploymentFrontier.Context frontierContext) {
+        return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
+                userId, topN, worldId, maxLossCents,
+                frontierContext == null ? null : ignored -> frontierContext);
+    }
+
+    public ScanResult scanWithFrontier(List<String> symbols, String intent, String thesis,
+                                       String horizon, String riskMode, long buyingPowerCents,
+                                       String userId, int topN, String worldId, Long maxLossCents,
+                                       java.util.function.Function<List<StrategyEvaluation>,
+                                               RedeploymentFrontier.Context> contextFactory) {
+        if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
+        return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
+                userId, topN, worldId, maxLossCents, contextFactory);
+    }
+
+    private ScanResult scanInternal(List<String> symbols, String intent, String thesis, String horizon,
+                                    String riskMode, long buyingPowerCents, String userId, int topN,
+                                    String worldId, Long maxLossCents,
+                                    java.util.function.Function<List<StrategyEvaluation>,
+                                            RedeploymentFrontier.Context> contextFactory) {
         List<String> normalized = normalize(symbols);
         if (normalized.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
 
@@ -94,7 +130,10 @@ public final class OpportunityScanner {
         evaluations.persist(ranked, userId);
         List<CompensationView.CompensationEntry> compensation =
                 CompensationView.compute(best, evaluations, worldId);
-        return new ScanResult(ranked, notes, normalized.size(), compensation, CompensationView.BASIS);
+        RedeploymentFrontier.Result frontier = contextFactory == null ? null
+                : RedeploymentFrontier.compose(best, compensation, contextFactory.apply(best));
+        return new ScanResult(ranked, notes, normalized.size(), compensation,
+                CompensationView.BASIS, frontier);
     }
 
 
