@@ -76,9 +76,13 @@ class PlanAdoptionReviewServiceTest {
         var objectiveNow = objectives.declare("local", accountId,
                 "INCOME", "NON_DIRECTIONAL", null, "ACCEPT");
         AtomicReference<TradeService.OpenRequest> analyzed = new AtomicReference<>();
+        AtomicReference<ApiResponses.TrackedPackageAnalysis> surfaced = new AtomicReference<>();
         var service = new PlanAdoptionReviewService(db, (owner, account, request) -> {
             analyzed.set(request);
             return analysisStub(account, request.symbol());
+        }, (owner, analysis) -> {
+            surfaced.set(analysis);
+            return analysis;
         }, campaigns, objectives, books, new HeldPositionEconomicsService(CLOCK));
 
         var review = service.reviews("local", adopted.plan().id()).getFirst();
@@ -98,6 +102,8 @@ class PlanAdoptionReviewServiceTest {
         assertThat(review.freshEyes().question()).contains("open").contains("today");
         assertThat(review.freshEyes().basis()).contains("sunk campaign cash excluded");
         assertThat(review.freshEyes().analysis().lifecycle().history().available()).isTrue();
+        assertThat(surfaced.get().lifecycle().history().available())
+                .as("only the campaign-enriched analysis is handed to the receipt surfacer").isTrue();
         assertThat(review.freshEyes().analysis().lifecycle().history().signedOpeningCashCents())
                 .isEqualTo(-1_200_000L);
         assertThat(review.freshEyes().analysis().lifecycle().assignmentExit()
@@ -180,6 +186,6 @@ class PlanAdoptionReviewServiceTest {
                         "market-fingerprint", "model-fingerprint", "FACTS_ONLY",
                         List.of("preview", "evaluation"), List.of()));
         return new ApiResponses.TrackedPackageAnalysis(null, null, null, accountId,
-                "Existing-position IRA", 0L, "OBSERVED", "Read only.", lifecycle, null, null);
+                "Existing-position IRA", 0L, "OBSERVED", "Read only.", lifecycle, null, null, null);
     }
 }

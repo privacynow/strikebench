@@ -87,21 +87,66 @@ public final class AccountObjectiveService {
         }
     }
 
+    /** Named lifecycle thresholds; values are receipts, not universal trading doctrine. */
+    public record LifecyclePolicy(
+            String policyId,
+            double harvestCapturedPremiumPct,
+            Long harvestRemainingPremiumMaxCents,
+            double cheapRiskRemovalMaxPctOfAssignment,
+            int assignmentDecisionDte,
+            boolean defendConfirmedEvents,
+            Long expectedShortfallDefendCents
+    ) {
+        public LifecyclePolicy {
+            policyId = clean(policyId).toUpperCase(Locale.ROOT);
+            if (!Double.isFinite(harvestCapturedPremiumPct)
+                    || harvestCapturedPremiumPct < 0 || harvestCapturedPremiumPct > 100) {
+                throw new IllegalArgumentException("harvest captured-premium threshold must be 0-100%");
+            }
+            nonNegative(harvestRemainingPremiumMaxCents, "harvest remaining-premium threshold");
+            if (!Double.isFinite(cheapRiskRemovalMaxPctOfAssignment)
+                    || cheapRiskRemovalMaxPctOfAssignment < 0
+                    || cheapRiskRemovalMaxPctOfAssignment > 100) {
+                throw new IllegalArgumentException("cheap-risk-removal threshold must be 0-100%");
+            }
+            if (assignmentDecisionDte < 0 || assignmentDecisionDte > 3650) {
+                throw new IllegalArgumentException("assignment decision DTE must be between 0 and 3650");
+            }
+            nonNegative(expectedShortfallDefendCents, "expected-shortfall defense threshold");
+        }
+
+        public static LifecyclePolicy standard() {
+            return new LifecyclePolicy("STANDARD_V1", 75.0, 10_000L,
+                    0.35, 5, false, null);
+        }
+    }
+
     /** Account-wide capacity policy stored on the same immutable objective revision. */
     public record AccountCapacityPolicy(
             List<ScopedCeiling> symbolCeilings,
             List<ScopedCeiling> themeCeilings,
             List<ScopedCeiling> expiryCeilings,
-            CapacityCeiling encumbranceCeiling
+            CapacityCeiling encumbranceCeiling,
+            LifecyclePolicy lifecyclePolicy
     ) {
+        public AccountCapacityPolicy(List<ScopedCeiling> symbolCeilings,
+                                     List<ScopedCeiling> themeCeilings,
+                                     List<ScopedCeiling> expiryCeilings,
+                                     CapacityCeiling encumbranceCeiling) {
+            this(symbolCeilings, themeCeilings, expiryCeilings, encumbranceCeiling,
+                    LifecyclePolicy.standard());
+        }
+
         public AccountCapacityPolicy {
             symbolCeilings = normalizeScoped(symbolCeilings, "symbol");
             themeCeilings = normalizeScoped(themeCeilings, "theme");
             expiryCeilings = normalizeScoped(expiryCeilings, "expiry");
+            lifecyclePolicy = lifecyclePolicy == null ? LifecyclePolicy.standard() : lifecyclePolicy;
         }
 
         public static AccountCapacityPolicy empty() {
-            return new AccountCapacityPolicy(List.of(), List.of(), List.of(), null);
+            return new AccountCapacityPolicy(List.of(), List.of(), List.of(), null,
+                    LifecyclePolicy.standard());
         }
 
     }

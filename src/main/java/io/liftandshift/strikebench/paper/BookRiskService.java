@@ -95,8 +95,10 @@ public final class BookRiskService {
                            List<String> symbols, Long netDollarDeltaCents,
                            boolean bothSides, int basisValuedPositions) {}
 
+    public record SymbolNotional(String symbol, String theme, long notionalCents) {}
+
     public record ThemeBlock(List<ThemeRow> rows, String concentrationCallout,
-                             String classificationLabel) {}
+                             String classificationLabel, List<SymbolNotional> symbolNotionals) {}
 
     public record Contradiction(String theme, List<String> longVia, List<String> shortVia,
                                 Long netThemeDollarDeltaCents, String objectiveNote,
@@ -424,6 +426,7 @@ public final class BookRiskService {
         record Theme(long[] notional, int[] positions, Set<String> symbols, double[] delta,
                      boolean[] deltaComplete, boolean[] bullish, boolean[] bearish, int[] basisValued) {}
         Map<String, Theme> themes = new LinkedHashMap<>();
+        Map<String, long[]> symbols = new LinkedHashMap<>();
         long total = 0;
         for (var lot : lots) {
             String label = Universes.allocationSectorLabel(lot.symbol());
@@ -462,6 +465,8 @@ public final class BookRiskService {
                 theme.bearish()[0] |= !bullish;
             }
             theme.notional()[0] = Math.addExact(theme.notional()[0], notional);
+            long[] symbolNotional = symbols.computeIfAbsent(lot.symbol(), ignored -> new long[]{0});
+            symbolNotional[0] = Math.addExact(symbolNotional[0], notional);
             theme.positions()[0]++;
             theme.symbols().add(lot.symbol());
             total = Math.addExact(total, notional);
@@ -487,7 +492,12 @@ public final class BookRiskService {
                         + " (" + String.join(", ", top.symbols()) + ").";
             }
         }
-        return new ThemeBlock(List.copyOf(rows), callout, CLASSIFICATION_LABEL);
+        List<SymbolNotional> symbolRows = symbols.entrySet().stream()
+                .map(entry -> new SymbolNotional(entry.getKey(),
+                        Universes.allocationSectorLabel(entry.getKey()), entry.getValue()[0]))
+                .sorted(Comparator.comparingLong(SymbolNotional::notionalCents).reversed()
+                        .thenComparing(SymbolNotional::symbol)).toList();
+        return new ThemeBlock(List.copyOf(rows), callout, CLASSIFICATION_LABEL, symbolRows);
     }
 
     // ---- Intra-theme contradiction + strategy-collision callouts ----
@@ -677,6 +687,7 @@ public final class BookRiskService {
         Map<String, long[]> themeNotional = new LinkedHashMap<>();
         Map<String, int[]> themePositions = new LinkedHashMap<>();
         Map<String, Set<String>> themeSymbols = new LinkedHashMap<>();
+        Map<String, long[]> symbolNotional = new LinkedHashMap<>();
         int minSessions = Integer.MAX_VALUE;
         Set<String> unweighted = new LinkedHashSet<>();
         for (AccountRisk account : accounts) {
@@ -705,6 +716,10 @@ public final class BookRiskService {
                 themeNotional.computeIfAbsent(row.label(), ignored -> new long[]{0})[0] += row.notionalCents();
                 themePositions.computeIfAbsent(row.label(), ignored -> new int[]{0})[0] += row.positions();
                 themeSymbols.computeIfAbsent(row.label(), ignored -> new LinkedHashSet<>()).addAll(row.symbols());
+            }
+            for (SymbolNotional row : account.themes().symbolNotionals()) {
+                long[] total = symbolNotional.computeIfAbsent(row.symbol(), ignored -> new long[]{0});
+                total[0] = Math.addExact(total[0], row.notionalCents());
             }
         }
         int unmarked = optionLots - marked;
@@ -765,7 +780,13 @@ public final class BookRiskService {
                         + Money.fmt(top.notionalCents()) + ") shares one theme classification.";
             }
         }
-        ThemeBlock themes = new ThemeBlock(List.copyOf(themeRows), callout, CLASSIFICATION_LABEL);
+        List<SymbolNotional> symbolRows = symbolNotional.entrySet().stream()
+                .map(entry -> new SymbolNotional(entry.getKey(),
+                        Universes.allocationSectorLabel(entry.getKey()), entry.getValue()[0]))
+                .sorted(Comparator.comparingLong(SymbolNotional::notionalCents).reversed()
+                        .thenComparing(SymbolNotional::symbol)).toList();
+        ThemeBlock themes = new ThemeBlock(List.copyOf(themeRows), callout, CLASSIFICATION_LABEL,
+                symbolRows);
         return new CrossAccount(accounts.size(), greeks, obligation, unmarkedObligation,
                 "Combined stressed short-put obligation: " + Money.fmt(obligation)
                         + (unmarkedObligation > 0
