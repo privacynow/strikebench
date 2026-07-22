@@ -62,6 +62,11 @@ public final class Db implements AutoCloseable {
         return new Db(cfg.dbUrl(), cfg.dbUser(), cfg.dbPassword());
     }
 
+    /** The pooled data source, exposed so Flyway ({@link Migrations}) can run migrations on it. */
+    public javax.sql.DataSource dataSource() {
+        return ds;
+    }
+
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;
         try { ds.close(); }

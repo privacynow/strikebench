@@ -271,13 +271,13 @@ class BookRiskServiceTest {
         var themes = ira.themes();
         assertThat(themes.rows()).hasSize(1);
         var semis = themes.rows().getFirst();
-        assertThat(semis.label()).isEqualTo("Semiconductors");
+        assertThat(semis.label()).isEqualTo("Semiconductors, memory & storage");
         assertThat(semis.share()).isEqualTo(1.0);
         assertThat(semis.notionalCents()).isEqualTo(44_900_000L); // options strike notional + shares at spot
         assertThat(semis.netDollarDeltaCents()).isEqualTo(4_500_000L); // shares +$100k, options -$55k
         assertThat(semis.bothSides()).isTrue();
         assertThat(themes.concentrationCallout())
-                .contains("Effectively one semiconductors bet")
+                .contains("Effectively one semiconductors, memory & storage bet")
                 .contains("100%").contains("NVDA").contains("AMD").contains("AVGO");
         assertThat(themes.classificationLabel())
                 .contains("classification, not measured correlation")
@@ -294,14 +294,14 @@ class BookRiskServiceTest {
         assertThat(ira.objective().direction()).isEqualTo("BULLISH");
         assertThat(ira.contradictions()).hasSize(1);
         var contradiction = ira.contradictions().getFirst();
-        assertThat(contradiction.theme()).isEqualTo("Semiconductors");
+        assertThat(contradiction.theme()).isEqualTo("Semiconductors, memory & storage");
         assertThat(contradiction.longVia()).contains("short puts: NVDA ×1", "short puts: AMD ×2", "short puts: AVGO ×1");
         assertThat(contradiction.shortVia()).containsExactly("covered calls: NVDA ×2");
         // Net theme delta $45,000 on ~$265,000 gross -> within the ±20% neutral band.
         assertThat(contradiction.netThemeDollarDeltaCents()).isEqualTo(4_500_000L);
         // Lots iterate symbol-ordered (AMD, AVGO, NVDA) — the union preserves that order.
         assertThat(contradiction.message()).isEqualTo("You are both long (short puts) and short "
-                + "(covered calls) AMD/AVGO/NVDA — Semiconductors: net thematic dollar delta "
+                + "(covered calls) AMD/AVGO/NVDA — Semiconductors, memory & storage: net thematic dollar delta "
                 + "≈ neutral ($45,000.00) — despite a bullish stated goal (this account's declared "
                 + "objective, revision 1).");
     }

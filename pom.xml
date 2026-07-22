@@ -23,6 +23,7 @@
     <jackson.version>2.19.0</jackson.version>
     <postgresql.version>42.7.4</postgresql.version>
     <hikaricp.version>6.2.1</hikaricp.version>
+    <flyway.version>11.1.0</flyway.version>
     <caffeine.version>3.2.0</caffeine.version>
     <nimbus-oidc.version>11.20.1</nimbus-oidc.version>
     <slf4j.version>2.0.17</slf4j.version>
@@ -52,7 +53,7 @@
       <version>${jackson.version}</version>
     </dependency>
 
-    <!-- Persistence: Postgres + HikariCP. The pre-release app has one current schema. -->
+    <!-- Persistence: Postgres + HikariCP pool + Flyway migrations. -->
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
@@ -62,6 +63,16 @@
       <groupId>com.zaxxer</groupId>
       <artifactId>HikariCP</artifactId>
       <version>${hikaricp.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+      <version>${flyway.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+      <version>${flyway.version}</version>
     </dependency>
     <!-- Cache -->
     <dependency>
