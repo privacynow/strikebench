@@ -324,7 +324,9 @@ public final class ApiServer {
         accounts.getOrCreateDefault();
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
         var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
-                db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades);
+                db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades,
+                positions, pathEnsembles,
+                new io.liftandshift.strikebench.market.EtfLookThroughService(clock));
         var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(
                 clock, eventCalendar);
         var bookActionProjections = new io.liftandshift.strikebench.paper.BookActionProjectionService(

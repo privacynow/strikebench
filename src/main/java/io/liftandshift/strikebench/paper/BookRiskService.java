@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.AnalysisContext;
+import io.liftandshift.strikebench.market.EtfLookThroughService;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -8,6 +10,11 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.position.CampaignMath;
+import io.liftandshift.strikebench.sim.PathEnsembleService;
+import io.liftandshift.strikebench.sim.PathPosition;
+import io.liftandshift.strikebench.sim.ScenarioCanvasSpec;
+import io.liftandshift.strikebench.sim.ScenarioCanvasValuator;
+import io.liftandshift.strikebench.sim.ScenarioSpec;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
@@ -61,15 +68,30 @@ public final class BookRiskService {
     private final PortfolioAccountingService books;
     private final AccountObjectiveService objectives;
     private final TradeService trades;
+    private final PositionsService positions;
+    private final PathEnsembleService pathEnsembles;
+    private final EtfLookThroughService etfLookThrough;
+    private final ScenarioCanvasValuator canvasValuator;
 
     public BookRiskService(Db db, Clock clock, MarksSource marks, PortfolioAccountingService books,
                            AccountObjectiveService objectives, TradeService trades) {
+        this(db, clock, marks, books, objectives, trades, null, null, null);
+    }
+
+    public BookRiskService(Db db, Clock clock, MarksSource marks, PortfolioAccountingService books,
+                           AccountObjectiveService objectives, TradeService trades,
+                           PositionsService positions, PathEnsembleService pathEnsembles,
+                           EtfLookThroughService etfLookThrough) {
         this.db = db;
         this.clock = clock;
         this.marks = marks;
         this.books = books;
         this.objectives = objectives;
         this.trades = trades;
+        this.positions = positions;
+        this.pathEnsembles = pathEnsembles;
+        this.etfLookThrough = etfLookThrough;
+        this.canvasValuator = new ScenarioCanvasValuator();
     }
 
     // ---- Views (every block names its basis; every aggregate discloses its coverage) ----
@@ -98,7 +120,20 @@ public final class BookRiskService {
     public record SymbolNotional(String symbol, String theme, long notionalCents) {}
 
     public record ThemeBlock(List<ThemeRow> rows, String concentrationCallout,
-                             String classificationLabel, List<SymbolNotional> symbolNotionals) {}
+                             String classificationLabel, List<SymbolNotional> symbolNotionals,
+                             EtfLookThroughService.BookReceipt etfLookThrough,
+                             List<ThemeRow> lookThroughRows) {
+        public ThemeBlock {
+            rows = rows == null ? List.of() : List.copyOf(rows);
+            symbolNotionals = symbolNotionals == null ? List.of() : List.copyOf(symbolNotionals);
+            lookThroughRows = lookThroughRows == null ? List.of() : List.copyOf(lookThroughRows);
+        }
+
+        public ThemeBlock(List<ThemeRow> rows, String concentrationCallout,
+                          String classificationLabel, List<SymbolNotional> symbolNotionals) {
+            this(rows, concentrationCallout, classificationLabel, symbolNotionals, null, List.of());
+        }
+    }
 
     public record Contradiction(String theme, List<String> longVia, List<String> shortVia,
                                 Long netThemeDollarDeltaCents, String objectiveNote,
@@ -122,9 +157,16 @@ public final class BookRiskService {
                                long unmarkedObligationCents, String stressNote,
                                ExpiryCalendar expiries, ThemeBlock themes, String basis) {}
 
+    public record MeasuredBook(boolean available, String unavailableReason,
+                               LocalDate anchorDate,
+                               PathEnsembleService.CorrelationEvidence correlation,
+                               ScenarioCanvasValuator.BookScenarioReport scenario,
+                               double annualRate, DataEvidence rateEvidence,
+                               String basis) {}
+
     public record PracticeLane(Double deltaShares, Long dollarDeltaNetCents, Long dollarDeltaGrossCents,
                                Double gammaShares, Double thetaPerDay, Double vegaPerPoint,
-                               boolean complete, String basis) {}
+                               boolean complete, String basis, MeasuredBook measuredBook) {}
 
     public record Lane(List<AccountRisk> accounts, CrossAccount crossAccount,
                        PracticeLane practice, String basis) {}
@@ -497,7 +539,60 @@ public final class BookRiskService {
                         Universes.allocationSectorLabel(entry.getKey()), entry.getValue()[0]))
                 .sorted(Comparator.comparingLong(SymbolNotional::notionalCents).reversed()
                         .thenComparing(SymbolNotional::symbol)).toList();
-        return new ThemeBlock(List.copyOf(rows), callout, CLASSIFICATION_LABEL, symbolRows);
+        return withEtfLookThrough(List.copyOf(rows), callout, symbolRows);
+    }
+
+    /**
+     * Compose reviewed ETF evidence into the existing concentration block. Direct classification
+     * rows remain inspectable; look-through rows are a second receipt over the same exact notional,
+     * not another risk score. Unknown holdings remain an explicit residual.
+     */
+    private ThemeBlock withEtfLookThrough(List<ThemeRow> directRows, String directCallout,
+                                          List<SymbolNotional> symbolRows) {
+        if (etfLookThrough == null || symbolRows == null || symbolRows.isEmpty()) {
+            return new ThemeBlock(directRows, directCallout, CLASSIFICATION_LABEL, symbolRows);
+        }
+        Map<String, Long> notionals = new LinkedHashMap<>();
+        for (SymbolNotional row : symbolRows) notionals.merge(row.symbol(), row.notionalCents(), Math::addExact);
+        EtfLookThroughService.BookReceipt receipt = etfLookThrough.expand(notionals);
+        record Look(long[] notional, Set<String> sources) {}
+        Map<String, Look> adjusted = new LinkedHashMap<>();
+        for (SymbolNotional row : symbolRows) {
+            if (etfLookThrough.recognizes(row.symbol())) continue;
+            Look value = adjusted.computeIfAbsent(row.theme(), ignored ->
+                    new Look(new long[]{0}, new LinkedHashSet<>()));
+            value.notional()[0] = Math.addExact(value.notional()[0], row.notionalCents());
+            value.sources().add(row.symbol());
+        }
+        for (EtfLookThroughService.ThemeExposure row : receipt.themes()) {
+            Look value = adjusted.computeIfAbsent(row.theme(), ignored ->
+                    new Look(new long[]{0}, new LinkedHashSet<>()));
+            value.notional()[0] = Math.addExact(value.notional()[0], row.notionalCents());
+            value.sources().addAll(row.funds());
+        }
+        long total = adjusted.values().stream().mapToLong(value -> value.notional()[0]).sum();
+        List<ThemeRow> lookThroughRows = adjusted.entrySet().stream()
+                .map(entry -> new ThemeRow(entry.getKey(), entry.getValue().notional()[0],
+                        total == 0 ? null : entry.getValue().notional()[0] / (double) total,
+                        entry.getValue().sources().size(), List.copyOf(entry.getValue().sources()),
+                        null, false, 0))
+                .sorted(Comparator.comparingLong(ThemeRow::notionalCents).reversed()
+                        .thenComparing(ThemeRow::label)).toList();
+        String callout = directCallout;
+        if (!lookThroughRows.isEmpty() && total > 0) {
+            ThemeRow top = lookThroughRows.getFirst();
+            if (top.share() != null && top.share() >= 0.5 && top.positions() >= 2) {
+                callout = "After reviewed ETF look-through, this is effectively one "
+                        + top.label().toLowerCase(Locale.ROOT) + " bet: "
+                        + Math.round(top.share() * 100) + "% of recorded exposure ("
+                        + Money.fmt(top.notionalCents()) + ") shares that theme. Undisclosed ETF "
+                        + "weight remains residual rather than being guessed.";
+            }
+        }
+        String label = CLASSIFICATION_LABEL + " The look-through receipt uses reviewed issuer "
+                + "holdings or a labeled index proxy; its source dates and residual weight are "
+                + "shown separately and never imply measured correlation.";
+        return new ThemeBlock(directRows, callout, label, symbolRows, receipt, lookThroughRows);
     }
 
     // ---- Intra-theme contradiction + strategy-collision callouts ----
@@ -785,8 +880,7 @@ public final class BookRiskService {
                         Universes.allocationSectorLabel(entry.getKey()), entry.getValue()[0]))
                 .sorted(Comparator.comparingLong(SymbolNotional::notionalCents).reversed()
                         .thenComparing(SymbolNotional::symbol)).toList();
-        ThemeBlock themes = new ThemeBlock(List.copyOf(themeRows), callout, CLASSIFICATION_LABEL,
-                symbolRows);
+        ThemeBlock themes = withEtfLookThrough(List.copyOf(themeRows), callout, symbolRows);
         return new CrossAccount(accounts.size(), greeks, obligation, unmarkedObligation,
                 "Combined stressed short-put obligation: " + Money.fmt(obligation)
                         + (unmarkedObligation > 0
@@ -813,7 +907,126 @@ public final class BookRiskService {
                 "Practice account, in its own market lane — shown side-by-side and never "
                         + "numerically netted with tracked accounts (§3.13). Share-equivalent "
                         + "delta/gamma, $/day theta, and $/vol-point vega from current Practice "
-                        + "marks; dollar delta uses the disclosed option model.");
+                        + "marks; dollar delta uses the disclosed option model.",
+                measuredPracticeBook(practiceAccountId));
+    }
+
+    private MeasuredBook measuredPracticeBook(String accountId) {
+        String unavailableBasis = "The automatic Book fan requires one synchronized artifact from "
+                + "the canonical PathEnsembleService and ScenarioCanvasValuator. It uses locally "
+                + "available history only, never independently generated position fans and never "
+                + "provider acquisition while Home is opening.";
+        if (positions == null || pathEnsembles == null || trades == null) {
+            return unavailableMeasuredBook("Joint Book composition is not wired in this service context.",
+                    unavailableBasis);
+        }
+        try {
+            List<PositionsService.Position> shares = positions.records(accountId);
+            List<TradeRecord> active = trades.list(accountId, TradeRecord.ACTIVE, 0, 100).trades();
+            LinkedHashSet<String> symbols = new LinkedHashSet<>();
+            shares.stream().filter(position -> position.shares() != 0)
+                    .map(PositionsService.Position::symbol).forEach(symbols::add);
+            for (TradeRecord trade : active) {
+                if (trade.legs().stream().anyMatch(leg -> !leg.isStock())) symbols.add(trade.symbol());
+            }
+            if (symbols.isEmpty()) {
+                return unavailableMeasuredBook("No Practice shares or active option packages are available.",
+                        unavailableBasis);
+            }
+            String world = practiceWorld(accountId);
+            List<PathEnsembleService.Scope> scopes = symbols.stream().sorted()
+                    .map(symbol -> new PathEnsembleService.Scope(symbol, world, AnalysisContext.OBSERVED))
+                    .toList();
+            ScenarioSpec spec = new ScenarioSpec(ScenarioSpec.PathModel.BLOCK_BOOTSTRAP,
+                    ScenarioSpec.Shape.CHOP, 45, 1, 0, .30,
+                    0, 0, 0, 6, ScenarioSpec.Heston.fromVol(.30),
+                    0x5B00_0000L + Integer.toUnsignedLong(accountId.hashCode()), 600);
+            PathEnsembleService.JointEnsemble joint =
+                    pathEnsembles.buildJointFromLocalHistory(scopes, spec);
+            Map<String, Double> realizedVols = new LinkedHashMap<>();
+            for (PathEnsembleService.SymbolCorrelationCoverage row : joint.correlation().symbols()) {
+                if (row.realizedVolAnnual() != null) {
+                    realizedVols.put(row.symbol(), Math.clamp(row.realizedVolAnnual(), .01, 4.0));
+                }
+            }
+            List<ScenarioCanvasValuator.JointPositionInput> inputs = new ArrayList<>();
+            for (PositionsService.Position position : shares) {
+                if (position.shares() == 0) continue;
+                PathEnsembleService.Ensemble member = joint.member(position.symbol());
+                Double iv = realizedVols.get(position.symbol());
+                if (member == null || iv == null) {
+                    throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                            "Measured local volatility is unavailable for " + position.symbol());
+                }
+                int units = Math.toIntExact(Math.abs(position.shares()));
+                Leg stock = Leg.stockShares(position.shares() > 0 ? LegAction.BUY : LegAction.SELL,
+                        units, BigDecimal.valueOf(member.spot()));
+                var packageInput = new ScenarioCanvasValuator.PositionInput(
+                        "shares:" + position.symbol(), position.symbol() + " shares", "PRACTICE",
+                        "PERSISTED_SHARE_INVENTORY",
+                        new PathPosition(joint.anchorDate(), List.of(stock)), 1, null, false);
+                inputs.add(new ScenarioCanvasValuator.JointPositionInput(position.symbol(),
+                        packageInput, iv));
+            }
+            for (TradeRecord trade : active) {
+                List<Leg> optionLegs = trade.legs().stream().filter(leg -> !leg.isStock()).toList();
+                if (optionLegs.isEmpty()) continue; // persisted shares above own the stock inventory
+                Double iv = realizedVols.get(trade.symbol());
+                if (iv == null) {
+                    throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                            "Measured local volatility is unavailable for " + trade.symbol());
+                }
+                var packageInput = new ScenarioCanvasValuator.PositionInput(trade.id(),
+                        trade.symbol() + " · " + trade.strategy(), "PRACTICE",
+                        "ACTIVE_PRACTICE_PACKAGE",
+                        new PathPosition(joint.anchorDate(), optionLegs), trade.qty(), null, false);
+                inputs.add(new ScenarioCanvasValuator.JointPositionInput(trade.symbol(),
+                        packageInput, iv));
+            }
+            if (inputs.isEmpty()) {
+                return unavailableMeasuredBook("No valuatable Practice packages remain.", unavailableBasis);
+            }
+            ScenarioCanvasSpec canvas = new ScenarioCanvasSpec("NYSE", null,
+                    "Dividend source unavailable in the local-only automatic Book build; pricing "
+                            + "uses 0% and discloses that limitation.",
+                    0, 0, ScenarioCanvasSpec.SurfaceDynamics.STICKY_MONEYNESS,
+                    ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM,
+                    ScenarioCanvasSpec.ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
+            double annualRate = .04;
+            DataEvidence rateEvidence = DataEvidence.of("modeled-default",
+                    io.liftandshift.strikebench.model.Freshness.MODELED);
+            ScenarioCanvasValuator.BookScenarioReport report = canvasValuator.valueJointBook(
+                    joint, canvas, annualRate, inputs, 9);
+            String basis = "Measured joint Book as of " + joint.anchorDate() + ": 600 synchronized "
+                    + "45-session aligned block-bootstrap paths. Current package values and future "
+                    + "option marks use the canonical valuation kernel with each symbol's aligned "
+                    + "realized volatility as an explicit IV proxy and a labeled 4% modeled rate; "
+                    + "no live chain IV or provider history was acquired automatically. Physical "
+                    + "assignment is measured only for expirations inside the 45-session horizon.";
+            return new MeasuredBook(true, null, joint.anchorDate(), joint.correlation(), report,
+                    annualRate, rateEvidence, basis);
+        } catch (RuntimeException e) {
+            String reason = e.getMessage() == null || e.getMessage().isBlank()
+                    ? "The measured joint Book could not be composed from local evidence."
+                    : e.getMessage();
+            return unavailableMeasuredBook(reason, unavailableBasis);
+        }
+    }
+
+    private String practiceWorld(String accountId) {
+        record AccountLane(String type, String worldId) {}
+        List<AccountLane> rows = db.query("SELECT type,world_id FROM accounts WHERE id=?",
+                r -> new AccountLane(r.str("type"), r.str("world_id")), accountId);
+        if (rows.isEmpty()) throw new IllegalArgumentException("no such Practice account " + accountId);
+        AccountLane lane = rows.getFirst();
+        if ("DEMO".equals(lane.type())) return "demo";
+        return lane.worldId() == null || lane.worldId().isBlank() ? "observed" : lane.worldId();
+    }
+
+    private static MeasuredBook unavailableMeasuredBook(String reason, String basis) {
+        return new MeasuredBook(false, reason, null, null, null, .04,
+                DataEvidence.of("modeled-default",
+                        io.liftandshift.strikebench.model.Freshness.MODELED), basis);
     }
 
     // ---- Betas from observed underlying_bar return series vs SPY ----

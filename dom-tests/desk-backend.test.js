@@ -185,6 +185,66 @@ function positionStoredEnsemble() {
   };
 }
 
+function measuredJointBookReceipt() {
+  const stepBands = [0, 15, 30, 45].map((sessionProgress, index) => ({
+    step: sessionProgress,
+    sessionProgress,
+    pnlP5Cents: [-0, -42000, -88000, -135000][index],
+    pnlP10Cents: [0, -30000, -65000, -94000][index],
+    pnlP25Cents: [0, -10000, -24000, -36000][index],
+    pnlP50Cents: [0, 12000, 28000, 46000][index],
+    pnlP75Cents: [0, 33000, 67000, 104000][index],
+    pnlP90Cents: [0, 52000, 98000, 151000][index],
+    pnlP95Cents: [0, 68000, 124000, 188000][index]
+  }));
+  const displayPaths = [
+    [0, -18000, 12000, 46000],
+    [0, 22000, 54000, 104000],
+    [0, -42000, -88000, -135000]
+  ].map((values, sourcePathIndex) => ({
+    sourcePathIndex,
+    role: sourcePathIndex === 0 ? 'FOCUS' : 'CONTEXT',
+    steps: values.map((pnlCents, index) => ({
+      step: stepBands[index].step,
+      sessionProgress: stepBands[index].sessionProgress,
+      pnlCents
+    }))
+  }));
+  return {
+    available: true,
+    unavailableReason: null,
+    anchorDate: '2026-07-20',
+    correlation: {
+      available: true,
+      alignedSessions: 252,
+      pairs: [],
+      basis: 'Exact shared dated sessions; no fill-forward.'
+    },
+    scenario: {
+      jointFingerprint: 'joint-book-browser-receipt',
+      modelVersion: 'scenario-canvas-1+joint-book-1',
+      pathCount: 600,
+      positionCount: 1,
+      horizonSessions: 45,
+      stepBands,
+      displayPaths,
+      positions: [],
+      terminalP5Cents: -135000,
+      terminalP50Cents: 46000,
+      terminalP95Cents: 188000,
+      expectedTerminalPnlCents: 51000,
+      chanceOfGainPct: 61.5,
+      p10MaxDrawdownCents: -98000,
+      assignments: { chanceAnyAssignmentPct: 0 },
+      tailScenarios: [],
+      notes: ['P/L aggregates only synchronized source path indexes.']
+    },
+    annualRate: 0.04,
+    rateEvidence: { provenance: 'MODELED', source: 'modeled-default' },
+    basis: 'Measured joint Book browser sentinel; no provider history was acquired automatically.'
+  };
+}
+
 function populatedBookDocuments() {
   const trade = {
     id: BOOK_TRADE_ID,
@@ -2531,6 +2591,49 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
     assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 0,
       'an empty roster cannot trigger a fixture or speculative position-detail read');
     assert.deepEqual(pageErrors, [], `empty Practice book emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Home renders the synchronized Book total without summing independent position fans', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const bookDocuments = populatedBookDocuments();
+  bookDocuments.bookRisk.practice.measuredBook = measuredJointBookReceipt();
+  const backend = await installBackend(page, { bookDocuments });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForSelector('#stage[data-book-authority="ready"] #authBookFan');
+    await page.waitForFunction(() => document.querySelector('#authBookFan')?.textContent.includes('BOOK'));
+    const rendered = await page.evaluate(() => ({
+      hint: document.querySelector('#riskMain .lenshd .hint')?.textContent.trim(),
+      bookLegend: document.querySelector('#authBookFanLegend .booktotal')?.textContent
+        .replace(/\s+/g, ' ').trim(),
+      readout: document.querySelector('#bookFanReadout')?.textContent.replace(/\s+/g, ' ').trim(),
+      chartText: document.querySelector('#authBookFan')?.textContent.replace(/\s+/g, ' ').trim(),
+      aggregatePaths: document.querySelectorAll('#authBookFan path[stroke="var(--text)"]').length,
+      positionEntries: document.querySelector('#authBookFan')?._bfmap?.entries?.map(row => row.id) || [],
+      measuredFingerprint: window.DeskBackend.state().book.data.portfolio.bookRisk
+        .practice.measuredBook.scenario.jointFingerprint
+    }));
+    assert.match(rendered.hint, /book total = synchronized paths/i);
+    assert.match(rendered.hint, /colors = independent positions/i);
+    assert.match(rendered.bookLegend, /BOOKsynchronized total\+\$460 62% gain odds/i);
+    assert.match(rendered.readout, /Book total · synchronized measured paths/i);
+    assert.match(rendered.readout, /colored position projections are independent/i);
+    assert.match(rendered.chartText, /BOOK \+\$460/i);
+    assert.ok(rendered.aggregatePaths >= 2,
+      'the one renderer paints synchronized Book paths and its median from the canonical receipt');
+    assert.deepEqual(rendered.positionEntries, [BOOK_TRADE_ID],
+      'hover/click identity remains the independent position, never a fabricated aggregate position');
+    assert.equal(rendered.measuredFingerprint, 'joint-book-browser-receipt');
+    assert.equal(backend.count('GET', '/api/portfolio/book-risk'), 1,
+      'the aggregate reuses the existing Book-risk API rather than adding a fan endpoint');
+    assert.deepEqual(pageErrors, [], `joint Book fan emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }

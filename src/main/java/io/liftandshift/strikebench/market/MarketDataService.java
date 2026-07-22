@@ -341,6 +341,91 @@ public final class MarketDataService {
         return observedWorld(worldId) ? candleSeries(symbol, from, to, actx) : CandleSeries.EMPTY;
     }
 
+    /**
+     * A history read that is guaranteed not to contact an external provider. This is the read
+     * contract for automatically composed surfaces such as the Book: opening the desk may use
+     * history the user already owns, but it must never spend a provider request budget merely to
+     * paint a chart. Explicit Demo fixtures and live simulated worlds are local sources; Observed
+     * and saved Scenario lanes read only the injected {@link CandleStore}.
+     */
+    public record LocalCandleRead(CandleSeries series, CandleCoverage coverage, String basis) {
+        public LocalCandleRead {
+            series = series == null ? CandleSeries.EMPTY : series;
+            if (coverage == null) throw new IllegalArgumentException("local candle coverage is required");
+            basis = basis == null || basis.isBlank()
+                    ? "Local history only; external provider acquisition was not attempted."
+                    : basis;
+        }
+    }
+
+    public LocalCandleRead localCandleSeries(String symbol, LocalDate from, LocalDate to,
+                                             String worldId,
+                                             io.liftandshift.strikebench.db.AnalysisContext actx) {
+        if (from == null || to == null || from.isAfter(to)) {
+            throw new IllegalArgumentException("a valid local history range is required");
+        }
+        String sym = norm(symbol);
+        io.liftandshift.strikebench.db.AnalysisContext analysis = actx == null
+                ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : actx;
+        String dataset = analysis.datasetId();
+
+        // A saved Scenario is a locally persisted analysis dataset, even when it overlays the
+        // ordinary Observed or Demo exchange lane. Never fall through to either baseline here.
+        if (analysis.synthetic()
+                && (worldId == null || worldId.isBlank()
+                    || "observed".equals(worldId) || "demo".equals(worldId))) {
+            return localStoredCandles(sym, from, to, dataset, false);
+        }
+        if ("demo".equals(worldId)) {
+            List<Candle> candles = demoProvider == null ? List.of()
+                    : demoProvider.candles(sym, from, to);
+            CandleSeries series = candles.size() < 2 ? CandleSeries.EMPTY
+                    : new CandleSeries(candles, "fixture", Freshness.FIXTURE);
+            return new LocalCandleRead(series, CandleCoverage.assess(series.candles(), from, to),
+                    "Built-in Demo history already resident in the application; no external "
+                            + "provider acquisition was attempted.");
+        }
+        var simulated = world(worldId);
+        if (simulated.isPresent()) {
+            List<Candle> candles = simulated.get().candles(sym, from, to);
+            CandleSeries series = candles.size() < 2 ? CandleSeries.EMPTY
+                    : new CandleSeries(candles, "simulated", Freshness.SIMULATED);
+            return new LocalCandleRead(series, CandleCoverage.assess(series.candles(), from, to),
+                    "History from the already-running simulated world; no external provider "
+                            + "acquisition was attempted.");
+        }
+        if (observedWorld(worldId)) {
+            return localStoredCandles(sym, from, to, dataset, true);
+        }
+        return emptyLocalRead(from, to,
+                "Unknown market lane; no local history was eligible and no provider acquisition was attempted.");
+    }
+
+    private LocalCandleRead localStoredCandles(String symbol, LocalDate from, LocalDate to,
+                                               String dataset, boolean requireObserved) {
+        if (candleStore != null) {
+            try {
+                Optional<CandleStore.Read> stored = candleStore.candles(symbol, from, to, dataset);
+                if (stored.isPresent() && !stored.get().series().candles().isEmpty()
+                        && (!requireObserved || fixtureOnlyChain
+                            || observedEvidence(stored.get().series().evidence()))) {
+                    return new LocalCandleRead(stored.get().series(), stored.get().coverage(),
+                            "Persisted " + (requireObserved ? "Observed" : "Scenario")
+                                    + " history only; no provider acquisition was attempted.");
+                }
+            } catch (RuntimeException e) {
+                log.debug("local-only candle store read failed for {}: {}", symbol, e.toString());
+            }
+        }
+        return emptyLocalRead(from, to,
+                "No eligible persisted history was available; no provider acquisition was attempted.");
+    }
+
+    private static LocalCandleRead emptyLocalRead(LocalDate from, LocalDate to, String basis) {
+        return new LocalCandleRead(CandleSeries.EMPTY,
+                CandleCoverage.assess(List.of(), from, to), basis);
+    }
+
     public Optional<Quote> quote(String symbol) {
         String sym = norm(symbol);
         Optional<Quote> loaded = cached(quoteCache, sym, "quote", () -> {

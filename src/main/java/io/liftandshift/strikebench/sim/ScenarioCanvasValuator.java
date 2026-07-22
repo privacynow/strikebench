@@ -1,12 +1,17 @@
 package io.liftandshift.strikebench.sim;
 
 import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.OptionType;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Reprices many same-symbol packages on one already-built ensemble for the unified canvas.  It is
@@ -17,6 +22,8 @@ import java.util.List;
 public final class ScenarioCanvasValuator {
 
     private static final long MAX_CANVAS_VALUATION_WORK = 40_000_000L;
+    public static final String JOINT_BOOK_MODEL_VERSION = ScenarioCanvasSpec.MODEL_VERSION
+            + "+joint-book-1";
 
     public record PositionInput(String key, String label, String lane, String source,
                                 PathPosition position, int qty, Long entryCostCents,
@@ -108,10 +115,238 @@ public final class ScenarioCanvasValuator {
         }
     }
 
+    /** One held package bound to the matching member of a joint multi-symbol path artifact. */
+    public record JointPositionInput(String symbol, PositionInput position, double atmIvAnnual) {
+        public JointPositionInput {
+            symbol = symbol == null ? "" : symbol.trim().toUpperCase(java.util.Locale.ROOT);
+            if (symbol.isBlank()) throw new IllegalArgumentException("joint position symbol is required");
+            if (position == null) throw new IllegalArgumentException("joint position package is required");
+            if (!(atmIvAnnual >= .01 && atmIvAnnual <= 4) || !Double.isFinite(atmIvAnnual)) {
+                throw new IllegalArgumentException("joint position ATM IV must be 1%..400%");
+            }
+        }
+    }
+
+    /** Same-path-index book P/L quantiles; unlike independent fans these may be summed honestly. */
+    public record BookStepBand(int step, double sessionProgress,
+                               long pnlP5Cents, long pnlP10Cents, long pnlP25Cents,
+                               long pnlP50Cents, long pnlP75Cents, long pnlP90Cents,
+                               long pnlP95Cents) {}
+    public record BookPathStep(int step, double sessionProgress, long pnlCents) {}
+    public record BookDisplayPath(int sourcePathIndex, String role, List<BookPathStep> steps) {
+        public BookDisplayPath {
+            steps = steps == null ? List.of() : List.copyOf(steps);
+        }
+    }
+    public record BookPositionReceipt(String key, String symbol, String label, String source,
+                                      long anchorValueCents, String anchorBasis,
+                                      long horizonP10Cents, long horizonP50Cents,
+                                      long horizonP90Cents, double atmIvAnnual) {}
+    public record BookTailScenario(String role, int sourcePathIndex, long terminalPnlCents,
+                                   long maxDrawdownCents, Map<String, Long> assignmentShares,
+                                   long shortContractsAssigned) {
+        public BookTailScenario {
+            assignmentShares = assignmentShares == null ? Map.of()
+                    : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(assignmentShares));
+        }
+    }
+    public record AssignmentSummary(double chanceAnyAssignmentPct,
+                                    long p50AbsoluteShares, long p90AbsoluteShares,
+                                    long maximumAbsoluteShares, String basis) {}
+    public record BookScenarioReport(String jointFingerprint, String modelVersion,
+                                     int pathCount, int positionCount, int horizonSessions,
+                                     List<BookStepBand> stepBands,
+                                     List<BookDisplayPath> displayPaths,
+                                     List<BookPositionReceipt> positions,
+                                     long terminalP5Cents, long terminalP50Cents,
+                                     long terminalP95Cents, long expectedTerminalPnlCents,
+                                     double chanceOfGainPct, long p10MaxDrawdownCents,
+                                     AssignmentSummary assignments,
+                                     List<BookTailScenario> tailScenarios,
+                                     List<String> notes) {
+        public BookScenarioReport {
+            stepBands = stepBands == null ? List.of() : List.copyOf(stepBands);
+            displayPaths = displayPaths == null ? List.of() : List.copyOf(displayPaths);
+            positions = positions == null ? List.of() : List.copyOf(positions);
+            tailScenarios = tailScenarios == null ? List.of() : List.copyOf(tailScenarios);
+            notes = notes == null ? List.of() : List.copyOf(notes);
+        }
+    }
+
     public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
                         ScenarioCanvasSpec rawCanvas, double annualRate,
                         List<PositionInput> rawPositions) {
         return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null, List.of());
+    }
+
+    /**
+     * Value a complete book only on a synchronized joint artifact. The implementation delegates
+     * every leg/expiry transformation to {@link PathValuationKernel}; it merely sums values that
+     * share the same source path index. Passing independent ensembles is structurally impossible.
+     */
+    public BookScenarioReport valueJointBook(PathEnsembleService.JointEnsemble joint,
+                                             ScenarioCanvasSpec rawCanvas,
+                                             double annualRate,
+                                             List<JointPositionInput> rawPositions,
+                                             int requestedDisplayPaths) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            return valueJointBookPermitted(joint, rawCanvas, annualRate, rawPositions,
+                    requestedDisplayPaths);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private BookScenarioReport valueJointBookPermitted(PathEnsembleService.JointEnsemble joint,
+                                                       ScenarioCanvasSpec rawCanvas,
+                                                       double annualRate,
+                                                       List<JointPositionInput> rawPositions,
+                                                       int requestedDisplayPaths) {
+        if (joint == null) throw new IllegalArgumentException("joint book ensemble is required");
+        List<JointPositionInput> positions = rawPositions == null ? List.of() : List.copyOf(rawPositions);
+        if (positions.isEmpty()) throw new IllegalArgumentException("joint book positions are required");
+        if (positions.size() > 64) throw new IllegalArgumentException("at most 64 joint book positions");
+        PathEnsembleService.Ensemble template = joint.members().values().iterator().next();
+        ScenarioSpec spec = template.spec().sane();
+        int pathCount = template.paths().length;
+        int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay());
+        long legCount = positions.stream().mapToLong(row -> row.position().position().legs().size()).sum();
+        long work = (long) pathCount * (steps + 1L) * Math.max(1, legCount);
+        if (work > MAX_CANVAS_VALUATION_WORK) {
+            throw new IllegalArgumentException("Joint book comparison is too large (" + work
+                    + " leg-steps > " + MAX_CANVAS_VALUATION_WORK + ")");
+        }
+        ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
+                .sane(spec.horizonDays());
+        int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
+        long[][] aggregatePnl = new long[pathCount][displaySteps.length];
+        @SuppressWarnings("unchecked")
+        Map<String, Long>[] assignments = new Map[pathCount];
+        long[] assignedContracts = new long[pathCount];
+        for (int path = 0; path < pathCount; path++) assignments[path] = new LinkedHashMap<>();
+        List<BookPositionReceipt> positionReceipts = new ArrayList<>();
+        Set<String> keys = new java.util.LinkedHashSet<>();
+
+        for (JointPositionInput row : positions) {
+            PositionInput input = row.position();
+            if (!keys.add(input.key())) throw new IllegalArgumentException("duplicate book position key " + input.key());
+            PathEnsembleService.Ensemble member = joint.member(row.symbol());
+            if (member == null) throw new IllegalArgumentException("joint artifact has no member for " + row.symbol());
+            if (!input.position().asOf().equals(joint.anchorDate())) {
+                throw new IllegalArgumentException(input.key() + " valuation date does not match joint anchor");
+            }
+            double[] stepYears = member.spec().calendarStepYears(member.anchorDate());
+            double[] elapsed = PathValuationKernel.elapsed(stepYears);
+            double[] legacyIv = IvSpec.flat(row.atmIvAnnual()).path(steps,
+                    sum(stepYears) / Math.max(1, steps), spd);
+            int[][] transformations = new int[pathCount][];
+            for (int path = 0; path < pathCount; path++) {
+                transformations[path] = PathValuationKernel.transformationSteps(input.position(),
+                        member.paths()[path], steps, spd, elapsed, legacyIv, canvas, annualRate);
+            }
+            long anchorValue = input.entryCostCents() == null
+                    ? cents(PathValuationKernel.valueCanvas(input.position(), member.paths()[0],
+                        0, steps, spd, elapsed, legacyIv, canvas, annualRate,
+                        transformations[0]) * input.qty())
+                    : input.entryCostCents();
+            long[] terminal = new long[pathCount];
+            for (int point = 0; point < displaySteps.length; point++) {
+                int step = displaySteps[point];
+                for (int path = 0; path < pathCount; path++) {
+                    long value = cents(PathValuationKernel.valueCanvas(input.position(),
+                            member.paths()[path], step, steps, spd, elapsed, legacyIv,
+                            canvas, annualRate, transformations[path]) * input.qty());
+                    long pnl = Math.subtractExact(value, anchorValue);
+                    aggregatePnl[path][point] = Math.addExact(aggregatePnl[path][point], pnl);
+                    if (point == displaySteps.length - 1) terminal[path] = pnl;
+                }
+            }
+            collectAssignments(row, member, spd, steps, assignments, assignedContracts);
+            long[] sortedTerminal = terminal.clone();
+            Arrays.sort(sortedTerminal);
+            positionReceipts.add(new BookPositionReceipt(input.key(), row.symbol(), input.label(),
+                    input.source(), anchorValue,
+                    input.entryCostCents() == null ? "MODELED_CURRENT_VALUE" : "SUPPLIED_CURRENT_VALUE",
+                    pct(sortedTerminal, .10), pct(sortedTerminal, .50), pct(sortedTerminal, .90),
+                    row.atmIvAnnual()));
+        }
+
+        List<BookStepBand> bands = new ArrayList<>(displaySteps.length);
+        long[] terminalBook = new long[pathCount];
+        long[] maxDrawdowns = new long[pathCount];
+        for (int point = 0; point < displaySteps.length; point++) {
+            long[] values = new long[pathCount];
+            for (int path = 0; path < pathCount; path++) {
+                values[path] = aggregatePnl[path][point];
+                maxDrawdowns[path] = Math.min(maxDrawdowns[path], values[path]);
+                if (point == displaySteps.length - 1) terminalBook[path] = values[path];
+            }
+            Arrays.sort(values);
+            bands.add(new BookStepBand(displaySteps[point], sessionProgress(displaySteps[point], spd),
+                    pct(values, .05), pct(values, .10), pct(values, .25), pct(values, .50),
+                    pct(values, .75), pct(values, .90), pct(values, .95)));
+        }
+        long[] sortedTerminal = terminalBook.clone(); Arrays.sort(sortedTerminal);
+        long[] sortedDrawdowns = maxDrawdowns.clone(); Arrays.sort(sortedDrawdowns);
+        long terminalSum = 0; int gains = 0, anyAssignment = 0;
+        long[] absoluteAssignedShares = new long[pathCount];
+        for (int path = 0; path < pathCount; path++) {
+            terminalSum = Math.addExact(terminalSum, terminalBook[path]);
+            if (terminalBook[path] > 0) gains++;
+            if (assignedContracts[path] > 0) anyAssignment++;
+            for (long shares : assignments[path].values()) {
+                absoluteAssignedShares[path] = Math.addExact(absoluteAssignedShares[path], Math.abs(shares));
+            }
+        }
+        long[] sortedAssignments = absoluteAssignedShares.clone(); Arrays.sort(sortedAssignments);
+        AssignmentSummary assignmentSummary = new AssignmentSummary(
+                round2(anyAssignment * 100.0 / pathCount), pct(sortedAssignments, .50),
+                pct(sortedAssignments, .90), sortedAssignments[sortedAssignments.length - 1],
+                "Short-option moneyness at each contract's own expiry on the same joint path; "
+                        + "signed shares are +put assignment and -call assignment. Long-leg exercise "
+                        + "and package value remain governed by the canonical valuation kernel.");
+        List<Integer> selected = terminalQuantilePaths(terminalBook,
+                Math.clamp(requestedDisplayPaths <= 0 ? 9 : requestedDisplayPaths,
+                        1, PathEnsembleService.MAX_DISPLAY_PATHS));
+        int medianSource = terminalQuantilePath(terminalBook, .50);
+        List<BookDisplayPath> displayPaths = new ArrayList<>();
+        for (int source : selected) {
+            List<BookPathStep> pathSteps = new ArrayList<>(displaySteps.length);
+            for (int point = 0; point < displaySteps.length; point++) {
+                pathSteps.add(new BookPathStep(displaySteps[point],
+                        sessionProgress(displaySteps[point], spd), aggregatePnl[source][point]));
+            }
+            displayPaths.add(new BookDisplayPath(source,
+                    source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
+        }
+        int worstTerminal = indexOfMinimum(terminalBook);
+        int worstDrawdown = indexOfMinimum(maxDrawdowns);
+        int assignmentCluster = indexOfMaximum(assignedContracts, terminalBook);
+        LinkedHashMap<Integer, String> tailRoles = new LinkedHashMap<>();
+        tailRoles.put(worstTerminal, "WORST_TERMINAL");
+        tailRoles.putIfAbsent(worstDrawdown, "WORST_DRAWDOWN");
+        if (assignedContracts[assignmentCluster] > 0) tailRoles.putIfAbsent(assignmentCluster, "MOST_ASSIGNMENTS");
+        List<BookTailScenario> tails = tailRoles.entrySet().stream()
+                .map(entry -> new BookTailScenario(entry.getValue(), entry.getKey(),
+                        terminalBook[entry.getKey()], maxDrawdowns[entry.getKey()],
+                        assignments[entry.getKey()], assignedContracts[entry.getKey()]))
+                .toList();
+        List<String> notes = List.of(
+                joint.interpretation(),
+                "Every held package is repriced from today's modeled anchor value through "
+                        + PathValuationKernel.class.getSimpleName() + "; historical P/L is not mixed into this forward fan.",
+                "Option values use each symbol's disclosed ATM-IV input and the one shared Scenario Canvas surface rule. "
+                        + "Underlying dependence is measured; future option marks remain modeled.",
+                "P/L is aggregated only by synchronized source path index. Quantiles from independent position fans are never added.");
+        return new BookScenarioReport(joint.fingerprint(), JOINT_BOOK_MODEL_VERSION,
+                pathCount, positions.size(), spec.horizonDays(), List.copyOf(bands),
+                List.copyOf(displayPaths), List.copyOf(positionReceipts),
+                pct(sortedTerminal, .05), pct(sortedTerminal, .50), pct(sortedTerminal, .95),
+                Math.round((double) terminalSum / pathCount),
+                round2(gains * 100.0 / pathCount), pct(sortedDrawdowns, .10),
+                assignmentSummary, tails, notes);
     }
 
     /** Value a deterministic display subset alongside the full-ensemble bands. */
@@ -397,6 +632,93 @@ public final class ScenarioCanvasValuator {
                 input.proposed(), input.entryCostCents(), List.copyOf(timeline),
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
                 List.copyOf(legs), List.copyOf(transformationRows)), terminal);
+    }
+
+    private static void collectAssignments(JointPositionInput row,
+                                           PathEnsembleService.Ensemble member,
+                                           int stepsPerDay, int steps,
+                                           Map<String, Long>[] assignmentShares,
+                                           long[] assignedContracts) {
+        PositionInput input = row.position();
+        for (Leg leg : input.position().legs()) {
+            if (leg.isStock() || leg.action() != LegAction.SELL) continue;
+            int expiryDay = input.position().expiryDay(leg);
+            int expiryStep = expiryDay <= 0 ? Math.min(stepsPerDay, steps)
+                    : Math.multiplyExact(expiryDay, stepsPerDay);
+            if (expiryStep > steps) continue;
+            long contracts = Math.multiplyExact((long) input.qty(), leg.ratio());
+            long shares = Math.multiplyExact(contracts, leg.multiplier());
+            for (int path = 0; path < member.paths().length; path++) {
+                double spot = member.paths()[path][expiryStep];
+                boolean itm = leg.type() == OptionType.CALL
+                        ? spot > leg.strike().doubleValue()
+                        : spot < leg.strike().doubleValue();
+                if (!itm) continue;
+                long signedShares = leg.type() == OptionType.PUT ? shares : -shares;
+                assignmentShares[path].merge(row.symbol(), signedShares, Math::addExact);
+                assignedContracts[path] = Math.addExact(assignedContracts[path], contracts);
+            }
+        }
+    }
+
+    private static List<Integer> terminalQuantilePaths(long[] terminal, int requested) {
+        int limit = Math.min(Math.max(1, requested), terminal.length);
+        List<Integer> ranked = new ArrayList<>(terminal.length);
+        for (int i = 0; i < terminal.length; i++) ranked.add(i);
+        ranked.sort((left, right) -> {
+            int compared = Long.compare(terminal[left], terminal[right]);
+            return compared == 0 ? Integer.compare(left, right) : compared;
+        });
+        LinkedHashSet<Integer> selected = new LinkedHashSet<>();
+        if (limit == 1) selected.add(ranked.get((ranked.size() - 1) / 2));
+        else {
+            for (int slot = 0; slot < limit; slot++) {
+                int at = (int) Math.round(slot * (ranked.size() - 1.0) / (limit - 1.0));
+                selected.add(ranked.get(at));
+            }
+            selected.add(ranked.get((ranked.size() - 1) / 2));
+        }
+        if (selected.size() > limit) {
+            Integer median = ranked.get((ranked.size() - 1) / 2);
+            List<Integer> bounded = new ArrayList<>(selected);
+            while (bounded.size() > limit) {
+                int remove = bounded.size() - 2;
+                if (bounded.get(remove).equals(median)) remove--;
+                bounded.remove(Math.max(0, remove));
+            }
+            return List.copyOf(bounded);
+        }
+        for (int index : ranked) {
+            if (selected.size() >= limit) break;
+            selected.add(index);
+        }
+        return List.copyOf(selected);
+    }
+
+    private static int terminalQuantilePath(long[] terminal, double probability) {
+        List<Integer> ranked = new ArrayList<>(terminal.length);
+        for (int i = 0; i < terminal.length; i++) ranked.add(i);
+        ranked.sort((left, right) -> {
+            int compared = Long.compare(terminal[left], terminal[right]);
+            return compared == 0 ? Integer.compare(left, right) : compared;
+        });
+        return ranked.get(Math.max(0, Math.min(ranked.size() - 1,
+                (int) Math.floor(probability * (ranked.size() - 1)))));
+    }
+
+    private static int indexOfMinimum(long[] values) {
+        int at = 0;
+        for (int i = 1; i < values.length; i++) if (values[i] < values[at]) at = i;
+        return at;
+    }
+
+    private static int indexOfMaximum(long[] values, long[] tieBreaker) {
+        int at = 0;
+        for (int i = 1; i < values.length; i++) {
+            if (values[i] > values[at]
+                    || values[i] == values[at] && tieBreaker[i] < tieBreaker[at]) at = i;
+        }
+        return at;
     }
 
     private static List<DisplayPathSelection> saneDisplayPaths(

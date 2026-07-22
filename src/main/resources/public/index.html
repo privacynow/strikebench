@@ -2611,6 +2611,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .bookfanrow em{grid-area:val;justify-self:end;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;line-height:1.15}
 .bookfanrow em b{font-size:var(--f-xs)} .bookfanrow em .pos{color:var(--profit)} .bookfanrow em .neg{color:var(--loss)}
 .bookfanrow em small{display:block;color:var(--faint);font-size:var(--f-2xs)} .bookfanrow em small.warn{color:var(--caution)}
+.bookfanrow.booktotal{border-color:var(--line);background:color-mix(in srgb,var(--panel-2) 82%,var(--text) 3%);cursor:default}
+.bookfanrow.booktotal i{background:var(--text);box-shadow:0 0 0 3px color-mix(in srgb,var(--text) 12%,transparent)}
+.bookfanrow.booktotal.unavailable i{background:transparent;border:1px dashed var(--faint);box-shadow:none}
 .card.fanhot{outline:1px solid var(--accent-2);outline-offset:1px}
 @media (max-width:1200px){.bookfanwrap{grid-template-columns:minmax(0,1fr)}.bookfanlegend{flex-direction:row;flex-wrap:wrap}.bookfanrow{flex:1 1 150px}}
 /* Decide market band — always visible in the right column, never behind a tab */
@@ -4824,14 +4827,21 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   wireAuthoritativeHome();if(active)window.requestAnimationFrame(function(){drawAuthoritativeHomeHistory(active);});}
 function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};});authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
 function authShareInventoryHTML(shares){if(!shares.length)return '<div class="backendnotice">No share inventory in this Practice account.</div>';return '<div class="authlist">'+shares.map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),last=authDollarsFromCents(row.lastCents),unreal=authDollarsFromCents(row.unrealizedCents);return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(String(row.symbol||'—').toUpperCase())+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+(last==null?'':' · mark '+authMoney(last))+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(String(row.symbol||'').toUpperCase())+'">Analyze</button></div>';}).join('')+'</div>';}
-/* ===== Book-level possible futures — Phase 1 of the book fan (owner decision on record):
-   each position's OWN stored ensemble, valued for that exact package with no scenario
-   conditioning, overlaid in the shared position colors. Independent projections — the lines are
-   NEVER summed into a book total; an honest joint multi-symbol ensemble is a backend increment. */
+/* ===== Book-level possible futures — one renderer, two explicitly different artifacts:
+   the Book total comes only from the synchronized multi-symbol artifact in BookRiskService;
+   colored position overlays retain their OWN stored ensembles and are NEVER summed. */
 var BOOK_FAN={key:null,seq:0,rows:{},hot:null};
 var POSITION_COLORS=['#39C7D4','#9B8CFF','#41C892','#E7AC44','#F08CD0','#6B96EF','#D3C86B','#FF9B6B'];
 function positionColor(id){var index=POS.findIndex(function(p){return String(p.id)===String(id);});return POSITION_COLORS[(index<0?0:index)%POSITION_COLORS.length];}
-function authBookFanKey(){return POS.map(function(p){return p.id+':'+(p._plan&&p._plan.id||'')+':'+String(p._trade&&p._trade.updatedAt||'');}).join('|');}
+function authMeasuredBook(){var d=BOOK_AUTH.data||{},risk=d.portfolio&&d.portfolio.bookRisk||{},practice=risk.practice||{};return practice.measuredBook||null;}
+function authJointBookFan(){var measured=authMeasuredBook();if(!measured)return {phase:'unavailable',error:'Measured joint Book receipt is unavailable.'};
+  if(measured.available!==true||!measured.scenario)return {phase:'unavailable',error:measured.unavailableReason||'Local evidence is insufficient for a measured joint Book.'};
+  var scenario=measured.scenario,bands=Array.isArray(scenario.stepBands)?scenario.stepBands:[],display=Array.isArray(scenario.displayPaths)?scenario.displayPaths:[];
+  var frames=bands.map(function(step,i){function cents(key){var v=authNumber(step[key]);return v==null?null:v/100;}return {x:Number(step.sessionProgress==null?i:step.sessionProgress),p5:cents('pnlP5Cents'),p10:cents('pnlP10Cents'),p25:cents('pnlP25Cents'),p50:cents('pnlP50Cents'),p75:cents('pnlP75Cents'),p90:cents('pnlP90Cents'),p95:cents('pnlP95Cents')};}).filter(function(step){return step.p50!=null;});
+  var paths=display.map(function(path){return (path.steps||[]).map(function(step){var v=authNumber(step.pnlCents);return v==null?null:v/100;});}).filter(function(path){return path.length>1&&path.every(function(v){return v!=null;});});
+  var progress=display.length?(display[0].steps||[]).map(function(step,i){return Number(step.sessionProgress==null?i:step.sessionProgress);}):[];
+  return {phase:frames.length?'ready':'unavailable',frames:frames,paths:paths,progress:progress,chance:authNumber(scenario.chanceOfGainPct),anchor:measured.anchorDate||null,basis:measured.basis||'',error:frames.length?null:'The measured Book returned no path checkpoints.'};}
+function authBookFanKey(){var joint=authMeasuredBook(),jointKey=joint&&joint.scenario&&joint.scenario.jointFingerprint||joint&&joint.unavailableReason||'';return jointKey+'|'+POS.map(function(p){return p.id+':'+(p._plan&&p._plan.id||'')+':'+String(p._trade&&p._trade.updatedAt||'');}).join('|');}
 function authBookFanBands(row){var bands=row&&(Array.isArray(row.stepBands)&&row.stepBands.length?row.stepBands:Array.isArray(row.days)?row.days:[])||[];
   return bands.map(function(step,i){function cents(key){var v=authNumber(step[key]);return v==null?null:v/100;}
     return {x:Number(step.sessionProgress==null?step.day==null?i:step.day:step.sessionProgress),p10:cents('pnlP10Cents'),p25:cents('pnlP25Cents'),p50:cents('pnlP50Cents')==null?cents('focusPnlCents'):cents('pnlP50Cents'),p75:cents('pnlP75Cents'),p90:cents('pnlP90Cents')};
@@ -4879,13 +4889,16 @@ function authLoadBookFan(){
   })(0);
 }
 function authBookFanLegendHTML(){
-  return POS.map(function(p){var slot=BOOK_FAN.rows[p.id]||{},color=positionColor(p.id),hot=String(BOOK_FAN.hot||'')===String(p.id);
+  var joint=authJointBookFan(),book='';if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1];book='<div class="bookfanrow booktotal" title="'+deskEsc(joint.basis||'Synchronized measured Book paths')+'"><i></i><b>BOOK</b><span>synchronized total</span><em><b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(joint.chance==null?'':' <small>'+joint.chance.toFixed(0)+'% gain odds</small>')+'</em></div>';}
+  else book='<div class="bookfanrow booktotal unavailable" title="'+deskEsc(joint.error||'Measured Book unavailable')+'"><i></i><b>BOOK</b><span>joint total unavailable</span><em><small class="warn">local evidence</small></em></div>';
+  return book+POS.map(function(p){var slot=BOOK_FAN.rows[p.id]||{},color=positionColor(p.id),hot=String(BOOK_FAN.hot||'')===String(p.id);
     var value=slot.phase==='ready'?(function(){var terminal=slot.frames[slot.frames.length-1];return '<b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(slot.chance==null?'':' <small>'+slot.chance.toFixed(0)+'% gain odds</small>');})():
       slot.phase==='loading'?'<small>loading…</small>':'<small class="warn" title="'+deskEsc(slot.error||'unavailable')+'">no stored fan</small>';
     return '<button type="button" class="bookfanrow'+(hot?' hot':'')+'" data-fan-pos="'+deskEsc(p.id)+'" aria-label="Open '+deskEsc(p.sym)+'"><i style="background:'+color+'"></i><b>'+deskEsc(p.sym)+'</b><span>'+deskEsc(p.struct)+'</span><em>'+value+'</em></button>';
   }).join('');
 }
-function bookFanPrompt(){return 'Hover a position to inspect its odds and tail · click to open it';}
+function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Book total · synchronized measured paths','median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('P5 '+signed(terminal.p5)+' → P95 '+signed(terminal.p95));parts.push('colored position projections are independent · hover to inspect');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored position projections remain independent and are never summed';}
+function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'book total = synchronized paths · colors = independent positions':'independent position projections · never summed';}
 function bookFanReadoutText(id){
   var p=byId[id],slot=BOOK_FAN.rows[id];
   if(!p||!slot||slot.phase!=='ready'||!slot.frames.length)return bookFanPrompt();
@@ -4912,10 +4925,12 @@ function drawAuthoritativeBookFan(){
   /* the right-edge label column only exists where it has room; narrow fans keep sym-only labels */
   var wideLabels=W>=430,pad={l:52,r:wideLabels?74:26,t:12,b:22};
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
+  var joint=authJointBookFan(),jointReady=joint.phase==='ready'&&joint.frames.length>1;
   var ready=POS.map(function(p){return {p:p,slot:BOOK_FAN.rows[p.id]||{}};}).filter(function(e){return e.slot.phase==='ready'&&e.slot.frames.length>1;});
   var loading=POS.some(function(p){return (BOOK_FAN.rows[p.id]||{}).phase==='loading';});
-  if(!ready.length){svg.innerHTML='<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" fill="var(--dim)" font-size="12">'+(loading?'Valuing each position across its own stored fan…':'No stored fans yet — open a position’s idea and run outcomes once.')+'</text>';return;}
+  if(!ready.length&&!jointReady){svg.innerHTML='<text x="'+(W/2)+'" y="'+(H/2-8)+'" text-anchor="middle" fill="var(--dim)" font-size="12">'+(loading?'Loading independent position projections…':'Measured joint Book unavailable')+'</text><text x="'+(W/2)+'" y="'+(H/2+12)+'" text-anchor="middle" fill="var(--faint)" font-size="9">'+deskEsc(joint.error||'No stored position fans are available either.')+'</text>';svg._bfmap={entries:[]};return;}
   var hot=String(BOOK_FAN.hot||''),maxX=1,values=[0];
+  if(jointReady){joint.frames.forEach(function(f){maxX=Math.max(maxX,f.x);['p5','p10','p25','p50','p75','p90','p95'].forEach(function(k){if(f[k]!=null)values.push(f[k]);});});(joint.paths||[]).forEach(function(path){path.forEach(function(v){values.push(v);});});}
   ready.forEach(function(e){
     e.slot.frames.forEach(function(f){maxX=Math.max(maxX,f.x);['p10','p25','p50','p75','p90'].forEach(function(k){if(f[k]!=null)values.push(f[k]);});});
     (e.slot.paths||[]).forEach(function(path){path.forEach(function(v){values.push(v);});});
@@ -4928,6 +4943,13 @@ function drawAuthoritativeBookFan(){
     '<text x="'+(pad.l-5)+'" y="'+(H-pad.b)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+deskEsc(money(lo))+'</text>'+
     '<text x="'+pad.l+'" y="'+(H-6)+'" fill="var(--faint)" font-size="9">now</text>'+
     '<text x="'+(W-pad.r)+'" y="'+(H-6)+'" text-anchor="end" fill="var(--faint)" font-size="9">'+Math.round(maxX)+' sessions</text>';
+  /* The neutral Book field is the only aggregate. It comes from same-index synchronized paths. */
+  if(jointReady){
+    [['p5','p95','.055'],['p25','p75','.10']].forEach(function(band){var frames=joint.frames.filter(function(f){return f[band[0]]!=null&&f[band[1]]!=null;});if(frames.length<2)return;var upper=frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f[band[1]]).toFixed(1);}).join(' '),lower=frames.slice().reverse().map(function(f){return 'L'+X(f.x).toFixed(1)+' '+Y(f[band[0]]).toFixed(1);}).join(' ');g+='<path d="'+upper+lower+'Z" fill="var(--text)" fill-opacity="'+band[2]+'"/>';});
+    (joint.paths||[]).forEach(function(path){var d=path.map(function(v,i){var x=joint.progress&&joint.progress[i]!=null?Number(joint.progress[i]):maxX*i/Math.max(1,path.length-1);return (i?'L':'M')+X(x).toFixed(1)+' '+Y(v).toFixed(1);}).join(' ');g+='<path d="'+d+'" fill="none" stroke="var(--text)" stroke-width=".8" stroke-opacity=".11" style="pointer-events:none"/>';});
+    var bookLine=joint.frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f.p50).toFixed(1);}).join(' '),bookEnd=joint.frames[joint.frames.length-1];
+    g+='<path d="'+bookLine+'" fill="none" stroke="var(--text)" stroke-width="2.2" stroke-opacity=".82" style="pointer-events:none"/><circle cx="'+X(bookEnd.x).toFixed(1)+'" cy="'+Y(bookEnd.p50).toFixed(1)+'" r="3" fill="var(--text)"/><text x="'+(X(bookEnd.x)-5).toFixed(1)+'" y="'+(Y(bookEnd.p50)-7).toFixed(1)+'" text-anchor="end" fill="var(--text)" font-size="9" font-family="var(--mono)">BOOK '+deskEsc(signed(bookEnd.p50))+'</text>';
+  }
   /* quantile bands: the hovered position gets its full P10–P90 + P25–P75 story (idea-fan grammar) */
   ready.forEach(function(e){
     if(String(e.p.id)!==hot)return;var color=positionColor(e.p.id);
@@ -4972,7 +4994,7 @@ function drawAuthoritativeBookFan(){
       (wideLabels?'<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.read)+'</text>':'');
   });
   /* same chart-wide hover/click surface as the other fans: nearest position lights up, click opens it */
-  g+='<rect class="mcinteraction" data-fan-surface="1" role="button" aria-label="Hover a position to inspect its fan; choose one to open it" x="'+pad.l+'" y="'+pad.t+'" width="'+(W-pad.l-pad.r)+'" height="'+(H-pad.t-pad.b)+'"/>';
+  if(ready.length)g+='<rect class="mcinteraction" data-fan-surface="1" role="button" aria-label="Hover an independent position projection to inspect it; choose one to open it" x="'+pad.l+'" y="'+pad.t+'" width="'+(W-pad.l-pad.r)+'" height="'+(H-pad.t-pad.b)+'"/>';
   svg._bfmap={W:W,H:H,padL:pad.l,padT:pad.t,plotW:W-pad.l-pad.r,plotH:H-pad.t-pad.b,lo:lo,hi:hi,maxX:maxX,
     entries:ready.map(function(e){return {id:e.p.id,frames:e.slot.frames};})};
   svg.innerHTML=g;
@@ -4995,8 +5017,8 @@ function authRenderReadyPanels(empty){var d=BOOK_AUTH.data||{},pf=d.portfolio||{
     document.getElementById('riskMain').innerHTML='';
     document.getElementById('bookrisk').innerHTML='';
   }else{
-    document.getElementById('riskMain').innerHTML='<div class="authbookpanel bookfuturespanel"><div class="lenshd"><span class="eyebrow">Your book · possible futures</span><span class="hint">each line = that position’s own stored fan · never summed</span></div>'+
-      '<div class="bookfanwrap"><div class="bookfanstage"><svg id="authBookFan" class="bookfan" aria-label="Profit and loss paths of each open position across its own stored fan"></svg><div class="mcpathread" id="bookFanReadout">'+deskEsc(bookFanPrompt())+'</div></div><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div>'+
+    document.getElementById('riskMain').innerHTML='<div class="authbookpanel bookfuturespanel"><div class="lenshd"><span class="eyebrow">Your book · possible futures</span><span class="hint">'+deskEsc(bookFanHeaderHint())+'</span></div>'+
+      '<div class="bookfanwrap"><div class="bookfanstage"><svg id="authBookFan" class="bookfan" aria-label="Synchronized total Book profit and loss paths with independent per-position projections"></svg><div class="mcpathread" id="bookFanReadout">'+deskEsc(bookFanPrompt())+'</div></div><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div>'+
       '<div class="bookmapfacet"><div class="lenshd sub"><span class="eyebrow">Risk / reward</span><span class="hint">odds × loss</span></div><svg id="authBookRiskViz" class="authriskviz compactrisk" aria-label="Open positions by chance of profit and maximum loss"></svg><div class="authmetricgrid onecol">'+authMetric('Max loss in book',authMoney(authDollarsFromCents(h.totalMaxLossCents)))+authMetric('Concentration',authNumber(h.concentrationPct)==null?'—':Number(h.concentrationPct).toFixed(1)+'%')+'</div></div></div></div>';
     document.getElementById('bookrisk').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Book Risk</span><span class="hint" title="'+deskEsc(br.basis||g.note||'Greeks reflect the current open positions.')+'">live greeks · practice account</span></div>'+
       '<div class="kgrid boxed numrow calm bookriskrow">'+

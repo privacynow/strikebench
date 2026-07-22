@@ -74,6 +74,16 @@ public final class PositionsService {
 
     // ---- Reads ----
 
+    /**
+     * Exact persisted share inventory without a market-data read. Book scenario composition uses
+     * this owner-level view so automatically opening the desk cannot trigger quote acquisition;
+     * mark-to-market callers should continue to use {@link #list}.
+     */
+    public List<Position> records(String accountId) {
+        return db.query("SELECT * FROM positions WHERE account_id=? ORDER BY symbol",
+                PositionsService::map, accountId);
+    }
+
     public List<PositionView> list(String accountId) {
         List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked,a.type,a.world_id " +
                         "FROM positions p JOIN accounts a ON a.id=p.account_id LEFT JOIN (" +

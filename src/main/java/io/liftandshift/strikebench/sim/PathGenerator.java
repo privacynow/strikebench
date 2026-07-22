@@ -13,9 +13,23 @@ package io.liftandshift.strikebench.sim;
 public final class PathGenerator {
 
     public static final String MODEL_VERSION = "paths-4-calendar";
+    public static final String JOINT_MODEL_VERSION = MODEL_VERSION + "+joint-aligned-bootstrap-1";
     private static final long NOISE_STREAM = 0x504154484E4F4953L;
     private static final long EVENT_STREAM = 0x5041544845564E54L;
     private static final long OHLC_STREAM = 0x4F484C4342524944L;
+    private static final long JOINT_BOOTSTRAP_STREAM = 0x4A4F494E54424C4BL;
+
+    /**
+     * One synchronized multi-symbol draw. Every member uses the same sampled historical block
+     * indexes, so a path index means one coherent market world across all symbols. The public
+     * artifact owner remains {@link PathEnsembleService}; this record only carries generator
+     * output back to that owner.
+     */
+    record GeneratedJoint(java.util.Map<String, double[][]> paths) {
+        GeneratedJoint {
+            paths = java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(paths));
+        }
+    }
 
     /**
      * The model-honesty contract for authored waypoints (standing decision 9): Gaussian models
@@ -123,6 +137,107 @@ public final class PathGenerator {
             out[p][0] = s0;
         }
         return out;
+    }
+
+    /**
+     * Resample aligned observed return vectors as one block-bootstrap stream. Marginal returns are
+     * mean-removed and martingale-corrected exactly as in the single-symbol block bootstrap; the
+     * shared block start preserves observed cross-symbol dependence and within-symbol serial shape.
+     */
+    GeneratedJoint generateJointBootstrap(ScenarioSpec raw,
+                                           java.util.Map<String, Double> spots,
+                                           java.util.Map<String, double[]> alignedLogReturns,
+                                           double[] stepYears) {
+        ScenarioSpec spec = raw == null ? null : raw.sane();
+        if (spec == null) throw new IllegalArgumentException("joint scenario specification is required");
+        if (spec.model() != ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
+            throw new IllegalArgumentException("joint observed-return paths require BLOCK_BOOTSTRAP");
+        }
+        if (spots == null || spots.isEmpty() || alignedLogReturns == null
+                || !spots.keySet().equals(alignedLogReturns.keySet())) {
+            throw new IllegalArgumentException("joint spots and aligned returns must name the same symbols");
+        }
+        if (stepYears == null || stepYears.length != spec.totalSteps()) {
+            throw new IllegalArgumentException("joint calendar clock must contain exactly "
+                    + spec.totalSteps() + " year fractions");
+        }
+        int observations = -1;
+        java.util.LinkedHashMap<String, double[]> centered = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, Double> historicalSd = new java.util.LinkedHashMap<>();
+        for (var entry : alignedLogReturns.entrySet()) {
+            String symbol = entry.getKey();
+            Double spot = spots.get(symbol);
+            double[] history = entry.getValue();
+            if (symbol == null || symbol.isBlank() || spot == null || !(spot > 0)
+                    || !Double.isFinite(spot)) {
+                throw new IllegalArgumentException("every joint symbol needs a positive finite spot");
+            }
+            if (history == null || history.length < 5) {
+                throw new IllegalArgumentException(symbol + " needs at least 5 aligned returns");
+            }
+            if (observations < 0) observations = history.length;
+            if (history.length != observations) {
+                throw new IllegalArgumentException("joint return histories must be exactly aligned");
+            }
+            double mean = 0;
+            for (double value : history) {
+                if (!Double.isFinite(value)) throw new IllegalArgumentException("joint returns must be finite");
+                mean += value;
+            }
+            mean /= history.length;
+            double variance = 0;
+            double[] values = new double[history.length];
+            for (int i = 0; i < history.length; i++) {
+                values[i] = history[i] - mean;
+                variance += values[i] * values[i];
+            }
+            centered.put(symbol, values);
+            historicalSd.put(symbol, Math.sqrt(Math.max(1e-12,
+                    variance / Math.max(1, history.length - 1))));
+        }
+
+        int steps = spec.totalSteps();
+        int block = Math.max(2, Math.min(20, observations / 4));
+        java.util.LinkedHashMap<String, double[][]> output = new java.util.LinkedHashMap<>();
+        for (String symbol : spots.keySet()) {
+            output.put(symbol, new double[spec.paths()][steps + 1]);
+        }
+        for (int pathNo = 0; pathNo < spec.paths(); pathNo++) {
+            java.util.LinkedHashMap<String, double[]> cumulative = new java.util.LinkedHashMap<>();
+            for (String symbol : spots.keySet()) cumulative.put(symbol, new double[steps + 1]);
+            RandomStreams.Cursor rng = RandomStreams.cursor(spec.seed(), JOINT_BOOTSTRAP_STREAM, pathNo);
+            int step = 1;
+            while (step <= steps) {
+                int start = rng.nextInt(observations);
+                int length = Math.min(block, steps - step + 1);
+                for (String symbol : spots.keySet()) {
+                    double sd = historicalSd.get(symbol);
+                    double annualized = sd * Math.sqrt(252.0);
+                    double[] corrections = empiricalPrefixCompensators(centered.get(symbol), sd,
+                            annualized, stepYears, step - 1, length);
+                    double[] noise = cumulative.get(symbol);
+                    for (int offset = 1; offset <= length; offset++) {
+                        int at = step + offset - 1;
+                        double scale = annualized * Math.sqrt(stepYears[at - 1]) / sd;
+                        noise[at] = noise[at - 1]
+                                + centered.get(symbol)[(start + offset - 1) % observations] * scale
+                                - (corrections[offset] - corrections[offset - 1]);
+                    }
+                }
+                step += length;
+            }
+            for (String symbol : spots.keySet()) {
+                double spot = spots.get(symbol);
+                double[] prices = output.get(symbol)[pathNo];
+                double[] noise = cumulative.get(symbol);
+                prices[0] = spot;
+                for (int at = 1; at <= steps; at++) {
+                    prices[at] = spot * Math.exp(noise[at]);
+                    if (!(prices[at] > 0) || !Double.isFinite(prices[at])) prices[at] = spot * 1e-4;
+                }
+            }
+        }
+        return new GeneratedJoint(output);
     }
 
     // ---- Authored waypoints (the scenario canvas's pins) ----

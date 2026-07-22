@@ -394,6 +394,9 @@ final class PlanOutcomeController {
         io.liftandshift.strikebench.sim.PathEnsembleService.Basis basis;
         try { basis = io.liftandshift.strikebench.sim.PathEnsembleService.Basis.valueOf(basisName); }
         catch (Exception e) { throw new IllegalArgumentException("basis must be RISK_NEUTRAL, PARAMETRIC, HISTORICAL_ANALOGS, or CONDITIONAL_BOOTSTRAP"); }
+        if (basis == io.liftandshift.strikebench.sim.PathEnsembleService.Basis.JOINT_ALIGNED_BOOTSTRAP) {
+            throw new IllegalArgumentException("JOINT_ALIGNED_BOOTSTRAP is a Book-owned artifact, not a Plan outcome basis");
+        }
         var stored = resolvePlanEnsemble(ctx, plan, body, basis);
         var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
                 stored.ensemble().anchorDate());
@@ -406,6 +409,7 @@ final class PlanOutcomeController {
             case PARAMETRIC -> "The exact selected package is repriced on the same stored model ensemble shown in Evidence.";
             case HISTORICAL_ANALOGS -> "The exact selected package is repriced over the Plan's stored matching historical occurrences.";
             case CONDITIONAL_BOOTSTRAP -> "The exact selected package is repriced over whole-path resamples of the Plan's stored analog sample.";
+            case JOINT_ALIGNED_BOOTSTRAP -> throw new IllegalStateException("joint Book basis cannot enter a Plan outcome");
         };
         var saved = planOutcomes.savePathOutcome(root.ownerId(ctx), plan, body.expectedVersion(),
                 candidate.path("id").asText(), stored, result, input, interpretation);
@@ -534,6 +538,7 @@ final class PlanOutcomeController {
             case PARAMETRIC -> "Every current Plan proposal repriced on the exact stored model futures.";
             case HISTORICAL_ANALOGS -> "Every current Plan proposal repriced on the exact matching historical occurrences.";
             case CONDITIONAL_BOOTSTRAP -> "Every current Plan proposal repriced on whole-path resamples of the same analog sample.";
+            case JOINT_ALIGNED_BOOTSTRAP -> throw new IllegalStateException("joint Book basis cannot enter a Plan comparison");
         };
         String fairness = "Same ensemble " + stored.fingerprint() + ", captured proposal entries, quantities, and after-cost convention; cash is the zero-risk baseline.";
         var saved = planOutcomes.saveComparison(root.ownerId(ctx), plan, body.expectedVersion(), stored, ranked,
