@@ -53,6 +53,17 @@ public final class ApiServer {
 
     private static final Logger log = LoggerFactory.getLogger(ApiServer.class);
 
+    /** The StrikeBench brand mark, served for /favicon.ico (same art as the inline &lt;link rel=icon&gt;). */
+    private static final String FAVICON_SVG =
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+            + "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+            + "<stop offset='0' stop-color='#2f6bde'/><stop offset='1' stop-color='#7c4fe0'/>"
+            + "</linearGradient></defs>"
+            + "<rect width='24' height='24' rx='6' fill='url(#g)'/>"
+            + "<path d='M5 19h14' stroke='rgba(255,255,255,.4)' stroke-width='1.2' stroke-linecap='round' stroke-dasharray='1.4 2.6'/>"
+            + "<path d='M5 15.5h6l7.5-8.5' stroke='#fff' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/>"
+            + "<circle cx='11' cy='15.5' r='1.9' fill='#fff'/></svg>";
+
     private final AppConfig cfg;
     private final Clock clock;
     private final MarketDataService market;
@@ -418,6 +429,13 @@ public final class ApiServer {
                     sf.headers = Map.of("Cache-Control", "public, max-age=0, must-revalidate");
                 });
             }
+            // Browsers request /favicon.ico unconditionally, even with an inline <link rel=icon>;
+            // serve the brand mark so those requests are a 200, not a console-noise 404.
+            c.routes.get("/favicon.ico", ctx -> {
+                ctx.contentType("image/svg+xml");
+                ctx.header("Cache-Control", "public, max-age=86400");
+                ctx.result(FAVICON_SVG);
+            });
             // Auth: sign-in flow lives outside /api; /api/auth/me is always readable so the SPA
             // can decide whether to show the sign-in screen.
             c.routes.get("/auth/login", auth::startLogin);
