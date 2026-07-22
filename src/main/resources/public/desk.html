@@ -1035,19 +1035,19 @@
 .authleglist{display:flex;flex-direction:column;gap:5px;max-height:155px;overflow:auto;padding-right:2px}
 .authleg{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:7px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);font-family:var(--mono);font-size:var(--f-xs);min-width:0}
 .authleg .side{font-weight:800}.authleg .side.buy{color:var(--profit)}.authleg .side.sell{color:var(--loss)}.authleg .contract{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authleg .mark{color:var(--dim);white-space:nowrap}
-.authresearchgrid{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1fr) minmax(0,1.25fr) minmax(220px,.8fr);gap:10px;min-height:250px}
+.authresearchgrid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,.85fr) minmax(0,1fr) minmax(0,1.15fr) minmax(220px,.75fr);gap:10px;min-height:250px}
 .authresearchpanel{display:flex;flex-direction:column;gap:8px}.authhistory{width:100%;height:105px;display:block}.authhistory .emptyline{stroke:var(--line);stroke-dasharray:3 5}
 .authnews{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}.authnews a{display:block;padding:7px;border:1px solid var(--line-soft);border-radius:6px;color:var(--dim);font-size:var(--f-xs);line-height:1.35;text-decoration:none}.authnews a:hover{border-color:var(--accent-2);color:var(--text)}.authnews small{display:block;color:var(--faint);margin-top:3px}
 .authpositionnotice{margin:auto;max-width:56ch;text-align:center;color:var(--dim);font-size:var(--f-sm);line-height:1.5}.authpositionnotice b{display:block;color:var(--text);margin-bottom:5px}
 .authscenstage{min-width:0;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:10px;display:flex;flex-direction:column;gap:8px}
-.authscenarioarea{display:grid;grid-template-columns:minmax(540px,1.12fr) minmax(400px,.88fr);gap:10px;min-width:0;min-height:288px}
+.authscenarioarea{display:grid;grid-template-columns:minmax(540px,1.12fr) minmax(400px,.88fr);gap:10px;min-width:0;min-height:320px}
 .authscenpanel,.authpathpanel{min-width:0;min-height:0;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);padding:9px;overflow:hidden}
 .authscenpanel{display:flex;flex-direction:column;gap:7px}.authscengrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
 .authscenrow{position:relative;min-width:0;min-height:68px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);text-align:left;cursor:pointer;transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease),transform var(--mo-quick) var(--mo-ease)}
 .authscenrow:hover,.authscenrow:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}.authscenrow.pinned{border-color:var(--accent);background:var(--accent-wash);box-shadow:inset 2px 0 0 var(--accent)}
 .authscenrow .asname{display:flex;align-items:baseline;justify-content:space-between;gap:6px;color:var(--text);font-size:var(--f-xs);font-weight:750}.authscenrow .asname b{font-family:var(--mono);font-size:var(--f-2xs);font-weight:650;white-space:nowrap}.authscenrow .asdesc{display:block;margin-top:4px;min-height:28px;font-size:var(--f-2xs);line-height:1.35;color:var(--faint);overflow:hidden}.authscenrow .asvalue{display:block;margin-top:4px;font-family:var(--mono);font-size:var(--f-xs);font-weight:750;color:var(--dim)}
 .authscenrow .asvalue.pos{color:var(--profit)}.authscenrow .asvalue.neg{color:var(--loss)}.authscenwait{margin-top:auto;color:var(--faint);font-size:var(--f-2xs);line-height:1.4}
-.authpathpanel{display:grid;grid-template-rows:auto minmax(190px,1fr) auto;gap:6px}.authpathviewport{min-width:0;min-height:0;display:flex}.authpathviewport>.authpositionnotice{flex:1}.authpathchart{width:100%;height:100%;min-height:190px;display:block}.authpathchart .grid{stroke:var(--line-soft);stroke-dasharray:3 4}.authpathchart .context{fill:none;stroke:var(--dim);stroke-opacity:.18;stroke-width:.85}.authpathchart .focusghost{fill:none;stroke:var(--accent);stroke-opacity:.24;stroke-width:1.25}.authpathchart .focuspath{fill:none;stroke:var(--accent);stroke-width:2.2}.authpathchart .pathhit{fill:none;stroke:transparent;stroke-width:12;pointer-events:stroke;cursor:pointer}.authpathchart .pathband{fill:var(--accent);fill-opacity:.09}.authpathchart .pathband.inner{fill-opacity:.18}.authpathchart text{font-family:var(--mono);font-size:9px;fill:var(--faint)}
+.authpathpanel{display:grid;grid-template-rows:auto minmax(220px,1fr) auto;gap:6px}.authpathviewport{min-width:0;min-height:0;display:flex}.authpathviewport>.authpositionnotice{flex:1}.authpathchart{width:100%;height:100%;min-height:215px;display:block}.authpathchart .grid{stroke:var(--line-soft);stroke-dasharray:3 4}.authpathchart .context{fill:none;stroke:var(--dim);stroke-opacity:.18;stroke-width:.85}.authpathchart .focusghost{fill:none;stroke:var(--accent);stroke-opacity:.24;stroke-width:1.25}.authpathchart .focuspath{fill:none;stroke:var(--accent);stroke-width:2.2}.authpathchart .pathhit{fill:none;stroke:transparent;stroke-width:12;pointer-events:stroke;cursor:pointer}.authpathchart .pathband{fill:var(--accent);fill-opacity:.09}.authpathchart .pathband.inner{fill-opacity:.18}.authpathchart text{font-family:var(--mono);font-size:9px;fill:var(--faint)}
 .authscenmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.authscenmetric{min-width:0;padding:6px 7px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2)}.authscenmetric span{display:block;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.authscenmetric b{display:block;margin-top:2px;font-family:var(--mono);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.authscenmetric b.pos{color:var(--profit)}.authscenmetric b.neg{color:var(--loss)}
 .authscenrisk{width:100%;height:44px;display:block;margin-top:5px}.authscenrisk .track{stroke:var(--line);stroke-width:1}.authscenrisk .checkpoint{fill:var(--dim);fill-opacity:.35}.authscenrisk .live{fill:var(--accent);stroke:var(--text);stroke-width:1.2;filter:drop-shadow(0 0 3px rgba(70,213,181,.45))}
 .authscenreceipt{display:flex;align-items:center;gap:7px 12px;flex-wrap:wrap;color:var(--faint);font-family:var(--mono);font-size:var(--f-2xs);line-height:1.35}.authscenreceipt .badge{color:var(--violet);border-color:var(--violet)}
@@ -2590,6 +2590,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 /* position management actions */
 .authmanageacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+/* the bloom's standing chain panel (same component as Home and the Decide market band) */
+.authposchain .authchainrows{min-height:0}
+.authposchain .backendnotice{margin-top:2px}
 /* a chosen future (exact fan path) is the active story — the tiles stay unpinned, this strip says why */
 .customstory{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--accent-2);border-radius:8px;background:var(--accent-wash)}
 .customstory .csdot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;box-shadow:0 0 0 3px rgba(57,199,212,.15)}
@@ -3174,6 +3177,8 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
     if(back){ev.preventDefault();ev.stopPropagation();go('book');return;}
     var focusPath=ev.target.closest&&ev.target.closest('[data-auth-focus-path]');
     if(focusPath){ev.preventDefault();ev.stopPropagation();if(p._positionScenarioPhase==='ready')toggleScenPlay(positionSurf(p));return;}
+    var anyPath=ev.target.closest&&ev.target.closest('[data-auth-any-path]');
+    if(anyPath){ev.preventDefault();ev.stopPropagation();pinPositionFanPath(p,+anyPath.getAttribute('data-auth-any-path'));return;}
     var manageAct=ev.target.closest&&ev.target.closest('[data-auth-manage]');
     if(manageAct){ev.preventDefault();ev.stopPropagation();var manageKind=manageAct.getAttribute('data-auth-manage');
       if(manageKind==='resume'){var owningPlan=p._positionData&&p._positionData.plan||p._plan;if(owningPlan)authOpenPlan(owningPlan,manageAct.getBoundingClientRect());return;}
@@ -3203,6 +3208,14 @@ function authNewsHTML(data){var items=data&&data.news&&data.news.items||[];if(!i
 function authStageLabel(value){var key=String(value||'').toUpperCase();if(key==='MANAGE_REVIEW')return 'Manage & review';return authHuman(value||'—');}
 function authManagementHTML(p,data){var plan=data&&data.plan||p._plan,mg=data&&data.management,rows=[];if(plan)rows.push(['Idea',plan.title||((p.sym||p.symbol||'Position')+' working idea')],['Stage',authStageLabel(plan.furthestStage)]);
   if(mg){if(mg.status)rows.push(['Review',mg.status]);if(mg.note)rows.push(['Note',mg.note]);}
+  /* book context — real held-line facts, computed from what the book already knows */
+  var ranked=POS.slice().sort(function(a,b){return (b.riskPct||0)-(a.riskPct||0);}),rank=ranked.findIndex(function(x){return x.id===p.id;})+1;
+  if(p.riskPct!=null&&POS.length)rows.push(['Book share',Math.round(p.riskPct)+'% of book risk'+(rank?' · '+ordinal(rank)+' of '+POS.length:'')]);
+  var opened=p._trade&&p._trade.openedAt?String(p._trade.openedAt).slice(0,10):null;if(opened)rows.push(['Opened',opened]);
+  var expirations=(p.legs||[]).map(function(l){return l.expiration;}).filter(Boolean).sort();
+  if(expirations.length)rows.push(['Expiry',expirations[0]+(expirations[expirations.length-1]!==expirations[0]?' → '+expirations[expirations.length-1]:'')]);
+  var entryNet=authDollarsFromCents(p._trade&&p._trade.entryNetPremiumCents);
+  if(entryNet!=null)rows.push(['Entry net',(entryNet>=0?'collected ':'paid ')+authMoney(Math.abs(entryNet))+(p.lane==='paper'?' · practice':' · tracked')]);
   var acts='<div class="authmanageacts">'+
     (plan?'<button type="button" class="btn xs pri" data-auth-manage="resume">Analyze &amp; adjust in its idea →</button>':'')+
     '<button type="button" class="btn xs" data-auth-manage="forward" title="Play this position through its stored market fan — the honest forward test">▶ Forward test</button></div>';
@@ -3230,9 +3243,10 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
     '<div class="authpositionnotice"><b>'+(phase==='loading'?'Finding paths that fit this story…':phase==='error'?'This scenario could not load.':'Preparing the most likely market story…')+'</b>'+(phase==='error'?deskEsc(p._positionScenarioError||'The selected scenario is temporarily unavailable.'):'The chart uses paths already calculated for this position.')+'</div>';
   var focused=authPositionFocusedScenario(p),steps=focused&&focused.steps||[],last=authPositionScenarioTargetPoint(p)||{},g=last.greeks||{},pathReceipt=response&&response.paths&&response.paths.receipt||{},modelReceipt=response&&response.checkpoints&&response.checkpoints.modelReceipt||{};
   var pnlFan=phase==='ready'&&response?authPositionPnlFan(p):null,pathView=p._positionPathView==='price'||!pnlFan?'price':'pnl',pathToggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-auth-path-view="pnl" class="'+(pathView==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-auth-path-view="price" class="'+(pathView==='price'?'on':'')+'">Price</button></span>';
-  var scenarioName=pin==null?'Possible futures':(SCEN[pin]&&SCEN[pin].n||'Selected scenario');
+  var scenarioName=pin==null?'Possible futures':pin===FAN_STORY?'Chosen future':(SCEN[pin]&&SCEN[pin].n||'Selected scenario');
+  var customStrip=pin===FAN_STORY?(function(){var mag=magOf(p);return '<div class="customstory"><span class="csdot"></span><span class="cslbl"><b>Chosen future</b><span>a real path from this position’s stored fan · ends <b class="'+(mag>=0?'pos':'neg')+'">'+(mag>0?'+':'')+(mag==null?'—':mag)+'%</b></span></span></div>';})():'';
   return '<section class="authscenstage" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="'+deskEsc(phase)+'" data-ensemble-fingerprint="'+deskEsc(ensemble.fingerprint||'')+'" data-valuation-fingerprint="'+deskEsc(modelReceipt.valuationFingerprint||'')+'"><div class="lenshd"><span class="eyebrow">Position scenarios</span><span class="hint">one market fan · this position’s response</span></div><div class="authscenarioarea">'+
-    '<div class="authscenpanel"><div class="authscengrid">'+tiles+'</div>'+controls+'</div>'+
+    '<div class="authscenpanel"><div class="authscengrid">'+tiles+'</div>'+customStrip+controls+'</div>'+
     '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">What happens if — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the same paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
       '<div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div><div class="authscenmetric"><span>Net delta</span><b data-live="delta">'+(authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2))+'</b></div><div class="authscenmetric"><span>Theta / day</span><b data-live="theta">'+(authNumber(g.thetaCentsPerDay)==null?'—':money(Number(g.thetaCentsPerDay)/100))+'</b></div><div class="authscenmetric"><span>Gamma</span><b data-live="gamma">'+(authNumber(g.gammaSharesPerDollar)==null?'—':Number(g.gammaSharesPerDollar).toFixed(3))+'</b></div><div class="authscenmetric"><span>Vega / pt</span><b data-live="vega">'+(authNumber(g.vegaCentsPerPoint)==null?'—':money(Number(g.vegaCentsPerPoint)/100))+'</b></div></div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     '<div class="authscenreceipt" id="authScenReceipt-'+deskEsc(p.id)+'">'+authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</div></section>';}
@@ -3255,10 +3269,40 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
       '<div class="authmetric"><span>ATM IV</span><b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></div><div class="authmetric"><span>Market data</span><b>'+deskEsc(quoteStatus)+'</b></div></div>'+
       '<div class="backendnotice">'+deskEsc(authRegimeSummary(research))+'</div></section>'+
+    '<section class="authresearchpanel authposchain" id="authChainSlice-'+deskEsc(p.id)+'">'+authPositionChainHTML(p,quote)+'</section>'+
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">'+deskEsc(history.range||(data.auxiliaryPending?'loading':'unavailable'))+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+historyBody+'</section>'+
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+authNewsHTML(data)+'</section>'+
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Idea &amp; management</span><span class="hint">position context</span></div>'+authManagementHTML(p,data)+'</section></div>';
   window.requestAnimationFrame(function(){if(payoffReady){var svg=document.getElementById('authPay-'+p.id);if(svg)drawPayoff(svg,p,true,null,{hideScenarios:true,pinM:scrubMag(p),labelRails:true});}drawAuthoritativeHistory(p);drawAuthoritativePositionScenario(p);});
+  authEnsurePositionChain(p);
+}
+/* Chain slice for the focused position — the SAME cached symbolContext owner Home and the Decide
+   market band read, so the bloom carries the standing market surface without a second data path. */
+function authPositionChainHTML(p,quote){
+  var ctx=p._chainCtx&&p._chainCtx.symbol===p.sym?p._chainCtx:null;
+  var chain=ctx&&ctx.row&&ctx.row.chain,exp=chain&&chain.expiration;
+  var head='<div class="lenshd"><span class="eyebrow">Chain at the market</span><span class="hint">'+(exp?'bid / ask · '+deskEsc(exp):'bid / ask')+'</span></div>';
+  if(ctx&&ctx.phase==='ready'&&chain)return head+authHomeChainHTML({chain:chain},authNumber(quote&&quote.last)||p.spot||0);
+  if(ctx&&ctx.phase==='error')return head+'<div class="backendnotice">'+deskEsc(ctx.error||'The option chain is unavailable for this symbol.')+'</div>';
+  return head+'<div class="backendnotice">Loading the option chain…</div>';
+}
+function authEnsurePositionChain(p){
+  var ctx=p._chainCtx;
+  if(ctx&&ctx.symbol===p.sym&&(ctx.phase==='ready'||ctx.phase==='loading'))return;
+  ctx={symbol:p.sym,phase:'loading',row:null,error:null};p._chainCtx=ctx;
+  if(!(deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.symbolContext)){ctx.phase='error';ctx.error='Market context is unavailable.';return;}
+  window.DeskBackend.symbolContext(p.sym).then(function(row){
+    if(p._chainCtx!==ctx)return;ctx.phase='ready';ctx.row=row;authPatchPositionChain(p);
+  }).catch(function(error){
+    if(p._chainCtx!==ctx)return;ctx.phase='error';ctx.error=error&&error.message||'The option chain is unavailable for this symbol.';authPatchPositionChain(p);
+  });
+}
+/* patch ONLY the chain slice — a late resolve must never re-render the whole position and reset
+   a playing scenario stage */
+function authPatchPositionChain(p){
+  var host=document.getElementById('authChainSlice-'+p.id);if(!host)return;
+  var data=p._positionData||{},research=data.research||{},quote=research.quote||{};
+  host.innerHTML=authPositionChainHTML(p,quote);
 }
 function drawAuthoritativeHistory(p){var svg=document.getElementById('authHist-'+p.id);if(!svg)return;var candles=p._positionData&&p._positionData.history&&p._positionData.history.candles||[];drawCandleSeries(svg,candles,{minW:260,minH:90,defaultW:360,defaultH:105});}
 function authPositionPnlFan(p){
@@ -3282,7 +3326,7 @@ function drawAuthoritativePositionPaths(p){var svg=document.getElementById('auth
     '<line class="grid" x1="'+x0+'" y1="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'" x2="'+x1+'" y2="'+Y(isPnl&&lo<=0&&hi>=0?0:(lo+hi)/2).toFixed(1)+'"/><text x="'+x0+'" y="'+(H-5)+'">now</text><text x="'+x1+'" y="'+(H-5)+'" text-anchor="end">scenario horizon</text>';
   if(isPnl){g+='<text x="'+(x0-5)+'" y="'+(y0+6)+'" text-anchor="end">'+deskEsc(money(hi))+'</text><text x="'+(x0-5)+'" y="'+y1+'" text-anchor="end">'+deskEsc(money(lo))+'</text>';if(lo<=0&&hi>=0)g+='<text x="'+(x0-5)+'" y="'+(Y(0)+3).toFixed(1)+'" text-anchor="end">$0</text>';}
   if(frames.length>1){var upper='',lower='',innerUpper='',innerLower='',hasInner=frames.every(function(row){return row.p25!=null&&row.p75!=null;});frames.forEach(function(row,i){var xx=XDay(row.day==null?targetDay*i/(frames.length-1):row.day);upper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p90).toFixed(1);if(hasInner)innerUpper+=(i?' L ':'M ')+xx.toFixed(1)+' '+Y(row.p75).toFixed(1);});for(var ri=frames.length-1;ri>=0;ri--){var row=frames[ri],xx=XDay(row.day==null?targetDay*ri/(frames.length-1):row.day);lower+=' L '+xx.toFixed(1)+' '+Y(row.p10).toFixed(1);if(hasInner)innerLower+=' L '+xx.toFixed(1)+' '+Y(row.p25).toFixed(1);}g+='<path class="pathband" d="'+upper+lower+' Z"/>'+(hasInner?'<path class="pathband inner" d="'+innerUpper+innerLower+' Z"/>':'');}
-  fan.paths.forEach(function(path,i){var d=line(path),terminal=path.length?Number(path[Math.min(targetStep,path.length-1)]):null,title=(i===fan.focusPathIndex?'Focus path':'Nearby path')+(terminal==null?'':' · ends '+(isPnl?money(terminal):'$'+terminal.toFixed(2)));if(i===fan.focusPathIndex)g+='<path class="focusghost" d="'+d+'"><title>'+deskEsc(title)+'</title></path><path class="focuspath" d="'+d+'" clip-path="url(#'+clipId+')"/><path class="pathhit" data-auth-focus-path="true" d="'+d+'"><title>Play or pause this scenario</title></path>';else g+='<path class="context" d="'+d+'"><title>'+deskEsc(title)+'</title></path>';});
+  fan.paths.forEach(function(path,i){var d=line(path),terminal=path.length?Number(path[Math.min(targetStep,path.length-1)]):null,title=(i===fan.focusPathIndex?'Focus path':'Nearby path')+(terminal==null?'':' · ends '+(isPnl?money(terminal):'$'+terminal.toFixed(2)));if(i===fan.focusPathIndex)g+='<path class="focusghost" d="'+d+'"><title>'+deskEsc(title)+'</title></path><path class="focuspath" d="'+d+'" clip-path="url(#'+clipId+')"/><path class="pathhit" data-auth-focus-path="true" d="'+d+'"><title>Play or pause this scenario</title></path>';else g+='<path class="context" d="'+d+'"><title>'+deskEsc(title)+'</title></path><path class="pathhit" data-auth-any-path="'+i+'" d="'+d+'"><title>'+deskEsc(title)+' · click to pin this exact future</title></path>';});
   var frame=authoritativeFrame(p,progress.t),marker=frame&&authNumber(isPnl?frame.pnl:frame.price);if(marker!=null){var mx=Math.max(x0,Math.min(x1,revealX)),my=Y(marker);g+='<line x1="'+mx.toFixed(1)+'" y1="'+y0+'" x2="'+mx.toFixed(1)+'" y2="'+y1+'" stroke="var(--accent)" stroke-opacity=".28"/><circle cx="'+mx.toFixed(1)+'" cy="'+my.toFixed(1)+'" r="4.2" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/><text x="'+Math.max(x0+30,Math.min(x1-30,mx)).toFixed(1)+'" y="'+Math.max(y0+10,my-8).toFixed(1)+'" text-anchor="middle">'+deskEsc(isPnl?money(marker):'$'+Number(marker).toFixed(2))+'</text>';}
   svg.setAttribute('aria-label',isPnl?'Position profit and loss across the selected market scenario':'Price paths for the selected market scenario');svg.setAttribute('data-path-space',isPnl?'pnl':'price');svg.setAttribute('data-ensemble-fingerprint',fan.fingerprint||'');if(fan.valuationFingerprint)svg.setAttribute('data-valuation-fingerprint',fan.valuationFingerprint);svg.setAttribute('viewBox','0 0 '+W+' '+H);svg.innerHTML=g;}
 function drawAuthoritativePositionRisk(p){var svg=document.getElementById('authScenarioRisk-'+p.id),row=authPositionFocusedScenario(p),steps=row&&row.steps||[],targetIndex=authPositionScenarioTargetIndex(p,steps);if(targetIndex>=0)steps=steps.slice(0,targetIndex+1);if(!svg)return;var W=Math.max(300,Math.round(svg.clientWidth||500)),H=44,points=steps.map(function(step){var d=step&&step.greeks&&authNumber(step.greeks.deltaShares),pl=authNumber(step&&step.focusPnlCents);return d==null||pl==null?null:{d:d,pl:pl/100};}).filter(Boolean);svg.setAttribute('viewBox','0 0 '+W+' '+H);
@@ -5996,17 +6040,9 @@ function nearestMCPath(e){var svg=document.getElementById('mcFan'),map=svg&&svg.
   paths.forEach(function(path,index){var value=valueAt(path);if(!Number.isFinite(value))return;var y=map.padT+(map.H-map.padT-map.padB)*(map.hi-value)/Math.max(.000001,map.hi-map.lo),distance=Math.abs(y-vy);if(distance<bestDistance){bestDistance=distance;best=index;}});return best;}
 function mcPathPrompt(shown){return shown&&shown.space==='pnl'?'Hover a possible future to inspect its P/L · click to play it across the desk':'Hover a possible future to inspect it · click to play it across the desk';}
 function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex],line=svg&&svg.querySelector('[data-mc-line="'+index+'"]');if(line)line.classList.toggle('hot',!!on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=mcPathPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+money(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length>1){var start=Number(pricePath[0]),end=Number(pricePath[pricePath.length-1]),move=start?((end/start-1)*100):0;parts.push((shown.space==='pnl'?'underlying ':'')+'$'+end.toFixed(2)+' · '+(move>=0?'+':'')+move.toFixed(1)+'%');}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
-/* Clicking a possible future pins THAT exact path — its own checkpoints become the scenario
-   waypoints, so the backend's nearest-path selection returns the same source row as the focus
-   and the desk animates the future the user actually chose, not a nearby named story. */
-function playMCPath(index){
-  var c=authoritativeCandidate(),shown=decisionFan(c),res=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),path=res&&res.paths&&res.paths[priceIndex];
-  if(!c||!path||path.length<2)return;
-  var start=Number(path[0]),end=Number(path[path.length-1]);
-  if(!(start>0)||!Number.isFinite(end))return;
-  var spot=authNumber(decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.spot)||start;
-  var days=Math.max(1,Math.round(Number(res.horizonDays||res.targetDay||authoritativeHorizon(c)||1)));
-  var progress=res.pathProgress&&res.pathProgress.length===path.length?res.pathProgress.map(Number):null;
+/* ONE builder for "pin this exact stored path" (idea fan AND position fan): sample the clicked
+   price polyline into ordered pins the backend's nearest-path selection recovers exactly. */
+function buildExactPathPins(path,progress,spot,days){
   function valueAtDay(day){
     if(progress){
       if(day<=progress[0])return Number(path[0]);
@@ -6020,14 +6056,50 @@ function playMCPath(index){
   fractions.forEach(function(f){var day=Math.max(1,Math.min(days,Math.round(f*days)));if(seen[day])return;seen[day]=1;
     dayPins.push({dayIndex:day,priceRatio:Math.max(.01,valueAtDay(day)/spot),tolerance:f===1?.015:.03});});
   var pathPins=days<=1?[1/3,2/3,1].map(function(f,i){return {sessionProgress:f,priceRatio:Math.max(.01,valueAtDay(f*days)/spot),tolerance:i===2?.015:.03};}):null;
-  var movePct=Math.round((end/spot-1)*1000)/10;
-  c._customStoryPins={waypoints:dayPins,pathWaypoints:pathPins,movePct:movePct,days:days,
+  var end=Number(path[path.length-1]);
+  return {waypoints:dayPins,pathWaypoints:pathPins,movePct:Math.round((end/spot-1)*1000)/10,days:days};
+}
+/* Clicking a possible future pins THAT exact path — its own checkpoints become the scenario
+   waypoints, so the backend's nearest-path selection returns the same source row as the focus
+   and the desk animates the future the user actually chose, not a nearby named story. */
+function playMCPath(index){
+  var c=authoritativeCandidate(),shown=decisionFan(c),res=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),path=res&&res.paths&&res.paths[priceIndex];
+  if(!c||!path||path.length<2)return;
+  var start=Number(path[0]),end=Number(path[path.length-1]);
+  if(!(start>0)||!Number.isFinite(end))return;
+  var spot=authNumber(decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.spot)||start;
+  var days=Math.max(1,Math.round(Number(res.horizonDays||res.targetDay||authoritativeHorizon(c)||1)));
+  var progress=res.pathProgress&&res.pathProgress.length===path.length?res.pathProgress.map(Number):null;
+  var pins=buildExactPathPins(path,progress,spot,days);
+  c._customStoryPins={waypoints:pins.waypoints,pathWaypoints:pins.pathWaypoints,movePct:pins.movePct,days:days,
     sourcePathIndex:res.sourcePathIndices?res.sourcePathIndices[priceIndex]:null};
   var s=decSurf();
   stopScen(s);
-  pinnedScen[c.id]=FAN_STORY;pinMag[c.id]=movePct;pinIV[c.id]=0;pinDays[c.id]=days;
+  pinnedScen[c.id]=FAN_STORY;pinMag[c.id]=pins.movePct;pinIV[c.id]=0;pinDays[c.id]=days;
   scenSt(c.id).t=0;s.refresh();
   if(!requestAuthoritativeScenario(s,true))playScen(s);
+}
+/* The same gesture on the Position stage: click ANY drawn path → pin that exact stored future. */
+function pinPositionFanPath(p,index){
+  if(!p||!p.isHeld||p._positionScenarioPhase!=='ready'||!p.authoritativeAnimation)return;
+  var priceFan=authoritativeFanFromAnimation(p.authoritativeAnimation),shown=authPositionScenarioFan(p);
+  if(!priceFan||!priceFan.paths||!priceFan.paths.length)return;
+  var source=shown&&shown.sourcePathIndices?shown.sourcePathIndices[index]:null,priceIndex=index;
+  if(source!=null&&priceFan.sourcePathIndices){var matched=priceFan.sourcePathIndices.indexOf(source);if(matched>=0)priceIndex=matched;}
+  var path=priceFan.paths[priceIndex];if(!path||path.length<2)return;
+  var stored=authPositionEnsemble(p),preview=stored&&stored.preview||{};
+  var spot=authNumber(preview.spot)||authNumber(preview.receipt&&preview.receipt.anchorSpot)||Number(path[0]);
+  if(!(spot>0))return;
+  var days=Math.max(1,Math.round(Number(preview.horizonDays||priceFan.horizonDays||authoritativeHorizon(p)||1)));
+  var progress=priceFan.pathProgress&&priceFan.pathProgress.length===path.length?priceFan.pathProgress.map(Number):null;
+  var pins=buildExactPathPins(path,progress,spot,days);
+  p._customStoryPins={waypoints:pins.waypoints,pathWaypoints:pins.pathWaypoints,movePct:pins.movePct,days:days,
+    sourcePathIndex:source!=null?source:(priceFan.sourcePathIndices?priceFan.sourcePathIndices[priceIndex]:null)};
+  var s=positionSurf(p);
+  stopScen(s);
+  pinnedScen[p.id]=FAN_STORY;pinMag[p.id]=pins.movePct;pinIV[p.id]=0;pinDays[p.id]=days;
+  scenSt(p.id).t=0;s.refresh();
+  requestAuthoritativeScenario(s,true);
 }
 
 /* ---- enter / exit + the BREATHING transition (FLIP from the origin control, reusing the
