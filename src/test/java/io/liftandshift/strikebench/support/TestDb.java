@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.support;
 
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.db.Schema;
+import io.liftandshift.strikebench.db.Migrations;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -45,12 +45,12 @@ public final class TestDb {
 	    return db;
     }
 
-    /** Overrides for a current-schema clone. App startup still validates the schema fingerprint. */
+    /** Overrides for a current-schema clone. App startup re-runs Flyway, which no-ops (already migrated). */
     public static Map<String, String> freshConfig() {
 	    return config(newDatabase(true));
     }
 
-	/** A genuinely empty database reserved for tests of baseline initialization and rejection. */
+	/** A genuinely empty database reserved for tests of Flyway migration and legacy-shape rejection. */
 	public static Map<String, String> emptyConfig() {
 	    return config(newDatabase(false));
 	}
@@ -79,7 +79,7 @@ public final class TestDb {
 	                + Long.toHexString(System.nanoTime());
 	        admin("CREATE DATABASE " + name);
 	        try (Db db = new Db(BASE + name, USER, PASS)) {
-	            Schema.initialize(db);
+	            Migrations.run(db);
 	        } catch (RuntimeException e) {
 	            try { admin("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"); }
 	            catch (RuntimeException ignored) { }

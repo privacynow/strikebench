@@ -10,7 +10,7 @@ import io.liftandshift.strikebench.broker.ETradeProvider;
 import io.liftandshift.strikebench.broker.SecretsStore;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.db.Schema;
+import io.liftandshift.strikebench.db.Migrations;
 import io.liftandshift.strikebench.market.MarketDataMarks;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.SnapshotService;
@@ -141,10 +141,10 @@ public final class ApiServer {
         this.universeViews = new MarketUniverseView(cfg, market, universe, simSessions);
     }
 
-    /** Wires the whole app from config: current schema + provider chain + services. */
+    /** Wires the whole app from config: schema migrations + provider chain + services. */
     public static ApiServer create(AppConfig cfg, Clock clock) {
         Db db = Db.forConfig(cfg);
-        Schema.initialize(db);
+        Migrations.run(db);
         FixtureProvider fixture = new FixtureProvider(clock);
         List<MarketDataProvider> providers = new ArrayList<>();
         List<NewsFilingsProvider> newsProviders = new ArrayList<>();

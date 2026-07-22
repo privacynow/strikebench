@@ -1,3 +1,7 @@
+-- V1 baseline: the current StrikeBench schema, adopted as the Flyway baseline on
+-- 2026-07-22 when versioned migrations were reintroduced. Never edit this file once it
+-- has been applied to a real database; add forward migrations (V2__..., V3__...) instead.
+
 --
 -- PostgreSQL database dump
 --
