@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
+import io.liftandshift.strikebench.position.PositionLifecycleDecisionService;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -34,6 +35,7 @@ final class PortfolioController {
     private final TrackedPackageAnalysisService trackedAnalyses;
     private final AccountObjectiveService objectives;
     private final BookRiskService bookRisk;
+    private final PositionLifecycleDecisionService lifecycleDecisions;
     private final Function<Context, String> ownerId;
     private final Function<Context, Account> currentAccount;
 
@@ -41,6 +43,7 @@ final class PortfolioController {
                         PortfolioExportService exports, PositionsService positions,
                         TradeService trades, TrackedPackageAnalysisService trackedAnalyses,
                         AccountObjectiveService objectives, BookRiskService bookRisk,
+                        PositionLifecycleDecisionService lifecycleDecisions,
                         Function<Context, String> ownerId,
                         Function<Context, Account> currentAccount) {
         this.db = db;
@@ -48,6 +51,7 @@ final class PortfolioController {
         this.books = books;
         this.objectives = objectives;
         this.bookRisk = bookRisk;
+        this.lifecycleDecisions = lifecycleDecisions;
         this.exports = exports;
         this.positions = positions;
         this.trades = trades;
@@ -75,6 +79,7 @@ final class PortfolioController {
                 this::getObjective,
                 this::declareObjective,
                 this::analyzePackage,
+                this::recordLifecycleDecision,
                 this::transactions,
                 this::createTransaction,
                 ctx -> ctx.json(new ApiResponses.Lots<>(books.lots(ownerId.apply(ctx),
@@ -153,7 +158,15 @@ final class PortfolioController {
         TradeOpenRequest body = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class));
         TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(body, id);
-        ctx.json(trackedAnalyses.analyze(ownerId.apply(ctx), id, request));
+        String owner = ownerId.apply(ctx);
+        ctx.json(trackedAnalyses.surface(owner, trackedAnalyses.analyze(owner, id, request)));
+    }
+
+    private void recordLifecycleDecision(Context ctx) {
+        var input = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                PositionLifecycleDecisionService.DecisionInput.class));
+        ctx.status(201).json(lifecycleDecisions.recordUserDecision(ownerId.apply(ctx),
+                ctx.pathParam("id"), input));
     }
 
     private void createTransaction(Context ctx) {

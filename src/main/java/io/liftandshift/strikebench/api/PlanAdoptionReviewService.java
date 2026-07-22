@@ -39,6 +39,12 @@ final class PlanAdoptionReviewService {
                                                      TradeService.OpenRequest request);
     }
 
+    @FunctionalInterface
+    interface Surfacer {
+        ApiResponses.TrackedPackageAnalysis surface(String ownerId,
+                                                     ApiResponses.TrackedPackageAnalysis analysis);
+    }
+
     record BaselineLeg(int legNo, String instrumentType, String action, String symbol,
                        String optionType, BigDecimal strike, LocalDate expiration, long quantity,
                        int multiplier, BigDecimal bid, BigDecimal ask, BigDecimal mid,
@@ -72,12 +78,20 @@ final class PlanAdoptionReviewService {
     private final AccountObjectiveService objectives;
     private final PortfolioAccountingService books;
     private final HeldPositionEconomicsService lifecycle;
+    private final Surfacer surfacer;
 
     PlanAdoptionReviewService(Db db, Analyzer analyzer, CampaignService campaigns,
                               AccountObjectiveService objectives, PortfolioAccountingService books,
                               HeldPositionEconomicsService lifecycle) {
+        this(db, analyzer, (owner, analysis) -> analysis, campaigns, objectives, books, lifecycle);
+    }
+
+    PlanAdoptionReviewService(Db db, Analyzer analyzer, Surfacer surfacer,
+                              CampaignService campaigns, AccountObjectiveService objectives,
+                              PortfolioAccountingService books, HeldPositionEconomicsService lifecycle) {
         this.db = db;
         this.analyzer = analyzer;
+        this.surfacer = surfacer;
         this.campaigns = campaigns;
         this.objectives = objectives;
         this.books = books;
@@ -135,7 +149,8 @@ final class PlanAdoptionReviewService {
                             "ADOPTION_REVIEW", "PROPOSED");
                     ApiResponses.TrackedPackageAnalysis analysis = analyzer.analyze(owner, row.accountId(), request);
                     if (analysis != null && analysis.lifecycle() != null) {
-                        analysis = withHistory(owner, row, baseline, matching, analysis);
+                        analysis = surfacer.surface(owner,
+                                withHistory(owner, row, baseline, matching, analysis));
                     }
                     freshEyes = new FreshEyesLens(true, FRESH_EYES_QUESTION,
                             "Current observed executable marks; sunk campaign cash excluded. "
@@ -212,7 +227,7 @@ final class PlanAdoptionReviewService {
         return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
                 analysis.identity(), analysis.accountId(), analysis.accountName(),
                 analysis.availableCashCents(), analysis.marketLane(), analysis.note(), enriched,
-                analysis.bookActions(), analysis.capacity());
+                analysis.bookActions(), analysis.capacity(), null);
     }
 
     private List<PortfolioAccountingService.LotAllocation> currentLotAllocations(String structureId) {

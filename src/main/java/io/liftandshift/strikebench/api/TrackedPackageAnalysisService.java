@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
+import io.liftandshift.strikebench.position.PositionLifecycleDecisionService;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 
 /**
@@ -26,17 +27,20 @@ final class TrackedPackageAnalysisService {
     private final AccountObjectiveService objectives;
     private final HeldPositionEconomicsService lifecycle;
     private final BookActionProjectionService bookActions;
+    private final PositionLifecycleDecisionService decisions;
 
     TrackedPackageAnalysisService(PortfolioAccountingService books, TradeService trades,
                                   EvaluationService evaluations, AccountObjectiveService objectives,
                                   HeldPositionEconomicsService lifecycle,
-                                  BookActionProjectionService bookActions) {
+                                  BookActionProjectionService bookActions,
+                                  PositionLifecycleDecisionService decisions) {
         this.books = books;
         this.trades = trades;
         this.evaluations = evaluations;
         this.objectives = objectives;
         this.lifecycle = lifecycle;
         this.bookActions = bookActions;
+        this.decisions = decisions;
     }
 
     ApiResponses.TrackedPackageAnalysis analyze(String ownerId, String accountId,
@@ -57,6 +61,9 @@ final class TrackedPackageAnalysisService {
         String lane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
         var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
         var lifecycleReceipt = lifecycle.compose(request, preview, evaluation);
+        var actionProjections = bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary);
+        var capacity = AccountObjectiveService.capacityContext(objectiveRevision,
+                lifecycleReceipt.positionFingerprint());
         return new ApiResponses.TrackedPackageAnalysis(preview,
                 ApiResponses.EvaluationReceipt.of(evaluation),
                 identity,
@@ -65,9 +72,20 @@ final class TrackedPackageAnalysisService {
                         + " evidence and this tracked account's cash. It never changes tracked lots,"
                         + " tracked tax basis, campaign accounting, or the Practice account.",
                 lifecycleReceipt,
-                bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary),
-                AccountObjectiveService.capacityContext(objectiveRevision,
-                        lifecycleReceipt.positionFingerprint()));
+                actionProjections, capacity, null);
+    }
+
+    /** Freeze only the analysis that will actually cross the wire; callers may enrich history first. */
+    ApiResponses.TrackedPackageAnalysis surface(String ownerId,
+                                                ApiResponses.TrackedPackageAnalysis analysis) {
+        if (analysis == null || analysis.lifecycle() == null || analysis.bookActions() == null
+                || analysis.capacity() == null) return analysis;
+        return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
+                analysis.identity(), analysis.accountId(), analysis.accountName(),
+                analysis.availableCashCents(), analysis.marketLane(), analysis.note(),
+                analysis.lifecycle(), analysis.bookActions(), analysis.capacity(),
+                decisions.surface(ownerId, analysis.accountId(), analysis.lifecycle(),
+                        analysis.bookActions(), analysis.capacity()));
     }
 
     private DeclaredObjective declaredAccountObjective(AccountObjectiveService.Revision revision) {

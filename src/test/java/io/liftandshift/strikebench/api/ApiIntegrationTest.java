@@ -1610,6 +1610,10 @@ class ApiIntegrationTest {
                 .contains("HOLD", "CLOSE_ALL", "ROLL");
         assertThat(analyzed.at("/capacity/packageMatchStatus").asText())
                 .isEqualTo("NO_OBJECTIVE_REVISION");
+        assertThat(analyzed.at("/decision/analysis/schemaVersion").asText())
+                .isEqualTo("position-lifecycle-decision-v1");
+        assertThat(analyzed.at("/decision/receiptFingerprint").asText()).hasSize(64);
+        assertThat(analyzed.at("/decision/analysis/dimensions")).hasSize(7);
 
         String positionFingerprint = analyzed.at("/lifecycle/positionFingerprint").asText();
         HttpResponse<String> capacityRevision = post("/api/portfolio/accounts/" + id + "/objective", """
@@ -1632,6 +1636,24 @@ class ApiIntegrationTest {
         assertThat(analyzedWithCapacity.at("/evaluation/assessment/economics"))
                 .as("capacity declarations may alter fit later, but cannot alter EV inputs or outputs")
                 .isEqualTo(analyzed.at("/evaluation/assessment/economics"));
+        assertThat(analyzedWithCapacity.at("/decision/analysis/policy/policyId").asText())
+                .isEqualTo("STANDARD_V1");
+        String lifecycleReceiptId = analyzedWithCapacity.at("/decision/receiptId").asText();
+        HttpResponse<String> personalDecision = post("/api/portfolio/accounts/" + id
+                + "/lifecycle-decisions", """
+                {"receiptId":"%s","decision":"KEEP","selectedAction":"HOLD",
+                 "note":"Personal choice stays beside the named policy."}
+                """.formatted(lifecycleReceiptId));
+        assertThat(personalDecision.statusCode()).as(personalDecision.body()).isEqualTo(201);
+        JsonNode resurfaced = Json.parse(post("/api/portfolio/accounts/" + id + "/analyze",
+                trackedAnalysisRequest).body());
+        assertThat(resurfaced.at("/decision/latestUserDecision/decision").asText()).isEqualTo("KEEP");
+        assertThat(resurfaced.at("/decision/latestUserDecision/note").asText())
+                .contains("stays beside");
+        assertThat(resurfaced.at("/decision/analysis/verdict").asText()).isNotBlank();
+        assertThat(post("/api/portfolio/accounts/" + id + "/lifecycle-decisions", """
+                {"receiptId":"missing","decision":"KEEP","selectedAction":"HOLD"}
+                """).statusCode()).isEqualTo(404);
 
         HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
                 {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",

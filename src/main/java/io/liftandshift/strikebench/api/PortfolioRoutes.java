@@ -23,6 +23,7 @@ public final class PortfolioRoutes {
             Handler getObjective,
             Handler declareObjective,
             Handler analyzePackage,
+            Handler recordLifecycleDecision,
             Handler transactions,
             Handler createTransaction,
             Handler lots,
@@ -59,6 +60,7 @@ public final class PortfolioRoutes {
         config.routes.get("/api/portfolio/accounts/{id}/objective", h.getObjective());
         config.routes.post("/api/portfolio/accounts/{id}/objective", h.declareObjective());
         config.routes.post("/api/portfolio/accounts/{id}/analyze", h.analyzePackage());
+        config.routes.post("/api/portfolio/accounts/{id}/lifecycle-decisions", h.recordLifecycleDecision());
         config.routes.get("/api/portfolio/accounts/{id}/transactions", h.transactions());
         config.routes.post("/api/portfolio/accounts/{id}/transactions", h.createTransaction());
         config.routes.get("/api/portfolio/accounts/{id}/lots", h.lots());
