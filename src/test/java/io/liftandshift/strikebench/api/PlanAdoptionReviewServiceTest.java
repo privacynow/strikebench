@@ -180,6 +180,6 @@ class PlanAdoptionReviewServiceTest {
                         "market-fingerprint", "model-fingerprint", "FACTS_ONLY",
                         List.of("preview", "evaluation"), List.of()));
         return new ApiResponses.TrackedPackageAnalysis(null, null, null, accountId,
-                "Existing-position IRA", 0L, "OBSERVED", "Read only.", lifecycle);
+                "Existing-position IRA", 0L, "OBSERVED", "Read only.", lifecycle, null);
     }
 }

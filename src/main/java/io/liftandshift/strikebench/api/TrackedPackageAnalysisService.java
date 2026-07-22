@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
 import io.liftandshift.strikebench.eval.PortfolioExposureContext;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
+import io.liftandshift.strikebench.paper.BookActionProjectionService;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.position.PositionDomain;
@@ -24,15 +25,18 @@ final class TrackedPackageAnalysisService {
     private final EvaluationService evaluations;
     private final AccountObjectiveService objectives;
     private final HeldPositionEconomicsService lifecycle;
+    private final BookActionProjectionService bookActions;
 
     TrackedPackageAnalysisService(PortfolioAccountingService books, TradeService trades,
                                   EvaluationService evaluations, AccountObjectiveService objectives,
-                                  HeldPositionEconomicsService lifecycle) {
+                                  HeldPositionEconomicsService lifecycle,
+                                  BookActionProjectionService bookActions) {
         this.books = books;
         this.trades = trades;
         this.evaluations = evaluations;
         this.objectives = objectives;
         this.lifecycle = lifecycle;
+        this.bookActions = bookActions;
     }
 
     ApiResponses.TrackedPackageAnalysis analyze(String ownerId, String accountId,
@@ -51,6 +55,7 @@ final class TrackedPackageAnalysisService {
                 declaredAccountObjective(ownerId, accountId));
         String lane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
         var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
+        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation);
         return new ApiResponses.TrackedPackageAnalysis(preview,
                 ApiResponses.EvaluationReceipt.of(evaluation),
                 identity,
@@ -58,7 +63,8 @@ final class TrackedPackageAnalysisService {
                 "Read-only analysis uses " + lane.toLowerCase(java.util.Locale.ROOT)
                         + " evidence and this tracked account's cash. It never changes tracked lots,"
                         + " tracked tax basis, campaign accounting, or the Practice account.",
-                lifecycle.compose(request, preview, evaluation));
+                lifecycleReceipt,
+                bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary));
     }
 
     private DeclaredObjective declaredAccountObjective(String ownerId, String accountId) {

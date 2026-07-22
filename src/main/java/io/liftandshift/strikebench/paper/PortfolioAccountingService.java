@@ -1451,6 +1451,15 @@ public final class PortfolioAccountingService {
                 complete, List.copyOf(notes));
     }
 
+    /**
+     * Read-only projection seam for lifecycle analysis. The canonical pairing algorithm above is
+     * reused against caller-supplied copies of lots; no tracked row or balance is mutated.
+     */
+    public CollateralView projectCollateral(List<LotView> hypotheticalLots, long hypotheticalCashCents) {
+        return collateral(hypotheticalLots == null ? List.of() : List.copyOf(hypotheticalLots),
+                hypotheticalCashCents);
+    }
+
     private static List<CollateralLot> collateralLots(List<LotView> lots, String type, String side) {
         Comparator<LotView> byStrike = "PUT".equals(type)
                 ? Comparator.comparing(LotView::strike).reversed()

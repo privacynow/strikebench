@@ -327,8 +327,11 @@ public final class ApiServer {
                 db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades);
         var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(
                 clock, eventCalendar);
+        var bookActionProjections = new io.liftandshift.strikebench.paper.BookActionProjectionService(
+                portfolioBooks, bookRisk, clock);
         var trackedPackageAnalyses = new TrackedPackageAnalysisService(
-                portfolioBooks, trades, evaluations, accountObjectives, heldPositionEconomics);
+                portfolioBooks, trades, evaluations, accountObjectives, heldPositionEconomics,
+                bookActionProjections);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,
                 portfolioExports, positions, trades, trackedPackageAnalyses,
                 accountObjectives, bookRisk,

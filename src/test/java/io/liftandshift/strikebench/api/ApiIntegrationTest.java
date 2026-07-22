@@ -1598,6 +1598,14 @@ class ApiIntegrationTest {
         assertThat(analyzed.at("/lifecycle/positionFingerprint").asText()).hasSize(64);
         assertThat(analyzed.at("/lifecycle/carryCollateral/concurrentCollateralIncome/authority").asText())
                 .isEqualTo("UNAVAILABLE");
+        assertThat(analyzed.at("/bookActions/schemaVersion").asText())
+                .isEqualTo("book-action-projection-v1");
+        assertThat(analyzed.at("/bookActions/positionFingerprint").asText())
+                .isEqualTo(analyzed.at("/lifecycle/positionFingerprint").asText());
+        assertThat(java.util.stream.StreamSupport.stream(
+                        analyzed.withObject("/bookActions").withArray("actions").spliterator(), false)
+                .map(row -> row.get("action").asText()).toList())
+                .contains("HOLD", "CLOSE_ALL", "ROLL");
 
         HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
                 {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",
