@@ -1575,11 +1575,13 @@ class ApiIntegrationTest {
 
         String expiration = Json.parse(get("/api/research/AAPL").body())
                 .withArray("expirations").get(2).asText();
-        HttpResponse<String> analyzedResponse = post("/api/portfolio/accounts/" + id + "/analyze", """
+        String trackedAnalysisRequest = """
                 {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":1,"source":"API_TEST","fillNature":"PROPOSED","legs":[
                   {"action":"BUY","type":"CALL","strike":"250","expiration":"%s","ratio":1,"multiplier":100,"positionEffect":"OPEN"},
                   {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,"multiplier":100,"positionEffect":"OPEN"}]}
-                """.formatted(expiration, expiration));
+                """.formatted(expiration, expiration);
+        HttpResponse<String> analyzedResponse = post("/api/portfolio/accounts/" + id + "/analyze",
+                trackedAnalysisRequest);
         assertThat(analyzedResponse.statusCode()).as(analyzedResponse.body()).isEqualTo(200);
         JsonNode analyzed = Json.parse(analyzedResponse.body());
         assertThat(analyzed.get("marketLane").asText()).isEqualTo("DEMO");
@@ -1606,6 +1608,30 @@ class ApiIntegrationTest {
                         analyzed.withObject("/bookActions").withArray("actions").spliterator(), false)
                 .map(row -> row.get("action").asText()).toList())
                 .contains("HOLD", "CLOSE_ALL", "ROLL");
+        assertThat(analyzed.at("/capacity/packageMatchStatus").asText())
+                .isEqualTo("NO_OBJECTIVE_REVISION");
+
+        String positionFingerprint = analyzed.at("/lifecycle/positionFingerprint").asText();
+        HttpResponse<String> capacityRevision = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"DIRECTIONAL","direction":"BULLISH","assignmentPreference":"ACCEPT",
+                 "packageCapacities":[{"positionFingerprint":"%s","symbol":"AAPL",
+                   "acceptedCallAwayShares":100,"acceptedCallAwayProceedsCents":2600000}],
+                 "capacityPolicy":{"symbolCeilings":[{"key":"AAPL","maxCents":5000000,
+                   "enforcement":"ADVISORY"}],"expiryCeilings":[{"key":"%s","maxCents":7500000,
+                   "enforcement":"HARD"}],"encumbranceCeiling":{"maxCents":10000000,
+                   "enforcement":"HARD"}}}
+                """.formatted(positionFingerprint, expiration));
+        assertThat(capacityRevision.statusCode()).as(capacityRevision.body()).isEqualTo(201);
+        JsonNode analyzedWithCapacity = Json.parse(post("/api/portfolio/accounts/" + id + "/analyze",
+                trackedAnalysisRequest).body());
+        assertThat(analyzedWithCapacity.at("/capacity/packageMatchStatus").asText())
+                .isEqualTo("EXACT_FINGERPRINT");
+        assertThat(analyzedWithCapacity.at("/capacity/packageCapacity/acceptedCallAwayShares").asLong())
+                .isEqualTo(100L);
+        assertThat(analyzedWithCapacity.at("/capacity/basis").asText()).contains("never valuation or EV");
+        assertThat(analyzedWithCapacity.at("/evaluation/assessment/economics"))
+                .as("capacity declarations may alter fit later, but cannot alter EV inputs or outputs")
+                .isEqualTo(analyzed.at("/evaluation/assessment/economics"));
 
         HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
                 {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",
