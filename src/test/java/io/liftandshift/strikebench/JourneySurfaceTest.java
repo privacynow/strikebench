@@ -470,6 +470,8 @@ class JourneySurfaceTest {
                 "src/main/java/io/liftandshift/strikebench/eval/EvaluationService.java"));
         String scanner = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/recommend/OpportunityScanner.java"));
+        String frontier = Files.readString(Path.of(
+                "src/main/java/io/liftandshift/strikebench/recommend/RedeploymentFrontier.java"));
         String discovery = Files.readString(Path.of(
                 "src/main/java/io/liftandshift/strikebench/api/DiscoveryController.java"));
 
@@ -477,8 +479,13 @@ class JourneySurfaceTest {
                 "newVirtualThreadPerTaskExecutor", "Semaphore");
         assertThat(scanner).contains("class OpportunityScanner", "newVirtualThreadPerTaskExecutor",
                 "evaluations.evaluate(", "evaluations.persist(");
-        assertThat(discovery).contains("opportunityScanner.scan(")
+        assertThat(discovery).contains("opportunityScanner.scanWithFrontier(",
+                        "auto.runWithFrontier(")
                 .doesNotContain("evaluations.scan(");
+        assertThat(frontier).contains("Pure composition over the existing Scout evaluations",
+                        "CompensationView", "PortfolioImpactComposer", "assessCapacity")
+                .doesNotContain("new RecommendationEngine", "new OpportunityScanner",
+                        "new EvaluationService", "MarketDataService", "routes.");
     }
 
     @Test void trackedAccountTaxCopyPreservesTheReconciliationBoundary() throws Exception {

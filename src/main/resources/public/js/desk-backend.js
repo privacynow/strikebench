@@ -3581,8 +3581,9 @@
   }
 
   /**
-   * Bounded, explicit opportunity scan for a user-selected market theme.  It reuses the canonical
-   * Universe Scout and never runs automatically while Home paints or warms a broad provider set.
+   * Explicit opportunity scan through the canonical Universe Scout. When no watchlist is supplied,
+   * the server owns the configured active universe; Home never duplicates universe selection. The
+   * scan remains user-triggered so painting Home cannot silently spend a provider allowance.
    */
   async function scoutOpportunities(options) {
     if (!state.enabled) return null;
@@ -3590,19 +3591,21 @@
     var universe = Array.isArray(options.universe) ? options.universe.map(function (symbol) {
       return String(symbol || '').trim().toUpperCase();
     }).filter(Boolean) : [];
-    if (!universe.length) throw new Error('Choose at least one symbol for the opportunity scan.');
     var body = {
-      universe: universe,
       horizons: Array.isArray(options.horizons) && options.horizons.length
         ? options.horizons : ['45d'],
-      maxPicks: Math.max(1, Math.min(universe.length, Number(options.maxPicks || universe.length))),
+      maxPicks: Math.max(1, Math.min(universe.length || 12,
+        Number(options.maxPicks || Math.min(universe.length || 5, 5)))),
       riskMode: String(options.riskMode || 'balanced').toLowerCase(),
       allow0dte: false,
       intents: Array.isArray(options.intents) && options.intents.length
         ? options.intents : ['INCOME']
     };
+    if (universe.length) body.universe = universe;
     if (options.maxLossCents != null) body.maxLossCents = Number(options.maxLossCents);
     if (options.filters) body.filters = options.filters;
+    if (options.destinationAccountId) body.destinationAccountId = String(options.destinationAccountId);
+    if (options.redeployment) body.redeployment = options.redeployment;
     return requireApi().post('/api/research/scout', body);
   }
 

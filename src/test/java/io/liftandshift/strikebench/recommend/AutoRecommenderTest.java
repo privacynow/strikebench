@@ -366,4 +366,59 @@ class AutoRecommenderTest {
                 .map(CompensationView.CompensationEntry::score).toList();
         assertThat(yields).isSortedAccordingTo(java.util.Comparator.reverseOrder());
     }
+
+    @Test
+    void redeploymentFrontierKeepsEconomicsCompensationAndBookPolicySeparate() {
+        AutoRecommender.AutoResult raw = auto.run(new AutoRecommender.AutoRequest(
+                List.of("AAPL", "SPY"), List.of("month"), 2, null, null, null, null,
+                "balanced", false, List.of("INCOME"), null, null), BP);
+        List<io.liftandshift.strikebench.eval.StrategyEvaluation> evaluations = raw.picks().stream()
+                .flatMap(pick -> pick.horizons().stream())
+                .flatMap(horizon -> horizon.candidates().stream())
+                .map(AutoRecommender.ScoredCandidate::evaluation).toList();
+        assertThat(evaluations).isNotEmpty();
+        String symbol = evaluations.getFirst().symbol();
+        var practiceExposure = new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
+                0, 0, 0, true, "exact Practice exposure");
+        var realExposure = new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.REAL,
+                0, 0, 0, true, "tracked exposure receipt");
+        var hardLimit = new io.liftandshift.strikebench.paper.AccountObjectiveService.AccountCapacityPolicy(
+                List.of(new io.liftandshift.strikebench.paper.AccountObjectiveService.ScopedCeiling(
+                        symbol, 1L,
+                        io.liftandshift.strikebench.paper.AccountObjectiveService.Enforcement.HARD)),
+                List.of(), List.of(), null);
+        var lanes = List.of(
+                new RedeploymentFrontier.BookLane("PRACTICE", "practice", "Practice",
+                        practiceExposure, null, null, 0L, "SYSTEM_CALCULATED"),
+                new RedeploymentFrontier.BookLane("REAL", "tracked", "Tracked",
+                        realExposure, null, hardLimit, 0L, "MODEL_DERIVED"));
+        var universe = new RedeploymentFrontier.UniverseScope(
+                "ACTIVE", "Current universe", List.of("AAPL", "SPY"));
+
+        var result = RedeploymentFrontier.compose(evaluations, raw.compensation(),
+                new RedeploymentFrontier.Context(universe, "tracked", lanes, null));
+
+        assertThat(result.decisionRanking()).hasSameSizeAs(evaluations);
+        assertThat(result.compensationRanking()).containsExactlyElementsOf(raw.compensation());
+        assertThat(result.compensationBasis()).contains("never replaces");
+        assertThat(result.decisionRanking()).allSatisfy(entry -> {
+            assertThat(entry.dataCompleteness().basis()).contains("existing input");
+            assertThat(entry.bookImpacts()).extracting(RedeploymentFrontier.LaneImpact::lane)
+                    .containsExactly("PRACTICE", "REAL");
+        });
+        assertThat(result.decisionRanking().stream()
+                .filter(entry -> entry.symbol().equals(symbol)).toList())
+                .allSatisfy(entry -> assertThat(entry.qualification()).isEqualTo("ACCOUNT_BLOCKED"));
+
+        var source = new RedeploymentFrontier.RedeploymentSource("pldr_test", "tracked", symbol,
+                "CLOSE_ALL", 1, 4_700L, 1L, -10_000L, null, null,
+                "EXECUTABLE", "frozen lifecycle action");
+        var redeployment = RedeploymentFrontier.compose(evaluations, raw.compensation(),
+                new RedeploymentFrontier.Context(universe, "tracked", lanes, source));
+        assertThat(redeployment.notes()).anyMatch(note -> note.contains("Capital optionality is restored"));
+        assertThat(redeployment.decisionRanking()).allSatisfy(entry ->
+                assertThat(entry.replacement().status()).isEqualTo("DOES_NOT_QUALIFY"));
+    }
 }

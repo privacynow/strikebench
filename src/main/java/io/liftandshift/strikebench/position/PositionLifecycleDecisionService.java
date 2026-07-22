@@ -99,6 +99,14 @@ public final class PositionLifecycleDecisionService {
     public record SurfacedReceipt(String receiptId, String receiptFingerprint,
                                   DecisionAnalysis analysis, UserDecision latestUserDecision) {}
 
+    /** Exact frozen close facts for Scout's optional redeployment comparison. */
+    public record ResolvedAction(String receiptId, String accountId, String symbol,
+                                 String action, int quantity, Long executableCloseCostCents,
+                                 Long capitalReleasedCents, Long closingPnlCents,
+                                 BookActionProjectionService.BookSnapshot postActionBook,
+                                 BookActionProjectionService.BasisEffect basisEffect,
+                                 String authority, String basis) {}
+
     private record CapacityResult(Dimension dimension, boolean assignmentActive) {}
 
     private final Db db;
@@ -248,6 +256,68 @@ public final class PositionLifecycleDecisionService {
                             "VALUES(?,?,?,?,?,?,?,?)",
                     id, input.receiptId(), owner, decision.name(), selected, input.quantity(), note, at);
             return new UserDecision(id, input.receiptId(), decision, selected, input.quantity(), note, at);
+        });
+    }
+
+    /**
+     * Resolves a close-to-redeploy source from the exact lifecycle receipt that crossed the wire.
+     * Client-supplied costs, released capital, Book state, and tax basis are never trusted.
+     */
+    public ResolvedAction resolveAction(String userId, String accountId, String receiptId,
+                                        String requestedAction, Integer requestedQuantity) {
+        String action = clean(requestedAction, "redeployment action");
+        if (!action.startsWith("CLOSE_")) {
+            throw new IllegalArgumentException("redeployment must begin with a frozen close action");
+        }
+        if (requestedQuantity == null || requestedQuantity <= 0) {
+            throw new IllegalArgumentException("redeployment close quantity must be positive");
+        }
+        return db.with(c -> {
+            String owner = OwnerScope.ensure(c, userId);
+            requireOwnedAccount(c, owner, accountId);
+            List<FrozenReceipt> rows = Db.queryOn(c,
+                    "SELECT lifecycle_json::text lifecycle,book_actions_json::text actions "
+                            + "FROM position_lifecycle_decision_receipt "
+                            + "WHERE id=? AND user_id=? AND portfolio_account_id=?",
+                    row -> new FrozenReceipt(
+                            Json.read(row.str("lifecycle"), PositionLifecycleReceipt.class),
+                            Json.read(row.str("actions"), BookActionProjectionService.ProjectionSet.class)),
+                    receiptId, owner, accountId);
+            if (rows.isEmpty()) {
+                throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                        "No lifecycle receipt " + receiptId + " in this account");
+            }
+            FrozenReceipt frozen = rows.getFirst();
+            BookActionProjectionService.ActionProjection selected = frozen.actions().actions().stream()
+                    .filter(candidate -> action.equals(candidate.action()))
+                    .filter(candidate -> requestedQuantity == candidate.quantityAffected())
+                    .filter(BookActionProjectionService.ActionProjection::available)
+                    .findFirst().orElseThrow(() -> new IllegalArgumentException(
+                            "redeployment action and quantity are not available in the frozen receipt"));
+            BookActionProjectionService.ActionProjection hold = frozen.actions().actions().stream()
+                    .filter(candidate -> "HOLD".equals(candidate.action()))
+                    .findFirst().orElseThrow(() -> new IllegalStateException(
+                            "frozen lifecycle receipt has no HOLD snapshot"));
+            Long cost = selected.executableCost() == null
+                    || selected.executableCost().signedNetCashCents() == null ? null
+                    : Math.max(0, -selected.executableCost().signedNetCashCents());
+            Long released = hold.snapshot() == null || selected.snapshot() == null
+                    || hold.snapshot().encumbrance() == null || selected.snapshot().encumbrance() == null
+                    || hold.snapshot().encumbrance().cents() == null
+                    || selected.snapshot().encumbrance().cents() == null ? null
+                    : Math.max(0, Math.subtractExact(hold.snapshot().encumbrance().cents(),
+                            selected.snapshot().encumbrance().cents()));
+            int totalQuantity = Math.addExact(selected.quantityAffected(), selected.quantityRemaining());
+            Long pnl = frozen.lifecycle().history().netPnlIfClosedCents() == null ? null
+                    : proportional(frozen.lifecycle().history().netPnlIfClosedCents(),
+                            selected.quantityAffected(), totalQuantity);
+            String authority = selected.executableCost() == null
+                    || selected.executableCost().authority() == null ? "UNAVAILABLE"
+                    : selected.executableCost().authority().name();
+            return new ResolvedAction(receiptId, accountId, frozen.lifecycle().symbol(),
+                    action, requestedQuantity, cost, released, pnl, selected.snapshot(),
+                    selected.basisEffect(), authority,
+                    "Resolved from immutable lifecycle_json and book_actions_json; no client financial amount is accepted.");
         });
     }
 
@@ -445,29 +515,40 @@ public final class PositionLifecycleDecisionService {
                                                 BookActionProjectionService.ActionProjection hold,
                                                 List<BookActionProjectionService.ActionProjection> closes) {
         if (policy == null || hold == null || hold.snapshot() == null) return List.of();
+        List<AccountObjectiveService.CapacityCheck> current =
+                AccountObjectiveService.assessCapacity(policy, usage(hold.snapshot()));
         List<LimitCheck> out = new ArrayList<>();
-        for (var ceiling : policy.symbolCeilings()) out.add(limit("SYMBOL", ceiling.key(),
-                ceiling.maxCents(), ceiling.enforcement(), hold, closes));
-        for (var ceiling : policy.themeCeilings()) out.add(limit("THEME", ceiling.key(),
-                ceiling.maxCents(), ceiling.enforcement(), hold, closes));
-        for (var ceiling : policy.expiryCeilings()) out.add(limit("EXPIRY", ceiling.key(),
-                ceiling.maxCents(), ceiling.enforcement(), hold, closes));
-        if (policy.encumbranceCeiling() != null) out.add(limit("ENCUMBRANCE", "ACCOUNT",
-                policy.encumbranceCeiling().maxCents(), policy.encumbranceCeiling().enforcement(),
-                hold, closes));
+        for (AccountObjectiveService.CapacityCheck check : current) {
+            Integer restored = closes.stream().filter(close -> close.snapshot() != null)
+                    .filter(close -> AccountObjectiveService.assessCapacity(policy, usage(close.snapshot())).stream()
+                            .filter(next -> next.scope().equals(check.scope()) && next.key().equals(check.key()))
+                            .noneMatch(AccountObjectiveService.CapacityCheck::breached))
+                    .map(BookActionProjectionService.ActionProjection::quantityAffected)
+                    .findFirst().orElse(null);
+            out.add(new LimitCheck(check.scope(), check.key(), check.maxCents(), check.enforcement(),
+                    check.currentCents() == null ? Long.MAX_VALUE : check.currentCents(),
+                    check.breached(), restored, check.basis()));
+        }
         return List.copyOf(out);
     }
 
-    private static LimitCheck limit(String scope, String key, long max,
-                                    AccountObjectiveService.Enforcement enforcement,
-                                    BookActionProjectionService.ActionProjection hold,
-                                    List<BookActionProjectionService.ActionProjection> closes) {
-        long current = limitValue(scope, key, hold.snapshot());
-        Integer restored = closes.stream().filter(close -> close.snapshot() != null)
-                .filter(close -> limitValue(scope, key, close.snapshot()) <= max)
-                .map(BookActionProjectionService.ActionProjection::quantityAffected).findFirst().orElse(null);
-        return new LimitCheck(scope, key, max, enforcement, current, current > max, restored,
-                "Values come from each canonical BookRiskService/PortfolioAccountingService hypothetical snapshot.");
+    private static AccountObjectiveService.CapacityUsage usage(
+            BookActionProjectionService.BookSnapshot snapshot) {
+        Map<String, Long> symbols = new LinkedHashMap<>();
+        Map<String, Long> themes = new LinkedHashMap<>();
+        Map<String, Long> expiries = new LinkedHashMap<>();
+        if (snapshot != null && snapshot.risk() != null) {
+            snapshot.risk().themes().symbolNotionals().forEach(row ->
+                    symbols.merge(row.symbol().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
+            snapshot.risk().themes().rows().forEach(row ->
+                    themes.merge(row.label().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
+            snapshot.risk().expiries().rows().forEach(row ->
+                    expiries.merge(row.date().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
+        }
+        Long encumbrance = snapshot == null || snapshot.encumbrance() == null
+                ? null : snapshot.encumbrance().cents();
+        return new AccountObjectiveService.CapacityUsage(symbols, themes, expiries, encumbrance,
+                "Values come from the canonical BookRiskService/PortfolioAccountingService hypothetical snapshot.");
     }
 
     private static long limitValue(String scope, String key,
@@ -528,6 +609,13 @@ public final class PositionLifecycleDecisionService {
                                                     AccountObjectiveService.LifecyclePolicy policy) {
         return remaining != null && policy.harvestRemainingPremiumMaxCents() != null
                 && remaining <= policy.harvestRemainingPremiumMaxCents();
+    }
+
+    private static long proportional(long amount, int quantity, int totalQuantity) {
+        if (quantity == totalQuantity) return amount;
+        return java.math.BigDecimal.valueOf(amount).multiply(java.math.BigDecimal.valueOf(quantity))
+                .divide(java.math.BigDecimal.valueOf(totalQuantity), 0,
+                        java.math.RoundingMode.HALF_UP).longValueExact();
     }
 
     private static Dimension dimension(String name, String status, Verdict signal, String reason) {
@@ -603,4 +691,7 @@ public final class PositionLifecycleDecisionService {
             throw new IllegalStateException("Unable to fingerprint lifecycle decision receipt", e);
         }
     }
+
+    private record FrozenReceipt(PositionLifecycleReceipt lifecycle,
+                                 BookActionProjectionService.ProjectionSet actions) {}
 }

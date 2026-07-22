@@ -44,8 +44,23 @@ public final class AutoRecommender {
             Boolean allow0dte,
             List<String> intents,           // required StrategyIntent names
             RecommendationEngine.Filters filters, // optional hard screens per candidate
-            String thesisOverride           // optional Plan-owned thesis for focused single-view scans
-    ) {}
+            String thesisOverride,          // optional Plan-owned thesis for focused single-view scans
+            String destinationAccountId,    // optional tracked destination; null = active Practice account
+            RedeploymentRequest redeployment // optional frozen lifecycle close action
+    ) {
+        /** Compatibility shape retained for every pre-frontier caller. */
+        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
+                           Long targetProfitCents, Long maxLossCents, Double maxRiskPctOfAccount,
+                           Double minConfidence, String riskMode, Boolean allow0dte,
+                           List<String> intents, RecommendationEngine.Filters filters,
+                           String thesisOverride) {
+            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
+                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
+                    filters, thesisOverride, null, null);
+        }
+    }
+
+    public record RedeploymentRequest(String lifecycleReceiptId, String action, Integer quantity) {}
 
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
@@ -100,11 +115,21 @@ public final class AutoRecommender {
     public record AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
                              long riskBudgetCents, String disclaimer,
                              List<CompensationView.CompensationEntry> compensation,
-                             String compensationBasis) {
+                             String compensationBasis,
+                             RedeploymentFrontier.Result frontier) {
         /** Pre-compensation-view constructor keeps existing callers' shape. */
         public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
                           long riskBudgetCents, String disclaimer) {
-            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null);
+            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null, null);
+        }
+
+        /** Compatibility shape for callers that predate the Book-aware frontier. */
+        public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
+                          long riskBudgetCents, String disclaimer,
+                          List<CompensationView.CompensationEntry> compensation,
+                          String compensationBasis) {
+            this(picks, skipped, notes, riskBudgetCents, disclaimer,
+                    compensation, compensationBasis, null);
         }
     }
 
@@ -133,6 +158,32 @@ public final class AutoRecommender {
 
     /** World-aware: a simulated session's scan reads and prices against THAT world. null = observed. */
     public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings, String worldId) {
+        return run(req, buyingPowerCents, holdings, worldId, null);
+    }
+
+    /**
+     * Book-aware variant. Candidate generation/evaluation remains unchanged; the optional context
+     * only composes the separate redeployment frontier after the canonical evaluations exist.
+     */
+    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings,
+                          String worldId, RedeploymentFrontier.Context frontierContext) {
+        return runInternal(req, buyingPowerCents, holdings, worldId,
+                frontierContext == null ? null : ignored -> frontierContext);
+    }
+
+    /** Builds Book context only after the surfaced symbols are known, avoiding broad repeated marks. */
+    public AutoResult runWithFrontier(AutoRequest req, long buyingPowerCents,
+                                      List<HoldingInfo> holdings, String worldId,
+                                      java.util.function.Function<List<StrategyEvaluation>,
+                                              RedeploymentFrontier.Context> contextFactory) {
+        if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
+        return runInternal(req, buyingPowerCents, holdings, worldId, contextFactory);
+    }
+
+    private AutoResult runInternal(AutoRequest req, long buyingPowerCents,
+                                   List<HoldingInfo> holdings, String worldId,
+                                   java.util.function.Function<List<StrategyEvaluation>,
+                                           RedeploymentFrontier.Context> contextFactory) {
         DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         List<String> universe = req.universe() != null && !req.universe().isEmpty()
@@ -246,8 +297,12 @@ public final class AutoRecommender {
                 .flatMap(h -> h.candidates().stream())
                 .map(ScoredCandidate::evaluation)
                 .toList();
+        List<CompensationView.CompensationEntry> compensation =
+                CompensationView.compute(surfaced, evaluations, worldId);
+        RedeploymentFrontier.Result frontier = contextFactory == null ? null
+                : RedeploymentFrontier.compose(surfaced, compensation, contextFactory.apply(surfaced));
         return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER,
-                CompensationView.compute(surfaced, evaluations, worldId), CompensationView.BASIS);
+                compensation, CompensationView.BASIS, frontier);
     }
 
     /** Runs the engine per horizon for one symbol under one intent. */

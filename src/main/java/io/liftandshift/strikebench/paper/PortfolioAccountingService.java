@@ -238,12 +238,34 @@ public final class PortfolioAccountingService {
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
                                       boolean complete, String basis) {}
 
+    /** One observed tracked-book pass with every symbol subtotal for cross-symbol Scout. */
+    public record DollarDeltaBook(long grossCents, long netCents,
+                                  Map<String, Long> symbolGrossCents,
+                                  boolean complete, String basis) {
+        public DollarDeltaBook {
+            symbolGrossCents = symbolGrossCents == null ? Map.of() : Map.copyOf(symbolGrossCents);
+        }
+        public DollarDeltaExposure focus(String symbol) {
+            return new DollarDeltaExposure(grossCents, netCents,
+                    symbolGrossCents.getOrDefault(symbol == null ? "" : symbol.toUpperCase(Locale.ROOT), 0L),
+                    complete, basis);
+        }
+    }
+
     public record CollateralView(long knownBlockedCashCents, long cashSecuredPutObligationCents,
                                  Long availableCashCents,
                                  long cashSecuredPutContracts, long definedRiskPutContracts,
                                  long coveredCallContracts, long definedRiskCallContracts,
                                  long uncoveredShortCallShares, boolean complete,
-                                 List<String> notes) {}
+                                 List<String> notes, Map<String, Long> freeSharesBySymbol) {
+        public CollateralView {
+            notes = notes == null ? List.of() : List.copyOf(notes);
+            freeSharesBySymbol = freeSharesBySymbol == null ? Map.of() : Map.copyOf(freeSharesBySymbol);
+        }
+    }
+
+    /** Canonical tracked shares remaining after recorded covered-call encumbrance. */
+    public record EquityHolding(String symbol, long freeShares, long avgEconomicCostPerShareCents) {}
 
     public record PortfolioSummary(AccountProfile account, long bookCashCents,
                                    Long securitiesLiquidationValueCents, Long totalValueCents,
@@ -573,6 +595,29 @@ public final class PortfolioAccountingService {
                 + "WHERE l.portfolio_account_id=?" + (includeClosed ? "" : " AND l.status='OPEN'")
                 + " ORDER BY l.symbol,l.instrument_type,l.opened_at,t.record_seq,l.id";
         return db.query(sql, PortfolioAccountingService::mapLotView, account.id());
+    }
+
+    public List<EquityHolding> equityHoldings(String ownerId, String accountId) {
+        PortfolioSummary summary = summary(ownerId, accountId);
+        Map<String, long[]> basis = new LinkedHashMap<>();
+        for (LotView lot : lots(ownerId, accountId, false)) {
+            if (!"STOCK".equals(lot.instrumentType()) || !"LONG".equals(lot.side())) continue;
+            long[] bucket = basis.computeIfAbsent(lot.symbol(), ignored -> new long[2]);
+            bucket[0] = Math.addExact(bucket[0],
+                    Math.multiplyExact(lot.remainingQuantity(), (long) lot.multiplier()));
+            bucket[1] = Math.addExact(bucket[1], lot.economicRemainingOpenAmountCents());
+        }
+        List<EquityHolding> out = new ArrayList<>();
+        for (Map.Entry<String, Long> entry : summary.collateral().freeSharesBySymbol().entrySet()) {
+            long free = Math.max(0, entry.getValue());
+            long[] bucket = basis.get(entry.getKey());
+            if (free == 0 || bucket == null || bucket[0] <= 0) continue;
+            long avg = BigDecimal.valueOf(bucket[1]).divide(BigDecimal.valueOf(bucket[0]), 0,
+                    RoundingMode.HALF_UP).longValueExact();
+            out.add(new EquityHolding(entry.getKey(), free, avg));
+        }
+        out.sort(Comparator.comparing(EquityHolding::symbol));
+        return List.copyOf(out);
     }
 
     /**
@@ -1224,10 +1269,15 @@ public final class PortfolioAccountingService {
     }
 
     public DollarDeltaExposure portfolioDollarDelta(String ownerId, String accountId, String focusSymbol) {
+        return portfolioDollarDeltaBook(ownerId, accountId).focus(focusSymbol);
+    }
+
+    public DollarDeltaBook portfolioDollarDeltaBook(String ownerId, String accountId) {
         PortfolioSummary summary = summary(ownerId, accountId);
         Map<String, BigDecimal> underlyings = marks == null ? Map.of() : marks.underlyingMarks(
                 summary.positions().stream().map(PositionView::symbol).distinct().toList(), null);
-        long gross = 0, net = 0, focusGross = 0;
+        long gross = 0, net = 0;
+        Map<String, Long> bySymbol = new LinkedHashMap<>();
         boolean complete = summary.complete();
         for (PositionView position : summary.positions()) {
             BigDecimal underlying = underlyings.get(position.symbol());
@@ -1258,11 +1308,9 @@ public final class PortfolioAccountingService {
             long magnitude = absolute(delta, "dollar delta exposure");
             gross = Math.addExact(gross, magnitude);
             net = Math.addExact(net, delta);
-            if (position.symbol().equalsIgnoreCase(focusSymbol)) {
-                focusGross = Math.addExact(focusGross, magnitude);
-            }
+            bySymbol.merge(position.symbol().toUpperCase(Locale.ROOT), magnitude, Math::addExact);
         }
-        return new DollarDeltaExposure(gross, net, focusGross, complete,
+        return new DollarDeltaBook(gross, net, Map.copyOf(bySymbol), complete,
                 "Current tracked-account liquidation marks; each position retains its own provenance in the account summary."
                         + " Option dollar delta uses the disclosed model. This hypothetical overlay is not recorded P&L,"
                         + " cash, or tracked tax basis.");
@@ -1448,7 +1496,7 @@ public final class PortfolioAccountingService {
         return new CollateralView(blocked, cashSecuredPutObligation,
                 complete ? Math.subtractExact(cash, blocked) : null,
                 cashSecuredPuts, spreadPuts, coveredCalls, spreadCalls, uncoveredCallShares,
-                complete, List.copyOf(notes));
+                complete, List.copyOf(notes), Map.copyOf(freeShares));
     }
 
     /**

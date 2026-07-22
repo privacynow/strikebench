@@ -120,6 +120,23 @@ class PortfolioAccountingServiceTest {
     }
 
     @Test
+    void scoutEquityHoldingsReuseCanonicalCoveredSharePairingAndEconomicBasis() {
+        var account = books.createAccount("local", account("Income book", "TAXABLE", null));
+        books.record("local", account.id(), trade("2026-01-02", 0L,
+                leg("STOCK", "BUY", "OPEN", "AAPL", null, null, null, 150, 1, "100.00")));
+        books.record("local", account.id(), trade("2026-02-02", 0L,
+                leg("OPTION", "SELL", "OPEN", "AAPL", "CALL", "130", "2026-08-21",
+                        1, 100, "2.00")));
+
+        assertThat(books.equityHoldings("local", account.id()))
+                .singleElement().satisfies(holding -> {
+                    assertThat(holding.symbol()).isEqualTo("AAPL");
+                    assertThat(holding.freeShares()).isEqualTo(50);
+                    assertThat(holding.avgEconomicCostPerShareCents()).isEqualTo(10_000);
+                });
+    }
+
+    @Test
     void sameTimestampLotsUseAppendSequenceForDeterministicFifoAndLifo() {
         var fifo = books.createAccount("local", account("FIFO", "TAXABLE", null));
         books.record("local", fifo.id(), tx("2026-01-02", "TRADE", null, 0L, null, "BROKER", "fifo-first",

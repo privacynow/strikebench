@@ -346,7 +346,8 @@ public final class ApiServer {
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
         var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
         discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,
-                positions, trades, universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
+                positions, trades, portfolioBooks, accountObjectives, bookRisk, lifecycleDecisions,
+                universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
                 marketVolatility, planOutcomes, this::activeWorld, this::ownerId, this::analysisCtx,

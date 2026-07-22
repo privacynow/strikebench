@@ -10,12 +10,16 @@ import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.paper.Account;
+import io.liftandshift.strikebench.paper.AccountObjectiveService;
+import io.liftandshift.strikebench.paper.BookRiskService;
+import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
 import io.liftandshift.strikebench.recommend.OpportunityScanner;
+import io.liftandshift.strikebench.recommend.RedeploymentFrontier;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
@@ -28,7 +32,9 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Function;
 
 /** Owns strategy discovery, shared ranking, universe scans, and portfolio construction. */
@@ -43,6 +49,10 @@ final class DiscoveryController {
     private final AutoRecommender auto;
     private final PositionsService positions;
     private final TradeService trades;
+    private final PortfolioAccountingService portfolioBooks;
+    private final AccountObjectiveService accountObjectives;
+    private final BookRiskService bookRisk;
+    private final io.liftandshift.strikebench.position.PositionLifecycleDecisionService lifecycleDecisions;
     private final UniverseService universe;
     private final SimulationSessions simSessions;
     private final Clock clock;
@@ -55,7 +65,11 @@ final class DiscoveryController {
     DiscoveryController(Db db, MarketDataService market, EvaluationService evaluations,
                         OpportunityScanner opportunityScanner,
                         RecommendationEngine engine, AutoRecommender auto,
-                        PositionsService positions, TradeService trades, UniverseService universe,
+                        PositionsService positions, TradeService trades,
+                        PortfolioAccountingService portfolioBooks,
+                        AccountObjectiveService accountObjectives, BookRiskService bookRisk,
+                        io.liftandshift.strikebench.position.PositionLifecycleDecisionService lifecycleDecisions,
+                        UniverseService universe,
                         SimulationSessions simSessions, Clock clock,
                         io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility,
                         Function<Context, Account> accountResolver,
@@ -70,6 +84,10 @@ final class DiscoveryController {
         this.auto = auto;
         this.positions = positions;
         this.trades = trades;
+        this.portfolioBooks = portfolioBooks;
+        this.accountObjectives = accountObjectives;
+        this.bookRisk = bookRisk;
+        this.lifecycleDecisions = lifecycleDecisions;
         this.universe = universe;
         this.simSessions = simSessions;
         this.clock = clock;
@@ -330,7 +348,8 @@ final class DiscoveryController {
                 req == null ? null : req.intent(), req == null ? null : req.thesis(),
                 req == null ? null : req.horizon(), req == null ? null : req.riskMode(),
                 req == null ? null : req.objective());
-        String optWorld = worldParam(activeWorldResolver.apply(ctx));
+        String activeWorld = activeWorldResolver.apply(ctx);
+        String optWorld = worldParam(activeWorld);
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
                 ? req.universe()
                 : optWorld != null
@@ -339,15 +358,17 @@ final class DiscoveryController {
         Account acct = accountResolver.apply(ctx);
         String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
-        var scan = opportunityScanner.scan(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
+        RedeploymentFrontier.UniverseScope scope = universeScope(req.universe(), activeWorld, ownerId);
+        var scan = opportunityScanner.scanWithFrontier(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
                 acct.buyingPowerCents(), optWorld != null ? null : ownerId, Math.max(1, symbols.size()),
-                optWorld, rcOpt.riskCapitalCents());
+                optWorld, rcOpt.riskCapitalCents(), evaluations -> frontierContext(ownerId, acct,
+                        acct.id(), scope, null, evaluations, optWorld == null));
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
         var result = new io.liftandshift.strikebench.research.PortfolioOptimizer().optimize(scan.ranked(),
                 new io.liftandshift.strikebench.research.PortfolioOptimizer.Constraints(
                         budget, req.maxPerPositionCents(), req.maxPositions(), req.maxSymbolPct(), req.objective(),
                         Boolean.TRUE.equals(req.diagnostic())));
-        ctx.json(new ApiResponses.Optimization<>(result, scan.scanned(), scan.notes()));
+        ctx.json(new ApiResponses.Optimization<>(result, scan.scanned(), scan.notes(), scan.frontier()));
     }
 
     private void researchIntentLadder(Context ctx) {
@@ -430,6 +451,8 @@ final class DiscoveryController {
         AutoRecommender.AutoRequest req = ApiRequest.bodyOrNull(ctx, AutoRecommender.AutoRequest.class);
         DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         String world = activeWorldResolver.apply(ctx);
+        RedeploymentFrontier.UniverseScope scope = universeScope(req.universe(), world,
+                ownerResolver.apply(ctx));
         if (req.universe() == null || req.universe().isEmpty()) {
             // Default scan list: the selected universe — or, inside a simulated session, the
             // world's OWN symbols (the observed universe does not exist in that market).
@@ -439,9 +462,11 @@ final class DiscoveryController {
                             .orElseGet(() -> universe.active().symbols());
             req = new AutoRecommender.AutoRequest(scan, req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(),
-                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride());
+                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride(),
+                    req.destinationAccountId(), req.redeployment());
         }
         Account acct = accountResolver.apply(ctx);
+        String owner = ownerResolver.apply(ctx);
         // THE policy applies to the scout too (review IC-1): auto and manual recommendations
         // must size under the identical declared-capital cap.
         Long capAuto = RiskBudgetPolicy.effectiveMaxLossCents(
@@ -449,14 +474,146 @@ final class DiscoveryController {
         if (!java.util.Objects.equals(capAuto, req.maxLossCents())) {
             req = new AutoRecommender.AutoRequest(req.universe(), req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), capAuto, req.maxRiskPctOfAccount(), req.minConfidence(),
-                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride());
+                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride(),
+                    req.destinationAccountId(), req.redeployment());
         }
-        // Real holdings feed the EXIT/HEDGE scans and let INCOME write against held shares
-        List<AutoRecommender.HoldingInfo> held = positions.list(acct.id()).stream()
-                .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
-                        (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents()))
-                .toList();
-        ctx.json(auto.run(req, acct.buyingPowerCents(), held, worldParam(world)));
+        String destination = req.destinationAccountId() == null || req.destinationAccountId().isBlank()
+                ? acct.id() : req.destinationAccountId().trim();
+        if (!"observed".equals(world) && !destination.equals(acct.id())) {
+            throw new IllegalArgumentException(
+                    "A generated-market Scout cannot project a trade into a real tracked account");
+        }
+        io.liftandshift.strikebench.position.PositionLifecycleDecisionService.ResolvedAction resolved = null;
+        if (req.redeployment() != null) {
+            if (!"observed".equals(world)) {
+                throw new IllegalArgumentException("Tracked-position redeployment requires the observed market");
+            }
+            if (destination.equals(acct.id())) {
+                throw new IllegalArgumentException(
+                        "A tracked lifecycle receipt requires its tracked destination account id");
+            }
+            resolved = lifecycleDecisions.resolveAction(owner, destination,
+                    req.redeployment().lifecycleReceiptId(), req.redeployment().action(),
+                    req.redeployment().quantity());
+        }
+
+        List<AutoRecommender.HoldingInfo> held;
+        long destinationBuyingPower;
+        if (destination.equals(acct.id())) {
+            held = positions.list(acct.id()).stream()
+                    .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
+                            (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents()))
+                    .toList();
+            destinationBuyingPower = acct.buyingPowerCents();
+        } else {
+            var summary = portfolioBooks.summary(owner, destination);
+            held = portfolioBooks.equityHoldings(owner, destination).stream()
+                    .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
+                            (int) Math.min(Integer.MAX_VALUE, p.freeShares()),
+                            p.avgEconomicCostPerShareCents())).toList();
+            Long reported = summary.liquidity().genuinelyFreeBuyingPower().cents();
+            destinationBuyingPower = reported != null ? Math.max(0, reported)
+                    : resolved != null && resolved.capitalReleasedCents() != null
+                            ? resolved.capitalReleasedCents() : 0;
+        }
+        AutoRecommender.AutoRequest finalReq = req;
+        var finalResolved = resolved;
+        String finalDestination = destination;
+        boolean observedWorld = "observed".equals(world);
+        ctx.json(auto.runWithFrontier(finalReq, destinationBuyingPower, held, worldParam(world),
+                evaluations -> frontierContext(owner, acct, finalDestination, scope,
+                        finalResolved, evaluations, observedWorld)));
+    }
+
+    private RedeploymentFrontier.UniverseScope universeScope(List<String> requested, String world,
+                                                              String owner) {
+        if (requested == null || requested.isEmpty()) {
+            if (!"observed".equals(world)) {
+                var symbols = simSessions.getOrRestore(world, owner)
+                        .map(session -> List.copyOf(session.config().symbolBetas().keySet()))
+                        .orElseGet(() -> universe.active().symbols());
+                return new RedeploymentFrontier.UniverseScope("SIMULATED_WORLD",
+                        "Current generated market", symbols);
+            }
+            UniverseService.Active active = universe.active();
+            return new RedeploymentFrontier.UniverseScope(active.source().toUpperCase(Locale.ROOT),
+                    active.sectorLabel(), active.symbols());
+        }
+        List<String> normalized = requested.stream().filter(java.util.Objects::nonNull)
+                .map(value -> value.trim().toUpperCase(Locale.ROOT)).filter(value -> !value.isBlank())
+                .distinct().toList();
+        for (var sector : io.liftandshift.strikebench.market.Universes.SECTORS.values()) {
+            if (normalized.equals(sector.symbols())) {
+                return new RedeploymentFrontier.UniverseScope("THEME", sector.label(), normalized);
+            }
+        }
+        UniverseService.Active active = universe.active();
+        if (normalized.equals(active.symbols())) {
+            return new RedeploymentFrontier.UniverseScope(active.source().toUpperCase(Locale.ROOT),
+                    active.sectorLabel(), normalized);
+        }
+        return new RedeploymentFrontier.UniverseScope("WATCHLIST", "Selected watchlist", normalized);
+    }
+
+    private RedeploymentFrontier.Context frontierContext(
+            String owner, Account practice, String destination,
+            RedeploymentFrontier.UniverseScope scope,
+            io.liftandshift.strikebench.position.PositionLifecycleDecisionService.ResolvedAction resolved,
+            List<io.liftandshift.strikebench.eval.StrategyEvaluation> evaluations,
+            boolean includeTracked) {
+        List<String> symbols = evaluations.stream()
+                .map(io.liftandshift.strikebench.eval.StrategyEvaluation::symbol)
+                .filter(java.util.Objects::nonNull).map(value -> value.toUpperCase(Locale.ROOT))
+                .distinct().toList();
+        List<RedeploymentFrontier.BookLane> lanes = new java.util.ArrayList<>();
+        TradeService.DollarDeltaBook practiceDelta = trades.portfolioDollarDeltaBook(practice.id());
+        Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> practiceExposures =
+                new LinkedHashMap<>();
+        for (String symbol : symbols) {
+            var focused = practiceDelta.focus(symbol);
+            practiceExposures.put(symbol, new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                    io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
+                    focused.grossCents(), focused.netCents(), focused.focusSymbolGrossCents(),
+                    focused.complete(), focused.basis()));
+        }
+        lanes.add(new RedeploymentFrontier.BookLane("PRACTICE", practice.id(), practice.name(),
+                practiceExposures, null, null, practice.reservedCents(), "SYSTEM_CALCULATED"));
+
+        if (includeTracked) {
+            BookRiskService.Lane riskLane = bookRisk.lane(owner, null);
+            for (BookRiskService.AccountRisk risk : riskLane.accounts()) {
+                PortfolioAccountingService.PortfolioSummary summary =
+                        portfolioBooks.summary(owner, risk.accountId());
+                PortfolioAccountingService.DollarDeltaBook delta =
+                        portfolioBooks.portfolioDollarDeltaBook(owner, risk.accountId());
+                Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> exposures =
+                        new LinkedHashMap<>();
+                for (String symbol : symbols) {
+                    var focused = delta.focus(symbol);
+                    exposures.put(symbol, new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                            io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.REAL,
+                            focused.grossCents(), focused.netCents(), focused.focusSymbolGrossCents(),
+                            focused.complete(), focused.basis()));
+                }
+                AccountObjectiveService.Revision revision = accountObjectives.latest(owner, risk.accountId());
+                AccountObjectiveService.AccountCapacityPolicy policy = revision == null
+                        ? AccountObjectiveService.AccountCapacityPolicy.empty() : revision.capacityPolicy();
+                var reportedReserve = summary.liquidity().recordedOrReportedReserve();
+                Long encumbrance = reportedReserve.cents() != null ? reportedReserve.cents()
+                        : summary.collateral().knownBlockedCashCents();
+                String authority = reportedReserve.cents() != null
+                        ? reportedReserve.authority().name() : "MODEL_DERIVED";
+                lanes.add(new RedeploymentFrontier.BookLane("REAL", risk.accountId(), risk.name(),
+                        exposures, risk, policy, encumbrance, authority));
+            }
+        }
+        RedeploymentFrontier.RedeploymentSource source = resolved == null ? null
+                : new RedeploymentFrontier.RedeploymentSource(resolved.receiptId(), resolved.accountId(),
+                resolved.symbol(), resolved.action(), resolved.quantity(),
+                resolved.executableCloseCostCents(), resolved.capitalReleasedCents(),
+                resolved.closingPnlCents(), resolved.postActionBook(), resolved.basisEffect(),
+                resolved.authority(), resolved.basis());
+        return new RedeploymentFrontier.Context(scope, destination, lanes, source);
     }
 
 }

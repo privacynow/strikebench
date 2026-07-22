@@ -245,6 +245,19 @@ class ApiIntegrationTest {
         assertThat(pick.at("/bestIdea/economicVerdict").asText())
                 .isIn("FAVORABLE", "MIXED", "UNFAVORABLE", "UNAVAILABLE");
         assertThat(pick.get("horizons").size()).isEqualTo(2);
+        JsonNode frontier = json.get("frontier");
+        assertThat(frontier.at("/schemaVersion").asText()).isEqualTo("redeployment-frontier-v1");
+        assertThat(frontier.at("/universe/label").asText()).isNotBlank();
+        assertThat(frontier.at("/universe/symbols").size()).isGreaterThan(0);
+        assertThat(frontier.at("/destinationAccountId").asText()).isNotBlank();
+        assertThat(frontier.at("/decisionRanking").size()).isGreaterThan(0);
+        assertThat(frontier.at("/decisionRanking/0/bookImpacts").size()).isGreaterThan(0);
+        assertThat(frontier.at("/decisionRanking/0/qualification").asText()).isIn(
+                "QUALIFIED", "COMPARE_CAREFULLY", "ECONOMICS_UNAVAILABLE", "UNFAVORABLE",
+                "ACCOUNT_BLOCKED", "MECHANICALLY_BLOCKED");
+        assertThat(frontier.get("compensationRanking")).isEqualTo(json.get("compensation"));
+        assertThat(frontier.at("/notes/0").asText())
+                .contains("Decision economics and compensation are independent rankings");
         JsonNode candidates = pick.get("horizons").get(0).get("candidates");
         if (candidates.size() > 0) {
             assertThat(candidates.get(0).get("targetFit").asText()).isNotBlank();
@@ -1639,6 +1652,15 @@ class ApiIntegrationTest {
         assertThat(analyzedWithCapacity.at("/decision/analysis/policy/policyId").asText())
                 .isEqualTo("STANDARD_V1");
         String lifecycleReceiptId = analyzedWithCapacity.at("/decision/receiptId").asText();
+        HttpResponse<String> redeploymentResponse = post("/api/research/scout", """
+                {"universe":["AAPL"],"horizons":["month"],"maxPicks":1,
+                 "riskMode":"balanced","intents":["DIRECTIONAL"],
+                 "destinationAccountId":"%s","redeployment":{
+                   "lifecycleReceiptId":"%s","action":"CLOSE_ALL","quantity":1}}
+                """.formatted(id, lifecycleReceiptId));
+        assertThat(redeploymentResponse.statusCode()).isEqualTo(400);
+        assertThat(redeploymentResponse.body())
+                .contains("generated-market Scout cannot project a trade into a real tracked account");
         HttpResponse<String> personalDecision = post("/api/portfolio/accounts/" + id
                 + "/lifecycle-decisions", """
                 {"receiptId":"%s","decision":"KEEP","selectedAction":"HOLD",
