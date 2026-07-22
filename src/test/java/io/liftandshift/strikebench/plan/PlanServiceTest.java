@@ -96,6 +96,26 @@ class PlanServiceTest {
     }
 
     @Test
+    void aDecidedButStillActivePlanIsNotReopenedAsEquivalentToANewIdea() {
+        // Regression: a plan that has a decision (a trade was placed) is frozen — assumptions are no
+        // longer editable — even while its status is still ACTIVE. A new idea with the same
+        // declarations must mint a FRESH working plan instead of colliding with the frozen one
+        // (which the desk rejects as "did not return a mutable working Plan for this new idea").
+        Plan.View decided = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-decided", "AAPL", "INCOME", 30));
+        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,quote_as_of,economic_verdict,"
+                + "evidence_provenance,model_version,review_horizon_days,created_at,decision_seq) "
+                + "VALUES('dec-regression',?,1,'CASH',now(),'FAVORABLE','OBSERVED','test',30,now(),1)",
+                decided.id());
+        assertThat(plans.get(null, decided.id()).assumptionsEditable()).isFalse();
+
+        Plan.View fresh = plans.create(null, Plan.MarketKind.DEMO, null, null,
+                create("req-after-decision", "AAPL", "INCOME", 30));
+        assertThat(fresh.id()).isNotEqualTo(decided.id());
+        assertThat(fresh.assumptionsEditable()).isTrue();
+    }
+
+    @Test
     void concurrentEquivalentContentWithDifferentRequestIdsCreatesExactlyOnePlan() throws Exception {
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch go = new CountDownLatch(1);
