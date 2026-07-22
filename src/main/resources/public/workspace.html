@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StrikeBench</title>
+  <script>
+    // Theme must be decided BEFORE first paint or dark-mode users get a white flash.
+    // Modes: system (follow OS), light, dark. Stored under strikebench.theme.
+    (function () {
+      try {
+        var mode = localStorage.getItem('strikebench.theme') || 'system';
+        var dark = mode === 'dark' || (mode === 'system'
+          && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+    })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%232f6bde'/%3E%3Cstop%20offset='1'%20stop-color='%237c4fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='24'%20height='24'%20rx='6'%20fill='url(%23g)'/%3E%3Cpath%20d='M5%2019h14'%20stroke='rgba(255,255,255,.4)'%20stroke-width='1.2'%20stroke-linecap='round'%20stroke-dasharray='1.4%202.6'/%3E%3Cpath%20d='M5%2015.5h6l7.5-8.5'%20stroke='%23fff'%20stroke-width='2.2'%20fill='none'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='11'%20cy='15.5'%20r='1.9'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/css/app.css?v=@asset.version@">
+  <link rel="stylesheet" href="/css/workspace.css?v=@asset.version@">
+  <link rel="stylesheet" href="/css/learn.css?v=@asset.version@">
+</head>
+<body>
+  <a class="skip-link" href="#app">Skip to main content</a>
+  <header class="topbar">
+    <a class="brand" href="#/home" title="StrikeBench — your practice desk">
+      <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <defs><linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#2f6bde"/><stop offset="1" stop-color="#7c4fe0"/>
+        </linearGradient></defs>
+        <rect width="24" height="24" rx="6" fill="url(#bm-g)"/>
+        <path d="M5 19h14" stroke="rgba(255,255,255,.4)" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="1.4 2.6"/>
+        <path d="M5 15.5h6l7.5-8.5" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="11" cy="15.5" r="1.9" fill="#fff"/>
+      </svg>
+      StrikeBench</a>
+    <nav class="nav" id="nav">
+      <a href="#/home" data-route="home">Desk<span class="nav-alert-badge" hidden></span></a>
+      <a href="#/research" data-route="research plan">Workspace</a>
+      <a href="#/portfolio/positions" data-route="portfolio">Book</a>
+      <a href="#/data/overview" data-route="data">Data</a>
+    </nav>
+    <div class="topbar-controls">
+      <input id="global-search" type="text" list="universe-symbols" placeholder="Search symbol  /"
+             autocomplete="off" spellcheck="false" aria-label="Search a ticker symbol">
+      <span id="lane-chip" class="badge badge-dim" aria-label="Active market: loading">MARKET</span>
+      <button id="theme-toggle" type="button" class="theme-toggle"
+              title="Theme: follows your system. Click to cycle System / Light / Dark."></button>
+      <a id="learn-link" class="learn-utility-link" href="#/learn"
+         title="Open the searchable terms and strategy guide">Learn</a>
+      <div class="risk-picker" id="header-risk-picker">
+        <span class="risk-picker-label">Risk</span>
+        <button id="risk-mode" class="risk-mode-trigger" type="button" value=""
+                aria-haspopup="true" aria-expanded="false" aria-controls="risk-mode-popover"
+                aria-label="Choose how much capital one new idea may put at risk">Choose</button>
+        <div id="risk-mode-popover" class="risk-mode-popover" hidden></div>
+      </div>
+      <div class="level-switch" id="level-switch" role="group" aria-label="Experience level"
+           title="Beginner: question-driven flows, plain language, extra safety context. Expert: dense, data-first screens with deeper analytics.">
+        <button data-level="beginner" type="button">Beginner</button>
+        <button data-level="expert" type="button">Expert</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="tape" class="tape" hidden aria-label="Universe ticker">
+    <select id="tape-sector" class="tape-sector" aria-label="Market sector"
+            title="Change the active sector used by market cards, ticker suggestions, and scans" hidden></select>
+    <div class="tape-scroll"><div class="tape-strip" id="tape-strip"></div></div>
+  </div>
+  <datalist id="universe-symbols"></datalist>
+
+  <main id="app" class="app" tabindex="-1">
+    <noscript>StrikeBench needs JavaScript enabled.</noscript>
+    <div class="loading">Loading…</div>
+  </main>
+  <div id="route-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <footer class="disclaimer" id="disclaimer">
+    Educational tool only — practice trading by default. Options involve substantial risk of loss.
+    Nothing here is financial advice or a promise of profit.
+  </footer>
+
+  <div id="modal-root"></div>
+
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Primary">
+    <a href="#/home" data-route="home"><span class="bn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6.5 9.5V20h11V9.5"/></svg><span class="nav-alert-badge" hidden></span></span>Desk</a>
+    <a href="#/research" data-route="research plan"><span class="bn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></span>Workspace</a>
+    <a href="#/portfolio/positions" data-route="portfolio"><span class="bn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19h16"/><path d="M5 15l4-5 3 3 6-8"/><circle cx="18" cy="5" r="1.2"/></svg></span>Book</a>
+    <a href="#/data/overview" data-route="data"><span class="bn-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg></span>Data</a>
+  </nav>
+
+  <script src="/vendor/d3.min.js?v=@asset.version@"></script>
+  <script src="/js/contracts.js?v=@asset.version@"></script>
+  <script src="/js/learn.js?v=@asset.version@"></script>
+  <script src="/js/api.js?v=@asset.version@"></script>
+  <script src="/js/plans.js?v=@asset.version@"></script>
+  <script src="/js/workspace.js?v=@asset.version@"></script>
+  <script src="/js/rails.js?v=@asset.version@"></script>
+  <script src="/js/ui.js?v=@asset.version@"></script>
+  <script src="/js/flow.js?v=@asset.version@"></script>
+  <script src="/js/scenario.js?v=@asset.version@"></script>
+  <script src="/js/outcomes.js?v=@asset.version@"></script>
+  <script src="/js/builder.js?v=@asset.version@"></script>
+  <script src="/js/position-editor.js?v=@asset.version@"></script>
+  <script src="/js/views.js?v=@asset.version@"></script>
+  <script src="/js/views-learn.js?v=@asset.version@"></script>
+  <script src="/js/views-research.js?v=@asset.version@"></script>
+  <script src="/js/views-plan.js?v=@asset.version@"></script>
+  <script src="/js/views-portfolio.js?v=@asset.version@"></script>
+  <script src="/js/views-data.js?v=@asset.version@"></script>
+  <script src="/js/app.js?v=@asset.version@"></script>
+</body>
+</html>

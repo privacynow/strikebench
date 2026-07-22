@@ -119,6 +119,7 @@
         <filtering>false</filtering>
         <excludes>
           <exclude>public/index.html</exclude>
+          <exclude>public/workspace.html</exclude>
         </excludes>
       </resource>
       <resource>
@@ -126,6 +127,7 @@
         <filtering>true</filtering>
         <includes>
           <include>public/index.html</include>
+          <include>public/workspace.html</include>
         </includes>
       </resource>
     </resources>
