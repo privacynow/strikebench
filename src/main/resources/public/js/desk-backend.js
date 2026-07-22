@@ -749,10 +749,13 @@
     if (!plan) {
       plan = await createPlan(false);
       if (seq !== state.requestSeq) return null;
-      if (!samePlan(plan, identity)) {
-        // The session-scoped create key can legitimately outlive the declarations of the Plan it
-        // originally created. Re-list first so a concurrent matching Plan wins; otherwise rotate
-        // the create key exactly once. Reusing the stale key would make Retry a permanent loop.
+      if (!samePlan(plan, identity) || !mutableWorkingPlan(plan)) {
+        // The session-scoped create key can legitimately outlive the Plan it originally created:
+        // that Plan may no longer match this idea's declarations, OR it may have been frozen since
+        // (a trade was placed, so it is now a Position, not a mutable working inquiry). In both
+        // cases the idempotent create returns the stale Plan. Re-list first so a concurrent
+        // *mutable* Plan wins, otherwise rotate the create key exactly once to mint a fresh Plan.
+        // Reusing the stale key would make Retry a permanent loop on the frozen Plan.
         var relisted = await api.getFresh('/api/plans');
         if (seq !== state.requestSeq) return null;
         plan = await freshestMatchingPlan(relisted && relisted.plans, identity, seq);

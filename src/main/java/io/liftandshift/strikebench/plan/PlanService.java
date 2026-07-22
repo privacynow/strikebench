@@ -510,6 +510,9 @@ public final class PlanService {
             String assignmentPreference, String positionOwnerKey) throws java.sql.SQLException {
         return Db.queryOn(c, "SELECT p.id FROM plans p JOIN plan_context_revision c " +
                         "ON c.plan_id=p.id AND c.rev=p.active_context_rev WHERE " + ownerClause("p.user_id") +
+                        // A decided Plan is frozen (a trade was placed), so it is no longer a mutable
+                        // working inquiry and must never be reopened as "equivalent" to a new idea.
+                        " AND NOT EXISTS (SELECT 1 FROM plan_decision pd WHERE pd.plan_id=p.id) " +
                         " AND p.status='ACTIVE' AND p.symbol=? AND p.intent IS NOT DISTINCT FROM ? " +
                         "AND p.market_kind=? AND p.world_id IS NOT DISTINCT FROM ? " +
                         "AND p.origin_plan_id IS NOT DISTINCT FROM ? AND p.account_id IS NOT DISTINCT FROM ? " +
