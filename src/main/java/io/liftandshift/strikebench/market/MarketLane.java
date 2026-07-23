@@ -14,6 +14,15 @@ public enum MarketLane {
         return OBSERVED;
     }
 
+    /**
+     * Normalizes a route-level world token to the service-layer convention: {@code null} is the
+     * OBSERVED baseline, any other id names a simulated world. THE one definition, so a controller
+     * cannot re-spell (and drift) this sentinel — it was copied byte-for-byte across eight of them.
+     */
+    public static String worldParam(String world) {
+        return world == null || "observed".equals(world) ? null : world;
+    }
+
     public static MarketLane of(String worldId, boolean fixturesOnly,
                                 io.liftandshift.strikebench.db.AnalysisContext context) {
         MarketLane market = of(worldId, fixturesOnly);

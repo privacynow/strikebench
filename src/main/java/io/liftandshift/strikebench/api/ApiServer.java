@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -717,9 +718,6 @@ public final class ApiServer {
     }
 
     /** Normalizes the route-level world to the service-layer convention (null = observed). */
-    private static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
 
     /** The caller's active market world: 'observed' unless they switched to a sim session. */
     private String activeWorld(Context ctx) {
