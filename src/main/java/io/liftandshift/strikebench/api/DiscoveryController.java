@@ -319,31 +319,44 @@ final class DiscoveryController {
         StrategyIntent intent = DecisionDeclarationPolicy.requireRecommendation(
                 "Strategy recommendation", req, true);
         Account acct = accountResolver.apply(ctx);
-        // Hold-based intents read the account's real position when the caller didn't supply
-        // one: free shares + average basis feed strike selection and the intent framing.
-        // ACQUIRE is excluded: holdings.sharesOwned means "shares I WANT" there, and injecting
-        // the existing position would silently size new purchases to what is already owned.
-        if (req.holdings() == null && intent != StrategyIntent.DIRECTIONAL && intent != StrategyIntent.ACQUIRE) {
-            try {
-                PositionsService.PositionView pos = positions.get(acct.id(), req.symbol());
-                req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
-                        req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
-                        req.avoidEarnings(), req.allow0dte(), req.intent(),
-                        new RecommendationEngine.Holdings((int) Math.min(Integer.MAX_VALUE, pos.freeShares()),
-                                pos.avgCostCents(), null),
-                        req.filters());
-            } catch (io.liftandshift.strikebench.util.ResourceNotFoundException ignored) { /* no position — engine handles it */ }
-        }
-        // R4 via THE policy (review IC-1): the declared risk-capital line caps the engine's
-        // per-trade budget — one translation shared by every recommending surface.
-        Long capGov = RiskBudgetPolicy.effectiveMaxLossCents(
-                req.maxLossCents(), riskCapResolver.apply(ctx));
-        if (!java.util.Objects.equals(capGov, req.maxLossCents())) {
-            req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
-                    capGov, req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
-                    req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
-        }
+        req = withAccountHoldings(req, intent, acct);
+        req = withRiskCap(req, ctx);
         return engine.recommend(req, acct.buyingPowerCents(), activeWorldResolver.apply(ctx));
+    }
+
+    /**
+     * Hold-based intents read the account's real position when the caller didn't supply one: free
+     * shares + average basis feed strike selection and the intent framing. ACQUIRE is excluded —
+     * holdings.sharesOwned means "shares I WANT" there, and injecting the existing position would
+     * silently size new purchases to what is already owned. Shared by every recommending surface.
+     */
+    private RecommendationEngine.Request withAccountHoldings(RecommendationEngine.Request req,
+                                                             StrategyIntent intent, Account acct) {
+        if (req.holdings() != null || intent == StrategyIntent.DIRECTIONAL || intent == StrategyIntent.ACQUIRE) {
+            return req;
+        }
+        try {
+            PositionsService.PositionView pos = positions.get(acct.id(), req.symbol());
+            return req.withHoldings(new RecommendationEngine.Holdings(
+                    (int) Math.min(Integer.MAX_VALUE, pos.freeShares()), pos.avgCostCents(), null));
+        } catch (io.liftandshift.strikebench.util.ResourceNotFoundException noPosition) {
+            return req; // no position — the engine handles it (buy-write style where relevant)
+        }
+    }
+
+    /**
+     * R4 via THE policy (review IC-1): the declared risk-capital line caps the engine's per-trade
+     * budget — one translation shared by every recommending surface (recommend, ladder, scout).
+     */
+    private RecommendationEngine.Request withRiskCap(RecommendationEngine.Request req, Context ctx) {
+        Long cap = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapResolver.apply(ctx));
+        return java.util.Objects.equals(cap, req.maxLossCents()) ? req : req.withMaxLossCents(cap);
+    }
+
+    /** The same declared risk-capital cap for the Scout's AutoRequest. */
+    private AutoRecommender.AutoRequest withRiskCap(AutoRecommender.AutoRequest req, Context ctx) {
+        Long cap = RiskBudgetPolicy.effectiveMaxLossCents(req.maxLossCents(), riskCapResolver.apply(ctx));
+        return java.util.Objects.equals(cap, req.maxLossCents()) ? req : req.withMaxLossCents(cap);
     }
 
 
@@ -393,25 +406,8 @@ final class DiscoveryController {
                 req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
                 req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         Account acct = accountResolver.apply(ctx);
-        if (req.holdings() == null && intent != StrategyIntent.DIRECTIONAL && intent != StrategyIntent.ACQUIRE) {
-            try {
-                PositionsService.PositionView pos = positions.get(acct.id(), req.symbol());
-                req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
-                        req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
-                        req.avoidEarnings(), req.allow0dte(), req.intent(),
-                        new RecommendationEngine.Holdings((int) Math.min(Integer.MAX_VALUE, pos.freeShares()),
-                                pos.avgCostCents(), null),
-                        req.filters());
-            } catch (io.liftandshift.strikebench.util.ResourceNotFoundException ignored) { /* buy-write ladder */ }
-        }
-        // R4 via THE policy: ladders obey the same declared-capital translation as every surface.
-        Long capLad = RiskBudgetPolicy.effectiveMaxLossCents(
-                req.maxLossCents(), riskCapResolver.apply(ctx));
-        if (!java.util.Objects.equals(capLad, req.maxLossCents())) {
-            req = new RecommendationEngine.Request(req.symbol(), req.thesis(), req.horizon(), req.riskMode(),
-                    capLad, req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
-                    req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
-        }
+        req = withAccountHoldings(req, intent, acct);
+        req = withRiskCap(req, ctx);
         var ladder = engine.ladder(req, acct.buyingPowerCents(), activeWorldResolver.apply(ctx));
         // R9: the SAME decision policy annotates every rung — no ranked surface escapes it.
         try {
@@ -479,14 +475,7 @@ final class DiscoveryController {
         String owner = ownerResolver.apply(ctx);
         // THE policy applies to the scout too (review IC-1): auto and manual recommendations
         // must size under the identical declared-capital cap.
-        Long capAuto = RiskBudgetPolicy.effectiveMaxLossCents(
-                req.maxLossCents(), riskCapResolver.apply(ctx));
-        if (!java.util.Objects.equals(capAuto, req.maxLossCents())) {
-            req = new AutoRecommender.AutoRequest(req.universe(), req.horizons(), req.maxPicks(),
-                    req.targetProfitCents(), capAuto, req.maxRiskPctOfAccount(), req.minConfidence(),
-                    req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride(),
-                    req.destinationAccountId(), req.redeployment());
-        }
+        req = withRiskCap(req, ctx);
         String destination = req.destinationAccountId() == null || req.destinationAccountId().isBlank()
                 ? acct.id() : req.destinationAccountId().trim();
         if (!"observed".equals(world) && !destination.equals(acct.id())) {

@@ -58,6 +58,13 @@ public final class AutoRecommender {
                     maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
                     filters, thesisOverride, null, null);
         }
+
+        /** A copy with the risk-capital-capped per-trade budget; every other field unchanged. */
+        public AutoRequest withMaxLossCents(Long cappedMaxLossCents) {
+            return new AutoRequest(universe, horizons, maxPicks, targetProfitCents, cappedMaxLossCents,
+                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents, filters,
+                    thesisOverride, destinationAccountId, redeployment);
+        }
     }
 
     public record RedeploymentRequest(String lifecycleReceiptId, String action, Integer quantity) {}

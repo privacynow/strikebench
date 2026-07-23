@@ -91,7 +91,19 @@ public final class RecommendationEngine {
             String intent,               // explicit StrategyIntent at every product/API decision boundary
             Holdings holdings,           // shares context for EXIT/HEDGE/ACQUIRE flows, optional
             Filters filters              // hard screens on candidate metrics, optional
-    ) {}
+    ) {
+        /** A copy with the risk-capital-capped per-trade budget; every other field unchanged. */
+        public Request withMaxLossCents(Long cappedMaxLossCents) {
+            return new Request(symbol, thesis, horizon, riskMode, cappedMaxLossCents, maxRiskPctOfAccount,
+                    minConfidence, allowedStrategies, avoidEarnings, allow0dte, intent, holdings, filters);
+        }
+
+        /** A copy carrying the account's real share position; every other field unchanged. */
+        public Request withHoldings(Holdings resolvedHoldings) {
+            return new Request(symbol, thesis, horizon, riskMode, maxLossCents, maxRiskPctOfAccount,
+                    minConfidence, allowedStrategies, avoidEarnings, allow0dte, intent, resolvedHoldings, filters);
+        }
+    }
 
     /**
      * Shares context. sharesOwned must be the FREE (unlocked) share count; costBasisCents is the
