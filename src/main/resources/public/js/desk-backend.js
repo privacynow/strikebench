@@ -2168,10 +2168,16 @@
       }
 
       var current = updated.context || {};
+      var requested = requestedPlanContext(next);
       var desired = {
-        thesis: thesisOf(next.view),
-        horizonDays: horizonDays(next),
-        riskMode: riskModeOf(next)
+        thesis: requested.thesis,
+        horizonDays: requested.horizonDays,
+        targetCents: requested.targetCents,
+        riskMode: requested.riskMode,
+        holdingsShares: requested.holdingsShares,
+        costBasisCents: requested.costBasisCents,
+        priceAssumptionCents: requested.priceAssumptionCents,
+        assignmentPreference: requested.assignmentPreference
       };
       var patch = { expectedVersion: updated.version };
       var clear = [];

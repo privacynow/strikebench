@@ -91,6 +91,11 @@ function plan(version, overrides = {}) {
       thesis: has('thesis') ? overrides.thesis : 'neutral',
       horizonDays: has('horizonDays') ? overrides.horizonDays : 45,
       riskMode: has('riskMode') ? overrides.riskMode : 'balanced',
+      targetCents: has('targetCents') ? overrides.targetCents : null,
+      holdingsShares: has('holdingsShares') ? overrides.holdingsShares : null,
+      costBasisCents: has('costBasisCents') ? overrides.costBasisCents : null,
+      priceAssumptionCents: has('priceAssumptionCents') ? overrides.priceAssumptionCents : null,
+      assignmentPreference: has('assignmentPreference') ? overrides.assignmentPreference : null,
       rev: has('contextRev') ? overrides.contextRev : 7
     }
   };
@@ -1752,6 +1757,13 @@ async function installBackend(page, options = {}) {
       if (body && Object.prototype.hasOwnProperty.call(body, 'horizonDays')) {
         planOverrides.horizonDays = body.horizonDays;
       }
+      if (body && Object.prototype.hasOwnProperty.call(body, 'intent')) {
+        planOverrides.intent = body.intent;
+      }
+      for (const key of ['thesis', 'targetCents', 'riskMode', 'holdingsShares',
+        'costBasisCents', 'priceAssumptionCents', 'assignmentPreference']) {
+        if (body && Object.prototype.hasOwnProperty.call(body, key)) planOverrides[key] = body[key];
+      }
       response = currentPlan();
       }
     } else if (method === 'PUT' && url.pathname === `${activePlanPath}/intent`) {
@@ -1781,11 +1793,15 @@ async function installBackend(page, options = {}) {
           body: JSON.stringify({ error: 'Plan version conflict.' }) });
         return;
       }
-      for (const key of ['thesis', 'horizonDays', 'riskMode']) {
+      for (const key of ['thesis', 'horizonDays', 'targetCents', 'riskMode', 'holdingsShares',
+        'costBasisCents', 'priceAssumptionCents', 'assignmentPreference']) {
         if (Object.prototype.hasOwnProperty.call(body, key)) planOverrides[key] = body[key];
       }
       for (const key of body.clear || []) {
-        if (['thesis', 'horizonDays', 'riskMode'].includes(key)) planOverrides[key] = null;
+        if (['thesis', 'horizonDays', 'targetCents', 'riskMode', 'holdingsShares',
+          'costBasisCents', 'priceAssumptionCents', 'assignmentPreference'].includes(key)) {
+          planOverrides[key] = null;
+        }
       }
       planOverrides.contextRev = Number(planOverrides.contextRev || 0) + 1;
       planVersion += 1;
@@ -2074,6 +2090,9 @@ async function startNewIdea(page, symbol = 'AMD') {
   if (needsUnderlying) {
     await page.locator('#univq').fill(symbol);
     await page.locator('#univq').press('Enter');
+    await page.waitForFunction(expected => window.decide?.ideaDraft?.sym === expected
+      && window.decide?.backendPhase === 'underlying-required', symbol);
+    await page.locator('[data-dec="analyzeidea"]').click();
   }
 }
 
@@ -2160,6 +2179,22 @@ test('global New idea keeps the underlying absent until the user chooses it', as
 
     await page.locator('#univq').fill('AMD');
     await page.locator('#univq').press('Enter');
+    const staged = await page.evaluate(() => ({
+      draftSymbol: window.decide?.ideaDraft?.sym,
+      liveSymbol: window.decide?.sym,
+      phase: window.decide?.backendPhase,
+      composer: document.querySelectorAll('.ideacomposer').length,
+      analyze: document.querySelector('[data-dec="analyzeidea"]')?.textContent
+    }));
+    assert.deepEqual(staged, {
+      draftSymbol: 'AMD', liveSymbol: null, phase: 'underlying-required', composer: 1,
+      analyze: 'Analyze AMD →'
+    }, 'ticker selection stages the subject and leaves every idea declaration editable');
+    assert.equal(backend.count('POST', '/api/plans'), 0,
+      'ticker selection alone cannot mint a Plan or begin market work');
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 0);
+
+    await page.locator('[data-dec="analyzeidea"]').click();
     try {
       await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
         && window.DeskBackend.state().plan?.symbol === 'AMD', null, { timeout: 10000 });
@@ -2172,8 +2207,77 @@ test('global New idea keeps the underlying absent until the user chooses it', as
       throw new Error(`${error.message}\n${JSON.stringify(diagnosis)}`);
     }
     assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 1,
-      'the explicit symbol is the point at which the canonical idea workflow begins');
+      'the explicit Analyze action is the point at which the canonical idea workflow begins');
     assert.deepEqual(pageErrors, [], `symbol-required composer emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Acquire requires an explicit stock-entry price and share quantity before analysis', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, { universeSymbols: ['AMD', 'AAPL'] });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.locator('#threadNewIdea').click();
+    await page.waitForSelector('.underlyingrequired #univq');
+    await page.locator('[data-obj="goal"][data-val="Acquire"]').click();
+    await page.locator('#univq').fill('AMD');
+    await page.locator('#univq').press('Enter');
+
+    assert.equal(await page.locator('#acquireTarget').count(), 1);
+    assert.equal(await page.locator('#acquireShares').count(), 1);
+    assert.equal(await page.locator('[data-dec="analyzeidea"]').isDisabled(), true,
+      'Acquire cannot silently invent the desired stock price or quantity');
+    assert.match(await page.locator('[data-idea-status]').textContent(),
+      /buy-at-or-below price.*number of shares wanted/i);
+    assert.equal(backend.count('POST', '/api/plans'), 0);
+
+    await page.locator('#acquireTarget').fill('85.50');
+    await page.locator('#acquireShares').fill('300');
+    assert.equal(await page.locator('[data-dec="analyzeidea"]').isDisabled(), false);
+    assert.equal(backend.count('POST', '/api/plans'), 0,
+      'goal-specific declarations remain local until Analyze');
+    await page.locator('[data-dec="analyzeidea"]').click();
+    await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
+      && window.DeskBackend.state().plan?.intent === 'ACQUIRE'
+      && window.DeskBackend.state().plan?.context?.targetCents === 8550
+      && window.DeskBackend.state().plan?.context?.holdingsShares === 300,
+    null, { timeout: 10000 });
+
+    const create = backend.requests.find(row => row.method === 'POST' && row.path === '/api/plans');
+    assert.equal(create.body.intent, 'ACQUIRE');
+    assert.equal(create.body.targetCents, 8550);
+    assert.equal(create.body.holdingsShares, 300);
+
+    const createsAfterOpen = backend.count('POST', '/api/plans');
+    await page.locator('[data-dec="intent"]').click();
+    await page.locator('#acquireTarget').fill('82.25');
+    await page.locator('#acquireShares').fill('200');
+    await page.locator('[data-dec="analyzeidea"]').click();
+    await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
+      && window.DeskBackend.state().plan?.context?.targetCents === 8225
+      && window.DeskBackend.state().plan?.context?.holdingsShares === 200,
+    null, { timeout: 10000 });
+    const contextUpdate = backend.requests.filter(row => row.method === 'PUT'
+      && row.path === `/api/plans/${PLAN_ID}/context`).at(-1);
+    assert.equal(contextUpdate.body.targetCents, 8225);
+    assert.equal(contextUpdate.body.holdingsShares, 200);
+    assert.equal(backend.count('POST', '/api/plans'), createsAfterOpen,
+      'editing Acquire declarations reuses the canonical versioned Plan context API');
+
+    await page.locator('#threadNewIdea').click();
+    await page.waitForSelector('.replacementcomposer #acquireTarget');
+    assert.equal(await page.locator('#acquireTarget').inputValue(), '',
+      'a stock-specific acquisition price never leaks into the next underlying');
+    assert.equal(await page.locator('#acquireShares').inputValue(), '',
+      'quantity-denominated willingness is declared for each fresh idea');
+    await page.locator('[data-dec="cancelreplacement"]').click();
+    assert.deepEqual(pageErrors, [], `Acquire composer emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -2862,6 +2966,9 @@ test('editing a resumed exact Plan declaration updates that Plan instead of mint
     const createsBefore = backend.count('POST', '/api/plans');
     await page.locator('[data-dec="intent"]').click();
     await page.locator('[data-obj="view"][data-val="Bullish"]').click();
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/context`), 0,
+      'declarations stay staged until the explicit apply boundary');
+    await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(planId => window.decide?.backendPhase === 'ready'
       && window.DeskBackend.state().plan?.id === planId
       && window.DeskBackend.state().plan?.context?.thesis === 'bullish', PLAN_ID,
@@ -2904,6 +3011,7 @@ test('declaration reload clears every scenario pin before rebuilding the exact P
 
     await page.locator('[data-dec="intent"]').click();
     await page.locator('[data-obj="view"][data-val="Bullish"]').click();
+    await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
       && window.DeskBackend.state().plan?.context?.thesis === 'bullish'
       && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
@@ -2967,6 +3075,7 @@ test('a rejected declaration edit restores the accepted Plan and Retry remains u
 
     await page.locator('[data-dec="intent"]').click();
     await page.locator('[data-obj="view"][data-val="Bullish"]').click();
+    await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(() => window.decide?.backendPhase === 'error', null,
       { timeout: 10000 });
     assert.equal(await page.evaluate(() => window.decide.view), 'Bearish',
@@ -6771,7 +6880,7 @@ test('New Idea measures one elegant overflow list, composes in the left rail, an
       horizonP5Cents: -9000, horizonP50Cents: 2200, horizonP95Cents: 10500,
       chanceOfGainPct: 68 }
   ];
-  const { context, page, pageErrors } = await openAuthoritativeDesk({
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
     strategyCandidates: rows, canvasComparison, canvasPositions
   });
   try {
@@ -6856,12 +6965,16 @@ test('New Idea measures one elegant overflow list, composes in the left rail, an
       'the idea editor occupies the decision rail instead of becoming a transient header strip');
     assert.equal(await page.locator('.intentpop').count(), 0);
     await page.locator('[data-obj="goal"][data-val="Hedge"]').click();
+    assert.equal(await page.locator('.ideacomposer').count(), 1,
+      'the complete composer stays open while declarations are staged together');
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/intent`), 0,
+      'a staged goal does not mutate the Plan on click');
+    await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
       && window.decide?.goal === 'Hedge' && !window.DeskBackend.state().mutationPending,
     null, { timeout: 10000 });
-    assert.equal(await page.locator('.ideacomposer').count(), 1,
-      'the structural composer stays open while one declaration is refined');
-    await page.locator('[data-dec="intentdone"]').click();
+    assert.equal(await page.locator('.ideacomposer').count(), 0,
+      'the explicit apply boundary returns to the ranked field');
 
     await page.locator('[data-inspect="book"]').click();
     assert.equal(await page.locator('.authcompare .acrow').count(), 3,
@@ -6878,8 +6991,10 @@ test('New Idea measures one elegant overflow list, composes in the left rail, an
   }
 });
 
-test('New Idea from an active or resumed idea stages the old subject and opens one full-width typeahead', async () => {
-  const { context, page, pageErrors } = await openAuthoritativeDesk();
+test('New Idea from an active or resumed idea stages one complete request without muting the current analysis', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    bookDocuments: populatedBookDocuments(), universeSymbols: ['AMD', 'AAPL']
+  });
   try {
     await page.setViewportSize({ width: 1920, height: 1080 });
     const scenarioOverlaps = await page.evaluate(() => Array.from(
@@ -6918,9 +7033,13 @@ test('New Idea from an active or resumed idea stages the old subject and opens o
         chipWidth: chipBox?.width || 0,
         popContained: !!popBox && !!chipBox && popBox.left >= chipBox.left - 1
           && popBox.right <= chipBox.right + 1,
+        declarationGroups: composer?.querySelectorAll('.objchip').length,
+        analyzeActions: composer?.querySelectorAll('[data-dec="analyzeidea"]').length,
         staleActions: composer?.querySelectorAll('[data-dec="intentdone"],[data-dec="rescout"]').length,
-        centerInert: center?.hasAttribute('inert') && center?.getAttribute('aria-hidden') === 'true',
-        rightInert: right?.hasAttribute('inert') && right?.getAttribute('aria-hidden') === 'true',
+        centerInert: center?.hasAttribute('inert') || center?.getAttribute('aria-hidden') === 'true',
+        rightInert: right?.hasAttribute('inert') || right?.getAttribute('aria-hidden') === 'true',
+        centerOpacity: center && getComputedStyle(center).opacity,
+        rightOpacity: right && getComputedStyle(right).opacity,
         dockEmpty: document.querySelector('#decideStage .decdock')?.classList.contains('empty')
       };
     });
@@ -6933,11 +7052,17 @@ test('New Idea from an active or resumed idea stages the old subject and opens o
     assert.ok(staged.popWidth > 280 && staged.popWidth > staged.chipWidth * 0.9,
       'the in-flow picker spans the composer instead of the 88px label track');
     assert.equal(staged.popContained, true);
+    assert.equal(staged.declarationGroups, 5,
+      'replacement uses the same underlying, goal, view, horizon, and risk composer');
+    assert.equal(staged.analyzeActions, 1);
     assert.equal(staged.staleActions, 0,
-      'the abandoned idea cannot expose Show/Refresh actions during replacement');
-    assert.equal(staged.centerInert, true);
-    assert.equal(staged.rightInert, true);
-    assert.equal(staged.dockEmpty, true, 'execution is unavailable while choosing a replacement');
+      'there is one explicit Analyze boundary and no duplicate refresh path');
+    assert.equal(staged.centerInert, false);
+    assert.equal(staged.rightInert, false);
+    assert.equal(staged.centerOpacity, '1');
+    assert.equal(staged.rightOpacity, '1');
+    assert.equal(staged.dockEmpty, true,
+      'execution pauses during composition while the current evidence remains readable');
 
     await page.locator('#univq').fill('AAPL');
     assert.equal(await page.locator('.univrow').count(), 1);
@@ -6956,11 +7081,24 @@ test('New Idea from an active or resumed idea stages the old subject and opens o
       'cancel restores the prior idea without recreating its financial surface');
 
     await startNewIdea(page);
-    await page.locator('#univq').fill('AMD');
+    const createsBefore = backend.count('POST', '/api/plans');
+    await page.locator('#univq').fill('AAPL');
     await page.locator('#univq').press('Enter');
+    assert.deepEqual(await page.evaluate(() => ({
+      liveSymbol: window.decide?.sym,
+      draftSymbol: window.decide?.ideaDraft?.sym,
+      replacing: window.decide?.replacingIdea,
+      composer: document.querySelectorAll('.replacementcomposer').length
+    })), { liveSymbol: 'AMD', draftSymbol: 'AAPL', replacing: true, composer: 1 },
+    'ticker selection stages the next subject without discarding or loading over the current idea');
+    assert.equal(backend.count('POST', '/api/plans'), createsBefore);
+    await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
-      && window.decide?.replacingIdea === false && !window.decide?.intentOpen,
+      && window.decide?.sym === 'AAPL' && window.decide?.replacingIdea === false
+      && !window.decide?.intentOpen,
     null, { timeout: 10000 });
+    assert.equal(backend.count('POST', '/api/plans'), createsBefore + 1,
+      'only Analyze crosses the canonical Plan boundary');
     assert.equal(await page.evaluate(() => window.decide?.canPick), true,
       'the selected replacement is a fresh idea and remains replaceable');
     assert.equal(await page.locator('.replacementcomposer').count(), 0);
