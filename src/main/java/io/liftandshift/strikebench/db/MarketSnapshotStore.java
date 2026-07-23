@@ -14,6 +14,13 @@ import java.util.Optional;
  */
 public final class MarketSnapshotStore implements io.liftandshift.strikebench.market.ports.SnapshotStore {
 
+    private static final String SNAPSHOT_COLUMNS =
+            "symbol, description, last, bid, ask, prev_close, optionable, source, freshness, as_of";
+    /** Persisted rows are eligible as an observed last-known quote only if not fixture/sim/modeled. */
+    private static final String OBSERVED_ONLY =
+            "coalesce(lower(source),'') NOT LIKE '%fixture%' "
+          + "AND coalesce(freshness,'') NOT IN ('FIXTURE','SIMULATED','MODELED')";
+
     private final Db db;
     private final MarketDataMaintenanceGate maintenance;
 
@@ -44,30 +51,24 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     /** Load every persisted last-known quote as a STALE snapshot to seed the engine on boot. */
     @Override public List<MarketSnapshot> loadAll() {
         List<MarketSnapshot> out = new ArrayList<>();
-        db.query("SELECT symbol, description, last, bid, ask, prev_close, optionable, source, freshness, as_of "
-                        + "FROM market_snapshot WHERE coalesce(lower(source),'') NOT LIKE '%fixture%' "
-                        + "AND coalesce(freshness,'') NOT IN ('FIXTURE','SIMULATED','MODELED')",
-                r -> {
-                    out.add(new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
-                            r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
-                            Freshness.STALE, r.str("source"),
-                            epochMillis(r), epochMillis(r), false, null));
-                    return null;
-                });
+        db.query("SELECT " + SNAPSHOT_COLUMNS + " FROM market_snapshot WHERE " + OBSERVED_ONLY,
+                r -> { out.add(staleSnapshot(r)); return null; });
         return out;
     }
 
     /** Read one last-known observed quote for a user-facing request whose provider refresh failed. */
     @Override public Optional<MarketSnapshot> load(String symbol) {
         if (symbol == null || symbol.isBlank()) return Optional.empty();
-        return db.query("SELECT symbol, description, last, bid, ask, prev_close, optionable, source, freshness, as_of "
-                        + "FROM market_snapshot WHERE symbol=? "
-                        + "AND coalesce(lower(source),'') NOT LIKE '%fixture%' "
-                        + "AND coalesce(freshness,'') NOT IN ('FIXTURE','SIMULATED','MODELED')",
-                r -> new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
-                        r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
-                        Freshness.STALE, r.str("source"), epochMillis(r), epochMillis(r), false, null),
+        return db.query("SELECT " + SNAPSHOT_COLUMNS + " FROM market_snapshot WHERE symbol=? AND " + OBSERVED_ONLY,
+                MarketSnapshotStore::staleSnapshot,
                 symbol.trim().toUpperCase(java.util.Locale.ROOT)).stream().findFirst();
+    }
+
+    /** Every persisted row reads back STALE by construction (observed last-known, never live). */
+    private static MarketSnapshot staleSnapshot(Db.Row r) {
+        return new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
+                r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
+                Freshness.STALE, r.str("source"), epochMillis(r), epochMillis(r), false, null);
     }
 
     private static long epochMillis(Db.Row row) {
