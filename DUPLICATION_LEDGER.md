@@ -36,7 +36,13 @@ responsibility.
   `objectiveCoherence`; direction: delta `StanceProfiler.implied`). Different inputs at different
   stages for different purposes; force-merging would harm the architecture. Resolved by cross-linking
   comments so they can't silently drift, not by a merge.
-- REMAINING orchestrator: O7 (recommend/ladder preflight).
+- **2026-07-23 · O7 (53658bf):** one `preflightSymbol` for recommend()/ladder().
+- **2026-07-23 · API layer:** A1 (b9a2fac) `MarketLane.worldParam` — 8 copies gone; A2 (55318ad)
+  `DollarDeltaExposure.toContext(lane)` — 7 inline mappings gone; A5 (3d9355d)
+  `MarketLane.isSimulatedWorld` — 6 predicates gone; A6 `ApiResponses.EvaluationReceipt.attachTo`.
+- STATUS: orchestrator layer DONE (O1–O7); dangerous divergent DONE (X1, X3; X2/E3 two-tier);
+  API layer DONE bar A4. REMAINING: A4 (universe-resolution — divergent fallbacks, nuanced),
+  D2 (last-known-quote dual ownership — architectural), D3 (ObservedCandleWriter), U1–U12 (frontend).
 
 ---
 

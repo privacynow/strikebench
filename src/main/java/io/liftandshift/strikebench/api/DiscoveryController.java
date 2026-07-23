@@ -169,7 +169,7 @@ final class DiscoveryController {
                         : e.evidence().claims().get("endorsement");
                 readinessTally.add(e.assessment().economics(),
                         endorsement == null ? null : endorsement.missingDimensions());
-                attachEvaluationReceipt(m, e);
+                ApiResponses.EvaluationReceipt.attachTo(m, e);
                 cands.add(m);
             }
             io.liftandshift.strikebench.eval.EconomicReadiness readiness = readinessTally.summarize();
@@ -201,11 +201,6 @@ final class DiscoveryController {
             throw new DataUnavailableException(
                     "Decision ranking is unavailable right now; no alternate ranking was substituted", e);
         }
-    }
-
-    private static void attachEvaluationReceipt(ObjectNode candidate,
-                                                 io.liftandshift.strikebench.eval.StrategyEvaluation evaluation) {
-        candidate.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
     }
 
     /** Builds the one ranked Decision competition, including explicit cash and share-owning baselines. */
@@ -411,7 +406,7 @@ final class DiscoveryController {
                             (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(c);
                     var e = byCand.get(c);
                     if (e != null) {
-                        attachEvaluationReceipt(m, e);
+                        ApiResponses.EvaluationReceipt.attachTo(m, e);
                     }
                     arr.add(m);
                 }
