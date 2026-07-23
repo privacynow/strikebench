@@ -251,7 +251,9 @@ class StrategyEvaluatorTest {
         assertThat(evidence.claims().get("endorsement").observed()).isFalse();
         assertThat(economics.realizedVolEvAfterCostsCents())
                 .isGreaterThan(economics.realisticEvMaterialityCents());
-        assertThat(economics.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        // Two-axis: synthetic history → FAVORABLE economics, modeled evidence badge, non-actionable.
+        assertThat(economics.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(economics.observedEvidence()).isFalse();
         assertThat(economics.actionableFavorable()).isFalse();
         assertThat(economics.reasons()).anyMatch(reason -> reason.contains("history"));
     }

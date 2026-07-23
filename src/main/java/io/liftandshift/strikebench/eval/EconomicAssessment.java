@@ -176,15 +176,18 @@ public record EconomicAssessment(
                     marketRole(), range == null ? realisticBasis(ctx) : range.basis(), observed, reasons);
         }
 
-        // Observed prices with a modeled/unknown weak link (for example no IV history or only a
-        // fallback rate) may describe a promising scenario, but they cannot support the same
-        // FAVORABLE enum downstream allocators/scouts treat as an endorsement. Keep the package
-        // visible as MIXED and name the missing evidence rather than deleting it.
+        // Two-axis verdict: the ECONOMIC TIER (does the after-cost point estimate clear materiality)
+        // is independent of the EVIDENCE BADGE (is that estimate backed end-to-end by observed data).
+        // A positive-EV package on modeled/unknown inputs is FAVORABLE on economics with a modeled
+        // evidence badge (observedEvidence=false) — NOT demoted to MIXED where it hides. Downstream
+        // endorsement/allocation still gates on actionableFavorable() (favorable AND observed), so
+        // modeled-favorable surfaces in the scan and ranks below observed-favorable, but never
+        // auto-endorses. This is the single biggest fix for "income scans return no income."
         if (realizedPositive && !observed && !explicitTeachingMarket) {
-            reasons.add("The favorable scenario is not supported by end-to-end observed evidence yet.");
-            return new EconomicAssessment(Verdict.MIXED, "COMPARE_CAREFULLY",
-                    "Promising model, incomplete evidence",
-                    "The realized-volatility scenario is positive after costs, but a modeled or unknown input prevents an observed-edge claim. Keep it for comparison until the missing evidence is observed.",
+            reasons.add("The economics are favorable after costs, but the edge rests on modeled or unknown inputs rather than end-to-end observed evidence.");
+            return new EconomicAssessment(Verdict.FAVORABLE, "WORTH_INVESTIGATING",
+                    "Favorable · modeled evidence",
+                    "The realized-volatility point estimate clears the after-cost materiality threshold, so the economics are favorable. The evidence is modeled, not observed end-to-end, so treat it as a strong candidate to confirm rather than a live-market endorsement.",
                     marketNet, realizedNet, fees, evPct, realisticLow, realisticHigh, material,
                     marketRole(), range == null ? realisticBasis(ctx) : range.basis(), false, reasons);
         }
