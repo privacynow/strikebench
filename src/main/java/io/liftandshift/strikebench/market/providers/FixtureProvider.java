@@ -39,7 +39,7 @@ import java.util.Set;
 public final class FixtureProvider implements MarketDataProvider, HistoricalOptionsProvider, NewsFilingsProvider, RatesProvider {
 
     public static final String NAME = "fixture";
-    private static final double RISK_FREE = 0.04;
+    private static final double RISK_FREE = io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE;
     private static final int STRIKES_EACH_SIDE = 10;
     private static final int EXPIRATION_COUNT = 8;
 
