@@ -6505,7 +6505,9 @@ function deskBackendChanged(payload){
         decide.buildLegs=forkSeed.legs.map(cloneDecisionLeg).map(function(l){
           if(l.t!=='s'){var snapped=nearestBackendStrike(l.t,l.k);if(snapped!=null){l.k=snapped;l.strike=snapped;}}
           l.entryPrice=null;return l;});
-        decide.buildSourceId=null;decide.mode='build';
+        /* the draft contract anchors every edit to the selected backend strategy; the forked
+           legs replace that package's legs wholesale but keep its selection as the source */
+        decide.buildSourceId=decide.candId||null;decide.mode='build';
         if(forkSeed.edit)legAction(forkSeed.edit.act,forkSeed.edit.li,forkSeed.edit.d);
         else renderAfterDecisionChange();
       },0);
