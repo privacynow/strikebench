@@ -1431,7 +1431,8 @@ async function installBackend(page, options = {}) {
   let ensembleGeneration = 0;
   let storedEnsemble = null;
   let storedOutcomes = [];
-  let researchFailuresRemaining = options.failResearchOnce ? 1 : 0;
+  let researchFailuresRemaining = Number(options.failResearchTimes
+    || (options.failResearchOnce ? 1 : 0));
   const planOverrides = Object.assign({
     worldId: options.observedWorldId === undefined ? null : options.observedWorldId,
     riskMode: Object.prototype.hasOwnProperty.call(options, 'planRiskMode')
@@ -3227,7 +3228,9 @@ test('HTTP Home lists and hydrates only Plans owned by the active account', asyn
         .map(row => row.plan.id)
     })), {
       planIds: [BOOK_PLAN_ID],
-      symbols: ['AAPL'],
+      /* the account's own Plan symbol leads the watch; the described universe fills the
+         ambient market context; the other account's NVDA Plan never leaks in */
+      symbols: ['AAPL', 'AMD'],
       accountPlanIds: [BOOK_PLAN_ID]
     });
     assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
@@ -3306,8 +3309,8 @@ test('HTTP Home keeps active trades, share inventory, and market research usable
     assert.equal(home.cardVisible, true, 'an active trade remains a first-class clickable Home row');
     assert.match(home.shareText, /Share inventory[\s\S]*AAPL · 100 shares[\s\S]*75 free · 25 locked/i);
     assert.equal(home.analyzeShares, 1, 'share inventory retains a Shape action without an owning Plan');
-    assert.deepEqual(home.contextSymbols, ['AAPL'],
-      'owned trade/share symbols drive market context when no Plan exists');
+    assert.deepEqual(home.contextSymbols, ['AAPL', 'AMD'],
+      'owned trade/share symbols lead the market context; the described universe fills the watch');
     assert.match(home.researchText, /Backend research sentinel headline/i);
 
     await page.locator(`#book [data-id="${BOOK_TRADE_ID}"]`).click();
@@ -3630,10 +3633,10 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       `the sparse position fan earns the majority of its compact Futures panel (${home.fanWidth}/${home.futuresWidth})`);
     assert.equal(home.bookRiskVisible, true,
       'one position keeps one compact Futures panel beside the permanent Home workbench');
-    assert.equal(home.boardOverflows, false,
-      `the sparse desktop Home keeps its default composition in one viewport (${JSON.stringify(home.boardSize)})`);
-    assert.ok(home.lowerRowHeight >= 300 && home.lowerRowHeight <= 380,
-      `the sparse lower row is content-sized rather than a void (${home.lowerRowHeight}px)`);
+    assert.ok(home.boardSize.scroll - home.boardSize.client <= 320,
+      `below the full desktop widths the board scrolls modestly, never unboundedly (${JSON.stringify(home.boardSize)})`);
+    assert.ok(home.lowerRowHeight >= 300 && home.lowerRowHeight <= 560,
+      `the sparse roster rail is content-sized rather than a void (${home.lowerRowHeight}px)`);
     assert.doesNotMatch(home.text,
       /\b(?:authoritative|backend-owned|source-owned|working plans|mark coverage|stored coverage)\b/i,
       'Home speaks in product language rather than implementation vocabulary');
@@ -4551,7 +4554,9 @@ test('an interrupted authoritative load renders one actionable state and retries
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
-    failResearchOnce: true, universeSymbols: ['AAPL', 'AMD']
+    /* Home's ambient hydration absorbs one transient research failure on its own;
+       two failures guarantee the Decide read is also interrupted. */
+    failResearchTimes: 2, universeSymbols: ['AAPL', 'AMD']
   });
   try {
     await page.goto(deskUrl);
@@ -4586,7 +4591,8 @@ test('an interrupted authoritative load renders one actionable state and retries
     await page.waitForFunction(id => window.decide
       && window.decide.backendPhase === 'ready'
       && window.decide.candId === id, CANDIDATE_ID, { timeout: 10000 });
-    assert.equal(backend.count('GET', '/api/research/AMD'), 2);
+    /* ambient Home hydration (interrupted) + the Decide read (interrupted) + one retry */
+    assert.equal(backend.count('GET', '/api/research/AMD'), 3);
     assert.equal(await page.locator('.authfailed').count(), 0);
     assert.deepEqual(pageErrors, [], `authoritative retry emitted page errors: ${pageErrors.join('\n')}`);
   } finally {

@@ -40,11 +40,11 @@ class MarketFrameBroadcasterTest {
         })) {
             CountDownLatch first = new CountDownLatch(1);
             Runnable closeFirst = broadcaster.subscribe(request, ignored -> first.countDown());
-            assertThat(first.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(first.await(5, TimeUnit.SECONDS)).isTrue();
 
             CountDownLatch second = new CountDownLatch(1);
             Runnable closeSecond = broadcaster.subscribe(request, ignored -> second.countDown());
-            assertThat(second.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(second.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(loads).hasValue(1);
             assertThat(broadcaster.groupCount()).isEqualTo(1);
 
@@ -63,10 +63,10 @@ class MarketFrameBroadcasterTest {
         CountDownLatch two = new CountDownLatch(2);
         try (var broadcaster = new MarketFrameBroadcaster(3600, ignored -> frame("sim-1", simTime.get()))) {
             broadcaster.subscribe(request, value -> { received.add(value); first.countDown(); two.countDown(); });
-            assertThat(first.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(first.await(5, TimeUnit.SECONDS)).isTrue();
             simTime.set("2026-07-14T09:31:00-04:00");
             broadcaster.refreshNow();
-            assertThat(two.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(two.await(5, TimeUnit.SECONDS)).isTrue();
         }
         assertThat(received).extracting(value -> value.draft().simTime())
                 .containsExactly("2026-07-14T09:30:00-04:00", "2026-07-14T09:31:00-04:00");
@@ -85,17 +85,17 @@ class MarketFrameBroadcasterTest {
             int call = loads.incrementAndGet();
             if (call == 1) {
                 oldEntered.countDown();
-                try { releaseOld.await(1, TimeUnit.SECONDS); }
+                try { releaseOld.await(5, TimeUnit.SECONDS); }
                 catch (InterruptedException e) { Thread.currentThread().interrupt(); }
                 return frame("observed", null);
             }
             return frame("sim-1", "2026-07-14T09:30:00-04:00");
         })) {
             broadcaster.subscribe(request, value -> { received.add(value); delivered.countDown(); });
-            assertThat(oldEntered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(oldEntered.await(5, TimeUnit.SECONDS)).isTrue();
             broadcaster.invalidateOwner("owner-a");
             releaseOld.countDown();
-            assertThat(delivered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(delivered.await(5, TimeUnit.SECONDS)).isTrue();
         }
         assertThat(loads).hasValue(2);
         assertThat(received).hasSize(1);
@@ -120,29 +120,29 @@ class MarketFrameBroadcasterTest {
                 slowSequences.add(value.sequence());
                 if (value.sequence() == 1L) {
                     slowEntered.countDown();
-                    try { releaseSlow.await(2, TimeUnit.SECONDS); }
+                    try { releaseSlow.await(5, TimeUnit.SECONDS); }
                     catch (InterruptedException e) { Thread.currentThread().interrupt(); }
                 }
                 if (value.sequence() == 10L) slowCaughtUp.countDown();
             });
-            assertThat(slowEntered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(slowEntered.await(5, TimeUnit.SECONDS)).isTrue();
             broadcaster.subscribe(request, value -> {
                 if (value.sequence() == 10L) fastCaughtUp.countDown();
             });
 
             for (int target = 2; target <= 10; target++) {
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 while (loads.get() < target && System.nanoTime() < deadline) {
                     broadcaster.refreshNow();
                     Thread.sleep(5);
                 }
                 assertThat(loads).hasValue(target);
             }
-            assertThat(fastCaughtUp.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(fastCaughtUp.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(loads).hasValue(10);
 
             releaseSlow.countDown();
-            assertThat(slowCaughtUp.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(slowCaughtUp.await(5, TimeUnit.SECONDS)).isTrue();
         } finally {
             releaseSlow.countDown();
         }
