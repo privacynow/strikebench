@@ -317,8 +317,11 @@ class EconomicAssessmentTest {
         EconomicAssessment assessment = EconomicAssessment.assess(
                 candidate(0.55), risk, evidence, pass(), ctx());
 
-        assertThat(assessment.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
+        // Two-axis: modeled current volatility keeps the economics FAVORABLE but the evidence badge
+        // non-observed, so it can never become an OBSERVED (actionable) endorsement.
+        assertThat(assessment.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
         assertThat(assessment.observedEvidence()).isFalse();
+        assertThat(assessment.actionableFavorable()).isFalse();
         assertThat(assessment.reasons()).anyMatch(reason -> reason.contains("currentVolatility"));
     }
 
@@ -344,8 +347,10 @@ class EconomicAssessmentTest {
                 "rates", EvidenceLevel.MODELED), "modeled rate");
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.55), risk, incomplete, pass(), ctx());
 
-        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
-        assertThat(a.label()).containsIgnoringCase("incomplete evidence");
+        // Favorable economics, modeled evidence badge → never an observed (actionable) endorsement.
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(a.label()).containsIgnoringCase("modeled evidence");
+        assertThat(a.observedEvidence()).isFalse();
         assertThat(a.actionableFavorable()).isFalse();
     }
 
@@ -359,8 +364,10 @@ class EconomicAssessmentTest {
         EconomicAssessment a = EconomicAssessment.assess(
                 candidate(0.55), risk, modeledPricing, pass(), ctx());
 
-        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
-        assertThat(a.label()).containsIgnoringCase("incomplete evidence");
+        // Modeled pricing fallback → favorable economics, modeled evidence, not a teaching market,
+        // and not an observed endorsement.
+        assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(a.label()).containsIgnoringCase("modeled evidence");
         assertThat(a.summary()).doesNotContainIgnoringCase("teaching market")
                 .doesNotContainIgnoringCase("generated market");
         assertThat(a.actionableFavorable()).isFalse();

@@ -101,8 +101,11 @@ class EvaluationServiceDataIsolationTest {
         assertThat(evaluation.evidence().claims().get("endorsement").observed()).isFalse();
         assertThat(evaluation.assessment().economics().realizedVolEvAfterCostsCents())
                 .isGreaterThan(evaluation.assessment().economics().realisticEvMaterialityCents());
+        // Two-axis: synthetic history yields FAVORABLE economics with a modeled evidence badge,
+        // which stays non-actionable (never an observed endorsement).
         assertThat(evaluation.assessment().economics().verdict())
-                .isEqualTo(EconomicAssessment.Verdict.MIXED);
+                .isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
+        assertThat(evaluation.assessment().economics().observedEvidence()).isFalse();
         assertThat(evaluation.assessment().economics().actionableFavorable()).isFalse();
     }
 
