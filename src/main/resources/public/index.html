@@ -3041,7 +3041,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeworkbenchpanel .scoutactivegrid>.scoutidlefield{align-content:start}
 .homeworkbenchpanel .scoutresultcard .opportunityrows{flex:1 1 auto;min-height:60px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}
 .homeworkbenchpanel .scoutresultcard .opportunityrows>.opportunityrow{scroll-snap-align:start}
-.homeworkbenchpanel .scoutactivegrid>.scoutidlefield>.scoutidlecard{height:auto;min-height:100%}
+.homeworkbenchpanel .scoutactivegrid>.scoutidlefield>.scoutidlecard{height:100%;min-height:0}
+/* No dark gap: the idle card fills its column and the goal explanation grows to absorb any
+   slack as an intentional accent panel, instead of margin-top:auto opening a black rectangle. */
+.homeworkbenchpanel:not(.emptyopportunitypanel) .scoutgoalread{margin-top:0;flex:1;display:flex;flex-direction:column;justify-content:center}
+.homeworkbenchpanel:not(.emptyopportunitypanel) .homeworkbenchactions{margin-top:0}
 .homeworkbenchpanel .scoutstartgrid{flex:1;min-height:0}
 .compactbookfutures .bookonefacts .authmetric{padding:4px 6px}
 .compactbookfutures .bookonefacts .authmetric{gap:0}
@@ -5223,7 +5227,7 @@ function authScoutIdleFieldHTML(){
   return '<div class="scoutidlefield"><section class="scoutidlecard"><div class="lenshd sub"><span class="eyebrow">'+deskEsc(marketLabel)+'</span><span class="hint">'+fieldCount+' optionable symbols</span></div>'+
     '<label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type NVDA, XOM, healthcare…" autocomplete="off" data-auth-workbench-query></label><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire+
     '<div class="scoutgoalread"><b>'+authHuman(HOME_SCOUT.goal)+'.</b> '+deskEsc(goalReads[HOME_SCOUT.goal]||goalReads.INCOME)+'</div>'+
-    '<div class="homeworkbenchactions"><button type="button" class="btn pri" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Choose an underlying')+' →</button><span>Scan ranks the whole field; Analyze opens one exact idea with these same settings.</span></div></section></div>';
+    '<div class="homeworkbenchactions"><button type="button" class="btn '+(ready?'pri':'ghost')+'" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Type a ticker to analyze one')+' →</button><span>Scan ranks the whole field; Analyze opens one exact idea with these same settings.</span></div></section></div>';
 }
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?'<div class="scoutactivegrid">'+authScoutIdleFieldHTML()+'<section class="scoutresultcard">'+body+'</section></div>':body)+'</div>';
@@ -5247,17 +5251,17 @@ function authHomeStrategyFieldHTML(){
   var names=applicable.slice(0,3).map(function(entry){return String(entry.display||authHuman(entry.name)).toLowerCase();});
   return '<div class="homecatalogline">'+applicable.length+' structures compete for '+deskEsc(authHuman(intent).toLowerCase())+' — '+deskEsc(names.join(', '))+(applicable.length>names.length?', and more':'')+'. Live prices, evidence, risk, and your Book decide the ranking.</div>';
 }
-function authOpportunityHTML(expanded){
+function authScoutResultHTML(expanded){
   var state=HOME_OPPORTUNITY;
-  var controls=authOpportunityControlsHTML(),goal=authHuman(HOME_SCOUT.goal).toLowerCase(),scope=HOME_SCOUT.scope==='broad'?'broad market':'active names',sector=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector)+' within the ':'';
+  var goal=authHuman(HOME_SCOUT.goal).toLowerCase(),scope=HOME_SCOUT.scope==='broad'?'broad market':'active names',sector=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector)+' within the ':'';
   if(state.phase==='loading'){
     var progress=state.progress||{},completed=Math.max(0,Number(progress.completed||0)),total=Math.max(1,Number(progress.total||1)),phase=authHuman(progress.phase||'starting'),partial=authPartialOpportunityRowsHTML(state.partial);
     var progressBlock='<div class="scoutprogress" role="status"><meter min="0" max="'+total+'" value="'+Math.min(total,completed)+'"></meter><b>'+completed+' / '+total+'</b><span>'+deskEsc((progress.symbol?progress.symbol+' · ':'')+(progress.message||phase))+'</span></div>';
     var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'<div class="scoutwaiting">Rows appear as soon as the first symbol completes; exact pricing follows in the same stream.</div>';
     var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Rows appear as each symbol completes; the final order waits for the Book-fit checks.</span><button class="btn scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
-    return authOpportunityShell(expanded,controls,loading);
+    return loading;
   }
-  if(state.phase==='error')return authOpportunityShell(expanded,controls,'<div class="opportunityprompt"><span>'+deskEsc(state.error||'The opportunity scan could not finish.')+'</span><button class="btn scoutprimary" data-auth-opportunity-scan>Try scan again →</button></div>');
+  if(state.phase==='error')return '<div class="opportunityprompt"><span>'+deskEsc(state.error||'The opportunity scan could not finish.')+'</span><button class="btn scoutprimary" data-auth-opportunity-scan>Try scan again →</button></div>';
   var picks=state.data&&Array.isArray(state.data.picks)?state.data.picks:[];
   if(state.phase==='ready'){
     var frontier=state.data&&state.data.frontier||null,ranked=frontier&&Array.isArray(frontier.decisionRanking)?frontier.decisionRanking:[];
@@ -5280,7 +5284,7 @@ function authOpportunityHTML(expanded){
     var notes=frontier&&Array.isArray(frontier.notes)?frontier.notes:[],read=notes[0]||(favorable?'At least one package is worth opening after costs and fits your Book.':'Nothing cleared a favorable after-cost edge today. Keeping your cash is a fine outcome; open any row to see why.');
     var compensationRead=comp?(expanded?'<div class="opportunitycomp"><span>Premium richness · separate view</span>'+comp+'<em>high premium alone never outranks sound economics</em></div>':'<div class="opportunitycompactreceipt"><b>Premium richness stays separate</b><span>High premium alone never promotes a bad trade.</span></div>'):'';
     var footerRead=expanded?read:(displayed.length+' ranked package'+(displayed.length===1?'':'s')+' · choose Analyze for exact legs and receipts');
-    return authOpportunityShell(expanded,controls,'<div class="lenshd sub"><span class="eyebrow">'+deskEsc(scope.label||'Opportunity frontier')+'</span><span class="hint">'+scopeHint+'</span></div><div class="opportunityrows">'+(rows||'<div class="backendnotice">No optionable package cleared this scan. Your cash stays available.</div>')+'</div><div class="overflowmeta rowsoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>'+compensationRead+'<div class="authpulsefoot"><span>'+deskEsc(footerRead)+'</span><button class="btn xs" data-auth-opportunity-scan>Refresh scan</button></div>');
+    return '<div class="lenshd sub"><span class="eyebrow">'+deskEsc(scope.label||'Opportunity frontier')+'</span><span class="hint">'+scopeHint+'</span></div><div class="opportunityrows">'+(rows||'<div class="backendnotice">No optionable package cleared this scan. Your cash stays available.</div>')+'</div><div class="overflowmeta rowsoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>'+compensationRead+'<div class="authpulsefoot"><span>'+deskEsc(footerRead)+'</span><button class="btn xs" data-auth-opportunity-scan>Refresh scan</button></div>';
   }
   var prompt=expanded
     ? 'Find '+goal+' opportunities across '+sector+'the '+scope+', ranked by expected profit after real trading costs.'
@@ -5289,15 +5293,28 @@ function authOpportunityHTML(expanded){
   if(expanded){
     var described=authoritativeUniverse()||{},selectedScope=HOME_SCOUT.scope==='broad'?described.scout:described.active,selectedSymbols=selectedScope&&Array.isArray(selectedScope.symbols)?selectedScope.symbols.length:0;
     var start='<div class="scoutstart"><div class="lenshd sub"><span class="eyebrow">Ready to scan</span><span class="hint">'+selectedSymbols+' symbols · '+deskEsc(authHuman(HOME_SCOUT.goal))+'</span></div><div class="scoutstartgrid">'+authHomeStrategyFieldHTML()+'</div><div class="scoutlaunch"><span>'+deskEsc(prompt)+' Finding nothing worth opening is a good outcome too — you keep your cash.</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div></div>';
-    return authOpportunityShell(true,controls,start);
+    return start;
   }
-  return authOpportunityShell(false,controls,'<div class="opportunityprompt"><span>'+deskEsc(prompt)+'</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div>');
+  return '<div class="opportunityprompt"><span>'+deskEsc(prompt)+'</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div>';
 }
+function authOpportunityHTML(expanded){
+  return authOpportunityShell(expanded,authOpportunityControlsHTML(),authScoutResultHTML(expanded));
+}
+function authBindOpportunityRows(scope){var rows=scope&&scope.querySelector('.opportunityrows');if(rows)bindElegantList(rows,'.opportunityrow',rows.parentElement&&rows.parentElement.querySelector('.rowsoverflowmeta'));}
 function authRenderOpportunityOnly(){var host=document.getElementById('authHomeOpportunity')||document.getElementById('authEmptyOpportunity');if(!host)return;host.innerHTML=authOpportunityHTML(true);
-  window.requestAnimationFrame(function(){var rows=host.querySelector('.opportunityrows');if(rows)bindElegantList(rows,'.opportunityrow',rows.parentElement&&rows.parentElement.querySelector('.rowsoverflowmeta'));});}
+  window.requestAnimationFrame(function(){authBindOpportunityRows(host);});}
 function authRenderOpportunityFrame(){authRenderOpportunityOnly();}
-function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=window.requestAnimationFrame(function(){HOME_SCOUT_RAF=0;authRenderOpportunityOnly();});}
-function authResetOpportunity(){HOME_SCOUT_SEQ++;HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};authRenderOpportunityFrame();}
+/* A running scan repaints many times a second. Rebuilding the whole panel each frame destroyed
+   focus in the ticker box and janked the controls. Progress frames now patch ONLY the result
+   card, leaving the idle field (and any focus/caret in it) untouched. */
+function authPatchScoutResult(){
+  var host=document.getElementById('authHomeOpportunity')||document.getElementById('authEmptyOpportunity');
+  var card=host&&host.querySelector('.scoutresultcard');
+  if(!host||!card){authRenderOpportunityOnly();return;}
+  card.innerHTML=authScoutResultHTML(true);authBindOpportunityRows(card);
+}
+function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=window.requestAnimationFrame(function(){HOME_SCOUT_RAF=0;authPatchScoutResult();});}
+function authResetOpportunity(){HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};authRenderOpportunityFrame();}
 function authRunOpportunityScan(){
   if(HOME_OPPORTUNITY.phase==='loading'||!window.DeskBackend||!window.DeskBackend.scoutOpportunities)return;
   var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=/^7\b/.test(HOME_IDEA.horizon)?'week':'month';
@@ -5341,11 +5358,15 @@ function authStageHomeSymbol(symbol){
 }
 function authAnalyzeHomeSymbol(symbol,origin){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
-  HOME_SCOUT_SEQ++;HOME_IDEA.symbol=symbol;HOME_IDEA.query=symbol;authOpenHomeIdea(origin);
+  HOME_IDEA.symbol=symbol;HOME_IDEA.query=symbol;authOpenHomeIdea(origin);
 }
 function authOpenHomeIdea(origin){
   if(!HOME_IDEA.symbol)return;
   if(HOME_SCOUT.goal==='ACQUIRE'&&(!(Number(HOME_IDEA.targetCents)>0)||!(Number(HOME_IDEA.holdingsShares)>0))){authRenderOpportunityOnly();return;}
+  /* opening one exact idea supersedes any running scan: abort it so the churning universe scan
+     stops holding the market provider and can't starve this ticker's chain load */
+  HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();
+  if(HOME_OPPORTUNITY.phase==='loading')HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
   enterDecide('idea',null,'New idea',origin,String(HOME_IDEA.symbol).toUpperCase(),null,{
     goal:HOME_SCOUT.goal,view:HOME_IDEA.view,horizon:HOME_IDEA.horizon,riskMode:HOME_IDEA.riskMode,
     targetCents:HOME_IDEA.targetCents,holdingsShares:HOME_IDEA.holdingsShares
@@ -5353,7 +5374,7 @@ function authOpenHomeIdea(origin){
 }
 function authRefreshHomeIdeaAction(){
   var button=document.querySelector('[data-auth-workbench-analyze]'),ready=!!HOME_IDEA.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
-  if(button){button.disabled=!ready;button.textContent=(HOME_IDEA.symbol?'Analyze '+HOME_IDEA.symbol:'Choose an underlying')+' →';}
+  if(button){button.disabled=!ready;button.classList.toggle('pri',ready);button.classList.toggle('ghost',!ready);button.textContent=(HOME_IDEA.symbol?'Analyze '+HOME_IDEA.symbol:'Type a ticker to analyze one')+' →';}
 }
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
     var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(fanSurface){ev.preventDefault();var nearestSeries=nearestBookFanSeries(ev);if(nearestSeries)go('position',nearestSeries);return;}
