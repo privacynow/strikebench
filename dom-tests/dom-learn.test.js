@@ -10,6 +10,7 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7192';
 const BASE = `http://localhost:${PORT}`;
+const WORKSPACE = BASE + '/workspace.html';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
@@ -45,7 +46,7 @@ before(async () => {
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage({ viewport: { width: 2560, height: 1400 } });
   page.on('pageerror', error => pageErrors.push(error.message));
-  await page.goto(BASE + '/#/home');
+  await page.goto(WORKSPACE + '#/home');
   await page.waitForSelector('#app[data-ready="true"]');
 });
 

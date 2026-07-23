@@ -94,7 +94,7 @@ test('canonical discovery controls begin blank and retired defaults stay absent'
   const views = fs.readFileSync(path.join(publicJs, 'views.js'), 'utf8');
   const builder = fs.readFileSync(path.join(publicJs, 'builder.js'), 'utf8');
   const portfolio = fs.readFileSync(path.join(publicJs, 'views-portfolio.js'), 'utf8');
-  const index = fs.readFileSync(path.join(publicJs, '..', 'index.html'), 'utf8');
+  const workspace = fs.readFileSync(path.join(publicJs, '..', 'workspace.html'), 'utf8');
   const scout = research.slice(research.indexOf('function universePlanScout()'),
     research.indexOf('function researchEvidenceOwnerKey'));
   const home = views.slice(views.indexOf('function homeIdeasSection()'),
@@ -102,8 +102,8 @@ test('canonical discovery controls begin blank and retired defaults stay absent'
   const construct = portfolio.slice(portfolio.indexOf('async function openOptimizationPlan'),
     portfolio.indexOf('function portfolioModeNav'));
 
-  assert.match(index, /<button id="risk-mode"[^>]*value=""/);
-  assert.doesNotMatch(index, /<select id="risk-mode"/);
+  assert.match(workspace, /<button id="risk-mode"[^>]*value=""/);
+  assert.doesNotMatch(workspace, /<select id="risk-mode"/);
   assert.equal((scout.match(/value: null/g) || []).length, 3,
     'goal, horizon, and risk posture all start undeclared');
   assert.match(scout, /UI\.chipSet[\s\S]*UI\.segmented[\s\S]*UI\.chipSet/);

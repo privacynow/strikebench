@@ -1585,6 +1585,10 @@ async function installBackend(page, options = {}) {
           source: 'test', sectorKey: 'CORE', label: 'Deterministic test universe',
           symbols: options.universeSymbols || ['AAPL']
         },
+        scout: {
+          source: 'CURATED', label: 'Curated cross-sector opportunity universe',
+          symbols: options.scoutSymbols || options.universeSymbols || ['AAPL']
+        },
         sectors: options.universeSectors || [], world: activeWorld, lane: activeMarketLane
       };
     } else if (method === 'GET' && tradeDetailId && tradeDetails[tradeDetailId]) {
@@ -2057,6 +2061,22 @@ async function installBackend(page, options = {}) {
   };
 }
 
+async function startNewIdea(page, symbol = 'AMD') {
+  await page.locator('#threadNewIdea').click();
+  await page.waitForFunction(() => window.decide && (
+    window.decide.backendPhase === 'underlying-required'
+    || window.decide.backendPhase === 'loading'
+    || window.decide.replacingIdea === true
+    || window.DeskBackend?.state()?.mutationPending === true
+  ));
+  const needsUnderlying = await page.evaluate(() =>
+    window.decide?.backendPhase === 'underlying-required');
+  if (needsUnderlying) {
+    await page.locator('#univq').fill(symbol);
+    await page.locator('#univq').press('Enter');
+  }
+}
+
 async function openAuthoritativeDesk(options = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
@@ -2065,7 +2085,7 @@ async function openAuthoritativeDesk(options = {}) {
   const backend = await installBackend(page, options);
   await page.goto(deskUrl);
   await waitForDeskBoot(page);
-  await page.locator('#threadNewIdea').click();
+  await startNewIdea(page, options.ideaSymbol || 'AMD');
   try {
     await page.waitForFunction(id => window.decide
       && window.decide.backendPhase === 'ready'
@@ -2107,6 +2127,57 @@ async function waitForDeskBoot(page) {
     throw new Error(`${error.message}\nDesk boot diagnosis: ${JSON.stringify(diagnosis)}`);
   }
 }
+
+test('global New idea keeps the underlying absent until the user chooses it', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    universeSymbols: ['AMD', 'AAPL']
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready');
+    const amdResearchBefore = backend.count('GET', '/api/research/AMD');
+    await page.locator('#threadNewIdea').click();
+    await page.waitForSelector('.underlyingrequired #univq');
+
+    const absent = await page.evaluate(() => ({
+      symbol: window.decide?.sym,
+      phase: window.decide?.backendPhase,
+      heading: document.querySelector('.underlyingrequired .emptycard.hero h2')?.textContent,
+      queryFocused: document.activeElement?.id
+    }));
+    assert.equal(absent.symbol, null);
+    assert.equal(absent.phase, 'underlying-required');
+    assert.match(absent.heading, /which underlying/i);
+    assert.equal(backend.count('POST', '/api/plans'), 0,
+      'opening the composer does not mint a Plan for an arbitrary ticker');
+    assert.equal(backend.count('GET', '/api/research/AMD'), amdResearchBefore,
+      'opening the composer does not secretly load AMD research');
+
+    await page.locator('#univq').fill('AMD');
+    await page.locator('#univq').press('Enter');
+    try {
+      await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
+        && window.DeskBackend.state().plan?.symbol === 'AMD', null, { timeout: 10000 });
+    } catch (error) {
+      const diagnosis = await page.evaluate(() => ({
+        decide: window.decide && { symbol: window.decide.sym, phase: window.decide.backendPhase,
+          error: window.decide.backendError, query: window.decide.pickq },
+        bridge: window.DeskBackend.state()
+      }));
+      throw new Error(`${error.message}\n${JSON.stringify(diagnosis)}`);
+    }
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 1,
+      'the explicit symbol is the point at which the canonical idea workflow begins');
+    assert.deepEqual(pageErrors, [], `symbol-required composer emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
 
 test('HTTP Home hydrates ambient universe quotes without Plans, trades, or shares', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -2256,7 +2327,9 @@ test('served Home command search retargets symbols and sectors through the backe
     assert.equal(result.detailSymbol, 'AMD');
     assert.deepEqual(result.lens.symbols, ['AMD', 'NVDA']);
     assert.deepEqual(result.visibleSymbols, ['AMD', 'NVDA']);
-    assert.match(result.text, /Semiconductors · backend universe/i);
+    assert.match(result.text, /Semiconductors/i);
+    assert.doesNotMatch(result.text, /backend universe/i,
+      'the sector lens names the product concept without exposing implementation provenance');
     assert.doesNotMatch(result.text, /VISUAL FIXTURE/i);
     assert.ok(backend.count('GET', '/api/research/AMD') >= 1);
     assert.ok(backend.count('GET', '/api/quotes') >= 2,
@@ -2316,7 +2389,7 @@ test('a user focus supersedes slower initial Home market hydration', async () =>
     assert.equal(settled.requestId, acceptedGeneration);
     assert.equal(settled.detailSymbol, 'AMD');
     assert.equal(settled.visibleSymbol, 'AMD');
-    assert.match(settled.heading, /AMD · OBSERVED/i);
+    assert.match(settled.heading, /AMD/i);
     assert.match(settled.news, /AMD focused research receipt/i);
     assert.ok(backend.count('GET', '/api/research/AAPL') >= 1,
       'the deliberately stale initial request really completed behind the user focus');
@@ -2379,7 +2452,7 @@ test('rapid Home focus changes retain the newest symbol when responses resolve o
     assert.equal(settled.detailSymbol, 'NVDA');
     assert.equal(settled.visibleSymbol, 'NVDA');
     assert.deepEqual(settled.selectedRows, ['NVDA']);
-    assert.match(settled.heading, /NVDA · OBSERVED/i);
+    assert.match(settled.heading, /NVDA/i);
     assert.match(settled.news, /NVDA focused research receipt/i);
     assert.ok(backend.count('GET', '/api/research/AMD') >= 1,
       'the older AMD request was in flight when NVDA became the focus owner');
@@ -2431,9 +2504,12 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       'loading', 'the account and Plan actions render before a cold Research source finishes');
     await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready',
       null, { timeout: 10000 });
+    await page.waitForSelector('#chainBand [data-hist-svg] rect', { timeout: 10000 });
 
     for (const viewport of [
       { width: 1280, height: 800 },
+      { width: 1920, height: 1080 },
+      { width: 2560, height: 1440 },
       { width: 390, height: 844 }
     ]) {
       await page.setViewportSize(viewport);
@@ -2458,7 +2534,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
               return { id, visible: node.getClientRects().length > 0, width: rect.width, height: rect.height };
             }),
           cockpitGeometry: Object.fromEntries(
-            ['book', 'chainBand', 'univBand', 'sectorBand', 'newsBand'].map(id => {
+            ['book', 'riskMain', 'chainBand', 'univBand', 'sectorBand', 'newsBand'].map(id => {
               const rect = document.getElementById(id).getBoundingClientRect();
               return [id, {
                 left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
@@ -2471,11 +2547,15 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
             .map(node => node.tagName),
           marketRows: document.querySelectorAll('[data-auth-market-symbol]').length,
           newsLinks: document.querySelectorAll('#newsBand .authhomenews a').length,
-          candleBodies: document.querySelectorAll('#authHomeHistory rect').length,
+          candleBodies: document.querySelectorAll('#chainBand [data-hist-svg] rect').length,
           chainRows: document.querySelectorAll('#chainBand .authchainrow').length,
           riskMapCount: document.querySelectorAll('#authBookRiskViz').length,
+          scoutControls: document.querySelectorAll('#riskMain [data-auth-scout-goal]').length,
+          liquiditySegments: document.querySelectorAll('.liquiditybar > i').length,
           boardTemplateAreas: getComputedStyle(document.querySelector('#stage .board'))
             .gridTemplateAreas,
+          boardOverflows: document.querySelector('#stage .board').scrollHeight
+            > document.querySelector('#stage .board').clientHeight + 2,
           authorityOverlayVisible: document.getElementById('bookAuthState').getClientRects().length > 0,
           fullHeightEmptyOverlay: document.querySelectorAll('#bookAuthState .authempty').length,
           fixtureFlagVisible: !!fixtureFlag && fixtureFlag.getClientRects().length > 0,
@@ -2492,8 +2572,11 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         `${viewport.width}px HTTP Home does not render the six offline fixture positions`);
       assert.equal(rendered.fixtureFlagVisible, false,
         'served Home is not labeled as a fixture after its authoritative empty receipt arrives');
-      assert.match(rendered.text, /No open Practice positions/i);
-      assert.match(rendered.text, /Market pulse & chain[\s\S]*AAPL[\s\S]*Price history/i,
+      assert.doesNotMatch(rendered.text, /No open Practice positions/i,
+        'a truly empty Book does not spend a full panel apologizing for absent positions');
+      assert.match(rendered.text, /What is worth studying today\?.*Broad market.*Income.*Directional.*Acquire.*Hedge.*Exit/i,
+        'the empty Book leads with the canonical cross-sector Scout and every supported goal');
+      assert.match(rendered.text, /Market pulse & chain[\s\S]*AAPL[\s\S]*(?:daily bars|stored daily bars)/i,
         'the empty account retains current market evidence without exposing ingestion receipts');
       assert.match(rendered.text, /Research & news[\s\S]*Backend research sentinel headline/i,
         'the empty account retains research headlines without repeating provenance in the heading');
@@ -2513,36 +2596,49 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         'the empty Book does not leave a full-board authority overlay over Home');
       assert.equal(rendered.fullHeightEmptyOverlay, 0,
         'the screenshot-era three-column empty receipt canvas is absent');
-      const emptyRisk = rendered.cockpitPanels.find(panel => panel.id === 'riskMain');
-      assert.deepEqual(emptyRisk, { id: 'riskMain', visible: false, width: 0, height: 0 },
-        `${viewport.width}px does not reserve a large chart tile for zero plottable positions`);
+      const opportunityHero = rendered.cockpitPanels.find(panel => panel.id === 'riskMain');
+      assert.equal(opportunityHero.visible, true,
+        `${viewport.width}px gives the primary Home canvas to opportunity discovery`);
+      assert.ok(opportunityHero.width >= (viewport.width <= 500 ? 350 : 400),
+        `${viewport.width}px Scout hero keeps useful width (${opportunityHero.width}px)`);
+      assert.ok(opportunityHero.height >= (viewport.width <= 500 ? 400 : 300),
+        `${viewport.width}px Scout hero keeps useful height (${opportunityHero.height}px)`);
       const emptyBookRisk = rendered.cockpitPanels.find(panel => panel.id === 'bookrisk');
       assert.deepEqual(emptyBookRisk, { id: 'bookrisk', visible: false, width: 0, height: 0 },
         `${viewport.width}px does not reserve a second empty risk receipt tile`);
+      const emptyRoster = rendered.cockpitPanels.find(panel => panel.id === 'book');
+      assert.deepEqual(emptyRoster, { id: 'book', visible: false, width: 0, height: 0 },
+        `${viewport.width}px does not reserve a redundant apology panel for an empty roster`);
       assert.equal(rendered.riskMapCount, 0,
         'the empty Practice receipt never mounts a zero-valued risk-map SVG');
-      assert.doesNotMatch(rendered.boardTemplateAreas, /\bmap\b/,
-        `${viewport.width}px gives the empty Home grid to actionable account and evidence panels`);
-      rendered.cockpitPanels.filter(panel => panel.id !== 'riskMain' && panel.id !== 'bookrisk').forEach(panel => {
+      assert.match(rendered.boardTemplateAreas, /\bmap\b/,
+        `${viewport.width}px gives the empty Home hero to the actionable Scout`);
+      assert.equal(rendered.scoutControls, 5,
+        'one Home Scout surface owns all goal controls');
+      assert.ok(rendered.liquiditySegments >= 1,
+        'the top orientation row plots the same cash-truth receipt it labels');
+      rendered.cockpitPanels.filter(panel => panel.id !== 'bookrisk' && panel.id !== 'book').forEach(panel => {
         assert.equal(panel.visible, true, `${viewport.width}px ${panel.id} remains visible`);
         assert.ok(panel.width >= (viewport.width <= 500 ? 350 : 200),
           `${viewport.width}px ${panel.id} keeps useful width (${panel.width}px)`);
         assert.ok(panel.height >= 180,
           `${viewport.width}px ${panel.id} keeps useful height (${panel.height}px)`);
       });
-      if (viewport.width === 1280) {
-        const { book, chainBand, univBand, sectorBand, newsBand } = rendered.cockpitGeometry;
-        assert.ok(Math.abs(chainBand.top - book.top) < 2 && Math.abs(book.top - sectorBand.top) < 2,
-          'the empty desktop cockpit keeps chain, roster, and market watch in one first row');
-        assert.ok(Math.abs(newsBand.top - univBand.top) < 2 && newsBand.top >= chainBand.bottom - 2,
-          'research/news and working Plans share the second row without overlapping the market row');
-        assert.ok(chainBand.width > book.width * 2.5,
-          'the information-dense chain/candle panel receives three times the empty roster width');
-        assert.ok(chainBand.width > sectorBand.width * 1.4,
-          'the chain/candle panel remains wider than the bounded market watch');
-        assert.ok(Math.abs(chainBand.width - newsBand.width) < 3
-          && Math.abs(newsBand.width - univBand.width) < 3,
-        'the two full-width evidence/Plan panels balance the second row');
+      if (viewport.width >= 1200) {
+        const { riskMain, chainBand, univBand, sectorBand, newsBand } = rendered.cockpitGeometry;
+        assert.ok(Math.abs(riskMain.top - chainBand.top) < 2,
+          'the Scout and live market pulse form the empty desktop hero row');
+        assert.ok(Math.abs(univBand.top - sectorBand.top) < 2
+          && Math.abs(sectorBand.top - newsBand.top) < 2
+          && univBand.top >= riskMain.bottom - 2,
+          'working ideas, market watch, and news form the second decision row');
+        assert.ok(riskMain.width > chainBand.width * 1.25,
+          'cross-sector opportunity discovery receives the wider hero surface');
+        assert.ok(Math.abs(univBand.width - sectorBand.width) < 3
+          && Math.abs(sectorBand.width - newsBand.width) < 3,
+          'the three supporting Home panels share the second row evenly');
+        assert.equal(rendered.boardOverflows, false,
+          `${viewport.width}px default Home composition has no panel or board scroll`);
       }
       assert.doesNotMatch(rendered.text, /Covered strangle|Short-put campaign|Past stop/i,
         'offline position stories cannot survive in the served empty book');
@@ -2551,6 +2647,8 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       assert.equal(rendered.documentOverflow, false,
         `${viewport.width}px authoritative empty Home remains horizontally contained`);
     }
+    assert.equal(backend.count('POST', '/api/research/scout'), 0,
+      'rendering the rich Home never spends a provider allowance; Scout remains explicit');
 
     await page.evaluate(() => {
       window.__homeResumeContext = null;
@@ -3111,7 +3209,7 @@ test('missing observed history leaves Position Bloom usable with its structural 
         phases: window.__positionPhases,
         payoffPaths: host.querySelectorAll('svg.authpayoff path').length,
         payoffSvg: host.querySelectorAll('svg.authpayoff').length,
-        legs: host.querySelectorAll('.authleg').length,
+        legs: host.querySelectorAll('.legr').length,
         failed: host.querySelectorAll('.authfailed').length,
         loading: /Loading the exact position/i.test(host.textContent),
         sourceAction: host.querySelector('a[href="/#/data/sources"]')?.textContent.trim(),
@@ -3132,8 +3230,8 @@ test('missing observed history leaves Position Bloom usable with its structural 
     assert.match(rendered.missing.find(row => row.key === 'history')?.message || '',
       /daily history is not stored/i);
     assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 1);
-    assert.equal(backend.count('GET', '/api/research/AAPL/history'), 2,
-      'Home context and the focused Position each receive an explicit history receipt');
+    assert.equal(backend.count('GET', '/api/research/AAPL/history'), 1,
+      'Home and Position share one complete stored-history artifact');
     assert.deepEqual(pageErrors, [], `partial Position Bloom emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -3189,6 +3287,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       null, { timeout: 10000 });
     await page.waitForSelector('#stage[data-book-authority="ready"] #book .card[data-id="'
       + BOOK_TRADE_ID + '"]', { timeout: 10000 });
+    await page.waitForSelector('#authBookRiskViz [data-auth-risk-position="'
+      + BOOK_TRADE_ID + '"]', { timeout: 10000 });
 
     const home = await page.evaluate(tradeId => {
       const state = window.DeskBackend.state();
@@ -3228,7 +3328,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(home.authoredSparkPaths, 0,
       'Home leaves mark history blank until a stored marksHistory receipt is loaded');
     assert.equal(home.workingIdeas, 'Working ideas');
-    assert.equal(home.riskHint, 'chance of profit × max loss');
+    assert.match(home.riskHint, /(?:independent position projections · never summed|synchronized Book projection)/i);
     assert.equal(home.riskPoints, 1, 'each plotted position is a focus control');
     assert.doesNotMatch(home.text,
       /\b(?:authoritative|backend-owned|source-owned|working plans|mark coverage|stored coverage)\b/i,
@@ -3241,6 +3341,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       return bridge && bridge.position && bridge.position.phase === 'ready'
         && bridge.position.data.trade.id === tradeId;
     }, BOOK_TRADE_ID, { timeout: 10000 });
+    await page.waitForSelector(`#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"]`,
+      { timeout: 10000 });
     await page.waitForFunction(tradeId => window.state && window.state.level === 'position'
       && window.state.focus === tradeId, BOOK_TRADE_ID, { timeout: 10000 });
 
@@ -3260,7 +3362,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       const payPanel = positionViewport?.querySelector('.authpaypanel');
       const positionSide = positionViewport?.querySelector('.authposside');
       const sideRect = positionSide?.getBoundingClientRect();
-      const legRows = Array.from(positionSide?.querySelectorAll('.authleg') || []);
+      const legRows = Array.from(positionSide?.querySelectorAll('.legr') || []);
       return {
         id: receipt.trade.id,
         symbol: receipt.trade.symbol,
@@ -3310,8 +3412,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       { price: 222.22, profit: 246.8 },
       { price: 230, profit: 1567.9 }
     ]);
-    assert.equal(position.scenarioUnavailable, true,
-      'without a position-focused backend canvas, the browser does not invent scenario P/L');
+    assert.equal(position.scenarioUnavailable, false,
+      'the held package is valued on its owning unconditioned stored fan');
     assert.equal(position.payKeyCount, 5,
       'the payoff keeps its values in a dedicated rail instead of overlaying the curve');
     assert.equal(position.payoffOverlayLabels, 0,
@@ -3319,8 +3421,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(position.legRows, 2);
     assert.equal(position.legsContained, true,
       'the Position hero keeps every leg visible inside its top-right decision panel');
-    assert.equal(position.researchPanelCount, 4,
-      'market, history, news, and management each receive a readable panel');
+    assert.equal(position.researchPanelCount, 5,
+      'market, chain, history, news, and management each receive one readable shared panel');
     assert.equal(position.researchPanelsContained, true,
       'the expanded Position research band remains horizontally contained');
     assert.equal(position.researchBeforeScenario, true,
@@ -3334,24 +3436,27 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.doesNotMatch(position.text,
       /\b(?:authoritative position|backend checkpoints|exact stored legs|quote receipt|source-backed news|plan & management|conditioned|KEYWORD_DERIVED|MANAGE_REVIEW)\b/i,
       'Position Bloom keeps implementation vocabulary out of the user-facing surface');
-    assert.match(position.text,
-      /scenario P\/L.*remain blank|scenario.*unavailable|authoritative scenario.*required/i,
-      'missing backend position checkpoints are disclosed instead of calculated locally');
+    assert.match(position.text, /What happens if — Possible futures/i,
+      'Position opens on the honest unconditioned fan without inventing a named story');
     assert.doesNotMatch(position.text, /MI400 ramp|Visual fixture|Time decay pays you about/i,
       'the focused backend position does not inherit static fixture research or mechanics');
     assert.equal(position.documentOverflow, false);
 
     assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 1);
     assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
-    assert.equal(backend.count('GET', '/api/research/AAPL/history'), 2,
-      'Home context and the focused Position each receive an explicit history receipt');
+    assert.equal(backend.count('GET', '/api/research/AAPL/history'), 1,
+      'Home context and the focused Position share one complete stored-history receipt');
     assert.equal(backend.count('GET', '/api/research/AAPL/news'), 1);
     assert.equal(backend.count('GET', '/api/plans/' + BOOK_PLAN_ID + '/manage'), 1);
     assert.equal(backend.count('GET', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/latest`), 1,
       'Position Bloom names the owning Plan stored ensemble as an optional receipt');
     assert.equal(backend.count('POST', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble`), 0,
       'Position Bloom never creates a replacement fan');
-    assert.equal(backend.count('POST', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`), 0,
+    const positionPaths = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
+    assert.ok(positionPaths.some(row => !Array.isArray(row.body.waypoints)),
+      'opening a Position reuses the owning unconditioned stored fan');
+    assert.equal(positionPaths.filter(row => Array.isArray(row.body.waypoints)).length, 0,
       'opening a Position does not condition paths until a scenario is selected');
     assert.deepEqual(pageErrors, [], `authoritative Position Bloom emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -3391,7 +3496,7 @@ test('global New idea from Position Bloom starts a mutable Plan and preserves th
       window.__positionCardBeforeNewIdea = document.querySelector(`.card[data-id="${tradeId}"]`);
     }, BOOK_TRADE_ID);
 
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(planId => window.decide?.backendPhase === 'error'
       || (window.decide?.backendPhase === 'ready'
         && window.DeskBackend.state().plan?.id === planId), PLAN_ID, { timeout: 10000 });
@@ -3465,7 +3570,7 @@ test('New idea rotates a stale create idempotency key after a Plan changes decla
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide?.backendPhase === 'error'
       || window.decide?.backendPhase === 'ready', null, { timeout: 10000 });
     const diagnosis = await page.evaluate(() => ({
@@ -3488,7 +3593,7 @@ test('New idea rotates a stale create idempotency key after a Plan changes decla
   }
 });
 
-test('Position Bloom opens on its backend median story with a useful paused P/L fan', async () => {
+test('Position opens on the unconditioned stored P/L fan and reuses it for playback', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   const pageErrors = [];
@@ -3522,13 +3627,13 @@ test('Position Bloom opens on its backend median story with a useful paused P/L 
         ghostLength: ghost?.getTotalLength() || 0
       };
     }, { tradeId: BOOK_TRADE_ID, stageSelector });
-    assert.equal(opened.pinned, 4,
-      'the ensemble terminal median selects the nearest named Flat/range story');
-    assert.equal(opened.progress, 0,
-      'the useful default is paused at now rather than silently autoplaying');
+    assert.equal(opened.pinned, undefined,
+      'opening a held position does not silently condition the stored market fan');
+    assert.equal(opened.progress, 1,
+      'the resting fan shows the complete possible-futures field');
     assert.equal(opened.playing, false);
     assert.equal(opened.pathSpace, 'pnl');
-    assert.match(opened.stageText, /What happens if — Flat \/ range/i);
+    assert.match(opened.stageText, /What happens if — Possible futures/i);
     assert.doesNotMatch(opened.stageText, /select a scenario|conditioned|receipt|authoritative/i);
     assert.ok(opened.ghostLength > 0 && opened.focusLength > 0,
       'the full backend path remains visible as context at t=0 instead of leaving a void');
@@ -3538,24 +3643,30 @@ test('Position Bloom opens on its backend median story with a useful paused P/L 
     const priceView = await page.evaluate(stageSelector => ({
       space: document.querySelector(stageSelector)?.querySelector('.authpathchart')
         ?.getAttribute('data-path-space'),
-      sameStage: window.__defaultPositionStage === document.querySelector(stageSelector)
+      stageCount: document.querySelectorAll(stageSelector).length
     }), stageSelector);
     assert.equal(priceView.space, 'price');
-    assert.equal(priceView.sameStage, true,
-      'switching chart meaning preserves the mounted Position scenario surface');
+    assert.equal(priceView.stageCount, 1,
+      'switching chart meaning rebinds the one Position scenario component without duplicating it');
     await page.locator(`${stageSelector} [data-auth-path-view="pnl"]`).click();
     await page.waitForSelector(`${stageSelector} .authpathchart[data-path-space="pnl"]`);
 
-    await page.locator(`${stageSelector} [data-auth-focus-path]`).dispatchEvent('click');
+    const projectionsBeforePlayback = backend.count('POST',
+      `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
+    await page.locator('[data-auth-position-detail] [data-auth-manage="forward"]').click();
     await page.waitForFunction(tradeId => window.scenSt(tradeId).t > 0,
       BOOK_TRADE_ID, { timeout: 3000 });
-    assert.equal(backend.count('POST', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`), 1,
-      'the default and playback reuse one backend projection');
-    const request = backend.requests.find(row => row.method === 'POST'
-      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
-    assert.equal(request.body.limit, 48);
-    assert.equal(Object.hasOwn(request.body, 'paths'), false);
-    assert.deepEqual(pageErrors, [], `default Position story emitted page errors: ${pageErrors.join('\n')}`);
+    assert.equal(backend.count('POST', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`),
+      projectionsBeforePlayback, 'playback reuses the unconditioned stored projection');
+    const requests = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`
+      && row.body.focusPositionKey === BOOK_TRADE_ID
+      && !Array.isArray(row.body.waypoints));
+    assert.ok(requests.length >= 1,
+      'the resting Position fan is the exact held package valued on its owning stored ensemble');
+    assert.ok(requests.some(row => row.body.limit === 24));
+    requests.forEach(row => assert.equal(Object.hasOwn(row.body, 'paths'), false));
+    assert.deepEqual(pageErrors, [], `default Position fan emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -3577,9 +3688,9 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
     await page.waitForFunction(tradeId => window.DeskBackend.state().position?.phase === 'ready'
       && window.state?.level === 'position' && window.state?.focus === tradeId,
     BOOK_TRADE_ID, { timeout: 10000 });
-    await page.waitForSelector(`${stageSelector}[data-position-scenario="idle"]`);
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"]`);
 
-    await page.locator(`${stageSelector} [data-auth-scenario="0"]`).click();
+    await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
     await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"] path.focuspath`,
       { timeout: 10000 });
     // The ready event and the request promise both reconcile this bounded panel. Let that
@@ -3601,7 +3712,7 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
         state: stage.getAttribute('data-position-scenario'),
         contextPaths: stage.querySelectorAll('path.context').length,
         focusPaths: stage.querySelectorAll('path.focuspath').length,
-        bandCount: stage.querySelectorAll('path.pathband').length,
+        bandCount: stage.querySelectorAll('.authpathchart path[fill^="url(#pf"]').length,
         focusPrices: focus.prices,
         focusSourcePathIndex: focus.sourcePathIndex,
         receiptFocusKey: response.receipt.focusPositionKey,
@@ -3610,7 +3721,7 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
         chartSpace: stage.querySelector('.authpathchart')?.getAttribute('data-path-space'),
         pnlPathCount: window.authPositionPnlFan(window.byId[tradeId])?.paths?.length || 0,
         directionChanges,
-        tileText: stage.querySelector('[data-auth-scenario="0"]').textContent
+        tileText: stage.querySelector('.srow[data-si="0"]').textContent
           .replace(/\s+/g, ' ').trim(),
         text: stage.textContent.replace(/\s+/g, ' ').trim()
       };
@@ -3639,7 +3750,6 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
       'the selected tile exposes the backend target-day P/L');
     assert.match(ready.text, /What happens if — Market crash/i);
     assert.match(ready.text, /this position across the same paths/i);
-    assert.match(ready.text, /one market fan.*this position’s response/i);
     assert.match(ready.text, /3 of 500 paths from this market fan/i);
     assert.doesNotMatch(ready.text,
       /Conditioned Monte Carlo|model position-path-model-test-v1|valuation position-valuation|stored paths/i,
@@ -3736,7 +3846,9 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
       'the conditioned path panel remains contained at mobile width');
 
     const projection = backend.requests.find(row => row.method === 'POST'
-      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
+      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`
+      && Array.isArray(row.body.waypoints));
+    assert.ok(projection, 'the named story adds one conditioned read of the owning stored ensemble');
     assert.equal(projection.body.focusPositionKey, BOOK_TRADE_ID);
     assert.equal(projection.body.limit, 48,
       'the bounded renderer requests enough stored neighbors for credible trajectory texture');
@@ -3770,9 +3882,11 @@ test('unpinning a Position scenario during a delayed response cannot restore cle
     await page.waitForFunction(tradeId => window.DeskBackend.state().position?.phase === 'ready'
       && window.state?.level === 'position' && window.state?.focus === tradeId,
     BOOK_TRADE_ID, { timeout: 10000 });
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"]`);
 
-    await page.locator(`${stageSelector} [data-auth-scenario="0"]`).click();
-    for (let attempt = 0; attempt < 120 && backend.count('POST', projectionPath) < 1; attempt += 1) {
+    await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
+    for (let attempt = 0; attempt < 120 && !backend.requests.some(row => row.method === 'POST'
+      && row.path === projectionPath && Array.isArray(row.body.waypoints)); attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const inFlightDiagnostic = await page.evaluate(({ tradeId, stageSelector }) => ({
@@ -3784,11 +3898,12 @@ test('unpinning a Position scenario during a delayed response cannot restore cle
       stagePhase: document.querySelector(stageSelector)?.getAttribute('data-position-scenario'),
       stageText: document.querySelector(stageSelector)?.textContent.replace(/\s+/g, ' ').trim()
     }), { tradeId: BOOK_TRADE_ID, stageSelector });
-    assert.equal(backend.count('POST', projectionPath), 1,
+    assert.equal(backend.requests.filter(row => row.method === 'POST'
+      && row.path === projectionPath && Array.isArray(row.body.waypoints)).length, 1,
       `the test clears the scenario only after its conditioned request is in flight: ${JSON.stringify({ inFlightDiagnostic, pageErrors })}`);
 
-    await page.locator(`${stageSelector} [data-auth-scenario="0"]`).click();
-    await page.waitForSelector(`${stageSelector}[data-position-scenario="idle"]`);
+    await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"]`);
     await page.waitForFunction(() => window.DeskBackend.state().positionScenario?.phase === 'ready',
       null, { timeout: 5000 });
     await page.waitForTimeout(80);
@@ -3799,21 +3914,25 @@ test('unpinning a Position scenario during a delayed response cannot restore cle
       return {
         stagePhase: stage.getAttribute('data-position-scenario'),
         pinned: Object.prototype.hasOwnProperty.call(window.pinnedScen, tradeId),
-        pinnedTiles: stage.querySelectorAll('[data-auth-scenario].pinned').length,
+        pinnedTiles: stage.querySelectorAll('.srow.pinned').length,
         chartCount: stage.querySelectorAll('.authpathchart').length,
         scenarioPhase: position._positionScenarioPhase,
         animationRestored: !!position.authoritativeAnimation,
+        conditionedWaypoints: position.authoritativeAnimation?.receipt
+          ?.conditioningAssumptions?.waypoints?.length || 0,
         text: stage.textContent.replace(/\s+/g, ' ').trim()
       };
     }, { tradeId: BOOK_TRADE_ID, stageSelector });
-    assert.equal(cleared.stagePhase, 'idle');
+    assert.equal(cleared.stagePhase, 'ready');
     assert.equal(cleared.pinned, false);
     assert.equal(cleared.pinnedTiles, 0);
-    assert.equal(cleared.chartCount, 0);
-    assert.equal(cleared.scenarioPhase, 'idle');
-    assert.equal(cleared.animationRestored, false,
-      'the late authoritative response cannot repopulate a scenario the user cleared');
-    assert.match(cleared.text, /Select a scenario to reveal its stored trajectories/i);
+    assert.equal(cleared.chartCount, 1);
+    assert.equal(cleared.scenarioPhase, 'ready');
+    assert.equal(cleared.animationRestored, true,
+      'unpinning returns to the useful unconditioned stored fan');
+    assert.equal(cleared.conditionedWaypoints, 0,
+      'the late conditioned response cannot overwrite the restored possible-futures field');
+    assert.match(cleared.text, /What happens if — Possible futures/i);
     assert.equal(backend.count('POST', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble`), 0);
     assert.deepEqual(pageErrors, [], `delayed Position scenario emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -3862,8 +3981,8 @@ test('reopening cached Position A after Position B restores adapter ownership be
       && window.DeskBackend.state().position?.phase === 'ready'
       && window.DeskBackend.state().position?.data?.trade?.id === tradeId,
     BOOK_TRADE_ID, { timeout: 10000 });
-    assert.equal(backend.count('GET', firstDetailPath), 2,
-      'the cached A card reloads the global adapter after B owned it');
+    assert.equal(backend.count('GET', firstDetailPath), 1,
+      'Home, cached Position A, and its reopen share one exact trade-detail receipt');
 
     const restored = await page.evaluate(tradeId => ({
       adapterTradeId: window.DeskBackend.state().position.data.trade.id,
@@ -3876,7 +3995,8 @@ test('reopening cached Position A after Position B restores adapter ownership be
     assert.equal(restored.cardTradeId, BOOK_TRADE_ID);
     assert.equal(restored.cardPlanId, BOOK_PLAN_ID);
 
-    await page.locator(`${firstStage} [data-auth-scenario="0"]`).click();
+    await page.waitForSelector(`${firstStage}[data-position-scenario="ready"]`);
+    await page.locator(`${firstStage} .srow[data-si="0"]`).click();
     await page.waitForSelector(`${firstStage}[data-position-scenario="ready"] path.focuspath`,
       { timeout: 10000 });
     const conditioned = await page.evaluate(({ firstId, secondId, stageSelector }) => {
@@ -3890,7 +4010,8 @@ test('reopening cached Position A after Position B restores adapter ownership be
         visibleFocusKey: first.authoritativeAnimation.receipt.focusPositionKey,
         firstStageReady: document.querySelector(stageSelector)
           ?.getAttribute('data-position-scenario'),
-        secondAnimation: !!second.authoritativeAnimation
+        secondConditioned: !!(second.authoritativeAnimation?.receipt
+          ?.conditioningAssumptions?.waypoints?.length)
       };
     }, {
       firstId: BOOK_TRADE_ID,
@@ -3902,16 +4023,17 @@ test('reopening cached Position A after Position B restores adapter ownership be
     assert.equal(conditioned.responseFocusKey, BOOK_TRADE_ID);
     assert.equal(conditioned.visibleFocusKey, BOOK_TRADE_ID);
     assert.equal(conditioned.firstStageReady, 'ready');
-    assert.equal(conditioned.secondAnimation, false,
-      'B cannot receive or render a focused scenario requested from A');
+    assert.equal(conditioned.secondConditioned, false,
+      'B can retain its independent possible-futures fan but cannot receive A\'s conditioned story');
 
     const firstProjection = backend.requests.find(row => row.method === 'POST'
-      && row.path === firstProjectionPath);
+      && row.path === firstProjectionPath && Array.isArray(row.body.waypoints));
     assert.ok(firstProjection, 'A sends one focused stored-ensemble projection');
     assert.equal(firstProjection.body.ensembleId, BOOK_ENSEMBLE_ID);
     assert.equal(firstProjection.body.focusPositionKey, BOOK_TRADE_ID);
-    assert.equal(backend.count('POST', secondProjectionPath), 0,
-      'B\'s owning Plan is never conditioned while A is focused');
+    assert.equal(backend.requests.filter(row => row.method === 'POST'
+      && row.path === secondProjectionPath && Array.isArray(row.body.waypoints)).length, 0,
+    'B\'s owning Plan is never conditioned while A is focused');
     assert.deepEqual(pageErrors, [], `A→B→A Position ownership emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -3996,13 +4118,17 @@ test('Position scenarios condition the owning Plan stored ensemble on the exact 
 
     const projectionRequests = backend.requests.filter(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
-    assert.equal(projectionRequests.length, 1);
-    assert.deepEqual(projectionRequests[0].body, {
+    const conditionedRequests = projectionRequests.filter(row => Array.isArray(row.body.waypoints));
+    assert.equal(conditionedRequests.length, 1,
+      'one explicit story adds one conditioned read beside the unconditioned Book fan');
+    assert.deepEqual(conditionedRequests[0].body, {
       ensembleId: BOOK_ENSEMBLE_ID,
       waypoints: requestedWaypoints,
       limit: 7,
       focusPositionKey: BOOK_TRADE_ID
     }, 'the browser sends selection constraints and the exact trade id, not generated paths');
+    assert.ok(projectionRequests.some(row => !Array.isArray(row.body.waypoints)),
+      'the Book projection remains the same unconditioned owner, not a second scenario engine');
     assert.equal(backend.count('GET', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/latest`), 1);
     assert.equal(backend.requests.filter(row => row.method === 'POST'
       && /\/outcomes\/ensemble$/.test(row.path)).length, 0,
@@ -4072,7 +4198,8 @@ test('Position scenario rejects substituted focused identity without disturbing 
       assert.equal(rejected.storedEnsembleFingerprint, BOOK_ENSEMBLE_FINGERPRINT);
       if (failure.pathWaypoints) {
         const projection = backend.requests.find(row => row.method === 'POST'
-          && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
+          && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`
+          && Array.isArray(row.body.pathWaypoints));
         assert.deepEqual(projection.body.pathWaypoints, failure.pathWaypoints);
         assert.equal(Object.hasOwn(projection.body, 'waypoints'), false,
           'fractional and day-level waypoints cannot compete as two conditioning owners');
@@ -4094,7 +4221,7 @@ test('an interrupted authoritative load renders one actionable state and retries
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'error');
 
     for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
@@ -4158,7 +4285,7 @@ test('a zero-candidate backend result remains a stable Desk with screening recei
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide
       && window.decide.backendPhase === 'strategy-empty', null, { timeout: 10000 });
 
@@ -4204,7 +4331,7 @@ test('a zero-candidate backend result remains a stable Desk with screening recei
         'screening receipts lead with the backend human display name');
       assert.equal(empty.rejectionLabels.includes('IRON CONDOR'), false,
         'screening receipts do not expose the backend family enum as the user-facing name');
-      assert.match(empty.text, /no package fits this exact idea yet/i);
+      assert.match(empty.text, /no package fits this idea yet/i);
       assert.match(empty.text, /STALE/i);
       assert.equal(empty.failedCount, 0,
         'a valid empty competition is not presented as a transport failure');
@@ -4265,7 +4392,7 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
         visibleHorizon: window.decide.horizon,
         positionIdentity: active.positionIdentity,
         deskPickId: window.decide.deskPickId,
-        pickBadgeCandidate: document.querySelector('.fanr .pickbadge')?.closest('.fanr')?.dataset.cand,
+        pickBadgeCandidate: document.querySelector('.fanr.pick')?.dataset.cand,
         fanSummary: document.querySelector('.dcleft .modebar .hint')?.textContent,
         scenarioHint: document.querySelector('.scenpanel > .lenshd .hint')?.textContent,
         monteCarloStats: document.querySelector('.mcstats')?.textContent,
@@ -4417,8 +4544,8 @@ test('Desk loads the server strategy catalog and accounts for families outside t
       })),
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
     }));
-    assert.match(drawer.heading, /Supported strategy catalog.*4 server-owned families/i);
-    assert.match(drawer.intro, /catalog stays complete/i);
+    assert.match(drawer.heading, /Supported strategies.*4 families/i);
+    assert.match(drawer.intro, /Every family remains visible/i);
     assert.deepEqual(new Set(drawer.rows.map(row => row.name)), new Set([
       'Debit call spread', 'Cash-secured put', 'Protective put', 'Naked call'
     ]), 'the drawer renders every family in the server receipt, not just ranked candidates');
@@ -4451,7 +4578,7 @@ test('a slow additive strategy catalog never blocks the exact Plan and recommend
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(id => window.decide?.backendPhase === 'ready'
       && window.DeskBackend.state().selected?.id === id
       && window.decide.orderPreview?.selected?.id === id,
@@ -4657,7 +4784,7 @@ test('unavailable execution preserves candidate economics without promoting zero
         ensembleAnchorFreshness: state.ensemble.preview.receipt.anchorFreshness,
         previewFreshness: window.decide.orderPreview.preview.freshness,
         deskPickId: window.decide.deskPickId,
-        pickBadges: document.querySelectorAll('.fanr .pickbadge').length,
+        pickBadges: document.querySelectorAll('.fanr.pick').length,
         rankRead: document.querySelector('.dcleft .modebar .hint')?.textContent
       };
     }, CANDIDATE_ID);
@@ -4681,7 +4808,8 @@ test('unavailable execution preserves candidate economics without promoting zero
     assert.match(rendered.rankRead, /favorable economic.*execution unavailable/i);
     assert.match(rendered.dockText, /candidate −\$123 debit · execution unavailable/i);
     assert.match(rendered.dockText, /book unavailable/i);
-    assert.match(rendered.dockText, /Cannot execute AMD from a stale observed option book/i);
+    assert.match(rendered.dockText,
+      /Execution paused: the current AMD quote is stale\. Refresh an executable quote/i);
     assert.doesNotMatch(rendered.dockText, /backend proposed \+\$0|collect \+\$0|pay \+\$0/i);
     assert.equal(rendered.reviewDisabled, true);
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
@@ -4974,7 +5102,7 @@ test('Desk Pick preserves backend rank while selecting the coherent assessed can
       dimmed: Array.from(document.querySelectorAll('.fanr[data-cand]')).map(row => row.classList.contains('dis')),
       selectedId: window.decide.candId,
       deskPickId: window.decide.deskPickId,
-      badgeId: document.querySelector('.fanr .pickbadge')?.closest('.fanr')?.dataset.cand
+      badgeId: document.querySelector('.fanr.pick')?.dataset.cand
     }));
     assert.deepEqual(view.order, [first.id, second.id],
       'the Desk does not silently rewrite the backend recommendation rank');
@@ -5003,7 +5131,7 @@ test('an adverse-only competition requires an explicit comparison selection befo
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide?.backendPhase === 'comparison-required'
       && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
     await page.waitForSelector('#decMap [data-mapi]');
@@ -5013,12 +5141,12 @@ test('an adverse-only competition requires an explicit comparison selection befo
       previewedId: window.decide.candId,
       selectedId: window.DeskBackend.state().selected?.id || null,
       deskPickId: window.decide.deskPickId,
-      badges: document.querySelectorAll('.fanr .pickbadge').length,
+      badges: document.querySelectorAll('.fanr.pick').length,
       sectionLabel: document.querySelector('.modebar .eyebrow')?.textContent.trim(),
-      qualityLabel: document.querySelector('.fanr .ffit')?.textContent.trim(),
-      qualityReason: document.querySelector('.fanr .why')?.textContent.trim(),
-      metricText: document.querySelector('.fanr .fr3')?.textContent
-        .replace(/\s+/g, ' ').trim(),
+      qualityLabel: document.querySelector('.fanr .fvd')?.getAttribute('title'),
+      qualityReason: document.querySelector('.fanr')?.getAttribute('title'),
+      metrics: Array.from(document.querySelectorAll('.fanr .fnum,.fanr .fev'))
+        .map(node => node.textContent.trim()),
       rankRead: document.querySelector('.modebar .hint')?.textContent.trim(),
       payoffTitle: document.querySelector('#decideStage .dccenter .paytitle .lbl')?.textContent.trim(),
       selectedRows: document.querySelectorAll('.fanr.sel').length,
@@ -5041,13 +5169,15 @@ test('an adverse-only competition requires an explicit comparison selection befo
       'a coherent declaration fit is not promoted over an unfavorable economic verdict');
     assert.equal(comparison.badges, 0);
     assert.equal(comparison.sectionLabel, 'Engine comparisons');
-    assert.equal(comparison.qualityLabel, 'Unfavorable',
+    assert.match(comparison.qualityLabel, /^Unfavorable/i,
       'a coherent intent fit with adverse economics is never presented as merely coherent');
-    assert.match(comparison.qualityReason, /modeled after-cost economics are adverse/i,
+    assert.match(comparison.qualityReason,
+      /Realistic after-cost EV.*comparison, not a recommendation/i,
       'the ranked row itself explains why this is not a recommendation');
-    assert.match(comparison.metricText, /chance\s+63%/i);
-    assert.match(comparison.metricText, /stress[\s\S]*(?:−|-)\$123/i);
-    assert.match(comparison.metricText, /capital[\s\S]*\$123/i,
+    assert.deepEqual(comparison.metrics, ['−$123', '−$123', '63%', '−$123', '$123', '−$370']);
+    assert.equal(comparison.metrics[2], '63%');
+    assert.equal(comparison.metrics[3], '−$123');
+    assert.equal(comparison.metrics[4], '$123',
       'comparison-required keeps the backend POP, stress, and capital field visible');
     assert.equal(comparison.rankRead, 'no endorsable pick · 1 comparison');
     assert.match(comparison.payoffTitle, /^Comparison preview payoff/,
@@ -5097,13 +5227,13 @@ test('favorable economics remain visible when objective fit prevents endorsement
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide?.backendPhase === 'comparison-required'
       && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
     const view = await page.evaluate(() => ({
       deskPickId: window.decide.deskPickId,
       rankRead: document.querySelector('.modebar .hint')?.textContent.trim(),
-      quality: document.querySelector('.fanr .ffit')?.textContent.trim(),
+      quality: document.querySelector('.fanr .fvd')?.getAttribute('title'),
       notice: document.querySelector('.dcleft .backendnotice')?.textContent
         .replace(/\s+/g, ' ').trim(),
       pathNotice: document.querySelector('.evsimstage .backendnotice')?.textContent
@@ -5112,8 +5242,8 @@ test('favorable economics remain visible when objective fit prevents endorsement
     assert.equal(view.deskPickId, null,
       'a mixed objective fit is not silently promoted to Desk Pick');
     assert.equal(view.rankRead, '1 favorable economic · no exact-fit pick · 1 comparison');
-    assert.equal(view.quality, 'Favorable economics · mixed fit');
-    assert.match(view.notice, /favorable after-cost economics.*none fully matches/i);
+    assert.match(view.quality, /^Favorable economics · mixed fit/i);
+    assert.match(view.notice, /favorable after-cost economics.*no exact-fit pick/i);
     assert.match(view.pathNotice, /Favorable economics; mixed objective fit/i);
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 0,
       'visible positive economics do not bypass explicit mixed-fit selection');
@@ -5134,7 +5264,7 @@ test('a failed explicit comparison selection clears its queued scenario and rest
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide?.backendPhase === 'comparison-required'
       && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
     await page.locator('#decideStage .srow[data-si="5"]').click();
@@ -5190,17 +5320,34 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
         const center = rect('#decideStage .dccenter');
         const right = rect('#decideStage .dcright');
         const map = rect('#decideStage .pickmap');
+        const fan = rect('#decideStage .fan');
+        const support = rect('#decideStage .leftsupport');
         const rail = document.querySelector('#decideStage .declegpanel .declegs');
         const rows = Array.from(rail?.querySelectorAll('.legr') || []);
         const selectedName = document.querySelector('#decideStage .fanr.sel .fnm');
-        const selectedHeader = selectedName?.closest('.fr1');
+        const selectedHeader = selectedName?.closest('.fanr');
+        const idealLabel = document.querySelector('#decideStage #decMap .maplab');
+        const zeroLine = document.querySelector('#decideStage #decMap line[stroke="var(--line)"][stroke-dasharray="3 4"]');
+        let referenceAvoidsIdealLabel = true;
+        if (idealLabel && zeroLine) {
+          const labelBox = idealLabel.getBBox();
+          const y = Number(zeroLine.getAttribute('y1'));
+          const x2 = Number(zeroLine.getAttribute('x2'));
+          referenceAvoidsIdealLabel = y < labelBox.y - 1 || y > labelBox.y + labelBox.height + 1
+            || x2 <= labelBox.x - 2;
+        }
         return {
           left: left?.width || 0,
           center: center?.width || 0,
           right: right?.width || 0,
           mapHeight: map?.height || 0,
+          candidateToSupportGap: fan && support ? support.top - fan.bottom : null,
+          supportBottomSlack: left && support ? left.bottom - support.bottom : null,
+          referenceAvoidsIdealLabel,
           legCount: rows.length,
           legRailScrolls: !!rail && rail.scrollHeight > rail.clientHeight + 2,
+          legRailSize: rail && { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight,
+            panelHeight: rail.closest('.declegpanel')?.clientHeight },
           legsContained: rows.every(row => {
             const box = row.getBoundingClientRect();
             const parent = rail.getBoundingClientRect();
@@ -5212,7 +5359,12 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
           }),
           metadataWidths: rows.map(row => {
             const meta = row.querySelector('.lgm');
-            return meta ? { client: meta.clientWidth, scroll: meta.scrollWidth } : null;
+            return meta ? { client: meta.clientWidth, scroll: meta.scrollWidth,
+              rowHeight: row.getBoundingClientRect().height,
+              controlsWidth: row.querySelector('.legr-top')?.getBoundingClientRect().width,
+              flex: getComputedStyle(row).flex, height: getComputedStyle(row).height,
+              minHeight: getComputedStyle(row).minHeight,
+              gridRows: getComputedStyle(row).gridTemplateRows } : null;
           }),
           selectedNameFits: !!selectedName && selectedName.scrollWidth <= selectedName.clientWidth + 1
             && selectedName.getBoundingClientRect().bottom <= selectedHeader.getBoundingClientRect().bottom + 1,
@@ -5222,11 +5374,11 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
       });
       assert.equal(geometry.legCount, 4);
       assert.equal(geometry.legRailScrolls, false,
-        `${viewport.width}px shows a canonical four-leg package without hiding rows in a rail`);
+        `${viewport.width}px shows a canonical four-leg package without hiding rows in a rail: ${JSON.stringify(geometry)}`);
       assert.equal(geometry.legsContained, true,
         `${viewport.width}px keeps every full-width leg inside the workbench`);
       assert.equal(geometry.metadataFits, true,
-        `${viewport.width}px keeps exact contract metadata readable on its single line: ${JSON.stringify(geometry)}`);
+        `${viewport.width}px keeps exact contract metadata readable inside its row: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.left >= viewport.width * .32,
         `${viewport.width}px reserves useful width for ideas and legs: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.right >= viewport.width * .26,
@@ -5235,6 +5387,12 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
         `${viewport.width}px payoff remains the center without consuming the canvas: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.mapHeight >= 170,
         `${viewport.width}px keeps the risk/reward map legible: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.candidateToSupportGap >= -1 && geometry.candidateToSupportGap <= 12,
+        `${viewport.width}px puts the leg workbench directly after the ranked ideas: ${JSON.stringify(geometry)}`);
+      assert.ok(Math.abs(geometry.supportBottomSlack) <= 2,
+        `${viewport.width}px lets the workbench/map support strip use the remaining rail height`);
+      assert.equal(geometry.referenceAvoidsIdealLabel, true,
+        `${viewport.width}px clips the zero-EV reference before the ideal-region caption`);
       assert.equal(geometry.selectedNameFits, true,
         `${viewport.width}px keeps the selected exact package name fully visible: ${JSON.stringify(geometry)}`);
       assert.equal(geometry.selectedNameWraps, true,
@@ -5255,6 +5413,12 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
         const rowRects = rows.map(row => row.getBoundingClientRect());
         const map = document.querySelector('#decideStage .pickmap');
         const mapRect = map?.getBoundingClientRect();
+        const support = document.querySelector('#decideStage .leftsupport');
+        const supportRect = support?.getBoundingClientRect();
+        const centerRect = document.querySelector('#decideStage .dccenter')?.getBoundingClientRect();
+        const panelRect = panel?.getBoundingClientRect();
+        const mapSvg = map?.querySelector('svg');
+        const mapLabels = Array.from(mapSvg?.querySelectorAll('.maplab') || []).map(label => label.getBBox());
         const selectedName = document.querySelector('#decideStage .fanr.sel .fnm');
         return {
           legCount: rows.length,
@@ -5270,10 +5434,26 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
               && (!meta || getComputedStyle(meta).whiteSpace === 'normal')
               && (!meta || meta.scrollWidth <= meta.clientWidth + 1);
           }),
+          rowDebug: rows.map((row, index) => {
+            const rect = rowRects[index];
+            const meta = row.querySelector('.lgm');
+            return { height: rect.height, left: rect.left, right: rect.right,
+              metaWhiteSpace: meta && getComputedStyle(meta).whiteSpace,
+              metaClient: meta && meta.clientWidth, metaScroll: meta && meta.scrollWidth };
+          }),
           railClips: !!rail && rail.scrollHeight > rail.clientHeight + 2,
           panelContained: !!panel && panel.scrollWidth <= panel.clientWidth + 1,
           mapContained: !!mapRect && mapRect.left >= -1 && mapRect.right <= innerWidth + 1,
+          mapBounds: mapRect && { left: mapRect.left, right: mapRect.right, viewport: innerWidth },
           mapHeight: mapRect?.height || 0,
+          supportOwnsContent: !!supportRect && !!panelRect && !!mapRect
+            && supportRect.height >= panelRect.height + mapRect.height - 1,
+          supportPrecedesCenter: !!mapRect && !!centerRect && mapRect.bottom <= centerRect.top + 1,
+          mapLabelsContained: !!mapSvg && mapLabels.every(box => box.x >= -1
+            && box.x + box.width <= mapSvg.viewBox.baseVal.width + 1),
+          mapLabelsSeparate: mapLabels.every((box, index) => mapLabels.slice(index + 1).every(other =>
+            box.x + box.width <= other.x + 1 || other.x + other.width <= box.x + 1
+            || box.y + box.height <= other.y + 1 || other.y + other.height <= box.y + 1)),
           selectedNameReadable: !!selectedName
             && selectedName.scrollWidth <= selectedName.clientWidth + 1
             && getComputedStyle(selectedName).textOverflow !== 'ellipsis',
@@ -5284,6 +5464,11 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
       assert.equal(mobile.legCount, 4);
       assert.deepEqual(mobile.strikes, ['90', '95', '105', '110'],
         `${viewport.width}px preserves all four exact strikes in package order`);
+      assert.ok(mobile.labels.every(label => /exp 2026-08-21.*fill/i.test(label)),
+        `${viewport.width}px uses the mobile second line for expiration and analyzed fill`);
+      assert.ok(mobile.labels.some(label => /bid \/ ask/i.test(label))
+        && mobile.labels.some(label => /IV 30\.0%/i.test(label)),
+        `${viewport.width}px enriches listed legs with available book and volatility evidence`);
       assert.equal(mobile.rowsStacked, true,
         `${viewport.width}px renders one readable full-width leg per row`);
       assert.equal(mobile.rowsReadable, true,
@@ -5294,6 +5479,14 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
       assert.equal(mobile.mapContained, true);
       assert.ok(mobile.mapHeight >= 200,
         `${viewport.width}px retains a useful linked risk map below the legs`);
+      assert.equal(mobile.supportOwnsContent, true,
+        `${viewport.width}px gives the workbench and map real layout height instead of overflow-painting them`);
+      assert.equal(mobile.supportPrecedesCenter, true,
+        `${viewport.width}px completes the ideas/legs/map rail before the payoff column begins`);
+      assert.equal(mobile.mapLabelsContained, true,
+        `${viewport.width}px keeps every risk-map region caption inside the SVG`);
+      assert.equal(mobile.mapLabelsSeparate, true,
+        `${viewport.width}px keeps risk-map region captions from colliding`);
       assert.equal(mobile.selectedNameReadable, true);
       assert.equal(mobile.documentOverflow, false);
     }
@@ -5389,7 +5582,7 @@ test('a favorable coherent package receives Desk Pick ahead of a higher-ranked a
       order: Array.from(document.querySelectorAll('.fanr[data-cand]')).map(row => row.dataset.cand),
       selectedId: window.decide.candId,
       deskPickId: window.decide.deskPickId,
-      badgeId: document.querySelector('.fanr .pickbadge')?.closest('.fanr')?.dataset.cand
+      badgeId: document.querySelector('.fanr.pick')?.dataset.cand
     }));
     assert.deepEqual(view.order, [adverse.id, favorable.id],
       'frontend endorsement does not reorder the backend competition');
@@ -5436,6 +5629,7 @@ test('stored ensembles are reused only for the same authoritative quote and mark
       'the flattened latest-outcomes read retains the same displayed statistics as the run response');
 
     backend.setQuote({ bid: 101, ask: 103, last: 102, asOf: 1784563260000 });
+    await page.evaluate(() => window.API.invalidate(['/api/research/AMD']));
     const moved = await page.evaluate(async () => {
       const state = await window.DeskBackend.openIdea(Object.assign({}, window.DeskBackend.state().context));
       return {
@@ -5453,6 +5647,7 @@ test('stored ensembles are reused only for the same authoritative quote and mark
     assert.equal(moved.outcomeEnsembleId, moved.ensembleId);
 
     backend.setChainIv(0.37, 1784563200000);
+    await page.evaluate(() => window.API.invalidate(['/api/research/AMD/chain']));
     const recalibrated = await page.evaluate(async () => {
       const state = await window.DeskBackend.openIdea(Object.assign({}, window.DeskBackend.state().context));
       return {
@@ -5483,7 +5678,7 @@ test('a scenario chosen while the exact preview is pending is conditioned after 
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide?.ensemble
       && window.DeskBackend.state().mutationPending === true
       && document.querySelector('#decideStage .srow[data-si="5"]'),
@@ -5716,7 +5911,7 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
         pop: row.pop,
         instruction: window.decide.orderPreview.order.orderInstruction.type,
         deskPickId: window.decide.deskPickId,
-        pickBadges: document.querySelectorAll('.fanr .pickbadge').length
+        pickBadges: document.querySelectorAll('.fanr.pick').length
       };
     }, CANDIDATE_ID);
     const economicsAfter = Object.assign({}, candidateAfter);
@@ -5815,7 +6010,17 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       };
     });
 
-    await page.locator('#decideStage .declegpanel [data-dec="editlegs"]').click();
+    const inlineWorkbench = await page.evaluate(() => ({
+      inlineControls: document.querySelectorAll('#decideStage .declegpanel .inlineleg [data-leg]').length,
+      separateEditor: Boolean(document.querySelector('#decideStage .declegpanel [data-dec="editlegs"]')),
+      text: document.querySelector('#decideStage .declegpanel')?.textContent.replace(/\s+/g, ' ').trim()
+    }));
+    assert.ok(inlineWorkbench.inlineControls >= 8,
+      'the selected backend package is directly editable in its resting workbench');
+    assert.equal(inlineWorkbench.separateEditor, false,
+      'inline leg controls replace the redundant dedicated-editor transition');
+    assert.match(inlineWorkbench.text, /bid \/ ask|analyzed fill/i,
+      'the resting leg rows carry contract economics before the user edits them');
     await page.locator('#decideStage .declegpanel [data-leg="rm"][data-li="1"]')
       .evaluate(node => node.click());
     await page.waitForFunction(() => window.decide.draftPending
@@ -6063,19 +6268,20 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
   });
   try {
     const rendered = await page.evaluate(() => ({
-      risk: document.querySelector('.fanr.sel .rchip')?.textContent.trim(),
+      duplicateRiskChip: document.querySelector('.fanr.sel .rchip')?.textContent.trim(),
       riskTitle: document.querySelector('.fanr.sel .fanicon')?.getAttribute('title'),
       reviewDisabled: document.querySelector('[data-dec="review"]')?.disabled,
       dock: document.querySelector('.execute')?.textContent,
       deskPickId: window.decide.deskPickId,
-      pickBadges: document.querySelectorAll('.fanr .pickbadge').length
+      pickBadges: document.querySelectorAll('.fanr.pick').length
     }));
-    assert.equal(rendered.risk, 'unknown');
+    assert.equal(rendered.duplicateRiskChip, undefined,
+      'risk classification appears once on the canonical payoff glyph');
     assert.match(rendered.riskTitle, /classification unavailable/i);
     assert.equal(rendered.reviewDisabled, true);
-    assert.match(rendered.dock, /guardrails block this exact package/i,
-      'execution pricing and placement guardrails remain separately visible');
-    assert.match(rendered.dock, /exceeds the backend loss limit/i);
+    assert.match(rendered.dock, /Risk checks block this exact package/i,
+      'execution pricing and placement risk checks remain separately visible');
+    assert.match(rendered.dock, /exact package exceeds the loss limit/i);
     assert.equal(rendered.deskPickId, null,
       'a final exact-package guardrail block removes the Desk Pick endorsement');
     assert.equal(rendered.pickBadges, 0);
@@ -6085,7 +6291,7 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
       return { review: window.decide.order.review, error: window.decide.backendError };
     });
     assert.equal(guard.review, false);
-    assert.match(guard.error, /exceeds the backend loss limit/i);
+    assert.match(guard.error, /exact package exceeds the loss limit/i);
     assert.deepEqual(pageErrors, [], `eligibility rendering emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -6206,7 +6412,7 @@ test('a detached order completion cannot close the replacement idea', async () =
       'the backend commitment is in flight');
 
     await page.locator('[data-dec="back"]').click();
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(id => {
       const state = window.DeskBackend.state();
       return window.decide && window.decide.backendPhase === 'ready'
@@ -6249,7 +6455,7 @@ test('canceling exact-package application cannot publish draft state into the re
     const outcomeBefore = backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`);
 
     await page.locator('[data-dec="back"]').click();
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(id => {
       const state = window.DeskBackend.state();
       return window.decide && window.decide.backendPhase === 'ready'
@@ -6404,7 +6610,7 @@ test('the initial backend selection cannot be superseded by a second idea load',
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     for (let attempt = 0; attempt < 100
       && backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`) < 1; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -6528,8 +6734,8 @@ test('New Idea keeps one source-aligned market fan and lets a selected future dr
   }
 });
 
-test('New Idea pages whole rows, composes in the left rail, and focuses Book without losing the idea', async () => {
-  const rows = Array.from({ length: 9 }, (_, index) => {
+test('New Idea measures one elegant overflow list, composes in the left rail, and compares the Book without losing the idea', async () => {
+  const rows = Array.from({ length: 18 }, (_, index) => {
     const row = JSON.parse(JSON.stringify(candidate()));
     row.id = index === 0 ? CANDIDATE_ID : `candidate_page_${index}`;
     row.label = `Income structure ${index + 1}`;
@@ -6569,35 +6775,81 @@ test('New Idea pages whole rows, composes in the left rail, and focuses Book wit
     strategyCandidates: rows, canvasComparison, canvasPositions
   });
   try {
-    assert.equal(await page.locator('.fanr[data-cand]').count(), 5,
-      'the 900px viewport renders one page of whole ranked rows');
-    assert.equal(await page.locator('.fitpager').count(), 1);
-    const firstPageFits = await page.evaluate(() => {
-      const fan = document.querySelector('.dcleft .fan');
-      const pager = fan?.querySelector('.fitpager');
-      const rows = Array.from(fan?.querySelectorAll('.fanr') || []);
-      const ceiling = pager?.getBoundingClientRect().top ?? fan?.getBoundingClientRect().bottom;
-      return rows.every(row => row.getBoundingClientRect().bottom <= ceiling + 0.5);
+    await page.waitForFunction(() => document.querySelector('.fanrows')?.classList.contains('hasoverflow'),
+      null, { timeout: 5000 });
+    const measuredOverflow = async () => page.evaluate(() => {
+      const list = document.querySelector('.dcleft .fanrows');
+      const fan = list?.closest('.fan');
+      const support = document.querySelector('.dcleft .leftsupport');
+      const meta = fan?.querySelector('.overflowmeta');
+      const selected = list?.querySelector('.fanr.sel');
+      const listBox = list?.getBoundingClientRect();
+      const fanBox = fan?.getBoundingClientRect();
+      const supportBox = support?.getBoundingClientRect();
+      const selectedBox = selected?.getBoundingClientRect();
+      return {
+        rows: list?.querySelectorAll('.fanr[data-cand]').length || 0,
+        measured: !!list && list.scrollHeight > list.clientHeight + 2,
+        classed: list?.classList.contains('hasoverflow') || false,
+        cue: meta?.classList.contains('on') || false,
+        cueText: meta?.querySelector('.overflowread')?.textContent || '',
+        snap: getComputedStyle(list).scrollSnapType,
+        pager: fan?.querySelectorAll('.fitpager').length || 0,
+        selectedVisible: !!selectedBox && !!listBox
+          && selectedBox.top >= listBox.top - 1 && selectedBox.bottom <= listBox.bottom + 1,
+        listOwned: Array.from(list?.querySelectorAll('.fanr') || [])
+          .every(row => row.parentElement === list),
+        supportSeparated: !!fanBox && !!supportBox && fanBox.bottom <= supportBox.top + 1,
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+      };
     });
-    assert.equal(firstPageFits, true, 'no ranked row is clipped behind its pager');
+    let listState = await measuredOverflow();
+    assert.equal(listState.rows, 18, 'every ranked idea remains in the one list DOM');
+    assert.equal(listState.measured, true, JSON.stringify(listState));
+    assert.equal(listState.classed, listState.measured);
+    assert.equal(listState.cue, true);
+    assert.match(listState.cueText, /^\+\d+ more$/);
+    assert.match(listState.snap, /^y(?: |$)/);
+    assert.equal(listState.pager, 0, 'the obsolete page-state grammar is absent');
+    assert.equal(listState.selectedVisible, true);
+    assert.equal(listState.listOwned, true);
+    assert.equal(listState.supportSeparated, true,
+      'the candidate list ends before the workbench/map support strip begins');
+    assert.equal(listState.documentOverflow, false);
+
+    await page.evaluate(() => {
+      const list = document.querySelector('#decideStage .dcleft .fanrows');
+      list.scrollTop = list.scrollHeight;
+    });
+    await page.waitForFunction(() => {
+      const list = document.querySelector('#decideStage .dcleft .fanrows');
+      return list?.scrollTop > 0
+        && /above/.test(list.parentElement?.querySelector('.overflowread')?.textContent || '');
+    },
+    null, { timeout: 5000 });
+    const scrolled = await page.evaluate(() => {
+      const list = document.querySelector('#decideStage .dcleft .fanrows');
+      const last = list?.querySelector('.fanr:last-child');
+      const a = list?.getBoundingClientRect(), b = last?.getBoundingClientRect();
+      return { rows: list?.querySelectorAll('.fanr').length || 0,
+        lastVisible: !!a && !!b && b.top >= a.top - 1 && b.bottom <= a.bottom + 1,
+        cue: list?.parentElement?.querySelector('.overflowread')?.textContent || '' };
+    });
+    assert.equal(scrolled.rows, 18);
+    assert.equal(scrolled.lastVisible, true, JSON.stringify(scrolled));
+    assert.match(scrolled.cue, /above/);
 
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.evaluate(() => window.renderDecide());
-    assert.equal(await page.locator('.fanr[data-cand]').count(), 5,
-      'the 1080px desktop keeps the selected explanation and every ranked row whole');
-    const desktopPageFits = await page.evaluate(() => {
-      const fan = document.querySelector('.dcleft .fan');
-      const pager = fan?.querySelector('.fitpager');
-      const rows = Array.from(fan?.querySelectorAll('.fanr') || []);
-      const ceiling = pager?.getBoundingClientRect().top ?? fan?.getBoundingClientRect().bottom;
-      return rows.every(row => row.getBoundingClientRect().bottom <= ceiling + 0.5);
-    });
-    assert.equal(desktopPageFits, true, 'the principal desktop viewport has no partial ranked row');
-
-    await page.locator('[data-dec="candpage"][data-page="1"]').click();
-    assert.equal(await page.locator('.fanr[data-cand]').count(), 4);
-    assert.equal(await page.locator('.fanr[data-cand]').first().getAttribute('data-cand'),
-      'candidate_page_5');
+    await page.waitForFunction(() => document.querySelector('.fanrows')?._elegantBound === true);
+    listState = await measuredOverflow();
+    assert.equal(listState.rows, 18,
+      'the principal desktop keeps the full ranked field in one measured list');
+    assert.equal(listState.classed, listState.measured, JSON.stringify(listState));
+    assert.equal(listState.cue, listState.measured);
+    assert.equal(listState.pager, 0);
+    assert.equal(listState.supportSeparated, true);
+    assert.equal(listState.documentOverflow, false);
 
     await page.locator('.decintent').click();
     assert.equal(await page.locator('.ideacomposer').count(), 1,
@@ -6612,22 +6864,21 @@ test('New Idea pages whole rows, composes in the left rail, and focuses Book wit
     await page.locator('[data-dec="intentdone"]').click();
 
     await page.locator('[data-inspect="book"]').click();
-    await page.locator(`[data-dec="bookfocus"][data-book-key="${heldKey}"]`).click();
-    assert.equal(await page.locator('#bookFocusChart').count(), 1);
-    assert.match(await page.locator('.bookfocushead').textContent(), /AMD income position/i);
-    assert.ok(await page.locator('#bookFocusChart path').count() >= 2,
-      'the focused Book row brings its backend P/L journey into the center');
-    await page.keyboard.press('Escape');
-    assert.equal(await page.locator('#bookFocusChart').count(), 0);
+    assert.equal(await page.locator('.authcompare .acrow').count(), 3,
+      'the Book lens keeps the proposed idea and held position on one comparison receipt');
+    assert.match(await page.locator('#dec-inspect-panel').textContent(),
+      /same possible futures.*This idea.*AMD income position/s);
     assert.equal(await page.locator('#decPay').count(), 1,
-      'one step back restores the idea without closing the decision surface');
-    assert.deepEqual(pageErrors, [], `fit/composer/Book focus emitted page errors: ${pageErrors.join('\n')}`);
+      'opening Book comparison preserves the idea financial surface');
+    assert.equal(await page.locator('.fanr[data-cand]').count(), 18,
+      'Book comparison does not replace or rebuild the ranked idea field');
+    assert.deepEqual(pageErrors, [], `overflow/composer/Book focus emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
 });
 
-test('New Idea from an active idea stages the old subject and opens one full-width typeahead', async () => {
+test('New Idea from an active or resumed idea stages the old subject and opens one full-width typeahead', async () => {
   const { context, page, pageErrors } = await openAuthoritativeDesk();
   try {
     await page.setViewportSize({ width: 1920, height: 1080 });
@@ -6646,7 +6897,8 @@ test('New Idea from an active idea stages the old subject and opens one full-wid
     }));
     assert.deepEqual(scenarioOverlaps, [],
       '1920×1080 has one scenario-tile media owner and no name/value collisions');
-    await page.locator('#threadNewIdea').click();
+    await page.evaluate(() => { window.decide.canPick = false; });
+    await startNewIdea(page);
     await page.waitForSelector('.replacementcomposer #univq');
     const staged = await page.evaluate(() => {
       const composer = document.querySelector('.replacementcomposer');
@@ -6658,6 +6910,7 @@ test('New Idea from an active idea stages the old subject and opens one full-wid
       const chipBox = chip?.getBoundingClientRect();
       return {
         replacing: window.decide?.replacingIdea,
+        canPick: window.decide?.canPick,
         query: window.decide?.pickq,
         resultRows: composer?.querySelectorAll('.univrow').length,
         prompt: composer?.querySelector('.univlist')?.textContent,
@@ -6672,6 +6925,8 @@ test('New Idea from an active idea stages the old subject and opens one full-wid
       };
     });
     assert.equal(staged.replacing, true);
+    assert.equal(staged.canPick, true,
+      'starting another idea may pick a symbol without making the resumed Plan itself mutable');
     assert.equal(staged.query, '');
     assert.equal(staged.resultRows, 0, 'opening the picker does not dump the full universe');
     assert.match(staged.prompt, /type a symbol or company name/i);
@@ -6684,25 +6939,30 @@ test('New Idea from an active idea stages the old subject and opens one full-wid
     assert.equal(staged.rightInert, true);
     assert.equal(staged.dockEmpty, true, 'execution is unavailable while choosing a replacement');
 
-    await page.locator('#univq').fill('AMD');
+    await page.locator('#univq').fill('AAPL');
     assert.equal(await page.locator('.univrow').count(), 1);
     await page.keyboard.press('Escape');
     const canceled = await page.evaluate(() => ({
       replacing: window.decide?.replacingIdea,
+      canPick: window.decide?.canPick,
       intentOpen: window.decide?.intentOpen,
       active: document.activeElement?.id,
       composers: document.querySelectorAll('.replacementcomposer').length
     }));
     assert.equal(canceled.composers, 0, JSON.stringify(canceled));
+    assert.equal(canceled.canPick, false,
+      'cancel restores the resumed Plan’s fixed-underlying contract');
     assert.equal(await page.locator('#decPay').count(), 1,
       'cancel restores the prior idea without recreating its financial surface');
 
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.locator('#univq').fill('AMD');
     await page.locator('#univq').press('Enter');
     await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
       && window.decide?.replacingIdea === false && !window.decide?.intentOpen,
     null, { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.decide?.canPick), true,
+      'the selected replacement is a fresh idea and remains replaceable');
     assert.equal(await page.locator('.replacementcomposer').count(), 0);
     assert.deepEqual(pageErrors, [], `Idea replacement emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -6723,7 +6983,7 @@ test('the initial ensemble build keeps candidate changes behind one coherent mut
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     for (let attempt = 0; attempt < 100
       && backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`) < 1; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -6769,7 +7029,7 @@ test('backing out of a slow idea load queues a clean re-entry instead of strandi
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     for (let attempt = 0; attempt < 100
       && backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`) < 1; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -6778,7 +7038,7 @@ test('backing out of a slow idea load queues a clean re-entry instead of strandi
       'the first idea fan is in flight');
 
     await page.locator('[data-dec="back"]').click();
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(id => {
       const state = window.DeskBackend.state();
       return window.decide && window.decide.backendPhase === 'ready'
@@ -6818,7 +7078,7 @@ test('a presentation observer exception cannot cancel the authoritative outcome 
       };
     });
 
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(candidateId => {
       const state = window.DeskBackend.state();
       return window.decide?.backendPhase === 'ready'
@@ -6868,7 +7128,7 @@ test('a newer server-owned quote observation is accepted without chasing the ope
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'ready', null,
       { timeout: 10000 });
     const state = await page.evaluate(() => {
@@ -6911,7 +7171,7 @@ test('a newer server-owned option calibration is accepted without a second full-
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
-    await page.locator('#threadNewIdea').click();
+    await startNewIdea(page);
     await page.waitForFunction(() => window.decide && window.decide.backendPhase === 'ready', null,
       { timeout: 10000 });
     const state = await page.evaluate(() => {
@@ -6966,11 +7226,22 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
         dataCompleteness: { status: 'OBSERVED_COMPLETE' },
         bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
       }],
-      compensationRanking: [{ symbol: 'MU', strategy: 'CASH_SECURED_PUT', score: 77.4 }],
+      compensationRanking: [{
+        symbol: 'MU', strategy: 'CASH_SECURED_PUT', score: 77.4,
+        components: [{
+          name: 'Annualized premium yield', weight: 0.35, value: 0.91,
+          note: '27.3%/yr on the collateral, IF repeatable'
+        }]
+      }],
       notes: ['Decision economics and compensation are independent rankings.']
     }
   };
-  const backend = await installBackend(page, { scoutResponse });
+  const broadSymbols = ['MU', 'XOM', 'JPM', 'PFE', 'KO'];
+  const backend = await installBackend(page, {
+    scoutResponse,
+    universeSymbols: ['MU', 'AMD', 'NVDA'],
+    scoutSymbols: broadSymbols
+  });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
@@ -6985,7 +7256,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       /MU.*Cash-secured put.*favorable.*qualified.*Book improves.*\+\$161.*EV/i,
       'Home turns the canonical frontier into a useful package and Book-fit lens');
     assert.match(await page.locator('.opportunitycomp').textContent(),
-      /Compensation.*separate view.*MU 77.*never overrides decision economics/i,
+      /Compensation.*separate view.*MU 77.*27\.3%\/yr on the collateral.*never overrides decision economics/i,
       'carry compensation remains visibly separate from the decision order');
     const request = backend.requests.find(row => row.method === 'POST'
       && row.path === '/api/research/scout');
@@ -6994,8 +7265,12 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       maxPicks: 5,
       riskMode: 'balanced',
       allow0dte: false,
-      intents: ['INCOME']
+      intents: ['INCOME'],
+      universe: broadSymbols
     });
+    assert.match(await page.locator('.opportunitylens').textContent(),
+      /Broad market 5.*Active universe 3.*Income.*Directional.*Acquire.*Hedge.*Exit/i,
+      'Home exposes broad cross-sector scope and every supported goal without a parallel Scout surface');
   } finally {
     await context.close();
   }

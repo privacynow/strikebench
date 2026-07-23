@@ -7,7 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { chromium } = require('playwright');
 
 const DESK_URL = pathToFileURL(path.resolve(
-  __dirname, '../src/main/resources/public/desk.html')).href;
+  __dirname, '../src/main/resources/public/index.html')).href;
 
 const DESKTOPS = [
   { width: 1280, height: 800 },
@@ -245,8 +245,6 @@ test('New Idea retargets NVDA, retains its scenario, and bounds Review in the ex
     await page.waitForSelector('#decideStage.on .decwrap');
     await page.waitForTimeout(420);
 
-    await page.locator('#decideStage .decintent').click();
-    await page.locator('#decideStage [data-dec="pick"]').click();
     await page.locator('#univq').fill('NVDA');
     await page.waitForSelector('#decideStage [data-pick="NVDA"]');
     await page.locator('#decideStage [data-pick="NVDA"]').click();
@@ -344,6 +342,8 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
     try {
       await page.locator('#threadNewIdea').evaluate(node => node.click());
       await page.waitForSelector('#decideStage.on .decwrap');
+      await page.locator('#univq').fill('AMD');
+      await page.locator('#univq').press('Enter');
       await page.locator('#decideStage [data-cand="i-ic"]').click();
       assert.equal(await page.locator('#decideStage .declegpanel .legr').count(), 4,
         `${label} renders the complete condor package`);
@@ -398,6 +398,9 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
             & Node.DOCUMENT_POSITION_FOLLOWING),
           gridDisplay: getComputedStyle(grid).display,
           gridDirection: getComputedStyle(grid).flexDirection,
+          supportDisplay: getComputedStyle(panel.parentElement).display,
+          wrapOverflowY: getComputedStyle(wrap).overflowY,
+          leftOverflowY: getComputedStyle(left).overflowY,
           railDirection: getComputedStyle(rail).flexDirection,
           railOverflowX: getComputedStyle(rail).overflowX,
           railOverflowY: getComputedStyle(rail).overflowY,
@@ -436,9 +439,11 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
         `${label} contains the leg structure without widening a panel or the overlay `
           + `(panel ${layout.panelXOverflow}px, wrap ${layout.wrapXOverflow}px, left ${layout.leftXOverflow}px; `
           + `offenders ${JSON.stringify(layout.leftOffenders)})`);
-      assert.ok(layout.leftYOverflow <= 1,
-        `${label} keeps candidates, stacked legs, and the risk map inside the left decision rail `
-          + `(overflow ${layout.leftYOverflow}px)`);
+      if (viewport.width > 1000) {
+        assert.ok(layout.leftYOverflow <= 1,
+          `${label} keeps candidates, stacked legs, and the risk map inside the left decision rail `
+            + `(overflow ${layout.leftYOverflow}px)`);
+      }
       assert.equal(layout.railDirection, 'column', `${label} stacks every exact leg at full width`);
       assert.ok(layout.railXOverflow <= 1, `${label} needs no sideways scrolling for exact legs`);
       layout.legRects.forEach((rect, index) => {
@@ -450,7 +455,18 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
           `${label} leg ${index + 1} follows the preceding leg vertically`);
       });
 
-      if (viewport.width >= 1900) {
+      if (viewport.width >= 1900 && viewport.height <= 1150) {
+        assert.equal(layout.supportDisplay, 'grid',
+          `${label} gives the exact package and supporting map one bounded short-desktop row`);
+        assert.ok(layout.panelRect.top - layout.fanRect.bottom <= 16,
+          `${label} places the selected strategy legs directly after the ranked ideas`);
+        assert.ok(layout.mapRect.left > layout.panelRect.right,
+          `${label} places the supporting map beside, not beneath, the exact package`);
+        assert.ok(Math.abs(layout.mapRect.height - (layout.panelRect.bottom - layout.panelRect.top)) <= 2,
+          `${label} gives both support instruments the same bounded row height`);
+        assert.ok(layout.mapRect.width >= 170,
+          `${label} keeps the supporting map wide enough to read (${layout.mapRect.width}px)`);
+      } else if (viewport.width >= 1900) {
         assert.ok(layout.panelRect.top - layout.fanRect.bottom <= 16,
           `${label} places the selected strategy legs directly after the ranked ideas`);
         assert.ok(layout.mapRect.top > layout.panelRect.bottom,
@@ -464,6 +480,8 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       if (viewport.width <= 1000) {
         assert.equal(layout.gridDisplay, 'flex', `${label} structurally stacks decision areas`);
         assert.equal(layout.gridDirection, 'column', `${label} uses a vertical narrow-screen reading order`);
+        assert.equal(layout.wrapOverflowY, 'auto', `${label} gives vertical movement to the one overlay reading surface`);
+        assert.equal(layout.leftOverflowY, 'visible', `${label} does not create a nested left-column scroller`);
         assert.equal(layout.railOverflowY, 'visible', `${label} exposes the complete narrow-screen leg stack`);
         assert.ok(layout.railYOverflow <= 1, `${label} does not add a nested narrow-screen leg scroller`);
       } else {
