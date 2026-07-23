@@ -225,11 +225,8 @@ final class PlanStrategyController {
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol) {
-        var exposure = trades.portfolioDollarDelta(account.id(), symbol);
-        return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
-                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
-                exposure.grossCents(), exposure.netCents(), exposure.focusSymbolGrossCents(),
-                exposure.complete(), exposure.basis());
+        return trades.portfolioDollarDelta(account.id(), symbol).toContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE);
     }
 
     void planScoutLatest(Context ctx) {

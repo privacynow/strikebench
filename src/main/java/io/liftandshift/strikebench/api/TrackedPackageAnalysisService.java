@@ -60,10 +60,8 @@ final class TrackedPackageAnalysisService {
         var assessed = trades.analyzeActivePosition(tradeId);
         var preview = assessed.preview();
         var candidate = TradeController.exactPreviewCandidate(request, preview);
-        var current = trades.portfolioDollarDelta(account.id(), request.symbol(), tradeId);
-        var exposure = new PortfolioExposureContext(PositionDomain.ExecutionLane.PRACTICE,
-                current.grossCents(), current.netCents(), current.focusSymbolGrossCents(),
-                current.complete(), current.basis());
+        var exposure = trades.portfolioDollarDelta(account.id(), request.symbol(), tradeId)
+                .toContext(PositionDomain.ExecutionLane.PRACTICE);
         long availableAfterClose = Math.addExact(account.buyingPowerCents(), assessed.risk().reserveCents());
         String world = "DEMO".equals(account.type()) ? "demo" : account.worldId();
         var evaluation = evaluations.assessExact(request.symbol(), candidate, availableAfterClose,
@@ -110,11 +108,9 @@ final class TrackedPackageAnalysisService {
         var summary = books.summary(ownerId, accountId);
         var preview = trades.previewTracked(request, summary.bookCashCents());
         var candidate = TradeController.exactPreviewCandidate(request, preview);
-        var current = books.portfolioDollarDelta(ownerId, accountId, request.symbol());
         AccountObjectiveService.Revision objectiveRevision = objectives.latest(ownerId, accountId);
-        var exposure = new PortfolioExposureContext(PositionDomain.ExecutionLane.REAL,
-                current.grossCents(), current.netCents(), current.focusSymbolGrossCents(),
-                current.complete(), current.basis());
+        var exposure = books.portfolioDollarDelta(ownerId, accountId, request.symbol())
+                .toContext(PositionDomain.ExecutionLane.REAL);
         var evaluation = evaluations.assessExact(request.symbol(), candidate, summary.bookCashCents(),
                 AnalysisContext.OBSERVED, null, preview.ok(), preview.blockReasons(),
                 Math.multiplyExact(preview.feesOpenCents(), 2L), exposure,
