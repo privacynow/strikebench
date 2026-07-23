@@ -1046,7 +1046,7 @@
 .scoutstart{height:100%;display:flex;flex-direction:column;gap:7px}.scoutstartgrid{min-height:0;display:flex;flex-direction:column;gap:6px}.scoutlaunch{margin-top:auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--accent-wash)}.scoutlaunch>span{min-width:0;color:var(--dim);font-size:var(--f-2xs);line-height:1.35}.scoutlaunch .scoutprimary{min-width:180px;min-height:36px}
 .scoutprogress{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center;margin-top:6px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs)}.scoutprogress span{grid-column:1/-1}.scoutprogress b{color:var(--text)}.scoutprogress meter{width:100%;height:5px;accent-color:var(--accent)}.opportunityrows.provisional .opportunityrow{border-style:dashed}.opportunityrows.provisional .opportunityrow small:after{content:" · provisional";color:var(--accent)}
 .scoutwaiting{flex:1;min-height:52px;margin-top:5px;padding:9px;border:1px dashed var(--line-soft);border-radius:7px;display:grid;place-items:center;color:var(--faint);font-size:var(--f-2xs);line-height:1.4;text-align:center}
-.emptyopportunitypanel #authEmptyOpportunity,.emptyopportunitypanel #authHomeOpportunity{flex:1;min-height:0}.emptyopportunitypanel .opportunitylens{height:100%;display:flex;flex-direction:column}.scoutidlefield{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,.85fr);gap:10px;margin-top:9px}.scoutidlecard{min-width:0;padding:10px;border:1px solid var(--line-soft);border-radius:8px;background:color-mix(in srgb,var(--panel-2) 92%,transparent);display:flex;flex-direction:column;gap:8px}.scoutidlecard .lenshd{margin:0}.scoutgoalread{margin-top:auto;padding:8px;border-left:2px solid var(--accent);background:var(--accent-wash);color:var(--dim);font-size:var(--f-xs);line-height:1.45}.scoutgoalread b{color:var(--text)}
+.emptyopportunitypanel #authEmptyOpportunity,.emptyopportunitypanel #authHomeOpportunity{flex:1;min-height:0}.emptyopportunitypanel .opportunitylens{height:100%;display:flex;flex-direction:column}.scoutidlefield{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,.85fr);gap:10px;margin-top:9px}.scoutidlecard{min-width:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--raise);display:flex;flex-direction:column;gap:8px}.scoutidlecard .lenshd{margin:0}.scoutgoalread{margin-top:auto;padding:8px;border-left:2px solid var(--accent);background:var(--accent-wash);color:var(--dim);font-size:var(--f-xs);line-height:1.45}.scoutgoalread b{color:var(--text)}
 .opportunitycomp{display:flex;align-items:center;gap:6px;margin-top:5px;padding:5px 7px;border:1px dashed var(--line-soft);border-radius:6px;color:var(--faint);font-size:var(--f-2xs);overflow:hidden;white-space:nowrap}.opportunitycomp>span:first-child{color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.05em}.opportunitycomp b{min-width:0;color:var(--text);font-family:var(--mono);font-weight:600}.opportunitycomp b small{display:none}.opportunitycomp em{font-style:normal;color:var(--faint)}.opportunitycomp>em:last-child{margin-left:auto;overflow:hidden;text-overflow:ellipsis}
 .opportunitycompactreceipt{display:flex;align-items:center;gap:6px;margin-top:5px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}.opportunitycompactreceipt b{color:var(--dim)}.opportunitycompactreceipt span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 #authHomeOpportunity .opportunitylens:not(.expanded) .opportunitycontrols{gap:4px 6px;margin-bottom:3px;flex:none}#authHomeOpportunity .opportunitylens:not(.expanded) .opportunitycontrol button{padding-inline:5px}#authHomeOpportunity .opportunitylens:not(.expanded) .lenshd.sub{flex:none;margin-top:2px}#authHomeOpportunity .opportunitylens:not(.expanded) .opportunityrows{flex:1;min-height:66px;margin-top:4px}#authHomeOpportunity .opportunitylens:not(.expanded) .authpulsefoot{flex:none;margin-top:4px}#authHomeOpportunity .opportunitylens:not(.expanded) .authpulsefoot>span{white-space:nowrap}
@@ -2996,7 +2996,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* Home is one permanent composition, not a launcher plus a succession of modal surfaces.
    The workbench owns both a governed field scan and one exact staged underlying. */
 .homeworkbenchpanel{gap:7px}
-.homeworkbenchpanel.emptyopportunitypanel{background:var(--panel);border-color:var(--line-soft)}
+.homeworkbenchpanel.emptyopportunitypanel{background:var(--panel);border-color:var(--line)}
 .homeworkbenchpanel .emptyopportunityintro{padding-bottom:3px}
 .homeworkbenchpanel .emptyopportunityintro h2{font-size:clamp(18px,1.08vw,23px)}
 .homeworkbenchpanel .opportunitylens{margin-top:2px;padding-top:6px}
@@ -3004,15 +3004,20 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeworkbenchpanel .opportunitycontrol{border-color:var(--line);background:var(--panel-2)}
 .homeworkbenchpanel .opportunitycontrol .oseg button{min-height:27px;padding:3px 7px}
 .homeworkbenchpanel .scoutidlecard{padding:8px;gap:6px}
-.homeworkbenchpanel .scoutidlecard,.homeworkbenchpanel .scoutresultcard{background:var(--panel-2)}
+.homeworkbenchpanel .scoutidlecard,.homeworkbenchpanel .scoutresultcard{background:var(--raise);border-color:var(--line)}
 .homeworkbenchpanel .scoutgoalread{padding:6px 7px}
 .homecatalogline{padding:6px 8px;border-left:2px solid var(--line);color:var(--faint);font-size:var(--f-2xs);line-height:1.4}
 .homecatalogline.warn{border-left-color:var(--loss)}
-.homeideasearch{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
-.homeideasearch>span{color:var(--faint);font-size:var(--f-2xs);font-weight:750;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-.homeideasearch input,.homeacquirefields input{min-width:0;width:100%;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);color:var(--text);padding:4px 7px;font:650 var(--f-xs) var(--sans);outline:none}
+.homeideasearch{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2)}
+.homeideasearch>span{color:var(--accent);font-size:var(--f-2xs);font-weight:750;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.homeideasearch input,.homeacquirefields input{min-width:0;width:100%;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);color:var(--text);padding:4px 7px;font:650 var(--f-sm) var(--mono);outline:none}
 .homeideasearch input:focus,.homeacquirefields input:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-wash)}
 .homeideamatchhost{min-height:28px}
+.homeworkbenchpanel .btn.pri:disabled,.homeworkbenchactions .btn.pri:disabled{opacity:.5;filter:saturate(.55);box-shadow:none;cursor:not-allowed}
+.homeworkbenchpanel .btn.xs{border-color:var(--accent-2);color:var(--accent);background:transparent}
+.homeworkbenchpanel .btn.xs:hover{background:var(--accent-wash);color:var(--accent)}
+.opportunityrow:hover,.opportunityrow:focus-visible{box-shadow:var(--sel-bar)}
+.opportunityrow.provisional,.opportunityrows .opportunityrow[aria-current="true"]{box-shadow:var(--sel-bar)}
 .homeideahelp{padding:5px 7px;color:var(--faint);font-size:var(--f-2xs);line-height:1.35}
 .homeideachosen{display:flex;align-items:center;gap:8px;padding:5px 7px;border-left:2px solid var(--accent);background:var(--accent-wash);color:var(--dim);font-size:var(--f-2xs)}
 .homeideachosen span{flex:1}.homeideachosen b{color:var(--text);font-family:var(--mono)}.homeideachosen button{border:0;background:transparent;color:var(--accent);cursor:pointer}
@@ -3027,7 +3032,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homesectorchips{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 auto;overflow-x:auto;scrollbar-width:none;padding:1px 0}
 .homesectorchips.overflowing{mask-image:linear-gradient(to right,transparent 0,#000 14px,#000 calc(100% - 18px),transparent 100%)}
 .homesectorchips::-webkit-scrollbar{display:none}
-.homesectorchips button{flex:none;min-height:22px;padding:2px 9px;border:1px solid var(--line-soft);border-radius:999px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}
+.homesectorchips button{flex:none;min-height:24px;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:#131a24;color:var(--dim);font-size:var(--f-xs);font-weight:650;white-space:nowrap;cursor:pointer}
 .homesectorchips button:hover{background:var(--row-hover);color:var(--text)}
 .homesectorchips button.on{border-color:var(--accent-2);background:var(--accent-wash);color:var(--accent)}
 .homeworkbenchactions{display:flex;align-items:center;gap:8px}
@@ -5227,7 +5232,7 @@ function authScoutIdleFieldHTML(){
   return '<div class="scoutidlefield"><section class="scoutidlecard"><div class="lenshd sub"><span class="eyebrow">'+deskEsc(marketLabel)+'</span><span class="hint">'+fieldCount+' optionable symbols</span></div>'+
     '<label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type NVDA, XOM, healthcare…" autocomplete="off" data-auth-workbench-query></label><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire+
     '<div class="scoutgoalread"><b>'+authHuman(HOME_SCOUT.goal)+'.</b> '+deskEsc(goalReads[HOME_SCOUT.goal]||goalReads.INCOME)+'</div>'+
-    '<div class="homeworkbenchactions"><button type="button" class="btn '+(ready?'pri':'ghost')+'" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Type a ticker to analyze one')+' →</button><span>Scan ranks the whole field; Analyze opens one exact idea with these same settings.</span></div></section></div>';
+    '<div class="homeworkbenchactions"><button type="button" class="btn pri" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Type a ticker to analyze one')+' →</button><span>Scan ranks the whole field; Analyze opens one exact idea with these same settings.</span></div></section></div>';
 }
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?'<div class="scoutactivegrid">'+authScoutIdleFieldHTML()+'<section class="scoutresultcard">'+body+'</section></div>':body)+'</div>';
@@ -5258,10 +5263,10 @@ function authScoutResultHTML(expanded){
     var progress=state.progress||{},completed=Math.max(0,Number(progress.completed||0)),total=Math.max(1,Number(progress.total||1)),phase=authHuman(progress.phase||'starting'),partial=authPartialOpportunityRowsHTML(state.partial);
     var progressBlock='<div class="scoutprogress" role="status"><meter min="0" max="'+total+'" value="'+Math.min(total,completed)+'"></meter><b>'+completed+' / '+total+'</b><span>'+deskEsc((progress.symbol?progress.symbol+' · ':'')+(progress.message||phase))+'</span></div>';
     var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'<div class="scoutwaiting">Rows appear as soon as the first symbol completes; exact pricing follows in the same stream.</div>';
-    var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Rows appear as each symbol completes; the final order waits for the Book-fit checks.</span><button class="btn scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
+    var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Rows appear as each symbol completes; the final order waits for the Book-fit checks.</span><button class="btn pri scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
     return loading;
   }
-  if(state.phase==='error')return '<div class="opportunityprompt"><span>'+deskEsc(state.error||'The opportunity scan could not finish.')+'</span><button class="btn scoutprimary" data-auth-opportunity-scan>Try scan again →</button></div>';
+  if(state.phase==='error')return '<div class="opportunityprompt"><span>'+deskEsc(state.error||'The opportunity scan could not finish.')+'</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Try scan again →</button></div>';
   var picks=state.data&&Array.isArray(state.data.picks)?state.data.picks:[];
   if(state.phase==='ready'){
     var frontier=state.data&&state.data.frontier||null,ranked=frontier&&Array.isArray(frontier.decisionRanking)?frontier.decisionRanking:[];
@@ -5374,7 +5379,7 @@ function authOpenHomeIdea(origin){
 }
 function authRefreshHomeIdeaAction(){
   var button=document.querySelector('[data-auth-workbench-analyze]'),ready=!!HOME_IDEA.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
-  if(button){button.disabled=!ready;button.classList.toggle('pri',ready);button.classList.toggle('ghost',!ready);button.textContent=(HOME_IDEA.symbol?'Analyze '+HOME_IDEA.symbol:'Type a ticker to analyze one')+' →';}
+  if(button){button.disabled=!ready;button.textContent=(HOME_IDEA.symbol?'Analyze '+HOME_IDEA.symbol:'Type a ticker to analyze one')+' →';}
 }
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
     var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(fanSurface){ev.preventDefault();var nearestSeries=nearestBookFanSeries(ev);if(nearestSeries)go('position',nearestSeries);return;}
