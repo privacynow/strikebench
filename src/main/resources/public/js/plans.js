@@ -10,6 +10,10 @@
   var loadingByMarket = {};
   var libraryLoading = null;
   var pendingFocusId = null;
+  // A list/library reconciliation is a read snapshot. If a Plan response is applied after
+  // that read begins (create, progress, decision, focused GET, etc.), the older snapshot must
+  // not erase the newer Plan or steal its focus when it eventually resolves.
+  var appliedPlanRevision = 0;
 
   var STAGE_PATH = {
     UNDERSTAND: 'understand', EVIDENCE: 'evidence', STRATEGY: 'strategy',
@@ -63,6 +67,7 @@
   }
 
   function replace(plan) {
+    appliedPlanRevision++;
     var key = planMarketKey(plan);
     var open = plan.open !== false && plan.status !== 'ARCHIVED';
     collections[key] = upsert(collections[key], plan, open);
@@ -81,8 +86,12 @@
       try { await loadingByMarket[requestedKey]; } catch (e) { /* the forced read retries */ }
       if (loadingByMarket[requestedKey]) return loadingByMarket[requestedKey];
     }
+    var readRevision = appliedPlanRevision;
     loadingByMarket[requestedKey] = (force ? API.getFresh('/api/plans') : API.get('/api/plans')).then(function (r) {
       var key = r && r.world ? String(r.world) : requestedKey;
+      if (appliedPlanRevision !== readRevision) {
+        return (collections[key] || []).slice();
+      }
       collections[key] = ((r && r.plans) || []).filter(function (p) {
         return p.open !== false && p.status !== 'ARCHIVED';
       });
@@ -101,7 +110,9 @@
       if (libraryLoading) return libraryLoading;
     }
     var path = '/api/plans?scope=all&openOnly=false';
+    var readRevision = appliedPlanRevision;
     libraryLoading = (force ? API.getFresh(path) : API.get(path)).then(function (r) {
+      if (appliedPlanRevision !== readRevision) return libraryItems.slice();
       libraryItems = (r && r.plans) || [];
       libraryLoaded = true;
       var grouped = {};

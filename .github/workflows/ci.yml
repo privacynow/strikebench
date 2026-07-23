@@ -49,7 +49,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Program ONE contract, fixture, grown-state, responsive, auth-on, Book Risk, adoption, and Learn browser matrix
+      - name: Program ONE contract, fixture, grown-state, responsive, auth-on, Book Risk, adoption, Desk, and Learn browser matrix
         working-directory: dom-tests
         run: |
           set -o pipefail
@@ -62,6 +62,7 @@ jobs:
           npm run test:auth | tee ../target/dom-auth.tap
           npm run test:bookrisk | tee ../target/dom-bookrisk.tap
           npm run test:adoption | tee ../target/dom-adoption.tap
+          npm run test:desk | tee ../target/dom-desk.tap
           npm run test:learn:coverage | tee ../target/dom-learn-coverage.tap
           node --test dom-learn.test.js | tee ../target/dom-learn.tap
 
