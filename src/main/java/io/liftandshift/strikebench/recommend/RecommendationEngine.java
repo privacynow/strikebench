@@ -1242,6 +1242,11 @@ public final class RecommendationEngine {
             return "At executable prices this structure cannot profit under any outcome (max profit "
                     + Money.fmt(c.maxProfitCents()) + ") — not a usable trade.";
         }
+        // TWO-TIER income check (paired with StrategyEvaluator.objectiveCoherence): this is the cheap
+        // GENERATION-time gate on entry cashflow — a single-expiration income structure must COLLECT a
+        // credit. The precise EVAL-time judgment is the carry/theta diagnostic in objectiveCoherence;
+        // a structure offered as income here should read carry-coherent there. Distinct inputs at
+        // distinct stages, intentionally — not a duplicate check.
         if (intent == StrategyIntent.INCOME && !family.multiExpiration() && !family.needsStock()
                 && c.entryNetPremiumCents() <= 0) {
             return "Earning income means COLLECTING premium, but this structure pays a net debit of "

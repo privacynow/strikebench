@@ -140,7 +140,10 @@ public final class StrategyEvaluator {
                     + "; the position reads " + actual.name().toLowerCase(java.util.Locale.ROOT)
                     + " (" + implied.summary() + ")";
         } else if ("INCOME".equals(declared.objective())) {
-            // Shares-agnostic income: the honest axis is carry, not direction.
+            // Shares-agnostic income: the honest axis is carry, not direction. This is the precise
+            // EVAL-time tier of the two-tier income check; RecommendationEngine.intentIncoherence is
+            // the cheap GENERATION gate (entry credit) that pre-filters debit structures. Distinct
+            // inputs/stages by design — keep them aligned, they are not a duplicate check.
             var carry = implied.carry();
             direction = carry == ImpliedStance.Carry.POSITIVE ? FourOutputAssessment.Coherence.COHERENT
                     : carry == ImpliedStance.Carry.NEGATIVE ? FourOutputAssessment.Coherence.INCOHERENT
