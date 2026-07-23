@@ -233,38 +233,34 @@ public final class PlanStrategyService {
     /** Reconstructs additive readiness metadata from the immutable candidate receipts so a
      * restored competition says the same thing as its first response without a schema fork. */
     private static void attachEconomicReadiness(ObjectNode result) {
-        int actionable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
-        boolean needsHistory = false;
-        var missing = new java.util.LinkedHashSet<String>();
+        // THE shared readiness classifier, fed from the persisted candidate JSON (the live-object
+        // surfaces feed the same Tally from EconomicAssessment objects).
+        io.liftandshift.strikebench.eval.EconomicReadiness.Tally tally =
+                io.liftandshift.strikebench.eval.EconomicReadiness.tally();
         for (JsonNode candidate : result.path("candidates")) {
             JsonNode evaluation = candidate.path("evaluation");
             JsonNode economics = evaluation.path("assessment").path("economics");
-            String verdict = economics.path("verdict").asText("UNAVAILABLE");
-            switch (verdict) {
-                case "FAVORABLE" -> {
-                    if (economics.path("observedEvidence").asBoolean(false)) actionable++;
-                }
-                case "MIXED" -> mixed++;
-                case "UNFAVORABLE" -> unfavorable++;
-                default -> unavailable++;
-            }
+            if (economics.isMissingNode() || economics.isNull()) { tally.addUnassessed(); continue; }
+            boolean needsHistory = false;
             for (JsonNode reason : economics.path("reasons")) {
                 if (io.liftandshift.strikebench.eval.EconomicAssessment.DAILY_HISTORY_REASON
                         .equals(reason.asText())) needsHistory = true;
             }
-            JsonNode claim = evaluation.path("evidence").path("claims").path("endorsement");
-            for (JsonNode dimension : claim.path("missingDimensions")) {
-                missing.add(dimension.asText());
-                if ("history".equals(dimension.asText())) needsHistory = true;
+            var missingDimensions = new java.util.ArrayList<String>();
+            for (JsonNode dimension : evaluation.path("evidence").path("claims").path("endorsement")
+                    .path("missingDimensions")) {
+                missingDimensions.add(dimension.asText());
             }
+            tally.addAssessment(economics.path("verdict").asText("UNAVAILABLE"),
+                    economics.path("observedEvidence").asBoolean(false),
+                    "MECHANICALLY_INELIGIBLE".equals(economics.path("placement").asText("")),
+                    needsHistory, missingDimensions);
         }
-        result.put("actionableFavorableCount", actionable);
-        result.put("economicReadiness", actionable > 0 ? "READY"
-                : needsHistory ? "NEEDS_DAILY_HISTORY"
-                : unavailable > 0 && mixed == 0 && unfavorable == 0 ? "EVIDENCE_INCOMPLETE"
-                : "CHECKED_NO_FAVORABLE");
+        io.liftandshift.strikebench.eval.EconomicReadiness readiness = tally.summarize();
+        result.put("actionableFavorableCount", readiness.actionableFavorable());
+        result.put("economicReadiness", readiness.readiness());
         ArrayNode missingArray = result.putArray("missingEvidence");
-        missing.forEach(missingArray::add);
+        readiness.missingEvidence().forEach(missingArray::add);
     }
 
     public Selection select(String userId, String planId, String candidateId, long expectedVersion) {
