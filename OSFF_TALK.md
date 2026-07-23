@@ -63,7 +63,7 @@ Faraz Babar
 
 ## Speaker Tagline
 
-Independent options trader who builds his own analytics.
+Software engineer who trades options with tools he built himself.
 
 ## Email
 
