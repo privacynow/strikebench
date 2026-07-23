@@ -281,14 +281,14 @@ final class ResearchController {
     }
 
     private List<LocalDate> activeExpirationsFor(String symbol, String world) {
-        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
+        java.time.Instant now = market.laneNow(worldParam(world), clock);
         return activeExpirations(market.expirations(symbol, world), now);
     }
 
     private void expirations(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
-        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
+        java.time.Instant now = market.laneNow(worldParam(world), clock);
         ctx.json(new ApiResponses.Expirations<>(symbol,
                 LocalDate.ofInstant(now, MarketHours.EASTERN).toString(),
                 activeExpirations(market.expirations(symbol, world), now).stream()
@@ -304,7 +304,7 @@ final class ResearchController {
         }
         LocalDate date = LocalDate.parse(expiration.trim());
         String world = activeWorld.apply(ctx);
-        java.time.Instant now = market.simInstant(worldParam(world)).orElse(clock.instant());
+        java.time.Instant now = market.laneNow(worldParam(world), clock);
         if (MarketHours.contractDead(date, now)) {
             throw new IllegalArgumentException("expiration is no longer active: " + date);
         }

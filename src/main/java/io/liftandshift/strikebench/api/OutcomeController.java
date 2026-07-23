@@ -416,7 +416,7 @@ final class OutcomeController {
         private List<java.time.LocalDate> exps;
         EntryBook(String symbol, String worldId) {
             this.symbol = symbol; this.worldId = worldId;
-            this.snapshotAt = market.simInstant(worldId).orElse(clock.instant()).toString();
+            this.snapshotAt = market.laneNow(worldId, clock).toString();
         }
         synchronized List<java.time.LocalDate> expirations() {
             if (exps == null) exps = market.expirations(symbol, worldId);
@@ -891,7 +891,7 @@ final class OutcomeController {
         out.put("worldId", world);
         out.put("datasetId", analysis.datasetId());
         if (asOf != null) out.put("asOf", asOf);
-        out.put("serverTime", market.simInstant(worldParam(world)).orElse(clock.instant()).toString());
+        out.put("serverTime", market.laneNow(worldParam(world), clock).toString());
         return out;
     }
 

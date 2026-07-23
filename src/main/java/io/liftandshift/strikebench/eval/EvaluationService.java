@@ -248,7 +248,7 @@ public final class EvaluationService {
                                      DeclaredObjective declared) {
         // ONE LANE: spot, DTE clock, ATM IV and realized vol all come from the market that priced
         // the candidates — a sim world's numbers never blend with observed ones (review P0).
-        Instant laneNow = market.simInstant(worldId).orElseGet(() -> Instant.now(clock));
+        Instant laneNow = market.laneNow(worldId, clock);
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
         long underlyingCents = market.quote(symbol, worldId)
                 .map(q -> q.mark() == null ? 0L : Money.toCents(q.mark())).orElse(0L);
@@ -403,8 +403,7 @@ public final class EvaluationService {
      * a missing gap record is honest, a zero would be a claim.
      */
     public Double gapFrequency(String symbol, String worldId) {
-        LocalDate today = LocalDate.ofInstant(
-                market.simInstant(worldId).orElseGet(() -> Instant.now(clock)), MarketHours.EASTERN);
+        LocalDate today = market.laneToday(worldId, clock);
         List<Candle> candles = worldId != null
                 ? market.candleSeries(symbol, today.minusDays(180), today, worldId, null).candles()
                 : market.candles(symbol, today.minusDays(180), today,

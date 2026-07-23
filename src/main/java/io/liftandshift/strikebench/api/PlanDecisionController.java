@@ -393,7 +393,7 @@ final class PlanDecisionController {
         java.time.Instant dueAt = decidedAt.plus(java.time.Duration.ofDays(horizon));
         String world = plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? plan.worldId() : plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO ? "demo" : "observed";
-        java.time.Instant laneNow = market.simInstant(world).orElse(clock.instant());
+        java.time.Instant laneNow = market.laneNow(world, clock);
         if (laneNow.isBefore(dueAt)) {
             throw new IllegalStateException("This opportunity review is scheduled for "
                     + LocalDate.ofInstant(dueAt, io.liftandshift.strikebench.market.MarketHours.EASTERN) + ".");

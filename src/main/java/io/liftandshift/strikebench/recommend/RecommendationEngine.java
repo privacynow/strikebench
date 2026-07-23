@@ -161,7 +161,7 @@ public final class RecommendationEngine {
     }
 
     public LocalDate marketDate(String worldId) {
-        return LocalDate.ofInstant(market.simInstant(worldId).orElseGet(clock::instant), MarketHours.EASTERN);
+        return market.laneToday(worldId, clock);
     }
 
     public Result recommend(Request req, long buyingPowerCents) {
@@ -560,7 +560,7 @@ public final class RecommendationEngine {
     private SymbolReady preflightSymbol(String symbol, String worldId, List<String> notes) {
         // ONE CLOCK PER LANE: a simulated session's clock is always in-session while it runs — the
         // observed market being closed says nothing about THIS market (review P2).
-        java.time.Instant laneNow = market.simInstant(worldId).orElseGet(clock::instant);
+        java.time.Instant laneNow = market.laneNow(worldId, clock);
         if (worldId == null && !MarketHours.isRegularSession(laneNow)) {
             notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
                     + "not a live quote, and can shift at the next open.");
