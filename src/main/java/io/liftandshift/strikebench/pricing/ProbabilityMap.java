@@ -124,25 +124,14 @@ public final class ProbabilityMap {
                 cvar95, Math.min(0, stress), touches, basis);
     }
 
-    /** Lognormal CDF: P(S_T <= s) with ln S_T ~ N(mu, sd^2). */
+    /** Lognormal CDF: P(S_T <= s) with ln S_T ~ N(mu, sd^2). Uses THE one normal CDF
+     *  (BlackScholes.normCdf) — no second erf/CDF approximation lives here. */
     private static double cdf(double s, double mu, double sd) {
         if (s <= 0) return 0;
-        return normCdf((Math.log(s) - mu) / sd);
+        return BlackScholes.normCdf((Math.log(s) - mu) / sd);
     }
 
     private static double clamp01(double v) { return Math.max(0, Math.min(1, v)); }
-
-    private static double normCdf(double z) {
-        return 0.5 * (1 + erf(z / Math.sqrt(2)));
-    }
-
-    private static double erf(double x) {
-        // Abramowitz–Stegun 7.1.26 (|err| < 1.5e-7) — same kernel family as BlackScholes.normCdf.
-        double t = 1 / (1 + 0.3275911 * Math.abs(x));
-        double y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
-                + 0.254829592) * t * Math.exp(-x * x);
-        return x >= 0 ? y : -y;
-    }
 
     private static double round4(double v) { return Math.round(v * 10000.0) / 10000.0; }
 }

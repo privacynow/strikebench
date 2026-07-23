@@ -198,8 +198,9 @@ final class OutcomeController {
         long contracts = (position == null ? List.<Leg>of() : position.legs())
                 .stream().filter(l -> !l.isStock())
                 .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, qty);
-        long orderFees = position == null ? 0 : cfg.feePerOrderCents() * 2L;
-        return contracts * cfg.feePerContractCents() * 2L + orderFees;
+        // THE one fee formula (also correctly charges no option order fee on a stock-only package).
+        return io.liftandshift.strikebench.util.Fees.roundTripCents(
+                contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
     }
 
     private io.liftandshift.strikebench.sim.SimulationEngine.PreviewRun simScenarioRun(Context ctx, ScenarioRequest b) {
