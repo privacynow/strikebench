@@ -67,15 +67,15 @@ Faraz Babar
 
 ## Speaker Tagline
 
-Software engineer who trades options with tools he built himself.
+Software engineer who solves problems in finance: payments, onboarding, risk, and compliance.
 
 ## Email
 
 Use the address you actually read; the organizer contacts you there about this submission.
 
-## Speaker Biography (limit 500 characters; text below is 351, leaving 148 for the first sentence)
+## Speaker Biography (limit 500 characters; this text is 465, leaving 35 spare if you add an affiliation)
 
-[One sentence: role / affiliation.] He trades options for his own account and built StrikeBench, a personal platform that recommends options trades and shows the evidence behind every number it puts on screen. His current work uses Apache Flink and small, explainable models to make the platform's backtests trustworthy and to check its confidence numbers against what actually happened.
+Faraz Babar is a software engineer who solves problems in finance and fintech, across onboarding, payments, risk, and compliance. He built StrikeBench, a personal platform for learning options trading, which recommends trades and shows the evidence behind every number it puts on screen. His current work uses Apache Flink and small, explainable models to make the platform's backtests trustworthy and to check its confidence numbers against what actually happened.
 
 ## Speaker Photo
 
