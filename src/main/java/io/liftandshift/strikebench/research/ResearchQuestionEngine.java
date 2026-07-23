@@ -121,9 +121,7 @@ public final class ResearchQuestionEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();
 
-        LocalDate laneToday = market.simInstant(worldId)
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate laneToday = market.laneToday(worldId, clock);
         LocalDate to = parseDate(req.to(), laneToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);

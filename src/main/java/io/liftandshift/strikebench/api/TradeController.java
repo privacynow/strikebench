@@ -634,10 +634,7 @@ final class TradeController {
                         + " are free (held minus already locked)";
             }
         }
-        LocalDate laneToday = market.simInstant(accountWorld)
-                .map(instant -> LocalDate.ofInstant(instant,
-                        io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate laneToday = market.laneToday(accountWorld, clock);
         Verdict verdict = Guardrails.check(new Guardrails.Proposal(family, priced, request.qty(),
                 quotes, spot, worst, laneToday, buyingPowerCents, false,
                 earningsSoon, false, lockedShares));

@@ -165,9 +165,7 @@ final class ResearchController {
                             + " quote data from " + current.evidence().source()));
             return;
         }
-        LocalDate today = market.simInstant(worldParam(world))
-                .map(instant -> LocalDate.ofInstant(instant, MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate today = market.laneToday(worldParam(world), clock);
 
         record IvExp(List<LocalDate> expirations, Double atmIv, DataEvidence evidence) {}
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
@@ -327,9 +325,7 @@ final class ResearchController {
             default -> "1y";
         };
         String world = activeWorld.apply(ctx);
-        LocalDate today = market.simInstant(worldParam(world))
-                .map(i -> LocalDate.ofInstant(i, MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate today = market.laneToday(worldParam(world), clock);
         int days = switch (range) {
             case "1m" -> 30;
             case "3m" -> 91;

@@ -36,8 +36,7 @@ public final class ScenarioCanvasTemplateService {
         ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
                 .sane(spec.horizonDays());
         String world = worldId == null || worldId.isBlank() ? "observed" : worldId;
-        LocalDate anchor = market.simInstant(world)
-                .map(i -> LocalDate.ofInstant(i, MarketHours.EASTERN)).orElseGet(() -> LocalDate.now(clock));
+        LocalDate anchor = market.laneToday(world, clock);
         return switch (request.kind()) {
             case EARNINGS_GAP_UP -> earnings(symbol, world, analysis, spot, atmIv, spec, canvas, anchor, true);
             case EARNINGS_GAP_DOWN -> earnings(symbol, world, analysis, spot, atmIv, spec, canvas, anchor, false);

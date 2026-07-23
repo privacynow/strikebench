@@ -30,9 +30,7 @@ public final class MarketVolatilityResolver {
             var expirations = market.expirations(symbol, worldId);
             if (expirations.isEmpty()) return null;
 
-            LocalDate laneToday = market.simInstant(worldId)
-                    .map(instant -> LocalDate.ofInstant(instant, MarketHours.EASTERN))
-                    .orElseGet(() -> LocalDate.now(clock));
+            LocalDate laneToday = market.laneToday(worldId, clock);
             LocalDate target = MarketHours.tradingDateAfter(laneToday, Math.max(1, horizonSessions));
             LocalDate expiration = expirations.stream()
                     .min(Comparator.comparingLong(date -> Math.abs(ChronoUnit.DAYS.between(date, target))))
