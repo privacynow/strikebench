@@ -11,16 +11,17 @@ technologists and open-source program office people, not options traders.
 
 ---
 
-## Title
+## Title (final — owner's choice)
 
-Building a backtest that can't lie: one Apache Flink job for both history and live
+The backtest was green. The account wasn't. Building a backtest that can't lie.
 
-Alternates (swap at paste time if preferred):
-- Your backtest is lying to you — here's one that can't. — *the aggressive form; accurate only with the second clause attached*
-- The backtest was green. The account wasn't. — *closing the backtest/live gap with Apache Flink*
-- When your model says 70%, does it ever mean 70%? — *calibrating a trading engine with Apache Flink and small, explainable models*
-- I built an engine that says my trades are bad. It's right. — *Apache Flink, honest backtests, and a decade of replayed decisions*
-(The last one doubles as the talk's opening line even if not used as the title.)
+Note: Apache Flink is no longer in the title — it stays prominent in the elevator pitch's third
+sentence, the abstract, and the tags, which the committee also scans for technology fit.
+
+Retired alternates (for reference):
+- Building a backtest that can't lie: one Apache Flink job for both history and live
+- When your model says 70%, does it ever mean 70%?
+- I built an engine that says my trades are bad. It's right. — *still the talk's opening line.*
 
 ## Elevator pitch (short field, ≤ ~300 chars)
 
