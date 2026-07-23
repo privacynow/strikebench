@@ -2894,7 +2894,7 @@ test('an empty Home with no working ideas gives Scout and market context the who
       'the broad-market chip is always present; sector chips appear with the described universe');
     assert.equal(rendered.duplicateSectorTiles, 0,
       'the permanent top Market lens owns sector selection without a clipped second sector wall');
-    assert.match(rendered.text, /Scan a market or shape one exact idea.*Scan the broad market/i);
+    assert.match(rendered.text, /Scan a market or shape one exact idea[\s\S]*Ticker or sector[\s\S]*Scan/i);
     assert.deepEqual(pageErrors, [], `zero-plan Home emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -7670,11 +7670,9 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       && row.focus && row.contextWhiteSpace === 'nowrap'),
     'every market row exposes separate focus and Shape actions without wrapping its receipt');
     assert.match(idle.heading, /Watchlist/i);
-    const homeCatalogText = await page.locator('.homecatalogline').textContent();
-    assert.match(homeCatalogText, /\d+ structures compete for income/i,
-      'Home states the goal-matched structure coverage in one plain sentence');
-    assert.doesNotMatch(homeCatalogText, /Naked.*call/i,
-      'blocked-by-default catalog families are not presented as viable Scout inputs');
+    const scanAction = await page.locator('.scoutbar [data-auth-opportunity-scan]').textContent();
+    assert.match(scanAction, /Scan/i,
+      'the minimal compose bar offers one adaptive Scan action, no catalog wall');
     assert.equal(await page.locator('.opportunitycontrol').first()
       .evaluate(node => getComputedStyle(node).borderTopWidth), '1px',
     'Home uses the same bordered declaration grammar as New Idea');
@@ -7771,12 +7769,10 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
       const root = document.querySelector('.homeworkbenchpanel');
       const rootBox = root.getBoundingClientRect();
       const legend = document.getElementById('authBookFanLegend');
-      const catalog = document.querySelector('.homecatalogline');
       const structural = Array.from(root.querySelectorAll(
-        '.opportunitycontrols,.scoutactivegrid,.scoutidlecard,.scoutresultcard,'
-          + '.homecatalogline,.scoutlaunch,.scoutprimary'));
+        '.opportunitycontrols,.scoutbar,.scoutresults,.homeideasearch,.scoutgo'));
       const overflowTargets = Array.from(root.querySelectorAll(
-        '.scoutidlecard,.scoutresultcard,.scoutstart,.scoutstartgrid,.homecatalogline'));
+        '.scoutbar,.scoutresults,.homeideasearch'));
       return {
         workbenchChildrenFit: Array.from(root.children).every(node => {
           const box = node.getBoundingClientRect();
@@ -7796,7 +7792,6 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
             horizontal: node.scrollWidth - node.clientWidth
           })),
         futuresOverflow: legend.scrollHeight - legend.clientHeight,
-        catalogOverflow: catalog.scrollHeight - catalog.clientHeight,
         declarationBorders: Array.from(document.querySelectorAll('.opportunitycontrol'))
           .every(node => parseFloat(getComputedStyle(node).borderTopWidth) >= 1),
         declarationButtonsTransparent: Array.from(document.querySelectorAll(
@@ -7812,8 +7807,6 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
       `Home permanent workbench sections must not hide overflow: ${JSON.stringify(desktopComposition)}`);
     assert.ok(desktopComposition.futuresOverflow <= 2,
       `the compact Futures receipt must not clip or require a nested scroller (${desktopComposition.futuresOverflow}px)`);
-    assert.ok(desktopComposition.catalogOverflow <= 2,
-      `the canonical strategy field must not clip (${desktopComposition.catalogOverflow}px)`);
     assert.equal(desktopComposition.declarationBorders, true,
       'Home declaration groups retain the shared bordered control grammar');
     assert.equal(desktopComposition.declarationButtonsTransparent, true,
