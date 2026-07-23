@@ -248,6 +248,12 @@ test('New Idea retargets NVDA, retains its scenario, and bounds Review in the ex
     await page.locator('#univq').fill('NVDA');
     await page.waitForSelector('#decideStage [data-pick="NVDA"]');
     await page.locator('#decideStage [data-pick="NVDA"]').click();
+    assert.match(await page.locator('#decideStage .ideacomposer > .lenshd .hint').innerText(), /^NVDA/,
+      'choosing a symbol stages it in the complete composer');
+    assert.match(await page.locator('#decideStage .decintent b').innerText(), /^Choose underlying/,
+      'a symbol click does not bypass the remaining idea controls');
+    await page.locator('#decideStage [data-dec="analyzeidea"]').click();
+    await page.waitForSelector('#decideStage .fanr');
     assert.match(await page.locator('#decideStage .decintent b').innerText(), /^NVDA/);
 
     await page.locator(
@@ -344,6 +350,8 @@ test('New Idea keeps six exact legs readable beside ideas across desktop and mob
       await page.waitForSelector('#decideStage.on .decwrap');
       await page.locator('#univq').fill('AMD');
       await page.locator('#univq').press('Enter');
+      await page.locator('#decideStage [data-dec="analyzeidea"]').click();
+      await page.waitForSelector('#decideStage [data-cand="i-ic"]');
       await page.locator('#decideStage [data-cand="i-ic"]').click();
       assert.equal(await page.locator('#decideStage .declegpanel .legr').count(), 4,
         `${label} renders the complete condor package`);

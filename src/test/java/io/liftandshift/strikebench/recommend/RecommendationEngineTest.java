@@ -351,6 +351,28 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void candidateLegsCarryTheExactExecutableBookReceipt() {
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire",
+                new RecommendationEngine.Holdings(null, null, 24_000L), null), BP);
+        Candidate csp = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CASH_SECURED_PUT"))
+                .findFirst().orElseThrow();
+        LegView shortPut = csp.legs().getFirst();
+
+        assertThat(shortPut.action()).isEqualTo("SELL");
+        assertThat(shortPut.quoteBid()).isNotBlank();
+        assertThat(shortPut.quoteAsk()).isNotBlank();
+        assertThat(shortPut.entryPrice())
+                .as("a SELL candidate must be priced from the captured bid")
+                .isEqualTo(shortPut.quoteBid());
+        assertThat(new BigDecimal(shortPut.quoteAsk()))
+                .isGreaterThanOrEqualTo(new BigDecimal(shortPut.quoteBid()));
+        assertThat(shortPut.quoteAsOfEpochMs()).isPositive();
+        assertThat(shortPut.quoteSource()).isNotBlank();
+        assertThat(shortPut.quoteFreshness()).isEqualTo("FIXTURE");
+    }
+
+    @Test
     void cashSecuredPutYieldAndEffectivePriceUseNetPremiumOverFullStrikeCash() {
         engine.withFees(100, 500); // $1/contract + $5/order at entry
         RecommendationEngine.Result result = engine.recommend(intentReq("acquire",

@@ -65,7 +65,9 @@ class PlanStrategyServiceTest {
                      "stance":{},"participation":{},"impliedStance":{},"ivContext":{},"coverage":{},
                      "explanation":{"assumptions":["No dividend yield"],"failureModes":["Move beyond a short strike"]}},
                    "legs":[
-                     {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.4007","positionEffect":"OPEN"},
+                     {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.4007","positionEffect":"OPEN",
+                      "quoteBid":"2.4007","quoteAsk":"2.55","quoteAsOfEpochMs":1784050200000,
+                      "quoteSource":"fixture-chain","quoteFreshness":"FIXTURE"},
                      {"action":"BUY","type":"PUT","strike":"240","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.1","positionEffect":"OPEN"},
                      {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.3","positionEffect":"OPEN"},
                      {"action":"BUY","type":"CALL","strike":"270","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.05","positionEffect":"OPEN"}
@@ -97,6 +99,14 @@ class PlanStrategyServiceTest {
                 .isEqualTo("close");
         assertThat(restored.result().at("/candidates/0/legs/0/entryPrice").asText()).isEqualTo("2.4007");
         assertThat(restored.result().at("/candidates/0/legs/0/positionEffect").asText()).isEqualTo("OPEN");
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteBid").asText()).isEqualTo("2.4007");
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteAsk").asText()).isEqualTo("2.55");
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteAsOfEpochMs").asLong())
+                .isEqualTo(1_784_050_200_000L);
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteSource").asText())
+                .isEqualTo("fixture-chain");
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteFreshness").asText())
+                .isEqualTo("FIXTURE");
         assertThat(db.query("SELECT evaluation_snapshot->'evidence'->>'rollup' evidence FROM plan_candidate WHERE id=?",
                 r -> r.str("evidence"), candidateId)).containsExactly("DEMO_FIXTURE");
         assertThat(restored.result().at("/candidates/0/sourceKind").asText()).isEqualTo("RANKED");

@@ -18,7 +18,7 @@ class MigrationsTest {
             // Flyway owns the history; the baseline landed successfully.
             assertThat(db.query(
                     "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank",
-                    r -> r.str("version"))).containsExactly("1", "2", "3", "4", "5");
+                    r -> r.str("version"))).containsExactly("1", "2", "3", "4", "5", "6");
 
             // The baseline carries its seed rows and the current column shape.
             assertThat(db.query("SELECT id FROM users ORDER BY id", r -> r.str("id")))
@@ -45,6 +45,16 @@ class MigrationsTest {
                             + "WHERE table_schema='public' AND table_name='plan_strategy_run' "
                             + "AND column_name='sentiment_scorer_version'",
                     r -> r.str("column_name"))).containsExactly("sentiment_scorer_version");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_candidate_leg' "
+                            + "AND column_name IN ('quote_bid','quote_ask','quote_as_of_epoch_ms',"
+                            + "'quote_source','quote_freshness') ORDER BY column_name",
+                    r -> r.str("column_name"))).containsExactly(
+                            "quote_as_of_epoch_ms",
+                            "quote_ask",
+                            "quote_bid",
+                            "quote_freshness",
+                            "quote_source");
         }
     }
 

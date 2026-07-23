@@ -63,11 +63,18 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
      * display/marking price. Paper fills must use the executable side, never the mid.
      */
     record LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
-                   Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence) {
+                   Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence,
+                   Long asOfEpochMs) {
+        /** Compatibility constructor for marks whose source timestamp is unavailable. */
+        public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
+                       Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence) {
+            this(bid, ask, mid, iv, freshness, delta, gamma, theta, vega, evidence, null);
+        }
+
         /** Convenience constructor without greeks (stubs, stock legs). */
         public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness) {
             this(bid, ask, mid, iv, freshness, null, null, null, null,
-                    DataEvidence.of(null, freshness));
+                    DataEvidence.of(null, freshness), null);
         }
 
         /**
