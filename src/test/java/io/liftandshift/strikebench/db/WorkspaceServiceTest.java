@@ -96,13 +96,17 @@ class WorkspaceServiceTest {
         assertThat(bus.currentSeq()).isEqualTo(e2.seq());
         // The replay ring is capped — old events fall off instead of growing forever.
         for (int i = 0; i < 400; i++) bus.publish("tick", Map.of("i", i));
-        assertThat(bus.since(0)).hasSizeLessThanOrEqualTo(256);
-        // Unsubscribe actually stops delivery.
-        awaitTrue(() -> seen.size() == 402);
-        int before = seen.size();
-        Runnable unsub = bus.subscribe(seen::add);
+        assertThat(bus.since(0)).hasSize(256);
+        // Per-subscriber queues are also deliberately capped at 256 hints and may drop the
+        // oldest items during this 400-event burst. Do not require lossless async delivery here.
+        // A fresh subscriber gives the unsubscribe check a deterministic delivery barrier.
+        List<EventBus.Event> markerSeen = new CopyOnWriteArrayList<>();
+        bus.subscribe(markerSeen::add);
+        List<EventBus.Event> removedSeen = new CopyOnWriteArrayList<>();
+        Runnable unsub = bus.subscribe(removedSeen::add);
         unsub.run();
-        bus.publish("after", Map.of());
-        awaitTrue(() -> seen.size() == before + 1); // only the original subscriber saw 'after'
+        var after = bus.publish("after", Map.of());
+        awaitTrue(() -> markerSeen.stream().anyMatch(event -> event.seq() == after.seq()));
+        assertThat(removedSeen).isEmpty();
     }
 }
