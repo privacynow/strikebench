@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench.sim;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
+import io.liftandshift.strikebench.util.Quantiles;
+
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -249,7 +251,7 @@ public final class ScenarioSimulator {
             for (int p = 0; p < n; p++) tmp[p] = pnl[p][i];
             double[] sorted = tmp.clone();
             java.util.Arrays.sort(sorted);
-            bands.add(new Band(day, cents(pct(sorted, 0.10)), cents(pct(sorted, 0.50)), cents(pct(sorted, 0.90))));
+            bands.add(new Band(day, cents(Quantiles.of(sorted, 0.10)), cents(Quantiles.of(sorted, 0.50)), cents(Quantiles.of(sorted, 0.90))));
         }
 
         double[] terminal = new double[n];
@@ -307,8 +309,8 @@ public final class ScenarioSimulator {
         }
 
         return new SimResult(cents(entry), n, steps / spd,
-                cents(pct(sorted, 0.05)), cents(pct(sorted, 0.25)), cents(pct(sorted, 0.50)),
-                cents(pct(sorted, 0.75)), cents(pct(sorted, 0.95)),
+                cents(Quantiles.of(sorted, 0.05)), cents(Quantiles.of(sorted, 0.25)), cents(Quantiles.of(sorted, 0.50)),
+                cents(Quantiles.of(sorted, 0.75)), cents(Quantiles.of(sorted, 0.95)),
                 cents(sum / n), Math.round(wins * 1000.0 / n) / 10.0,
                 cents(sorted[n - 1]), cents(sorted[0]),
                 0, bands, dist, example, notes);
@@ -319,11 +321,6 @@ public final class ScenarioSimulator {
         for (int i = 0; i < idx.length; i++) idx[i] = i;
         java.util.Arrays.sort(idx, (a, b) -> Double.compare(paths[a][steps], paths[b][steps]));
         return idx[idx.length / 2];
-    }
-
-    private static double pct(double[] sorted, double p) {
-        int i = (int) Math.floor(p * (sorted.length - 1));
-        return sorted[Math.max(0, Math.min(sorted.length - 1, i))];
     }
 
     private static long cents(double dollars) { return Math.round(dollars * 100); }
