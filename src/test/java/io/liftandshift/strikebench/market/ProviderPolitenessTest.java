@@ -67,6 +67,18 @@ class ProviderPolitenessTest {
     }
 
     @Test
+    void requestLocalFailuresDoNotPoisonTheProviderWideBreaker() {
+        ProviderPoliteness p = new ProviderPoliteness("yahoo", 1, 0, 60_000);
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(() -> p.call(
+                    () -> { throw new RuntimeException("HTTP 400 unsupported symbol"); },
+                    null, ignored -> false)).hasMessageContaining("400");
+        }
+        assertThat(p.coolingDown()).isFalse();
+        assertThat(p.call(() -> "healthy symbol", null)).isEqualTo("healthy symbol");
+    }
+
+    @Test
     void restoredCooldownShortCircuitsAndExpiredStateIsIgnored() {
         ProviderPoliteness restored = new ProviderPoliteness("yahoo", 1, 0, 60_000);
         restored.seedCooldown(System.currentTimeMillis() + 60_000);

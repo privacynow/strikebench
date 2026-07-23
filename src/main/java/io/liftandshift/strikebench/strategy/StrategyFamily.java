@@ -25,13 +25,13 @@ public enum StrategyFamily {
     LONG_STRANGLE("Long strangle", Set.of(Thesis.VOLATILE), true, false, false, false, 2,
             DIRECTIONAL, Set.of(DIRECTIONAL)),
     DEBIT_CALL_SPREAD("Bull call (debit) spread", Set.of(Thesis.BULLISH), true, false, false, false, 1,
-            DIRECTIONAL, Set.of(DIRECTIONAL)),
+            DIRECTIONAL, Set.of(DIRECTIONAL, ACQUIRE)),
     DEBIT_PUT_SPREAD("Bear put (debit) spread", Set.of(Thesis.BEARISH), true, false, false, false, 1,
             DIRECTIONAL, Set.of(DIRECTIONAL)),
     CREDIT_CALL_SPREAD("Bear call (credit) spread", Set.of(Thesis.BEARISH, Thesis.NEUTRAL), true, false, false, false, 2,
             INCOME, Set.of(INCOME, DIRECTIONAL)),
     CREDIT_PUT_SPREAD("Bull put (credit) spread", Set.of(Thesis.BULLISH, Thesis.NEUTRAL), true, false, false, false, 2,
-            INCOME, Set.of(INCOME, DIRECTIONAL)),
+            INCOME, Set.of(INCOME, DIRECTIONAL, ACQUIRE)),
     IRON_CONDOR("Iron condor", Set.of(Thesis.NEUTRAL), true, false, false, false, 2,
             INCOME, Set.of(INCOME)),
     IRON_BUTTERFLY("Iron butterfly", Set.of(Thesis.NEUTRAL), true, false, false, false, 3,
@@ -43,7 +43,7 @@ public enum StrategyFamily {
     CALENDAR_CALL("Call calendar spread", Set.of(Thesis.NEUTRAL), true, false, false, true, 3,
             INCOME, Set.of(INCOME, DIRECTIONAL)),
     CALENDAR_PUT("Put calendar spread", Set.of(Thesis.NEUTRAL), true, false, false, true, 3,
-            INCOME, Set.of(INCOME, DIRECTIONAL)),
+            INCOME, Set.of(INCOME, DIRECTIONAL, ACQUIRE)),
     // Diagonals are wide, net-DEBIT DIRECTIONAL plays (a long deep-ITM anchor financed by a nearer
     // short leg). They are NOT income: "earn income" means collecting premium / positive carry, and a
     // diagonal pays a large debit up front. They stay in the catalog under the DIRECTIONAL flow (where

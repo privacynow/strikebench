@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /**
  * Reusable politeness gate for external data providers — the generalization of the discipline
@@ -63,6 +64,17 @@ public final class ProviderPoliteness {
      * (message contains "HTTP 429" or "HTTP 999") trips the breaker and rethrows.
      */
     public <T> T call(Callable<T> request, T coolingDownFallback) {
+        return call(request, coolingDownFallback, ignored -> true);
+    }
+
+    /**
+     * Provider-specific variant. {@code countsAsProviderFailure} distinguishes a bad individual
+     * request (for example Yahoo HTTP 400 for one unsupported symbol) from an upstream outage.
+     * Request-local failures still propagate, but they neither advance nor preserve the
+     * provider-wide consecutive-failure count.
+     */
+    public <T> T call(Callable<T> request, T coolingDownFallback,
+                      Predicate<Exception> countsAsProviderFailure) {
         if (coolingDown()) return coolingDownFallback;
         boolean acquired = false;
         try {
@@ -76,7 +88,12 @@ public final class ProviderPoliteness {
         } catch (Exception e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             boolean denied = msg.contains("HTTP 403") || msg.contains("HTTP 429") || msg.contains("HTTP 999");
-            if (denied || consecutiveFailures.incrementAndGet() >= 3) trip();
+            boolean providerFailure = countsAsProviderFailure == null || countsAsProviderFailure.test(e);
+            if (denied || (providerFailure && consecutiveFailures.incrementAndGet() >= 3)) {
+                trip();
+            } else if (!providerFailure) {
+                consecutiveFailures.set(0);
+            }
             if (e instanceof RuntimeException re) throw re;
             throw new RuntimeException(e);
         } finally {

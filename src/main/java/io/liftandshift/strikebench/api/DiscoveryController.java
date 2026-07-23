@@ -28,6 +28,9 @@ import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
@@ -40,6 +43,14 @@ import java.util.function.Function;
 /** Owns strategy discovery, shared ranking, universe scans, and portfolio construction. */
 final class DiscoveryController {
     private static final Logger log = LoggerFactory.getLogger(DiscoveryController.class);
+    private static final String SCOUT_STREAM_TYPE = "application/x-ndjson";
+    /*
+     * Safari may retain a tiny streaming response until its receive buffer fills. One ignorable
+     * whitespace record commits enough bytes for the first real progress frame to paint promptly;
+     * NDJSON consumers already ignore blank records.
+     */
+    private static final byte[] SCOUT_STREAM_PREAMBLE =
+            (" ".repeat(2048) + "\n").getBytes(StandardCharsets.UTF_8);
 
     private final Db db;
     private final MarketDataService market;
@@ -520,9 +531,70 @@ final class DiscoveryController {
         var finalResolved = resolved;
         String finalDestination = destination;
         boolean observedWorld = "observed".equals(world);
-        ctx.json(auto.runWithFrontier(finalReq, destinationBuyingPower, held, worldParam(world),
-                evaluations -> frontierContext(owner, acct, finalDestination, scope,
-                        finalResolved, evaluations, observedWorld)));
+        var contextFactory = (java.util.function.Function<List<io.liftandshift.strikebench.eval.StrategyEvaluation>,
+                RedeploymentFrontier.Context>) evaluations -> frontierContext(owner, acct,
+                finalDestination, scope, finalResolved, evaluations, observedWorld);
+        if (acceptsScoutStream(ctx)) {
+            ctx.disableCompression()
+                    .contentType(SCOUT_STREAM_TYPE)
+                    .header("Cache-Control", "no-store")
+                    .header("X-Accel-Buffering", "no");
+            ScoutStreamWriter stream = new ScoutStreamWriter(ctx.outputStream(), ctx);
+            try {
+                AutoRecommender.AutoResult result = auto.runWithFrontier(finalReq,
+                        destinationBuyingPower, held, worldParam(world), contextFactory,
+                        progress -> stream.write(new ScoutStreamFrame(
+                                "progress", progress, null, null)));
+                stream.write(new ScoutStreamFrame("complete", null, result, null));
+            } catch (RuntimeException failure) {
+                log.warn("Progressive Universe Scout failed after its response began");
+                log.debug("Progressive Universe Scout failure", failure);
+                stream.write(new ScoutStreamFrame("error", null, null,
+                        failure.getMessage() == null
+                                ? "The opportunity scan could not finish."
+                                : failure.getMessage()));
+            }
+            return;
+        }
+        ctx.json(auto.runWithFrontier(finalReq, destinationBuyingPower, held,
+                worldParam(world), contextFactory));
+    }
+
+    private static boolean acceptsScoutStream(Context ctx) {
+        String accept = ctx.header("Accept");
+        return accept != null && accept.toLowerCase(Locale.ROOT).contains(SCOUT_STREAM_TYPE);
+    }
+
+    private record ScoutStreamFrame(String type, AutoRecommender.Progress progress,
+                                    AutoRecommender.AutoResult result, String error) {}
+
+    /** One response-local writer; worker callbacks may arrive concurrently during signal scans. */
+    private static final class ScoutStreamWriter {
+        private final OutputStream out;
+        private final Context ctx;
+        private boolean closed;
+        private boolean primed;
+
+        private ScoutStreamWriter(OutputStream out, Context ctx) {
+            this.out = out;
+            this.ctx = ctx;
+        }
+
+        private synchronized void write(ScoutStreamFrame frame) {
+            if (closed) return;
+            try {
+                if (!primed) {
+                    out.write(SCOUT_STREAM_PREAMBLE);
+                    primed = true;
+                }
+                out.write(Json.MAPPER.writeValueAsBytes(frame));
+                out.write('\n');
+                out.flush();
+                ctx.res().flushBuffer();
+            } catch (IOException | RuntimeException disconnected) {
+                closed = true;
+            }
+        }
     }
 
     private RedeploymentFrontier.UniverseScope universeScope(List<String> requested, String world,

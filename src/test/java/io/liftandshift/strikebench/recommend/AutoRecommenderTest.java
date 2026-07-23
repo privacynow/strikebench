@@ -136,7 +136,24 @@ class AutoRecommenderTest {
                                 assertThat(io.liftandshift.strikebench.strategy.StrategyFamily
                                         .valueOf(scored.evaluation().candidate().strategy())
                                         .fits(io.liftandshift.strikebench.strategy.StrategyFamily.Thesis
-                                                .valueOf(override.toUpperCase()))).isTrue())));
+                                        .valueOf(override.toUpperCase()))).isTrue())));
+    }
+
+    @Test
+    void explicitViewNarrowsIncomeScoutThroughTheExistingStrategyCatalog() {
+        AutoRecommender.AutoResult focused = auto.run(new AutoRecommender.AutoRequest(
+                List.of("AAPL"), List.of("month"), 1, null, null, null, null,
+                "balanced", false, List.of("INCOME"), null, "bullish"), BP);
+
+        assertThat(focused.picks().stream().flatMap(pick -> pick.horizons().stream())
+                .flatMap(horizon -> horizon.candidates().stream())).isNotEmpty();
+        assertThat(focused.picks()).singleElement().satisfies(pick ->
+                assertThat(pick.horizons()).allSatisfy(horizon ->
+                        assertThat(horizon.candidates()).allSatisfy(scored ->
+                                assertThat(io.liftandshift.strikebench.strategy.StrategyFamily
+                                        .valueOf(scored.evaluation().candidate().strategy())
+                                        .fits(io.liftandshift.strikebench.strategy.StrategyFamily.Thesis.BULLISH))
+                                        .isTrue())));
     }
 
     @Test

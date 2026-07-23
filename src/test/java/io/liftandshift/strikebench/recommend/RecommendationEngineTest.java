@@ -351,6 +351,39 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void acquireComparesDirectSharesWithExistingDefinedRiskAndTimeStructures() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(300, null, 25_000L);
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire", h, null), BP);
+        var byFamily = result.candidates().stream()
+                .collect(java.util.stream.Collectors.toMap(Candidate::strategy, candidate -> candidate,
+                        (first, ignored) -> first));
+
+        assertThat(byFamily).containsKeys("CASH_SECURED_PUT", "CREDIT_PUT_SPREAD",
+                "DEBIT_CALL_SPREAD", "CALENDAR_PUT");
+        assertThat(byFamily.get("CASH_SECURED_PUT").intentNote()).contains("buy 300 shares");
+        assertThat(byFamily.get("CREDIT_PUT_SPREAD").intentNote())
+                .contains("Capped-risk alternative").contains("not a reliable way to receive shares");
+        BigDecimal creditPutShort = byFamily.get("CREDIT_PUT_SPREAD").legs().stream()
+                .filter(leg -> "SELL".equals(leg.action()) && "PUT".equals(leg.type()))
+                .map(leg -> new BigDecimal(leg.strike())).findFirst().orElseThrow();
+        assertThat(creditPutShort)
+                .as("the insured acquisition alternative must honor the declared buy ceiling")
+                .isLessThanOrEqualTo(new BigDecimal("250"));
+        assertThat(byFamily.get("DEBIT_CALL_SPREAD").intentNote())
+                .contains("cannot deliver shares").contains("defined risk");
+        assertThat(byFamily.get("CALENDAR_PUT").intentNote())
+                .contains("farther-dated long put").contains("does not guarantee share delivery");
+
+        long ordinaryRiskBudget = RiskBudgetPolicy.requestBudgetCents(
+                RecommendationEngine.RiskMode.BALANCED, BP, null, null);
+        for (String family : List.of("CREDIT_PUT_SPREAD", "DEBIT_CALL_SPREAD", "CALENDAR_PUT")) {
+            assertThat(byFamily.get(family).maxLossCents())
+                    .as(family + " stays inside the risk budget rather than consuming acquisition buying power")
+                    .isLessThanOrEqualTo(ordinaryRiskBudget);
+        }
+    }
+
+    @Test
     void candidateLegsCarryTheExactExecutableBookReceipt() {
         RecommendationEngine.Result result = engine.recommend(intentReq("acquire",
                 new RecommendationEngine.Holdings(null, null, 24_000L), null), BP);

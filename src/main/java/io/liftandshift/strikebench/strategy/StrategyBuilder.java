@@ -56,9 +56,10 @@ public final class StrategyBuilder {
 
     /**
      * Intent-flow construction hints. targetPrice steers the short strike of covered calls /
-     * cash-secured puts (and the collar's call) to the user's desired sell/buy level instead of
-     * the default delta target; sharesHeld omits the stock BUY leg from stock-hedged families
-     * because the account already owns the shares (the trade layer locks them as coverage).
+     * cash-secured puts, the collar's call, and an acquisition put-calendar to the user's desired
+     * sell/buy level instead of the default delta target; sharesHeld omits the stock BUY leg from
+     * stock-hedged families because the account already owns the shares (the trade layer locks them
+     * as coverage).
      */
     public record BuildHints(BigDecimal targetPrice, boolean sharesHeld) {
         public static final BuildHints NONE = new BuildHints(null, false);
@@ -83,13 +84,14 @@ public final class StrategyBuilder {
                 case DEBIT_CALL_SPREAD -> vertical(chain, OptionType.CALL, LegAction.BUY, 0.50, +2);
                 case DEBIT_PUT_SPREAD -> vertical(chain, OptionType.PUT, LegAction.BUY, 0.50, -2);
                 case CREDIT_CALL_SPREAD -> creditVertical(chain, OptionType.CALL, spot);
-                case CREDIT_PUT_SPREAD -> creditVertical(chain, OptionType.PUT, spot);
+                case CREDIT_PUT_SPREAD -> creditVertical(
+                        chain, OptionType.PUT, spot, hints.targetPrice());
                 case IRON_CONDOR -> ironCondor(chain, spot);
                 case IRON_BUTTERFLY -> ironButterfly(chain, spot);
                 case LONG_CALL_BUTTERFLY -> butterfly(chain, OptionType.CALL, spot);
                 case LONG_PUT_BUTTERFLY -> butterfly(chain, OptionType.PUT, spot);
-                case CALENDAR_CALL -> calendar(chain, farChain, OptionType.CALL, spot);
-                case CALENDAR_PUT -> calendar(chain, farChain, OptionType.PUT, spot);
+                case CALENDAR_CALL -> calendar(chain, farChain, OptionType.CALL, spot, null);
+                case CALENDAR_PUT -> calendar(chain, farChain, OptionType.PUT, spot, hints.targetPrice());
                 case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL, spot);
                 case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT, spot);
                 case COVERED_CALL -> coveredCall(chain, spot, hints);
@@ -128,7 +130,9 @@ public final class StrategyBuilder {
                 case CREDIT_CALL_SPREAD -> creditVerticalAlternatives(
                         chain, OptionType.CALL, spot, false, MAX_SEARCH_ALTERNATIVES, stats);
                 case CREDIT_PUT_SPREAD -> creditVerticalAlternatives(
-                        chain, OptionType.PUT, spot, false, MAX_SEARCH_ALTERNATIVES, stats);
+                        chain, OptionType.PUT, spot, false, MAX_SEARCH_ALTERNATIVES, stats).stream()
+                        .filter(built -> shortStrikeAtOrBelow(built, hints.targetPrice()))
+                        .toList();
                 case IRON_CONDOR -> ironCondorAlternatives(
                         chain, spot, MAX_SEARCH_ALTERNATIVES, stats);
                 default -> {
@@ -163,6 +167,22 @@ public final class StrategyBuilder {
      */
     private static Built creditVertical(OptionChain chain, OptionType type, BigDecimal spot) {
         return creditVertical(chain, type, spot, false);
+    }
+
+    private static Built creditVertical(OptionChain chain, OptionType type, BigDecimal spot,
+                                        BigDecimal maxShortStrike) {
+        SearchStats stats = new SearchStats();
+        return creditVerticalAlternatives(chain, type, spot, false, MAX_SEARCH_ALTERNATIVES, stats).stream()
+                .filter(built -> shortStrikeAtOrBelow(built, maxShortStrike))
+                .findFirst().orElse(null);
+    }
+
+    private static boolean shortStrikeAtOrBelow(Built built, BigDecimal ceiling) {
+        if (ceiling == null) return true;
+        return built.legs().stream().anyMatch(leg -> !leg.isStock()
+                && leg.action() == LegAction.SELL
+                && leg.type() == OptionType.PUT
+                && leg.strike().compareTo(ceiling) <= 0);
     }
 
     private static Built creditVertical(OptionChain chain, OptionType type, BigDecimal spot,
@@ -727,14 +747,26 @@ public final class StrategyBuilder {
                 "BUY " + strikeLabel(lower) + " / SELL 2x " + strikeLabel(middle) + " / BUY " + strikeLabel(upper) + " " + chain.expiration());
     }
 
-    private static Built calendar(OptionChain near, OptionChain far, OptionType type, BigDecimal spot) {
+    private static Built calendar(OptionChain near, OptionChain far, OptionType type, BigDecimal spot,
+                                  BigDecimal targetPrice) {
         if (far == null) return null;
-        BigDecimal atm = nearestStrike(near, spot);
-        OptionQuote nearQ = at(near, type, atm);
-        OptionQuote farQ = at(far, type, atm);
+        BigDecimal anchor = targetPrice == null ? nearestStrike(near, spot)
+                : commonStrikeAtOrBelow(near, far, type, targetPrice);
+        if (anchor == null) return null;
+        OptionQuote nearQ = at(near, type, anchor);
+        OptionQuote farQ = at(far, type, anchor);
         if (nearQ == null || farQ == null) return null;
         return new Built(List.of(leg(LegAction.SELL, nearQ), leg(LegAction.BUY, farQ)), List.of(nearQ, farQ),
                 "SELL " + strikeLabel(nearQ) + " " + near.expiration() + " / BUY " + strikeLabel(farQ) + " " + far.expiration());
+    }
+
+    private static BigDecimal commonStrikeAtOrBelow(OptionChain near, OptionChain far, OptionType type,
+                                                     BigDecimal target) {
+        return near.strikes().stream()
+                .filter(strike -> strike.compareTo(target) <= 0)
+                .filter(strike -> at(near, type, strike) != null && at(far, type, strike) != null)
+                .max(BigDecimal::compareTo)
+                .orElse(null);
     }
 
     private static Built diagonal(OptionChain near, OptionChain far, OptionType type, BigDecimal spot) {

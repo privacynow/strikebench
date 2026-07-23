@@ -2612,6 +2612,10 @@
   function publishBookContext(seq, contextSeq, data, context) {
     if (seq !== bookRequestSeq || !state.book || state.book.requestId !== seq
         || contextSeq !== bookContextRequestSeq || state.book.data !== data) return false;
+    if (!context.defaultSymbols && data.homeContext
+        && Array.isArray(data.homeContext.defaultSymbols)) {
+      context.defaultSymbols = data.homeContext.defaultSymbols.slice();
+    }
     context = Object.assign({}, context, { requestId: contextSeq });
     data.homeContext = context;
     state.book.data = data;
@@ -2831,13 +2835,27 @@
   async function focusBookSector(rawSector) {
     var book = state.book, data = book && book.data, context = data && data.homeContext;
     if (!book || !data || !context) return null;
-    var sector = describedSector(data.universe, rawSector), seq = book.requestId;
+    var seq = book.requestId, requested = String(rawSector || '').trim();
     var contextSeq = ++bookContextRequestSeq;
+    if (!requested) {
+      var defaults = (context.defaultSymbols || context.symbols || []).slice(0, 12);
+      publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
+        phase: defaults.length ? 'loading' : 'ready', symbols: defaults, rows: [],
+        detailSymbol: defaults[0] || null, detailLoading: defaults[0] || null,
+        sectorLens: null
+      }));
+      if (!defaults.length) return data.homeContext;
+      var defaultBefore = await readIdentitySnapshot();
+      if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return null;
+      await hydrateBookContext(seq, contextSeq, defaultBefore, data, defaults);
+      return contextSeq === bookContextRequestSeq ? data.homeContext : null;
+    }
+    var sector = describedSector(data.universe, requested);
     if (!sector) {
       publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
         phase: 'ready', detailLoading: null,
         sectorLens: {
-          available: false, requested: String(rawSector || ''),
+          available: false, requested: requested,
           message: 'That sector is not present in the backend-owned universe catalog.'
         }
       }));
@@ -2927,7 +2945,8 @@
         readSlot('greeks', '/api/portfolio/greeks'),
         readSlot('bookRisk', '/api/portfolio/book-risk'),
         readSlot('planPortfolio', '/api/plans/portfolio'),
-        readSlot('universe', '/api/universe')
+        readSlot('universe', '/api/universe'),
+        readSlot('strategyCatalog', '/api/strategies')
       ]);
       if (seq !== bookRequestSeq) return null;
       var after = await readIdentitySnapshot();
@@ -2942,7 +2961,8 @@
         greeks: 'The portfolio Greeks receipt',
         bookRisk: 'The Book risk receipt',
         planPortfolio: 'The Plan portfolio',
-        universe: 'The active market universe'
+        universe: 'The active market universe',
+        strategyCatalog: 'The canonical strategy catalog'
       };
       slots = slots.map(function (slot) { return objectSlot(slot, bookLabels[slot.key]); });
       var values = slotsByKey(slots);
@@ -2989,6 +3009,7 @@
         plans: planRows,
         accountPlans: accountPlans,
         universe: values.universe.available ? values.universe.value : null,
+        strategyCatalog: values.strategyCatalog.available ? values.strategyCatalog.value : null,
         positionAnalyses: {},
         positionDetails: {},
         lifecycle: { phase: tradePage.trades.length ? 'loading' : 'empty',
@@ -2998,7 +3019,8 @@
         }) ? recentCommittedTradeId : null,
         homeContext: {
           phase: homeSymbols.length ? 'loading' : 'empty',
-          requestId: contextSeq, symbols: homeSymbols, rows: [], missing: []
+          requestId: contextSeq, symbols: homeSymbols, defaultSymbols: homeSymbols.slice(),
+          rows: [], missing: []
         },
         loadedAt: new Date().toISOString()
       };
@@ -3007,6 +3029,10 @@
         phase: phase, requestId: seq, identity: before.identity,
         data: data, missing: missing, error: null
       };
+      if (data.strategyCatalog && Array.isArray(data.strategyCatalog.catalog)) {
+        state.strategyCatalog = data.strategyCatalog;
+        state.strategyCatalogError = null;
+      }
       notify('book-' + phase, {
         operation: 'book', requestId: seq, book: state.book, data: data
       });
@@ -3725,7 +3751,7 @@
    * the server owns the configured active universe; Home never duplicates universe selection. The
    * scan remains user-triggered so painting Home cannot silently spend a provider allowance.
    */
-  async function scoutOpportunities(options) {
+  async function scoutOpportunities(options, onProgress) {
     if (!state.enabled) return null;
     options = options || {};
     var universe = Array.isArray(options.universe) ? options.universe.map(function (symbol) {
@@ -3751,8 +3777,61 @@
     if (universe.length) body.universe = universe;
     if (options.maxLossCents != null) body.maxLossCents = Number(options.maxLossCents);
     if (options.filters) body.filters = options.filters;
+    if (options.thesisOverride) body.thesisOverride = String(options.thesisOverride);
     if (options.destinationAccountId) body.destinationAccountId = String(options.destinationAccountId);
     if (options.redeployment) body.redeployment = options.redeployment;
+    if (typeof onProgress === 'function' && typeof fetch === 'function'
+        && typeof TextDecoder === 'function') {
+      var response = await fetch('/api/research/scout', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/x-ndjson',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        var failureText = await response.text(), failurePayload = null;
+        try { failurePayload = failureText ? JSON.parse(failureText) : null; } catch (ignored) {}
+        var failure = new Error(failurePayload && (failurePayload.detail || failurePayload.error)
+          || ('HTTP ' + response.status));
+        failure.status = response.status;
+        failure.payload = failurePayload;
+        throw failure;
+      }
+      var result = null, streamError = null, pending = '';
+      function acceptLine(raw) {
+        if (!raw || !raw.trim()) return;
+        var frame;
+        try { frame = JSON.parse(raw); } catch (ignored) { return; }
+        if (frame.type === 'progress' && frame.progress) onProgress(frame.progress);
+        else if (frame.type === 'complete') result = frame.result || null;
+        else if (frame.type === 'error') streamError = new Error(
+          frame.error || 'The opportunity scan could not finish.');
+        else if (frame && (Array.isArray(frame.picks) || frame.frontier || frame.searched != null)) {
+          // A JSON response remains a valid canonical Scout receipt when an intermediary or
+          // deterministic browser harness cannot preserve the negotiated NDJSON content type.
+          result = frame;
+        }
+      }
+      if (response.body && typeof response.body.getReader === 'function') {
+        var reader = response.body.getReader(), decoder = new TextDecoder();
+        while (true) {
+          var chunk = await reader.read();
+          pending += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+          var lines = pending.split('\n');
+          pending = lines.pop() || '';
+          lines.forEach(acceptLine);
+          if (chunk.done) break;
+        }
+        acceptLine(pending);
+      } else {
+        (await response.text()).split('\n').forEach(acceptLine);
+      }
+      if (streamError) throw streamError;
+      if (!result) throw new Error('The opportunity scan ended without a complete receipt.');
+      return result;
+    }
     return requireApi().post('/api/research/scout', body);
   }
 

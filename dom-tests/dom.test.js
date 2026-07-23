@@ -2574,7 +2574,7 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
         id: plan.id, symbol: plan.symbol, title: plan.title, market: plan.market,
         status: plan.status, open: plan.open
       }))
-    }), activeId);
+    }), ids[5]);
     throw new Error(error.message + '\nHome collection diagnosis: ' + JSON.stringify(diagnosis));
   });
   assert.equal(await compact.locator('.home-plan-compact-row').count(), 3,

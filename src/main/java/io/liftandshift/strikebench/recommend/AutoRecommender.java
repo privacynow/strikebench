@@ -133,6 +133,20 @@ public final class AutoRecommender {
         }
     }
 
+    /**
+     * Small progressive projection for the existing Scout request. A progress listener observes
+     * canonical work as it completes; it never ranks, prices, or mutates anything itself.
+     */
+    public record Progress(String phase, int completed, int total, String symbol,
+                           Pick pick, String message) {}
+
+    @FunctionalInterface
+    public interface ProgressListener {
+        void onProgress(Progress progress);
+    }
+
+    private static final ProgressListener NO_PROGRESS = ignored -> {};
+
     private final SignalEngine signals;
     private final RecommendationEngine engine;
     private final AppConfig cfg;
@@ -168,7 +182,7 @@ public final class AutoRecommender {
     public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings,
                           String worldId, RedeploymentFrontier.Context frontierContext) {
         return runInternal(req, buyingPowerCents, holdings, worldId,
-                frontierContext == null ? null : ignored -> frontierContext);
+                frontierContext == null ? null : ignored -> frontierContext, NO_PROGRESS);
     }
 
     /** Builds Book context only after the surfaced symbols are known, avoiding broad repeated marks. */
@@ -176,14 +190,25 @@ public final class AutoRecommender {
                                       List<HoldingInfo> holdings, String worldId,
                                       java.util.function.Function<List<StrategyEvaluation>,
                                               RedeploymentFrontier.Context> contextFactory) {
+        return runWithFrontier(req, buyingPowerCents, holdings, worldId, contextFactory, NO_PROGRESS);
+    }
+
+    /** Same canonical scan, with optional delivery of partial progress over the caller's transport. */
+    public AutoResult runWithFrontier(AutoRequest req, long buyingPowerCents,
+                                      List<HoldingInfo> holdings, String worldId,
+                                      java.util.function.Function<List<StrategyEvaluation>,
+                                              RedeploymentFrontier.Context> contextFactory,
+                                      ProgressListener progressListener) {
         if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
-        return runInternal(req, buyingPowerCents, holdings, worldId, contextFactory);
+        return runInternal(req, buyingPowerCents, holdings, worldId, contextFactory,
+                progressListener == null ? NO_PROGRESS : progressListener);
     }
 
     private AutoResult runInternal(AutoRequest req, long buyingPowerCents,
                                    List<HoldingInfo> holdings, String worldId,
                                    java.util.function.Function<List<StrategyEvaluation>,
-                                           RedeploymentFrontier.Context> contextFactory) {
+                                           RedeploymentFrontier.Context> contextFactory,
+                                   ProgressListener progressListener) {
         DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         List<String> universe = req.universe() != null && !req.universe().isEmpty()
@@ -192,6 +217,9 @@ public final class AutoRecommender {
         List<String> horizons = normalizeHorizons(req.horizons(), allow0dte);
         int maxPicks = req.maxPicks() == null ? DEFAULT_MAX_PICKS : Math.clamp(req.maxPicks(), 1, 10);
         double minConfidence = req.minConfidence() == null ? MIN_SIGNAL_CONFIDENCE : Math.clamp(req.minConfidence(), 0, 1);
+        List<StrategyIntent> intents = normalizeIntents(req.intents());
+        emit(progressListener, new Progress("STARTING", 0, universe.size(), null, null,
+                "Preparing the governed universe and declared goal."));
 
         List<String> skipped = new ArrayList<>();
         List<String> notes = new ArrayList<>();
@@ -204,11 +232,33 @@ public final class AutoRecommender {
         // network-bound and per-symbol independent (the service layer is thread-safe).
         List<SignalEngine.Signals> eligibleSignals = new ArrayList<>();
         java.util.Map<String, SignalEngine.Signals> bySymbol = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.atomic.AtomicInteger signalCompleted = new java.util.concurrent.atomic.AtomicInteger();
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
             for (String symbol : universe) {
-                futures.add(executor.submit(() ->
-                        signals.analyze(symbol, worldId).ifPresent(s -> bySymbol.put(symbol, s))));
+                futures.add(executor.submit(() -> {
+                    SignalEngine.Signals analyzed = null;
+                    try {
+                        analyzed = signals.analyze(symbol, worldId).orElse(null);
+                        if (analyzed != null) bySymbol.put(symbol, analyzed);
+                    } finally {
+                        int completed = signalCompleted.incrementAndGet();
+                        Pick preview = null;
+                        if (analyzed != null && analyzed.optionable()
+                                && analyzed.confidence() >= minConfidence) {
+                            StrategyIntent primaryIntent = intents.get(0);
+                            OpportunityContext opportunity =
+                                    opportunityContext(analyzed, primaryIntent);
+                            preview = new Pick(analyzed.symbol(), analyzed,
+                                    opportunity.score(), List.of(), primaryIntent.name(),
+                                    opportunity, null);
+                        }
+                        emit(progressListener, new Progress("SIGNALS", completed, universe.size(),
+                                symbol, preview, preview == null
+                                ? "Reading price, volatility, event, and liquidity evidence."
+                                : "Evidence is ready; exact package pricing follows after the field is ranked."));
+                    }
+                }));
             }
             for (var f : futures) {
                 try { f.get(); } catch (Exception e) { /* per-symbol failure -> treated as no data */ }
@@ -229,8 +279,10 @@ public final class AutoRecommender {
         List<Pick> picks = new ArrayList<>();
         java.util.Map<String, HoldingInfo> heldBySymbol = new java.util.HashMap<>();
         for (HoldingInfo h : holdings) heldBySymbol.put(h.symbol().toUpperCase(Locale.ROOT), h);
+        java.util.concurrent.atomic.AtomicInteger ideasCompleted = new java.util.concurrent.atomic.AtomicInteger();
+        int ideasTotal = Math.max(1, maxPicks * intents.size());
 
-        for (StrategyIntent intent : normalizeIntents(req.intents())) {
+        for (StrategyIntent intent : intents) {
             record GoalScored(SignalEngine.Signals signals, OpportunityContext opportunity) {}
             List<GoalScored> rankedForGoal = eligibleSignals.stream()
                     .map(signal -> new GoalScored(signal, opportunityContext(signal, intent)))
@@ -263,8 +315,12 @@ public final class AutoRecommender {
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
                             buyingPowerCents, riskBudget, worldId);
                     OpportunityContext opportunity = opportunityContext(s, intent);
-                    picks.add(new Pick(sym, s, opportunity.score(), perHorizon, intent.name(),
-                            opportunity, bestIdea(perHorizon)));
+                    Pick pick = new Pick(sym, s, opportunity.score(), perHorizon, intent.name(),
+                            opportunity, bestIdea(perHorizon));
+                    picks.add(pick);
+                    emit(progressListener, new Progress("IDEAS", ideasCompleted.incrementAndGet(),
+                            ideasTotal, sym, pick,
+                            "A canonical candidate field is ready; destination-Book gates are still composing."));
                 }
                 continue;
             }
@@ -279,8 +335,12 @@ public final class AutoRecommender {
                         : null;
                 List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
                         buyingPowerCents, riskBudget, worldId);
-                picks.add(new Pick(s.symbol(), s, top.opportunity().score(), perHorizon, intent.name(),
-                        top.opportunity(), bestIdea(perHorizon)));
+                Pick pick = new Pick(s.symbol(), s, top.opportunity().score(), perHorizon, intent.name(),
+                        top.opportunity(), bestIdea(perHorizon));
+                picks.add(pick);
+                emit(progressListener, new Progress("IDEAS", ideasCompleted.incrementAndGet(),
+                        ideasTotal, s.symbol(), pick,
+                        "A canonical candidate field is ready; destination-Book gates are still composing."));
             }
         }
 
@@ -299,10 +359,20 @@ public final class AutoRecommender {
                 .toList();
         List<CompensationView.CompensationEntry> compensation =
                 CompensationView.compute(surfaced, evaluations, worldId);
+        emit(progressListener, new Progress("BOOK", ideasCompleted.get(), ideasTotal, null, null,
+                "Applying destination-Book capacity, concentration, and expiry checks."));
         RedeploymentFrontier.Result frontier = contextFactory == null ? null
                 : RedeploymentFrontier.compose(surfaced, compensation, contextFactory.apply(surfaced));
         return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER,
                 compensation, CompensationView.BASIS, frontier);
+    }
+
+    private static void emit(ProgressListener listener, Progress progress) {
+        try {
+            listener.onProgress(progress);
+        } catch (RuntimeException ignored) {
+            // Delivery is observational. A closed browser stream must never change the scan result.
+        }
     }
 
     /** Runs the engine per horizon for one symbol under one intent. */
@@ -313,12 +383,12 @@ public final class AutoRecommender {
         List<HorizonIdeas> perHorizon = new ArrayList<>();
         for (String horizon : horizons) {
             if ("0DTE".equals(horizon) && !allow0dte) continue;
-            // Directional scans ride the derived thesis; intent scans pick families by purpose
-            // (an explicit thesis would narrow them, so none is passed).
-            String thesis = intent == StrategyIntent.DIRECTIONAL
-                    ? (req.thesisOverride() == null || req.thesisOverride().isBlank()
-                        ? s.thesis() : req.thesisOverride())
-                    : null;
+            // An explicitly declared view is part of the same Scout/Idea control contract and must
+            // narrow every goal's compatible families. Only an undeclared directional scan derives
+            // a view from the signal engine; other undeclared goals remain purpose-only.
+            String thesis = req.thesisOverride() != null && !req.thesisOverride().isBlank()
+                    ? req.thesisOverride()
+                    : intent == StrategyIntent.DIRECTIONAL ? s.thesis() : null;
             RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
                     s.symbol(), thesis, horizon, req.riskMode(),
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,
