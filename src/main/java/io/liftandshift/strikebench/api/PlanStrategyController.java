@@ -296,9 +296,8 @@ final class PlanStrategyController {
         result.put("disclaimer", raw.disclaimer());
         result.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
         ArrayNode candidates = result.putArray("candidates");
-        int favorable = 0, mixed = 0, unfavorable = 0, unavailable = 0;
-        boolean anyEconomicAssessment = false, anyComparableAssessment = false;
-        boolean anyRealizedVolLane = false, needsDailyHistory = false;
+        io.liftandshift.strikebench.eval.EconomicReadiness.Tally readinessTally =
+                io.liftandshift.strikebench.eval.EconomicReadiness.tally();
         List<String> collectedNotes = new ArrayList<>();
         String wantedThesis = plan.context().thesis() == null ? null : plan.context().thesis().toUpperCase(Locale.ROOT);
         for (AutoRecommender.Pick pick : raw.picks()) {
@@ -315,37 +314,29 @@ final class PlanStrategyController {
                     candidate.put("opportunityScore", pick.opportunityScore());
                     if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
                     candidate.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
-                    if (economics != null) {
-                        anyEconomicAssessment = true;
-                        if (!"MECHANICALLY_INELIGIBLE".equals(economics.placement())) {
-                            anyComparableAssessment = true;
-                        }
-                        if (economics.realizedVolEvAfterCostsCents() != null) anyRealizedVolLane = true;
-                        if (economics.needsDailyHistory()) needsDailyHistory = true;
-                        switch (economics.verdict()) {
-                            case FAVORABLE -> favorable++;
-                            case MIXED -> mixed++;
-                            case UNFAVORABLE -> unfavorable++;
-                            case UNAVAILABLE -> unavailable++;
-                        }
-                    } else unavailable++;
+                    var endorsement = evaluation.evidence() == null ? null
+                            : evaluation.evidence().claims().get("endorsement");
+                    readinessTally.add(economics,
+                            endorsement == null ? null : endorsement.missingDimensions());
                     candidates.add(candidate);
                 }
             }
         }
-        result.put("favorableCount", favorable); result.put("mixedCount", mixed);
-        result.put("unfavorableCount", unfavorable); result.put("unavailableCount", unavailable);
-        result.put("economicReadiness", anyEconomicAssessment && !anyComparableAssessment
-                ? "MECHANICALLY_BLOCKED"
-                : anyEconomicAssessment && !anyRealizedVolLane && needsDailyHistory
-                    ? "NEEDS_DAILY_HISTORY" : "READY");
+        io.liftandshift.strikebench.eval.EconomicReadiness readiness = readinessTally.summarize();
+        result.put("favorableCount", readiness.favorable()); result.put("mixedCount", readiness.mixed());
+        result.put("unfavorableCount", readiness.unfavorable());
+        result.put("unavailableCount", readiness.unavailable());
+        result.put("economicReadiness", readiness.readiness());
         result.put("economicMessage", candidates.isEmpty()
                 ? "No related symbol matched this Plan's evidence and mechanical screens."
-                : anyEconomicAssessment && !anyComparableAssessment
-                    ? "The related symbols produced structures, but none passed the mechanical and account checks required for an economic comparison."
-                : anyEconomicAssessment && !anyRealizedVolLane && needsDailyHistory
-                    ? "These symbols can be compared mechanically and under market-implied pricing, but daily history is insufficient for a realized-volatility edge verdict."
-                : "Related symbols remain separate Plans; compare their evidence, tail risk, and capital use before treating one as an alternative.");
+                : switch (readiness.readiness()) {
+                    case io.liftandshift.strikebench.eval.EconomicReadiness.MECHANICALLY_BLOCKED ->
+                        "The related symbols produced structures, but none passed the mechanical and account checks required for an economic comparison.";
+                    case io.liftandshift.strikebench.eval.EconomicReadiness.NEEDS_DAILY_HISTORY ->
+                        "These symbols can be compared mechanically and under market-implied pricing, but daily history is insufficient for a realized-volatility edge verdict.";
+                    default ->
+                        "Related symbols remain separate Plans; compare their evidence, tail risk, and capital use before treating one as an alternative.";
+                });
         ArrayNode notes = result.putArray("notes");
         collectedNotes.forEach(notes::add);
         raw.notes().forEach(notes::add);
