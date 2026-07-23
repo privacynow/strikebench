@@ -67,15 +67,15 @@ Faraz Babar
 
 ## Speaker Tagline
 
-Software engineer who solves problems in finance: payments, onboarding, risk, and compliance.
+Technology executive and software architect; 25+ years in payments, fraud, and risk.
 
 ## Email
 
 Use the address you actually read; the organizer contacts you there about this submission.
 
-## Speaker Biography (limit 500 characters; this text is 465, leaving 35 spare if you add an affiliation)
+## Speaker Biography (limit 500 characters; this text is 481)
 
-Faraz Babar is a software engineer who solves problems in finance and fintech, across onboarding, payments, risk, and compliance. He built StrikeBench, a personal platform for learning options trading, which recommends trades and shows the evidence behind every number it puts on screen. His current work uses Apache Flink and small, explainable models to make the platform's backtests trustworthy and to check its confidence numbers against what actually happened.
+Faraz Babar is a technology executive and software architect with 25+ years building mission-critical platforms for JPMorgan Chase, Apple, PayPal, American Express, Bloomberg, and UBS. He has led engineering for global payments, fraud, AI, and risk systems processing transaction volumes approaching $2T daily. His interests include open architecture, AI governance, developer platforms, and modernizing regulated financial systems. The platform in this talk is his personal build.
 
 ## Speaker Photo
 
