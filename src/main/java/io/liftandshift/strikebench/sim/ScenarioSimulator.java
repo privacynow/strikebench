@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.sim;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
+import io.liftandshift.strikebench.util.Money;
 import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.LocalDate;
@@ -251,7 +252,7 @@ public final class ScenarioSimulator {
             for (int p = 0; p < n; p++) tmp[p] = pnl[p][i];
             double[] sorted = tmp.clone();
             java.util.Arrays.sort(sorted);
-            bands.add(new Band(day, cents(Quantiles.of(sorted, 0.10)), cents(Quantiles.of(sorted, 0.50)), cents(Quantiles.of(sorted, 0.90))));
+            bands.add(new Band(day, Money.toCents(Quantiles.of(sorted, 0.10)), Money.toCents(Quantiles.of(sorted, 0.50)), Money.toCents(Quantiles.of(sorted, 0.90))));
         }
 
         double[] terminal = new double[n];
@@ -275,7 +276,7 @@ public final class ScenarioSimulator {
             int idx = (int) Math.floor((t - lo) / w);
             counts[Math.max(0, Math.min(bins - 1, idx))]++;
         }
-        for (int b = 0; b < bins; b++) dist.add(new Bucket(cents(lo + b * w), cents(lo + (b + 1) * w), counts[b]));
+        for (int b = 0; b < bins; b++) dist.add(new Bucket(Money.toCents(lo + b * w), Money.toCents(lo + (b + 1) * w), counts[b]));
 
         // The median path's underlying (an "example future") for the preview chart.
         int medianIdx = medianTerminalIndex(paths, steps);
@@ -308,11 +309,11 @@ public final class ScenarioSimulator {
             notes.add(canvas.dividendBasis());
         }
 
-        return new SimResult(cents(entry), n, steps / spd,
-                cents(Quantiles.of(sorted, 0.05)), cents(Quantiles.of(sorted, 0.25)), cents(Quantiles.of(sorted, 0.50)),
-                cents(Quantiles.of(sorted, 0.75)), cents(Quantiles.of(sorted, 0.95)),
-                cents(sum / n), Math.round(wins * 1000.0 / n) / 10.0,
-                cents(sorted[n - 1]), cents(sorted[0]),
+        return new SimResult(Money.toCents(entry), n, steps / spd,
+                Money.toCents(Quantiles.of(sorted, 0.05)), Money.toCents(Quantiles.of(sorted, 0.25)), Money.toCents(Quantiles.of(sorted, 0.50)),
+                Money.toCents(Quantiles.of(sorted, 0.75)), Money.toCents(Quantiles.of(sorted, 0.95)),
+                Money.toCents(sum / n), Math.round(wins * 1000.0 / n) / 10.0,
+                Money.toCents(sorted[n - 1]), Money.toCents(sorted[0]),
                 0, bands, dist, example, notes);
     }
 
@@ -323,5 +324,4 @@ public final class ScenarioSimulator {
         return idx[idx.length / 2];
     }
 
-    private static long cents(double dollars) { return Math.round(dollars * 100); }
 }
