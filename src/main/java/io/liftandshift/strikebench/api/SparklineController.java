@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.util.BoundedFanout;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -21,8 +22,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
@@ -87,84 +86,73 @@ final class SparklineController {
         AnalysisContext context = analysisContext.apply(ctx);
         String lane = world != null ? world : "observed";
         long dataVersion = historicalDataVersion.get();
-        Map<String, Map<String, Object>> rows = new ConcurrentHashMap<>();
-        Semaphore gate = new Semaphore(2);
-        List<Thread> workers = new ArrayList<>();
-        for (String symbol : symbols) {
-            workers.add(Thread.startVirtualThread(() -> loadRow(rows, gate, symbol, from,
-                    today, world, context, lane, range, dataVersion)));
-        }
-        for (Thread worker : workers) {
-            try {
-                worker.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        List<Map<String, Object>> output = new ArrayList<>();
-        for (String symbol : symbols) {
-            Map<String, Object> row = rows.get(symbol);
-            if (row != null) output.add(row);
-        }
+        // maxConcurrency=2 preserves the historical politeness bound; BoundedFanout returns the
+        // rows in request order, replacing the old map-then-reorder.
+        List<Map<String, Object>> output = BoundedFanout.map(symbols, 2,
+                symbol -> loadRow(symbol, from, today, world, context, lane, range, dataVersion),
+                (symbol, failure) -> failureRow(symbol, failure));
         ctx.json(new ApiResponses.Sparklines<>(range, output, totalRequested, world));
     }
 
-    private void loadRow(Map<String, Map<String, Object>> rows, Semaphore gate, String symbol,
-                         LocalDate from, LocalDate today, String world, AnalysisContext context,
-                         String lane, String range, long dataVersion) {
+    private Map<String, Object> loadRow(String symbol, LocalDate from, LocalDate today, String world,
+                                        AnalysisContext context, String lane, String range, long dataVersion) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("symbol", symbol);
         String memoKey = dataVersion + "|" + lane + "|" + context + "|" + symbol + "|" + range;
         if (world == null && emptyMemo.getIfPresent(memoKey) != null) {
             unavailable(row, "No daily-candle source for this symbol right now — quotes still work.",
                     DataEvidence.missing("daily history unavailable"));
-            rows.put(symbol, row);
-            return;
+            return row;
         }
         try {
-            gate.acquire();
-            try {
-                var series = market.candleSeries(symbol, from, today, world, context);
-                List<Candle> candles = series == null ? List.of() : series.candles();
-                if (candles.size() < 2) {
-                    if (world == null) emptyMemo.put(memoKey, Boolean.TRUE);
-                    unavailable(row,
-                            "No daily-candle source for this symbol right now — quotes still work.",
-                            series == null ? DataEvidence.missing("daily history unavailable")
-                                    : series.evidence());
-                } else {
-                    int stride = Math.max(1, (int) Math.ceil(candles.size() / 64.0));
-                    List<String> dates = new ArrayList<>();
-                    List<BigDecimal> closes = new ArrayList<>();
-                    for (int i = 0; i < candles.size(); i += stride) {
-                        Candle candle = candles.get(i);
-                        dates.add(candle.date().toString());
-                        closes.add(candle.close());
-                    }
-                    Candle last = candles.getLast();
-                    if (!dates.getLast().equals(last.date().toString())) {
-                        dates.add(last.date().toString());
-                        closes.add(last.close());
-                    }
-                    row.put("available", true);
-                    row.put("dates", dates);
-                    row.put("closes", closes);
-                    row.put("source", series.source());
-                    row.put("freshness", series.freshness().name());
-                    row.put("evidence", series.evidence());
+            var series = market.candleSeries(symbol, from, today, world, context);
+            List<Candle> candles = series == null ? List.of() : series.candles();
+            if (candles.size() < 2) {
+                if (world == null) emptyMemo.put(memoKey, Boolean.TRUE);
+                unavailable(row,
+                        "No daily-candle source for this symbol right now — quotes still work.",
+                        series == null ? DataEvidence.missing("daily history unavailable")
+                                : series.evidence());
+            } else {
+                int stride = Math.max(1, (int) Math.ceil(candles.size() / 64.0));
+                List<String> dates = new ArrayList<>();
+                List<BigDecimal> closes = new ArrayList<>();
+                for (int i = 0; i < candles.size(); i += stride) {
+                    Candle candle = candles.get(i);
+                    dates.add(candle.date().toString());
+                    closes.add(candle.close());
                 }
-            } finally {
-                gate.release();
+                Candle last = candles.getLast();
+                if (!dates.getLast().equals(last.date().toString())) {
+                    dates.add(last.date().toString());
+                    closes.add(last.close());
+                }
+                row.put("available", true);
+                row.put("dates", dates);
+                row.put("closes", closes);
+                row.put("source", series.source());
+                row.put("freshness", series.freshness().name());
+                row.put("evidence", series.evidence());
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            unavailable(row, "History lookup was interrupted — try again.",
-                    DataEvidence.missing("history interrupted"));
         } catch (RuntimeException e) {
             unavailable(row, "History lookup failed — try again or check Data source health.",
                     DataEvidence.missing("history lookup failed"));
         }
-        rows.put(symbol, row);
+        return row;
+    }
+
+    /** onFailure sink: BoundedFanout owns the gate now, so an interrupt at acquire lands here. */
+    private static Map<String, Object> failureRow(String symbol, Throwable failure) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("symbol", symbol);
+        if (failure instanceof InterruptedException) {
+            unavailable(row, "History lookup was interrupted — try again.",
+                    DataEvidence.missing("history interrupted"));
+        } else {
+            unavailable(row, "History lookup failed — try again or check Data source health.",
+                    DataEvidence.missing("history lookup failed"));
+        }
+        return row;
     }
 
     private static void unavailable(Map<String, Object> row, String note, DataEvidence evidence) {
