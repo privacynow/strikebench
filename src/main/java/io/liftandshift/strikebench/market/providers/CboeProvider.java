@@ -66,55 +66,36 @@ public final class CboeProvider implements MarketDataProvider {
                             v.map(cp -> 1024 + cp.data().path("options").size() * 200).orElse(64))
                     .build();
 
-    private final long cooldownMs;
-    /** After a 429/1015, ALL Cboe requests short-circuit until this time (a shared circuit breaker). */
-    private volatile long cooldownUntilMs = 0;
-    // Politeness governor for this HEAVY keyless source: cap concurrency and space requests so the
-    // background warm + interactive loads never burst the CDN. Cached (warmed) symbols skip both.
-    private final java.util.concurrent.Semaphore concurrency;
-    private final long spacingMs;
-    private long nextAllowedMs = 0;
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CboeProvider.class);
+    // ONE shared politeness governor (concurrency cap, request spacing, circuit breaker) for this
+    // HEAVY keyless source, replacing the inline Cboe-only copy — which diverged in two ways that
+    // this fixes: its seedCooldown could REGRESS a live breaker, and ordinary consecutive failures
+    // never tripped it (only HTTP 429 did). Cached (warmed) symbols skip the gate entirely.
+    private final io.liftandshift.strikebench.market.ProviderPoliteness politeness;
 
     public CboeProvider(AppConfig cfg) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.cboeBaseUrl());
-        this.cooldownMs = Math.max(1, cfg.cboeCooldownMinutes()) * 60_000L;
-        this.concurrency = new java.util.concurrent.Semaphore(Math.max(1, cfg.cboeMaxConcurrency()), true);
-        this.spacingMs = Math.max(0, cfg.cboeMinSpacingMs());
-    }
-
-    /** Serialize a minimum gap between network requests (rate cap), shared across all threads. */
-    private synchronized void pace() {
-        long now = System.currentTimeMillis();
-        long wait = nextAllowedMs - now;
-        if (wait > 0) { try { Thread.sleep(wait); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
-        nextAllowedMs = Math.max(now, nextAllowedMs) + spacingMs;
+        this.politeness = new io.liftandshift.strikebench.market.ProviderPoliteness("cboe",
+                cfg.cboeMaxConcurrency(), cfg.cboeMinSpacingMs(),
+                Math.max(1, cfg.cboeCooldownMinutes()) * 60_000L);
     }
 
     /** True while Cboe is in a rate-limit cooldown — surfaced to the Data Center. */
-    public boolean coolingDown() { return System.currentTimeMillis() < cooldownUntilMs; }
-    public long cooldownUntilMs() { return cooldownUntilMs; }
+    public boolean coolingDown() { return politeness.coolingDown(); }
+    public long cooldownUntilMs() { return politeness.cooldownUntilMs(); }
 
-    private io.liftandshift.strikebench.util.EventBus events; // optional: announce breaker trips
-    public void setEvents(io.liftandshift.strikebench.util.EventBus events) { this.events = events; }
+    public void setEvents(io.liftandshift.strikebench.util.EventBus events) { politeness.setEvents(events); }
 
     /** Restore a persisted breaker state at boot — a restart must not forget an active Cboe ban. */
-    public void seedCooldown(long untilMs) {
-        if (untilMs > System.currentTimeMillis()) {
-            cooldownUntilMs = untilMs;
-            log.warn("Cboe cooldown restored from local state — cooling until {}", java.time.Instant.ofEpochMilli(untilMs));
-        }
-    }
+    public void seedCooldown(long untilMs) { politeness.seedCooldown(untilMs); }
 
     /**
-     * Whether this heavy provider has budget for SPECULATIVE work right now. Prefetch is
-     * denied while cooling down or while every concurrency permit is busy with real requests —
-     * a guess must never queue behind (or ahead of) something the user actually asked for.
+     * Whether this heavy provider has budget for SPECULATIVE work right now. Prefetch is denied
+     * while cooling down or while every concurrency permit is busy — a guess must never queue
+     * behind (or ahead of) something the user actually asked for.
      */
-    public boolean prefetchBudget() {
-        return !coolingDown() && concurrency.availablePermits() > 0;
-    }
+    public boolean prefetchBudget() { return politeness.prefetchBudget(); }
 
     @Override
     public String name() {
@@ -267,48 +248,34 @@ public final class CboeProvider implements MarketDataProvider {
                 .map(root -> "_" + root)
                 .orElse(symbol);
         String url = baseUrl + "/api/global/delayed_quotes/options/" + cboeSymbol + ".json";
-        String body;
-        boolean acquired = false;
-        try {
-            concurrency.acquire();      // cap concurrent heavy downloads
-            acquired = true;
-            pace();                     // and space them out so we never burst the CDN
-            if (coolingDown()) return Optional.empty(); // a 429 may have tripped while we waited
-            body = http.get(url);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            return Optional.empty();
-        } catch (Http.ProviderHttpException e) {
-            // Cboe's CDN answers 404 OR S3-style "403 AccessDenied" for symbols it does not
-            // know — both mean "definitively no data", not a provider failure.
-            String msg = e.getMessage() == null ? "" : e.getMessage();
-            if (msg.contains("HTTP 404") || (msg.contains("HTTP 403") && msg.contains("AccessDenied"))) {
-                return Optional.empty();
+        // ONE governor owns concurrency, spacing, and the circuit breaker (HTTP 403/429/999 denial or
+        // three consecutive failures trip it, announced as provider.cooldown). Cboe's own 404 and
+        // S3-style "403 AccessDenied" mean "definitively no data" — caught inside and returned empty
+        // so they never count as a provider failure.
+        return politeness.call(() -> {
+            String body;
+            try {
+                body = http.get(url);
+            } catch (Http.ProviderHttpException e) {
+                String msg = e.getMessage() == null ? "" : e.getMessage();
+                if (msg.contains("HTTP 404") || (msg.contains("HTTP 403") && msg.contains("AccessDenied"))) {
+                    return Optional.<CachedPayload>empty();
+                }
+                throw e; // 429 / real denial / other → the shared breaker decides
             }
-            // 429 (Cloudflare 1015) = rate limited. Trip the breaker so we stop asking Cboe app-wide.
-            if (msg.contains("HTTP 429")) {
-                cooldownUntilMs = System.currentTimeMillis() + cooldownMs;
-                log.warn("Cboe rate-limited (429/1015) — cooling down for {} min; serving stale/other sources",
-                        cooldownMs / 60000);
-                if (events != null) events.publish("provider.cooldown",
-                        java.util.Map.of("provider", "cboe", "untilMs", cooldownUntilMs));
-            }
-            throw e;
-        } finally {
-            if (acquired) concurrency.release();
-        }
-        JsonNode root = Json.parse(body);
-        JsonNode data = root.path("data");
-        if (!data.isObject()) return Optional.empty();
-        Long sourceAsOf = null;
-        try {
-            String ts = root.path("timestamp").asText(null); // "yyyy-MM-dd HH:mm:ss" (UTC)
-            if (ts != null && !ts.isBlank()) {
-                sourceAsOf = java.time.LocalDateTime.parse(ts.replace(' ', 'T'))
-                        .toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
-            }
-        } catch (RuntimeException ignored) { /* fall back to fetch time */ }
-        return Optional.of(new CachedPayload(data, System.currentTimeMillis(), sourceAsOf));
+            JsonNode root = Json.parse(body);
+            JsonNode data = root.path("data");
+            if (!data.isObject()) return Optional.<CachedPayload>empty();
+            Long sourceAsOf = null;
+            try {
+                String ts = root.path("timestamp").asText(null); // "yyyy-MM-dd HH:mm:ss" (UTC)
+                if (ts != null && !ts.isBlank()) {
+                    sourceAsOf = java.time.LocalDateTime.parse(ts.replace(' ', 'T'))
+                            .toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+                }
+            } catch (RuntimeException ignored) { /* fall back to fetch time */ }
+            return Optional.of(new CachedPayload(data, System.currentTimeMillis(), sourceAsOf));
+        }, Optional.empty());
     }
 
     private static String normalize(String symbol) {
