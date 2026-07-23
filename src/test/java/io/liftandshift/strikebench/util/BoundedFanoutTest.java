@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BoundedFanoutTest {
 
@@ -66,14 +67,31 @@ class BoundedFanoutTest {
     }
 
     @Test
-    void anErrorCauseIsRoutedNotThrownOut() {
+    void anOrdinaryErrorCauseIsRoutedNotThrownOut() {
+        // A non-fatal Error (e.g. AssertionError under -ea) is isolated like any other failure.
         List<String> out = BoundedFanout.map(List.of("x", "y"), BoundedFanout.UNBOUNDED,
                 s -> {
-                    if (s.equals("y")) throw new StackOverflowError("deep");
+                    if (s.equals("y")) throw new AssertionError("invariant");
                     return s;
                 },
                 (s, e) -> "ERR:" + (e instanceof Error));
         assertThat(out).containsExactly("x", "ERR:true");
+    }
+
+    @Test
+    void aFatalVirtualMachineErrorIsRethrownNotSwallowed() {
+        // OutOfMemoryError / StackOverflowError mean the JVM is compromised — the batch must abort
+        // honestly rather than disguise it as a benign per-item failure.
+        AtomicBoolean onFailureCalled = new AtomicBoolean(false);
+        assertThatThrownBy(() ->
+                BoundedFanout.map(List.of("a", "b"), BoundedFanout.UNBOUNDED,
+                        s -> {
+                            if (s.equals("b")) throw new StackOverflowError("deep");
+                            return s;
+                        },
+                        (s, e) -> { onFailureCalled.set(true); return "SWALLOWED"; }))
+                .isInstanceOf(StackOverflowError.class);
+        assertThat(onFailureCalled).isFalse();
     }
 
     @Test
