@@ -5,6 +5,7 @@ import static io.liftandshift.strikebench.util.Numbers.round2;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.util.Money;
 import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.LocalDate;
@@ -250,7 +251,7 @@ public final class ScenarioCanvasValuator {
                         member.paths()[path], steps, spd, elapsed, legacyIv, canvas, annualRate);
             }
             long anchorValue = input.entryCostCents() == null
-                    ? cents(PathValuationKernel.valueCanvas(input.position(), member.paths()[0],
+                    ? Money.toCents(PathValuationKernel.valueCanvas(input.position(), member.paths()[0],
                         0, steps, spd, elapsed, legacyIv, canvas, annualRate,
                         transformations[0]) * input.qty())
                     : input.entryCostCents();
@@ -258,7 +259,7 @@ public final class ScenarioCanvasValuator {
             for (int point = 0; point < displaySteps.length; point++) {
                 int step = displaySteps[point];
                 for (int path = 0; path < pathCount; path++) {
-                    long value = cents(PathValuationKernel.valueCanvas(input.position(),
+                    long value = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
                             member.paths()[path], step, steps, spd, elapsed, legacyIv,
                             canvas, annualRate, transformations[path]) * input.qty());
                     long pnl = Math.subtractExact(value, anchorValue);
@@ -508,7 +509,7 @@ public final class ScenarioCanvasValuator {
                     paths[p], steps, spd, elapsed, legacyPath, canvas, annualRate);
         }
         long entry = input.entryCostCents() == null
-                ? cents(PathValuationKernel.valueCanvas(input.position(), paths[representativePath], 0, steps, spd,
+                ? Money.toCents(PathValuationKernel.valueCanvas(input.position(), paths[representativePath], 0, steps, spd,
                     elapsed, legacyPath, canvas, annualRate,
                     resolvedTransformations[representativePath]) * input.qty())
                 : input.entryCostCents();
@@ -524,7 +525,7 @@ public final class ScenarioCanvasValuator {
             int step = Math.min(steps, day * spd);
             long[] values = new long[paths.length];
             for (int p = 0; p < paths.length; p++) {
-                values[p] = cents(PathValuationKernel.valueCanvas(input.position(), paths[p], step,
+                values[p] = Money.toCents(PathValuationKernel.valueCanvas(input.position(), paths[p], step,
                         steps, spd, elapsed, legacyPath, canvas, annualRate,
                         resolvedTransformations[p]) * input.qty());
             }
@@ -541,16 +542,16 @@ public final class ScenarioCanvasValuator {
                 double q = input.qty();
                 dd += point.deltaShares() * q; gg += point.gammaSharesPerDollar() * q;
                 tt += point.thetaDollarsPerDay() * q; vv += point.vegaDollarsPerPoint() * q;
-                legDays.get(legNo).add(new LegDay(day, cents(point.valueDollars() * q),
-                        cents(point.optionPrice()), new Greeks(round4(point.deltaShares() * q),
-                        round4(point.gammaSharesPerDollar() * q), cents(point.thetaDollarsPerDay() * q),
-                        cents(point.vegaDollarsPerPoint() * q)), point.state()));
+                legDays.get(legNo).add(new LegDay(day, Money.toCents(point.valueDollars() * q),
+                        Money.toCents(point.optionPrice()), new Greeks(round4(point.deltaShares() * q),
+                        round4(point.gammaSharesPerDollar() * q), Money.toCents(point.thetaDollarsPerDay() * q),
+                        Money.toCents(point.vegaDollarsPerPoint() * q)), point.state()));
             }
             timeline.add(new PositionDay(day, date(day, ensemble.anchorDate(), sessionDates),
                     Quantiles.of(sorted, 0.10), Quantiles.of(sorted, 0.50), Quantiles.of(sorted, 0.90),
                     Quantiles.of(sorted, 0.10) - entry, Quantiles.of(sorted, 0.50) - entry, Quantiles.of(sorted, 0.90) - entry,
                     focusValue, focusValue - entry,
-                    new Greeks(round4(dd), round4(gg), cents(tt), cents(vv))));
+                    new Greeks(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
         }
         int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
         List<PositionStep> focusSteps = new ArrayList<>(displaySteps.length);
@@ -560,7 +561,7 @@ public final class ScenarioCanvasValuator {
         for (int step : displaySteps) {
             long[] displayValues = new long[paths.length];
             for (int p = 0; p < paths.length; p++) {
-                displayValues[p] = cents(PathValuationKernel.valueCanvas(input.position(),
+                displayValues[p] = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
                         paths[p], step, steps, spd, elapsed, legacyPath, canvas, annualRate,
                         resolvedTransformations[p]) * input.qty()) - entry;
             }
@@ -576,7 +577,7 @@ public final class ScenarioCanvasValuator {
                 selectedSteps.get(selected).add(new DisplayPositionStep(step, progress,
                         displayValues[sourceIndex]));
             }
-            long focusValue = cents(PathValuationKernel.valueCanvas(input.position(),
+            long focusValue = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
                     paths[representativePath], step, steps, spd, elapsed, legacyPath, canvas,
                     annualRate, resolvedTransformations[representativePath]) * input.qty());
             double dd = 0, gg = 0, tt = 0, vv = 0;
@@ -589,16 +590,16 @@ public final class ScenarioCanvasValuator {
                 dd += point.deltaShares() * q; gg += point.gammaSharesPerDollar() * q;
                 tt += point.thetaDollarsPerDay() * q; vv += point.vegaDollarsPerPoint() * q;
                 legSteps.get(legNo).add(new LegStep(step, progress,
-                        cents(point.valueDollars() * q), cents(point.optionPrice()),
+                        Money.toCents(point.valueDollars() * q), Money.toCents(point.optionPrice()),
                         new Greeks(round4(point.deltaShares() * q),
                                 round4(point.gammaSharesPerDollar() * q),
-                                cents(point.thetaDollarsPerDay() * q),
-                                cents(point.vegaDollarsPerPoint() * q)), point.state()));
+                                Money.toCents(point.thetaDollarsPerDay() * q),
+                                Money.toCents(point.vegaDollarsPerPoint() * q)), point.state()));
             }
             focusSteps.add(new PositionStep(step, progress,
                     dateForStep(step, spd, days, ensemble.anchorDate(), sessionDates),
                     focusValue, focusValue - entry,
-                    new Greeks(round4(dd), round4(gg), cents(tt), cents(vv))));
+                    new Greeks(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
         }
         List<DisplayPositionPath> valuedDisplayPaths = new ArrayList<>(displaySelections.size());
         for (int i = 0; i < displaySelections.size(); i++) {
@@ -822,5 +823,4 @@ public final class ScenarioCanvasValuator {
         return round4((double) step / Math.max(1, stepsPerDay));
     }
     private static double sum(double[] values) { double s = 0; for (double v : values) s += v; return s; }
-    private static long cents(double dollars) { return Math.round(dollars * 100); }
 }
