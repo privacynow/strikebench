@@ -720,8 +720,8 @@ final class OutcomeController {
                 curve, underlying.mark().doubleValue(), iv, time.years(), rate, shorts);
         long contracts = entry.pricedLegs().stream().filter(l -> !l.isStock())
                 .mapToLong(Leg::ratio).sum() * qty;
-        long roundTripFees = contracts * cfg.feePerContractCents() * 2L
-                + cfg.feePerOrderCents() * 2L;
+        long roundTripFees = io.liftandshift.strikebench.util.Fees.roundTripCents(
+                contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("probabilityMap", analyzed.probabilityMap());
         out.put("expectedValueCents", analyzed.expectedValueCents());

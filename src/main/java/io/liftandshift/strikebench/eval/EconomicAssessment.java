@@ -220,15 +220,16 @@ public record EconomicAssessment(
         return reasons.contains(DAILY_HISTORY_REASON);
     }
 
-    private static long roundTripFees(Candidate c, EvalContext ctx) {
+    /** THE round-trip commission for a candidate (option legs only, ×2 for open+close). Reused by
+     *  the ranker so the verdict and the decision score always net the SAME fees off the same EV. */
+    static long roundTripFees(Candidate c, EvalContext ctx) {
         if (c == null || c.legs() == null || ctx == null) return 0;
         long contracts = c.legs().stream()
                 .filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
                 .mapToLong(l -> Math.max(1, l.ratio()))
                 .sum() * Math.max(1, c.qty());
-        long contractFees = contracts * Math.max(0, ctx.feePerContractCents()) * 2;
-        long orderFees = c.legs().isEmpty() ? 0 : Math.max(0, ctx.feePerOrderCents()) * 2;
-        return contractFees + orderFees;
+        return io.liftandshift.strikebench.util.Fees.roundTripCents(
+                contracts, ctx.feePerContractCents(), ctx.feePerOrderCents());
     }
 
     /**
