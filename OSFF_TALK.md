@@ -1,6 +1,6 @@
 # OSFF New York 2026 submission package
 
-Event: Open Source in Finance Forum, New York, November 4–5, 2026.
+Event: Open Source in Finance Forum, New York, November 4 to 5, 2026.
 CFP closes July 26, 2026, 11:59 PM EDT · notifications August 17 · schedule August 19.
 Submission page: https://sessionize.com/open-source-in-finance-forum-new-york-2026
 
@@ -70,7 +70,7 @@ what the whole exercise taught me about my own trading.
 
 ## Session format
 
-25–30 minute talk with a live demo. The demo runs against a deterministic, seeded market
+25 to 30 minute talk with a live demo. The demo runs against a deterministic, seeded market
 recording, so it cannot fail on stage due to market hours or connectivity; a live-data version
 runs when conditions allow.
 
