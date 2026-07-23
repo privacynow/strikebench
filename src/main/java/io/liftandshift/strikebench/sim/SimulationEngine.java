@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.sim;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
@@ -494,7 +495,6 @@ public final class SimulationEngine {
     }
 
     private static BigDecimal bd(double v) { return BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP); }
-    private static double round2(double v) { return Math.round(v * 100) / 100.0; }
 
     public Map<String, Object> toJson(DatasetRun r) {
         return Map.of("datasetId", r.datasetId(), "name", r.name(), "symbol", r.symbol(), "bars", r.bars(),

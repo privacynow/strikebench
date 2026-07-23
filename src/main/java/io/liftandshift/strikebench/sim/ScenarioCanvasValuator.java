@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.sim;
+import static io.liftandshift.strikebench.util.Numbers.round4;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -825,6 +827,4 @@ public final class ScenarioCanvasValuator {
     }
     private static double sum(double[] values) { double s = 0; for (double v : values) s += v; return s; }
     private static long cents(double dollars) { return Math.round(dollars * 100); }
-    private static double round2(double v) { return Math.round(v * 100.0) / 100.0; }
-    private static double round4(double v) { return Math.round(v * 10_000.0) / 10_000.0; }
 }

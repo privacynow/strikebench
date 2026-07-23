@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.market;
+import static io.liftandshift.strikebench.util.Numbers.round4;
 
 import io.liftandshift.strikebench.model.DataAge;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -297,7 +298,6 @@ public final class EtfLookThroughService {
         if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("ETF symbol is required");
         return symbol.trim().toUpperCase(Locale.ROOT);
     }
-    private static double round4(double value) { return Math.round(value * 10_000.0) / 10_000.0; }
     private static String formatPct(double value) {
         return String.format(Locale.ROOT, "%.2f", value).replaceAll("0+$", "").replaceAll("\\.$", "");
     }

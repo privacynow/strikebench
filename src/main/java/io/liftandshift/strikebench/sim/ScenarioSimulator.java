@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.sim;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -326,5 +327,4 @@ public final class ScenarioSimulator {
     }
 
     private static long cents(double dollars) { return Math.round(dollars * 100); }
-    private static double round2(double v) { return Math.round(v * 100) / 100.0; }
 }

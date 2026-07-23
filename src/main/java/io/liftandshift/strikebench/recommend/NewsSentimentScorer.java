@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.recommend;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.model.NewsItem;
 
@@ -184,9 +185,6 @@ public final class NewsSentimentScorer {
         return (int) headlines.stream().filter(h -> h.classification() == classification).count();
     }
 
-    private static double round2(double value) {
-        return Math.round(value * 100.0) / 100.0;
-    }
 
     private record EventRule(EventFlag flag, List<String> stems) {}
 

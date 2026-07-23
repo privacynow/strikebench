@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.position;
+import static io.liftandshift.strikebench.util.Numbers.round4;
 
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
@@ -468,7 +469,4 @@ public final class HeldPositionEconomicsService {
         catch (NumberFormatException ignored) { return null; }
     }
 
-    private static double round4(double value) {
-        return Math.round(value * 10_000.0) / 10_000.0;
-    }
 }
