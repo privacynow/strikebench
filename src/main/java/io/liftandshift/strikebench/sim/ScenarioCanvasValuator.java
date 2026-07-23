@@ -5,6 +5,7 @@ import static io.liftandshift.strikebench.util.Numbers.round2;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -271,7 +272,7 @@ public final class ScenarioCanvasValuator {
             positionReceipts.add(new BookPositionReceipt(input.key(), row.symbol(), input.label(),
                     input.source(), anchorValue,
                     input.entryCostCents() == null ? "MODELED_CURRENT_VALUE" : "SUPPLIED_CURRENT_VALUE",
-                    pct(sortedTerminal, .10), pct(sortedTerminal, .50), pct(sortedTerminal, .90),
+                    Quantiles.of(sortedTerminal, .10), Quantiles.of(sortedTerminal, .50), Quantiles.of(sortedTerminal, .90),
                     row.atmIvAnnual()));
         }
 
@@ -287,8 +288,8 @@ public final class ScenarioCanvasValuator {
             }
             Arrays.sort(values);
             bands.add(new BookStepBand(displaySteps[point], sessionProgress(displaySteps[point], spd),
-                    pct(values, .05), pct(values, .10), pct(values, .25), pct(values, .50),
-                    pct(values, .75), pct(values, .90), pct(values, .95)));
+                    Quantiles.of(values, .05), Quantiles.of(values, .10), Quantiles.of(values, .25), Quantiles.of(values, .50),
+                    Quantiles.of(values, .75), Quantiles.of(values, .90), Quantiles.of(values, .95)));
         }
         long[] sortedTerminal = terminalBook.clone(); Arrays.sort(sortedTerminal);
         long[] sortedDrawdowns = maxDrawdowns.clone(); Arrays.sort(sortedDrawdowns);
@@ -304,8 +305,8 @@ public final class ScenarioCanvasValuator {
         }
         long[] sortedAssignments = absoluteAssignedShares.clone(); Arrays.sort(sortedAssignments);
         AssignmentSummary assignmentSummary = new AssignmentSummary(
-                round2(anyAssignment * 100.0 / pathCount), pct(sortedAssignments, .50),
-                pct(sortedAssignments, .90), sortedAssignments[sortedAssignments.length - 1],
+                round2(anyAssignment * 100.0 / pathCount), Quantiles.of(sortedAssignments, .50),
+                Quantiles.of(sortedAssignments, .90), sortedAssignments[sortedAssignments.length - 1],
                 "Short-option moneyness at each contract's own expiry on the same joint path; "
                         + "signed shares are +put assignment and -call assignment. Long-leg exercise "
                         + "and package value remain governed by the canonical valuation kernel.");
@@ -345,9 +346,9 @@ public final class ScenarioCanvasValuator {
         return new BookScenarioReport(joint.fingerprint(), JOINT_BOOK_MODEL_VERSION,
                 pathCount, positions.size(), spec.horizonDays(), List.copyOf(bands),
                 List.copyOf(displayPaths), List.copyOf(positionReceipts),
-                pct(sortedTerminal, .05), pct(sortedTerminal, .50), pct(sortedTerminal, .95),
+                Quantiles.of(sortedTerminal, .05), Quantiles.of(sortedTerminal, .50), Quantiles.of(sortedTerminal, .95),
                 Math.round((double) terminalSum / pathCount),
-                round2(gains * 100.0 / pathCount), pct(sortedDrawdowns, .10),
+                round2(gains * 100.0 / pathCount), Quantiles.of(sortedDrawdowns, .10),
                 assignmentSummary, tails, notes);
     }
 
@@ -457,7 +458,7 @@ public final class ScenarioCanvasValuator {
         for (PositionInput input : rawPositions) {
             if ("STOCK_BASELINE".equals(input.source())) {
                 long[] sorted = terminalPnl.get(input.key()).clone(); Arrays.sort(sorted);
-                stockMedian = pct(sorted, 0.50); break;
+                stockMedian = Quantiles.of(sorted, 0.50); break;
             }
         }
         for (PositionInput input : rawPositions) {
@@ -465,9 +466,9 @@ public final class ScenarioCanvasValuator {
             long sum = 0; int wins = 0;
             for (long value : terminal) { sum += value; if (value > 0) wins++; }
             Arrays.sort(terminal);
-            long median = pct(terminal, 0.50);
+            long median = Quantiles.of(terminal, 0.50);
             comparisons.add(new ComparisonRow(input.key(), input.label(), input.lane(), input.proposed(),
-                    input.entryCostCents(), pct(terminal, 0.05), median, pct(terminal, 0.95),
+                    input.entryCostCents(), Quantiles.of(terminal, 0.05), median, Quantiles.of(terminal, 0.95),
                     Math.round((double) sum / terminal.length), Math.round(wins * 1000.0 / terminal.length) / 10.0,
                     stockMedian == null || "STOCK_BASELINE".equals(input.source()) ? null : median - stockMedian));
         }
@@ -546,8 +547,8 @@ public final class ScenarioCanvasValuator {
                         cents(point.vegaDollarsPerPoint() * q)), point.state()));
             }
             timeline.add(new PositionDay(day, date(day, ensemble.anchorDate(), sessionDates),
-                    pct(sorted, 0.10), pct(sorted, 0.50), pct(sorted, 0.90),
-                    pct(sorted, 0.10) - entry, pct(sorted, 0.50) - entry, pct(sorted, 0.90) - entry,
+                    Quantiles.of(sorted, 0.10), Quantiles.of(sorted, 0.50), Quantiles.of(sorted, 0.90),
+                    Quantiles.of(sorted, 0.10) - entry, Quantiles.of(sorted, 0.50) - entry, Quantiles.of(sorted, 0.90) - entry,
                     focusValue, focusValue - entry,
                     new Greeks(round4(dd), round4(gg), cents(tt), cents(vv))));
         }
@@ -567,9 +568,9 @@ public final class ScenarioCanvasValuator {
             Arrays.sort(sortedDisplayValues);
             double progress = sessionProgress(step, spd);
             stepBands.add(new PositionStepBand(step, progress,
-                    pct(sortedDisplayValues, .10), pct(sortedDisplayValues, .25),
-                    pct(sortedDisplayValues, .50), pct(sortedDisplayValues, .75),
-                    pct(sortedDisplayValues, .90)));
+                    Quantiles.of(sortedDisplayValues, .10), Quantiles.of(sortedDisplayValues, .25),
+                    Quantiles.of(sortedDisplayValues, .50), Quantiles.of(sortedDisplayValues, .75),
+                    Quantiles.of(sortedDisplayValues, .90)));
             for (int selected = 0; selected < displaySelections.size(); selected++) {
                 int sourceIndex = displaySelections.get(selected).sourcePathIndex();
                 selectedSteps.get(selected).add(new DisplayPositionStep(step, progress,
@@ -744,8 +745,7 @@ public final class ScenarioCanvasValuator {
     private record Ranked(Pair[] sorted) {
         double valueAt(double p) { return sorted[index(p)].value(); }
         int indexAt(double p) { return sorted[index(p)].index(); }
-        private int index(double p) { return Math.max(0, Math.min(sorted.length - 1,
-                (int) Math.floor(p * (sorted.length - 1)))); }
+        private int index(double p) { return Quantiles.index(sorted.length, p); }
     }
 
     private static Ranked rank(double[][] paths, int step) {
@@ -820,10 +820,6 @@ public final class ScenarioCanvasValuator {
     }
     private static double sessionProgress(int step, int stepsPerDay) {
         return round4((double) step / Math.max(1, stepsPerDay));
-    }
-    private static long pct(long[] sorted, double p) {
-        return sorted[Math.max(0, Math.min(sorted.length - 1,
-                (int) Math.floor(p * (sorted.length - 1))))];
     }
     private static double sum(double[] values) { double s = 0; for (double v : values) s += v; return s; }
     private static long cents(double dollars) { return Math.round(dollars * 100); }

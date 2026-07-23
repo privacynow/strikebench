@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.sim;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -8,6 +9,7 @@ import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.research.BootstrapSampler;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -384,9 +386,9 @@ public final class PathEnsembleService {
             for (int i = 0; i < paths.size(); i++) values[i] = paths.get(i)[step];
             java.util.Arrays.sort(values);
             bands.add(new DisplayBand(step, (double) step / Math.max(1, stepsPerDay),
-                    roundedQuantile(values, .10), roundedQuantile(values, .25),
-                    roundedQuantile(values, .50), roundedQuantile(values, .75),
-                    roundedQuantile(values, .90)));
+                    round2(Quantiles.of(values, .10)), round2(Quantiles.of(values, .25)),
+                    round2(Quantiles.of(values, .50)), round2(Quantiles.of(values, .75)),
+                    round2(Quantiles.of(values, .90))));
         }
         return List.copyOf(bands);
     }
@@ -407,13 +409,6 @@ public final class PathEnsembleService {
         double[] projected = new double[displaySteps.length];
         for (int i = 0; i < displaySteps.length; i++) projected[i] = source[displaySteps[i]];
         return projected;
-    }
-
-    private static double roundedQuantile(double[] sorted, double probability) {
-        if (sorted.length == 0) return Double.NaN;
-        int index = Math.clamp((int) Math.round(probability * (sorted.length - 1)),
-                0, sorted.length - 1);
-        return Math.round(sorted[index] * 100.0) / 100.0;
     }
 
     private static RankedPath rank(double[] path, int index, Ensemble ensemble,

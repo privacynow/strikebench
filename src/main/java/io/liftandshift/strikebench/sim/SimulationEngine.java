@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench.sim;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
+import io.liftandshift.strikebench.util.Quantiles;
+
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
@@ -270,7 +272,7 @@ public final class SimulationEngine {
             for (int p = 0; p < paths.length; p++) tmp[p] = paths[p][i];
             double[] sorted = tmp.clone();
             java.util.Arrays.sort(sorted);
-            bands.add(new PreviewBand(day, round2(q(sorted, 0.10)), round2(q(sorted, 0.50)), round2(q(sorted, 0.90))));
+            bands.add(new PreviewBand(day, round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.90))));
         }
         int[] displaySteps = PathEnsembleService.displayStepIndices(spec.totalSteps());
         List<PreviewStepBand> stepBands = new ArrayList<>(displaySteps.length);
@@ -279,9 +281,9 @@ public final class SimulationEngine {
             double[] sorted = tmp.clone();
             java.util.Arrays.sort(sorted);
             stepBands.add(new PreviewStepBand(step, (double) step / spd,
-                    round2(q(sorted, 0.10)), round2(q(sorted, 0.25)),
-                    round2(q(sorted, 0.50)), round2(q(sorted, 0.75)),
-                    round2(q(sorted, 0.90))));
+                    round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.25)),
+                    round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.75)),
+                    round2(Quantiles.of(sorted, 0.90))));
         }
         // Representative futures retain the stored rows and full-matrix terminal ranking. Only
         // their wire representation is deterministically sampled at the same source steps as the
@@ -396,7 +398,7 @@ public final class SimulationEngine {
             if (touchCount > 0) {
                 double[] td = java.util.Arrays.copyOf(touchDays, touchCount);
                 java.util.Arrays.sort(td);
-                medianTouch = round2(quantile(td, 0.50));
+                medianTouch = round2(Quantiles.of(td, 0.50));
             }
             double aboveP = (double) above / n;
             odds.add(new LevelOdds(level.key(), round2(level.price()), upward ? "ABOVE" : "BELOW",
@@ -418,22 +420,13 @@ public final class SimulationEngine {
         double sd = Math.sqrt(var / Math.max(1, n - 1));
         double[] sorted = terminal.clone();
         java.util.Arrays.sort(sorted);
-        return new TerminalDistribution(round2(quantile(sorted, 0.05)),
-                round2(quantile(sorted, 0.16)), round2(quantile(sorted, 0.50)),
-                round2(quantile(sorted, 0.84)), round2(quantile(sorted, 0.95)),
+        return new TerminalDistribution(round2(Quantiles.of(sorted, 0.05)),
+                round2(Quantiles.of(sorted, 0.16)), round2(Quantiles.of(sorted, 0.50)),
+                round2(Quantiles.of(sorted, 0.84)), round2(Quantiles.of(sorted, 0.95)),
                 round2(mean), round2(sd), round2(sd / Math.sqrt(n)));
     }
 
     private static double maxProbabilityMargin95(int paths) { return 1.96 * Math.sqrt(0.25 / paths); }
-
-    private static double quantile(double[] sorted, double p) {
-        if (sorted.length == 1) return sorted[0];
-        double pos = Math.max(0, Math.min(1, p)) * (sorted.length - 1);
-        int lo = (int) Math.floor(pos), hi = (int) Math.ceil(pos);
-        if (lo == hi) return sorted[lo];
-        double w = pos - lo;
-        return sorted[lo] * (1 - w) + sorted[hi] * w;
-    }
 
     private static double[] wilson(int successes, int total) {
         double z = 1.96, n = total, p = successes / n;
@@ -460,10 +453,6 @@ public final class SimulationEngine {
         } catch (java.security.NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
-    }
-
-    private static double q(double[] sorted, double p) {
-        return sorted[Math.max(0, Math.min(sorted.length - 1, (int) Math.floor(p * (sorted.length - 1))))];
     }
 
     private static List<Candle> toDailyBars(double[] path, int spd, LocalDate firstDay) {

@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.sim.ScenarioCanvasSpec;
 import io.liftandshift.strikebench.sim.SimulationEngine;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.Quantiles;
 import io.liftandshift.strikebench.util.OwnerScope;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
@@ -930,7 +931,7 @@ public final class PlanOutcomeService {
         Arrays.sort(terminal);
         for (double p : new double[]{0.05, 0.16, 0.50, 0.84, 0.95}) {
             Db.execOn(c, "INSERT INTO plan_ensemble_quantile(ensemble_id,probability,value_cents) VALUES(?,?,?)",
-                    ensembleId, p, Math.round(quantile(terminal, p) * 100));
+                    ensembleId, p, Math.round(Quantiles.of(terminal, p) * 100));
         }
     }
 
@@ -1017,12 +1018,6 @@ public final class PlanOutcomeService {
             if (iso.matches(".*[+-]\\d{2}$")) iso += ":00";
             return java.time.OffsetDateTime.parse(iso).toInstant();
         }
-    }
-
-    private static double quantile(double[] sorted, double p) {
-        if (sorted.length == 1) return sorted[0];
-        double pos = p * (sorted.length - 1); int lo = (int) Math.floor(pos); int hi = (int) Math.ceil(pos);
-        return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
     }
 
     private static byte[] encodeMatrix(double[][] matrix) {
