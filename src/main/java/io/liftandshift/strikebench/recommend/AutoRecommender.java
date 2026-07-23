@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
+import io.liftandshift.strikebench.util.BoundedFanout;
 import io.liftandshift.strikebench.util.Money;
 
 import java.time.Clock;
@@ -241,14 +242,19 @@ public final class AutoRecommender {
         List<SignalEngine.Signals> eligibleSignals = new ArrayList<>();
         java.util.Map<String, SignalEngine.Signals> bySymbol = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.atomic.AtomicInteger signalCompleted = new java.util.concurrent.atomic.AtomicInteger();
-        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
-            for (String symbol : universe) {
-                futures.add(executor.submit(() -> {
+        // UNBOUNDED on purpose. This signal fan-out has never carried a per-batch concurrency cap:
+        // live provider load is throttled downstream by ProviderPoliteness, and imposing a bound
+        // here would change live provider pressure (risking the recorded Cboe 429/1015 incident).
+        // The ordered return is intentionally DISCARDED — bySymbol (a ConcurrentHashMap written
+        // concurrently inside the closure) is the artifact the eligibility screen and the EXIT/HEDGE
+        // held-symbol lookup read afterward, and they need random access by symbol, not positional.
+        BoundedFanout.<String, SignalEngine.Signals>map(universe, BoundedFanout.UNBOUNDED,
+                symbol -> {
                     SignalEngine.Signals analyzed = null;
                     try {
                         analyzed = signals.analyze(symbol, worldId).orElse(null);
                         if (analyzed != null) bySymbol.put(symbol, analyzed);
+                        return analyzed;
                     } finally {
                         int completed = signalCompleted.incrementAndGet();
                         Pick preview = null;
@@ -266,12 +272,8 @@ public final class AutoRecommender {
                                 ? "Reading price, volatility, event, and liquidity evidence."
                                 : "Evidence is ready; exact package pricing follows after the field is ranked."));
                     }
-                }));
-            }
-            for (var f : futures) {
-                try { f.get(); } catch (Exception e) { /* per-symbol failure -> treated as no data */ }
-            }
-        }
+                },
+                (symbol, failure) -> null);
         for (String symbol : universe) {
             SignalEngine.Signals s = bySymbol.get(symbol);
             if (s == null) { skipped.add(symbol + ": no market data"); continue; }

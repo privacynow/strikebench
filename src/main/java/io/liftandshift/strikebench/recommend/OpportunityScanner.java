@@ -3,14 +3,11 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
+import io.liftandshift.strikebench.util.BoundedFanout;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.Semaphore;
 
 /**
  * Cross-symbol opportunity orchestration. Candidate construction and DecisionPolicy evaluation
@@ -81,44 +78,26 @@ public final class OpportunityScanner {
         if (normalized.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
 
         record PerSymbol(StrategyEvaluation best, String note) {}
-        Semaphore gate = new Semaphore(Math.min(CONCURRENCY, normalized.size()));
-        List<PerSymbol> results = new ArrayList<>(Collections.nCopies(normalized.size(), null));
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            List<Future<PerSymbol>> futures = new ArrayList<>();
-            for (String symbol : normalized) {
-                futures.add(executor.submit(() -> {
-                    gate.acquire();
-                    try {
-                        var request = new RecommendationEngine.Request(symbol, thesis, horizon, riskMode,
-                                maxLossCents, null, null, null, false, false, intent, null, null);
-                        var field = engine.recommend(request, buyingPowerCents, worldId);
-                        if (field.candidates().isEmpty()) {
-                            return new PerSymbol(null, symbol + ": no candidates");
-                        }
-                        // ONE ranking primitive (shared with Scout and Decision): best package per
-                        // family in decision-score order, then this scan's own pick — the top viable.
-                        StrategyEvaluation best = evaluations.evaluateBestPerFamily(symbol, field.intent(),
-                                        field.thesis(), field.horizon(), field.riskMode(), field.candidates(),
-                                        buyingPowerCents, AnalysisContext.OBSERVED, worldId, null).stream()
-                                .filter(StrategyEvaluation::viable)
-                                .findFirst().orElse(null);
-                        return new PerSymbol(best, null);
-                    } catch (RuntimeException failure) {
-                        return new PerSymbol(null, symbol + ": analysis unavailable right now");
-                    } finally {
-                        gate.release();
+        List<PerSymbol> results = BoundedFanout.map(normalized, CONCURRENCY,
+                symbol -> {
+                    var request = new RecommendationEngine.Request(symbol, thesis, horizon, riskMode,
+                            maxLossCents, null, null, null, false, false, intent, null, null);
+                    var field = engine.recommend(request, buyingPowerCents, worldId);
+                    // "no candidates" is a NORMAL outcome, not a failure — it must stay a returned
+                    // value and NOT route through onFailure (which would relabel it).
+                    if (field.candidates().isEmpty()) {
+                        return new PerSymbol(null, symbol + ": no candidates");
                     }
-                }));
-            }
-            for (int i = 0; i < futures.size(); i++) {
-                try {
-                    results.set(i, futures.get(i).get());
-                } catch (Exception failure) {
-                    results.set(i, new PerSymbol(null,
-                            normalized.get(i) + ": analysis unavailable right now"));
-                }
-            }
-        }
+                    // ONE ranking primitive (shared with Scout and Decision): best package per
+                    // family in decision-score order, then this scan's own pick — the top viable.
+                    StrategyEvaluation best = evaluations.evaluateBestPerFamily(symbol, field.intent(),
+                                    field.thesis(), field.horizon(), field.riskMode(), field.candidates(),
+                                    buyingPowerCents, AnalysisContext.OBSERVED, worldId, null).stream()
+                            .filter(StrategyEvaluation::viable)
+                            .findFirst().orElse(null);
+                    return new PerSymbol(best, null);
+                },
+                (symbol, failure) -> new PerSymbol(null, symbol + ": analysis unavailable right now"));
 
         List<StrategyEvaluation> best = new ArrayList<>();
         List<String> notes = new ArrayList<>();
