@@ -19,6 +19,7 @@ import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.strategy.Verdict;
+import io.liftandshift.strikebench.util.Fees;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
@@ -785,10 +786,8 @@ public final class RecommendationEngine {
         }
         if (packageShareUnitsPerUnit <= 0) packageShareUnitsPerUnit = Leg.SHARES_PER_CONTRACT;
         long optionNetCents = PayoffCurve.of(optionLegs, qty).entryNetPremiumCents();
-        long optionContracts = 0;
-        for (Leg optionLeg : optionLegs) optionContracts += (long) optionLeg.ratio() * qty;
-        long openingFees = optionContracts * feePerContractCents
-                + (optionLegs.isEmpty() ? 0 : feePerOrderCents);
+        long optionContracts = Fees.optionContracts(optionLegs, qty);
+        long openingFees = Fees.openingCents(optionContracts, feePerContractCents, feePerOrderCents);
         long netOptionIncomeCents = optionNetCents - openingFees;
 
         // Annualized yield is quoted ONLY for share-backed premium (covered calls, cash-secured

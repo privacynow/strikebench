@@ -17,6 +17,7 @@ import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.pricing.VolSurface;
 import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
+import io.liftandshift.strikebench.util.Fees;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Money;
 
@@ -750,8 +751,8 @@ public final class Backtester {
     // ---- Reporting helpers ----
 
     private long feesFor(List<Leg> legs, int qty) {
-        long contracts = legs.stream().filter(l -> !l.isStock()).mapToLong(l -> (long) l.ratio() * qty).sum();
-        return contracts * cfg.feePerContractCents() + cfg.feePerOrderCents();
+        return Fees.openingCents(Fees.optionContracts(legs, qty),
+                cfg.feePerContractCents(), cfg.feePerOrderCents());
     }
 
     private Map<String, Object> assumptions(double slippage, StrategyFamily family,

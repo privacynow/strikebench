@@ -10,6 +10,7 @@ import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionPackage;
 import io.liftandshift.strikebench.position.PositionTransformation;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
+import io.liftandshift.strikebench.util.Fees;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
@@ -3378,10 +3379,10 @@ public final class TradeService {
         }
     }
 
-    /** Commission: per-contract fee on option legs only, plus a flat per-order fee. */
+    /** Opening commission for this package under the app's configured fee schedule. */
     private long feesFor(List<Leg> legs, int qty) {
-        long contracts = legs.stream().filter(l -> !l.isStock()).mapToLong(l -> (long) l.ratio() * qty).sum();
-        return contracts * cfg.feePerContractCents() + cfg.feePerOrderCents();
+        return Fees.openingCents(Fees.optionContracts(legs, qty),
+                cfg.feePerContractCents(), cfg.feePerOrderCents());
     }
 
     /** Sign of the cash flow when CLOSING a leg: long legs are sold (+), short legs bought back (-). */
