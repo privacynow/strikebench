@@ -3778,6 +3778,13 @@
    * the server owns the configured active universe; Home never duplicates universe selection. The
    * scan remains user-triggered so painting Home cannot silently spend a provider allowance.
    */
+  var scoutAbortController = null;
+  function cancelScout() {
+    if (scoutAbortController) {
+      try { scoutAbortController.abort(); } catch (ignored) { /* already settled */ }
+      scoutAbortController = null;
+    }
+  }
   async function scoutOpportunities(options, onProgress) {
     if (!state.enabled) return null;
     options = options || {};
@@ -3809,13 +3816,20 @@
     if (options.redeployment) body.redeployment = options.redeployment;
     if (typeof onProgress === 'function' && typeof fetch === 'function'
         && typeof TextDecoder === 'function') {
+      // A scan streams a whole universe through the market provider. If the user pivots to
+      // analyzing one ticker (or starts a fresh scan), abort this one so it stops holding the
+      // provider — otherwise the churning scan rate-limits the exact idea the user asked for.
+      cancelScout();
+      var controller = typeof AbortController === 'function' ? new AbortController() : null;
+      scoutAbortController = controller;
       var response = await fetch('/api/research/scout', {
         method: 'POST',
         headers: {
           'Accept': 'application/x-ndjson',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: controller ? controller.signal : undefined
       });
       if (!response.ok) {
         var failureText = await response.text(), failurePayload = null;
@@ -3855,6 +3869,7 @@
       } else {
         (await response.text()).split('\n').forEach(acceptLine);
       }
+      if (scoutAbortController === controller) scoutAbortController = null;
       if (streamError) throw streamError;
       if (!result) throw new Error('The opportunity scan ended without a complete receipt.');
       return result;
@@ -3921,6 +3936,7 @@
     symbolContext: symbolContext,
     symbolHistory: symbolHistory,
     scoutOpportunities: scoutOpportunities,
+    cancelScout: cancelScout,
     cancel: function () {
       pendingIdeaContext = null;
       if (state.mutationPending) activeMutationCancelled = true;
