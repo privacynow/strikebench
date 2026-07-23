@@ -13,7 +13,13 @@ technologists and open-source program office people, not options traders.
 
 ## Title
 
-Same code for the backtest and the live system: an Apache Flink case study from an options platform
+Your backtest is lying to you: one Apache Flink job for both history and live
+
+Alternates (swap at paste time if preferred):
+- The backtest was green. The account wasn't. — *closing the backtest/live gap with Apache Flink*
+- When your model says 70%, does it ever mean 70%? — *calibrating a trading engine with Apache Flink and small, explainable models*
+- I built an engine that says my trades are bad. It's right. — *Apache Flink, honest backtests, and a decade of replayed decisions*
+(The last one doubles as the talk's opening line even if not used as the title.)
 
 ## Elevator pitch (short field, ≤ ~300 chars)
 
