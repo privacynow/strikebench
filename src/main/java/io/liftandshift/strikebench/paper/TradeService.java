@@ -2248,6 +2248,7 @@ public final class TradeService {
             snap.put("provenance", mark.evidence().provenance().name());
             snap.put("dataAge", mark.evidence().age().name());
             snap.put("source", mark.evidence().source());
+            snap.put("asOfEpochMs", mark.asOfEpochMs());
             snapshotLegs.add(snap);
         }
         if (!blocks.isEmpty()) {

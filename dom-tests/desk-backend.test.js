@@ -565,7 +565,8 @@ function positionIdentity(overrides = {}) {
 function strategyCatalog() {
   return {
     families: [
-      'CALL_DEBIT_SPREAD', 'CASH_SECURED_PUT', 'PROTECTIVE_PUT', 'NAKED_CALL'
+      'CALL_DEBIT_SPREAD', 'CREDIT_PUT_SPREAD', 'CALENDAR_CALL',
+      'CASH_SECURED_PUT', 'PROTECTIVE_PUT', 'NAKED_CALL'
     ],
     catalog: [
       {
@@ -582,6 +583,36 @@ function strategyCatalog() {
         recommendationEnabled: true,
         primaryIntent: 'DIRECTIONAL',
         intents: ['DIRECTIONAL']
+      },
+      {
+        name: 'CREDIT_PUT_SPREAD',
+        display: 'Bull put credit spread',
+        category: 'Income',
+        summary: 'Defined-risk premium sale using a lower-strike protective put.',
+        payoffShape: '2,26 24,26 43,7 62,7',
+        foundationalRank: 2,
+        definedRisk: true,
+        blockedByDefault: false,
+        scenarioEnabled: true,
+        backtestEnabled: true,
+        recommendationEnabled: true,
+        primaryIntent: 'INCOME',
+        intents: ['INCOME']
+      },
+      {
+        name: 'CALENDAR_CALL',
+        display: 'Call calendar',
+        category: 'Time spreads',
+        summary: 'Sell nearer-term time value against a longer-dated call.',
+        payoffShape: '2,25 22,20 34,5 47,20 62,25',
+        foundationalRank: 4,
+        definedRisk: true,
+        blockedByDefault: false,
+        scenarioEnabled: true,
+        backtestEnabled: true,
+        recommendationEnabled: true,
+        primaryIntent: 'DIRECTIONAL',
+        intents: ['DIRECTIONAL', 'INCOME']
       },
       {
         name: 'CASH_SECURED_PUT',
@@ -2166,12 +2197,15 @@ test('global New idea keeps the underlying absent until the user chooses it', as
     const absent = await page.evaluate(() => ({
       symbol: window.decide?.sym,
       phase: window.decide?.backendPhase,
-      heading: document.querySelector('.underlyingrequired .emptycard.hero h2')?.textContent,
+      dialog: document.querySelector('.composepanel')?.getAttribute('aria-label'),
+      deskVisible: getComputedStyle(document.querySelector('#stage')).display !== 'none',
       queryFocused: document.activeElement?.id
     }));
     assert.equal(absent.symbol, null);
     assert.equal(absent.phase, 'underlying-required');
-    assert.match(absent.heading, /which underlying/i);
+    assert.equal(absent.dialog, 'Shape a new idea');
+    assert.equal(absent.deskVisible, true,
+      'the focused composer stays over the useful Home rather than replacing it with empty panels');
     assert.equal(backend.count('POST', '/api/plans'), 0,
       'opening the composer does not mint a Plan for an arbitrary ticker');
     assert.equal(backend.count('GET', '/api/research/AMD'), amdResearchBefore,
@@ -2798,6 +2832,68 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
   }
 });
 
+test('an empty Home with no working ideas gives Scout and market context the whole canvas', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const marketDocuments = populatedBookDocuments();
+  const bookDocuments = emptyBookDocuments();
+  bookDocuments.planPortfolio = [];
+  bookDocuments.research = marketDocuments.research;
+  bookDocuments.history = marketDocuments.history;
+  bookDocuments.expirations = marketDocuments.expirations;
+  bookDocuments.chain = marketDocuments.chain;
+  bookDocuments.news = marketDocuments.news;
+  await installBackend(page, { bookDocuments });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForSelector('#stage[data-book-authority="empty"][data-plan-count="0"]',
+      { timeout: 10000 });
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.homeContext?.phase === 'ready',
+      null, { timeout: 10000 });
+    const rendered = await page.evaluate(() => {
+      const board = document.querySelector('#stage .board');
+      const visible = id => document.getElementById(id).getClientRects().length > 0;
+      const risk = document.getElementById('riskMain').getBoundingClientRect();
+      const chain = document.getElementById('chainBand').getBoundingClientRect();
+      const sector = document.getElementById('sectorBand').getBoundingClientRect();
+      const news = document.getElementById('newsBand').getBoundingClientRect();
+      return {
+        hidden: ['book', 'bookrisk', 'univBand'].map(id => [id, visible(id)]),
+        shown: ['riskMain', 'chainBand', 'sectorBand', 'newsBand'].map(id => [id, visible(id)]),
+        heroAligned: Math.abs(risk.top - chain.top) < 2,
+        supportAligned: Math.abs(sector.top - news.top) < 2 && sector.top >= risk.bottom - 2,
+        supportWidths: [sector.width, news.width],
+        boardOverflow: board.scrollHeight > board.clientHeight + 2,
+        horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        scoutButtons: document.querySelectorAll('#riskMain [data-auth-opportunity-scan]').length,
+        sectorTiles: document.querySelectorAll('#riskMain [data-auth-scout-sector]').length,
+        text: board.textContent.replace(/\s+/g, ' ').trim()
+      };
+    });
+    assert.deepEqual(rendered.hidden, [
+      ['book', false], ['bookrisk', false], ['univBand', false]
+    ], 'zero positions and zero ideas reserve no apology or empty-list cells');
+    assert.deepEqual(rendered.shown, [
+      ['riskMain', true], ['chainBand', true], ['sectorBand', true], ['newsBand', true]
+    ]);
+    assert.equal(rendered.heroAligned, true);
+    assert.equal(rendered.supportAligned, true);
+    assert.ok(Math.abs(rendered.supportWidths[0] - rendered.supportWidths[1]) < 3,
+      'market watch and news share the supporting row after the empty idea cell disappears');
+    assert.equal(rendered.boardOverflow, false);
+    assert.equal(rendered.horizontalOverflow, false);
+    assert.equal(rendered.scoutButtons, 1);
+    assert.ok(rendered.sectorTiles >= 1);
+    assert.match(rendered.text, /What is worth studying today\?.*Scan the broad market/i);
+    assert.deepEqual(pageErrors, [], `zero-plan Home emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('Home renders the synchronized Book total without summing independent position fans', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
@@ -3396,7 +3492,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       null, { timeout: 10000 });
     await page.waitForSelector('#stage[data-book-authority="ready"] #book .card[data-id="'
       + BOOK_TRADE_ID + '"]', { timeout: 10000 });
-    await page.waitForSelector('#authBookRiskViz [data-auth-risk-position="'
+    await page.waitForSelector('#authBookFanLegend [data-fan-pos="'
       + BOOK_TRADE_ID + '"]', { timeout: 10000 });
 
     const home = await page.evaluate(tradeId => {
@@ -3405,6 +3501,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       const stage = document.querySelector('#stage');
       return {
         authority: stage && stage.getAttribute('data-book-authority'),
+        positionCount: stage && stage.getAttribute('data-position-count'),
         phase: state.book && state.book.phase,
         ids: state.book.data.activeTrades.map(trade => trade.id),
         totalValueCents: state.book.data.portfolio.summary.totalValueCents,
@@ -3414,12 +3511,27 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
         workingIdeas: document.querySelector('#univBand .eyebrow')?.textContent.trim(),
         riskHint: document.querySelector('#riskMain .lenshd .hint')?.textContent.trim(),
         riskPoints: document.querySelectorAll('#authBookRiskViz [data-auth-risk-position]').length,
+        riskMapCount: document.querySelectorAll('#authBookRiskViz').length,
+        singleReceipt: document.querySelector('.bookonefacts')?.textContent
+          .replace(/\s+/g, ' ').trim(),
+        fanWidth: document.querySelector('#authBookFan')?.getBoundingClientRect().width,
+        heroWidth: document.querySelector('#riskMain')?.getBoundingClientRect().width,
+        bookRiskVisible: document.querySelector('#bookrisk')?.getClientRects().length > 0,
+        boardOverflows: document.querySelector('#stage .board').scrollHeight
+          > document.querySelector('#stage .board').clientHeight + 2,
+        boardSize: {
+          client: document.querySelector('#stage .board').clientHeight,
+          scroll: document.querySelector('#stage .board').scrollHeight,
+          template: getComputedStyle(document.querySelector('#stage .board')).gridTemplateRows
+        },
+        lowerRowHeight: document.querySelector('#book')?.getBoundingClientRect().height,
         authoredSparkPaths: card ? card.querySelectorAll('.cplspark path').length : 0,
         visibleCardIds: Array.from(document.querySelectorAll('#book .card[data-id]'))
           .filter(row => row.getClientRects().length).map(row => row.dataset.id)
       };
     }, BOOK_TRADE_ID);
     assert.equal(home.authority, 'ready');
+    assert.equal(home.positionCount, '1');
     assert.equal(home.phase, 'ready');
     assert.deepEqual(home.ids, [BOOK_TRADE_ID]);
     assert.deepEqual(home.visibleCardIds, [BOOK_TRADE_ID],
@@ -3438,13 +3550,26 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       'Home leaves mark history blank until a stored marksHistory receipt is loaded');
     assert.equal(home.workingIdeas, 'Working ideas');
     assert.match(home.riskHint, /(?:independent position projections · never summed|synchronized Book projection)/i);
-    assert.equal(home.riskPoints, 1, 'each plotted position is a focus control');
+    assert.equal(home.riskPoints, 0,
+      'one position does not pretend that a one-dot comparison is a useful risk map');
+    assert.equal(home.riskMapCount, 0,
+      'the sparse hero gives its canvas to measured futures rather than an empty comparative facet');
+    assert.match(home.singleReceipt, /Chance.*Max loss.*Entry credit.*Expiry/i,
+      'the displaced one-dot facet becomes an exact single-position receipt');
+    assert.ok(home.fanWidth > home.heroWidth * 0.6,
+      `the sparse position fan earns the majority of its hero (${home.fanWidth}/${home.heroWidth})`);
+    assert.equal(home.bookRiskVisible, false,
+      'one position does not reserve a duplicate aggregate-risk column');
+    assert.equal(home.boardOverflows, false,
+      `the sparse desktop Home keeps its default composition in one viewport (${JSON.stringify(home.boardSize)})`);
+    assert.ok(home.lowerRowHeight >= 300 && home.lowerRowHeight <= 380,
+      `the sparse lower row is content-sized rather than a void (${home.lowerRowHeight}px)`);
     assert.doesNotMatch(home.text,
       /\b(?:authoritative|backend-owned|source-owned|working plans|mark coverage|stored coverage)\b/i,
       'Home speaks in product language rather than implementation vocabulary');
     assert.doesNotMatch(home.text, /Covered strangle|Short-put campaign|Visual fixture/i);
 
-    await page.locator('#authBookRiskViz [data-auth-risk-position="' + BOOK_TRADE_ID + '"]').click();
+    await page.locator('#authBookFanLegend [data-fan-pos="' + BOOK_TRADE_ID + '"]').click();
     await page.waitForFunction(tradeId => {
       const bridge = window.DeskBackend && window.DeskBackend.state();
       return bridge && bridge.position && bridge.position.phase === 'ready'
@@ -3472,6 +3597,12 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       const positionSide = positionViewport?.querySelector('.authposside');
       const sideRect = positionSide?.getBoundingClientRect();
       const legRows = Array.from(positionSide?.querySelectorAll('.legr') || []);
+      const focusedCard = document.querySelector(`.focus .card[data-id="${tradeId}"]`);
+      const accentProbe = document.createElement('span');
+      accentProbe.style.color = 'var(--accent)';
+      document.body.appendChild(accentProbe);
+      const accentColor = getComputedStyle(accentProbe).color;
+      accentProbe.remove();
       return {
         id: receipt.trade.id,
         symbol: receipt.trade.symbol,
@@ -3501,6 +3632,9 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
           && researchRect.top < scenarioRect.top,
         researchVisibleAtInitialScroll: !!researchRect && !!viewportRect
           && researchRect.top < viewportRect.bottom && researchRect.bottom > viewportRect.top,
+        recedeVisible: document.querySelector('.recede')?.getClientRects().length > 0,
+        focusedBorder: focusedCard && getComputedStyle(focusedCard).borderTopColor,
+        accentColor,
         text: stage.textContent.replace(/\s+/g, ' ').trim(),
         documentOverflow: document.documentElement.scrollWidth
           > document.documentElement.clientWidth
@@ -3538,6 +3672,10 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       'desktop Position Bloom places current Research and news before the scenario workspace');
     assert.equal(position.researchVisibleAtInitialScroll, true,
       'desktop users can see source-owned market context before choosing a scenario');
+    assert.equal(position.recedeVisible, false,
+      'one focused position does not reserve an empty sibling column');
+    assert.notEqual(position.focusedBorder, position.accentColor,
+      'opening recency remains a badge and does not turn the whole Position cyan');
     assert.match(position.text, /Backend research sentinel headline/i,
       'Position Bloom restores its backend Research/news context');
     assert.match(position.text, /Payoff at expiration/i);
@@ -3573,7 +3711,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
   }
 });
 
-test('global New idea from Position Bloom starts a mutable Plan and preserves the focused Position', async () => {
+test('global New idea from Position starts blank, then preserves the focused Position after explicit analysis', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   const pageErrors = [];
@@ -3605,7 +3743,19 @@ test('global New idea from Position Bloom starts a mutable Plan and preserves th
       window.__positionCardBeforeNewIdea = document.querySelector(`.card[data-id="${tradeId}"]`);
     }, BOOK_TRADE_ID);
 
-    await startNewIdea(page);
+    await page.locator('#threadNewIdea').click();
+    await page.waitForFunction(() => window.decide?.backendPhase === 'underlying-required');
+    assert.deepEqual(await page.evaluate(() => ({
+      symbol: window.decide?.sym,
+      positionFocus: window.state?.focus
+    })), {
+      symbol: null,
+      positionFocus: BOOK_TRADE_ID
+    }, 'an ambient Position never becomes the global New idea default');
+    assert.equal(backend.count('POST', '/api/plans'), 0);
+    await page.locator('#univq').fill('AAPL');
+    await page.locator('#univq').press('Enter');
+    await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(planId => window.decide?.backendPhase === 'error'
       || (window.decide?.backendPhase === 'ready'
         && window.DeskBackend.state().plan?.id === planId), PLAN_ID, { timeout: 10000 });
@@ -3641,7 +3791,7 @@ test('global New idea from Position Bloom starts a mutable Plan and preserves th
       positionTradeId: BOOK_TRADE_ID,
       cardPreserved: true,
       interrupted: false
-    }, 'global New idea inherits only the Position symbol while preserving its bloom identity');
+    }, 'the explicitly chosen subject opens while preserving the Position identity underneath');
 
     assert.equal(backend.count('GET', `/api/plans/${BOOK_PLAN_ID}`), 0,
       'fresh idea lookup never hydrates the frozen Position Plan as a working Plan');
@@ -4632,11 +4782,15 @@ test('Desk loads the server strategy catalog and accounts for families outside t
       families: window.DeskBackend.state().strategyCatalog?.families,
       visibleCount: window.decide.strategyCatalog?.catalog?.length
     })), {
-      families: ['CALL_DEBIT_SPREAD', 'CASH_SECURED_PUT', 'PROTECTIVE_PUT', 'NAKED_CALL'],
-      visibleCount: 4
+      families: ['CALL_DEBIT_SPREAD', 'CREDIT_PUT_SPREAD', 'CALENDAR_CALL',
+        'CASH_SECURED_PUT', 'PROTECTIVE_PUT', 'NAKED_CALL'],
+      visibleCount: 6
     }, 'the Desk retains the exact server-owned catalog receipt');
 
-    await page.locator('[data-dec="lefttool"][data-tool="catalog"]').click();
+    assert.match(await page.locator('.strategycoverage').textContent(),
+      /1 exact.*6 families in the canonical engine.*Put verticals and calendars/i,
+      'strategy breadth is visible before opening the complete catalog');
+    await page.locator('.strategycoverage').click();
     await page.waitForSelector('#decideStage .catalogdrawer .catalogrow');
     const drawer = await page.evaluate(() => ({
       heading: document.querySelector('.catalogdrawer .lenshd')?.textContent
@@ -4653,10 +4807,11 @@ test('Desk loads the server strategy catalog and accounts for families outside t
       })),
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
     }));
-    assert.match(drawer.heading, /Supported strategies.*4 families/i);
+    assert.match(drawer.heading, /Supported strategies.*6 families/i);
     assert.match(drawer.intro, /Every family remains visible/i);
     assert.deepEqual(new Set(drawer.rows.map(row => row.name)), new Set([
-      'Debit call spread', 'Cash-secured put', 'Protective put', 'Naked call'
+      'Debit call spread', 'Bull put credit spread', 'Call calendar',
+      'Cash-secured put', 'Protective put', 'Naked call'
     ]), 'the drawer renders every family in the server receipt, not just ranked candidates');
     const rowsByName = Object.fromEntries(drawer.rows.map(row => [row.name, row]));
     assert.equal(rowsByName['Debit call spread'].state, 'compared now');
@@ -4694,7 +4849,7 @@ test('a slow additive strategy catalog never blocks the exact Plan and recommend
     CANDIDATE_ID, { timeout: 1400 });
     assert.equal(await page.evaluate(() => window.DeskBackend.state().strategyCatalog), null,
       'the recommendation is ready while the independent catalog receipt is still pending');
-    await page.waitForFunction(() => window.DeskBackend.state().strategyCatalog?.catalog?.length === 4,
+    await page.waitForFunction(() => window.DeskBackend.state().strategyCatalog?.catalog?.length === 6,
       null, { timeout: 5000 });
     assert.equal(backend.count('GET', '/api/strategies'), 1);
     assert.equal(await page.evaluate(() => window.decide.backendPhase), 'ready',
@@ -5061,6 +5216,46 @@ test('Desk consumes the Research canonical display mark instead of rebuilding a 
     assert.notEqual(mark.spot, (mark.quoteBid + mark.quoteAsk) / 2,
       'a divergent canonical mark proves the browser did not reconstruct the midpoint');
     assert.deepEqual(pageErrors, [], `canonical display-mark wiring emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('selected package premiums come from its exact expiration receipt, never an ambient same-strike chain', async () => {
+  const exact = candidate();
+  exact.legs = [
+    {
+      type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 100, expiration: '2026-09-18', entryPrice: 12.4,
+      quoteBid: 12.1, quoteAsk: 12.4, quoteAsOfEpochMs: 1784563260000,
+      quoteSource: 'EXACT_SEPTEMBER_BOOK', quoteFreshness: 'DELAYED'
+    },
+    {
+      type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 110, expiration: '2026-09-18', entryPrice: 3.3,
+      quoteBid: 3.3, quoteAsk: 3.5, quoteAsOfEpochMs: 1784563260000,
+      quoteSource: 'EXACT_SEPTEMBER_BOOK', quoteFreshness: 'DELAYED'
+    }
+  ];
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    strategyCandidates: [exact]
+  });
+  try {
+    const receipt = await page.evaluate(() => ({
+      legText: document.querySelector('.declegpanel')?.textContent.replace(/\s+/g, ' ').trim(),
+      packageText: document.querySelector('.packagebookcol')?.textContent.replace(/\s+/g, ' ').trim(),
+      ambientExpiration: window.DeskBackend.state().market?.chain?.expiration
+    }));
+    assert.equal(receipt.ambientExpiration, '2026-08-21');
+    assert.match(receipt.legText, /2026-09-18.*12\.10.*12\.40.*buy at ask 12\.40/i);
+    assert.match(receipt.legText, /2026-09-18.*3\.30.*3\.50.*sell at bid 3\.30/i);
+    assert.match(receipt.packageText, /EXACT_SEPTEMBER_BOOK.*DELAYED/i);
+    assert.match(receipt.packageText,
+      /Nearby 2026-08-21 chain withheld.*package expires 2026-09-18/i);
+    assert.doesNotMatch(receipt.packageText, /5\.80\s*\/\s*6\.20/i,
+      'the August 100-call quote cannot decorate the September 100-call leg');
+    assert.deepEqual(pageErrors, [],
+      `exact package quote receipt emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -7378,12 +7573,33 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
   const backend = await installBackend(page, {
     scoutResponse,
     universeSymbols: ['MU', 'AMD', 'NVDA'],
-    scoutSymbols: broadSymbols
+    scoutSymbols: broadSymbols,
+    universeSectors: [
+      { key: 'ENERGY', label: 'Energy', symbols: ['XOM'] },
+      { key: 'FINANCIALS', label: 'Financials', symbols: ['JPM'] },
+      { key: 'HEALTHCARE', label: 'Healthcare', symbols: ['PFE'] },
+      { key: 'STAPLES', label: 'Consumer staples', symbols: ['KO'] },
+      { key: 'SEMICONDUCTORS', label: 'Semiconductors', symbols: ['MU', 'AMD', 'NVDA'] }
+    ]
   });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
     await page.waitForSelector('[data-auth-opportunity-scan]');
+    const idle = await page.evaluate(() => ({
+      sectors: Array.from(document.querySelectorAll('[data-auth-scout-sector]'))
+        .map(node => node.textContent.replace(/\s+/g, ' ').trim()),
+      watch: Array.from(document.querySelectorAll('.authmarketrow'))
+        .map(node => node.getAttribute('data-auth-market-symbol')),
+      heading: document.querySelector('#sectorBand .lenshd')?.textContent.replace(/\s+/g, ' ').trim()
+    }));
+    assert.ok(idle.sectors.some(text => /Energy.*XOM/i.test(text)));
+    assert.ok(idle.sectors.some(text => /Healthcare.*PFE/i.test(text)));
+    assert.ok(idle.watch.length > 4,
+      `Home watch must cover markets and sectors rather than a fixed four (${idle.watch.join(', ')})`);
+    assert.ok(['XOM', 'JPM', 'PFE', 'KO'].some(symbol => idle.watch.includes(symbol)),
+      'at least one non-megacap cross-sector representative is visible at rest');
+    assert.match(idle.heading, /Markets.*sectors.*your focus/i);
     await page.locator('[data-auth-opportunity-scan]').click();
     await page.waitForSelector('.opportunityrow');
     const result = await page.evaluate(() => window.HOME_OPPORTUNITY.data);

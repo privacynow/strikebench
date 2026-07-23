@@ -2270,7 +2270,7 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
         id: plan.id, symbol: plan.symbol, title: plan.title, market: plan.market,
         status: plan.status, open: plan.open
       }))
-    }), values);
+    }), ids);
     throw new Error(error.message + '\nParallel Plan diagnosis: ' + JSON.stringify(diagnosis));
   });
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,

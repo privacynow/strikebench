@@ -823,7 +823,12 @@
       strike: leg.strike == null ? null : number(leg.strike),
       action: leg.action,
       positionEffect: leg.positionEffect,
-      entryPrice: leg.entryPrice
+      entryPrice: leg.entryPrice,
+      quoteBid: leg.quoteBid,
+      quoteAsk: leg.quoteAsk,
+      quoteAsOfEpochMs: leg.quoteAsOfEpochMs,
+      quoteSource: leg.quoteSource,
+      quoteFreshness: leg.quoteFreshness
     };
   }
 
@@ -2565,7 +2570,7 @@
     }) || null;
   }
 
-  function homeBookSymbols(rows, trades, sharePositions, ambientSymbols) {
+  function homeBookSymbols(rows, trades, sharePositions, universe) {
     var seen = {};
     var sources = (rows || []).map(function (row) { return row && row.plan || row; })
       .filter(function (plan) {
@@ -2577,12 +2582,31 @@
     var owned = sources.map(function (source) {
       return String(source && source.symbol || '').trim().toUpperCase();
     });
-    return owned.concat(ambientSymbols || []).filter(function (symbol) {
+    var described = describedUniverseSymbols(universe), describedSet = {};
+    described.forEach(function (symbol) { describedSet[symbol] = true; });
+    var benchmarks = ['SPY', 'IWM', 'TLT', 'GLD', 'DIA', 'QQQ'].filter(function (symbol) {
+      return describedSet[symbol];
+    });
+    var sectorRepresentatives = (universe && Array.isArray(universe.sectors) ? universe.sectors : [])
+      .map(function (sector) {
+        var symbols = (sector && Array.isArray(sector.symbols) ? sector.symbols : []).map(function (symbol) {
+          return String(symbol || '').trim().toUpperCase();
+        }).filter(Boolean);
+        return symbols.find(function (symbol) {
+          return /^(XL[BEFKIPRSTUVY]|SMH|SOXX|ITA|IHI|XBI|KRE)$/.test(symbol);
+        }) || symbols[0] || null;
+      }).filter(Boolean);
+    var active = activeUniverseSymbols(universe);
+    /* Home is a market watch, not a duplicate position roster. Keep the current Book represented
+       without letting six correlated holdings crowd out rates, commodities, broad markets, and
+       cross-sector lenses. The remaining owned names are still present in the Book itself. */
+    return owned.slice(0, 2).concat(benchmarks.slice(0, 4), sectorRepresentatives,
+      owned.slice(2), active, described).filter(function (symbol) {
         symbol = String(symbol || '').trim().toUpperCase();
         if (!symbol || seen[symbol]) return false;
         seen[symbol] = true;
         return true;
-      }).slice(0, 4);
+      }).slice(0, 12);
   }
 
   function publishBookContext(seq, contextSeq, data, context) {
@@ -2949,7 +2973,7 @@
       });
       var missing = missingSlots(slots);
       var homeSymbols = homeBookSymbols(accountPlans || [], tradePage.trades, positionBook.positions,
-        values.universe.available ? activeUniverseSymbols(values.universe.value) : []);
+        values.universe.available ? values.universe.value : null);
       var data = {
         identity: before.identity,
         account: before.account,

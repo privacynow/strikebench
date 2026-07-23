@@ -593,20 +593,28 @@ public final class PlanStrategyService {
                 throw new IllegalArgumentException("Plan Strategy candidates require positionEffect=OPEN");
             }
             Db.execOn(c, "INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_price," +
-                            "expiration,ratio,multiplier,entry_price) VALUES(?,?,?,?,?,?,?,?,?)", id, index++, requiredText(leg, "action").toUpperCase(),
+                            "expiration,ratio,multiplier,entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms," +
+                            "quote_source,quote_freshness) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    id, index++, requiredText(leg, "action").toUpperCase(),
                     type, "STOCK".equals(type) ? null : priceDecimal(leg.get("strike")),
                     "STOCK".equals(type) || text(leg, "expiration") == null ? null : java.time.LocalDate.parse(text(leg, "expiration")),
                     requiredPositiveInteger(leg, "ratio"),
-                    requiredPositiveInteger(leg, "multiplier"), priceDecimal(leg.get("entryPrice")));
+                    requiredPositiveInteger(leg, "multiplier"), priceDecimal(leg.get("entryPrice")),
+                    priceDecimal(leg.get("quoteBid")), priceDecimal(leg.get("quoteAsk")),
+                    longOrNull(leg, "quoteAsOfEpochMs"), text(leg, "quoteSource"),
+                    text(leg, "quoteFreshness"));
         }
     }
 
     private static ArrayNode loadLegs(java.sql.Connection c, String id) throws java.sql.SQLException {
         ArrayNode out = Json.MAPPER.createArrayNode();
-        Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,multiplier,entry_price FROM " +
+        Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,multiplier," +
+                        "entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms,quote_source,quote_freshness FROM " +
                         "plan_candidate_leg WHERE candidate_id=? ORDER BY leg_index",
                 r -> new LegRow(r.str("action"), r.str("instrument_type"), r.bd("strike_price"),
-                        r.str("expiration"), r.intv("ratio"), r.intv("multiplier"), r.bd("entry_price")), id).forEach(leg -> {
+                        r.str("expiration"), r.intv("ratio"), r.intv("multiplier"), r.bd("entry_price"),
+                        r.bd("quote_bid"), r.bd("quote_ask"), r.lngOrNull("quote_as_of_epoch_ms"),
+                        r.str("quote_source"), r.str("quote_freshness")), id).forEach(leg -> {
             ObjectNode n = out.addObject(); n.put("action", leg.action()); n.put("type", leg.type());
             if (leg.strikePrice() != null) n.put("strike", decimalString(leg.strikePrice()));
             if (leg.expiration() != null) n.put("expiration", leg.expiration());
@@ -614,6 +622,11 @@ public final class PlanStrategyService {
             n.put("multiplier", leg.multiplier());
             n.put("positionEffect", "OPEN");
             if (leg.entryPrice() != null) n.put("entryPrice", decimalString(leg.entryPrice()));
+            if (leg.quoteBid() != null) n.put("quoteBid", decimalString(leg.quoteBid()));
+            if (leg.quoteAsk() != null) n.put("quoteAsk", decimalString(leg.quoteAsk()));
+            if (leg.quoteAsOfEpochMs() != null) n.put("quoteAsOfEpochMs", leg.quoteAsOfEpochMs());
+            put(n, "quoteSource", leg.quoteSource());
+            put(n, "quoteFreshness", leg.quoteFreshness());
         });
         return out;
     }
@@ -837,8 +850,9 @@ public final class PlanStrategyService {
                           String sentimentScorerVersion, String inputHash, String state,
                           String createdAt) {}
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
-                          int multiplier,
-                          BigDecimal entryPrice) {}
+                          int multiplier, BigDecimal entryPrice, BigDecimal quoteBid,
+                          BigDecimal quoteAsk, Long quoteAsOfEpochMs, String quoteSource,
+                          String quoteFreshness) {}
     private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
                                 String sourceKind,
                                 String family, String displayName, String structureGroup, String label,

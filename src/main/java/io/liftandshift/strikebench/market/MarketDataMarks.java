@@ -137,12 +137,12 @@ public final class MarketDataMarks implements MarksSource {
 
     private static LegMark stockMark(Quote q) {
         return new LegMark(q.bid(), q.ask(), q.mark(), null, q.markFreshness(),
-                1.0, 0.0, 0.0, 0.0, q.evidence());
+                1.0, 0.0, 0.0, 0.0, q.evidence(), q.asOfEpochMs());
     }
 
     private static LegMark optionMark(OptionQuote q) {
         return new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.markFreshness(),
-                q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence());
+                q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence(), q.asOfEpochMs());
     }
 
     @Override

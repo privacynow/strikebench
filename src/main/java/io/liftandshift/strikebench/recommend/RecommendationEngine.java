@@ -860,8 +860,13 @@ public final class RecommendationEngine {
         if (ivMissing && !multiExp) {
             candidateWarnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
         }
+        List<LegView> legViews = new ArrayList<>(built.legs().size());
+        for (int i = 0; i < built.legs().size(); i++) {
+            OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
+            legViews.add(LegView.of(built.legs().get(i), quoteReceipt));
+        }
         return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
-                built.legs().stream().map(LegView::of).toList(), qty,
+                List.copyOf(legViews), qty,
                 entryNet, maxProfit, maxLoss, breakevens, pop, ev,
                 round2(liquidity), freshness.name(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,

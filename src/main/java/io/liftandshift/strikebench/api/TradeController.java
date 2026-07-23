@@ -740,7 +740,12 @@ final class TradeController {
                     requiredPositiveInteger(mark, "ratio"),
                     Objects.toString(mark.get("fill"), null),
                     requiredPositiveInteger(mark, "multiplier"),
-                    "OPEN")).toList();
+                    "OPEN",
+                    optionalDecimalString(mark.get("bid")),
+                    optionalDecimalString(mark.get("ask")),
+                    mark.get("asOfEpochMs") instanceof Number timestamp ? timestamp.longValue() : null,
+                    Objects.toString(mark.get("source"), null),
+                    Objects.toString(mark.get("freshness"), null))).toList();
         boolean liquid = preview.legs().stream().filter(mark -> !"STOCK".equals(mark.get("type")))
                 .allMatch(mark -> mark.get("bid") != null && mark.get("ask") != null);
         Long combinedMaxLoss = preview.analytics().get("combinedMaxLossCents") instanceof Number number
@@ -872,6 +877,11 @@ final class TradeController {
             throw new IllegalStateException("Exact preview leg is missing a valid " + key + ".");
         }
         return number.intValue();
+    }
+
+    private static String optionalDecimalString(Object raw) {
+        if (raw == null) return null;
+        return new BigDecimal(raw.toString()).stripTrailingZeros().toPlainString();
     }
 
     private static String worldParam(String world) {
