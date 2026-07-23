@@ -4081,6 +4081,9 @@ test('navigation is NEVER trapped behind a slow route (Research does not block m
 });
 
 test('progressive Home applies its route layout before slow market fills finish', async () => {
+  /* a RETURNING user's progressive shell — first contact deliberately waits on the account
+     fact instead, so the welcome decision must already be settled for this contract */
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
   await page.evaluate(() => { window.location.hash = '#/research'; });
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   await page.evaluate(async () => {
@@ -4115,6 +4118,7 @@ test('progressive Home applies its route layout before slow market fills finish'
 });
 
 test('returning Home paints a stable desk while durable Plans reconcile', async () => {
+  await page.evaluate(() => localStorage.setItem('strikebench.welcomed', '1'));
   await page.evaluate(() => { window.location.hash = '#/research'; });
   await page.waitForSelector('#app[data-route="research"][data-ready="true"]');
   await page.evaluate(async () => {
