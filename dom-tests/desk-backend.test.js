@@ -7696,7 +7696,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     assert.deepEqual(result, scoutResponse,
       'the bridge preserves the canonical Scout response for the Home lens');
     assert.match(await page.locator('.opportunityrow').textContent(),
-      /MU.*Cash-secured put.*favorable.*qualified.*Book improves.*\+\$161.*EV/i,
+      /MU.*Cash-secured put.*favorable.*qualified.*Book improves.*\+\$161.*after costs/i,
       'Home turns the canonical frontier into a useful package and Book-fit lens');
     assert.match(await page.locator('.opportunitycomp').textContent(),
       /Premium richness.*separate view.*MU 77.*27\.3%\/yr on the collateral.*high premium alone never outranks sound economics/i,
@@ -7858,7 +7858,7 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
 
     await page.waitForSelector('#authHomeOpportunity .opportunityrows:not(.provisional) .opportunityrow');
     assert.match(await page.locator('#authHomeOpportunity .opportunityrow').textContent(),
-      /MU.*Bull put.*favorable.*qualified.*Book improves.*\+\$161.*EV.*Analyze/i);
+      /MU.*Bull put.*favorable.*qualified.*Book improves.*\+\$161.*after costs.*Analyze/i);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(100);
