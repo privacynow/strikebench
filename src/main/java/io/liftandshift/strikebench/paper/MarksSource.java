@@ -57,6 +57,11 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
     /** The lane's effective clock: a simulated world's sim instant; empty = use the real clock. */
     default java.util.Optional<java.time.Instant> simNow(String worldId) { return java.util.Optional.empty(); }
 
+    /** The lane's "now": the world's sim instant inside a simulated session, else the caller's clock. */
+    default java.time.Instant simNow(String worldId, java.time.Clock clock) {
+        return simNow(worldId).orElseGet(clock::instant);
+    }
+
 
     /**
      * bid/ask are the EXECUTABLE sides (null/zero = no market on that side); mid is the

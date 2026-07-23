@@ -297,6 +297,16 @@ public final class MarketDataService {
         return world(worldId).map(io.liftandshift.strikebench.market.sim.SimulatedWorld::simInstant);
     }
 
+    /** The lane's "now": the world's sim instant inside a simulated session, else the caller's clock. */
+    public java.time.Instant laneNow(String worldId, java.time.Clock clock) {
+        return simInstant(worldId).orElseGet(clock::instant);
+    }
+
+    /** The lane's trading date — always Eastern (a US options desk's "today"), sim or observed. */
+    public java.time.LocalDate laneToday(String worldId, java.time.Clock clock) {
+        return java.time.LocalDate.ofInstant(laneNow(worldId, clock), MarketHours.EASTERN);
+    }
+
     /** The world's own symbol set (empty optional = observed lane). */
     public Optional<java.util.Set<String>> worldSymbols(String worldId) {
         if ("demo".equals(worldId) && demoProvider instanceof io.liftandshift.strikebench.market.providers.FixtureProvider f) {
