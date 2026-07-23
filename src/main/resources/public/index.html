@@ -210,8 +210,6 @@
 .homesummary .posture{padding-left:11px;gap:5px}
 .homesummary .posture .pgt,.homesummary .posture .pchip.static{display:none}
 .homesummary .pchip{padding:3px 7px;background:transparent}
-.authhomesector{min-width:190px;max-width:265px;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
-.authhomesector>span{color:var(--faint);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}.authhomesector select{min-width:0;height:24px;border:0;background:var(--panel);color:var(--text);font-size:var(--f-2xs)}
 .homesummary .landing-acts .btn{width:32px;height:30px;padding:0;display:grid;place-items:center;font-size:0}
 .homesummary .landing-acts .btn::before{content:'↧';font-size:var(--f-lg);color:var(--accent)}
 .hshort{display:none}
@@ -273,7 +271,6 @@
   .homesummary .bookline{padding:6px 8px;gap:5px;flex-wrap:nowrap;border-top:0;border-left:1px solid var(--line-soft)}
   .homesummary .bookline .sblock{min-width:68px}.homesummary .bookline .sblock .lbl{font-size:var(--f-2xs)}
   .homesummary .bookline .sblock .lbl{font-size:9px;line-height:1.1;white-space:nowrap}.homesummary .bookline .sblock .sv{font-size:12px;line-height:1.2}
-  .authhomesector{min-width:155px;max-width:205px;padding-inline:4px}.authhomesector>span{display:none}
   .homesummary .bookline .sneed{padding:2px 3px}.homesummary .bookline .sneed .badge{font-size:10px;padding:2px 5px}
   .homesummary .posture{gap:2px;padding-left:5px}.homesummary .pchip{padding:2px 4px;font-size:10px}
   .lv-book #riskMain .lenshd{gap:5px}.lv-book #riskMain .lenshd .eyebrow{white-space:nowrap;font-size:12px}.lv-book #riskMain .rkleg{gap:4px;font-size:9px}
@@ -1025,7 +1022,12 @@
 .authmarkethero .amh-change{font-family:var(--mono);font-size:var(--f-xs)}.authmarketfacts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.authmarketfact{padding:6px 7px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);min-width:0}
 .authmarketfact span{display:block;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.authmarketfact b{display:block;margin-top:2px;color:var(--text);font-family:var(--mono);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .authmarketwatch{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
-.lv-book:not([data-book-authority="empty"]) #sectorBand .authmarketwatch{flex:0 0 auto}
+.authmarketwatch.elegantscroll{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}
+.authmarketwatch.elegantscroll>[data-scroll-row]{flex:none;scroll-snap-align:start}
+.authhomenews.elegantscroll{flex:1 1 auto}
+.lv-book #univBand .authlist.elegantscroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}
+.lv-book #univBand .authlist.elegantscroll>[data-scroll-row]{scroll-snap-align:start}
+.watchoverflowmeta .overflowhair,.planoverflowmeta .overflowhair{min-width:45px}
 #authHomeOpportunity{flex:1;min-height:0;display:flex;overflow:hidden}#authHomeOpportunity>.opportunitylens{flex:1}#authHomeOpportunity .opportunityrows{flex:1}
 .authmarketrow{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);overflow:hidden}
 .authmarketrow:hover,.authmarketrow:focus-within,.authmarketrow.on{border-color:var(--accent-2);background:var(--row-hover);outline:none}.authmarketrow.on{box-shadow:inset 2px 0 0 var(--accent)}
@@ -1041,7 +1043,7 @@
 .opportunitygo{min-height:28px;padding:4px 7px;border:1px solid var(--accent-2);border-radius:5px;background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;white-space:nowrap;display:grid;place-items:center}.opportunityrow:hover .opportunitygo,.opportunityrow:focus-visible .opportunitygo{background:var(--accent);color:var(--bg)}
 .opportunitycontrols{display:flex;align-items:center;gap:7px 12px;margin-bottom:7px;min-width:0;flex-wrap:wrap}.opportunitycontrol{display:inline-flex;align-items:center;min-width:0;border:1px solid var(--line-soft);border-radius:6px;overflow:hidden;background:var(--panel-2)}.opportunitycontrol>b{padding:3px 6px;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.opportunitycontrol button{min-height:24px;padding:3px 7px;border:0;border-left:1px solid var(--line-soft);background:transparent;color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}.opportunitycontrol button:hover{background:var(--row-hover);color:var(--text)}.opportunitycontrol button.on{background:var(--accent-wash);color:var(--accent)}.opportunitycontrol button small{color:var(--faint);font-family:var(--mono)}
 .scoutactivegrid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.12fr) minmax(380px,.88fr);gap:9px}.scoutactivegrid>.scoutidlefield{margin-top:0}.scoutresultcard{min-width:0;min-height:0;padding:9px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);display:flex;flex-direction:column}.scoutresultcard .opportunityprompt{margin:auto 0}.scoutresultcard .opportunityrows{flex:1}
-.scoutstart{height:100%;display:flex;flex-direction:column;gap:7px}.scoutstartgrid{min-height:0;display:flex;flex-direction:column;gap:6px}.scoutguardrails{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.scoutguardrails span{min-width:0;padding:5px 6px;border-top:2px solid var(--line);color:var(--faint);font-size:var(--f-2xs);line-height:1.25}.scoutguardrails span:first-child{border-top-color:var(--accent)}.scoutguardrails span:nth-child(3){border-top-style:dashed}.scoutguardrails b{display:block;color:var(--text);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.scoutlaunch{margin-top:auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--accent-wash)}.scoutlaunch>span{min-width:0;color:var(--dim);font-size:var(--f-2xs);line-height:1.35}.scoutlaunch .scoutprimary{min-width:180px;min-height:36px}
+.scoutstart{height:100%;display:flex;flex-direction:column;gap:7px}.scoutstartgrid{min-height:0;display:flex;flex-direction:column;gap:6px}.scoutlaunch{margin-top:auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--accent-wash)}.scoutlaunch>span{min-width:0;color:var(--dim);font-size:var(--f-2xs);line-height:1.35}.scoutlaunch .scoutprimary{min-width:180px;min-height:36px}
 .scoutprogress{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center;margin-top:6px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs)}.scoutprogress span{grid-column:1/-1}.scoutprogress b{color:var(--text)}.scoutprogress meter{width:100%;height:5px;accent-color:var(--accent)}.opportunityrows.provisional .opportunityrow{border-style:dashed}.opportunityrows.provisional .opportunityrow small:after{content:" · provisional";color:var(--accent)}
 .scoutwaiting{flex:1;min-height:52px;margin-top:5px;padding:9px;border:1px dashed var(--line-soft);border-radius:7px;display:grid;place-items:center;color:var(--faint);font-size:var(--f-2xs);line-height:1.4;text-align:center}
 .emptyopportunitypanel #authEmptyOpportunity,.emptyopportunitypanel #authHomeOpportunity{flex:1;min-height:0}.emptyopportunitypanel .opportunitylens{height:100%;display:flex;flex-direction:column}.scoutidlefield{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,.85fr);gap:10px;margin-top:9px}.scoutidlecard{min-width:0;padding:10px;border:1px solid var(--line-soft);border-radius:8px;background:color-mix(in srgb,var(--panel-2) 92%,transparent);display:flex;flex-direction:column;gap:8px}.scoutidlecard .lenshd{margin:0}.scoutgoalread{margin-top:auto;padding:8px;border-left:2px solid var(--accent);background:var(--accent-wash);color:var(--dim);font-size:var(--f-xs);line-height:1.45}.scoutgoalread b{color:var(--text)}
@@ -1052,14 +1054,6 @@
 .lv-book[data-book-authority="empty"] #bookrisk,.lv-book[data-book-authority="empty"] .book{display:none}
 .emptyopportunitypanel{background:linear-gradient(145deg,var(--panel),var(--accent-wash));border-color:var(--accent-2)}
 .emptyopportunityintro{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px 18px;padding:2px 2px 6px}.emptyopportunityintro h2{margin:0;color:var(--text);font-size:clamp(18px,1.25vw,25px);line-height:1.15}.emptyopportunityintro p{margin:4px 0 0;max-width:72ch;color:var(--dim);font-size:var(--f-xs);line-height:1.45}.emptyopportunityintro span{color:var(--accent);font:700 var(--f-2xs) var(--mono);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
-@media(min-width:1200px){
-  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(390px,1fr) clamp(230px,21vh,310px);grid-template-areas:
-    "map map map map map map map chain chain chain chain chain"
-    "univ univ univ univ sector sector sector sector news news news news";overflow:hidden}
-}
-@media(min-width:1200px) and (min-height:960px){
-  .lv-book[data-book-authority="empty"] .board{grid-template-rows:minmax(390px,1fr) clamp(285px,21vh,310px)}
-}
 @media(min-width:901px) and (max-width:1199px){
   .lv-book[data-book-authority="empty"] .board{grid-template-columns:1fr 1fr;grid-template-rows:minmax(410px,auto) minmax(300px,auto) minmax(300px,auto);grid-template-areas:
     "map chain" "univ sector" "news news";overflow:auto}
@@ -2458,9 +2452,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book .board{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;grid-template-areas:"roster" "map" "chain" "bookrisk" "univ" "sector" "news";gap:8px;padding:8px;overflow-x:hidden;overflow-y:auto}
   .lv-book[data-book-authority="empty"] .board{grid-template-rows:auto;grid-template-areas:"map" "chain" "univ" "sector" "news"}
   .lv-book .book,.lv-book #riskMain,.lv-book #bookrisk,.lv-book #chainBand,.lv-book #univBand,.lv-book #sectorBand,.lv-book #newsBand{min-height:210px;overflow:visible}
-  .lv-book[data-book-authority="empty"] #riskMain{min-height:650px}.emptyopportunityintro{grid-template-columns:1fr;align-items:start}.emptyopportunityintro span{white-space:normal}.opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}.scoutidlefield{grid-template-columns:1fr}.scoutguardrails{grid-template-columns:1fr 1fr}.scoutlaunch{grid-template-columns:1fr}.scoutlaunch .scoutprimary{width:100%}
+  .lv-book[data-book-authority="empty"] #riskMain{min-height:650px}.emptyopportunityintro{grid-template-columns:1fr;align-items:start}.emptyopportunityintro span{white-space:normal}.opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}.scoutidlefield{grid-template-columns:1fr}.scoutlaunch{grid-template-columns:1fr}.scoutlaunch .scoutprimary{width:100%}
   .lv-book .book{grid-template-rows:auto;grid-auto-rows:minmax(54px,auto)}
-  .lv-book[data-plan-count="0"] #univBand{display:none}
   .lv-book[data-position-count="1"] .book{min-height:320px;grid-template-rows:auto auto auto;grid-auto-rows:auto}
   .lv-book[data-position-count="1"] #riskMain{min-height:360px}
   .lv-book #chainBand{min-height:480px}
@@ -2933,24 +2926,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeoneshares .authsharerow .btn{padding:2px 5px}
 .lv-book[data-position-count="1"] #bookrisk{display:none}
 @media(min-width:1200px){
-  .lv-book[data-position-count="1"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(430px,1fr) clamp(300px,27vh,340px);
-    grid-template-areas:"map map map map map map map chain chain chain chain chain"
-      "roster roster roster univ univ univ sector sector sector news news news"}
   .lv-book[data-position-count="1"] .book{overflow:hidden;grid-template-rows:auto auto 1fr;grid-auto-rows:auto}
-  .lv-book[data-position-count="1"][data-plan-count="0"] #univBand{display:none}
-  .lv-book[data-position-count="1"][data-plan-count="0"] .board{
-    grid-template-areas:"map map map map map map map chain chain chain chain chain"
-      "roster roster roster sector sector sector sector sector news news news news"}
-}
-@media(min-width:901px) and (max-width:1199px){
-  .lv-book[data-position-count="1"] .board{grid-template-columns:1fr 1fr;grid-template-rows:auto;
-    grid-template-areas:"map chain" "roster univ" "sector news";overflow:auto}
-}
-@media(min-width:1200px) and (max-height:950px){
-  .lv-book[data-position-count="1"] .board{grid-template-rows:minmax(340px,1fr) 300px}
-}
-@media(min-width:1200px) and (max-height:850px){
-  .lv-book[data-position-count="1"] .board{grid-template-rows:minmax(300px,1fr) 270px}
 }
 
 /* Opening recency stays a badge, not a unique cyan frame around one entire surface. A position
@@ -2961,15 +2937,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* Home's orientation band and its cells use the same surface grammar at every density. */
 .homesummary{border-bottom:1px solid var(--line-soft);background:linear-gradient(180deg,var(--panel),var(--ground))}
 .homesummary .perfband,.homesummary .bookline{background:transparent}
-@media(min-width:1200px){
-  .lv-book[data-book-authority="empty"] .board{grid-template-rows:minmax(430px,1fr) clamp(250px,26vh,330px)}
-  .lv-book[data-book-authority="empty"][data-plan-count="0"] #univBand{display:none}
-  .lv-book[data-book-authority="empty"][data-plan-count="0"] .board{
-    grid-template-areas:"map map map map map map map chain chain chain chain chain"
-      "sector sector sector sector sector sector news news news news news news"}
-}
-@media(min-width:1200px) and (max-height:850px){
-  .lv-book[data-book-authority="empty"] .board{grid-template-rows:minmax(360px,1fr) 230px}
+/* Short desktop viewports: the two-row board keeps its floors and the page scrolls instead of clipping. */
+@media(min-width:1500px) and (max-height:899px){
+  .lv-book .board,.lv-book[data-book-authority="empty"] .board{overflow-y:auto}
 }
 @media(max-width:1199px){
   .scoutactivegrid{grid-template-columns:1fr}
@@ -3024,13 +2994,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeworkbenchpanel .scoutidlecard{padding:8px;gap:6px}
 .homeworkbenchpanel .scoutidlecard,.homeworkbenchpanel .scoutresultcard{background:var(--panel-2)}
 .homeworkbenchpanel .scoutgoalread{padding:6px 7px}
-.homecatalogfield{min-height:0;display:flex;flex-direction:column;gap:5px;overflow:visible}
-.homecatalogfield .lenshd{margin:0}
-.homecataloglist{min-height:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:26px;align-content:start;gap:3px 5px}
-.homecatalogrow{min-height:26px;padding:3px 5px;grid-template-columns:minmax(0,1fr);border:0;border-left:2px solid var(--line);border-radius:0;background:transparent}
-.homecatalogrow .catalogshape,.homecatalogrow .catalogcopy small,.homecatalogrow .catalogstate{display:none}
-.homecatalogrow .catalogcopy b{font-size:var(--f-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.homecatalogfoot{color:var(--faint);font-size:var(--f-2xs);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.homecatalogline{padding:6px 8px;border-left:2px solid var(--line);color:var(--faint);font-size:var(--f-2xs);line-height:1.4}
+.homecatalogline.warn{border-left-color:var(--loss)}
 .homeideasearch{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
 .homeideasearch>span{color:var(--faint);font-size:var(--f-2xs);font-weight:750;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
 .homeideasearch input,.homeacquirefields input{min-width:0;width:100%;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);color:var(--text);padding:4px 7px;font:650 var(--f-xs) var(--sans);outline:none}
@@ -3047,13 +3012,22 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeacquirefields{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .homeacquirefields label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:7px;padding:5px 7px;border:1px solid var(--accent-2);border-radius:7px;background:var(--accent-wash)}
 .homeacquirefields span{color:var(--dim);font-size:var(--f-2xs);white-space:nowrap}
-.scoutfieldreceipt{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:7px;border:1px solid var(--line);border-radius:7px;background:var(--panel)}
-.scoutfieldreceipt>span{min-width:0;padding:5px 6px;border-left:2px solid var(--line);color:var(--faint);font-size:var(--f-2xs);line-height:1.25}
-.scoutfieldreceipt>span:first-child{border-left-color:var(--accent)}.scoutfieldreceipt b{display:block;margin-top:2px;color:var(--text);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.scoutfieldreceipt>em{grid-column:1/-1;color:var(--faint);font-size:var(--f-2xs);font-style:normal;line-height:1.3}
+.homesectorchips{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 auto;overflow-x:auto;scrollbar-width:none;padding:1px 0}
+.homesectorchips::-webkit-scrollbar{display:none}
+.homesectorchips button{flex:none;min-height:22px;padding:2px 9px;border:1px solid var(--line-soft);border-radius:999px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}
+.homesectorchips button:hover{background:var(--row-hover);color:var(--text)}
+.homesectorchips button.on{border-color:var(--accent-2);background:var(--accent-wash);color:var(--accent)}
 .homeworkbenchactions{display:flex;align-items:center;gap:8px}
 .homeworkbenchactions .btn{min-width:150px}.homeworkbenchactions>span{min-width:0;color:var(--faint);font-size:var(--f-2xs);line-height:1.35}
 .homeworkbenchpanel .scoutactivegrid>.scoutidlefield{display:block;min-width:0;margin-top:0}
+@media(max-width:1499px){
+.homeworkbenchpanel:not(.emptyopportunitypanel) .scoutactivegrid{display:flex;flex-direction:column;gap:8px}
+.homeworkbenchpanel:not(.emptyopportunitypanel) .scoutactivegrid>.scoutidlefield{flex:0 0 auto;min-height:auto}
+.homeworkbenchpanel:not(.emptyopportunitypanel) .scoutresultcard{flex:1 1 140px;min-height:140px;overflow:hidden}
+}
+.homeworkbenchpanel .scoutactivegrid>.scoutidlefield{align-content:start}
+.homeworkbenchpanel .scoutresultcard .opportunityrows{flex:1 1 auto;min-height:60px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}
+.homeworkbenchpanel .scoutresultcard .opportunityrows>.opportunityrow{scroll-snap-align:start}
 .homeworkbenchpanel .scoutactivegrid>.scoutidlefield>.scoutidlecard{height:auto;min-height:100%}
 .homeworkbenchpanel .scoutstartgrid{flex:1;min-height:0}
 .compactbookfutures .bookonefacts .authmetric{padding:4px 6px}
@@ -3069,49 +3043,45 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .compactbookfutures .bookfanrow em small{display:inline;margin-left:4px}
 
 @media(min-width:1500px){
+  /* Market first (persistent sector lens + chart|chain + watch + news), the work row below it.
+     ONE populated grid and ONE empty grid — variants multiplied styling without earning it. */
   .lv-book .board,
   .lv-book[data-position-count="1"] .board,
-  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(500px,1fr) clamp(260px,24vh,330px);
+  .lv-book[data-position-count="1"][data-plan-count="0"] .board,
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(320px,4fr) minmax(440px,6fr);
     grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "bookrisk bookrisk bookrisk bookrisk roster roster univ univ sector sector news news";
+      "chain chain chain chain chain chain chain chain sector sector news news"
+      "map map map map map bookrisk bookrisk bookrisk roster roster univ univ";
     gap:10px;overflow:hidden}
   .lv-book[data-book-authority="empty"] .board,
-  .lv-book[data-book-authority="empty"][data-position-count="1"] .board{grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "univ univ univ sector sector sector sector news news news news news"}
+  .lv-book[data-book-authority="empty"][data-position-count="1"] .board,
   .lv-book[data-book-authority="empty"][data-plan-count="0"] .board,
   .lv-book[data-book-authority="empty"][data-plan-count="0"][data-position-count="1"] .board{grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "sector sector sector sector sector sector news news news news news news"}
-  .lv-book[data-position-count="1"][data-plan-count="0"] .board{grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "bookrisk bookrisk bookrisk bookrisk roster roster sector sector sector news news news"}
+      "chain chain chain chain chain chain chain chain sector sector news news"
+      "map map map map map map map map univ univ univ univ"}
 }
 @media(min-width:1200px) and (max-width:1499px){
   .lv-book .board,
   .lv-book[data-position-count="1"] .board,
-  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(510px,auto) minmax(230px,auto) minmax(230px,auto);
+  .lv-book[data-position-count="1"][data-plan-count="0"] .board,
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(320px,auto) minmax(500px,auto) minmax(210px,auto);
     grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "bookrisk bookrisk bookrisk bookrisk bookrisk bookrisk roster roster roster univ univ univ"
-      "sector sector sector sector sector sector news news news news news news";
+      "chain chain chain chain chain chain chain chain sector sector sector sector"
+      "map map map map map bookrisk bookrisk bookrisk bookrisk roster roster roster"
+      "univ univ univ univ news news news news news news news news";
     gap:9px;overflow-y:auto;overflow-x:hidden}
   .lv-book[data-book-authority="empty"] .board,
   .lv-book[data-book-authority="empty"][data-position-count="1"] .board{grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "univ univ univ univ univ univ sector sector sector sector sector sector"
-      "news news news news news news news news news news news news"}
-  .lv-book[data-position-count="1"][data-plan-count="0"] .board{grid-template-areas:
-      "map map map map map map map chain chain chain chain chain"
-      "bookrisk bookrisk bookrisk bookrisk bookrisk bookrisk roster roster roster sector sector sector"
+      "chain chain chain chain chain chain chain chain sector sector sector sector"
+      "map map map map map map map map univ univ univ univ"
       "news news news news news news news news news news news news"}
 }
 @media(min-width:901px) and (max-width:1199px){
   .lv-book .board,
-  .lv-book[data-position-count="1"] .board,
-  .lv-book[data-book-authority="empty"] .board{grid-template-columns:1fr 1fr;grid-template-rows:auto;grid-template-areas:
-    "map chain" "bookrisk roster" "univ sector" "news news";overflow:auto}
+  .lv-book[data-position-count="1"] .board{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto;grid-template-areas:
+    "chain chain" "map bookrisk" "roster univ" "sector news";overflow:auto}
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto;grid-template-areas:
+    "chain chain" "map map" "univ sector" "news news";overflow:auto}
 }
 @media(max-width:900px){
   .lv-book .board,
@@ -3123,12 +3093,13 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .homeworkbenchpanel .scoutactivegrid{display:flex;flex-direction:column}
   .homeworkbenchpanel .opportunityrows{height:auto;min-height:0;overflow:visible;flex:none}
   .authhomenews.elegantscroll{height:auto;max-height:none;overflow:visible;overscroll-behavior:auto;scroll-snap-type:none;mask-image:none!important}
-  .newsoverflowmeta{display:none!important}
-  .homecataloglist{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .homeideamatches,.scoutfieldreceipt{grid-template-columns:1fr}.scoutfieldreceipt>em{grid-column:1}.homeideasearch,.homeacquirefields label{grid-template-columns:1fr}.homeworkbenchactions{align-items:stretch;flex-direction:column}.homeworkbenchactions .btn{width:100%}
+  .newsoverflowmeta,.watchoverflowmeta,.planoverflowmeta,.rowsoverflowmeta{display:none!important}
+  .homeworkbenchpanel .scoutresultcard .opportunityrows{overflow:visible;scroll-snap-type:none;mask-image:none!important}
+  .authmarketwatch.elegantscroll,.lv-book #univBand .authlist.elegantscroll{height:auto;max-height:none;overflow:visible;overscroll-behavior:auto;scroll-snap-type:none;mask-image:none!important}
+  .homeideamatches{grid-template-columns:1fr}.homeideasearch,.homeacquirefields label{grid-template-columns:1fr}.homeworkbenchactions{align-items:stretch;flex-direction:column}.homeworkbenchactions .btn{width:100%}
 }
 @media(min-width:1001px){
-  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(300px,.9fr)}
+  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(360px,1.15fr)}
 }
 .lv-book[data-position-count="1"] #bookrisk{display:flex}
 .compactbookfutures .bookfanwrap,.compactbookfutures .bookfanwrap.singleposition{grid-template-columns:minmax(0,1fr) minmax(135px,175px)}
@@ -3694,7 +3665,7 @@ function authHuman(value){return String(value||'Position').toLowerCase().replace
 function authLifecycleAnalysis(data,id){var rows=data&&data.positionAnalyses||{};return rows&&rows[id]||null;}
 function authLifecyclePriority(verdict){return {DEFEND:0,REDUCE:1,HARVEST:2,ACCEPT_ASSIGNMENT:3,KEEP:4}[String(verdict||'').toUpperCase()]??9;}
 function authLifecycleClass(verdict){var v=String(verdict||'').toUpperCase();return v==='DEFEND'?'bad':v==='REDUCE'?'warn':v==='HARVEST'?'pick':v==='ACCEPT_ASSIGNMENT'?'violet':'ok';}
-function authLifecycleLabel(verdict,compact){var v=String(verdict||'').toUpperCase();if(v==='DEFEND')return compact?'Action required':'Defend · action required';return authHuman(verdict);}
+function authLifecycleLabel(verdict,compact){var v=String(verdict||'').toUpperCase();if(v==='DEFEND')return compact?'Action required':'Defend · action required';if(compact){if(v==='HARVEST')return 'Take profit';if(v==='REDUCE')return 'Trim';if(v==='KEEP')return 'On plan';if(v==='ACCEPT_ASSIGNMENT')return 'Assignment likely';}return authHuman(verdict);}
 function authLifecycleRead(analysis){var decision=analysis&&analysis.decision||{},life=analysis&&analysis.lifecycle||{},carry=life.carryCollateral||{},history=life.history||{},close=life.currentChoice&&life.currentChoice.close||{},events=life.assignmentExit&&life.assignmentExit.eventCrossings||[];return {verdict:decision.verdict||null,summary:decision.summary||null,remaining:authDollarsFromCents(carry.grossRemainingPremiumCents),annualized:authNumber(carry.grossAnnualizedRemainingPremiumPct),captured:authNumber(history.grossPremiumCapturedPct),closeCost:authDollarsFromCents(close.signedNetCloseCashCents==null?null:Math.max(0,-Number(close.signedNetCloseCashCents))),events:Array.isArray(events)?events:[],reduction:decision.reduction||null,dimensions:Array.isArray(decision.dimensions)?decision.dimensions:[]};}
 function authAccount(data){var a=data&&data.account||{};return a.account||a;}
 function authPlanRows(data){if(data&&Array.isArray(data.accountPlans))return data.accountPlans;var src=data&&data.planPortfolio&&data.planPortfolio.plans||data&&data.plans||[];return Array.isArray(src)?src:[];}
@@ -4848,9 +4819,12 @@ function authScoutSectorChoices(){
   var described=authoritativeUniverse()||{},scope=HOME_SCOUT.scope==='broad'?described.scout:described.active,scopeSymbols=scope&&Array.isArray(scope.symbols)?scope.symbols.map(function(symbol){return String(symbol||'').toUpperCase();}):[],scopeSet={};scopeSymbols.forEach(function(symbol){scopeSet[symbol]=1;});
   return (Array.isArray(described.sectors)?described.sectors:[]).map(function(row){var symbols=(row.symbols||[]).map(function(symbol){return String(symbol||'').toUpperCase();}).filter(function(symbol){return scopeSet[symbol];});return {key:String(row.key||row.label||''),label:String(row.label||row.key||'Sector'),count:symbols.length};}).filter(function(row){return row.key&&row.count;});
 }
-function authHomeSectorSelectHTML(){
-  var sectors=authScoutSectorChoices(),options='<option value="">All markets · '+sectors.length+' sectors</option>'+sectors.map(function(row){return '<option value="'+deskEsc(row.key)+'"'+(String(HOME_SCOUT.sector||'')===row.key?' selected':'')+'>'+deskEsc(row.label)+' · '+row.count+'</option>';}).join('');
-  return '<label class="authhomesector"><span>Market lens</span><select data-auth-home-sector-select aria-label="Choose Home market sector">'+options+'</select></label>';
+function authHomeSectorChipsHTML(){
+  /* The sector lens is a persistent, always-open chip row at the top of Home — never a dropdown. */
+  var sectors=authScoutSectorChoices(),current=String(HOME_SCOUT.sector||'');
+  var chips='<button type="button" class="'+(current?'':'on')+'" data-auth-scout-sector="" aria-pressed="'+(!current)+'">Broad market</button>'+
+    sectors.map(function(row){return '<button type="button" class="'+(current===row.key?'on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" aria-pressed="'+(current===row.key)+'" title="'+row.count+' optionable symbols">'+deskEsc(row.label)+'</button>';}).join('');
+  return '<div class="homesectorchips" role="group" aria-label="Market sector lens">'+chips+'</div>';
 }
 function authBookSummary(){var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.summary||{},a=authAccount(d),pnl=authDollarsFromCents(s.totalPnlCents),complete=s.complete===true,liq=s.liquidity||{};
   summaryEl.classList.add('authbooksummaryhost');
@@ -4862,7 +4836,6 @@ function authBookSummary(){var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.s
     authLiquidityFigure(liq,s)+
     sb('Packages',Number(s.openTradesCount||0)+(Number(s.sharesPositions||0)?' · '+Number(s.sharesPositions)+' shares':''))+
     sb('Reconciliation',liq.reconciliationStatus?authHuman(liq.reconciliationStatus):(complete?'priced':'partial'),String(liq.reconciliationStatus||'').toUpperCase()==='RECONCILED'?'pos':'neg')+
-    authHomeSectorSelectHTML()+
     '<div class="posture">'+authExceptionChip(s.freshness)+'</div><div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div></div>';
   wireLanding();}
 function authBookLoading(){stageEl.setAttribute('data-book-authority','loading');authSetBookPanels(true);var host=document.getElementById('bookAuthState');host.hidden=false;authBookSummary();host.innerHTML='<div class="authpending" role="status" aria-live="polite"><section class="authpane"><span class="eyebrow">Practice positions</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section><section class="authpane hero"><span class="eyebrow">Your book</span><div class="authline chart"></div><div class="authmessage"><b>Loading the Practice book.</b>Positions, shares, prices, risk, and linked ideas will appear as each part is ready.</div></section><section class="authpane"><span class="eyebrow">Market &amp; risk</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section></div>';}
@@ -4874,10 +4847,12 @@ function authHomePrice(value){var n=authNumber(value);return n==null?'—':'$'+N
 function authHomeQuote(row){var r=row&&row.research||{},q=r.quote||{},price=authNumber(r.displayPrice),prev=authNumber(q.prevClose),pct=price!=null&&prev>0?(price/prev-1)*100:null;return {price:price,prev:prev,pct:pct,basis:r.priceIsPreviousClose===true?'previous close':r.markBasis||'market price',source:q.source||r.evidence&&r.evidence.summary&&r.evidence.summary.source||'source unavailable',freshness:q.freshness||r.freshness||'unavailable',iv:authNumber(r.ivAtm),regime:r.regime&&r.regime.headline||null};}
 function authHomeNewsItems(row){var n=row&&row.news||{},items=n.items;return Array.isArray(items)?items:[];}
 function authHomeCandles(row){var history=row&&row.history||{},candles=history.candles;return Array.isArray(candles)?candles.filter(function(c){return authNumber(c.close==null?c.c:c.close)!=null;}):[];}
-function authHomeHistoryRead(row){var history=row&&row.history||{},candles=authHomeCandles(row),first=candles[0]||{},last=candles[candles.length-1]||{},start=authNumber(first.close==null?first.c:first.close),end=authNumber(last.close==null?last.c:last.close),change=start>0&&end!=null?(end/start-1)*100:null,coverage=history.coverage||{};return {candles:candles,change:change,source:history.source||'history unavailable',freshness:history.freshness||'unavailable',coverage:authNumber(coverage.coveragePct),sessions:authNumber(coverage.availableSessions)||candles.length};}
+function authHomeHistoryRead(row){var history=row&&row.history||{},candles=authHomeCandles(row),win=candles.slice(-63),first=win[0]||{},last=win[win.length-1]||{},start=authNumber(first.close==null?first.c:first.close),end=authNumber(last.close==null?last.c:last.close),change=start>0&&end!=null?(end/start-1)*100:null,coverage=history.coverage||{};
+  /* the stored history is range=max; the hero quotes a trailing ~3-month window so the label is true */
+  return {candles:candles,change:change,windowSessions:win.length,source:history.source||'history unavailable',freshness:history.freshness||'unavailable',coverage:authNumber(coverage.coveragePct),sessions:authNumber(coverage.availableSessions)||candles.length};}
 function authHomeOptionRows(row,spot){var chain=row&&row.chain||{},calls=Array.isArray(chain.calls)?chain.calls:[],puts=Array.isArray(chain.puts)?chain.puts:[],strikes={},key=function(value){return Number(value).toFixed(4);};calls.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).call=q;});puts.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).put=q;});var rows=Object.keys(strikes).map(function(k){return strikes[k];});rows.sort(function(a,b){return Math.abs(a.strike-spot)-Math.abs(b.strike-spot);});rows=rows.slice(0,9);rows.sort(function(a,b){return a.strike-b.strike;});return rows;}
-function authHomeBook(q){var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask);return bid==null||ask==null?'—':bid.toFixed(2)+' / '+ask.toFixed(2);}
-function authHomeChainHTML(row,spot,sym){var chain=row&&row.chain||{},rows=authHomeOptionRows(row,spot),exp=chain.expiration||row&&row.expirations&&row.expirations.expirations&&row.expirations.expirations[0],status=authExceptionStatus(chain.freshness);if(!rows.length)return '<div class="backendnotice">No current option-book rows are available for this symbol. Price history and research remain ready.</div>';return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows"'+(sym?' data-chain-sym="'+deskEsc(sym)+'"':'')+'>'+rows.map(function(r){return '<div class="authchainrow" data-chain-k="'+r.strike+'" title="Hover shows this strike on the price chart"><span>'+deskEsc(authHomeBook(r.call))+'</span><b class="'+(Math.abs(r.strike-spot)<=Math.max(1,spot*.006)?'atm':'')+'">'+Number(r.strike).toFixed(r.strike%1?1:0)+'</b><span>'+deskEsc(authHomeBook(r.put))+'</span></div>';}).join('')+'</div><div class="authreceipt">'+rows.length+' strikes nearest spot'+(status?' · '+deskEsc(status):'')+'</div>';}
+function authHomeBook(q){var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask);if(bid==null||ask==null)return '—';if(bid<=0&&ask<=0)return '—';return bid.toFixed(2)+' / '+ask.toFixed(2);}
+function authHomeChainHTML(row,spot,sym){var chain=row&&row.chain||{},rows=authHomeOptionRows(row,spot),exp=chain.expiration||row&&row.expirations&&row.expirations.expirations&&row.expirations.expirations[0],status=authExceptionStatus(chain.freshness);if(!rows.length)return '<div class="backendnotice">No live option chain rows for this symbol right now. Price history and research remain ready.</div>';return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows"'+(sym?' data-chain-sym="'+deskEsc(sym)+'"':'')+'>'+rows.map(function(r){return '<div class="authchainrow" data-chain-k="'+r.strike+'" title="Hover shows this strike on the price chart"><span>'+deskEsc(authHomeBook(r.call))+'</span><b class="'+(Math.abs(r.strike-spot)<=Math.max(1,spot*.006)?'atm':'')+'">'+Number(r.strike).toFixed(r.strike%1?1:0)+'</b><span>'+deskEsc(authHomeBook(r.put))+'</span></div>';}).join('')+'</div><div class="authreceipt">'+rows.length+' strikes around the current price'+(status?' · '+deskEsc(status):'')+'</div>';}
 /* ===== THE MARKET HISTORY INSTRUMENT =====================================================
    ONE interactive history chart for every surface (Home pulse, Decide market band, Position
    bloom, the future Market hero). One desk-wide lens state; each host is a window over the
@@ -5181,7 +5156,7 @@ function authHomeUnderlyingMatchesHTML(){
   var sectorMatches=query?authScoutSectorChoices().filter(function(row){return row.key.toLowerCase().indexOf(query)>=0||row.label.toLowerCase().indexOf(query)>=0;}).slice(0,3):[];
   var matches=query?symbols.filter(function(symbol){var known=univBy[symbol]||{};return symbol.toLowerCase().indexOf(query)>=0||String(known.name||'').toLowerCase().indexOf(query)>=0;}).slice(0,Math.max(0,6-sectorMatches.length)):[];
   var chosen=HOME_IDEA.symbol?'<div class="homeideachosen"><span><b>'+deskEsc(HOME_IDEA.symbol)+'</b> selected underlying</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
-  var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' governed optionable symbols</span><em>Scout →</em></button>';}).join('')+
+  var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Scan →</em></button>';}).join('')+
     matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(HOME_IDEA.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
   if(!query&&!chosen)return '<div class="homeideahelp">Type a ticker or company. Choosing a match only stages it; nothing loads until Analyze.</div>';
   if(query&&!rows)return chosen+'<div class="homeideahelp">No governed underlying or market sector matches “'+deskEsc(HOME_IDEA.query)+'”. Try another name or clear the Market lens.</div>';
@@ -5192,7 +5167,7 @@ function authOpportunityControlsHTML(){
   function scopeButton(key,label,count){return '<button type="button" class="'+(HOME_SCOUT.scope===key?'on':'')+'" data-auth-scout-scope="'+key+'" aria-pressed="'+(HOME_SCOUT.scope===key)+'">'+label+(count?' <small>'+count+'</small>':'')+'</button>';}
   function control(label,body,extra){return '<span class="opportunitycontrol objchip'+(extra?' '+extra:'')+'"><span class="ok">'+label+'</span><span class="oseg">'+body+'</span></span>';}
   function ideaButtons(label,key,values,current){return control(label,values.map(function(value){return '<button type="button" class="'+(String(current).toLowerCase()===String(value).toLowerCase()?'on':'')+'" data-auth-workbench-'+key+'="'+deskEsc(value)+'" aria-pressed="'+(String(current).toLowerCase()===String(value).toLowerCase())+'">'+deskEsc(value)+'</button>';}).join(''));}
-  return '<div class="opportunitycontrols" aria-label="Find and shape controls">'+control('Field',scopeButton('broad','Broad market',Array.isArray(broad.symbols)?broad.symbols.length:0)+scopeButton('active','Active universe',Array.isArray(active.symbols)?active.symbols.length:0))+
+  return '<div class="opportunitycontrols" aria-label="Scan and idea controls">'+control('Market',scopeButton('broad','Broad market',Array.isArray(broad.symbols)?broad.symbols.length:0)+scopeButton('active','Active names',Array.isArray(active.symbols)?active.symbols.length:0))+
     control('Goal',goals.map(function(row){return '<button type="button" class="'+(HOME_SCOUT.goal===row[0]?'on':'')+'" data-auth-scout-goal="'+row[0]+'" aria-pressed="'+(HOME_SCOUT.goal===row[0])+'">'+row[1]+'</button>';}).join(''),'goals')+
     ideaButtons('View','view',['Bearish','Neutral','Bullish'],HOME_IDEA.view)+
     ideaButtons('Horizon','horizon',['7 days','30 days','45 days'],HOME_IDEA.horizon)+
@@ -5201,45 +5176,43 @@ function authOpportunityControlsHTML(){
 function authScoutIdleFieldHTML(){
   var described=authoritativeUniverse()||{},scope=HOME_SCOUT.scope==='broad'?described.scout:described.active,symbols=scope&&Array.isArray(scope.symbols)?scope.symbols.map(function(v){return String(v||'').toUpperCase();}):[];
   var sectors=authScoutSectorChoices(),selectedSector=sectors.find(function(row){return String(row.key)===String(HOME_SCOUT.sector||'');}),fieldCount=selectedSector?selectedSector.count:symbols.length;
-  var sourceLabel=scope&&String(scope.label||scope.source||'governed universe'),marketLabel=selectedSector?selectedSector.label:'All markets';
-  var goalReads={INCOME:'Compare premium compensation, variance-risk premium, event exposure, liquidity, and capital efficiency—while after-cost EV keeps endorsement authority.',DIRECTIONAL:'Find packages whose direction, horizon, executable price, and realistic after-cost outcomes agree.',ACQUIRE:'For one underlying, your declared price and quantity govern direct delivery, capped-risk verticals, and a protected put calendar. Field Scout compares each symbol at its own canonical acquisition levels before you shape an exact price.',HEDGE:'Rank protection by the risk it actually offsets, its executable cost, event window, and destination-Book effect.',EXIT:'Find basis-aware exit or overwrite packages without turning a challenged holding into a hidden new bet.'};
+  var marketLabel=selectedSector?selectedSector.label:'Broad market';
+  var goalReads={INCOME:'Premium income ranked by expected profit after real trading costs — the richest-looking premium never outranks sound economics.',DIRECTIONAL:'Direction, horizon, and the prices you can actually get must all agree before a package ranks.',ACQUIRE:'Your price and share count drive cash-secured puts, capped-risk spreads, and calendars for getting the stock cheaper.',HEDGE:'Protection ranked by the risk it actually offsets and what it really costs to hold.',EXIT:'Basis-aware exits and overwrites for what you already hold — never a hidden new bet.'};
   var acquire=HOME_SCOUT.goal==='ACQUIRE'?'<div class="homeacquirefields"><label><span>Buy at or below</span><input type="number" min="0.01" step="0.01" value="'+(HOME_IDEA.targetCents==null?'':(Number(HOME_IDEA.targetCents)/100).toFixed(2))+'" placeholder="Price" data-auth-workbench-target></label><label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(HOME_IDEA.holdingsShares==null?'':deskEsc(HOME_IDEA.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label></div>':'';
   var ready=!!HOME_IDEA.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
-  return '<div class="scoutidlefield"><section class="scoutidlecard"><div class="lenshd sub"><span class="eyebrow">One field · two useful actions</span><span class="hint">'+symbols.length+' optionable symbols · server owned</span></div>'+
-    '<label class="homeideasearch"><span>Underlying or company</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type NVDA, XOM, healthcare…" autocomplete="off" data-auth-workbench-query></label><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire+
-    '<div class="scoutfieldreceipt"><span>Market lens<b>'+deskEsc(marketLabel)+' · '+fieldCount+' symbols</b></span><span>Governed source<b>'+deskEsc(sourceLabel)+'</b></span><em>Choose any sector in the persistent Market lens above, or type its name here. Market and Scout remain visible together.</em></div>'+
-    '<div class="scoutgoalread"><b>'+authHuman(HOME_SCOUT.goal)+' lens.</b> '+deskEsc(goalReads[HOME_SCOUT.goal]||goalReads.INCOME)+'</div>'+
-    '<div class="homeworkbenchactions"><button type="button" class="btn pri" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Choose an underlying')+' →</button><span>Exact idea uses these same declarations; field scan ranks the whole selected market or sector.</span></div></section></div>';
+  return '<div class="scoutidlefield"><section class="scoutidlecard"><div class="lenshd sub"><span class="eyebrow">'+deskEsc(marketLabel)+'</span><span class="hint">'+fieldCount+' optionable symbols</span></div>'+
+    '<label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type NVDA, XOM, healthcare…" autocomplete="off" data-auth-workbench-query></label><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire+
+    '<div class="scoutgoalread"><b>'+authHuman(HOME_SCOUT.goal)+'.</b> '+deskEsc(goalReads[HOME_SCOUT.goal]||goalReads.INCOME)+'</div>'+
+    '<div class="homeworkbenchactions"><button type="button" class="btn pri" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Choose an underlying')+' →</button><span>Scan ranks the whole field; Analyze opens one exact idea with these same settings.</span></div></section></div>';
 }
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?'<div class="scoutactivegrid">'+authScoutIdleFieldHTML()+'<section class="scoutresultcard">'+body+'</section></div>':body)+'</div>';
 }
 function authOpportunityRowHTML(symbol,name,detail,value,ev){
   symbol=String(symbol||'').toUpperCase();
-  return '<button type="button" class="opportunityrow" data-auth-analyze-symbol="'+deskEsc(symbol)+'" aria-label="Analyze '+deskEsc(symbol)+' in New idea"><strong>'+deskEsc(symbol||'—')+'</strong><span><b>'+deskEsc(name||'No package cleared this scan')+'</b><small>'+deskEsc(detail||'Complete receipts unavailable')+'</small></span><em class="'+(ev==null?'':ev>=0?'pos':'neg')+'">'+deskEsc(value||'—')+'</em><span class="opportunitygo">Analyze →</span></button>';
+  return '<button type="button" class="opportunityrow" data-scroll-row data-auth-analyze-symbol="'+deskEsc(symbol)+'" aria-label="Analyze '+deskEsc(symbol)+' in New idea"><strong>'+deskEsc(symbol||'—')+'</strong><span><b>'+deskEsc(name||'No package cleared this scan')+'</b><small>'+deskEsc(detail||'Complete receipts unavailable')+'</small></span><em class="'+(ev==null?'':ev>=0?'pos':'neg')+'">'+deskEsc(value||'—')+'</em><span class="opportunitygo">Analyze →</span></button>';
 }
 function authPartialOpportunityRowsHTML(picks){
   return (Array.isArray(picks)?picks.slice():[]).sort(function(a,b){return Number(b&&b.opportunity&&b.opportunity.score||0)-Number(a&&a.opportunity&&a.opportunity.score||0);}).slice(0,5).map(function(pick){var idea=pick.bestIdea||{},opportunity=pick.opportunity||{},priced=idea.available===true||!!idea.family||!!idea.displayName,ev=authNumber(idea.realizedVolEvAfterCostsCents),score=authNumber(opportunity.score),value=ev==null?(score==null?'receipts pending':Math.round(score)+' signal'):(ev>=0?'+':'')+authMoney(ev/100)+' EV',detail=priced?[idea.economicVerdict&&authHuman(idea.economicVerdict),idea.horizon&&authHuman(idea.horizon),'Book checks pending'].filter(Boolean).join(' · '):'Evidence ranked · exact package pricing pending';return authOpportunityRowHTML(pick.symbol,priced?idea.displayName:'Evidence ready',detail,value,ev);}).join('');
 }
 function authHomeStrategyFieldHTML(){
+  /* One honest sentence, not an inert list — the catalog itself lives in New idea. */
   var data=BOOK_AUTH.data||{},bridge=window.DeskBackend&&window.DeskBackend.state&&window.DeskBackend.state(),
     doc=data.strategyCatalog||bridge&&bridge.strategyCatalog,entries=doc&&Array.isArray(doc.catalog)?doc.catalog:[],intent=String(HOME_SCOUT.goal||'INCOME').toUpperCase();
-  if(!entries.length)return '<div class="homecatalogfield"><div class="lenshd sub"><span class="eyebrow">Strategy coverage · canonical catalog</span></div><div class="backendnotice">The server-owned strategy catalog is unavailable; Scout will not invent a family list.</div></div>';
+  if(!entries.length)return '<div class="homecatalogline warn">The strategy catalog is unavailable right now; the scan will not guess a family list.</div>';
   var applicable=entries.filter(function(entry){return entry&&entry.recommendationEnabled!==false&&!entry.blockedByDefault&&Array.isArray(entry.intents)&&entry.intents.indexOf(intent)>=0;}).sort(function(a,b){return Number(a.foundationalRank||99)-Number(b.foundationalRank||99);});
-  var representative=[],priority=[/CREDIT_PUT_SPREAD/,/(?:CREDIT|DEBIT)_CALL_SPREAD/,/CALENDAR_/,/CASH_SECURED_PUT/];
-  priority.forEach(function(pattern){var match=applicable.find(function(entry){return pattern.test(String(entry.name||''))&&representative.indexOf(entry)<0;});if(match)representative.push(match);});
-  applicable.forEach(function(entry){if(representative.indexOf(entry)<0)representative.push(entry);});
-  var rows=representative.map(function(entry){var state=entry.needsStock?'shares':entry.multiExpiration?'time spread':entry.definedRisk?'defined risk':'supported',detail=[entry.category,state].filter(Boolean).join(' · ');return '<div class="catalogrow homecatalogrow" title="'+deskEsc(entry.summary||'')+'"><svg class="catalogshape" viewBox="0 0 64 30" aria-hidden="true"><polyline points="'+deskEsc(entry.payoffShape||'2,15 62,15')+'"/></svg><span class="catalogcopy"><b>'+deskEsc(entry.display||authHuman(entry.name))+'</b><small>'+deskEsc(detail)+'</small></span><span class="catalogstate">eligible</span></div>';}).join('');
-  return '<div class="homecatalogfield"><div class="lenshd sub"><span class="eyebrow">Strategy coverage · canonical catalog</span><span class="hint">'+applicable.length+' '+deskEsc(authHuman(intent).toLowerCase())+' families</span></div><div class="homecataloglist">'+(rows||'<div class="backendnotice">No recommendation-enabled family is mapped to this goal.</div>')+'</div><div class="homecatalogfoot">'+applicable.length+' supported for this goal; exact chain, evidence, risk, and Book checks decide which can rank.</div></div>';
+  if(!applicable.length)return '<div class="homecatalogline warn">No supported structure is mapped to this goal.</div>';
+  var names=applicable.slice(0,3).map(function(entry){return String(entry.display||authHuman(entry.name)).toLowerCase();});
+  return '<div class="homecatalogline">'+applicable.length+' structures compete for '+deskEsc(authHuman(intent).toLowerCase())+' — '+deskEsc(names.join(', '))+(applicable.length>names.length?', and more':'')+'. Live prices, evidence, risk, and your Book decide the ranking.</div>';
 }
 function authOpportunityHTML(expanded){
   var state=HOME_OPPORTUNITY;
-  var controls=authOpportunityControlsHTML(),goal=authHuman(HOME_SCOUT.goal).toLowerCase(),scope=HOME_SCOUT.scope==='broad'?'cross-sector opportunity universe':'active universe',sector=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector)+' within the ':'';
+  var controls=authOpportunityControlsHTML(),goal=authHuman(HOME_SCOUT.goal).toLowerCase(),scope=HOME_SCOUT.scope==='broad'?'broad market':'active names',sector=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector)+' within the ':'';
   if(state.phase==='loading'){
     var progress=state.progress||{},completed=Math.max(0,Number(progress.completed||0)),total=Math.max(1,Number(progress.total||1)),phase=authHuman(progress.phase||'starting'),partial=authPartialOpportunityRowsHTML(state.partial);
     var progressBlock='<div class="scoutprogress" role="status"><meter min="0" max="'+total+'" value="'+Math.min(total,completed)+'"></meter><b>'+completed+' / '+total+'</b><span>'+deskEsc((progress.symbol?progress.symbol+' · ':'')+(progress.message||phase))+'</span></div>';
-    var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'<div class="scoutwaiting">The first usable evidence row will appear as soon as one symbol completes; exact package pricing follows in the same stream.</div>';
-    var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Results appear as each symbol completes; the final ordering waits for destination-Book gates.</span><button class="btn scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
+    var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'<div class="scoutwaiting">Rows appear as soon as the first symbol completes; exact pricing follows in the same stream.</div>';
+    var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Rows appear as each symbol completes; the final order waits for the Book-fit checks.</span><button class="btn scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
     return authOpportunityShell(expanded,controls,loading);
   }
   if(state.phase==='error')return authOpportunityShell(expanded,controls,'<div class="opportunityprompt"><span>'+deskEsc(state.error||'The opportunity scan could not finish.')+'</span><button class="btn scoutprimary" data-auth-opportunity-scan>Try scan again →</button></div>');
@@ -5261,30 +5234,25 @@ function authOpportunityHTML(expanded){
       return authOpportunityRowHTML(entry.symbol||pick.symbol,idea.displayName||authHuman(entry.strategy),detail,value,ev);
     }).join('');
     var compensation=frontier&&Array.isArray(frontier.compensationRanking)?frontier.compensationRanking:(Array.isArray(state.data.compensation)?state.data.compensation:[]),comp=compensation.slice(0,2).map(function(row){var components=Array.isArray(row.components)?row.components:[],premium=components.find(function(component){return /annualized premium yield/i.test(String(component.name||''));}),note=premium&&premium.note||'Compensation score remains separate from decision economics.';return '<b title="'+deskEsc(note)+'">'+deskEsc(row.symbol||'—')+' '+Math.round(authNumber(row.score)||0)+(premium&&premium.note?'<small>'+deskEsc(premium.note)+'</small>':'')+'</b>';}).join('<em>·</em>');
-    var scope=frontier&&frontier.universe||{},scopeSymbols=Array.isArray(scope.symbols)?scope.symbols.length:authNumber(state.data.searched),scopeHint=(scopeSymbols==null?'active universe':scopeSymbols+' symbols')+' · '+deskEsc(scope.source||'server configured');
-    var notes=frontier&&Array.isArray(frontier.notes)?frontier.notes:[],read=notes[0]||(favorable?'At least one package has favorable after-cost economics and survives the destination Book checks.':'No package cleared a favorable after-cost edge. Capital remains optional; choose a row to inspect the receipt.');
-    var compensationRead=comp?(expanded?'<div class="opportunitycomp"><span>Compensation — separate view</span>'+comp+'<em>never overrides decision economics</em></div>':'<div class="opportunitycompactreceipt"><b>Compensation stays separate</b><span>Rich carry never promotes adverse decision economics.</span></div>'):'';
+    var scope=frontier&&frontier.universe||{},scopeSymbols=Array.isArray(scope.symbols)?scope.symbols.length:authNumber(state.data.searched),scopeHint=scopeSymbols==null?'scanned field':scopeSymbols+' symbols scanned';
+    var notes=frontier&&Array.isArray(frontier.notes)?frontier.notes:[],read=notes[0]||(favorable?'At least one package is worth opening after costs and fits your Book.':'Nothing cleared a favorable after-cost edge today. Keeping your cash is a fine outcome; open any row to see why.');
+    var compensationRead=comp?(expanded?'<div class="opportunitycomp"><span>Premium richness · separate view</span>'+comp+'<em>high premium alone never outranks sound economics</em></div>':'<div class="opportunitycompactreceipt"><b>Premium richness stays separate</b><span>High premium alone never promotes a bad trade.</span></div>'):'';
     var footerRead=expanded?read:(displayed.length+' ranked package'+(displayed.length===1?'':'s')+' · choose Analyze for exact legs and receipts');
-    return authOpportunityShell(expanded,controls,'<div class="lenshd sub"><span class="eyebrow">'+deskEsc(scope.label||'Opportunity frontier')+'</span><span class="hint">'+scopeHint+'</span></div><div class="opportunityrows">'+(rows||'<div class="backendnotice">No optionable package cleared this scan. Capital optionality remains available.</div>')+'</div>'+compensationRead+'<div class="authpulsefoot"><span>'+deskEsc(footerRead)+'</span><button class="btn xs" data-auth-opportunity-scan>Refresh scan</button></div>');
+    return authOpportunityShell(expanded,controls,'<div class="lenshd sub"><span class="eyebrow">'+deskEsc(scope.label||'Opportunity frontier')+'</span><span class="hint">'+scopeHint+'</span></div><div class="opportunityrows">'+(rows||'<div class="backendnotice">No optionable package cleared this scan. Your cash stays available.</div>')+'</div><div class="overflowmeta rowsoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>'+compensationRead+'<div class="authpulsefoot"><span>'+deskEsc(footerRead)+'</span><button class="btn xs" data-auth-opportunity-scan>Refresh scan</button></div>');
   }
   var prompt=expanded
-    ? 'Find '+goal+' opportunities across '+sector+'the '+scope+'—after costs, with compensation, evidence quality, and Book fit kept distinct.'
-    : 'Rank '+goal+' opportunities now; EV, compensation, evidence, and Book fit stay separate.';
+    ? 'Find '+goal+' opportunities across '+sector+'the '+scope+', ranked by expected profit after real trading costs.'
+    : 'Rank '+goal+' opportunities now, after real trading costs.';
   var scanLabel=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector):HOME_SCOUT.scope==='broad'?'the broad market':'the active universe';
   if(expanded){
     var described=authoritativeUniverse()||{},selectedScope=HOME_SCOUT.scope==='broad'?described.scout:described.active,selectedSymbols=selectedScope&&Array.isArray(selectedScope.symbols)?selectedScope.symbols.length:0;
-    var start='<div class="scoutstart"><div class="lenshd sub"><span class="eyebrow">Ready to scan</span><span class="hint">'+selectedSymbols+' symbols · '+deskEsc(authHuman(HOME_SCOUT.goal))+'</span></div><div class="scoutstartgrid">'+
-      authHomeStrategyFieldHTML()+'<div class="scoutguardrails" aria-label="Scout ranking receipt">'+
-      '<span><b>Economics</b>after costs</span>'+
-      '<span><b>Evidence</b>events explicit</span>'+
-      '<span><b>Compensation</b>kept separate</span>'+
-      '<span><b>Book fit</b>applied last</span></div>'+
-      '</div><div class="scoutlaunch"><span>'+deskEsc(prompt)+' A scan that finds nothing worth opening still preserves capital optionality.</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div></div>';
+    var start='<div class="scoutstart"><div class="lenshd sub"><span class="eyebrow">Ready to scan</span><span class="hint">'+selectedSymbols+' symbols · '+deskEsc(authHuman(HOME_SCOUT.goal))+'</span></div><div class="scoutstartgrid">'+authHomeStrategyFieldHTML()+'</div><div class="scoutlaunch"><span>'+deskEsc(prompt)+' Finding nothing worth opening is a good outcome too — you keep your cash.</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div></div>';
     return authOpportunityShell(true,controls,start);
   }
   return authOpportunityShell(false,controls,'<div class="opportunityprompt"><span>'+deskEsc(prompt)+'</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div>');
 }
-function authRenderOpportunityOnly(){var host=document.getElementById('authHomeOpportunity')||document.getElementById('authEmptyOpportunity');if(host)host.innerHTML=authOpportunityHTML(true);}
+function authRenderOpportunityOnly(){var host=document.getElementById('authHomeOpportunity')||document.getElementById('authEmptyOpportunity');if(!host)return;host.innerHTML=authOpportunityHTML(true);
+  window.requestAnimationFrame(function(){var rows=host.querySelector('.opportunityrows');if(rows)bindElegantList(rows,'.opportunityrow',rows.parentElement&&rows.parentElement.querySelector('.rowsoverflowmeta'));});}
 function authRenderOpportunityFrame(){authRenderOpportunityOnly();}
 function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=window.requestAnimationFrame(function(){HOME_SCOUT_RAF=0;authRenderOpportunityOnly();});}
 function authResetOpportunity(){HOME_SCOUT_SEQ++;HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};authRenderOpportunityFrame();}
@@ -5381,28 +5349,40 @@ function setBookFanHot(id){
   if(id&&cardEl[id])cardEl[id].classList.add('fanhot');
   renderAuthoritativeBookFan();}
 function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=authWorkingPlanRows(d),ctx=d.homeContext||{},rows=authHomeContextRows(d),symbols=ctx.symbols||rows.map(function(row){return row.symbol;}),available=rows.map(function(row){return row.symbol;});
-  var emptyHome=stageEl&&stageEl.getAttribute('data-book-authority')==='empty';
-  if(!HOME_AUTH_SYMBOL||available.indexOf(HOME_AUTH_SYMBOL)<0)HOME_AUTH_SYMBOL=available[0]||symbols[0]||null;
+  if(!HOME_AUTH_SYMBOL||available.indexOf(HOME_AUTH_SYMBOL)<0&&symbols.indexOf(HOME_AUTH_SYMBOL)<0){
+    /* Default the detailed subject to the broad market (or the backend's declared detail),
+       never to whichever owned position happens to sort first. Deliberate focus stays stable.
+       The bare symbol list stands in before the first quote rows arrive, so the very first
+       paint already has the right subject instead of latching onto the first owned name. */
+    var detailPool=(available.length?available:symbols.map(function(s){return String(s||'').toUpperCase();})),
+      detailPrefs=[ctx.detailSymbol,'SPY','QQQ','DIA','IWM'].map(function(s){return s?String(s).toUpperCase():null;});
+    HOME_AUTH_SYMBOL=detailPrefs.find(function(s){return s&&detailPool.indexOf(s)>=0;})||detailPool[0]||null;
+  }
   var active=authHomeContextRow(d,HOME_AUTH_SYMBOL),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
   var marketBody;if(phase==='loading'&&(!active||!active.research))marketBody='<div class="backendnotice">Loading the active market watch in the background. Book actions are ready now.</div>';
   else if(!active||!active.research)marketBody='<div class="backendnotice">Market context is unavailable for '+deskEsc(HOME_AUTH_SYMBOL||'the active universe')+'. Your account and working ideas remain usable.</div>';
   else {var ch=quote.pct==null?'—':(quote.pct>=0?'+':'')+quote.pct.toFixed(2)+'%',chcls=quote.pct==null?'':quote.pct>=0?'pos':'neg',historyRead=authHomeHistoryRead(active),historyChange=historyRead.change==null?'—':(historyRead.change>=0?'+':'')+historyRead.change.toFixed(1)+'%';
     /* one hero line carries the facts inline — the chart is this panel's body and gets the height */
     marketBody='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(active.symbol)+'</span><span class="amh-change '+chcls+'">'+deskEsc(ch)+' vs close</span>'+
-      '<span class="amh-facts"><span>IV <b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></span><span>3M <b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></span><span>'+deskEsc(quote.basis)+'</span></span>'+
+      '<span class="amh-facts"><span>IV <b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></span><span>'+(historyRead.windowSessions>=60?'3M':historyRead.windowSessions+' sessions')+' <b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></span><span>'+deskEsc(quote.basis)+'</span></span>'+
       '<b class="amh-price">'+deskEsc(authHomePrice(quote.price))+'</b></div>'+
-      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask · nine nearest'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+authHomeChainHTML(active,quote.price||0,active.symbol)+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Shape '+deskEsc(active.symbol)+'</button></div>';}
-  document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market pulse &amp; chain</span><span class="hint">price action · volatility · options</span></div>'+marketBody+'</div>';
-  var planRows=plans.slice(0,4).map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});if(plans.length>4)planRows.push('<div class="authmore">+'+(plans.length-4)+' more working ideas · open New idea to search them</div>');
-  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+(planRows.length?authRowsHTML(planRows,''):'<div class="authrosterempty"><b>No working ideas yet</b><p>Scout above can seed one from a ranked opportunity, or choose an underlying directly without a hidden default.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Choose an underlying</button></div></div>')+'</div>';
-  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchLimit=emptyHome?8:6,watchRows=watchSource.slice(0,watchLimit).map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(authHomePrice(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Shape →</button></div>';});if(watchSource.length>watchLimit)watchRows.push('<div class="authmore">+'+(watchSource.length-watchLimit)+' more lenses · use the market lens above</div>');
-  document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Markets · sectors · your focus</span><span class="hint">'+watchSource.length+' live lenses'+(sectorLens&&sectorLens.available?' · '+deskEsc(sectorLens.label):'')+'</span></div>'+sectorNotice+'<div class="authmarketwatch">'+(watchRows.join('')||'<div class="backendnotice">No prices are available for the active market watch.</div>')+'</div></div>';
-  /* a news panel is HEADLINES — no stat cards counting what we loaded */
-  var allNews=authHomeNewsItems(active),newsLimit=emptyHome?5:3,newsItems=allNews.slice(0,newsLimit),newsRows=newsItems.map(function(item){var url=authHomeUrl(item.url),meta=[item.source,item.classification?authHuman(item.classification):null].filter(Boolean).join(' · ');return url?'<a href="'+deskEsc(url)+'" target="_blank" rel="noopener noreferrer">'+deskEsc(item.headline||'Untitled source item')+'<small>'+deskEsc(meta)+'</small></a>':'<div class="authlistrow"><span class="authrowmain"><b>'+deskEsc(item.headline||'Untitled source item')+'</b><small>'+deskEsc(meta)+'</small></span><span></span></div>';});if(allNews.length>newsLimit)newsRows.push('<div class="authmore">+'+(allNews.length-newsLimit)+' more headlines · open Market in New idea</div>');
+      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+authHomeChainHTML(active,quote.price||0,active.symbol)+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Shape '+deskEsc(active.symbol)+'</button></div>';}
+  document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market</span>'+authHomeSectorChipsHTML()+'</div>'+marketBody+'</div>';
+  var planRows=plans.map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-scroll-row data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title||authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});
+  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+(planRows.length?'<div class="authlist elegantscroll" id="homePlansList">'+planRows.join('')+'</div><div class="overflowmeta planoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>':'<div class="authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
+  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(authHomePrice(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Shape →</button></div>';});
+  document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Watchlist</span><span class="hint">'+watchSource.length+' markets'+(sectorLens&&sectorLens.available?' · '+deskEsc(sectorLens.label):'')+'</span></div>'+sectorNotice+'<div class="authmarketwatch elegantscroll" id="homeWatchList">'+(watchRows.join('')||'<div class="backendnotice">No prices are available for the active market watch.</div>')+'</div><div class="overflowmeta watchoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div></div>';
+  /* a news panel is HEADLINES — every one reachable through the elegant list, none amputated */
+  var allNews=authHomeNewsItems(active),newsRows=allNews.map(function(item){var url=authHomeUrl(item.url),meta=[item.source,item.classification?authHuman(item.classification):null].filter(Boolean).join(' · ');return url?'<a data-scroll-row href="'+deskEsc(url)+'" target="_blank" rel="noopener noreferrer">'+deskEsc(item.headline||'Untitled source item')+'<small>'+deskEsc(meta)+'</small></a>':'<div class="authlistrow" data-scroll-row><span class="authrowmain"><b>'+deskEsc(item.headline||'Untitled source item')+'</b><small>'+deskEsc(meta)+'</small></span><span></span></div>';});
   var newsEmpty=phase==='loading'?'Research headlines are loading without blocking the Book.':active?'No current headlines were returned for '+active.symbol+'.':'Choose a market symbol to see its research.';
-  document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research &amp; news</span><span class="hint">'+deskEsc(HOME_AUTH_SYMBOL||'market context')+(active&&active.research&&active.research.regime&&active.research.regime.headline?'':'')+'</span></div><div class="authhomenews">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+'</div>')+'</div></div>';
-  wireAuthoritativeHome();if(active)window.requestAnimationFrame(function(){drawAuthoritativeHomeHistory(active);});}
-function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};});authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
+  document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research &amp; news</span><span class="hint">'+deskEsc(HOME_AUTH_SYMBOL||'market context')+(allNews.length?' · '+allNews.length+' headline'+(allNews.length===1?'':'s'):'')+'</span></div><div class="authhomenews elegantscroll" id="homeNewsList">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+'</div>')+'</div><div class="overflowmeta newsoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div></div>';
+  wireAuthoritativeHome();window.requestAnimationFrame(function(){if(active)drawAuthoritativeHomeHistory(active);authBindHomeLists();});}
+function authBindHomeLists(){
+  [['homeWatchList','.authmarketrow'],['homeNewsList','[data-scroll-row]'],['homePlansList','.authlistrow']].forEach(function(cfg){
+    var node=document.getElementById(cfg[0]);
+    if(node)bindElegantList(node,cfg[1],node.parentElement&&node.parentElement.querySelector('.overflowmeta'));
+  });}
+function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};}),listScrolls=['homeWatchList','homeNewsList','homePlansList'].map(function(id){var node=document.getElementById(id);return node?{id:id,top:node.scrollTop}:null;}).filter(Boolean);authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});listScrolls.forEach(function(row){var node=document.getElementById(row.id);if(node)node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
 function authShareInventoryHTML(shares){if(!shares.length)return '';var rows=shares.slice(0,2).map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),unreal=authDollarsFromCents(row.unrealizedCents),symbol=String(row.symbol||'—').toUpperCase();return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(symbol)+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(symbol)+'">Shape</button></div>';});if(shares.length>2)rows.push('<div class="authmore">+'+(shares.length-2)+' more share lines · Book retains the complete inventory</div>');return '<div class="homeoneshares"><div class="lenshd sub"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' line'+(shares.length===1?'':'s')+'</span></div><div class="authlist">'+rows.join('')+'</div></div>';}
 /* ===== Book-level possible futures — one renderer, two explicitly different artifacts:
    the Book total comes only from the synchronized multi-symbol artifact in BookRiskService;
@@ -5466,10 +5446,10 @@ function authLoadBookFan(){
   })(0);
 }
 function authBookFanLegendHTML(){
-  var joint=authJointBookFan(),book='';if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1];book='<div class="bookfanrow booktotal" title="'+deskEsc(joint.basis||'Synchronized measured Book paths')+'"><i></i><b>BOOK</b><span>synchronized total</span><em><b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(joint.chance==null?'':' <small>'+joint.chance.toFixed(0)+'% gain odds</small>')+'</em></div>';}
-  else book='<div class="bookfanrow booktotal unavailable" title="'+deskEsc(joint.error||'Measured Book unavailable')+'"><i></i><b>BOOK</b><span>joint total unavailable</span><em><small class="warn">local evidence</small></em></div>';
+  var joint=authJointBookFan(),book='';if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1];book='<div class="bookfanrow booktotal" title="'+deskEsc(joint.basis||'All positions measured together')+'"><i></i><b>BOOK</b><span>everything together</span><em><b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(joint.chance==null?'':' <small>'+joint.chance.toFixed(0)+'% gain odds</small>')+'</em></div>';}
+  else book='<div class="bookfanrow booktotal unavailable" title="'+deskEsc(joint.error||'Measured Book unavailable')+'"><i></i><b>BOOK</b><span>whole-book view unavailable</span><em><small class="warn">needs more data</small></em></div>';
   var rows=POS.map(function(p){var slot=BOOK_FAN.rows[p.id]||{},color=positionColor(p.id),hot=String(BOOK_FAN.hot||'')===String(p.id);
-    var value=slot.phase==='ready'?(function(){var terminal=slot.frames[slot.frames.length-1];return '<b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(slot.chance==null?'':' <small>'+slot.chance.toFixed(0)+'% gain odds</small>');})():
+    var value=slot.phase==='ready'?(function(){var terminal=slot.frames[slot.frames.length-1];return '<b class="'+(terminal.p50>=0?'pos':'neg')+'">'+signed(terminal.p50)+'</b>'+(slot.chance==null?'':' <small title="chance this position ends in profit">'+slot.chance.toFixed(0)+'%</small>');})():
       slot.phase==='loading'?'<small>loading…</small>':'<small class="warn" title="'+deskEsc(slot.error||'unavailable')+'">no stored fan</small>';
     return '<button type="button" class="bookfanrow'+(hot?' hot':'')+'" data-fan-pos="'+deskEsc(p.id)+'" aria-label="Open '+deskEsc(p.sym)+'"><i style="background:'+color+'"></i><b>'+deskEsc(p.sym)+'</b><span>'+deskEsc(p.struct)+'</span><em>'+value+'</em></button>';
   }).join('');
@@ -5480,8 +5460,8 @@ function authBookFanLegendHTML(){
     authMetric('Expiry',expiration||'—')+'</div>';}
   return book+rows;
 }
-function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Book total · synchronized measured paths','median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('P5 '+signed(terminal.p5)+' → P95 '+signed(terminal.p95));parts.push('colored position projections are independent · hover to inspect');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored position projections remain independent and are never summed';}
-function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'book total = synchronized paths · colors = independent positions':'independent position projections · never summed';}
+function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Whole book · median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('P5 '+signed(terminal.p5)+' → P95 '+signed(terminal.p95));parts.push('hover a colored path for that position');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored paths are single-position projections';}
+function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'BOOK line = everything together · colors = single positions':'single-position projections · never summed';}
 function bookFanReadoutText(id){
   var p=byId[id],slot=BOOK_FAN.rows[id];
   if(!p||!slot||slot.phase!=='ready'||!slot.frames.length)return bookFanPrompt();
@@ -5489,7 +5469,7 @@ function bookFanReadoutText(id){
   parts.push('median '+signed(terminal.p50));
   if(terminal.p10!=null&&terminal.p90!=null)parts.push('P10 '+signed(terminal.p10)+' → P90 '+signed(terminal.p90));
   if(slot.chance!=null)parts.push(slot.chance.toFixed(0)+'% chance of gain');
-  parts.push(Math.round(terminal.x)+' sessions · its own stored fan');
+  parts.push(Math.round(terminal.x)+' sessions');
   return parts.join(' · ');
 }
 function renderAuthoritativeBookFan(){
@@ -5603,10 +5583,10 @@ function authBookFuturesPanelHTML(){
 }
 function authRenderReadyPanels(empty){
   if(empty){
-    document.getElementById('riskMain').innerHTML='<div class="authbookpanel emptyopportunitypanel homeworkbenchpanel"><div class="emptyopportunityintro"><div><span>Find &amp; shape · canonical decision engine</span><h2>Study a field or shape one exact idea</h2><p>Choose one underlying without leaving the desk, or scan a market or sector through the same goal, view, horizon, risk, economics, evidence, and destination-Book controls.</p></div><span>user-triggered · no silent provider spend</span></div><div id="authHomeOpportunity"></div></div>';
+    document.getElementById('riskMain').innerHTML='<div class="authbookpanel emptyopportunitypanel homeworkbenchpanel"><div class="emptyopportunityintro"><div><span>Start here</span><h2>Scan a market or shape one exact idea</h2><p>Pick a goal and scan a whole market or sector, or type one ticker and analyze it. Nothing loads until you ask.</p></div><span>scans run only when you ask</span></div><div id="authHomeOpportunity"></div></div>';
     document.getElementById('bookrisk').innerHTML='';
   }else{
-    document.getElementById('riskMain').innerHTML='<div class="authbookpanel emptyopportunitypanel homeworkbenchpanel"><div class="emptyopportunityintro"><div><span>Find &amp; shape · canonical decision engine</span><h2>Study a field or shape one exact idea</h2><p>One permanent workbench owns the underlying or sector, goal, view, horizon, and risk. Scan progressively or analyze the staged underlying without a second dialog.</p></div><span>market and Book stay in view</span></div><div id="authHomeOpportunity"></div></div>';
+    document.getElementById('riskMain').innerHTML='<div class="authbookpanel homeworkbenchpanel"><div class="lenshd"><span class="eyebrow">Find your next trade</span><span class="hint">scan a market or analyze one ticker · runs only when you ask</span></div><div id="authHomeOpportunity"></div></div>';
     document.getElementById('bookrisk').innerHTML=authBookFuturesPanelHTML();
   }
   authRenderMarketPanels();
@@ -6033,10 +6013,6 @@ function renderSummary(){
 }
 function wireLanding(){
   var imb=document.getElementById('importBtn'); if(imb) imb.onclick=function(){ openImport(imb.getBoundingClientRect()); };
-  var homeSector=document.querySelector('[data-auth-home-sector-select]');if(homeSector)homeSector.onchange=function(){
-    var nextSector=homeSector.value||null;if(nextSector===HOME_SCOUT.sector)return;
-    HOME_SCOUT.sector=nextSector;authResetOpportunity();focusSector(nextSector);
-  };
   /* (book risk is folded into Home as an always-visible band — the old '◈ Book risk' overlay is gone) */
   /* simulated-market controls (present only in sim mode) */
   var sw=summaryEl.querySelectorAll('[data-simworld]');

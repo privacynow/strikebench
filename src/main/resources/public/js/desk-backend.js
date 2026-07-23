@@ -2770,8 +2770,17 @@
    * account summary behind provider latency. Hydrate the bounded set of Plan symbols after the
    * core Book receipt has rendered, then publish one same-world additive update.
    */
+  function homeDetailSymbol(symbols) {
+    /* The default detailed subject is the broad market, never whichever owned
+       position happens to sort first. A deliberate focus bypasses this picker. */
+    var prefs = ['SPY', 'QQQ', 'DIA', 'IWM'];
+    for (var i = 0; i < prefs.length; i++) if (symbols.indexOf(prefs[i]) >= 0) return prefs[i];
+    return symbols[0];
+  }
+
   async function hydrateBookContext(seq, contextSeq, before, data, symbols) {
     if (!symbols.length) return;
+    var detail = homeDetailSymbol(symbols);
     try {
       var quotesPath = '/api/quotes?symbols=' + encodeURIComponent(symbols.join(','));
       var quoteSlot = objectSlot(await readCachedSlot('quotes', quotesPath), 'The ambient market watch');
@@ -2794,15 +2803,15 @@
       });
       publishBookContext(seq, contextSeq, data, {
         phase: 'loading', symbols: symbols, rows: rows,
-        detailSymbol: symbols[0], detailLoading: symbols[0],
+        detailSymbol: detail, detailLoading: detail,
         sectorLens: data.homeContext && data.homeContext.sectorLens || null,
         missing: quoteSlot.available ? [] : missingSlots([quoteSlot])
       });
       // The full option/research document is fetched for one focused symbol only. Its response
       // remains in the shared API cache for New Idea, while the bounded watch uses cheap quotes.
-      var api = requireApi(), encoded = encodeURIComponent(symbols[0]);
+      var api = requireApi(), encoded = encodeURIComponent(detail);
       if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
-      hydrateBookFocusedContext(seq, contextSeq, before, data, symbols[0]);
+      hydrateBookFocusedContext(seq, contextSeq, before, data, detail);
     } catch (error) {
       publishBookContext(seq, contextSeq, data, {
         phase: 'error', symbols: symbols, rows: [],
@@ -2839,9 +2848,10 @@
     var contextSeq = ++bookContextRequestSeq;
     if (!requested) {
       var defaults = (context.defaultSymbols || context.symbols || []).slice(0, 12);
+      var defaultDetail = defaults.length ? homeDetailSymbol(defaults) : null;
       publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
         phase: defaults.length ? 'loading' : 'ready', symbols: defaults, rows: [],
-        detailSymbol: defaults[0] || null, detailLoading: defaults[0] || null,
+        detailSymbol: defaultDetail, detailLoading: defaultDetail,
         sectorLens: null
       }));
       if (!defaults.length) return data.homeContext;
