@@ -40,9 +40,21 @@ responsibility.
 - **2026-07-23 · API layer:** A1 (b9a2fac) `MarketLane.worldParam` — 8 copies gone; A2 (55318ad)
   `DollarDeltaExposure.toContext(lane)` — 7 inline mappings gone; A5 (3d9355d)
   `MarketLane.isSimulatedWorld` — 6 predicates gone; A6 `ApiResponses.EvaluationReceipt.attachTo`.
-- STATUS: orchestrator layer DONE (O1–O7); dangerous divergent DONE (X1, X3; X2/E3 two-tier);
-  API layer DONE bar A4. REMAINING: A4 (universe-resolution — divergent fallbacks, nuanced),
-  D2 (last-known-quote dual ownership — architectural), D3 (ObservedCandleWriter), U1–U12 (frontend).
+- **2026-07-23 · A4 (a695106):** `MarketUniverseView.symbolsForWorld` — the world-symbols idiom;
+  Sparkline/Core routed. DataController/MarketStream use different patterns, left as-is.
+- **2026-07-23 · D2 RECLASSIFIED (not duplication):** the MarketDataService.quote() fallback to
+  `quoteSnapshotStore` reads the SAME durable mirror MarketDataEngine writes — a graceful last-known
+  read-fallback when live providers miss, pinned as intended by
+  `MarketDataServiceTest.observedProviderGapUsesTheEnginesDurableLastKnownQuote`. Layered ownership
+  (engine writes/warms, service reads as fallback), not two computations. No change.
+
+STATUS — DONE: orchestrator layer (O1–O7), dangerous divergent (X1 fees, X3 politeness; X2/E3
+two-tier), FULL API layer (A1 worldParam, A2 exposure, A4 world-symbols, A5 sim-world predicate,
+A6 receipt-attach). RECLASSIFIED as intentional (not duplication): X2, E3, D2.
+REMAINING: **D3** (observed underlying_bar written in 4 places — real, but a DB-write-semantics change
+needing a Connection-based ObservedCandleWriter overload + quote→Candle + quality-filter reconciliation,
+done carefully with tests) and **U1–U12** (desk frontend: one money/greeks/quote module, delete the
+stale prototypes/desk.html fork — touches the live index.html, needs the DOM suite + visual checks).
 
 ---
 
