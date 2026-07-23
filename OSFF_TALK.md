@@ -23,36 +23,38 @@ Alternates (swap at paste time if preferred):
 
 ## Elevator pitch (short field, ≤ ~300 chars)
 
-Backtest code always drifts from production code, and then your test results quietly stop meaning
-anything. One Flink job, run in batch mode to replay ten years and in streaming mode live, closes
-that gap. Plus: checking whether an engine's "70% chance" calls actually come true 70% of the time.
+I built a platform that recommends options trades. Like every trading system, its backtest code
+drifted from its live code until the test results meant little. The fix: one Apache Flink job that
+replays ten years in batch mode and runs live in streaming mode — same code, so it can't drift.
 
 ## Abstract / description
 
-I trade options, and I built a platform that recommends trades and tells me honestly when my own
-ideas are bad. It has a problem every trading system has: the code that tests a strategy against
-history is never quite the same as the code that runs live. The two drift apart, and then your
-test results quietly stop meaning anything.
+I trade options for my own account, and I built a platform that recommends trades and scores how
+good its own recommendations are. Testing it honestly ran into a problem every trading system
+has: the code that replays history to evaluate a strategy is never quite the same as the code
+that runs live. The two drift apart, and once they do, the test results quietly stop meaning
+anything.
 
-I solved this with Apache Flink, using one job in two modes. In batch mode it replays ten years
-of market data and scores every recommendation the engine would have made along the way. In
-streaming mode the same operators run against live data. Same code, so the test can't drift from
+This talk is about the fix I landed on: one Apache Flink job, run two ways. In batch mode it
+replays ten years of market data, re-makes every recommendation the platform would have made
+along the way, and scores them against what actually happened. In streaming mode the identical
+code runs on live data. Because both modes share one codebase, the test cannot drift from
 production.
 
-On top of that pipeline we train small, explainable models — no LLMs. The most useful one is
-simple: when the engine says a trade has a 70% chance of making money, did its past "70%" calls
-actually come true 70% of the time? Mine didn't, at first. This talk covers the pipeline, the
-late-data handling that keeps profit numbers from being silently wrong, and what the whole thing
-taught me about my own real-money trading.
+On top of that pipeline sit small, explainable machine-learning models — no LLMs. The most
+useful one answers a blunt question: when the platform said a trade had a 70% chance of making
+money, did those trades actually work out 70% of the time? At first, they didn't. I'll cover the
+pipeline, the handling of late-arriving market data that otherwise produces quietly wrong
+profit-and-loss numbers, and what the whole exercise taught me about my own real-money trading.
 
 ## Audience takeaways
 
-1. A working pattern for running one Flink codebase in both batch (backtest) and streaming (live)
-   mode, and why finance needs that guarantee more than any other industry.
-2. How event-time processing stops late or out-of-order market data from producing wrong profit
-   numbers that nobody notices.
-3. How to measure whether a prediction engine's confidence numbers can be trusted, and how to
-   show that record to users instead of asking them to take it on faith.
+1. A working pattern for running one Flink codebase in both batch (historical replay) and
+   streaming (live) modes, and why trading systems need that guarantee more than most software.
+2. How Flink's event-time processing keeps late or out-of-order market data from silently
+   corrupting profit-and-loss numbers.
+3. A practical way to test whether any prediction system's confidence numbers deserve trust —
+   and why showing users that track record beats asking them for faith.
 
 ## Session format
 
@@ -68,20 +70,20 @@ with published error rates, no LLMs).
 
 ## Notes to organizers (private field)
 
-This is not a vendor talk. StrikeBench is a personal options practice platform (running at
-strikebench.com); nothing is sold and nothing is being launched. The talk is the engineering
-story of applying Flink's batch/stream unification to the backtest-drift problem, with the
-honest twist that the calibration work exposed the author's own trading assumptions. All claims
-in the talk are backed by reproducible replays; happy to share a preview recording of the demo
-before the event.
+The speaker is an individual options trader who built StrikeBench (strikebench.com), a personal
+platform that recommends and analyzes options trades. Nothing is sold and nothing is being
+launched — this is not a vendor talk. The session is the engineering story of using Apache
+Flink's batch/stream unification to make that platform's backtesting trustworthy, including the
+uncomfortable finding that its own confidence numbers needed calibration. All claims are backed
+by reproducible replays; a preview recording of the demo is available on request.
 
 ## Speaker bio (fill the bracketed part)
 
-Faraz Babar is [role / affiliation — one line]. He is an active options trader who built
-StrikeBench, a practice and analytics platform whose recommendation engine is required to show
-its evidence — including the uncomfortable evidence about its author's own trades. His current
-work applies Apache Flink and small, explainable models to make backtests trustworthy and
-prediction confidence measurable.
+Faraz Babar is [role / affiliation — one line]. He trades options for his own account and built
+StrikeBench, a personal platform that recommends options trades and shows the evidence behind
+every number it puts on screen. His current work uses Apache Flink and small, explainable
+models to make the platform's backtests trustworthy and its confidence numbers measurable
+against reality.
 
 ## Tags
 
