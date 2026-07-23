@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import io.liftandshift.strikebench.market.MarketLane;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -282,7 +283,7 @@ final class PlanOutcomeController {
         }
         boolean calibrateFromMarket = requestsMarketVol(body.over());
         var spec = planScenarioSpec(plan, body.over());
-        var world = PlanController.worldParam(root.activeWorld(ctx));
+        var world = MarketLane.worldParam(root.activeWorld(ctx));
         var marketVol = outcomeController.marketVol(plan.symbol(), world, spec.horizonDays());
         var canvas = body.canvas() == null
                 ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
@@ -355,7 +356,7 @@ final class PlanOutcomeController {
             throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
                     "No current stored simulation for this Plan's view — run the scenario to create one.");
         }
-        String world = PlanController.worldParam(stored.ensemble().scope().worldId());
+        String world = MarketLane.worldParam(stored.ensemble().scope().worldId());
         int horizon = stored.ensemble().spec().horizonDays();
         var marketVol = outcomeController.marketVol(plan.symbol(), world, horizon);
         double rate = market.riskFreeRateQuote(Math.max(1, horizon), world).annualRate();
@@ -659,7 +660,7 @@ final class PlanOutcomeController {
             throw new IllegalArgumentException("Historical replay needs a named strategy rule; model futures still test the exact custom package.");
         }
         String engineKind = body.engine() == null ? "single" : body.engine().trim().toLowerCase(Locale.ROOT);
-        String world = PlanController.worldParam(root.activeWorld(ctx));
+        String world = MarketLane.worldParam(root.activeWorld(ctx));
         Object report;
         if ("portfolio".equals(engineKind)) {
             report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family, body.from(), body.to(),
@@ -700,7 +701,7 @@ final class PlanOutcomeController {
                 && body.over() == null && body.iv() == null) return existing;
         boolean calibrateFromMarket = requestsMarketVol(body.over());
         var spec = planScenarioSpec(plan, body.over());
-        String world = PlanController.worldParam(root.activeWorld(ctx));
+        String world = MarketLane.worldParam(root.activeWorld(ctx));
         double spot = pathEnsembles.anchorSpot(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
                 plan.symbol(), world, root.analysisCtx(ctx)));
         io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble ensemble;

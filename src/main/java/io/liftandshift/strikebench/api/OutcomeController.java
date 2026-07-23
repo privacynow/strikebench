@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.config.JavalinConfig;
@@ -64,9 +65,6 @@ final class OutcomeController {
         OutcomeRoutes.register(config, new OutcomeRoutes.Handlers(this::evaluate));
     }
 
-    private static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
 
     // ---- Datasets & scenario simulation ----
 

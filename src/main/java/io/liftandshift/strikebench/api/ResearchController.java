@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
@@ -410,7 +411,4 @@ final class ResearchController {
         return ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
     }
 
-    private static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
 }

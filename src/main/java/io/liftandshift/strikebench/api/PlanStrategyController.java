@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import io.liftandshift.strikebench.market.MarketLane;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -202,7 +203,7 @@ final class PlanStrategyController {
         try {
             evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
                     plan.symbol(), candidate, account.buyingPowerCents(),
-                    root.analysisCtx(ctx), PlanController.worldParam(root.activeWorld(ctx)), preview.ok(),
+                    root.analysisCtx(ctx), MarketLane.worldParam(root.activeWorld(ctx)), preview.ok(),
                     preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol()),
                     new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(), c.thesis(),
                             c.horizonDays(), c.assignmentPreference(), "this Plan's declared view")));
@@ -255,7 +256,7 @@ final class PlanStrategyController {
         } else {
             scanUniverse = io.liftandshift.strikebench.market.Universes.peersOf(plan.symbol());
         }
-        String world = PlanController.worldParam(root.activeWorld(ctx));
+        String world = MarketLane.worldParam(root.activeWorld(ctx));
         if (world != null) {
             var available = market.worldSymbols(world).map(java.util.HashSet::new).orElseGet(java.util.HashSet::new);
             scanUniverse = scanUniverse.stream().filter(available::contains).toList();

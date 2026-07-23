@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
@@ -884,7 +885,4 @@ final class TradeController {
         return new BigDecimal(raw.toString()).stripTrailingZeros().toPlainString();
     }
 
-    private static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
 }

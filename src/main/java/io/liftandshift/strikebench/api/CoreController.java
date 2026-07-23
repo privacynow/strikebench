@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
@@ -269,9 +270,6 @@ final class CoreController implements AutoCloseable {
                 .filter(symbol -> !symbol.isBlank()).distinct().toList();
     }
 
-    private static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
 
     @Override
     public void close() {

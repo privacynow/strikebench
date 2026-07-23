@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -162,9 +163,6 @@ final class PlanController {
     }
     private static <T> T bodyOrNull(Context ctx, Class<T> type) { return ApiRequest.bodyOrNull(ctx, type); }
     private static <T> T requireBody(T body) { return ApiRequest.requireBody(body); }
-    static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
     private List<LocalDate> activeExpirations(String symbol, String world) {
         var now = market.simInstant(worldParam(world)).orElse(clock.instant());
         return ResearchController.activeExpirations(market.expirations(symbol, world), now);

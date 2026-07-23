@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -175,7 +176,4 @@ final class SparklineController {
         row.put("evidence", evidence);
     }
 
-    private static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
-    }
 }

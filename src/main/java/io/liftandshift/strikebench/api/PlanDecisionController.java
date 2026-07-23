@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.api;
+import io.liftandshift.strikebench.market.MarketLane;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -335,7 +336,7 @@ final class PlanDecisionController {
     }
 
     void plansPortfolio(Context ctx) {
-        String world = PlanController.worldParam(root.activeWorld(ctx));
+        String world = MarketLane.worldParam(root.activeWorld(ctx));
         var marketKind = root.activePlanMarket(ctx);
         String ownerId = root.ownerId(ctx);
         var plans = planSvc.list(ownerId, marketKind,
