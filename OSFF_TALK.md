@@ -33,7 +33,7 @@ Retired alternates (for reference):
 I built an options platform to learn the domain without risking much money. Its spine is
 backtesting — which worked fine, until I asked what "70% chance of success" had actually meant.
 So I rebuilt it: history and live share one code path (Apache Flink), and every claim became
-checkable.
+testable.
 
 ## Abstract / description
 
