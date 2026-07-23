@@ -36,9 +36,13 @@ Session Presentation (typically 30 minutes).
 
 Any. The talk defines every finance term it uses.
 
-## Benefits to the Ecosystem (901 characters)
+## Benefits to the Ecosystem (775 characters)
 
-This solves two problems. First, backtest drift: backtests drive real capital decisions, but they usually run on a second implementation of the trading logic, and the two codebases drift apart until the test results describe nothing that actually runs. The pattern shown here, demonstrated with Apache Flink but portable to any engine, removes that by construction: one code path serves both historical replay and live processing. Second, unaudited confidence: models emit probabilities that are rarely checked against what later happened. The talk shows a repeatable way to score every past prediction and publish the reliability record. Both patterns apply directly to trading, risk, and reporting pipelines in regulated environments, where every institution rebuilds this non-differentiating plumbing privately. Nothing is sold here; the platform is a personal project used as an honest case study.
+Backtest and replay infrastructure is non-differentiating plumbing that every financial institution rebuilds privately, and the drift problem gets rebuilt right along with it. This talk demonstrates a reusable pattern on open source stream processing, shown with Apache Flink but portable to any engine with unified batch and streaming, that the community can adopt instead of reinventing: one code path for historical replay and live processing, honest handling of late-arriving market data, and a repeatable method for publishing a model's reliability record. Attendees leave with an architecture they can apply to trading, risk, and reporting pipelines in regulated environments. Nothing is sold here; the platform shown is a personal project used as an honest case study.
+
+## What problem does this solve? (683 characters)
+
+Two problems. First, backtest drift: backtests drive real capital decisions, but they usually run on a second implementation of the trading logic. The two codebases drift apart until the test results describe nothing that actually runs, and nobody can say when that happened. Second, unaudited confidence: trading models emit probabilities all day, and almost nobody checks them against what later happened. A model that says 70% has usually never been asked whether its past 70% calls came true. This talk removes the first problem by construction, one code path for both replay and live, and makes the second measurable: score every past prediction, publish the reliability record.
 
 ## Session keywords (they ask for at least 5)
 
