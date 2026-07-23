@@ -1115,6 +1115,12 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .authcompare button.acrow{width:100%;background:var(--panel);color:inherit;text-align:inherit;cursor:pointer}.authcompare button.acrow:hover,.authcompare button.acrow.on{border-color:var(--accent-2);background:var(--accent-wash)}
 .authcompare .acrow.head{border:0;padding-block:2px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;font-size:var(--f-2xs)}.authcompare .acrow.proposed{background:var(--accent-wash);border-color:var(--accent-2)}
 .authcompare .acrow b,.authcompare .acrow span:not(:first-child){font-family:var(--mono);text-align:right}.authcompare .acrow b{text-align:left;color:var(--text)}
+.authcompare .acrow b small{color:var(--accent);font-family:var(--sans);font-weight:650}
+.upanel.bookcmp{display:flex;flex-direction:column;min-height:0}
+.upanel.bookcmp .authcompare.acrows{flex:1 1 auto;min-height:0;margin-top:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;align-content:start}
+.upanel.bookcmp .authcompare.acrows>[data-scroll-row]{scroll-snap-align:start}
+.inspectpane:has(.upanel.bookcmp){display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.inspectpane:has(.upanel.bookcmp)>.upanel.bookcmp{flex:1;min-height:0}
 .authbasis{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.authbasis .badge{color:var(--violet);border-color:var(--violet)}
 .btn.xs{padding:5px 10px;font-size:var(--f-sm);border-radius:6px}
 .btn.ghost{background:transparent;border-color:var(--line);color:var(--dim)}
@@ -1168,12 +1174,11 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .dcleft .decmap{min-height:175px}
   /* A short package should not force a tall empty workbench. On the largest canvas its compact
      inline editor sits beside a larger linked map, immediately after the ranked field. */
-  .decgrid.short-package .dcleft .leftsupport{display:grid;grid-template-columns:minmax(330px,.9fr) minmax(0,1.1fr);gap:10px;align-items:stretch;flex:1 1 auto}
-  .decgrid.short-package .dcleft .leftsupport>.declegpanel{align-self:start;min-height:0}
-  .decgrid.short-package .dcleft .pickmap{height:100%;min-height:0;border-top:0;border-left:1px solid var(--line-soft);padding:0 0 0 10px}
-  .decgrid.few-ideas .dcleft .leftsupport{display:flex;flex-direction:column;gap:9px;align-items:stretch}
-  .decgrid.few-ideas .dcleft .leftsupport>.declegpanel{align-self:stretch;flex:none}
-  .decgrid.few-ideas .dcleft .pickmap{flex:1 1 auto;width:100%;height:auto;min-height:210px;border-left:0;border-top:1px solid var(--line-soft);padding:7px 0 0}
+  /* Geometry never depends on the SELECTED candidate: a 2-leg package must not rearrange
+     the workbench/map strip. The map keeps a bounded landscape aspect on full fields; a
+     few-ideas load (a per-load fact) may give the full-width map the leftover height. */
+  .dcleft .pickmap{max-height:min(44vh,420px)}
+  .decgrid.few-ideas .dcleft .pickmap{flex:1 1 auto;min-height:210px;max-height:none}
 }
 @media (min-width:1900px) and (min-height:1000px){
   .dccenter .dcctop{flex:1 1 auto;min-height:0}
@@ -1549,6 +1554,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   border:1px solid var(--accent);background:var(--ground);box-shadow:0 0 0 5px rgba(70,213,181,.08);font-size:10px}
 .ensemblecap{position:absolute;left:12px;bottom:10px;font-size:var(--f-2xs);color:var(--faint);letter-spacing:.04em;text-transform:uppercase}
 .ensemblerun{display:grid;place-items:center;color:var(--dim);font-size:var(--f-xs)}
+.ensembleempty{position:absolute;inset:0;display:grid;place-items:center;padding:14px;text-align:center}
+.ensembleempty b{display:block;margin-bottom:5px;color:var(--text);font-size:var(--f-xs)}
+.ensembleempty span{display:block;max-width:46ch;color:var(--faint);font-size:var(--f-2xs);line-height:1.5}
+.ensembleempty .btn{margin-top:9px}
 .runorb{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);border-top-color:var(--accent);animation:runorb .8s linear infinite;box-shadow:0 0 0 8px rgba(70,213,181,.04)}
 .runmsg{position:absolute;top:calc(50% + 37px);font-family:var(--mono);font-size:var(--f-2xs);color:var(--faint)}
 @keyframes runorb{to{transform:rotate(360deg)}}
@@ -1844,7 +1853,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fanmain .fr1{display:flex;align-items:center;gap:7px;min-width:0}
 .fanr .fnm{font-family:var(--mono);font-weight:700;color:var(--text);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .fanname{min-width:0;display:flex;flex-direction:column;justify-content:center}.fanname .fsub{display:none;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.decgrid.few-ideas .dcleft .fan{flex:none;min-height:0;max-height:none}.decgrid.few-ideas .fanrows{overflow:visible;mask-image:none!important}.decgrid.few-ideas .fanr{min-height:44px}.decgrid.few-ideas .fanname .fsub{display:block}.decgrid.few-ideas .overflowmeta{display:none!important}
+.decgrid.few-ideas .dcleft .fan{flex:none;min-height:0;max-height:none}.decgrid.few-ideas .fanrows{overflow:visible;mask-image:none!important}.decgrid.few-ideas .fanr{min-height:44px}.decgrid.few-ideas .fanname .fsub{display:block}.decgrid.few-ideas .dcleft .fan .overflowmeta{display:none!important}
 .fanmain .fr1 .ffit{margin-left:auto;font-size:var(--f-2xs);letter-spacing:.05em;text-transform:uppercase;font-weight:700;flex:none}
 .ffit.on{color:var(--profit)} .ffit.mid{color:var(--caution)} .ffit.off{color:var(--loss)}
 /* A comparison field intentionally has no selected row, but that must not hide the compact
@@ -1931,12 +1940,21 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegfoot .hint{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .declegfoot .draftok{color:var(--profit)}.declegfoot .drafterr{color:var(--loss)}
 .declegfoot .btn{padding:5px 9px;white-space:nowrap}
+.declegpanel.posheld{padding:0;border:0;background:transparent}
+.declegpanel.posheld .declegs{max-height:clamp(150px,20vh,220px)}
+.declegpanel.posheld .declegfoot .hint{white-space:normal;line-height:1.35}
 @media (min-width:901px){
   /* Desktop has enough horizontal room for one leg per line. Keep every control readable while
      making four-leg packages vertically compact; only strategies beyond the bounded rail scroll. */
   .declegpanel .declegs .legr{display:grid;grid-template-columns:minmax(175px,auto) minmax(0,1fr);align-items:center;column-gap:8px;padding:4px 7px}
   .declegpanel .declegs .legr-top{flex-wrap:nowrap}
-  .declegpanel .declegs .lgm{min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.15}
+  .declegpanel .declegs .lgm{min-width:0;text-align:right;overflow:hidden;line-height:1.15}
+  /* text-overflow on the flex CONTAINER is inert — each detail cell truncates itself, so a
+     squeezed cell ends in an ellipsis instead of painting across its neighbor (Safari included) */
+  .declegpanel .declegs .legdetail{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .declegpanel .declegs .legdetail-primary{flex-shrink:0}
+  .declegpanel .declegs .legdetail-book,.declegpanel .declegs .legdetail-entry{flex-shrink:1}
+  .declegpanel .declegs .legdetail-wide{flex-shrink:3}
 }
 @media (min-width:1701px){
   .declegpanel .declegs .legr{column-gap:4px}
@@ -1949,7 +1967,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .declegpanel .declegs .lgm{font-size:var(--f-xs)}
 }
 @media (min-width:1001px) and (max-width:1700px){
-  .declegpanel .declegs .legdetail-primary,.declegpanel .declegs .legdetail-entry,.declegpanel .declegs .legdetail-wide,.declegpanel .declegs .lgm i{display:none}
+  /* narrow desktops drop only the wide extras; exp and fill stay as truncating cells */
+  .declegpanel .declegs .legdetail-wide,.declegpanel .declegs .lgm i{display:none}
 }
 /* risk/reward map (ported from plan-desk) */
 .decmap{width:100%;height:200px;display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel)}
@@ -2637,7 +2656,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    beside each other, so the support strip costs half the height and the list gains whole rows */
 @media (min-width:1001px) and (max-height:1079px),
        (min-width:1900px) and (min-height:1080px) and (max-height:1150px){
-  .dcleft .leftsupport{display:grid;grid-template-columns:minmax(270px,1.22fr) minmax(170px,.78fr);gap:9px;align-items:stretch;flex:1 1 clamp(215px,25vh,260px);min-height:215px}
+  .dcleft .leftsupport{display:grid;grid-template-columns:minmax(270px,1.22fr) minmax(210px,.78fr);gap:9px;align-items:stretch;flex:1 1 clamp(215px,25vh,260px);min-height:215px;max-height:340px}
   .dcleft .leftsupport>.declegpanel{min-width:0;min-height:0;margin:0;display:flex;flex-direction:column;overflow:hidden}
   /* Four canonical legs are default composition, not overflow. The exact-package rail earns a
      scrollbar only for genuinely longer custom structures; ranked ideas keep the other primary
@@ -2647,21 +2666,19 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dcleft .declegpanel .declegs .legr-top{gap:2px}
   .dcleft .declegpanel .declegs .tgl{padding:1px 3px;font-size:10px;line-height:16px}
   .dcleft .declegpanel .declegs .mv,.dcleft .declegpanel .declegs .lgm{font-size:10px}
-  .dcleft .declegpanel .declegs .lgm{justify-content:flex-start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.05;min-height:11px}
+  .dcleft .declegpanel .declegs .lgm{justify-content:flex-start;overflow:hidden;line-height:1.05;min-height:11px}
   .dcleft .declegfoot{margin-top:3px}.dcleft .declegfoot .hint{display:none}
-  .dcleft .pickmap{min-width:0;min-height:0;height:100%;border-top:0;border-left:1px solid var(--line-soft);padding:0 0 0 9px}
-  .dcleft .decmap{min-height:118px}
+  .dcleft .pickmap{min-width:0;min-height:170px;height:auto;max-height:320px;border-top:0;border-left:1px solid var(--line-soft);padding:0 0 0 9px}
+  .dcleft .decmap{flex:1;min-height:118px}
   .dcleft .pickmap .fanleg{display:none}
   .declegpanel .legr{padding:3px 6px}
-  .decgrid.short-package .dcleft .leftsupport>.declegpanel{align-self:start;height:auto;min-height:0}
-  .decgrid.short-package .dcleft .declegpanel .declegs{flex:none;max-height:none;overflow:visible}
-  /* When only a few comparisons exist, vertical list pressure is gone. Put the complete inline
-     package directly below them and give the linked map the full rail width and remaining height. */
-  .decgrid.few-ideas .dcleft .leftsupport{display:flex;flex-direction:column;gap:9px;align-items:stretch;min-height:0}
+  /* Few ranked ideas is a per-load fact (never per-selection): list pressure is gone, so the
+     complete package sits below the short list and the linked map earns the full rail width. */
+  .decgrid.few-ideas .dcleft .leftsupport{display:flex;flex-direction:column;gap:9px;align-items:stretch;min-height:0;max-height:none}
   .decgrid.few-ideas .dcleft .leftsupport>.declegpanel{align-self:stretch;height:auto;min-height:0;flex:none}
   .decgrid.few-ideas .dcleft .declegpanel .declegs{flex:none;max-height:clamp(160px,22vh,220px)}
   .decgrid.few-ideas.canonical-package .dcleft .declegpanel .declegs{max-height:none;overflow:visible}
-  .decgrid.few-ideas .dcleft .pickmap{flex:1 1 auto;width:100%;height:auto;min-height:180px;border-left:0;border-top:1px solid var(--line-soft);padding:7px 0 0}
+  .decgrid.few-ideas .dcleft .pickmap{flex:1 1 auto;width:100%;height:auto;min-height:180px;max-height:none;border-left:0;border-top:1px solid var(--line-soft);padding:7px 0 0}
 }
 @media (min-width:1001px) and (max-width:1450px) and (max-height:1079px){
   /* In the compact side-by-side support row the selected candidate already owns expiration.
@@ -2712,8 +2729,16 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .card.fanhot{outline:1px solid var(--accent-2);outline-offset:1px}
 @media (max-width:1200px){.bookfanwrap{grid-template-columns:minmax(0,1fr)}.bookfanlegend{flex-direction:row;flex-wrap:wrap}.bookfanrow{flex:1 1 150px}.bookonefacts{flex:1 1 100%;grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media (max-width:640px){.bookonefacts{grid-template-columns:repeat(2,minmax(0,1fr))}}
-/* Decide market band — always visible in the right column, never behind a tab */
-.decmarketband{flex:none}
+/* Decide market band — always visible in the right column, never behind a tab.
+   The band is BOUNDED at every width: it may never starve the Understand rail above it.
+   When height runs out, the chain slice and news scroll honestly inside their columns
+   instead of silently losing rows or silently eating the column. */
+.decmarketband{flex:0 1 auto;min-height:150px;max-height:min(46vh,520px);display:flex;flex-direction:column;overflow:hidden}
+.decmarketband .marketctx{flex:1 1 auto;min-height:0;grid-template-rows:minmax(0,1fr);overflow:hidden}
+.decmarketband .marketcol{min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.decmarketband .marketcol .authnews{flex:1 1 auto;min-height:0;overflow:auto}
+.decmarketband .packagebook{flex:none}
+.decmarketband .packagebooknear{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
 .decmarketband .authmarkethero{margin-bottom:6px;display:flex;align-items:baseline;gap:9px}
 .decmarketband .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
 .decmarketband .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
@@ -2867,23 +2892,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .strategycoverage em{grid-column:1/-1;min-width:0;font-style:normal;font-size:var(--f-2xs);line-height:1.3;white-space:normal}
 .strategycoverage strong{color:var(--accent);font-size:var(--f-2xs);white-space:nowrap}
 
-/* A single surviving point is a receipt, not a giant comparative chart. Give the exact leg
-   editor and its small map one row; multi-candidate maps retain the larger comparative field. */
+/* A single surviving point is a receipt, not a giant comparative chart. */
 @media(min-width:1001px){
-  .decgrid.few-ideas.short-package .dcleft .leftsupport{display:grid;grid-template-columns:minmax(280px,1.12fr) minmax(210px,.88fr);
-    gap:9px;align-items:start;flex:0 0 auto;min-height:0}
-  .decgrid.few-ideas.short-package .dcleft .leftsupport>.declegpanel{height:auto;min-height:0}
-  .decgrid.few-ideas.short-package .decleghead .hint{display:none}
-  .decgrid.few-ideas.short-package .declegpanel .declegs .lgm{display:grid;grid-template-columns:minmax(0,1fr);
-    gap:1px;justify-content:stretch;overflow:visible;text-align:left;white-space:normal}
-  .decgrid.few-ideas.short-package .declegpanel .declegs .lgm i,
-  .decgrid.few-ideas.short-package .declegpanel .declegs .legdetail-primary,
-  .decgrid.few-ideas.short-package .declegpanel .declegs .legdetail-wide{display:none}
-  .decgrid.few-ideas.short-package .declegpanel .declegs .legdetail-book,
-  .decgrid.few-ideas.short-package .declegpanel .declegs .legdetail-entry{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .decgrid.few-ideas.short-package .dcleft .pickmap.single-point{width:100%;height:clamp(190px,22vh,260px);min-height:190px;
-    border-top:0;border-left:1px solid var(--line-soft);padding:0 0 0 9px;align-self:start;flex:none}
-  .decgrid.few-ideas.short-package .dcleft .pickmap.single-point .decmap{min-height:135px}
+  .dcleft .pickmap.single-point{height:clamp(190px,22vh,260px);min-height:190px}
+  .dcleft .pickmap.single-point .decmap{min-height:135px}
 }
 
 /* The selected package's captured book is the primary premium receipt. An ambient chain is shown
@@ -3672,7 +3684,8 @@ function authLifecycleLabel(verdict,compact){var v=String(verdict||'').toUpperCa
 function authLifecycleRead(analysis){var decision=analysis&&analysis.decision||{},life=analysis&&analysis.lifecycle||{},carry=life.carryCollateral||{},history=life.history||{},close=life.currentChoice&&life.currentChoice.close||{},events=life.assignmentExit&&life.assignmentExit.eventCrossings||[];return {verdict:decision.verdict||null,summary:decision.summary||null,remaining:authDollarsFromCents(carry.grossRemainingPremiumCents),annualized:authNumber(carry.grossAnnualizedRemainingPremiumPct),captured:authNumber(history.grossPremiumCapturedPct),closeCost:authDollarsFromCents(close.signedNetCloseCashCents==null?null:Math.max(0,-Number(close.signedNetCloseCashCents))),events:Array.isArray(events)?events:[],reduction:decision.reduction||null,dimensions:Array.isArray(decision.dimensions)?decision.dimensions:[]};}
 function authAccount(data){var a=data&&data.account||{};return a.account||a;}
 function authPlanRows(data){if(data&&Array.isArray(data.accountPlans))return data.accountPlans;var src=data&&data.planPortfolio&&data.planPortfolio.plans||data&&data.plans||[];return Array.isArray(src)?src:[];}
-function authWorkingPlanRows(data){return authPlanRows(data).filter(function(row){var p=row&&row.plan||row,status=String(p&&p.status||'').toUpperCase();return p&&p.open!==false&&p.assumptionsEditable!==false&&(status==='DRAFT'||status==='ACTIVE');});}
+function authPlanMutable(plan){var status=String(plan&&plan.status||'').toUpperCase();return !!plan&&plan.open!==false&&plan.assumptionsEditable!==false&&(status==='DRAFT'||status==='ACTIVE');}
+function authWorkingPlanRows(data){return authPlanRows(data).filter(function(row){return authPlanMutable(row&&row.plan||row);});}
 function authPlanForTrade(data,trade){var rows=authPlanRows(data);for(var i=0;i<rows.length;i++){var r=rows[i]||{};if(String(r.tradeId||'')===String(trade.id))return r;}return null;}
 function authLegs(trade){return (trade.legs||[]).map(function(l){var sign=String(l.action).toUpperCase()==='SELL'?-1:1,type=String(l.type||'').toUpperCase();return {
   t:type==='STOCK'?'s':type==='CALL'?'c':'p',k:type==='STOCK'?Number(trade.entryUnderlyingCents||0)/100:Number(l.strike),
@@ -3716,13 +3729,16 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
       if(nearest<0)return;
       if(shownFan&&nearest===shownFan.focusPathIndex)toggleScenPlay(positionSurf(p));else pinPositionFanPath(p,nearest);
       return;}
+    var heldLegTouch=ev.target.closest&&ev.target.closest('.authposside [data-leg]');
+    if(heldLegTouch){ev.preventDefault();ev.stopPropagation();
+      authForkPositionLegs(p,heldLegTouch.getBoundingClientRect(),{act:heldLegTouch.getAttribute('data-leg'),li:Number(heldLegTouch.getAttribute('data-li'))||0,d:Number(heldLegTouch.getAttribute('data-d'))||0});
+      return;}
     var manageAct=ev.target.closest&&ev.target.closest('[data-auth-manage]');
     if(manageAct){ev.preventDefault();ev.stopPropagation();var manageKind=manageAct.getAttribute('data-auth-manage');
       if(manageKind==='resume'){var owningPlan=p._positionData&&p._positionData.plan||p._plan;
         /* a plan that owns a PLACED trade is frozen — resuming it is refused by design; open a
            fresh idea on the symbol instead, and only resume plans that are still mutable */
-        var planMutable=owningPlan&&owningPlan.assumptionsEditable!==false&&owningPlan.open!==false&&['DRAFT','ACTIVE'].indexOf(String(owningPlan.status||'').toUpperCase())>=0;
-        if(planMutable)authOpenPlan(owningPlan,manageAct.getBoundingClientRect());
+        if(authPlanMutable(owningPlan))authOpenPlan(owningPlan,manageAct.getBoundingClientRect());
         else authOpenSymbol(p.sym,manageAct.getBoundingClientRect());
         return;}
       if(manageKind==='forward'){var stage=document.getElementById('authScenStage-'+p.id);if(stage)stage.scrollIntoView({behavior:'smooth',block:'center'});
@@ -3750,11 +3766,19 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
   el.addEventListener('mousemove',function(ev){var surface=ev.target.closest&&ev.target.closest('[data-auth-surface]');if(!surface)return;var next=nearestPositionPath(p,ev);if(next===p._pathHover)return;p._pathHover=next;hoverPositionPath(p,next,next>=0);});
   el.addEventListener('mouseout',function(ev){var surface=ev.target.closest&&ev.target.closest('[data-auth-surface]');if(!surface||(ev.relatedTarget&&surface.contains(ev.relatedTarget)))return;p._pathHover=-1;hoverPositionPath(p,-1,false);});
   return el;}
-/* ONE leg grammar: the same .legr chip rows the New Idea workbench renders */
+/* ONE leg component: the SAME interactive workbench chips New Idea renders. Touching any
+   control on a held package forks a new idea seeded with these exact legs (and applies the
+   touched change there) — held legs themselves never mutate in place. */
+var AUTH_PENDING_FORK=null;
+function authForkPositionLegs(p,originRect,edit){
+  var owningPlan=p._positionData&&p._positionData.plan||p._plan;
+  AUTH_PENDING_FORK={symbol:String(p.sym||'').toUpperCase(),legs:(p.legs||[]).map(cloneDecisionLeg),edit:edit&&edit.act?edit:null};
+  if(authPlanMutable(owningPlan))authOpenPlan(owningPlan,originRect);
+  else authOpenSymbol(p.sym,originRect);
+}
 function authPositionLegsHTML(p){if(!p.legs.length)return '<div class="backendnotice">This package has no legs to show.</div>';
-  return '<div class="declegs">'+p.legs.map(function(l){var side=l.q<0?'SELL':'BUY',type=l.t==='s'?'STOCK':l.t==='c'?'CALL':'PUT',qty=Math.max(1,Math.abs(l.q));
-    return '<div class="legr"><div class="legr-top"><span class="tgl '+(l.q<0?'sell':'buy')+'">'+side+'</span><span class="tgl '+(l.t==='c'?'callc':l.t==='p'?'putc':'stockc')+'">'+type+'</span>'+(l.t==='s'?'':'<span class="mv">'+l.k+'</span>')+'<span class="mv">'+qty+(l.t==='s'?' sh':' contracts')+'</span></div>'+
-      '<span class="lgm">'+(l.expiration?'exp '+deskEsc(l.expiration):'stock')+(l.entryPrice!=null?' · entry '+Number(l.entryPrice).toFixed(2):'')+'</span></div>';}).join('')+'</div>';}
+  return '<div class="declegpanel posheld"><div class="declegs">'+p.legs.map(function(l,i){return backendDecisionLegChip(l,i,true);}).join('')+'</div>'+
+    '<div class="declegfoot"><span class="hint">Held package — touching a control opens a new idea seeded with these exact legs.</span></div></div>';}
 function authEvidenceLabel(e){if(!e)return 'unavailable';return [e.provenance,e.age,e.source].filter(Boolean).join(' · ')||'unavailable';}
 function authNewsHTML(data){var items=data&&data.news&&data.news.items||[];if(!items.length)return '<div class="backendnotice">No current headlines were returned for this symbol.</div>';return '<div class="authnews">'+items.slice(0,8).map(function(n){var href=/^https?:\/\//.test(String(n.url||''))?String(n.url):'#',sentiment=n.classification?authHuman(n.classification):null;return '<a href="'+deskEsc(href)+'" target="_blank" rel="noopener"><b>'+deskEsc(n.headline||'Untitled headline')+'</b><small>'+deskEsc([n.source,sentiment].filter(Boolean).join(' · '))+'</small></a>';}).join('')+'</div>';}
 function authStageLabel(value){var key=String(value||'').toUpperCase();if(key==='MANAGE_REVIEW')return 'Manage & review';return authHuman(value||'—');}
@@ -3839,7 +3863,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div><div class="authmetric"><span>Close cost</span><b>'+authMoney(authDollarsFromCents(cur.closeCostCents))+'</b></div>'+
       '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span>POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
       '<div class="authmetric"><span>Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span>Theta / day</span><b>'+(authNumber(greeks.thetaPerDay)==null?'—':money(Number(greeks.thetaPerDay)))+'</b></div></div>'+
-      '<div class="lenshd sub"><span class="eyebrow">Position legs</span><span class="hint">'+p.legs.length+' legs</span><button class="btn xs" data-auth-manage="resume" title="Adjust these legs — opens the leg workbench seeded with this exact package" style="margin-left:auto">\u270e Edit legs</button></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
+      '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+' · touch to fork</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
     '<div class="authresearchgrid"><section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
       '<div class="authmetric"><span>ATM IV</span><b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></div><div class="authmetric"><span>Market data</span><b>'+deskEsc(quoteStatus)+'</b></div></div>'+
@@ -6391,6 +6415,7 @@ function deskBackendChanged(payload){
     decide.mode='engine'; decide.buildLegs=null; decide.buildSourceId=null; decide.draftCand=null;
     decide.draftPending=false; decide.draftValid=false; decide.draftError=null; DEC_HOT=-1;
   } else if(phase==='strategy-empty'){
+    AUTH_PENDING_FORK=null;
     decide.pendingCandidateId=null;
     decide.missingDeclarations=[];
     decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.mode='engine';
@@ -6468,6 +6493,23 @@ function deskBackendChanged(payload){
     decide._mc=authoritativeFanFromAnimation(payload.animation); decide.mcOn=true; decide.mcRunning=false;
   } else if(phase==='ready'){
     decide.missingDeclarations=[];
+    if(AUTH_PENDING_FORK&&AUTH_PENDING_FORK.symbol===String(decide.sym||'').toUpperCase()&&decide.kind==='idea'){
+      /* a held package forked into this idea: once the load settles, seed the build workbench
+         with those exact legs (strikes snapped to this chain) and apply the touched change.
+         Deferred one task so the selection/preview phases of the load cannot stomp the fork. */
+      var forkSeed=AUTH_PENDING_FORK;AUTH_PENDING_FORK=null;
+      var forkSym=String(decide.sym||'').toUpperCase();
+      window.setTimeout(function(){
+        if(!decide||decide.kind!=='idea'||String(decide.sym||'').toUpperCase()!==forkSym)return;
+        if(window.DeskBackend.state().mutationPending){AUTH_PENDING_FORK=null;return;}
+        decide.buildLegs=forkSeed.legs.map(cloneDecisionLeg).map(function(l){
+          if(l.t!=='s'){var snapped=nearestBackendStrike(l.t,l.k);if(snapped!=null){l.k=snapped;l.strike=snapped;}}
+          l.entryPrice=null;return l;});
+        decide.buildSourceId=null;decide.mode='build';
+        if(forkSeed.edit)legAction(forkSeed.edit.act,forkSeed.edit.li,forkSeed.edit.d);
+        else renderAfterDecisionChange();
+      },0);
+    }
     /* `ready` is published immediately before the bridge releases its Plan mutation. Replay a
        scenario chosen during the earlier strategy/ensemble paint on the next task, when the
        immutable ensemble is fully owned and the exact order preview can no longer supersede it. */
@@ -6490,6 +6532,7 @@ function deskBackendChanged(payload){
       decide.animation=null;decide._mc=null;decide.mcRunning=false;decide.mcOn=true;
     }
   } else if(phase==='error'){
+    AUTH_PENDING_FORK=null;
     decide.pendingCandidateId=null;
     decide.backendError=payload.error&&payload.error.message||'The authoritative Desk request failed.';
     decide.mcRunning=false; decide.order.previewPending=false; decide.order.committing=false;
@@ -7373,6 +7416,7 @@ function pinPositionFanPath(p,index){
 function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declarationOverride){
   var pos=posId?byId[posId]:null;
   var sym=String(symOverride||(pos&&pos.sym)||'').trim().toUpperCase()||null;
+  if(AUTH_PENDING_FORK&&AUTH_PENDING_FORK.symbol!==sym)AUTH_PENDING_FORK=null;
   var u=sym?(univBy[sym]||{sym:sym,name:sym,spot:null,em:null,iv:null,ivRank:null,sector:'Other',chg:null}):null;
   var planContext=planOverride&&planOverride.context||{},declaration=declarationOverride||null;
   var authoritativeIdea=deskBackendEnabled()&&kind==='idea';
@@ -7789,22 +7833,25 @@ function decisionLegQuote(l){
   return matching||{};
 }
 function decisionLegMeta(l){
-  var quote=decisionLegQuote(l),parts=[];
-  if(l.expiration)parts.push('<span class="legdetail legdetail-primary">exp '+deskEsc(l.expiration)+'</span>');
+  /* returns {html, plain}: the html row truncates per cell; the plain twin becomes the
+     tooltip so no width ever costs information */
+  var quote=decisionLegQuote(l),parts=[],plain=[];
+  function part(cls,text){parts.push('<span class="legdetail '+cls+'">'+text+'</span>');plain.push(text.replace(/<[^>]+>/g,''));}
+  if(l.expiration)part('legdetail-primary','exp '+deskEsc(l.expiration));
   var bid=authNumber(quote.bid),ask=authNumber(quote.ask);
-  if(bid!=null&&ask!=null)parts.push('<span class="legdetail legdetail-book">bid / ask '+bid.toFixed(2)+' / '+ask.toFixed(2)+'</span>');
-  if(l.entryPrice!=null)parts.push('<span class="legdetail legdetail-entry">fill: '+(l.q<0?'sell at bid ':'buy at ask ')+Number(l.entryPrice).toFixed(2)+'</span>');
+  if(bid!=null&&ask!=null)part('legdetail-book','bid / ask '+bid.toFixed(2)+' / '+ask.toFixed(2));
+  if(l.entryPrice!=null)part('legdetail-entry','fill: '+(l.q<0?'sell at bid ':'buy at ask ')+Number(l.entryPrice).toFixed(2));
   var iv=authNumber(quote.iv),delta=authNumber(quote.delta);
-  if(iv!=null)parts.push('<span class="legdetail legdetail-wide">IV '+(Math.abs(iv)<=2?iv*100:iv).toFixed(1)+'%</span>');
-  if(delta!=null)parts.push('<span class="legdetail legdetail-wide">Δ '+delta.toFixed(2)+'</span>');
+  if(iv!=null)part('legdetail-wide','IV '+(Math.abs(iv)<=2?iv*100:iv).toFixed(1)+'%');
+  if(delta!=null)part('legdetail-wide','Δ '+delta.toFixed(2));
   if(quote.captured){
     var source=String(quote.source||''),freshness=String(quote.freshness||'');
     var receipt=source&&freshness&&source.toLowerCase()===freshness.toLowerCase()
       ?source:[source,freshness].filter(Boolean).join(' · ');
-    parts.push('<span class="legdetail legdetail-wide">'+deskEsc(receipt||'captured book')+'</span>');
+    part('legdetail-wide',deskEsc(receipt||'captured book'));
   }
-  if(!parts.length)parts.push('<span class="legdetail legdetail-primary">'+(l.t==='s'?'stock exposure':'listed contract · market detail unavailable')+'</span>');
-  return parts.join('<i aria-hidden="true">·</i>');
+  if(!parts.length)part('legdetail-primary',l.t==='s'?'stock exposure':'listed contract · market detail unavailable');
+  return {html:parts.join('<i aria-hidden="true">·</i>'),plain:plain.join(' · ')};
 }
 function backendDecisionLegChip(l,i,interactive){
   interactive=interactive!==false;
@@ -7813,7 +7860,8 @@ function backendDecisionLegChip(l,i,interactive){
   var strike=l.t==='s'?'':interactive?'<span class="mstp"><span class="ml">K</span><button data-leg="strike" data-li="'+i+'" data-d="-1" aria-label="Previous listed strike">−</button><span class="mv">'+l.k+'</span><button data-leg="strike" data-li="'+i+'" data-d="1" aria-label="Next listed strike">+</button></span>':'<span class="mv">'+l.k+'</span>';
   var qty=interactive?'<span class="mstp"><span class="ml">'+(l.t==='s'?'Sh':'Qty')+'</span><button data-leg="qty" data-li="'+i+'" data-d="-1" aria-label="Reduce leg quantity">−</button><span class="mv">'+Math.abs(l.q)+'</span><button data-leg="qty" data-li="'+i+'" data-d="1" aria-label="Increase leg quantity">+</button></span>':'<span class="mv">'+Math.abs(l.q)+(l.t==='s'?' sh':' contracts')+'</span>';
   var remove=interactive&&l.t!=='s'?'<button class="lrm" data-leg="rm" data-li="'+i+'" title="Remove leg" aria-label="Remove leg '+(i+1)+'">✕</button>':'';
-  return '<div class="legr'+(interactive?' inlineleg':'')+'"><div class="legr-top">'+side+type+strike+qty+remove+'</div><span class="lgm">'+decisionLegMeta(l)+'</span></div>';
+  var meta=decisionLegMeta(l);
+  return '<div class="legr'+(interactive?' inlineleg':'')+'"><div class="legr-top">'+side+type+strike+qty+remove+'</div><span class="lgm" title="'+deskEsc(meta.plain)+'">'+meta.html+'</span></div>';
 }
 /* --- CENTER column: payoff hero -> numbers -> HOW IT REACTS. The exact structure stays beside
    its candidate list in the decision rail; execution lives in the stable dock below the grid. --- */
@@ -7965,7 +8013,8 @@ function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc===
    layout, snaps whole rows, names what remains, and never invents viewport breakpoints. */
 function updateElegantList(node,rowSelector,readNode){if(!node)return;var rows=Array.prototype.slice.call(node.querySelectorAll(rowSelector));if(!rows.length)return;var first=rows[0],style=window.getComputedStyle(node),gap=parseFloat(style.rowGap||style.gap)||0,stride=first.getBoundingClientRect().height+gap,sticky=node.querySelector(':scope > .rosterhd'),usable=node.clientHeight-(sticky?sticky.getBoundingClientRect().height+gap:0),visible=Math.max(1,Math.floor((usable+gap)/Math.max(1,stride))),overflow=node.scrollHeight>node.clientHeight+2,firstIndex=Math.max(0,Math.min(rows.length-1,Math.floor((node.scrollTop+gap)/Math.max(1,stride)))),above=firstIndex,below=Math.max(0,rows.length-Math.min(rows.length,firstIndex+visible));node.classList.toggle('hasoverflow',overflow);var topFade=overflow&&node.scrollTop>2?14:0,bottomFade=overflow&&node.scrollTop+node.clientHeight<node.scrollHeight-2?14:0;node.style.maskImage='linear-gradient(to bottom,transparent 0,#000 '+topFade+'px,#000 calc(100% - '+bottomFade+'px),transparent 100%)';var meta=readNode||node.parentElement&&node.parentElement.querySelector('.overflowmeta'),read=meta&&meta.querySelector('.overflowread'),hair=meta&&meta.querySelector('.overflowhair i');if(meta)meta.classList.toggle('on',overflow);if(read)read.textContent=!overflow?'':above&&below?above+' above · +'+below+' more':above?above+' above': '+'+below+' more';if(hair){var fraction=Math.min(1,node.clientHeight/Math.max(1,node.scrollHeight)),travel=100-Math.max(12,fraction*100),progress=node.scrollHeight<=node.clientHeight?0:node.scrollTop/(node.scrollHeight-node.clientHeight);hair.style.width=Math.max(12,fraction*100)+'%';hair.style.transform='translateX('+(travel*progress)+'%)';}}
 function bindElegantList(node,rowSelector,readNode){if(!node)return;node._elegantConfig={rowSelector:rowSelector,readNode:readNode};if(!node._elegantBound){node._elegantBound=true;node.addEventListener('scroll',function(){var c=node._elegantConfig;updateElegantList(node,c.rowSelector,c.readNode);},{passive:true});if(window.ResizeObserver){node._elegantResize=new ResizeObserver(function(){var c=node._elegantConfig;updateElegantList(node,c.rowSelector,c.readNode);});node._elegantResize.observe(node);}}updateElegantList(node,rowSelector,readNode);}
-function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fanrows');if(!rows)return;bindElegantList(rows,'.fanr',rows.parentElement.querySelector('.overflowmeta'));var selected=rows.querySelector('.fanr.sel');if(selected)selected.scrollIntoView({block:'nearest'});}
+function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fanrows');if(rows){bindElegantList(rows,'.fanr',rows.parentElement.querySelector('.overflowmeta'));var selected=rows.querySelector('.fanr.sel');if(selected)selected.scrollIntoView({block:'nearest'});}
+  var bookRows=decideEl&&decideEl.querySelector('.authcompare.acrows');if(bookRows)bindElegantList(bookRows,'.acrow',bookRows.parentElement.querySelector('.bookcmpmeta'));}
 /* the verdict is a GLYPH, not grey prose: ✓ endorsable · ✕ blocked/doesn't fit · ▾ unfavorable
    economics (the red EV beside it says why) · dashed ring = evidence incomplete (selecting the
    row runs its comparison and completes it) · ~ mixed. The full sentence stays on hover. */
@@ -8145,11 +8194,26 @@ function authoritativeGreekInspector(c){
 }
 function authoritativeComparisonPanel(c){
   var source=authoritativeCanvas(c),rows=source&&Array.isArray(source.comparison)?source.comparison:[],positions=source&&Array.isArray(source.positions)?source.positions:[];
-  if(!rows.length)return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Same-ensemble comparison</span><span class="hint">backend-owned</span></div><div class="backendnotice">'+(source?'No comparison rows were supplied for this evaluation.':'Waiting for the conditioned same-evaluation checkpoints…')+'</div></div>';
+  if(!rows.length)return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">same possible futures</span></div><div class="backendnotice">'+(source?'No comparison rows were supplied for this evaluation.':'Waiting for the conditioned same-evaluation checkpoints…')+'</div></div>';
   function cents(value){return value==null?'—':money(Number(value)/100);}
-  var body='<div class="authcompare"><div class="acrow head"><span>Position</span><span>P5</span><span>Median</span><span>P95</span><span>Gain</span></div>'+rows.map(function(row){
-    return '<div class="acrow'+(row.proposed?' proposed':'')+'"><b>'+deskEsc(row.label||row.key)+'</b><span>'+cents(row.horizonP5Cents)+'</span><span>'+cents(row.horizonP50Cents)+'</span><span>'+cents(row.horizonP95Cents)+'</span><span>'+(row.chanceOfGainPct==null?'—':Number(row.chanceOfGainPct).toFixed(1)+'%')+'</span></div>';}).join('')+'</div>';
-  return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">'+positions.length+' positions · same possible futures</span></div>'+body+'<div class="panefoot">Every row is valued on this idea’s stored ensemble. Held-position analysis remains in the one canonical Position focus.</div></div>';
+  var preview=decide.ensemble&&decide.ensemble.preview||{},fanPaths=Number(preview.paths||0),fanSessions=Number(preview.horizonDays||0);
+  var intro='<div class="catalogintro">What you already hold and this idea, each replayed through the '
+    +(fanPaths?fanPaths.toLocaleString()+' simulated futures':'same simulated futures')
+    +(fanSessions?' over '+fanSessions+' sessions':'')
+    +'. Dollars are that line\u2019s profit or loss at the horizon \u2014 so you can see what this idea adds to the book you have.</div>';
+  var head='<div class="authcompare"><div class="acrow head"><span>Position</span>'
+    +'<span title="5th percentile \u2014 95 of 100 simulated futures end better than this">Worst 5%</span>'
+    +'<span title="Median outcome across the shared futures">Typical</span>'
+    +'<span title="95th percentile \u2014 the best-case tail">Best 5%</span>'
+    +'<span title="Share of simulated futures that end with a gain">Gain odds</span></div></div>';
+  var body='<div class="authcompare acrows elegantscroll">'+rows.map(function(row){
+    var isBaseline=/^STOCK/i.test(String(row.key||''))||String(row.lane||'').toUpperCase()==='BASELINE'||/buy and hold/i.test(String(row.label||''));
+    var rawLabel=String(row.label||row.key||'');
+    var label=deskEsc(rawLabel)+(row.proposed&&!/this idea/i.test(rawLabel)?' <small>· this idea</small>':!row.proposed&&isBaseline?' <small>· benchmark</small>':'');
+    var medianTitle=row.versusStockP50Cents==null?'':' title="'+deskEsc((Number(row.versusStockP50Cents)>=0?'+':'')+money(Number(row.versusStockP50Cents)/100)+' vs just holding stock (median)')+'"';
+    return '<div class="acrow'+(row.proposed?' proposed':'')+'" data-scroll-row><b>'+label+'</b><span>'+cents(row.horizonP5Cents)+'</span><span'+medianTitle+'>'+cents(row.horizonP50Cents)+'</span><span>'+cents(row.horizonP95Cents)+'</span><span>'+(row.chanceOfGainPct==null?'—':Number(row.chanceOfGainPct).toFixed(1)+'%')+'</span></div>';}).join('')+'</div>'
+    +'<div class="overflowmeta bookcmpmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>';
+  return '<div class="upanel bookcmp"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">'+positions.length+' held position'+(positions.length===1?'':'s')+' · one shared fan</span></div>'+intro+head+body+'</div>';
 }
 function evidencePanel(c){
   var stage;
@@ -8157,9 +8221,10 @@ function evidencePanel(c){
     stage='<div class="conditionedpatherror" role="alert" data-conditioned-paths="unavailable"><div class="backendnotice err"><b>This market story is temporarily unavailable.</b><span>Matching paths could not be loaded.</span><span>The general market fan stays hidden so it cannot be mistaken for this story.</span><button class="btn" data-dec="retry-scenario">Try this story again</button></div></div>';
   }
   else if(c.authoritative&&decide.backendPhase==='comparison-required'){
-    stage=authoritativeEconomicFavorable(c)
-      ? '<div class="backendnotice" role="status"><b>Favorable economics; mixed objective fit.</b><span>This remains a comparison, not a recommendation. Choose it to value the package across the same possible futures and preview its order.</span></div>'
-      : '<div class="backendnotice" role="status"><b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation. Choose a ranked row to value that package and preview its order.</span></div>';
+    stage='<div class="ensembleempty" role="status"><div>'+(authoritativeEconomicFavorable(c)
+      ? '<b>Favorable economics; mixed objective fit.</b><span>This remains a comparison, not a recommendation.</span>'
+      : '<b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation.</span>')+
+      '<span>No shared market fan exists yet — choosing a ranked idea builds one, and every package is then valued on those same simulated futures.</span></div></div>';
   }
   else if(c.authoritative&&decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(priceFan.n||or.paths||0),horizon=Number(or.horizonDays||priceFan.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?'on':'')+'">Price</button></span>';
     stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+deskEsc(decide.sym)+' · '+pathCount.toLocaleString()+' price paths · '+horizon+' sessions — one market fan</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(mcPathPrompt(ar))+'</div>'+
@@ -8171,7 +8236,13 @@ function evidencePanel(c){
       : 'building one market fan · valuing this package';
     stage='<div class="ensemblerun" role="status"><span class="runorb"></span><span class="runmsg">'+runMessage+'</span></div>'; }
   else if(c.authoritative){ var count=decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.paths||0;
-    stage='<button class="ensembleidle" data-dec="montecarlo" aria-label="Show possible price paths" title="Show possible paths"><span class="mcplay">▶</span><span class="ensemblecap">'+Number(count).toLocaleString()+' price paths · one market fan across ideas</span></button>'; }
+    if(count>0){stage='<button class="ensembleidle" data-dec="montecarlo" aria-label="Show possible price paths" title="Show possible paths"><span class="mcplay">▶</span><span class="ensemblecap">'+Number(count).toLocaleString()+' price paths · one market fan across ideas</span></button>';}
+    else if(decide.backendError){stage='<div class="ensembleempty" role="status"><div><b>The market fan could not be built.</b><span>'+deskEsc(decide.backendError)+'</span><button class="btn" data-dec="retry">Try again</button></div></div>';}
+    else {var evGap=authoritativeAssessment(c),evMissing=evGap&&evGap.economics&&evGap.economics.observedEvidence===false;
+      stage='<div class="ensembleempty" role="status"><div>'+(evMissing
+        ? '<b>Evidence is incomplete for this package.</b><span>Quote, chain, or history inputs are missing, so simulated paths and win-odds stay withheld instead of being guessed from stale inputs.</span>'
+        : '<b>No market fan yet for this idea.</b><span>The fan is built when this idea is valued; simulated paths then appear here with their win-odds.</span>')+'</div></div>';}
+  }
   else if(decide.mcRunning){ stage='<div class="ensemblerun" role="status"><span class="runorb"></span><span class="runmsg">building 1,500 shared paths · repricing exact legs</span></div>'; }
   else if(decide.mcOn&&decide._mc){ var r=decide._mc;
     stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">Path ensemble · 21 sessions</span><span class="mchdacts"><span class="hint" title="shared '+r.fingerprint+' · exact package '+r.valuationFingerprint+'">prototype · E '+r.fingerprint.slice(-4)+' · V '+r.valuationFingerprint.slice(-4)+'</span><button class="microcta" data-dec="montecarlo" aria-label="Close the path ensemble" title="Close simulation">×</button></span></div>'+
@@ -8182,7 +8253,7 @@ function evidencePanel(c){
       '<path d="M0 45 C42 32 58 61 96 39 S162 22 240 15"/><path d="M0 47 C45 70 72 21 112 49 S176 78 240 63"/>'+
       '<path d="M0 44 C38 40 73 51 111 31 S175 37 240 25"/><path d="M0 49 C37 59 80 47 116 64 S180 34 240 45"/></svg>'+
       '<span class="mcplay">▶</span><span class="ensemblecap">1,500 paths · 21 sessions · exact payoff</span></button>'; }
-  var receipt=c.authoritative?(decide.ensemble?'<div class="mcreceipt"><span class="badge">SIMULATED PATHS</span><span>Every idea is judged against this same market fan.</span></div>':decide.backendPhase==='comparison-required'?'<div class="mcreceipt"><span>Choose an idea to build its shared market fan.</span></div>':'<div class="mcreceipt"><span>Possible paths are loading.</span></div>'):'<div class="mcreceipt"><span>Offline visual fixture · shared ensemble</span><span>exact legs · 1,500 paths</span></div>';
+  var receipt=c.authoritative?(decide.ensemble?'<div class="mcreceipt"><span class="badge">SIMULATED PATHS</span><span>Every idea is judged against this same market fan.</span></div>':decide.backendPhase==='comparison-required'?'<div class="mcreceipt"><span>Choose an idea to build its shared market fan.</span></div>':decide.mcRunning?'<div class="mcreceipt"><span>Possible paths are loading.</span></div>':'<div class="mcreceipt"><span>The fan appears once an idea is valued.</span></div>'):'<div class="mcreceipt"><span>Offline visual fixture · shared ensemble</span><span>exact legs · 1,500 paths</span></div>';
   var comparisonLabel=String(c.id)===String(decide.deskPickId)?'Recommendation':'Ranked comparison';
   var rankingRead=comparisonLabel==='Recommendation'?'Top-ranked after fit, economics, and risk checks':'Included after the same fit, economics, and risk checks';
   var volatilityRead=/stale/i.test(String(c.ivnote||''))?'Volatility uses stale option prices':/delayed/i.test(String(c.ivnote||''))?'Option prices are delayed; the top bar shows freshness':'Option prices compared with recent movement';
@@ -8234,8 +8305,9 @@ function candidateQuoteReceiptHTML(c,market){
       '<small>'+deskEsc(source||'exact source receipt unavailable')+'</small></div>';
   }).join('');
   var chain=market&&market.chain||{},ambientExpiration=String(chain.expiration||market&&market.expiration||''),
-    sameExpiration=expirations.length===1&&ambientExpiration===expirations[0],
-    ambient=sameExpiration?'<div class="packagebooknear"><span class="hint">Nearby '+deskEsc(ambientExpiration)+' strikes</span>'+
+    isoDate=function(value){var match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);return match?match[0]:String(value||'').trim();},
+    sameExpiration=expirations.length===1&&isoDate(ambientExpiration)!==''&&isoDate(ambientExpiration)===isoDate(expirations[0]),
+    ambient=sameExpiration?'<div class="packagebooknear"><span class="hint">Nearby '+deskEsc(ambientExpiration)+' strikes · matches this package\u2019s expiry</span>'+
       authHomeChainHTML({chain:chain},decide.spot||0,decide.sym)+'</div>':
       '<div class="mcreceipt"><span>Nearby '+deskEsc(ambientExpiration||'ambient')+' chain withheld here because this package expires '+deskEsc(expirations.join(' + ')||'on another date')+'.</span></div>';
   return '<div class="packagebook"><div class="packagebookhead"><span>Side / contract</span><span>Strike</span><span>Expiry</span><span>Bid / ask</span><span>Entry side</span><span>Receipt</span></div>'+body+'</div>'+ambient;
@@ -8651,7 +8723,10 @@ function decAction(a,el){
   }
   if(a==='pathview'){var pathView=el&&el.getAttribute('data-path-view');if(pathView==='price'||pathView==='pnl'){decide.pathView=pathView;renderDecide();}return;}
   if(a==='montecarlo'){
-    if(authoritativeCandidate()){ decide.mcOn=!decide.mcOn; renderDecide(); return; }
+    if(authoritativeCandidate()){
+      if(!decide._mc&&decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
+      if(decide._mc){decide.mcOn=!decide.mcOn;renderDecide();}
+      return; }
     if(decide.mcOn||decide.mcRunning){ decide.mcOn=false; decide.mcRunning=false; decide._mcRunKey=++MC_RUN_SEQ; renderDecide(); return; }
     queueDecisionSimulation(); return;
   }
