@@ -169,8 +169,9 @@ public final class RecommendationEngine {
         Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         boolean avoidEarnings = req.avoidEarnings() == null || req.avoidEarnings();
-        long budget = RiskBudgetPolicy.requestBudgetCents(
+        long riskBudget = RiskBudgetPolicy.requestBudgetCents(
                 mode, buyingPowerCents, req.maxRiskPctOfAccount(), req.maxLossCents());
+        long budget = riskBudget;
         double minConfidence = req.minConfidence() == null ? 0 : req.minConfidence();
 
         List<String> notes = new ArrayList<>();
@@ -350,7 +351,13 @@ public final class RecommendationEngine {
                     }
 
                     CandidateProbe probe = new CandidateProbe();
-                    Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, budget, buyingPowerCents,
+                    // A direct acquisition may use the declared purchase capital. Capped-risk
+                    // substitutes remain sized by the ordinary Plan risk budget; otherwise a
+                    // three-lot share request could quietly scale a vertical to the whole account.
+                    long familyBudget = intent == StrategyIntent.ACQUIRE
+                            && !family.needsStock() && family != StrategyFamily.CASH_SECURED_PUT
+                            ? riskBudget : budget;
+                    Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
                             ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
                             builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
                             quote, ctx.riskFreeRate(), probe);
@@ -992,6 +999,23 @@ public final class RecommendationEngine {
                 return sb.toString().trim();
             }
             case ACQUIRE -> {
+                if (family == StrategyFamily.CREDIT_PUT_SPREAD) {
+                    return "Capped-risk alternative to a cash-secured put: the long put limits the "
+                            + "downside while the short put earns premium. It expresses the desired-price "
+                            + "view but normally settles as a spread; it is not a reliable way to receive shares.";
+                }
+                if (family == StrategyFamily.DEBIT_CALL_SPREAD) {
+                    return "Capped-risk upside alternative while waiting for the desired stock price. "
+                            + "It participates if the shares run away from your target, but it cannot deliver "
+                            + "shares; the debit is the defined risk.";
+                }
+                if (family == StrategyFamily.CALENDAR_PUT) {
+                    return "Staged acquisition with time protection: the near put can assign shares at $"
+                            + (shortPutStrike == null ? "the selected strike"
+                            : shortPutStrike.stripTrailingZeros().toPlainString())
+                            + " while the farther-dated long put remains as a downside floor. It requires "
+                            + "active management and does not guarantee share delivery.";
+                }
                 if (shortPutStrike == null) return null;
                 StringBuilder sb = new StringBuilder();
                 sb.append("If assigned you buy ").append(shares).append(" shares at $")

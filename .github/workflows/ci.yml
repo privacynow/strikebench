@@ -49,14 +49,24 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Program ONE contract, fixture, grown-state, responsive, auth-on, Book Risk, adoption, Desk, and Learn browser matrix
+      - name: Deterministic browser contracts
         working-directory: dom-tests
         run: |
           set -o pipefail
           npm run test:defaults | tee ../target/dom-defaults.tap
           npm run test:scenario | tee ../target/dom-scenario.tap
           npm run test:spa | tee ../target/dom-spa.tap
-          npm run test:fixture | tee ../target/dom-fixture.tap
+
+      - name: Isolated browser journeys
+        working-directory: dom-tests
+        run: |
+          set -o pipefail
+          npm run test:journeys | tee ../target/dom-fixture.tap
+
+      - name: Grown-state, responsive, auth-on, Book Risk, adoption, Desk, and Learn browser matrix
+        working-directory: dom-tests
+        run: |
+          set -o pipefail
           npm run test:seeded | tee ../target/dom-seeded.tap
           npm run test:audit | tee ../target/dom-audit.tap
           npm run test:auth | tee ../target/dom-auth.tap
@@ -79,6 +89,7 @@ jobs:
           path: |
             target/surefire-reports
             target/dom-*.tap
+            target/dom-journey-shards
             target/release-matrix.md
             dom-tests/shots
           retention-days: 14

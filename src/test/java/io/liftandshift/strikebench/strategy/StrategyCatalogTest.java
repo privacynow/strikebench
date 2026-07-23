@@ -49,6 +49,15 @@ class StrategyCatalogTest {
     }
 
     @Test
+    void acquireIncludesDirectDeliveryAndRiskManagedAlternatives() {
+        assertThat(StrategyFamily.CASH_SECURED_PUT.servesIntent(StrategyIntent.ACQUIRE)).isTrue();
+        assertThat(StrategyFamily.CREDIT_PUT_SPREAD.servesIntent(StrategyIntent.ACQUIRE)).isTrue();
+        assertThat(StrategyFamily.DEBIT_CALL_SPREAD.servesIntent(StrategyIntent.ACQUIRE)).isTrue();
+        assertThat(StrategyFamily.CALENDAR_PUT.servesIntent(StrategyIntent.ACQUIRE)).isTrue();
+        assertThat(StrategyFamily.CREDIT_CALL_SPREAD.servesIntent(StrategyIntent.ACQUIRE)).isFalse();
+    }
+
+    @Test
     void concreteTemplatesAreUniqueAndNeverInventAnEngineFamily() {
         var keys = new HashSet<String>();
         Set<String> families = new HashSet<>();

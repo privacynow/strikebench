@@ -10,7 +10,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,38 +60,32 @@ class WorkspaceServiceTest {
                 .hasMessageContaining("too large");
     }
 
-    /** Fan-out is async (a dedicated pump thread) — assertions on delivery must poll briefly. */
-    private static void awaitTrue(java.util.function.BooleanSupplier cond) {
-        long deadline = System.currentTimeMillis() + 3000;
-        while (!cond.getAsBoolean()) {
-            if (System.currentTimeMillis() > deadline) break;
-            try { Thread.sleep(10); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
-        }
-        assertThat(cond.getAsBoolean()).isTrue();
-    }
-
     @Test
-    void writesAnnounceOnTheBus() {
+    void writesAnnounceOnTheBus() throws InterruptedException {
         db = TestDb.fresh();
         WorkspaceService ws = new WorkspaceService(db, clock);
         EventBus bus = new EventBus();
         ws.setEvents(bus);
         List<EventBus.Event> seen = new CopyOnWriteArrayList<>();
-        bus.subscribe(seen::add);
+        CountDownLatch delivered = new CountDownLatch(1);
+        bus.subscribe(event -> { seen.add(event); delivered.countDown(); });
         long rev = ws.put("user-a", "{\"symbol\":\"AAPL\"}");
-        awaitTrue(() -> seen.stream().anyMatch(e ->
-                e.type().equals("workspace.updated") && Long.valueOf(rev).equals(e.data().get("rev"))));
+        assertThat(delivered.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(seen).anyMatch(e ->
+                e.type().equals("workspace.updated") && Long.valueOf(rev).equals(e.data().get("rev")));
     }
 
     @Test
-    void eventBusReplaysSinceAndSurvivesBadSubscribers() {
+    void eventBusReplaysSinceAndSurvivesBadSubscribers() throws InterruptedException {
         EventBus bus = new EventBus();
         bus.subscribe(e -> { throw new RuntimeException("bad subscriber"); });
         List<EventBus.Event> seen = new CopyOnWriteArrayList<>();
-        bus.subscribe(seen::add);
+        CountDownLatch firstTwoDelivered = new CountDownLatch(2);
+        bus.subscribe(event -> { seen.add(event); firstTwoDelivered.countDown(); });
         var e1 = bus.publish("job.progress", Map.of("id", "j1", "done", 1));
         var e2 = bus.publish("job.complete", Map.of("id", "j1", "status", "DONE"));
-        awaitTrue(() -> seen.size() == 2); // the throwing subscriber didn't break delivery
+        assertThat(firstTwoDelivered.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(seen).containsExactly(e1, e2); // the throwing subscriber didn't break delivery
         // The replay ring is synchronous truth regardless of the async pump.
         assertThat(bus.since(e1.seq())).containsExactly(e2);
         assertThat(bus.since(0)).hasSize(2);
@@ -101,12 +97,14 @@ class WorkspaceServiceTest {
         // oldest items during this 400-event burst. Do not require lossless async delivery here.
         // A fresh subscriber gives the unsubscribe check a deterministic delivery barrier.
         List<EventBus.Event> markerSeen = new CopyOnWriteArrayList<>();
-        bus.subscribe(markerSeen::add);
+        CountDownLatch markerDelivered = new CountDownLatch(1);
+        bus.subscribe(event -> { markerSeen.add(event); markerDelivered.countDown(); });
         List<EventBus.Event> removedSeen = new CopyOnWriteArrayList<>();
         Runnable unsub = bus.subscribe(removedSeen::add);
         unsub.run();
         var after = bus.publish("after", Map.of());
-        awaitTrue(() -> markerSeen.stream().anyMatch(event -> event.seq() == after.seq()));
+        assertThat(markerDelivered.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(markerSeen).anyMatch(event -> event.seq() == after.seq());
         assertThat(removedSeen).isEmpty();
     }
 }

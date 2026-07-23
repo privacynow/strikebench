@@ -110,6 +110,42 @@ class YahooFinanceProviderTest {
         assertThat(server.getRequestCount()).isEqualTo(3);
     }
 
+    @Test
+    void badSymbolIsQuarantinedWithoutCoolingDownOrBlockingHealthySymbols() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(400)
+                .setBody("{\"chart\":{\"result\":null,\"error\":{\"code\":\"Bad Request\"}}}"));
+        assertThatThrownBy(() -> provider.candles("BAD.SYMBOL",
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31")))
+                .isInstanceOf(Http.ProviderHttpException.class)
+                .hasMessageContaining("HTTP 400");
+        assertThat(provider.coolingDown()).isFalse();
+        assertThat(server.getRequestCount()).isEqualTo(1);
+
+        // The exact poison symbol is skipped from memory without another HTTP request or warning
+        // heartbeat; the surrounding service can continue to its next provider.
+        assertThat(provider.candles("BAD.SYMBOL",
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).isEmpty();
+        assertThat(server.getRequestCount()).isEqualTo(1);
+
+        server.enqueue(new MockResponse().setBody(JSON).addHeader("Content-Type", "application/json"));
+        assertThat(provider.candles("AAPL",
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).hasSize(2);
+        assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void normalizesShareClassAndRejectsBadRangesBeforeSpendingARequest() throws Exception {
+        server.enqueue(new MockResponse().setBody(JSON).addHeader("Content-Type", "application/json"));
+        provider.candles("BRK.B", LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"));
+        assertThat(server.takeRequest().getPath()).startsWith("/v8/finance/chart/BRK-B?");
+
+        assertThatThrownBy(() -> provider.candles("AAPL",
+                LocalDate.parse("2026-07-31"), LocalDate.parse("2026-06-01")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("from <= to");
+        assertThat(server.getRequestCount()).isEqualTo(1);
+    }
+
     private static MockResponse ok(String body) {
         return new MockResponse().setBody(body).addHeader("Content-Type", "application/json");
     }

@@ -8,6 +8,8 @@
     "test:scenario": "node --test scenario-form.test.js",
     "test:spa": "node --test spa-identity.test.js",
     "test:fixture": "node --test dom.test.js",
+    "test:contracts": "npm run test:defaults && npm run test:scenario && npm run test:spa",
+    "test:journeys": "node run-journey-shards.mjs",
     "test:seeded": "node --test dom-seeded.test.js",
     "test:audit": "node --test dom-audit.test.js",
     "test:auth": "node --test dom-auth.test.js",
@@ -17,7 +19,7 @@
     "test:learn:coverage": "node --test dom-learn-coverage.test.js",
     "test:learn": "npm run test:learn:coverage && node --test dom-learn.test.js",
     "test:live": "node --test dom-live.test.js",
-    "test:ci": "npm run test:defaults && npm run test:scenario && npm run test:spa && npm run test:fixture && npm run test:seeded && npm run test:audit && npm run test:auth && npm run test:bookrisk && npm run test:adoption && npm run test:desk && npm run test:learn"
+    "test:ci": "npm run test:contracts && npm run test:journeys && npm run test:seeded && npm run test:audit && npm run test:auth && npm run test:bookrisk && npm run test:adoption && npm run test:desk && npm run test:learn"
   },
   "type": "commonjs",
   "devDependencies": {

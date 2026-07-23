@@ -85,6 +85,14 @@ class ApiIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> postAccept(String path, String body, String accept) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path))
+                        .header("Content-Type", "application/json")
+                        .header("Accept", accept)
+                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
     private static HttpResponse<String> put(String path, String body) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path))
                 .header("Content-Type", "application/json")
@@ -277,6 +285,41 @@ class ApiIntegrationTest {
         assertThat(missingConstruction.statusCode()).isEqualTo(400);
         assertThat(missingConstruction.body()).contains("goal (intent)", "market view (thesis)",
                 "horizon", "risk posture", "ranking objective");
+    }
+
+    @Test
+    @Order(5)
+    void autoScoutStreamsProgressiveCanonicalResultsOnTheSameEndpoint() throws Exception {
+        HttpResponse<String> res = postAccept("/api/research/scout", """
+                {"universe":["AAPL","SPY"],"horizons":["month"],"maxPicks":2,
+                 "riskMode":"balanced","intents":["INCOME"]}
+                """, "application/x-ndjson");
+        assertThat(res.statusCode()).as(res.body()).isEqualTo(200);
+        assertThat(res.headers().firstValue("Content-Type").orElse(""))
+                .contains("application/x-ndjson");
+        assertThat(res.body()).startsWith(" ".repeat(2048) + "\n");
+        java.util.List<JsonNode> frames = res.body().lines()
+                .filter(line -> !line.isBlank()).map(Json::parse).toList();
+        assertThat(frames).anySatisfy(frame -> assertThat(frame.path("type").asText())
+                .isEqualTo("progress"));
+        assertThat(frames.stream().filter(frame -> "progress".equals(frame.path("type").asText()))
+                .map(frame -> frame.at("/progress/phase").asText()).toList())
+                .contains("SIGNALS", "IDEAS", "BOOK");
+        int firstUsableSignal = java.util.stream.IntStream.range(0, frames.size())
+                .filter(i -> "SIGNALS".equals(frames.get(i).at("/progress/phase").asText())
+                        && !frames.get(i).at("/progress/pick/symbol").asText().isBlank())
+                .findFirst().orElseThrow();
+        int firstPricedIdea = java.util.stream.IntStream.range(0, frames.size())
+                .filter(i -> "IDEAS".equals(frames.get(i).at("/progress/phase").asText()))
+                .findFirst().orElseThrow();
+        assertThat(firstUsableSignal).isLessThan(firstPricedIdea);
+        assertThat(frames.get(firstUsableSignal).at("/progress/pick/horizons").size())
+                .as("the early row is honest evidence, not fabricated package pricing").isZero();
+        JsonNode complete = frames.stream()
+                .filter(frame -> "complete".equals(frame.path("type").asText()))
+                .findFirst().orElseThrow();
+        assertThat(complete.at("/result/picks").size()).isGreaterThan(0);
+        assertThat(complete.at("/result/frontier/decisionRanking").size()).isGreaterThan(0);
     }
 
     @Test

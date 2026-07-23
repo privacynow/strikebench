@@ -577,7 +577,8 @@ public final class MarketDataService {
                 }
                 recordEmpty(p.name(), Domain.CANDLES);
             } catch (Exception e) {
-                recordError(p.name(), Domain.CANDLES, e);
+                recordError(p.name(), Domain.CANDLES, e,
+                        "symbol " + norm(symbol) + " · " + from + " to " + to);
             }
         }
         return CandleSeries.EMPTY;
@@ -612,7 +613,8 @@ public final class MarketDataService {
             recordOk(provider.name(), Domain.CANDLES);
             return series;
         } catch (RuntimeException e) {
-            recordError(provider.name(), Domain.CANDLES, e);
+            recordError(provider.name(), Domain.CANDLES, e,
+                    "symbol " + norm(symbol) + " · " + from + " to " + to);
             throw e;
         }
     }
@@ -819,8 +821,20 @@ public final class MarketDataService {
     }
 
     private void recordError(String provider, Domain d, Exception e) {
+        recordError(provider, d, e, null);
+    }
+
+    private void recordError(String provider, Domain d, Exception e, String requestContext) {
         String detail = publicProviderFailure(e);
-        log.warn("Market source {} could not serve {}: {}", provider, d, detail);
+        String diagnostic = e instanceof io.liftandshift.strikebench.market.providers.Http.ProviderHttpException
+                ? e.getMessage()
+                : detail;
+        if (requestContext == null || requestContext.isBlank()) {
+            log.warn("Market source {} could not serve {}: {}", provider, d, diagnostic);
+        } else {
+            log.warn("Market source {} could not serve {} for {}: {}",
+                    provider, d, requestContext, diagnostic);
+        }
         log.debug("Market source failure detail for " + provider + " " + d, e);
         statusByKey.merge(key(provider, d),
                 new ProviderStatusInfo(provider, d.name(), "ERROR", detail, null, System.currentTimeMillis()),

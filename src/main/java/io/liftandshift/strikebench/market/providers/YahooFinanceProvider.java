@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Keyless daily OHLCV candles from Yahoo Finance's public chart endpoint:
@@ -45,6 +46,13 @@ public final class YahooFinanceProvider implements MarketDataProvider {
     // so an outage cannot be retried across the rest of the universe. While cooling, candles()
     // returns empty and the provider chain falls through to other sources.
     private final io.liftandshift.strikebench.market.ProviderPoliteness politeness;
+    /**
+     * HTTP 400 is deterministic for the exact Yahoo symbol request. Remember it for this process
+     * so the durable retry job cannot repeatedly spend the daily allowance on the same poison
+     * symbol. A restart deliberately retries once, allowing a corrected alias/provider behavior
+     * to heal without a permanent local blacklist.
+     */
+    private final Map<String, Http.ProviderHttpException> rejectedSymbols = new ConcurrentHashMap<>();
 
     public YahooFinanceProvider(AppConfig cfg) {
         this(cfg, null);
@@ -71,24 +79,40 @@ public final class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
+        if (from == null || to == null || from.isAfter(to)) {
+            throw new IllegalArgumentException("Yahoo candle range requires from <= to");
+        }
+        String requestedSymbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String yahooSymbol = yahooSymbol(requestedSymbol);
+        Http.ProviderHttpException rejected = rejectedSymbols.get(yahooSymbol);
+        // The first malformed request is surfaced and logged with its provider diagnostic. Later
+        // maintenance passes skip it quietly so one poison identifier cannot create a permanent
+        // warning heartbeat or consume another request; the normal provider chain may continue.
+        if (rejected != null) return List.of();
         long p1 = from.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
-        // URL-encode the symbol so index/class tickers (^GSPC, BRK-B) reach the right path segment.
-        String enc = java.net.URLEncoder.encode(symbol.trim().toUpperCase(Locale.ROOT), java.nio.charset.StandardCharsets.UTF_8);
+        // URL-encode the provider-normalized symbol so index/class tickers reach the right path segment.
+        String enc = java.net.URLEncoder.encode(yahooSymbol, java.nio.charset.StandardCharsets.UTF_8);
         String url = baseUrl + "/v8/finance/chart/" + enc
                 + "?period1=" + p1 + "&period2=" + p2 + "&interval=1d&events=div%2Csplit";
         // A browser-like User-Agent avoids the occasional bot interstitial; still a plain GET.
         // The politeness gate spaces/limits requests and short-circuits during a rate-limit cooldown.
-        JsonNode root = politeness.call(() -> {
-            if (budget != null) budget.acquire(name(), dailyLimit);
-            String body = http.get(url, Map.of("User-Agent",
-                    "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)"));
-            // Validation belongs inside the breaker call. Yahoo and intervening anti-bot layers can
-            // answer HTTP 200 with HTML, malformed JSON, chart.error, or an empty chart. Treating
-            // those as successful calls reset the failure counter and let a universe job keep
-            // sweeping an unhealthy endpoint.
-            return requireUsableChart(body);
-        }, null);
+        JsonNode root;
+        try {
+            root = politeness.call(() -> {
+                if (budget != null) budget.acquire(name(), dailyLimit);
+                String body = http.get(url, Map.of("User-Agent",
+                        "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)"));
+                // Validation belongs inside the breaker call. Yahoo and intervening anti-bot layers can
+                // answer HTTP 200 with HTML, malformed JSON, chart.error, or an empty chart. Treating
+                // those as successful calls reset the failure counter and let a universe job keep
+                // sweeping an unhealthy endpoint.
+                return requireUsableChart(body);
+            }, null, YahooFinanceProvider::countsAsProviderFailure);
+        } catch (Http.ProviderHttpException e) {
+            if (e.statusCode() == 400) rejectedSymbols.putIfAbsent(yahooSymbol, e);
+            throw e;
+        }
         if (root == null) return List.of();
 
         JsonNode result = root.path("chart").path("result");
@@ -118,6 +142,24 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         }
         out.sort(Comparator.comparing(Candle::date));
         return out;
+    }
+
+    private static boolean countsAsProviderFailure(Exception failure) {
+        return !(failure instanceof Http.ProviderHttpException http && http.statusCode() == 400);
+    }
+
+    /**
+     * Yahoo uses a dash for US share classes while broker/import notation commonly uses a dot.
+     * Keep this provider alias at the boundary; canonical StrikeBench identity remains untouched.
+     */
+    static String yahooSymbol(String requested) {
+        if (requested == null || requested.isBlank()) throw new IllegalArgumentException("symbol is required");
+        String normalized = requested.trim().toUpperCase(Locale.ROOT);
+        if (normalized.matches("[A-Z]{1,6}\\.[A-Z]")) normalized = normalized.replace('.', '-');
+        if (!normalized.matches("[A-Z0-9^=._\\-]{1,20}")) {
+            throw new IllegalArgumentException("symbol is not supported by Yahoo daily history: " + requested);
+        }
+        return normalized;
     }
 
     private static JsonNode requireUsableChart(String body) {

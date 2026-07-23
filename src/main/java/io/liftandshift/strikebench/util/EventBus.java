@@ -37,8 +37,8 @@ public final class EventBus {
     // let one slow client stall all delivery and grow an unbounded queue). Events are hints —
     // when a queue overflows the OLDEST hint is dropped; the client's normal refetching covers it.
     private static final int SUBSCRIBER_QUEUE_MAX = 256;
-    private final java.util.concurrent.ExecutorService drains =
-            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    private static final java.util.concurrent.ThreadFactory DRAIN_THREADS =
+            Thread.ofVirtual().name("strikebench-event-drain-", 0).factory();
 
     private final class Subscriber {
         final Consumer<Event> consumer;
@@ -54,7 +54,7 @@ public final class EventBus {
                 queue.addLast(e);
                 if (!draining) { draining = true; startDrain = true; }
             }
-            if (startDrain) drains.execute(this::drain);
+            if (startDrain) DRAIN_THREADS.newThread(this::drain).start();
         }
 
         private void drain() {
