@@ -9,6 +9,11 @@ to solve a real problem. StrikeBench is the case study, not the product being la
 license announcement, no pitch. Finance terms are explained on first use — the audience is bank
 technologists and open-source program office people, not options traders.
 
+Tech posture (owner-settled): title and story are tech-agnostic; the stack is named once as the
+implementation, with one line making the method portable ("the guarantee comes from one shared
+code path, not any framework"). Never fully agnostic — the open source stack is the admission
+ticket at this conference. No dollar figures anywhere in the materials.
+
 ---
 
 ## Title (final — owner's choice)
@@ -25,32 +30,33 @@ Retired alternates (for reference):
 
 ## Elevator pitch (short field, ≤ ~300 chars)
 
-I built a platform that recommends options trades. To trust it, I needed a backtest — and
-backtests built as separate code from production drift until their results mean little. Mine is
-one Apache Flink job: batch mode replays ten years, streaming mode runs live. Same code —
-nothing to drift, nowhere to lie.
+I built an options platform to learn the domain without risking much money. Its spine is
+backtesting — which worked fine, until I asked what "70% chance of success" had actually meant.
+So I rebuilt it: history and live share one code path (Apache Flink), and every claim became
+checkable.
 
 ## Abstract / description
 
-I trade options for my own account, and I built a platform that recommends trades and scores how
-good its own recommendations are. Testing it honestly ran into a problem every trading system
-has: the code that replays history to evaluate a strategy is never quite the same as the code
-that runs live. The two drift apart, and once they do, the test results quietly stop meaning
-anything.
+I built an options trading platform for one reason: to learn a complex domain without paying
+real-money tuition. The spine of that platform is backtesting — replaying history to check
+whether an idea would have worked. It served me fine, until I started asking harder questions.
+When the platform says a trade has a 70% chance of making money, what does that number actually
+mean? How much trust has it earned?
 
-This talk is about the fix I landed on: one Apache Flink job, run two ways. In batch mode it
-replays ten years of market data, re-makes every recommendation the platform would have made
-along the way, and scores them against what actually happened. In streaming mode the identical
-code runs on live data. Because both modes share one codebase, the test cannot drift from
-production.
+Chasing that question exposed a defect most trading systems share: the code that replays history
+is not the code that runs live. Built separately, the two drift apart, and once they do, test
+results quietly stop meaning much. The fix I landed on is one job that runs two ways: batch mode
+replays ten years and re-makes every recommendation the platform would have made along the way;
+streaming mode runs the identical code on live data. We use Apache Flink for this — though the
+pattern travels, because the guarantee comes from sharing one code path, not from any one
+framework.
 
-On top of that pipeline sit small, explainable machine-learning models — no LLMs. They exist to
-answer one blunt question: when the platform says a trade has a 70% chance of making money, do
-such trades actually work out 70% of the time? A decade of replayed recommendations answers that
-with evidence. The platform has already contradicted me once — it graded my own real-money
-positions and disagreed with my view of them, and on review it was right. I'll cover the
-pipeline, the late-data handling that keeps profit-and-loss numbers from going quietly wrong,
-and what building an honest scorekeeper taught me about my own trading.
+On top sit small, explainable models — no LLMs — that score the replayed recommendations: did
+the "70%" trades actually work out 70% of the time? None of this is a panacea; a backtest can
+still be wrong about the future. What it gives you is a repeatable way to verify claims — and it
+has already contradicted me once, grading my own real-money positions and turning out right.
+I'll cover the pipeline, the late-arriving-data handling that keeps profit-and-loss numbers from
+going quietly wrong, and what an honest scorekeeper taught me about my own trading.
 
 ## Audience takeaways
 
