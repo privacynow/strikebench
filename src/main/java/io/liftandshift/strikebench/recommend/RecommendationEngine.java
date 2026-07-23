@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.recommend;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
@@ -1157,9 +1158,6 @@ public final class RecommendationEngine {
         };
     }
 
-    private static double round2(double v) {
-        return Math.round(v * 100.0) / 100.0;
-    }
 
     private static StrategyFamily.Thesis parseThesis(String s) {
         if (s == null) return StrategyFamily.Thesis.NEUTRAL;

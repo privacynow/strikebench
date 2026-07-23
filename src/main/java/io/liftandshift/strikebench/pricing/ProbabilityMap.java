@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.pricing;
+import static io.liftandshift.strikebench.util.Numbers.round4;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -133,5 +134,4 @@ public final class ProbabilityMap {
 
     private static double clamp01(double v) { return Math.max(0, Math.min(1, v)); }
 
-    private static double round4(double v) { return Math.round(v * 10000.0) / 10000.0; }
 }

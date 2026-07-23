@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.recommend;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
@@ -623,7 +624,4 @@ public final class AutoRecommender {
         return List.copyOf(out);
     }
 
-    private static double round2(double v) {
-        return Math.round(v * 100.0) / 100.0;
-    }
 }

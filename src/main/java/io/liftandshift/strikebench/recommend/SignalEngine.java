@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.recommend;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketLane;
@@ -283,7 +284,4 @@ public final class SignalEngine {
         return NewsSentimentScorer.countHits(haystack, stems);
     }
 
-    private static double round2(double v) {
-        return Math.round(v * 100.0) / 100.0;
-    }
 }
