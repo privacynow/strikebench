@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.BoundedFanout;
 import io.liftandshift.strikebench.util.Money;
+import io.liftandshift.strikebench.util.Symbols;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -221,7 +222,7 @@ public final class AutoRecommender {
         DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         List<String> universe = req.universe() != null && !req.universe().isEmpty()
-                ? req.universe().stream().map(s -> s.trim().toUpperCase(Locale.ROOT)).filter(s -> !s.isBlank()).distinct().toList()
+                ? Symbols.normalize(req.universe())
                 : cfg.autoUniverse();
         List<String> horizons = normalizeHorizons(req.horizons(), allow0dte);
         int maxPicks = req.maxPicks() == null ? DEFAULT_MAX_PICKS : Math.clamp(req.maxPicks(), 1, 10);

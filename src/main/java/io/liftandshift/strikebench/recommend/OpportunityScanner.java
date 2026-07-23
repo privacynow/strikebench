@@ -4,10 +4,10 @@ import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.util.BoundedFanout;
+import io.liftandshift.strikebench.util.Symbols;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Cross-symbol opportunity orchestration. Candidate construction and DecisionPolicy evaluation
@@ -74,7 +74,7 @@ public final class OpportunityScanner {
                                     String worldId, Long maxLossCents,
                                     java.util.function.Function<List<StrategyEvaluation>,
                                             RedeploymentFrontier.Context> contextFactory) {
-        List<String> normalized = normalize(symbols);
+        List<String> normalized = Symbols.normalize(symbols);
         if (normalized.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
 
         record PerSymbol(StrategyEvaluation best, String note) {}
@@ -115,14 +115,4 @@ public final class OpportunityScanner {
                 book.compensationBasis(), book.frontier());
     }
 
-
-
-    private static List<String> normalize(List<String> symbols) {
-        List<String> normalized = new ArrayList<>();
-        for (String raw : symbols == null ? List.<String>of() : symbols) {
-            String symbol = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
-            if (!symbol.isEmpty() && !normalized.contains(symbol)) normalized.add(symbol);
-        }
-        return List.copyOf(normalized);
-    }
 }
