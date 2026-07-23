@@ -201,6 +201,9 @@ public final class ApiServer {
         MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders,
                 new io.liftandshift.strikebench.db.StoredCandleStore(db, marketDataMaintenance));
         market.setDemoSources(fixture, fixture, fixture);
+        // Warm option chains: a scan reads the last-known observed option_bar chain when the live
+        // provider is exhausted/rate-limited/absent, instead of an empty "no listed options".
+        market.setWarmOptionStore(new io.liftandshift.strikebench.db.StoredOptionChainStore(db));
         AuditLog audit = new AuditLog(db, clock);
         AccountService accounts = new AccountService(db, cfg, audit, clock);
         MarketDataMarks marksSource = new MarketDataMarks(market, cfg.fixturesOnly());
