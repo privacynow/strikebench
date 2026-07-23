@@ -164,7 +164,7 @@ final class PlanController {
     private static <T> T bodyOrNull(Context ctx, Class<T> type) { return ApiRequest.bodyOrNull(ctx, type); }
     private static <T> T requireBody(T body) { return ApiRequest.requireBody(body); }
     private List<LocalDate> activeExpirations(String symbol, String world) {
-        var now = market.simInstant(worldParam(world)).orElse(clock.instant());
+        var now = market.laneNow(worldParam(world), clock);
         return ResearchController.activeExpirations(market.expirations(symbol, world), now);
     }
 

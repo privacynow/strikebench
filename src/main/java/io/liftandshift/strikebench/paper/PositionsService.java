@@ -295,7 +295,7 @@ public final class PositionsService {
         List<String> warnings = new ArrayList<>();
         // ONE CLOCK PER LANE: a running sim session is its own open market — the observed
         // market being closed is irrelevant (and saying otherwise was a false claim).
-        java.time.Instant now = marks.simNow(world).orElseGet(clock::instant);
+        java.time.Instant now = marks.simNow(world, clock);
         if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }

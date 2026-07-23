@@ -3398,7 +3398,7 @@ public final class TradeService {
     /** The lane's effective clock: inside a simulated world, the WORLD's sim instant — every
      *  gate, warning, DTE and analytic for a world trade must run on the clock that priced it. */
     private java.time.Instant nowFor(String worldId) {
-        return marks.simNow(worldId).orElseGet(clock::instant);
+        return marks.simNow(worldId, clock);
     }
 
     private static Freshness freshnessOf(io.liftandshift.strikebench.model.DataEvidence evidence) {
