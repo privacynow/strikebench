@@ -192,17 +192,10 @@ public final class RecommendationEngine {
                     ? "No horizon was supplied to this internal engine call; using an explicit 30-session income cycle. Product decision routes still require the user-owned horizon to be persisted before ranking."
                     : "No horizon was supplied to this internal engine call; using the month analysis bucket. Product decision routes still require an explicit persisted horizon.");
         }
-        // ONE CLOCK PER LANE: a simulated session's clock is always in-session while it runs —
-        // the observed market being closed says nothing about THIS market (review P2).
-        java.time.Instant laneNow = market.simInstant(worldId).orElseGet(clock::instant);
-        if (worldId == null && !MarketHours.isRegularSession(laneNow)) {
-            notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
-                    + "not a live quote, and can shift at the next open.");
-        }
         // Buying shares at a discount commits the full purchase price by design — a cash-secured
         // put reserves strike x 100. Capping that by a small risk-% would reject every candidate,
         // so the ACQUIRE flow caps by available cash instead (unless the user set explicit limits).
-        if (StrategyIntent.parse(req.intent()) == StrategyIntent.ACQUIRE
+        if (intent == StrategyIntent.ACQUIRE
                 && req.maxRiskPctOfAccount() == null && req.maxLossCents() == null) {
             budget = buyingPowerCents;
             notes.add("Acquire flow: capital is capped by your buying power, not the risk-mode budget — "
@@ -211,25 +204,15 @@ public final class RecommendationEngine {
         List<Rejection> rejected = new ArrayList<>();
         List<Candidate> candidates = new ArrayList<>();
 
-        var lane = market.lane(worldId);
-        Quote quote = market.quote(symbol, worldId).orElse(null);
-        if (quote == null) {
-            notes.add(missingMarketDataNote(lane, symbol));
+        SymbolReady ready = preflightSymbol(symbol, worldId, notes);
+        if (ready == null) {
             return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
-        if (!quote.evidence().usableIn(lane)) {
-            notes.add("No " + lane + "-lane quote is available for " + symbol + "; refusing to substitute "
-                    + quote.evidence().provenance() + " data from " + quote.evidence().source());
-            return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget,
-                    null, List.of(), rejected, notes, DISCLAIMER);
-        }
-        List<LocalDate> expirations = market.expirations(symbol, worldId);
-        if (!quote.optionable() || expirations.isEmpty()) {
-            notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
-            return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
-        }
-
-        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+        var lane = ready.lane();
+        Quote quote = ready.quote();
+        List<LocalDate> expirations = ready.expirations();
+        java.time.Instant laneNow = ready.laneNow();
+        LocalDate today = ready.today();
         // DYNAMIC EXPIRY (engine remediation): the horizon is an ANCHOR, not a rigid bucket. Gather
         // the liquid, executable-chain expirations near it and let each family pick the one where it
         // is most profitable — instead of forcing one quantized date whose chain may be empty/thin,
@@ -467,28 +450,20 @@ public final class RecommendationEngine {
         };
         String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
         List<String> notes = new ArrayList<>();
-        java.time.Instant ladderNow = market.simInstant(worldId).orElseGet(clock::instant);
-        if (worldId == null && !MarketHours.isRegularSession(ladderNow)) {
-            notes.add("The market is closed — these rungs are measured off the PRIOR CLOSE and can shift at the open.");
-        }
         Holdings holdings = req.holdings();
         Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
 
-        var lane = market.lane(worldId);
-        Quote quote = market.quote(symbol, worldId).orElse(null);
-        List<LocalDate> expirations = quote == null ? List.of() : market.expirations(symbol, worldId);
-        if (quote == null || !quote.optionable() || expirations.isEmpty()) {
-            notes.add(quote == null ? missingMarketDataNote(lane, symbol)
-                    : symbol + " has no listed options");
+        SymbolReady ready = preflightSymbol(symbol, worldId, notes);
+        if (ready == null) {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
-        if (!quote.evidence().usableIn(lane)) {
-            notes.add("No " + lane + "-lane quote is available for " + symbol);
-            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
-        }
-        LocalDate today = LocalDate.ofInstant(ladderNow, MarketHours.EASTERN);
+        var lane = ready.lane();
+        Quote quote = ready.quote();
+        List<LocalDate> expirations = ready.expirations();
+        java.time.Instant ladderNow = ready.laneNow();
+        LocalDate today = ready.today();
         String horizon = effectiveHorizon(req.horizon(), intent);
         if (req.horizon() == null || req.horizon().isBlank()) {
             notes.add(intent == StrategyIntent.INCOME
@@ -571,6 +546,38 @@ public final class RecommendationEngine {
         }
         if (sharesHeld) notes.add("Sized against your " + freeShares + " free shares");
         return new LadderResult(symbol, intent.name(), rungs, notes, DISCLAIMER);
+    }
+
+    /** The lane clock, a usable quote, its expirations, and today's lane date — the shared symbol
+     *  readiness both recommend() and ladder() need. Null means "not tradable in this lane"; the
+     *  reason is appended to {@code notes}. One determination, so the two surfaces cannot drift. */
+    private record SymbolReady(java.time.Instant laneNow, LocalDate today,
+                               io.liftandshift.strikebench.market.MarketLane lane, Quote quote,
+                               List<LocalDate> expirations) {}
+
+    private SymbolReady preflightSymbol(String symbol, String worldId, List<String> notes) {
+        // ONE CLOCK PER LANE: a simulated session's clock is always in-session while it runs — the
+        // observed market being closed says nothing about THIS market (review P2).
+        java.time.Instant laneNow = market.simInstant(worldId).orElseGet(clock::instant);
+        if (worldId == null && !MarketHours.isRegularSession(laneNow)) {
+            notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
+                    + "not a live quote, and can shift at the next open.");
+        }
+        io.liftandshift.strikebench.market.MarketLane lane = market.lane(worldId);
+        Quote quote = market.quote(symbol, worldId).orElse(null);
+        if (quote == null) { notes.add(missingMarketDataNote(lane, symbol)); return null; }
+        if (!quote.evidence().usableIn(lane)) {
+            notes.add("No " + lane + "-lane quote is available for " + symbol + "; refusing to substitute "
+                    + quote.evidence().provenance() + " data from " + quote.evidence().source());
+            return null;
+        }
+        List<LocalDate> expirations = market.expirations(symbol, worldId);
+        if (!quote.optionable() || expirations.isEmpty()) {
+            notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
+            return null;
+        }
+        return new SymbolReady(laneNow, LocalDate.ofInstant(laneNow, MarketHours.EASTERN),
+                lane, quote, expirations);
     }
 
     private static String missingMarketDataNote(io.liftandshift.strikebench.market.MarketLane lane,
