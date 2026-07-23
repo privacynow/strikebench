@@ -36,9 +36,9 @@ Session Presentation (typically 30 minutes).
 
 Any. The talk defines every finance term it uses.
 
-## Benefits to the Ecosystem (735 characters)
+## Benefits to the Ecosystem (901 characters)
 
-Every institution that backtests strategies faces the same failure mode: replay code and production code are built separately and drift apart until test results cannot be trusted. This talk shows a reusable pattern, demonstrated with Apache Flink but portable to any engine, that removes the drift by construction: one code path serves both historical replay and live processing. It also shows a practical method for measuring whether a model's confidence numbers deserve trust, and for publishing that track record instead of asking users for faith. Both patterns apply directly to trading, risk, and reporting pipelines in regulated environments. Nothing is sold here; the platform is a personal project used as an honest case study.
+This solves two problems. First, backtest drift: backtests drive real capital decisions, but they usually run on a second implementation of the trading logic, and the two codebases drift apart until the test results describe nothing that actually runs. The pattern shown here, demonstrated with Apache Flink but portable to any engine, removes that by construction: one code path serves both historical replay and live processing. Second, unaudited confidence: models emit probabilities that are rarely checked against what later happened. The talk shows a repeatable way to score every past prediction and publish the reliability record. Both patterns apply directly to trading, risk, and reporting pipelines in regulated environments, where every institution rebuilds this non-differentiating plumbing privately. Nothing is sold here; the platform is a personal project used as an honest case study.
 
 ## Session keywords (they ask for at least 5)
 
