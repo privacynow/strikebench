@@ -280,6 +280,13 @@ public final class ApiResponses {
                     evaluation.coverage(), evaluation.explanation());
         }
 
+        /** Attaches this receipt onto a candidate JSON node under "evaluation" — THE one place that
+         *  serializes an evaluation receipt into a candidate, reused by every ranked surface. */
+        public static void attachTo(com.fasterxml.jackson.databind.node.ObjectNode node,
+                                    StrategyEvaluation evaluation) {
+            node.set("evaluation", io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(of(evaluation)));
+        }
+
         public static EvaluationReceipt unavailable(String reason, boolean mechanicallyEligible,
                                                     List<String> mechanicalReasons,
                                                     long estimatedRoundTripFeesCents) {

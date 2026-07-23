@@ -311,7 +311,7 @@ final class PlanStrategyController {
                     candidate.put("scoutScope", scope); candidate.put("scoutHorizon", horizon.horizon());
                     candidate.put("opportunityScore", pick.opportunityScore());
                     if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
-                    candidate.set("evaluation", Json.MAPPER.valueToTree(ApiResponses.EvaluationReceipt.of(evaluation)));
+                    ApiResponses.EvaluationReceipt.attachTo(candidate, evaluation);
                     var endorsement = evaluation.evidence() == null ? null
                             : evaluation.evidence().claims().get("endorsement");
                     readinessTally.add(economics,
