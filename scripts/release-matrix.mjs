@@ -61,6 +61,7 @@ const rows = liveOnly
       ['Auth-on browser (signed-out + signed-in)', browserResult('dom-auth.tap')],
       ['Book Risk browser', browserResult('dom-bookrisk.tap')],
       ['Adopted-position two-lens browser', browserResult('dom-adoption.tap')],
+      ['Desk/New Idea/Position browser', browserResult('dom-desk.tap')],
       ['Learn explanation coverage', browserResult('dom-learn-coverage.tap')],
       ['Learn SPA browser', browserResult('dom-learn.tap')]
     ];
