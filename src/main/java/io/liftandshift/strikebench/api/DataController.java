@@ -346,7 +346,7 @@ final class DataController {
         String owner = ownerId.apply(ctx);
         String activeMarket = activeWorld.apply(ctx);
         if (!DatasetService.OBSERVED.equals(body.id())
-                && !"observed".equals(activeMarket) && !"demo".equals(activeMarket)) {
+                && io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(activeMarket)) {
             throw new IllegalStateException("You are inside a simulated market session — return to the "
                     + "baseline market before activating a scenario dataset (they are separate worlds).");
         }

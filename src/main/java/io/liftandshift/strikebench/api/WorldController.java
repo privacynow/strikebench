@@ -371,7 +371,7 @@ final class WorldController {
                 || freshness == io.liftandshift.strikebench.model.Freshness.STALE) {
             base = "anchored to the real market's last " + freshness.name().toLowerCase() + " price";
         } else if (freshness == io.liftandshift.strikebench.model.Freshness.SIMULATED
-                || (sourceWorld != null && !"observed".equals(sourceWorld) && !"demo".equals(sourceWorld))) {
+                || (sourceWorld != null && io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(sourceWorld))) {
             base = "anchored to the active simulated market's generated price";
         } else {
             base = "anchored to a built-in DEMO quote — not a live price";

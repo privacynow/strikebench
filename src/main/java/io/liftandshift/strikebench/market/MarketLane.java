@@ -23,6 +23,15 @@ public enum MarketLane {
         return world == null || "observed".equals(world) ? null : world;
     }
 
+    /**
+     * True when the world token names a live simulated exchange — i.e. NOT the OBSERVED or DEMO
+     * replayable lanes. THE one definition of the "this is a generated market" guard, previously
+     * re-spelled as {@code !"observed".equals(x) && !"demo".equals(x)} in six places.
+     */
+    public static boolean isSimulatedWorld(String world) {
+        return !"observed".equals(world) && !"demo".equals(world);
+    }
+
     public static MarketLane of(String worldId, boolean fixturesOnly,
                                 io.liftandshift.strikebench.db.AnalysisContext context) {
         MarketLane market = of(worldId, fixturesOnly);

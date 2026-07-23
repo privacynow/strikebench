@@ -96,7 +96,7 @@ public final class WorldTransitionService {
         if (config.fixturesOnly() && "observed".equals(saved)) {
             return repair(owner, saved, fallback, "OBSERVED_UNAVAILABLE_IN_DEMO_BUILD");
         }
-        if (!"observed".equals(saved) && !"demo".equals(saved)
+        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(saved)
                 && sessions.getOrRestore(saved, owner).isEmpty()) {
             return repair(owner, saved, fallback, "SAVED_SCENARIO_UNAVAILABLE");
         }
@@ -175,7 +175,7 @@ public final class WorldTransitionService {
         if (config.fixturesOnly() && "observed".equals(world)) {
             throw new IllegalStateException("Observed market is unavailable in this explicit demo build");
         }
-        if (!"observed".equals(world) && !"demo".equals(world)) {
+        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(world)) {
             sessions.ensureReady(world, owner);
             sessions.getOrRestore(world, owner)
                     .orElseThrow(() -> new ResourceNotFoundException("no such simulated session: " + world));

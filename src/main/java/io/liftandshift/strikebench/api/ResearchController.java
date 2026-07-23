@@ -351,7 +351,7 @@ final class ResearchController {
     private void news(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
-        if (!"observed".equals(world) && !"demo".equals(world)) {
+        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(world)) {
             var unavailable = NewsSentimentScorer.unavailable(List.of(),
                     NewsSentimentScorer.UNAVAILABLE_BASIS,
                     "Simulated market — there is no issuer-news feed in this world; Observed headlines are not borrowed.");
