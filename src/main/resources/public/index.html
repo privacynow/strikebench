@@ -1105,7 +1105,6 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authresearchgrid .authresearchpanel{min-height:0}.authresearchgrid .authhistory{height:92px}
   .authposside .authmetricgrid{grid-template-columns:repeat(6,minmax(0,1fr));gap:5px}
   .authposside .authmetric{padding:6px 7px}
-  .authposside .declegs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;max-height:none;overflow:hidden;padding-right:0}
   .authposside .authleg{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"side qty mark" "contract contract contract";gap:3px 6px;padding:5px 6px}
   .authposside .authleg .side{grid-area:side}.authposside .authleg>span:nth-child(2){grid-area:qty;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authposside .authleg .contract{grid-area:contract}.authposside .authleg .mark{grid-area:mark}
 }
@@ -1117,7 +1116,8 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .authcompare .acrow b,.authcompare .acrow span:not(:first-child){font-family:var(--mono);text-align:right}.authcompare .acrow b{text-align:left;color:var(--text)}
 .authcompare .acrow b small{color:var(--accent);font-family:var(--sans);font-weight:650}
 .upanel.bookcmp{display:flex;flex-direction:column;min-height:0}
-.upanel.bookcmp .authcompare.acrows{flex:1 1 auto;min-height:0;margin-top:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;align-content:start}
+.upanel.bookcmp .authcompare.acrows{flex:1 1 auto;min-height:0;margin-top:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;align-content:start;scrollbar-width:none}
+.upanel.bookcmp .authcompare.acrows::-webkit-scrollbar{width:0}
 .upanel.bookcmp .authcompare.acrows>[data-scroll-row]{scroll-snap-align:start}
 .inspectpane:has(.upanel.bookcmp){display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .inspectpane:has(.upanel.bookcmp)>.upanel.bookcmp{flex:1;min-height:0}
@@ -1554,7 +1554,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   border:1px solid var(--accent);background:var(--ground);box-shadow:0 0 0 5px rgba(70,213,181,.08);font-size:10px}
 .ensemblecap{position:absolute;left:12px;bottom:10px;font-size:var(--f-2xs);color:var(--faint);letter-spacing:.04em;text-transform:uppercase}
 .ensemblerun{display:grid;place-items:center;color:var(--dim);font-size:var(--f-xs)}
-.ensembleempty{position:absolute;inset:0;display:grid;place-items:center;padding:14px;text-align:center}
+.ensembleempty{position:absolute;inset:0;display:grid;place-items:center;padding:14px;text-align:center;overflow:auto}
 .ensembleempty b{display:block;margin-bottom:5px;color:var(--text);font-size:var(--f-xs)}
 .ensembleempty span{display:block;max-width:46ch;color:var(--faint);font-size:var(--f-2xs);line-height:1.5}
 .ensembleempty .btn{margin-top:9px}
@@ -2517,7 +2517,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dcleft .leftsupport{display:flex;flex:none;height:auto;flex-direction:column;gap:9px;min-height:0;overflow:visible}
   .dcleft .pickmap{flex:none;height:clamp(250px,68vw,360px);min-height:250px;border-top:1px solid var(--line-soft);border-left:0;padding:7px 0 0}
   .dcleft .decmap{min-height:185px}
-  .decgrid.few-ideas.short-package .dcleft .pickmap{height:clamp(280px,76vw,390px);min-height:280px}
   .dcleft .pickmap .fanleg{display:flex}
   .dcleft .declegpanel .declegs{flex-direction:column;align-items:stretch;max-height:none;overflow:visible;padding:0;scroll-snap-type:none}
   .declegpanel .declegs .legr{flex:none;width:100%;min-width:0;max-width:none;min-height:42px;scroll-snap-align:none}
@@ -2734,11 +2733,14 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    When height runs out, the chain slice and news scroll honestly inside their columns
    instead of silently losing rows or silently eating the column. */
 .decmarketband{flex:0 1 auto;min-height:150px;max-height:min(46vh,520px);display:flex;flex-direction:column;overflow:hidden}
-.decmarketband .marketctx{flex:1 1 auto;min-height:0;grid-template-rows:minmax(0,1fr);overflow:hidden}
+.decmarketband .marketctx{flex:1 1 auto;min-height:0;grid-template-rows:minmax(0,1fr);grid-auto-rows:minmax(0,1fr);overflow:hidden}
 .decmarketband .marketcol{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .decmarketband .marketcol .authnews{flex:1 1 auto;min-height:0;overflow:auto}
 .decmarketband .packagebook{flex:none}
 .decmarketband .packagebooknear{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
+/* when the bounded band crushes the column below its receipt rows, the whole package-book
+   column scrolls as one honest unit instead of clipping the exact captured bid/ask rows */
+.decmarketband .packagebookcol{overflow-y:auto;overscroll-behavior:contain}
 .decmarketband .authmarkethero{margin-bottom:6px;display:flex;align-items:baseline;gap:9px}
 .decmarketband .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
 .decmarketband .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
@@ -2892,10 +2894,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .strategycoverage em{grid-column:1/-1;min-width:0;font-style:normal;font-size:var(--f-2xs);line-height:1.3;white-space:normal}
 .strategycoverage strong{color:var(--accent);font-size:var(--f-2xs);white-space:nowrap}
 
-/* A single surviving point is a receipt, not a giant comparative chart. */
+/* A single surviving point is a receipt, not a giant comparative chart. This rule outranks
+   the few-ideas growth rules (higher specificity, later in source) in every media regime. */
 @media(min-width:1001px){
-  .dcleft .pickmap.single-point{height:clamp(190px,22vh,260px);min-height:190px}
-  .dcleft .pickmap.single-point .decmap{min-height:135px}
+  .decgrid .dcleft .pickmap.single-point,
+  .decgrid.few-ideas .dcleft .pickmap.single-point{flex:0 0 auto;height:clamp(190px,22vh,260px);min-height:190px;max-height:260px}
+  .decgrid .dcleft .pickmap.single-point .decmap{min-height:135px}
 }
 
 /* The selected package's captured book is the primary premium receipt. An ambient chain is shown
@@ -2949,10 +2953,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* Home's orientation band and its cells use the same surface grammar at every density. */
 .homesummary{border-bottom:1px solid var(--line-soft);background:linear-gradient(180deg,var(--panel),var(--ground))}
 .homesummary .perfband,.homesummary .bookline{background:transparent}
-/* Short desktop viewports: the two-row board keeps its floors and the page scrolls instead of clipping. */
-@media(min-width:1500px) and (max-height:899px){
-  .lv-book .board,.lv-book[data-book-authority="empty"] .board{overflow-y:auto}
-}
 @media(max-width:1199px){
   .scoutactivegrid{grid-template-columns:1fr}
   .scoutresultcard{min-height:250px}
@@ -3025,6 +3025,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeacquirefields label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:7px;padding:5px 7px;border:1px solid var(--accent-2);border-radius:7px;background:var(--accent-wash)}
 .homeacquirefields span{color:var(--dim);font-size:var(--f-2xs);white-space:nowrap}
 .homesectorchips{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 auto;overflow-x:auto;scrollbar-width:none;padding:1px 0}
+.homesectorchips.overflowing{mask-image:linear-gradient(to right,transparent 0,#000 14px,#000 calc(100% - 18px),transparent 100%)}
 .homesectorchips::-webkit-scrollbar{display:none}
 .homesectorchips button{flex:none;min-height:22px;padding:2px 9px;border:1px solid var(--line-soft);border-radius:999px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}
 .homesectorchips button:hover{background:var(--row-hover);color:var(--text)}
@@ -3032,7 +3033,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeworkbenchactions{display:flex;align-items:center;gap:8px}
 .homeworkbenchactions .btn{min-width:150px}.homeworkbenchactions>span{min-width:0;color:var(--faint);font-size:var(--f-2xs);line-height:1.35}
 .homeworkbenchpanel .scoutactivegrid>.scoutidlefield{display:block;min-width:0;margin-top:0}
-@media(max-width:1499px){
+@media(max-width:1700px){
 .homeworkbenchpanel:not(.emptyopportunitypanel) .scoutactivegrid{display:flex;flex-direction:column;gap:8px}
 .homeworkbenchpanel:not(.emptyopportunitypanel) .scoutactivegrid>.scoutidlefield{flex:0 0 auto;min-height:auto}
 .homeworkbenchpanel:not(.emptyopportunitypanel) .scoutresultcard{flex:1 1 140px;min-height:140px;overflow:hidden}
@@ -3071,6 +3072,18 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book[data-book-authority="empty"][data-plan-count="0"][data-position-count="1"] .board{grid-template-areas:
       "chain chain chain chain chain chain chain chain sector sector news news"
       "map map map map map map map map univ univ univ univ"}
+}
+/* Short desktop viewports: the row floors exceed the available board height, so the board
+   scrolls honestly instead of clipping the work row. Placed AFTER the board block above —
+   these selectors tie on specificity and must win by source order. */
+@media(min-width:1500px) and (max-height:919px){
+  .lv-book .board,
+  .lv-book[data-position-count="1"] .board,
+  .lv-book[data-position-count="1"][data-plan-count="0"] .board,
+  .lv-book[data-book-authority="empty"] .board,
+  .lv-book[data-book-authority="empty"][data-position-count="1"] .board,
+  .lv-book[data-book-authority="empty"][data-plan-count="0"] .board,
+  .lv-book[data-book-authority="empty"][data-plan-count="0"][data-position-count="1"] .board{overflow-y:auto}
 }
 @media(min-width:1200px) and (max-width:1499px){
   .lv-book .board,
@@ -3777,7 +3790,7 @@ function authForkPositionLegs(p,originRect,edit){
   else authOpenSymbol(p.sym,originRect);
 }
 function authPositionLegsHTML(p){if(!p.legs.length)return '<div class="backendnotice">This package has no legs to show.</div>';
-  return '<div class="declegpanel posheld"><div class="declegs">'+p.legs.map(function(l,i){return backendDecisionLegChip(l,i,true);}).join('')+'</div>'+
+  return '<div class="declegpanel posheld"><div class="declegs">'+p.legs.map(function(l,i){return backendDecisionLegChip(l,i,true,p.sym);}).join('')+'</div>'+
     '<div class="declegfoot"><span class="hint">Held package — touching a control opens a new idea seeded with these exact legs.</span></div></div>';}
 function authEvidenceLabel(e){if(!e)return 'unavailable';return [e.provenance,e.age,e.source].filter(Boolean).join(' · ')||'unavailable';}
 function authNewsHTML(data){var items=data&&data.news&&data.news.items||[];if(!items.length)return '<div class="backendnotice">No current headlines were returned for this symbol.</div>';return '<div class="authnews">'+items.slice(0,8).map(function(n){var href=/^https?:\/\//.test(String(n.url||''))?String(n.url):'#',sentiment=n.classification?authHuman(n.classification):null;return '<a href="'+deskEsc(href)+'" target="_blank" rel="noopener"><b>'+deskEsc(n.headline||'Untitled headline')+'</b><small>'+deskEsc([n.source,sentiment].filter(Boolean).join(' · '))+'</small></a>';}).join('')+'</div>';}
@@ -3863,7 +3876,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div><div class="authmetric"><span>Close cost</span><b>'+authMoney(authDollarsFromCents(cur.closeCostCents))+'</b></div>'+
       '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span>POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
       '<div class="authmetric"><span>Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span>Theta / day</span><b>'+(authNumber(greeks.thetaPerDay)==null?'—':money(Number(greeks.thetaPerDay)))+'</b></div></div>'+
-      '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+' · touch to fork</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
+      '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+' · touch a control to adjust in a new idea</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
     '<div class="authresearchgrid"><section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
       '<div class="authmetric"><span>ATM IV</span><b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></div><div class="authmetric"><span>Market data</span><b>'+deskEsc(quoteStatus)+'</b></div></div>'+
@@ -5186,7 +5199,7 @@ function authHomeUnderlyingMatchesHTML(){
   var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Scan →</em></button>';}).join('')+
     matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(HOME_IDEA.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
   if(!query&&!chosen)return '<div class="homeideahelp">Type a ticker or company. Choosing a match only stages it; nothing loads until Analyze.</div>';
-  if(query&&!rows)return chosen+'<div class="homeideahelp">No governed underlying or market sector matches “'+deskEsc(HOME_IDEA.query)+'”. Try another name or clear the Market lens.</div>';
+  if(query&&!rows)return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(HOME_IDEA.query)+'”. Try another name, or choose Broad market above.</div>';
   return chosen+(rows?'<div class="homeideamatches">'+rows+'</div>':'');
 }
 function authOpportunityControlsHTML(){
@@ -5220,13 +5233,15 @@ function authOpportunityRowHTML(symbol,name,detail,value,ev){
   return '<button type="button" class="opportunityrow" data-scroll-row data-auth-analyze-symbol="'+deskEsc(symbol)+'" aria-label="Analyze '+deskEsc(symbol)+' in New idea"><strong>'+deskEsc(symbol||'—')+'</strong><span><b>'+deskEsc(name||'No package cleared this scan')+'</b><small>'+deskEsc(detail||'Complete receipts unavailable')+'</small></span><em class="'+(ev==null?'':ev>=0?'pos':'neg')+'">'+deskEsc(value||'—')+'</em><span class="opportunitygo">Analyze →</span></button>';
 }
 function authPartialOpportunityRowsHTML(picks){
-  return (Array.isArray(picks)?picks.slice():[]).sort(function(a,b){return Number(b&&b.opportunity&&b.opportunity.score||0)-Number(a&&a.opportunity&&a.opportunity.score||0);}).slice(0,5).map(function(pick){var idea=pick.bestIdea||{},opportunity=pick.opportunity||{},priced=idea.available===true||!!idea.family||!!idea.displayName,ev=authNumber(idea.realizedVolEvAfterCostsCents),score=authNumber(opportunity.score),value=ev==null?(score==null?'receipts pending':Math.round(score)+' signal'):(ev>=0?'+':'')+authMoney(ev/100)+' EV',detail=priced?[idea.economicVerdict&&authHuman(idea.economicVerdict),idea.horizon&&authHuman(idea.horizon),'Book checks pending'].filter(Boolean).join(' · '):'Evidence ranked · exact package pricing pending';return authOpportunityRowHTML(pick.symbol,priced?idea.displayName:'Evidence ready',detail,value,ev);}).join('');
+  return (Array.isArray(picks)?picks.slice():[]).sort(function(a,b){return Number(b&&b.opportunity&&b.opportunity.score||0)-Number(a&&a.opportunity&&a.opportunity.score||0);}).slice(0,5).map(function(pick){var idea=pick.bestIdea||{},opportunity=pick.opportunity||{},priced=idea.available===true||!!idea.family||!!idea.displayName,ev=authNumber(idea.realizedVolEvAfterCostsCents),score=authNumber(opportunity.score),value=ev==null?(score==null?'receipts pending':Math.round(score)+' signal'):(ev>=0?'+':'')+authMoney(ev/100)+' after costs',detail=priced?[idea.economicVerdict&&authHuman(idea.economicVerdict),idea.horizon&&authHuman(idea.horizon),'Book checks pending'].filter(Boolean).join(' · '):'Evidence ranked · exact package pricing pending';return authOpportunityRowHTML(pick.symbol,priced?idea.displayName:'Evidence ready',detail,value,ev);}).join('');
 }
 function authHomeStrategyFieldHTML(){
   /* One honest sentence, not an inert list — the catalog itself lives in New idea. */
   var data=BOOK_AUTH.data||{},bridge=window.DeskBackend&&window.DeskBackend.state&&window.DeskBackend.state(),
     doc=data.strategyCatalog||bridge&&bridge.strategyCatalog,entries=doc&&Array.isArray(doc.catalog)?doc.catalog:[],intent=String(HOME_SCOUT.goal||'INCOME').toUpperCase();
-  if(!entries.length)return '<div class="homecatalogline warn">The strategy catalog is unavailable right now; the scan will not guess a family list.</div>';
+  if(!entries.length)return bridge&&bridge.strategyCatalogError
+    ?'<div class="homecatalogline warn">The strategy catalog is unavailable right now; the scan will not guess a family list.</div>'
+    :'<div class="homecatalogline">Loading the strategy catalog…</div>';
   var applicable=entries.filter(function(entry){return entry&&entry.recommendationEnabled!==false&&!entry.blockedByDefault&&Array.isArray(entry.intents)&&entry.intents.indexOf(intent)>=0;}).sort(function(a,b){return Number(a.foundationalRank||99)-Number(b.foundationalRank||99);});
   if(!applicable.length)return '<div class="homecatalogline warn">No supported structure is mapped to this goal.</div>';
   var names=applicable.slice(0,3).map(function(entry){return String(entry.display||authHuman(entry.name)).toLowerCase();});
@@ -5257,7 +5272,7 @@ function authOpportunityHTML(expanded){
       var ev=authNumber(idea.realizedVolEvAfterCostsCents),qualification=String(entry.qualification||entry.economicVerdict||'ECONOMICS_UNAVAILABLE'),impact=null,impacts=Array.isArray(entry.bookImpacts)?entry.bookImpacts:[];
       for(var j=0;j<impacts.length;j++){if(!frontier||String(impacts[j].accountId)===String(frontier.destinationAccountId)){impact=impacts[j];break;}}
       var dataStatus=entry.dataCompleteness&&entry.dataCompleteness.status,detail=[entry.economicVerdict&&authHuman(entry.economicVerdict),authHuman(qualification),impact&&('Book '+authHuman(impact.status)),dataStatus&&authHuman(dataStatus)].filter(Boolean).join(' · ');
-      var value=ev==null?(score==null?'—':Math.round(score)+' decision'):(ev>=0?'+':'')+authMoney(ev/100)+' EV';
+      var value=ev==null?(score==null?'—':Math.round(score)+' decision'):(ev>=0?'+':'')+authMoney(ev/100)+' after costs';
       return authOpportunityRowHTML(entry.symbol||pick.symbol,idea.displayName||authHuman(entry.strategy),detail,value,ev);
     }).join('');
     var compensation=frontier&&Array.isArray(frontier.compensationRanking)?frontier.compensationRanking:(Array.isArray(state.data.compensation)?state.data.compensation:[]),comp=compensation.slice(0,2).map(function(row){var components=Array.isArray(row.components)?row.components:[],premium=components.find(function(component){return /annualized premium yield/i.test(String(component.name||''));}),note=premium&&premium.note||'Compensation score remains separate from decision economics.';return '<b title="'+deskEsc(note)+'">'+deskEsc(row.symbol||'—')+' '+Math.round(authNumber(row.score)||0)+(premium&&premium.note?'<small>'+deskEsc(premium.note)+'</small>':'')+'</b>';}).join('<em>·</em>');
@@ -5316,7 +5331,7 @@ async function authOpenPlan(plan,origin){if(!plan||AUTH_PLAN_OPEN_PENDING)return
       });
     }
     enterDecide('idea',null,'Resume '+String(plan.symbol||'idea'),origin,String(plan.symbol||'').toUpperCase(),plan);
-  }catch(error){toast(error&&error.message||'The idea’s market could not be opened.');}
+  }catch(error){AUTH_PENDING_FORK=null;toast(error&&error.message||'The idea’s market could not be opened.');}
   finally{AUTH_PLAN_OPEN_PENDING=false;}}
 function authOpenSymbol(symbol,origin){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase());}
 function authStageHomeSymbol(symbol){
@@ -5408,7 +5423,14 @@ function authBindHomeLists(){
   [['homeWatchList','.authmarketrow'],['homeNewsList','[data-scroll-row]'],['homePlansList','.authlistrow']].forEach(function(cfg){
     var node=document.getElementById(cfg[0]);
     if(node)bindElegantList(node,cfg[1],node.parentElement&&node.parentElement.querySelector('.overflowmeta'));
-  });}
+  });
+  var chips=document.querySelector('.homesectorchips');
+  if(chips){
+    var syncChips=function(){chips.classList.toggle('overflowing',chips.scrollWidth>chips.clientWidth+2);};
+    /* the first rAF can race layout; measure again on the next frame and on resize */
+    syncChips();window.requestAnimationFrame(syncChips);
+    if(window.ResizeObserver&&!chips._chipRo){chips._chipRo=new ResizeObserver(syncChips);chips._chipRo.observe(chips);}
+  }}
 function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,bookEl,document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};}),listScrolls=['homeWatchList','homeNewsList','homePlansList'].map(function(id){var node=document.getElementById(id);return node?{id:id,top:node.scrollTop}:null;}).filter(Boolean);authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});listScrolls.forEach(function(row){var node=document.getElementById(row.id);if(node)node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
 function authShareInventoryHTML(shares){if(!shares.length)return '';var rows=shares.slice(0,2).map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),basis=authDollarsFromCents(row.avgCostCents),unreal=authDollarsFromCents(row.unrealizedCents),symbol=String(row.symbol||'—').toUpperCase();return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(symbol)+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+authMoney(basis)+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+authSigned(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(symbol)+'">Shape</button></div>';});if(shares.length>2)rows.push('<div class="authmore">+'+(shares.length-2)+' more share lines · Book retains the complete inventory</div>');return '<div class="homeoneshares"><div class="lenshd sub"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' line'+(shares.length===1?'':'s')+'</span></div><div class="authlist">'+rows.join('')+'</div></div>';}
 /* ===== Book-level possible futures — one renderer, two explicitly different artifacts:
@@ -5487,14 +5509,14 @@ function authBookFanLegendHTML(){
     authMetric('Expiry',expiration||'—')+'</div>';}
   return book+rows;
 }
-function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Whole book · median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('P5 '+signed(terminal.p5)+' → P95 '+signed(terminal.p95));parts.push('hover a colored path for that position');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored paths are single-position projections';}
+function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Whole book · median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('worst 5% '+signed(terminal.p5)+' → best 5% '+signed(terminal.p95));parts.push('hover a colored path for that position');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored paths are single-position projections';}
 function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'BOOK line = everything together · colors = single positions':'single-position projections · never summed';}
 function bookFanReadoutText(id){
   var p=byId[id],slot=BOOK_FAN.rows[id];
   if(!p||!slot||slot.phase!=='ready'||!slot.frames.length)return bookFanPrompt();
   var terminal=slot.frames[slot.frames.length-1],parts=[p.sym+' · '+p.struct];
   parts.push('median '+signed(terminal.p50));
-  if(terminal.p10!=null&&terminal.p90!=null)parts.push('P10 '+signed(terminal.p10)+' → P90 '+signed(terminal.p90));
+  if(terminal.p10!=null&&terminal.p90!=null)parts.push('worst 10% '+signed(terminal.p10)+' → best 10% '+signed(terminal.p90));
   if(slot.chance!=null)parts.push(slot.chance.toFixed(0)+'% chance of gain');
   parts.push(Math.round(terminal.x)+' sessions');
   return parts.join(' · ');
@@ -5854,6 +5876,7 @@ function authoritativeSector(raw){var token=String(raw||'').trim().toUpperCase()
 function focusSector(sec){
   if(deskBackendEnabled()){
     var owned=authoritativeSector(sec),first=owned&&Array.isArray(owned.symbols)&&owned.symbols.length?String(owned.symbols[0]).toUpperCase():null,focusSeq=++HOME_AUTH_FOCUS_SEQ;
+    HOME_SCOUT.sector=owned?owned.key:(sec||null);
     if(state.level!=='book')go('book');
     if(first){HOME_AUTH_SYMBOL=first;authRenderMarketPanels();}
     window.DeskBackend.focusBookSector(owned?owned.key:sec).then(function(context){if(focusSeq!==HOME_AUTH_FOCUS_SEQ)return;if(!context||context.sectorLens&&context.sectorLens.available===false){toast(context&&context.sectorLens&&context.sectorLens.message||'This sector is unavailable in the active market universe.');return;}if(first)HOME_AUTH_SYMBOL=first;authRenderMarketPanels();}).catch(function(error){if(focusSeq===HOME_AUTH_FOCUS_SEQ)toast(error&&error.message||'Sector context could not load.');});return;
@@ -6395,6 +6418,7 @@ function deskBackendChanged(payload){
     applyAuthoritativePlanContext(payload.plan);
     decide.missingDeclarations=[];
   } else if(phase==='declaration-required'){
+    AUTH_PENDING_FORK=null;
     decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.mode='engine';
     decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
     decide.draftPending=false;decide.draftValid=false;decide.draftError=null;
@@ -6426,6 +6450,10 @@ function deskBackendChanged(payload){
     decide.backendNotes=payload.notes||bs.strategyNotes||[];
     decide.backendRejections=payload.rejected||bs.rejections||[];
   } else if(phase==='comparison-required'){
+    if(AUTH_PENDING_FORK&&AUTH_PENDING_FORK.symbol===String(decide.sym||'').toUpperCase()){
+      AUTH_PENDING_FORK=null;
+      toast('The held legs could not be seeded: no package is endorsed for this idea yet. The ranked comparisons are still here.');
+    }
     /* Ranking is useful even when nothing earned endorsement. Keep the complete comparison
        field visible, but do not let its first row masquerade as a selected Plan package or
        start an expensive outcome/order flow until the user explicitly chooses it. */
@@ -6493,7 +6521,7 @@ function deskBackendChanged(payload){
     decide._mc=authoritativeFanFromAnimation(payload.animation); decide.mcOn=true; decide.mcRunning=false;
   } else if(phase==='ready'){
     decide.missingDeclarations=[];
-    if(AUTH_PENDING_FORK&&AUTH_PENDING_FORK.symbol===String(decide.sym||'').toUpperCase()&&decide.kind==='idea'){
+    if(AUTH_PENDING_FORK&&payload.operation==='idea'&&AUTH_PENDING_FORK.symbol===String(decide.sym||'').toUpperCase()&&decide.kind==='idea'){
       /* a held package forked into this idea: once the load settles, seed the build workbench
          with those exact legs (strikes snapped to this chain) and apply the touched change.
          Deferred one task so the selection/preview phases of the load cannot stomp the fork. */
@@ -6502,9 +6530,11 @@ function deskBackendChanged(payload){
       window.setTimeout(function(){
         if(!decide||decide.kind!=='idea'||String(decide.sym||'').toUpperCase()!==forkSym)return;
         if(window.DeskBackend.state().mutationPending){AUTH_PENDING_FORK=null;return;}
+        var snappedMoves=[];
         decide.buildLegs=forkSeed.legs.map(cloneDecisionLeg).map(function(l){
-          if(l.t!=='s'){var snapped=nearestBackendStrike(l.t,l.k);if(snapped!=null){l.k=snapped;l.strike=snapped;}}
+          if(l.t!=='s'){var snapped=nearestBackendStrike(l.t,l.k);if(snapped!=null&&Number(snapped)!==Number(l.k)){snappedMoves.push(l.k+'→'+snapped);}if(snapped!=null){l.k=snapped;l.strike=snapped;}}
           l.entryPrice=null;return l;});
+        if(snappedMoves.length)toast('Strike'+(snappedMoves.length===1?'':'s')+' moved to the nearest listed contract: '+snappedMoves.join(', '));
         /* the draft contract anchors every edit to the selected backend strategy; the forked
            legs replace that package's legs wholesale but keep its selection as the source */
         decide.buildSourceId=decide.candId||null;decide.mode='build';
@@ -7470,7 +7500,7 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
   showDecide(decide._origin);
   if(kind==='idea'&&deskBackendEnabled()&&decide.sym) loadAuthoritativeIdea();
 }
-function exitDecide(){ if(!decide)return; var origin=decide._origin, payoffOrigin=decide._payoffOrigin, posId=decide.posId; stopDecScen(); if(deskBackendEnabled())window.DeskBackend.cancel(); decide=null; hideDecide(origin,payoffOrigin,posId); updateThread(); }
+function exitDecide(){ if(!decide)return; AUTH_PENDING_FORK=null; var origin=decide._origin, payoffOrigin=decide._payoffOrigin, posId=decide.posId; stopDecScen(); if(deskBackendEnabled())window.DeskBackend.cancel(); decide=null; hideDecide(origin,payoffOrigin,posId); updateThread(); }
 function showDecide(origin){
   void decideEl.offsetWidth; decideEl.classList.add('on'); decideEl.setAttribute('aria-hidden','false');
   decideEl.scrollTop=0;
@@ -7594,7 +7624,7 @@ function renderDecide(){
   if(oldScen&&oldScen.getAttribute('data-scen-key')===skey){ keepScen=oldScen; oldScen.parentNode.removeChild(oldScen); }
   var execHtml=decExecute(c);
   var densityClass=(decide.cands||[]).length<=3?' few-ideas':'';
-  var legCount=(c.legs||[]).length,packageClass=legCount<=2?' short-package canonical-package':legCount<=4?' canonical-package':'';
+  var packageClass=(c.legs||[]).length<=4?' canonical-package':'';
   decideEl.innerHTML='<div class="decwrap">'+decTop(c)+
     '<div class="decgrid'+densityClass+packageClass+'">'+leftCol(c)+centerCol(c)+rightCol(c)+'</div>'+
     '<div class="decdock'+(decide.order.review?' reviewdock':'')+(execHtml?'':' empty')+'"><span></span>'+execHtml+'</div>'+
@@ -7817,8 +7847,12 @@ function decLegWorkbench(c){
     (build?renderTemplates():'')+
   '</div>';
 }
-function decisionLegQuote(l){
+function decisionLegQuote(l,ownSymbol){
   var bridge=deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.state(),market=decide&&decide.backendState&&decide.backendState.market||bridge&&bridge.market||{},chain=market.chain||{};
+  /* Never decorate a leg with another symbol's ambient market: outside Decide the bridge's
+     market doc belongs to whatever idea was open last. Captured receipts on the leg still win. */
+  var marketSymbol=String(market.quote&&market.quote.symbol||market.symbol||'').toUpperCase();
+  if(ownSymbol&&marketSymbol&&marketSymbol!==String(ownSymbol).toUpperCase()){market={};chain={};}
   if(l.t==='s')return market.quote||{};
   /* A ranked package owns the exact option-book receipt that supplied its executable fill.
      Never decorate a September leg with an August quote merely because the strike matches.
@@ -7834,12 +7868,12 @@ function decisionLegQuote(l){
   };
   return matching||{};
 }
-function decisionLegMeta(l){
+function decisionLegMeta(l,ownSymbol){
   /* returns {html, plain}: the html row truncates per cell; the plain twin becomes the
      tooltip so no width ever costs information */
-  var quote=decisionLegQuote(l),parts=[],plain=[];
-  function part(cls,text){parts.push('<span class="legdetail '+cls+'">'+text+'</span>');plain.push(text.replace(/<[^>]+>/g,''));}
-  if(l.expiration)part('legdetail-primary','exp '+deskEsc(l.expiration));
+  var quote=decisionLegQuote(l,ownSymbol),parts=[],plain=[];
+  function part(cls,html,plainText){parts.push('<span class="legdetail '+cls+'">'+html+'</span>');plain.push(plainText==null?html:plainText);}
+  if(l.expiration)part('legdetail-primary','exp '+deskEsc(l.expiration),'exp '+String(l.expiration));
   var bid=authNumber(quote.bid),ask=authNumber(quote.ask);
   if(bid!=null&&ask!=null)part('legdetail-book','bid / ask '+bid.toFixed(2)+' / '+ask.toFixed(2));
   if(l.entryPrice!=null)part('legdetail-entry','fill: '+(l.q<0?'sell at bid ':'buy at ask ')+Number(l.entryPrice).toFixed(2));
@@ -7850,19 +7884,19 @@ function decisionLegMeta(l){
     var source=String(quote.source||''),freshness=String(quote.freshness||'');
     var receipt=source&&freshness&&source.toLowerCase()===freshness.toLowerCase()
       ?source:[source,freshness].filter(Boolean).join(' · ');
-    part('legdetail-wide',deskEsc(receipt||'captured book'));
+    part('legdetail-wide',deskEsc(receipt||'captured book'),receipt||'captured book');
   }
   if(!parts.length)part('legdetail-primary',l.t==='s'?'stock exposure':'listed contract · market detail unavailable');
   return {html:parts.join('<i aria-hidden="true">·</i>'),plain:plain.join(' · ')};
 }
-function backendDecisionLegChip(l,i,interactive){
+function backendDecisionLegChip(l,i,interactive,ownSymbol){
   interactive=interactive!==false;
   var side=interactive?'<button class="tgl '+(l.q<0?'sell':'buy')+'" data-leg="side" data-li="'+i+'" aria-label="Change leg '+(i+1)+' side">'+(l.q<0?'SELL':'BUY')+'</button>':'<span class="tgl '+(l.q<0?'sell':'buy')+'">'+(l.q<0?'SELL':'BUY')+'</span>';
   var type=l.t==='s'?'<span class="tgl stockc">STOCK</span>':interactive?'<button class="tgl '+(l.t==='c'?'callc':'putc')+'" data-leg="type" data-li="'+i+'" aria-label="Change leg '+(i+1)+' option type">'+(l.t==='c'?'CALL':'PUT')+'</button>':'<span class="tgl '+(l.t==='c'?'callc':'putc')+'">'+(l.t==='c'?'CALL':'PUT')+'</span>';
   var strike=l.t==='s'?'':interactive?'<span class="mstp"><span class="ml">K</span><button data-leg="strike" data-li="'+i+'" data-d="-1" aria-label="Previous listed strike">−</button><span class="mv">'+l.k+'</span><button data-leg="strike" data-li="'+i+'" data-d="1" aria-label="Next listed strike">+</button></span>':'<span class="mv">'+l.k+'</span>';
   var qty=interactive?'<span class="mstp"><span class="ml">'+(l.t==='s'?'Sh':'Qty')+'</span><button data-leg="qty" data-li="'+i+'" data-d="-1" aria-label="Reduce leg quantity">−</button><span class="mv">'+Math.abs(l.q)+'</span><button data-leg="qty" data-li="'+i+'" data-d="1" aria-label="Increase leg quantity">+</button></span>':'<span class="mv">'+Math.abs(l.q)+(l.t==='s'?' sh':' contracts')+'</span>';
   var remove=interactive&&l.t!=='s'?'<button class="lrm" data-leg="rm" data-li="'+i+'" title="Remove leg" aria-label="Remove leg '+(i+1)+'">✕</button>':'';
-  var meta=decisionLegMeta(l);
+  var meta=decisionLegMeta(l,ownSymbol);
   return '<div class="legr'+(interactive?' inlineleg':'')+'"><div class="legr-top">'+side+type+strike+qty+remove+'</div><span class="lgm" title="'+deskEsc(meta.plain)+'">'+meta.html+'</span></div>';
 }
 /* --- CENTER column: payoff hero -> numbers -> HOW IT REACTS. The exact structure stays beside
@@ -8196,7 +8230,7 @@ function authoritativeGreekInspector(c){
 }
 function authoritativeComparisonPanel(c){
   var source=authoritativeCanvas(c),rows=source&&Array.isArray(source.comparison)?source.comparison:[],positions=source&&Array.isArray(source.positions)?source.positions:[];
-  if(!rows.length)return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">same possible futures</span></div><div class="backendnotice">'+(source?'No comparison rows were supplied for this evaluation.':'Waiting for the conditioned same-evaluation checkpoints…')+'</div></div>';
+  if(!rows.length)return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">same possible futures</span></div><div class="backendnotice">'+(source?'No comparison rows were supplied for this evaluation.':'The comparison appears once this idea is valued on the shared futures.')+'</div></div>';
   function cents(value){return value==null?'—':money(Number(value)/100);}
   var preview=decide.ensemble&&decide.ensemble.preview||{},fanPaths=Number(preview.paths||0),fanSessions=Number(preview.horizonDays||0);
   var intro='<div class="catalogintro">What you already hold and this idea, each replayed through the '

@@ -2766,7 +2766,8 @@
 
   async function hydrateBookContext(seq, contextSeq, before, data, symbols) {
     if (!symbols.length) return;
-    var detail = homeDetailSymbol(symbols);
+    var prior = data.homeContext && data.homeContext.priorDetailSymbol;
+    var detail = prior && symbols.indexOf(prior) >= 0 ? prior : homeDetailSymbol(symbols);
     try {
       var quotesPath = '/api/quotes?symbols=' + encodeURIComponent(symbols.join(','));
       var quoteSlot = objectSlot(await readCachedSlot('quotes', quotesPath), 'The ambient market watch');
@@ -3037,6 +3038,13 @@
         homeContext: {
           phase: homeSymbols.length ? 'loading' : 'empty',
           requestId: contextSeq, symbols: homeSymbols, defaultSymbols: homeSymbols.slice(),
+          /* a reload keeps hydrating the subject the user was reading, when it survives;
+             a fresh session has no prior detail and the benchmark picker decides below */
+          priorDetailSymbol: (function () {
+            var prior = state.book && state.book.data && state.book.data.homeContext;
+            var symbol = prior && prior.detailSymbol;
+            return symbol && homeSymbols.indexOf(symbol) >= 0 ? symbol : null;
+          })(),
           rows: [], missing: []
         },
         loadedAt: new Date().toISOString()
