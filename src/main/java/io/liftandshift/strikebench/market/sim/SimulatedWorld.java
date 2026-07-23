@@ -56,7 +56,7 @@ public final class SimulatedWorld {
     private static final double QUANTUM_SECONDS = 30.0;
     private static final double SESSION_SECONDS = 6.5 * 3600.0;   // 09:30–16:00 ET
     private static final double YEAR_SECONDS = 252.0 * SESSION_SECONDS; // trading-time year
-    private static final ZoneId ET = ZoneId.of("America/New_York");
+    private static final ZoneId ET = io.liftandshift.strikebench.market.MarketHours.EASTERN;
     private static final LocalTime OPEN = LocalTime.of(9, 30), CLOSE = LocalTime.of(16, 0);
     private static final int HISTORY_DAYS = 250;
 
@@ -250,7 +250,8 @@ public final class SimulatedWorld {
     public void pause() { running = false; }
     public double speed() { return speed; }
     public LocalDateTime simTime() { return simTime; }
-    public long simMillis() { return simTime.atZone(ET).toInstant().toEpochMilli(); }
+    public java.time.Instant simInstant() { return simTime.atZone(ET).toInstant(); }
+    public long simMillis() { return simInstant().toEpochMilli(); }
     public long ticks() { return quantum; }
     public String modelVersion() { return MODEL_VERSION; }
     public ReplaySource replaySource() { return replay; }

@@ -294,8 +294,7 @@ public final class MarketDataService {
 
     /** The lane's effective clock: the world's sim instant inside a simulated session, else empty. */
     public Optional<java.time.Instant> simInstant(String worldId) {
-        return world(worldId).map(w -> w.simTime()
-                .atZone(java.time.ZoneId.of("America/New_York")).toInstant());
+        return world(worldId).map(io.liftandshift.strikebench.market.sim.SimulatedWorld::simInstant);
     }
 
     /** The world's own symbol set (empty optional = observed lane). */
