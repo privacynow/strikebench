@@ -13,6 +13,16 @@ Severity legend: **DIVERGENT** = same job, different rules → can already produ
 (worst). **IDENTICAL** = verbatim copy → drift risk, no live bug yet. **OVERLAP** = two owners of one
 responsibility.
 
+### Progress log
+- **2026-07-23 · commit 60ab33f (P1a):** O1-core, O3, O4 done — `EvaluationService.evaluateBestPerFamily`
+  (one per-symbol ranking primitive, also fixed the Portfolio scan's non-best-per-family divergence),
+  `RedeploymentFrontier.composeBookLayer` (one Book-layer epilogue), public `StrategyEvaluator.RANKING`
+  (one comparator). Scout output verified behavior-identical on sim.
+- **2026-07-23 · commit fcbcf0b (P1b):** O5, O6, A3 done — `Request`/`AutoRequest` withers +
+  `DiscoveryController.withAccountHoldings`/`withRiskCap`; three cap-and-rebuild copies and two
+  holdings-injection copies collapsed. ApiIntegration 52/52 + PlanApiIntegration 36/36 green.
+- REMAINING orchestrator: O2/X4 (economic-readiness, 3 dialects), O7 (recommend/ladder preflight).
+
 ---
 
 ## 0. The dangerous few (DIVERGENT — these can bite today)
