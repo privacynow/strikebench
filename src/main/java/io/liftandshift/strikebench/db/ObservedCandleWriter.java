@@ -58,16 +58,30 @@ final class ObservedCandleWriter {
     }
 
     private static void upsert(Connection connection, String symbol, String source, Candle candle) {
+        upsertObservedBar(connection, symbol, candle.date(), candle.open(), candle.high(), candle.low(),
+                candle.close(), candle.volume(), source, candle.adjusted(), quality(source), "OHLCV");
+    }
+
+    /**
+     * THE full-OHLC observed underlying_bar upsert — the column set and conflict clause live here
+     * once, shared by the read-through/backfill writer and the CSV importer. Each caller supplies its
+     * own quality rank and bar kind (so persisted metadata is unchanged). Only FULL OHLC bars belong
+     * here; the partial close-snapshot writers (SnapshotService, HistoricalOptionsIngest) intentionally
+     * write a different, narrower shape that the OHLC validator would reject.
+     */
+    static void upsertObservedBar(Connection connection, String symbol, LocalDate date,
+            java.math.BigDecimal open, java.math.BigDecimal high, java.math.BigDecimal low,
+            java.math.BigDecimal close, Long volume, String source, boolean adjusted,
+            int qualityRank, String barKind) {
         try {
             Db.execOn(connection, "INSERT INTO underlying_bar "
                             + "(symbol,d,open,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind) "
-                            + "VALUES (?,?,?,?,?,?,?,?,1,?,?, 'OHLCV') "
+                            + "VALUES (?,?,?,?,?,?,?,?,1,?,?,?) "
                             + "ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
                             + "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
                             + "volume=excluded.volume,observed=1,adjusted=excluded.adjusted,"
                             + "quality_rank=excluded.quality_rank,bar_kind=excluded.bar_kind,created_at=now()",
-                    symbol, candle.date(), candle.open(), candle.high(), candle.low(), candle.close(),
-                    candle.volume(), source, candle.adjusted(), quality(source));
+                    symbol, date, open, high, low, close, volume, source, adjusted, qualityRank, barKind);
         } catch (java.sql.SQLException e) {
             throw new Db.DbException(e);
         }
