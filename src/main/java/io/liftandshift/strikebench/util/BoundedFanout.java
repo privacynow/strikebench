@@ -30,7 +30,9 @@ import java.util.function.Function;
  *   <li><b>Failure isolation</b> — a throw from {@code work} (surfaced as the unwrapped
  *       {@link ExecutionException} cause) or an {@link InterruptedException} while joining is routed
  *       to {@code onFailure.apply(item, cause)}; that value takes the slot and the batch continues.
- *       Any {@link Throwable} cause is routed (including an {@link Error}).</li>
+ *       This includes ordinary {@link Error}s such as {@link AssertionError}. The one exception is a
+ *       fatal {@link VirtualMachineError} (out-of-memory, stack overflow): the JVM is compromised, so
+ *       it is RE-THROWN rather than disguised as a per-item failure, aborting the batch honestly.</li>
  *   <li><b>Join before return</b> — the try-with-resources executor {@code close()} blocks until
  *       every task finishes, so callers may safely run epilogue steps on the full result.</li>
  *   <li><b>Null-preserving</b> — a {@code null} returned by {@code work} is kept in its slot.</li>
@@ -78,6 +80,8 @@ public final class BoundedFanout {
                     results.set(i, futures.get(i).get());
                 } catch (ExecutionException e) {
                     Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    // A dying JVM is never a per-item failure — do not disguise it as one.
+                    if (cause instanceof VirtualMachineError fatal) throw fatal;
                     results.set(i, onFailure.apply(item, cause));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
