@@ -14,7 +14,9 @@ import java.util.List;
  */
 public final class StrategyEvaluator {
 
-    static final Comparator<StrategyEvaluation> RANKING =
+    /** THE decision-score comparator — the one canonical ranking order, reused by every cross-symbol
+     *  scan instead of re-spelling {@code comparingDouble(decisionScore).reversed()} inline. */
+    public static final Comparator<StrategyEvaluation> RANKING =
             Comparator.comparingDouble(StrategyEvaluation::decisionScore).reversed();
 
     private final CapitalProfiler capital = new CapitalProfiler();

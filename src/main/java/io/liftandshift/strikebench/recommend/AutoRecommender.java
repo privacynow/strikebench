@@ -357,14 +357,12 @@ public final class AutoRecommender {
                 .flatMap(h -> h.candidates().stream())
                 .map(ScoredCandidate::evaluation)
                 .toList();
-        List<CompensationView.CompensationEntry> compensation =
-                CompensationView.compute(surfaced, evaluations, worldId);
         emit(progressListener, new Progress("BOOK", ideasCompleted.get(), ideasTotal, null, null,
                 "Applying destination-Book capacity, concentration, and expiry checks."));
-        RedeploymentFrontier.Result frontier = contextFactory == null ? null
-                : RedeploymentFrontier.compose(surfaced, compensation, contextFactory.apply(surfaced));
+        RedeploymentFrontier.BookLayer book =
+                RedeploymentFrontier.composeBookLayer(surfaced, evaluations, worldId, contextFactory);
         return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER,
-                compensation, CompensationView.BASIS, frontier);
+                book.compensation(), book.compensationBasis(), book.frontier());
     }
 
     private static void emit(ProgressListener listener, Progress progress) {
@@ -414,11 +412,9 @@ public final class AutoRecommender {
             }
             List<ScoredCandidate> assessed;
             if (!pool.isEmpty()) {
-                List<StrategyEvaluation> evaluated = evaluations.evaluate(s.symbol(), intent.name(), thesis, horizon,
-                        req.riskMode(), pool, buyingPowerCents, null, false,
+                List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(s.symbol(), intent.name(),
+                        thesis, horizon, req.riskMode(), pool, buyingPowerCents,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null);
-                List<StrategyEvaluation> evals = io.liftandshift.strikebench.eval.StrategyEvaluator
-                        .bestPackagePerFamily(evaluated);
                 assessed = evals.stream().map(e -> new ScoredCandidate(
                                 targetFit(e.candidate(), req.targetProfitCents()), e))
                         .sorted(Comparator.comparingDouble(

@@ -216,6 +216,25 @@ public final class RedeploymentFrontier {
         }
     }
 
+    /**
+     * The Book-layer epilogue shared by every cross-symbol scan: the compensation ranking plus the
+     * optional Book-aware redeployment frontier. Extracted from the byte-identical tails the Scout
+     * (AutoRecommender) and the Portfolio scan (OpportunityScanner) each carried, so the two can
+     * never drift. {@code contextFactory} is applied only when a Book frontier is requested.
+     */
+    public record BookLayer(List<CompensationView.CompensationEntry> compensation,
+                            String compensationBasis, Result frontier) {}
+
+    public static BookLayer composeBookLayer(List<StrategyEvaluation> evals,
+            io.liftandshift.strikebench.eval.EvaluationService evalService, String worldId,
+            java.util.function.Function<List<StrategyEvaluation>, Context> contextFactory) {
+        List<CompensationView.CompensationEntry> compensation =
+                CompensationView.compute(evals, evalService, worldId);
+        Result frontier = contextFactory == null ? null
+                : compose(evals, compensation, contextFactory.apply(evals));
+        return new BookLayer(compensation, CompensationView.BASIS, frontier);
+    }
+
     public static Result compose(List<StrategyEvaluation> evaluations,
                                  List<CompensationView.CompensationEntry> compensation,
                                  Context context) {

@@ -478,7 +478,7 @@ class JourneySurfaceTest {
         assertThat(evaluation).doesNotContain("RecommendationEngine", "ScanResult", " scan(",
                 "newVirtualThreadPerTaskExecutor", "Semaphore");
         assertThat(scanner).contains("class OpportunityScanner", "newVirtualThreadPerTaskExecutor",
-                "evaluations.evaluate(", "evaluations.persist(");
+                "evaluations.evaluateBestPerFamily(", "evaluations.persist(");
         assertThat(discovery).contains("opportunityScanner.scanWithFrontier(",
                         "auto.runWithFrontier(")
                 .doesNotContain("evaluations.scan(");
