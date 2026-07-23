@@ -77,9 +77,7 @@ final class SparklineController {
         };
         LocalDate from = today.minusDays(days);
         List<String> symbols = raw == null || raw.isBlank()
-                ? world != null
-                    ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
-                    : universe.active().symbols()
+                ? MarketUniverseView.symbolsForWorld(market, universe, world)
                 : java.util.Arrays.stream(raw.split(","))
                     .map(symbol -> symbol.trim().toUpperCase(Locale.ROOT))
                     .filter(symbol -> !symbol.isBlank()).distinct().toList();

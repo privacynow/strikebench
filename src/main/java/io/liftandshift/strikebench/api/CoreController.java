@@ -163,7 +163,7 @@ final class CoreController implements AutoCloseable {
         String world = worldParam(activeWorld.apply(ctx));
         if (world != null) {
             List<String> symbols = raw == null || raw.isBlank()
-                    ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
+                    ? MarketUniverseView.symbolsForWorld(market, universe, world)
                     : parseSymbols(raw);
             int requested = symbols.size();
             int limit = SimulationSessions.MAX_SYMBOLS;

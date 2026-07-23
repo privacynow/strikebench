@@ -24,6 +24,15 @@ final class MarketUniverseView {
         this.sessions = sessions;
     }
 
+    /** THE resolver for "the symbols in play for this world": the world's own symbols when a
+     *  simulated/demo world is active (worldParam-normalized to non-null), else the active observed
+     *  universe. Previously re-spelled as {@code world != null ? worldSymbols.orElse(empty) : active}. */
+    static List<String> symbolsForWorld(MarketDataService market, UniverseService universe, String world) {
+        return world != null
+                ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
+                : universe.active().symbols();
+    }
+
     Object describe(String world, String owner) {
         if (world != null) {
             List<String> symbols = market.worldSymbols(world)
