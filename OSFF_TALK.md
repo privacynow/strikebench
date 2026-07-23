@@ -13,9 +13,10 @@ technologists and open-source program office people, not options traders.
 
 ## Title
 
-Your backtest is lying to you: one Apache Flink job for both history and live
+Building a backtest that can't lie: one Apache Flink job for both history and live
 
 Alternates (swap at paste time if preferred):
+- Your backtest is lying to you — here's one that can't. — *the aggressive form; accurate only with the second clause attached*
 - The backtest was green. The account wasn't. — *closing the backtest/live gap with Apache Flink*
 - When your model says 70%, does it ever mean 70%? — *calibrating a trading engine with Apache Flink and small, explainable models*
 - I built an engine that says my trades are bad. It's right. — *Apache Flink, honest backtests, and a decade of replayed decisions*
@@ -23,9 +24,10 @@ Alternates (swap at paste time if preferred):
 
 ## Elevator pitch (short field, ≤ ~300 chars)
 
-I built a platform that recommends options trades. Like every trading system, its backtest code
-drifted from its live code until the test results meant little. The fix: one Apache Flink job that
-replays ten years in batch mode and runs live in streaming mode — same code, so it can't drift.
+I built a platform that recommends options trades. To trust it, I needed a backtest — and
+backtests built as separate code from production drift until their results mean little. Mine is
+one Apache Flink job: batch mode replays ten years, streaming mode runs live. Same code —
+nothing to drift, nowhere to lie.
 
 ## Abstract / description
 
@@ -41,11 +43,13 @@ along the way, and scores them against what actually happened. In streaming mode
 code runs on live data. Because both modes share one codebase, the test cannot drift from
 production.
 
-On top of that pipeline sit small, explainable machine-learning models — no LLMs. The most
-useful one answers a blunt question: when the platform said a trade had a 70% chance of making
-money, did those trades actually work out 70% of the time? At first, they didn't. I'll cover the
-pipeline, the handling of late-arriving market data that otherwise produces quietly wrong
-profit-and-loss numbers, and what the whole exercise taught me about my own real-money trading.
+On top of that pipeline sit small, explainable machine-learning models — no LLMs. They exist to
+answer one blunt question: when the platform says a trade has a 70% chance of making money, do
+such trades actually work out 70% of the time? A decade of replayed recommendations answers that
+with evidence. The platform has already contradicted me once — it graded my own real-money
+positions and disagreed with my view of them, and on review it was right. I'll cover the
+pipeline, the late-data handling that keeps profit-and-loss numbers from going quietly wrong,
+and what building an honest scorekeeper taught me about my own trading.
 
 ## Audience takeaways
 
