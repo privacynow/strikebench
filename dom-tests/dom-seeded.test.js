@@ -21,6 +21,7 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7171';
 const BASE = `http://localhost:${PORT}`;
+const WORKSPACE = BASE + '/workspace.html';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
@@ -149,7 +150,7 @@ before(async () => {
   page = await browser.newPage();
   page.on('pageerror', e => pageErrors.push(e.message));
   page.on('response', r => { if (r.status() >= 500) serverErrors.push(r.status() + ' ' + r.url()); });
-  await page.goto(BASE + '/');
+  await page.goto(WORKSPACE);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
 });
 

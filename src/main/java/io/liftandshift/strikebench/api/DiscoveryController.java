@@ -542,6 +542,12 @@ final class DiscoveryController {
         List<String> normalized = requested.stream().filter(java.util.Objects::nonNull)
                 .map(value -> value.trim().toUpperCase(Locale.ROOT)).filter(value -> !value.isBlank())
                 .distinct().toList();
+        List<String> opportunitySymbols = universe.warmSymbols();
+        if (normalized.equals(opportunitySymbols)) {
+            return new RedeploymentFrontier.UniverseScope(
+                    universe.active().symbols().equals(opportunitySymbols) ? "ACTIVE" : "CURATED",
+                    "Curated cross-sector opportunity universe", normalized);
+        }
         for (var sector : io.liftandshift.strikebench.market.Universes.SECTORS.values()) {
             if (normalized.equals(sector.symbols())) {
                 return new RedeploymentFrontier.UniverseScope("THEME", sector.label(), normalized);

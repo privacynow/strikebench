@@ -115,6 +115,13 @@ public final class UniverseService {
                 "sectorKey", a.sectorKey() == null ? "" : a.sectorKey(),
                 "label", a.sectorLabel(),
                 "symbols", a.symbols()));
+        List<String> opportunitySymbols = warmSymbols();
+        out.put("scout", Map.of(
+                "source", cfg.fixturesOnly() ? "DEMO" : "CURATED",
+                "label", cfg.fixturesOnly()
+                        ? "Demo opportunity universe"
+                        : "Curated cross-sector opportunity universe",
+                "symbols", opportunitySymbols));
         out.put("sectors", sectors);
         out.put("maxCustom", MAX_CUSTOM);
         if (cfg.fixturesOnly()) {

@@ -47,6 +47,10 @@
   // starting a new Book read. Only the newest context generation may publish into that Book.
   var bookContextRequestSeq = 0;
   var bookContextLoads = {};
+  // The additive Book lifecycle receipt and focused Position state consume the same canonical
+  // trade-detail document. Share it within one Book generation so they never create duplicate
+  // reads or competing presentation owners for a held package.
+  var bookPositionDetailLoads = {};
   var recentCommittedTradeId = null;
   var positionRequestSeq = 0;
   var positionScenarioRequestSeq = 0;
@@ -395,6 +399,21 @@
     });
   }
 
+  function readBookPositionDetailSlot(tradeId, forceFresh) {
+    var id = String(tradeId == null ? '' : tradeId).trim();
+    var path = '/api/trades/' + encodeURIComponent(id);
+    if (!id) return Promise.resolve(unavailableSlot('tradeDetail', path,
+      'Choose an authoritative trade before reading its position detail.'));
+    if (!tradeHintFromBook(id)) return readSlot('tradeDetail', path);
+    if (forceFresh) delete bookPositionDetailLoads[id];
+    if (bookPositionDetailLoads[id]) return bookPositionDetailLoads[id];
+    // Keep both success and failure shared. Only an explicit retry passes forceFresh; otherwise
+    // a lifecycle miss followed by a row click would issue the same failed read twice.
+    var load = readSlot('tradeDetail', path);
+    bookPositionDetailLoads[id] = load;
+    return load;
+  }
+
   function unavailableSlot(key, path, message) {
     return {
       key: key,
@@ -455,8 +474,8 @@
       api.getFresh('/api/config'),
       api.getFresh('/api/status'),
       api.getFresh('/api/world'),
-      api.getFresh('/api/research/' + encoded),
-      api.getFresh('/api/research/' + encoded + '/expirations'),
+      api.get('/api/research/' + encoded),
+      api.get('/api/research/' + encoded + '/expirations'),
       optionalFresh('/api/account')
     ]);
     if (seq !== state.requestSeq) return null;
@@ -480,7 +499,7 @@
     var expiration = chooseExpiration(base[4] && base[4].expirations, targetDays, expirationAsOf);
     if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
     notify('loading', { operation: 'option-chain', symbol: symbol, expiration: expiration });
-    var chain = await api.getFresh('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
+    var chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
     if (seq !== state.requestSeq) return null;
     var optionCount = (chain && Array.isArray(chain.calls) ? chain.calls.length : 0)
       + (chain && Array.isArray(chain.puts) ? chain.puts.length : 0);
@@ -2573,26 +2592,52 @@
     return true;
   }
 
-  function loadBookSymbolContext(symbol) {
+  function loadBookSymbolContext(symbol, marketSeed) {
     if (bookContextLoads[symbol]) return bookContextLoads[symbol];
     var encoded = encodeURIComponent(symbol);
-    bookContextLoads[symbol] = Promise.all([
-      readCachedSlot('research:' + symbol, '/api/research/' + encoded),
+    var seeded = marketSeed && marketSeed.research && marketSeed.chain
+      && String(marketSeed.research.symbol || marketSeed.quote && marketSeed.quote.symbol || '')
+        .toUpperCase() === String(symbol).toUpperCase();
+    function present(key, path, value) {
+      return Promise.resolve({ key: key, path: path, available: true, value: value, error: null });
+    }
+    var load = Promise.all([
+      seeded ? present('research:' + symbol, '/api/research/' + encoded, marketSeed.research)
+        : readCachedSlot('research:' + symbol, '/api/research/' + encoded),
       readCachedSlot('news:' + symbol, '/api/research/' + encoded + '/news'),
-      readCachedSlot('history:' + symbol, '/api/research/' + encoded + '/history?range=3m'),
-      readCachedSlot('expirations:' + symbol, '/api/research/' + encoded + '/expirations')
+      // One complete stored artifact owns every chart range; viewport ranges are client-side
+      // windows, never distinct provider or API reads.
+      readCachedSlot('history:max:' + symbol,
+        '/api/research/' + encoded + '/history?range=max'),
+      seeded ? present('expirations:' + symbol, '/api/research/' + encoded + '/expirations', {
+        symbol: symbol, expirations: marketSeed.expirations || [],
+        asOfDate: marketSeed.expirationAsOf || null
+      }) : readCachedSlot('expirations:' + symbol,
+        '/api/research/' + encoded + '/expirations')
     ]).then(async function (base) {
       var expirationSlot = objectSlot(base[3], symbol + ' option expirations');
       var envelope = expirationSlot && expirationSlot.available ? expirationSlot.value : {};
-      var expiration = chooseExpiration(envelope.expirations, 30, envelope.asOfDate);
-      var chainSlot = expiration
+      var expiration = seeded ? marketSeed.expiration
+        : chooseExpiration(envelope.expirations, 30, envelope.asOfDate);
+      var chainSlot = seeded && String(marketSeed.expiration || '') === String(expiration)
+        ? await present('chain:' + symbol, '/api/research/' + encoded + '/chain', marketSeed.chain)
+        : expiration
         ? await readCachedSlot('chain:' + symbol, '/api/research/' + encoded
           + '/chain?expiration=' + encodeURIComponent(expiration))
         : unavailableSlot('chain:' + symbol, '/api/research/' + encoded + '/chain',
           'No current option expiration was available for the focused market pulse.');
       return base.concat([chainSlot]);
     });
-    return bookContextLoads[symbol];
+    bookContextLoads[symbol] = load;
+    // This map coalesces concurrent consumers only. The bounded API cache owns freshness and
+    // invalidation after the read settles; retaining a second indefinite cache here would create
+    // a competing market-data owner.
+    load.then(function () {
+      if (bookContextLoads[symbol] === load) delete bookContextLoads[symbol];
+    }, function () {
+      if (bookContextLoads[symbol] === load) delete bookContextLoads[symbol];
+    });
+    return load;
   }
 
   function quoteContextRow(symbol, quote, lane) {
@@ -2836,6 +2881,7 @@
     var seq = ++bookRequestSeq;
     var contextSeq = ++bookContextRequestSeq;
     bookContextLoads = {};
+    bookPositionDetailLoads = {};
     state.book = {
       phase: 'loading', requestId: seq, identity: null, data: null, missing: [], error: null
     };
@@ -2914,6 +2960,7 @@
         accountPlans: accountPlans,
         universe: values.universe.available ? values.universe.value : null,
         positionAnalyses: {},
+        positionDetails: {},
         lifecycle: { phase: tradePage.trades.length ? 'loading' : 'empty',
           available: 0, unavailable: 0 },
         recentTradeId: recentCommittedTradeId && tradePage.trades.some(function (trade) {
@@ -2959,20 +3006,24 @@
   async function hydrateBookLifecycle(bookSeq, identitySnapshot, data, trades) {
     var rows = Array.isArray(trades) ? trades.slice() : [];
     if (!rows.length || bookSeq !== bookRequestSeq) return;
-    var cursor = 0, analyses = {}, unavailable = {};
+    var cursor = 0, analyses = {}, details = {}, unavailable = {};
     async function worker() {
       while (bookSeq === bookRequestSeq) {
         var index = cursor++;
         if (index >= rows.length) return;
         var trade = rows[index] || {}, id = trade.id == null ? '' : String(trade.id);
         if (!id) continue;
-        var slot = await readSlot('positionLifecycle:' + id,
-          '/api/trades/' + encodeURIComponent(id));
+        var slot = await readBookPositionDetailSlot(id, false);
         if (bookSeq !== bookRequestSeq) return;
         if (!slot.available || !slot.value || !slot.value.trade
-            || String(slot.value.trade.id) !== id || !slot.value.analysis) {
+            || String(slot.value.trade.id) !== id) {
           unavailable[id] = slot.error && slot.error.message
-            || 'The current lifecycle receipt is unavailable.';
+            || 'The current position detail is unavailable.';
+          continue;
+        }
+        details[id] = slot.value;
+        if (!slot.value.analysis) {
+          unavailable[id] = 'The current lifecycle receipt is unavailable.';
           continue;
         }
         analyses[id] = slot.value.analysis;
@@ -2993,12 +3044,12 @@
       return;
     }
     data.positionAnalyses = analyses;
+    data.positionDetails = details;
     data.positionAnalysisErrors = unavailable;
     data.lifecycle = { phase: Object.keys(unavailable).length ? 'partial' : 'ready',
       available: Object.keys(analyses).length, unavailable: Object.keys(unavailable).length };
     if (state.book && state.book.requestId === bookSeq) {
       state.book.data = data;
-      if (Object.keys(unavailable).length) state.book.phase = 'partial';
     }
     notify('book-lifecycle', { operation: 'book-lifecycle', requestId: bookSeq,
       book: state.book, data: data });
@@ -3046,10 +3097,8 @@
   }
 
   function positionAuxiliarySlots(descriptor, symbol) {
-    var encoded = encodeURIComponent(symbol);
     var marketContext = bookContextLoads[symbol] || loadBookSymbolContext(symbol);
-    var requests = [readSlot('history', '/api/research/' + encoded + '/history?range='
-      + encodeURIComponent(descriptor.historyRange))];
+    var requests = [];
     if (descriptor.planId) {
       requests.push(readSlot('planWorkspace', '/api/plans/'
         + encodeURIComponent(descriptor.planId) + '/manage'));
@@ -3060,9 +3109,9 @@
       var market = groups[0], rest = groups[1];
       return [
         Object.assign({}, market[0], { key: 'research' }),
-        rest[0],
+        Object.assign({}, market[2], { key: 'history' }),
         Object.assign({}, market[1], { key: 'news' })
-      ].concat(rest.slice(1));
+      ].concat(rest);
     });
   }
 
@@ -3177,7 +3226,10 @@
     if (!state.enabled) return null;
     symbol = String(symbol || '').trim().toUpperCase();
     if (!symbol) throw new Error('Choose a symbol before loading its market context.');
-    var group = await loadBookSymbolContext(symbol);
+    var marketSeed = state.market && state.market.research
+      && String(state.market.research.symbol || '').toUpperCase() === symbol
+      ? state.market : null;
+    var group = await loadBookSymbolContext(symbol, marketSeed);
     var researchSlot = objectSlot(group[0], symbol + ' Research');
     var newsSlot = objectSlot(group[1], symbol + ' News');
     var historySlot = objectSlot(group[2], symbol + ' observed history');
@@ -3240,7 +3292,8 @@
 
       var auxiliaryPromise = descriptor.symbol
         ? positionAuxiliarySlots(descriptor, descriptor.symbol) : null;
-      var detailSlot = await readSlot('tradeDetail', '/api/trades/' + encodeURIComponent(descriptor.id));
+      var detailSlot = await readBookPositionDetailSlot(descriptor.id,
+        options && options.forceFresh === true);
       if (seq !== positionRequestSeq) return null;
       var detail = requireSlot(detailSlot, 'The position detail');
       if (!detail || !detail.trade || String(detail.trade.id) !== descriptor.id) {
@@ -3648,6 +3701,13 @@
     var universe = Array.isArray(options.universe) ? options.universe.map(function (symbol) {
       return String(symbol || '').trim().toUpperCase();
     }).filter(Boolean) : [];
+    if (!universe.length && String(options.scope || '').toLowerCase() === 'broad') {
+      var described = state.book && state.book.data && state.book.data.universe;
+      var broad = described && described.scout && described.scout.symbols;
+      if (Array.isArray(broad)) universe = broad.map(function (symbol) {
+        return String(symbol || '').trim().toUpperCase();
+      }).filter(Boolean);
+    }
     var body = {
       horizons: Array.isArray(options.horizons) && options.horizons.length
         ? options.horizons : ['45d'],

@@ -175,6 +175,11 @@ class MarketDataEngineTest {
         assertThat(warm.size()).isGreaterThan(u.active().symbols().size());
         assertThat(warm.size()).isGreaterThanOrEqualTo(50);
         assertThat(warm).contains("AAPL", "XOM", "JPM"); // tech / energy / financials — different sectors
+        @SuppressWarnings("unchecked")
+        Map<String, Object> scout = (Map<String, Object>) u.describe().get("scout");
+        assertThat(scout).containsEntry("source", "CURATED")
+                .containsEntry("label", "Curated cross-sector opportunity universe");
+        assertThat(scout.get("symbols")).isEqualTo(warm);
     }
 
     @Test

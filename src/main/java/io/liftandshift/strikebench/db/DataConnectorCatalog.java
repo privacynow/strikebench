@@ -27,19 +27,23 @@ public final class DataConnectorCatalog {
 
     public List<Connector> all() {
         List<Connector> out = new ArrayList<>();
-        boolean polygon = !cfg.polygonApiKey().isBlank();
-        boolean alpha = !cfg.alphaVantageApiKey().isBlank();
+        boolean observedProvidersMounted = !cfg.fixturesOnly();
+        boolean polygonConfigured = !cfg.polygonApiKey().isBlank();
+        boolean alphaConfigured = !cfg.alphaVantageApiKey().isBlank();
+        boolean polygon = observedProvidersMounted && polygonConfigured;
+        boolean alpha = observedProvidersMounted && alphaConfigured;
         boolean yahooOn = cfg.yahooEnabled();
-        boolean yahooPermitted = yahooOn && cfg.yahooAutomationPermissionConfirmed();
-        boolean stooq = cfg.stooqEnabled();
+        boolean yahooPermitted = observedProvidersMounted && yahooOn && cfg.yahooAutomationPermissionConfirmed();
+        boolean stooqConfigured = cfg.stooqEnabled();
+        boolean stooq = observedProvidersMounted && stooqConfigured;
         out.add(connector("polygon", "Massive / Polygon", "Daily prices + plan-dependent option history",
-                polygon, polygon, true, "Official keyed API", "Your subscribed plan governs personal use, storage, and redistribution.",
+                polygonConfigured, polygon, true, "Official keyed API", "Your subscribed plan governs personal use, storage, and redistribution.",
                 "End-of-day", "Range requests; depth depends on your plan", "Adjusted OHLCV",
                 cfg.polygonDailyRequestLimit(), true,
                 "Set POLYGON_API_KEY and confirm your plan permits the intended local or hosted use.",
                 "StrikeBench does not infer entitlements from possession of a key."));
         out.add(connector("alphavantage", "Alpha Vantage", "Daily equity and ETF prices",
-                alpha, alpha, true, "Official keyed API", "Provider terms and your plan govern storage and use.",
+                alphaConfigured, alpha, true, "Official keyed API", "Provider terms and your plan govern storage and use.",
                 "End-of-day", cfg.alphaVantageFullHistoryEnabled() ? "Full daily history enabled" : "Latest ~100 daily rows on compact access",
                 "Adjusted OHLCV", cfg.alphaVantageDailyRequestLimit(), !polygon,
                 "Set ALPHAVANTAGE_API_KEY. Enable ALPHAVANTAGE_FULL_HISTORY_ENABLED only with an entitled plan.",
@@ -49,7 +53,9 @@ public final class DataConnectorCatalog {
                 "Enabled under the product owner's standing authorization; source terms still govern storage and use.",
                 "End-of-day", "Requested date range; saved locally and incrementally enriched", "Raw OHLCV",
                 cfg.yahooDailyRequestLimit(), !polygon && !alpha,
-                yahooOn && !cfg.yahooAutomationPermissionConfirmed()
+                !observedProvidersMounted
+                        ? "Unavailable while Fixtures-only Demo mode is active; observed providers are not mounted."
+                        : yahooOn && !cfg.yahooAutomationPermissionConfirmed()
                         ? "Automation is revoked by YAHOO_AUTOMATION_PERMISSION_CONFIRMED=false."
                         : yahooOn
                             ? "Enabled. Set YAHOO_ENABLED=false to stop requests; stored rows retain their Yahoo provenance."
@@ -62,7 +68,7 @@ public final class DataConnectorCatalog {
                 "Export CSV from your broker or data source, then upload it here.",
                 "Rows are validated and invalid records are quarantined instead of entering observed analysis."));
         out.add(connector("stooq", "Stooq", "Daily equity prices",
-                stooq, stooq, true, "Keyless public endpoint", "Source terms apply.", "End-of-day",
+                stooqConfigured, stooq, true, "Keyless public endpoint", "Source terms apply.", "End-of-day",
                 "Requested range when the endpoint responds", "Raw OHLCV", 0, false,
                 "Opt in with STOOQ_ENABLED only if the endpoint works from your network.",
                 "Disabled by default because automated clients commonly receive an anti-bot page."));

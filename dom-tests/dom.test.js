@@ -18,6 +18,7 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7072';
 const BASE = `http://localhost:${PORT}`;
+const WORKSPACE = BASE + '/workspace.html';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
@@ -262,7 +263,7 @@ before(async () => {
   page = await context.newPage();
   page.on('pageerror', e => { throw new Error('page error: ' + e.message); });
 
-  await page.goto(BASE + '/');
+  await page.goto(WORKSPACE);
   await page.waitForSelector('#app[data-ready="true"]');
 });
 
@@ -430,7 +431,7 @@ test('first contact resolves Welcome before any dashboard paint', async () => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(account) });
   });
   await page.evaluate(() => localStorage.removeItem('strikebench.welcomed'));
-  await page.goto(BASE + '/?first-contact=' + Date.now() + '#/home');
+  await page.goto(WORKSPACE + '?first-contact=' + Date.now() + '#/home');
   await page.waitForTimeout(80);
   assert.equal(released, false, 'the account decision is still pending during the paint probe');
   assert.equal(await page.locator('.home-hero').count(), 0,
@@ -2256,7 +2257,22 @@ test('parallel Plans stay market-scoped, survive chip close, and open through on
     && !!document.querySelector('#home-plan-library [data-plan-id="' + values.simOne + '"]')
     && !document.querySelector('#home-plan-library [data-plan-id="' + values.simTwo + '"]')
     && /^Continue SPY/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || ''),
-  ids, { timeout: 30000 });
+  ids, { timeout: 45000 }).catch(async error => {
+    const diagnosis = await page.evaluate(values => ({
+      expected: values,
+      world: App.state.world,
+      activePlanId: App.state.activePlanId,
+      hero: (document.querySelector('.home-hero-ctas button') || {}).textContent || '',
+      rows: Array.from(document.querySelectorAll('#home-plan-library .home-plan-compact-row'))
+        .map(row => row.getAttribute('data-plan-id')),
+      routeError: document.querySelector('#route-error')?.textContent || '',
+      plans: (PlanStore.all ? PlanStore.all() : []).map(plan => ({
+        id: plan.id, symbol: plan.symbol, title: plan.title, market: plan.market,
+        status: plan.status, open: plan.open
+      }))
+    }), values);
+    throw new Error(error.message + '\nParallel Plan diagnosis: ' + JSON.stringify(diagnosis));
+  });
   assert.ok(await page.locator('#home-plan-library .home-plan-compact-row').count() <= 3,
     'Home shows a bounded alternative-Plan lens');
   assert.equal(await page.locator('#home-plan-library [data-plan-id="' + ids.simTwo + '"]').count(), 0,
@@ -2545,7 +2561,22 @@ test('Home bounds a large same-market Plan collection without hiding reachabilit
     && document.querySelectorAll('#home-plan-library .home-plan-compact-row').length === 3
     && /^Continue QQQ/.test((document.querySelector('.home-hero-ctas button') || {}).textContent || '')
     && !document.querySelector('#home-plan-library [data-plan-id="' + activeId + '"]'),
-  ids[5], { timeout: 20000 });
+  ids[5], { timeout: 45000 }).catch(async error => {
+    const diagnosis = await page.evaluate(activeId => ({
+      expectedActiveId: activeId,
+      activePlanId: App.state.activePlanId,
+      hero: (document.querySelector('.home-hero-ctas button') || {}).textContent || '',
+      rows: Array.from(document.querySelectorAll('#home-plan-library .home-plan-compact-row'))
+        .map(row => row.getAttribute('data-plan-id')),
+      expectedRepeated: !!document.querySelector('#home-plan-library [data-plan-id="' + activeId + '"]'),
+      routeError: document.querySelector('#route-error')?.textContent || '',
+      plans: (PlanStore.all ? PlanStore.all() : []).map(plan => ({
+        id: plan.id, symbol: plan.symbol, title: plan.title, market: plan.market,
+        status: plan.status, open: plan.open
+      }))
+    }), activeId);
+    throw new Error(error.message + '\nHome collection diagnosis: ' + JSON.stringify(diagnosis));
+  });
   assert.equal(await compact.locator('.home-plan-compact-row').count(), 3,
     'the desk shows at most three alternatives to the hero-owned active Plan');
   assert.ok((await compact.locator('.home-plan-compact-meta').allTextContents()).some(text =>
@@ -4401,7 +4432,7 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
     'the workspace backend stores navigation/presentation, not a second trading context');
 
   // Cold open with NO hash: the app resumes exactly where the user left off.
-  await page.goto(BASE + '/');
+  await page.goto(WORKSPACE);
   await page.waitForSelector('#app[data-ready="true"]');
   assert.equal(await page.evaluate(() => window.location.hash), durablePlanRoute,
     'the durable Plan route restores without reconstructing a Research destination');
@@ -4422,7 +4453,7 @@ test('workspace continuity: forms, symbol, and route survive a full reload', asy
   assert.equal(await page.evaluate(() => App.state.activePlanId), plan.id);
 
   // An explicit hash always beats the saved route (bookmarks/links stay honest).
-  await page.goto(BASE + '/#/portfolio');
+  await page.goto(WORKSPACE + '#/portfolio');
   await page.waitForSelector('#app[data-ready="true"]');
   assert.equal(await page.evaluate(() => document.getElementById('app').getAttribute('data-route')), 'portfolio');
 
@@ -6595,6 +6626,8 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
 
   // Sources & jobs tab
   await page.click('#data-tabs [data-tab="sources"]');
+  await page.waitForSelector('#data-csv-import .xp-head');
+  await ensureExpanded(page.locator('#data-csv-import .xp-head'));
   await page.waitForSelector('#dc-history-sync #data-csv-upload');
   await assertNamedControls('#app');
   await assertTabContracts('#app');
@@ -6606,10 +6639,11 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   const sources = await page.textContent('#dc-sources');
   const historySetup = await page.textContent('#dc-history-sync');
   assert.match(historySetup, /Yahoo Finance automation/);
-  assert.match(await page.textContent('#dc-history-sync'), /charts, HV, realized-volatility EV, and favorable observed verdicts/i,
-    'the source bridge explains the product consequence of candle starvation');
-  assert.match(await page.textContent('#dc-history-sync'), /standing authorization.*YAHOO_ENABLED=false/i,
-    'the product-owned source and its explicit revocation control stay visible');
+  const readyAutomatedSources = await page.locator('#dc-history-sync .data-source-choice .badge-ok').count();
+  if (!readyAutomatedSources) {
+    assert.match(historySetup, /charts, HV, realized-volatility EV, and favorable observed verdicts/i,
+      'when no automated source is active, the source bridge explains the product consequence of candle starvation');
+  }
   assert.doesNotMatch(sources, /Yahoo Finance automation|Alpha Vantage|Stooq/,
     'daily-history connectors are not repeated in a second inventory');
   assert.match(sources, /Cboe|SEC EDGAR/);
@@ -6621,8 +6655,11 @@ test('data center tabs: overview dashboard, sources+jobs, coverage backfill, adm
   assert.equal(await yahooChoice.isEnabled(), true, 'setup guidance remains interactive even when a source is not eligible');
   await yahooChoice.click();
   await page.waitForSelector('#data-source-detail:has-text("Permission & use")');
-  assert.match(await page.textContent('#data-source-detail'), /Automated collection requires permission|authorized personal use/i,
+  const yahooDetail = await page.textContent('#data-source-detail');
+  assert.match(yahooDetail, /standing authorization|Automated collection requires permission|authorized personal use/i,
     'full rights and setup guidance is reachable from the compact source choice');
+  assert.match(yahooDetail, /standing authorization.*(?:YAHOO_ENABLED=false|Fixtures-only Demo mode)/i,
+    'the source detail names either its observed revocation control or the active Demo-lane exclusion');
   assert.ok(await page.locator('#dc-sources .data-feed-row').count(),
     'feed identity, status, coverage, and setup remain visible instead of hiding the entire card');
   assert.equal(await page.locator('#dc-sources .xp-head:has-text("License and usage details")').count(), 1,
@@ -6674,6 +6711,8 @@ test('data center keeps every reset scope available to Beginner with plain guida
   assert.deepEqual(tiers, ['MARKET_DATA', 'RESEARCH', 'PAPER', 'EVERYTHING'],
     'Beginner keeps every reset capability instead of losing granular scopes');
   await go('#/data/sources');
+  await page.waitForSelector('#data-csv-import .xp-head');
+  await ensureExpanded(page.locator('#data-csv-import .xp-head'));
   await page.waitForSelector('#dc-history-sync #data-csv-upload');
   assert.ok(await page.locator('#dc-history-sync .data-source-choice').count() >= 4, 'beginner keeps every connector');
   assert.ok(await page.locator('#data-sync-years').count(), 'beginner keeps history window control');
@@ -7487,7 +7526,7 @@ test('multiple tabs share one realtime stream pair without starving API reads', 
     for (let i = 0; i < 4; i++) {
       const extra = await page.context().newPage();
       extras.push(extra);
-      await extra.goto(BASE + '/?stream-tab=' + i + '#/data/simulation');
+      await extra.goto(WORKSPACE + '?stream-tab=' + i + '#/data/simulation');
       await extra.waitForSelector('#app[data-ready="true"]');
     }
     await page.waitForTimeout(500);

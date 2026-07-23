@@ -20,6 +20,7 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7191';
 const BASE = `http://localhost:${PORT}`;
+const WORKSPACE = BASE + '/workspace.html';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
@@ -117,7 +118,7 @@ before(async () => {
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   page.on('pageerror', e => pageErrors.push(String(e)));
-  await page.goto(BASE + '/');
+  await page.goto(WORKSPACE);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 30000 });
   const skip = await page.locator('#welcome-skip').count();
   if (skip) { await page.click('#welcome-skip'); await page.waitForSelector('#app[data-ready="true"]'); }
@@ -146,7 +147,7 @@ test('the book-risk API serves the lane with disclosures, never fabricated numbe
   assert.equal(cluster.notionalCents, 32300000, '950x100 + 1000x200 + 160x100 + 120x100');
   assert.equal(cluster.flagged, true, 'four lots on one session is a cluster');
   assert.match(ira.expiries.clusterNote, /\$323,000\.00 notional expires 2026-08-07/);
-  assert.equal(ira.themes.rows[0].label, 'Semiconductors');
+  assert.equal(ira.themes.rows[0].label, 'Semiconductors, memory & storage');
   assert.match(ira.themes.classificationLabel, /classification, not measured correlation/);
   assert.equal(ira.contradictions.length, 1, 'short puts vs covered calls inside one theme');
   assert.match(ira.contradictions[0].message, /both long \(short puts\) and short \(covered calls\)/);

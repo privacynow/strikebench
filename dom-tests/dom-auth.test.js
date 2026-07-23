@@ -15,6 +15,7 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7191';
 const BASE = `http://localhost:${PORT}`;
+const WORKSPACE = BASE + '/workspace.html';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
@@ -140,7 +141,7 @@ async function loginAs(context, identityKey) {
   const candidate = await context.newPage();
   trackPage(candidate);
   await candidate.goto(`${BASE}/auth/login`);
-  await candidate.waitForURL(`${BASE}/#/home`, { timeout: 15_000 });
+  await candidate.waitForURL(WORKSPACE + '#/home', { timeout: 15_000 });
   await candidate.waitForSelector('#app[data-route="home"][data-ready="true"]');
   return candidate;
 }
@@ -153,7 +154,7 @@ before(async () => {
       ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true', AUTH_ENABLED: 'true',
       OIDC_CLIENT_ID: 'browser-test-client', OIDC_CLIENT_SECRET: 'browser-test-secret',
       OIDC_ISSUER: oidcIssuer, OIDC_CALLBACK_URL: `${BASE}/auth/callback`,
-      AUTH_POST_LOGIN_URL: '/#/home',
+      AUTH_POST_LOGIN_URL: '/workspace.html#/home',
       AUTH_ALLOWED_EMAILS: 'learner@example.com,reviewer@example.com',
       AUTH_ADMIN_EMAILS: 'learner@example.com', AUTH_SESSION_IDLE_SECONDS: '5'
     },
@@ -164,7 +165,7 @@ before(async () => {
   adminContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await adminContext.newPage();
   trackPage(page);
-  await page.goto(BASE + '/#/home');
+  await page.goto(WORKSPACE + '#/home');
   await page.waitForSelector('#app[data-ready="true"] .signin-card');
 });
 
@@ -208,7 +209,7 @@ test('verified OIDC sign-in reaches the owner-scoped application', async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
   nextIdentityKey = 'learner';
   await page.locator('.signin-card a').click();
-  await page.waitForURL(`${BASE}/#/home`, { timeout: 15_000 });
+  await page.waitForURL(WORKSPACE + '#/home', { timeout: 15_000 });
   await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
 
   const session = await page.evaluate(async () => {
@@ -298,7 +299,7 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
   assert.equal(isolation.admin.body.error, 'forbidden');
 
   await memberPage.goto(`${BASE}/auth/logout`);
-  await memberPage.waitForURL(`${BASE}/#/home`);
+  await memberPage.waitForURL(WORKSPACE + '#/home');
   await memberPage.waitForSelector('#app[data-ready="true"] .signin-card');
   const afterLogout = await memberPage.evaluate(async () => ({
     me: await (await fetch('/api/auth/me')).json(),
