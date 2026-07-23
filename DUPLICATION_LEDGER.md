@@ -21,7 +21,22 @@ responsibility.
 - **2026-07-23 · commit fcbcf0b (P1b):** O5, O6, A3 done — `Request`/`AutoRequest` withers +
   `DiscoveryController.withAccountHoldings`/`withRiskCap`; three cap-and-rebuild copies and two
   holdings-injection copies collapsed. ApiIntegration 52/52 + PlanApiIntegration 36/36 green.
-- REMAINING orchestrator: O2/X4 (economic-readiness, 3 dialects), O7 (recommend/ladder preflight).
+- **2026-07-23 · commit 1ac14ed (P1c):** O2/X4 done — one `EconomicReadiness` classifier fed by all
+  three surfaces (decisionRanked, attachEconomicReadiness, flattenPlanScout); the Scout and Decision
+  tabs can no longer disagree on the same verdicts. Retired `JourneySurfaceTest` (248 source-string
+  pins) per owner direction; added behavioral `EconomicReadinessTest`.
+- **2026-07-23 · commit ea7d182 (X1):** one `Fees.roundTripCents` behind EconomicAssessment,
+  ScoreComposer, and OutcomeController — verdict and score can no longer net different fees off the
+  same EV.
+- **2026-07-23 · commit 3456860 (X3/D1):** CboeProvider folded onto `ProviderPoliteness`, removing
+  its divergent inline gate (fixes the regressable seedCooldown + the missing consecutive-failure trip).
+- **2026-07-23 · X2 + E3 RECLASSIFIED (not duplication):** on close reading, both are intentional
+  TWO-TIER designs — a cheap generation-time gate (income: entry-credit `intentIncoherence`;
+  direction: catalog `StrategyFamily.fits`) plus a precise eval-time diagnostic (income: theta
+  `objectiveCoherence`; direction: delta `StanceProfiler.implied`). Different inputs at different
+  stages for different purposes; force-merging would harm the architecture. Resolved by cross-linking
+  comments so they can't silently drift, not by a merge.
+- REMAINING orchestrator: O7 (recommend/ladder preflight).
 
 ---
 
