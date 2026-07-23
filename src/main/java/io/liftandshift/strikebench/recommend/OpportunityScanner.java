@@ -95,9 +95,11 @@ public final class OpportunityScanner {
                         if (field.candidates().isEmpty()) {
                             return new PerSymbol(null, symbol + ": no candidates");
                         }
-                        StrategyEvaluation best = evaluations.evaluate(symbol, field.intent(), field.thesis(),
-                                        field.horizon(), field.riskMode(), field.candidates(), buyingPowerCents,
-                                        null, false, AnalysisContext.OBSERVED, worldId, null).stream()
+                        // ONE ranking primitive (shared with Scout and Decision): best package per
+                        // family in decision-score order, then this scan's own pick — the top viable.
+                        StrategyEvaluation best = evaluations.evaluateBestPerFamily(symbol, field.intent(),
+                                        field.thesis(), field.horizon(), field.riskMode(), field.candidates(),
+                                        buyingPowerCents, AnalysisContext.OBSERVED, worldId, null).stream()
                                 .filter(StrategyEvaluation::viable)
                                 .findFirst().orElse(null);
                         return new PerSymbol(best, null);
@@ -125,15 +127,13 @@ public final class OpportunityScanner {
             if (result.best() != null) best.add(result.best());
             if (result.note() != null) notes.add(result.note());
         }
-        best.sort(java.util.Comparator.comparingDouble(StrategyEvaluation::decisionScore).reversed());
+        best.sort(io.liftandshift.strikebench.eval.StrategyEvaluator.RANKING);
         List<StrategyEvaluation> ranked = best.stream().limit(Math.max(1, topN)).toList();
         evaluations.persist(ranked, userId);
-        List<CompensationView.CompensationEntry> compensation =
-                CompensationView.compute(best, evaluations, worldId);
-        RedeploymentFrontier.Result frontier = contextFactory == null ? null
-                : RedeploymentFrontier.compose(best, compensation, contextFactory.apply(best));
-        return new ScanResult(ranked, notes, normalized.size(), compensation,
-                CompensationView.BASIS, frontier);
+        RedeploymentFrontier.BookLayer book =
+                RedeploymentFrontier.composeBookLayer(best, evaluations, worldId, contextFactory);
+        return new ScanResult(ranked, notes, normalized.size(), book.compensation(),
+                book.compensationBasis(), book.frontier());
     }
 
 

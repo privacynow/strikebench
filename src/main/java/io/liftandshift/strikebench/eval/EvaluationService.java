@@ -132,6 +132,31 @@ public final class EvaluationService {
         return ranked;
     }
 
+    /**
+     * THE per-symbol ranking primitive: evaluate the candidates, then collapse to the single best
+     * package per family, ordered by the canonical decision score. Every ranked surface — Scout,
+     * Decision, the Portfolio scan — funnels through this ONE call so the SAME symbol yields the
+     * SAME best idea everywhere, instead of each orchestrator re-spelling evaluate + best-per-family
+     * with its own (divergent) selection rule.
+     */
+    public List<StrategyEvaluation> evaluateBestPerFamily(String symbol, String intent, String thesis,
+            String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
+            io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+            PortfolioExposureContext portfolioExposure) {
+        return evaluateBestPerFamily(symbol, intent, thesis, horizon, riskMode, candidates,
+                buyingPowerCents, actx, worldId, portfolioExposure, null);
+    }
+
+    /** Best-per-family ranking carrying the DECLARED assignment preference (objective lens). */
+    public List<StrategyEvaluation> evaluateBestPerFamily(String symbol, String intent, String thesis,
+            String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
+            io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+            PortfolioExposureContext portfolioExposure, String assignmentPreference) {
+        return StrategyEvaluator.bestPackagePerFamily(
+                rank(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
+                        actx, worldId, portfolioExposure, assignmentPreference));
+    }
+
     /** Reuses the complete candidate pipeline for the exact package on Ticket Review. */
     public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,

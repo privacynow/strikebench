@@ -145,15 +145,16 @@ final class DiscoveryController {
         try {
             // The decision score is computed from the SAME market that priced the candidates —
             // inside a simulated session that is the world's spot/IV/vol, never observed (review P0).
-            var evaluated = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
-                    result.riskMode(), result.candidates(), acct.buyingPowerCents(), null, false,
+            // ONE ranking primitive (shared with Scout and the Portfolio scan): best package per
+            // family in decision-score order. rank() emits exactly one evaluation per candidate or
+            // throws, so an empty field here is the "nothing could be ranked" data failure.
+            var evals = evaluations.evaluateBestPerFamily(result.symbol(), result.intent(), result.thesis(),
+                    result.horizon(), result.riskMode(), result.candidates(), acct.buyingPowerCents(),
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
                     practiceExposure(acct, result.symbol()), assignmentPreference);
-            if (evaluated.size() != result.candidates().size()) {
+            if (evals.isEmpty()) {
                 throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
             }
-            var evals = io.liftandshift.strikebench.eval.StrategyEvaluator
-                    .bestPackagePerFamily(evaluated);
             com.fasterxml.jackson.databind.node.ObjectNode out =
                     (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(result);
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
@@ -230,12 +231,10 @@ final class DiscoveryController {
         String world = activeWorldResolver.apply(ctx);
         boolean generatedWorld = !"observed".equals(world);
         String owner = ownerResolver.apply(ctx);
-        var evaluated = evaluations.evaluate(result.symbol(), result.intent(), result.thesis(), result.horizon(),
-                result.riskMode(), result.candidates(), account.buyingPowerCents(), owner, false,
+        var ranked = evaluations.evaluateBestPerFamily(result.symbol(), result.intent(), result.thesis(),
+                result.horizon(), result.riskMode(), result.candidates(), account.buyingPowerCents(),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
                 practiceExposure(account, result.symbol()));
-        var ranked = io.liftandshift.strikebench.eval.StrategyEvaluator
-                .bestPackagePerFamily(evaluated);
         if (!generatedWorld) evaluations.persist(ranked, owner);
 
         String recommendationId = null;
