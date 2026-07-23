@@ -49,6 +49,7 @@ public final class MarketDataService {
     private final List<NewsFilingsProvider> newsProviders;
     private final List<RatesProvider> ratesProviders;
     private final io.liftandshift.strikebench.market.ports.CandleStore candleStore; // stored bars first (nullable)
+    private volatile io.liftandshift.strikebench.market.ports.WarmOptionStore warmOptions; // warm chain fallback (nullable)
     private volatile io.liftandshift.strikebench.market.ports.SnapshotStore quoteSnapshotStore;
     private final boolean fixtureOnlyChain;
     private volatile MarketDataProvider demoProvider;
@@ -154,6 +155,15 @@ public final class MarketDataService {
     /** Shares the engine's durable observed quote mirror; never mounted in Demo-only builds. */
     public void setQuoteSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
         this.quoteSnapshotStore = store;
+    }
+
+    /**
+     * Mounts the warm option-chain store (last-known {@code option_bar} chains). Used only as an
+     * observed-lane fallback when the live provider chain yields nothing, so an exhausted or
+     * rate-limited provider serves the last-known chain instead of an empty "no listed options".
+     */
+    public void setWarmOptionStore(io.liftandshift.strikebench.market.ports.WarmOptionStore store) {
+        this.warmOptions = store;
     }
 
     public MarketLane lane(String worldId) { return MarketLane.of(worldId, fixtureOnlyChain); }
@@ -450,14 +460,29 @@ public final class MarketDataService {
         String sym = norm(symbol);
         return cached(expirationsCache, sym, "expirations", () -> {
             List<LocalDate> values = firstNonEmptyList(Domain.OPTIONS, p -> p.expirations(sym));
+            // The live provider yielded nothing (exhausted, rate-limited, or absent): fall back to
+            // the expirations present in the last-known warm capture rather than reporting none.
+            if ((values == null || values.isEmpty()) && warmOptions != null) {
+                List<LocalDate> warm = warmOptions.latestExpirations(sym);
+                if (warm != null && !warm.isEmpty()) values = warm;
+            }
             return values == null ? List.of() : List.copyOf(values);
         });
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
         String k = norm(symbol) + "|" + expiration;
-        Optional<OptionChain> loaded = cached(chainCache, k, "chain", () -> Optional.ofNullable(
-                firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null))));
+        Optional<OptionChain> loaded = cached(chainCache, k, "chain", () -> {
+            OptionChain live = firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null));
+            // Same warm fallback as expirations(): a live miss serves the last-known stored chain
+            // (labeled EOD via its "stored" source) so a scan reads warm data instead of empty.
+            if (live == null && warmOptions != null) {
+                live = warmOptions.latestChain(norm(symbol), expiration)
+                        .map(io.liftandshift.strikebench.market.ports.WarmOptionStore.Read::chain)
+                        .orElse(null);
+            }
+            return Optional.ofNullable(live);
+        });
         return loaded.map(this::gateChain)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }

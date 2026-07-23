@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
+import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.support.ObservedFixtureProvider;
@@ -215,6 +216,43 @@ class MarketDataServiceTest {
         assertThat(q.freshness()).isEqualTo(io.liftandshift.strikebench.model.Freshness.STALE);
         assertThat(q.evidence().provenance()).isEqualTo(io.liftandshift.strikebench.model.DataProvenance.OBSERVED);
         assertThat(svc.quote("MSFT")).isEmpty();
+    }
+
+    @Test
+    void exhaustedOptionProviderServesTheLastKnownWarmChainInsteadOfNothing() {
+        // The live options provider yields nothing (rate-limited / exhausted / absent). Without a
+        // warm store the scan would see "no listed options"; with one, the last-known stored chain
+        // is served (EOD-observed), so a scan reads warm data rather than an empty result.
+        EmptyCountingProvider empty = new EmptyCountingProvider();
+        MarketDataService svc = new MarketDataService(List.of(empty), List.of(), List.of());
+        LocalDate exp = LocalDate.parse("2026-08-21");
+        OptionQuote call = new OptionQuote("AAPL", null, io.liftandshift.strikebench.model.OptionType.CALL,
+                new java.math.BigDecimal("320"), exp, new java.math.BigDecimal("5.00"),
+                new java.math.BigDecimal("5.20"), new java.math.BigDecimal("5.10"), 100L, 500L,
+                0.25, 0.45, null, null, null, CLOCK.millis(), "stored",
+                io.liftandshift.strikebench.model.Freshness.EOD);
+        OptionChain stored = new OptionChain("AAPL", exp, new java.math.BigDecimal("318"),
+                List.of(call), List.of(), CLOCK.millis(), "stored",
+                io.liftandshift.strikebench.model.Freshness.EOD);
+        svc.setWarmOptionStore(new io.liftandshift.strikebench.market.ports.WarmOptionStore() {
+            @Override public Optional<Read> latestChain(String symbol, LocalDate expiration) {
+                return "AAPL".equals(symbol) && exp.equals(expiration)
+                        ? Optional.of(new Read(stored, exp)) : Optional.empty();
+            }
+            @Override public List<LocalDate> latestExpirations(String symbol) {
+                return "AAPL".equals(symbol) ? List.of(exp) : List.of();
+            }
+        });
+
+        assertThat(svc.expirations("AAPL")).containsExactly(exp);
+        OptionChain served = svc.chain("AAPL", exp).orElseThrow();
+        assertThat(served.source()).isEqualTo("stored");
+        assertThat(served.evidence().provenance())
+                .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.OBSERVED);
+        assertThat(served.calls()).hasSize(1);
+        // A symbol with no warm capture still reports nothing — the fallback is not a fabricator.
+        assertThat(svc.expirations("MSFT")).isEmpty();
+        assertThat(svc.chain("MSFT", exp)).isEmpty();
     }
 
     @Test
