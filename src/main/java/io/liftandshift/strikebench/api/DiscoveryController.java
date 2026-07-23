@@ -430,11 +430,8 @@ final class DiscoveryController {
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol) {
-        var current = trades.portfolioDollarDelta(account.id(), symbol);
-        return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
-                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
-                current.grossCents(), current.netCents(), current.focusSymbolGrossCents(),
-                current.complete(), current.basis());
+        return trades.portfolioDollarDelta(account.id(), symbol).toContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE);
     }
 
     private void researchScout(Context ctx) {
@@ -620,11 +617,8 @@ final class DiscoveryController {
         Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> practiceExposures =
                 new LinkedHashMap<>();
         for (String symbol : symbols) {
-            var focused = practiceDelta.focus(symbol);
-            practiceExposures.put(symbol, new io.liftandshift.strikebench.eval.PortfolioExposureContext(
-                    io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
-                    focused.grossCents(), focused.netCents(), focused.focusSymbolGrossCents(),
-                    focused.complete(), focused.basis()));
+            practiceExposures.put(symbol, practiceDelta.focus(symbol).toContext(
+                    io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE));
         }
         lanes.add(new RedeploymentFrontier.BookLane("PRACTICE", practice.id(), practice.name(),
                 practiceExposures, null, null, practice.reservedCents(), "SYSTEM_CALCULATED"));
@@ -639,11 +633,8 @@ final class DiscoveryController {
                 Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> exposures =
                         new LinkedHashMap<>();
                 for (String symbol : symbols) {
-                    var focused = delta.focus(symbol);
-                    exposures.put(symbol, new io.liftandshift.strikebench.eval.PortfolioExposureContext(
-                            io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.REAL,
-                            focused.grossCents(), focused.netCents(), focused.focusSymbolGrossCents(),
-                            focused.complete(), focused.basis()));
+                    exposures.put(symbol, delta.focus(symbol).toContext(
+                            io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.REAL));
                 }
                 AccountObjectiveService.Revision revision = accountObjectives.latest(owner, risk.accountId());
                 AccountObjectiveService.AccountCapacityPolicy policy = revision == null

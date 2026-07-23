@@ -117,7 +117,14 @@ public final class TradeService {
 
     /** Dollar-delta exposure for a lane-aware before/after assessment. */
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
-                                      boolean complete, String basis) {}
+                                      boolean complete, String basis) {
+        /** THE mapping to the evaluation layer's exposure context (adds the execution lane). */
+        public io.liftandshift.strikebench.eval.PortfolioExposureContext toContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane lane) {
+            return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                    lane, grossCents, netCents, focusSymbolGrossCents, complete, basis);
+        }
+    }
 
     /** One pass over the Practice book, retaining every symbol subtotal for cross-symbol Scout. */
     public record DollarDeltaBook(long grossCents, long netCents,

@@ -236,7 +236,13 @@ public final class PortfolioAccountingService {
 
     /** Observed tracked-book dollar delta for one account; never combined with Practice. */
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
-                                      boolean complete, String basis) {}
+                                      boolean complete, String basis) {
+        /** THE mapping to the evaluation layer's exposure context (adds the execution lane). */
+        public io.liftandshift.strikebench.eval.PortfolioExposureContext toContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane lane) {
+            return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
+                    lane, grossCents, netCents, focusSymbolGrossCents, complete, basis);
+        }}
 
     /** One observed tracked-book pass with every symbol subtotal for cross-symbol Scout. */
     public record DollarDeltaBook(long grossCents, long netCents,

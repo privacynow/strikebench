@@ -365,11 +365,8 @@ final class TradeController {
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol, String excludedTradeId) {
-        var exposure = trades.portfolioDollarDelta(account.id(), symbol, excludedTradeId);
-        return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
-                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE,
-                exposure.grossCents(), exposure.netCents(), exposure.focusSymbolGrossCents(),
-                exposure.complete(), exposure.basis());
+        return trades.portfolioDollarDelta(account.id(), symbol, excludedTradeId).toContext(
+                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE);
     }
 
     CreatedTrade execute(Context ctx, TradeOpenRequest body, TradeService.TransactionHook hook) {
