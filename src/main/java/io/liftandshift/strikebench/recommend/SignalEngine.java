@@ -118,9 +118,7 @@ public final class SignalEngine {
         if (!quote.evidence().usableIn(lane)) return Optional.empty();
         boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
-        LocalDate today = market.simInstant(worldId)
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate today = market.laneToday(worldId, clock);
         io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
         if (!series.isEmpty() && !series.evidence().usableIn(lane)) {
             series = io.liftandshift.strikebench.market.CandleSeries.EMPTY;

@@ -84,9 +84,7 @@ public final class SimulationEngine {
         // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
         // backtests use historical windows), so activating a saved run changed only the banner.
         // As the recent past, the active dataset genuinely drives charts, HV, and backtests.
-        LocalDate laneToday = market.simInstant(scope.worldId())
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate laneToday = market.laneToday(scope.worldId(), clock);
         List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(laneToday, days - 1));
         String id = maintenance.write(() -> {
             String created = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),

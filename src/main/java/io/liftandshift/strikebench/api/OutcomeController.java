@@ -435,9 +435,7 @@ final class OutcomeController {
                                     int qty, String worldId, EntryBook book, List<String> contractExpirations) {
         List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
         if (exps.isEmpty()) return null;
-        java.time.LocalDate today = market.simInstant(worldId)
-                .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> java.time.LocalDate.now(clock));
+        java.time.LocalDate today = market.laneToday(worldId, clock);
         double entryPerUnit = 0;
         Double atmIv = null;
         String source = null;
@@ -706,9 +704,7 @@ final class OutcomeController {
         long desiredNet = position.entryCostCents() == null ? -entry.entryCents() : -position.entryCostCents();
         long adjustment = desiredNet - baseCurve.entryNetPremiumCents();
         var curve = PayoffCurve.of(entry.pricedLegs(), qty, adjustment);
-        java.time.LocalDate today = market.simInstant(worldParam(activeWorld.apply(ctx)))
-                .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> java.time.LocalDate.now(clock));
+        java.time.LocalDate today = market.laneToday(worldParam(activeWorld.apply(ctx)), clock);
         var time = io.liftandshift.strikebench.market.OptionTime.nearest(entry.pricedLegs(), today);
         String outcomeWorld = worldParam(activeWorld.apply(ctx));
         double rate = market.riskFreeRateQuote((int) Math.max(1, time.calendarDays()), outcomeWorld).annualRate();
@@ -772,9 +768,7 @@ final class OutcomeController {
 
     io.liftandshift.strikebench.sim.PathPosition toPathPosition(
             Context ctx, List<io.liftandshift.strikebench.outcomes.OutcomeContract.Leg> legs) {
-        java.time.LocalDate laneToday = market.simInstant(worldParam(activeWorld.apply(ctx)))
-                .map(i -> java.time.LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> java.time.LocalDate.now(clock));
+        java.time.LocalDate laneToday = market.laneToday(worldParam(activeWorld.apply(ctx)), clock);
         return toPathPosition(ctx, legs, laneToday);
     }
 

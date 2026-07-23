@@ -7,7 +7,6 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -64,9 +63,7 @@ final class SparklineController {
             default -> "3m";
         };
         String world = worldParam(activeWorld.apply(ctx));
-        LocalDate today = market.simInstant(world)
-                .map(instant -> LocalDate.ofInstant(instant, MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate today = market.laneToday(world, clock);
         int days = switch (range) {
             case "1m" -> 30;
             case "6m" -> 182;

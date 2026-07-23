@@ -32,6 +32,19 @@ class MarketDataServiceTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
 
     @Test
+    void laneTodayResolvesTheObservedTradingDateInEasternRegardlessOfTheHostClockZone() {
+        MarketDataService svc = new MarketDataService(List.of(new FixtureProvider()), List.of(), List.of());
+        // 02:00 UTC on Jan 16 is 21:00 EST on Jan 15 — the US trading date is the 15th. A host clock
+        // in UTC (or any non-Eastern zone) must NOT make the observed "today" the 16th. This pins the
+        // C7 consolidation: laneToday is Eastern by construction, not the deploy host's local zone.
+        Clock utcClock = Clock.fixed(Instant.parse("2026-01-16T02:00:00Z"), java.time.ZoneOffset.UTC);
+        assertThat(svc.laneToday(null, utcClock)).isEqualTo(LocalDate.of(2026, 1, 15));
+        assertThat(svc.laneToday("", utcClock)).isEqualTo(LocalDate.of(2026, 1, 15));
+        // laneNow stays a pure instant — zone-independent.
+        assertThat(svc.laneNow(null, utcClock)).isEqualTo(Instant.parse("2026-01-16T02:00:00Z"));
+    }
+
+    @Test
     void partialObservedHistoryRechecksSoonerThanCompleteHistory() {
         assertThat(MarketDataService.candleCacheTtl(true)).isEqualTo(java.time.Duration.ofMinutes(5));
         assertThat(MarketDataService.candleCacheTtl(false)).isEqualTo(java.time.Duration.ofHours(1));

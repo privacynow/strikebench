@@ -257,10 +257,7 @@ final class DiscoveryController {
                     .filter(java.util.Objects::nonNull)
                     .min(LocalDate::compareTo)
                     .orElse(null);
-            LocalDate laneToday = market.simInstant(laneWorld)
-                    .map(instant -> LocalDate.ofInstant(instant,
-                            io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                    .orElseGet(() -> LocalDate.now(clock));
+            LocalDate laneToday = market.laneToday(laneWorld, clock);
             int horizonDays = frontExpiration == null ? 30
                     : (int) Math.max(1, ChronoUnit.DAYS.between(laneToday, frontExpiration));
             Double iv = marketVolatility.atmIv(result.symbol(), laneWorld, 30);

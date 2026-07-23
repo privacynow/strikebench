@@ -866,17 +866,13 @@ public final class PathEnsembleService {
 
     /** Lane date used by generation, valuation, session labels, and the immutable receipt. */
     private LocalDate anchorDate(Scope scope) {
-        return market.simInstant(scope.worldId())
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        return market.laneToday(scope.worldId(), clock);
     }
 
     /** Lane- and dataset-aware inputs for the block-bootstrap path model. */
     public double[] historicalLogReturns(Scope scope) {
         try {
-            LocalDate to = market.simInstant(scope.worldId())
-                    .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                    .orElseGet(() -> LocalDate.now(clock));
+            LocalDate to = market.laneToday(scope.worldId(), clock);
             List<Candle> candles = market.candleSeries(scope.symbol(), to.minusYears(2), to,
                     scope.worldId(), scope.analysis()).candles();
             if (candles.size() < 30) return null;
