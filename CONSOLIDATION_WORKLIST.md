@@ -5,6 +5,15 @@ Owner mandate: ALL duplications go, backend AND frontend; no 'different responsi
 `[x]` done this program · `[ ]` remaining. Front A (backend) first, then Front B (frontend).
 **83 findings · 4 already done · 79 remaining.**
 
+## PROGRESS — 2026-07-23 (this session)
+Full suite **1073 tests green** after each landing. Committed:
+- **backend-math COMPLETE**: `pricing/LognormalTerminal` (risk-neutral μ/sd ×4 + lognormal CDF ×2, incl. the 2nd normal-CDF); `util/Numbers.round2/round4` (~10 sites); `market/RateQuote.DEFAULT_MODELED_RATE` (4% ×5); `util/Quantiles` — ONE interpolated convention replacing floor ×3 / round ×1 / two ad-hoc interpolators, plus `Quantiles.index` for the representative-element selector (ScenarioCanvasValuator.Ranked); dollars→cents ×2 routed to `Money.toCents` (killed the raw-`Math.round` divergence on negative half-cents / NaN).
+- **backend-fees COMPLETE**: `util/Fees` now owns `optionContracts(legs,qty)` + `openingCents` + `roundTripCents(=2×opening)`; TradeService/Backtester/RecommendationEngine delegate. Fixed a latent divergence — TradeService/Backtester charged the flat per-order fee on stock-only orders; unified to "stock-only pays nothing". FeesTest extended.
+- Earlier this session (pre-compaction): CDF unification, `Fees.roundTripCents` + 2 fee-bypass fixes, `OptionBarWriter` (option_bar SQL), fresh-eyes constant.
+
+REMAINING Front-A is all HIGH/structural: scan-service merge (AutoRecommender/OpportunityScanner share a fan-out primitive — touches live Discovery/Scout/PlanStrategy), greeks unit-contract (couples to API + Front-B renderers), symbol value-object (203 upper-case sites/78 files — needs classification, not blind sweep), marketdata quote/freshness authority, persistence stores (settings/ledger/accounts — DB-clock vs sim-clock timestamp care). Then Front B.
+
+
 
 ## backend-math
 - [x] **HIGH** (DUPLICATE_DIVERGENT, ×2) Standard normal CDF N(x) (Abramowitz-Stegun 7.1.26)
