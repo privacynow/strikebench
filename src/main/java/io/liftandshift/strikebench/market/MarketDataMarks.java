@@ -38,13 +38,7 @@ public final class MarketDataMarks implements MarksSource {
     private Optional<Quote> observedQuote(String symbol) {
         MarketDataEngine current = engine;
         if (current == null) return market.quote(symbol);
-        return current.quote(symbol).map(MarketDataMarks::snapshotQuote);
-    }
-
-    private static Quote snapshotQuote(MarketDataEngine.MarketSnapshot snapshot) {
-        return new Quote(snapshot.symbol(), snapshot.description(), snapshot.last(), snapshot.bid(), snapshot.ask(),
-                snapshot.prevClose(), null, null, null, snapshot.optionable(), snapshot.asOfEpochMs(),
-                snapshot.source(), snapshot.freshness());
+        return current.quote(symbol).map(MarketDataEngine.MarketSnapshot::toQuote);
     }
 
     @Override
@@ -64,7 +58,7 @@ public final class MarketDataMarks implements MarksSource {
         if (!observed(worldId) || engine == null) return MarksSource.super.underlyingMarks(symbols, worldId);
         Map<String, BigDecimal> out = new LinkedHashMap<>();
         for (MarketDataEngine.MarketSnapshot snapshot : engine.quotes(symbols == null ? List.of() : symbols)) {
-            BigDecimal mark = snapshotQuote(snapshot).mark();
+            BigDecimal mark = snapshot.toQuote().mark();
             if (mark != null && mark.signum() > 0) out.put(snapshot.symbol(), mark);
         }
         return out;
