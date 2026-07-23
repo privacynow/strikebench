@@ -99,7 +99,7 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
     }
 
     /** Annualized risk-free rate for POP/EV modeling. */
-    default double riskFreeRate(int days) { return 0.04; }
+    default double riskFreeRate(int days) { return io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE; }
 
     /** Lane-aware rate value; generated markets must not silently borrow an observed input. */
     default double riskFreeRate(int days, String worldId) { return riskFreeRate(days); }

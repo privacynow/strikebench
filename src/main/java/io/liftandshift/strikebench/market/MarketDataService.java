@@ -720,7 +720,7 @@ public final class MarketDataService {
                 return new RateQuote(simulated.get().rateAnnual(),
                         io.liftandshift.strikebench.model.DataEvidence.of(simulated.get().rateSource(), Freshness.SIMULATED));
             }
-            return new RateQuote(0.04,
+            return new RateQuote(RateQuote.DEFAULT_MODELED_RATE,
                     io.liftandshift.strikebench.model.DataEvidence.missing("unknown simulated market"));
         }
         return cached(rateCache, days, "rate", () -> {
@@ -742,7 +742,7 @@ public final class MarketDataService {
                     recordError(p.name(), Domain.RATES, e);
                 }
             }
-            return RateQuote.modeledDefault(0.04);
+            return RateQuote.modeledDefault(RateQuote.DEFAULT_MODELED_RATE);
         });
     }
 

@@ -992,7 +992,7 @@ public final class BookRiskService {
                     0, 0, ScenarioCanvasSpec.SurfaceDynamics.STICKY_MONEYNESS,
                     ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM,
                     ScenarioCanvasSpec.ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
-            double annualRate = .04;
+            double annualRate = io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE;
             DataEvidence rateEvidence = DataEvidence.of("modeled-default",
                     io.liftandshift.strikebench.model.Freshness.MODELED);
             ScenarioCanvasValuator.BookScenarioReport report = canvasValuator.valueJointBook(
