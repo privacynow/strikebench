@@ -711,7 +711,7 @@ public final class ApiServer {
      *  moving simulated exchange (that lane has its own verification surface). */
     private void requireObservedLane(Context ctx, String what) {
         String world = activeWorld(ctx);
-        if (!"observed".equals(world) && !"demo".equals(world)) {
+        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(world)) {
             throw new IllegalStateException(what + " \u2014 it has no meaning inside a simulated session. "
                     + "Return to the baseline market to run it; your simulated session keeps running.");
         }
