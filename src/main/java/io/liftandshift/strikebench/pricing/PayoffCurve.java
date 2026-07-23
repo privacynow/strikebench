@@ -191,8 +191,7 @@ public final class PayoffCurve {
         if (tYears <= 0 || sigma <= 0) {
             return profitAt(BigDecimal.valueOf(spot)).signum() > 0 ? 1.0 : 0.0;
         }
-        double m = Math.log(spot) + (drift - 0.5 * sigma * sigma) * tYears;
-        double sd = sigma * Math.sqrt(tYears);
+        LognormalTerminal term = LognormalTerminal.of(spot, sigma, tYears, drift);
 
         List<Double> bounds = new ArrayList<>();
         bounds.add(0.0);
@@ -204,8 +203,8 @@ public final class PayoffCurve {
             double lo = bounds.get(i), hi = bounds.get(i + 1);
             double sample = sampleWithin(lo, hi, spot);
             if (profitAt(BigDecimal.valueOf(sample)).signum() > 0) {
-                double pHi = Double.isInfinite(hi) ? 1.0 : BlackScholes.normCdf((Math.log(hi) - m) / sd);
-                double pLo = lo <= 0 ? 0.0 : BlackScholes.normCdf((Math.log(lo) - m) / sd);
+                double pHi = Double.isInfinite(hi) ? 1.0 : term.cdf(hi);
+                double pLo = term.cdf(lo);
                 prob += pHi - pLo;
             }
         }
@@ -226,8 +225,9 @@ public final class PayoffCurve {
     public long expectedValueCents(double spot, double sigma, double tYears, double drift) {
         if (spot <= 0) return 0;
         if (tYears <= 0 || sigma <= 0) return profitAtCents(BigDecimal.valueOf(spot));
-        double m = Math.log(spot) + (drift - 0.5 * sigma * sigma) * tYears;
-        double sd = sigma * Math.sqrt(tYears);
+        LognormalTerminal term = LognormalTerminal.of(spot, sigma, tYears, drift);
+        double m = term.mu();
+        double sd = term.sd();
         int n = 2000; // even, for Simpson
         double lo = m - 8 * sd, hi = m + 8 * sd, h = (hi - lo) / n;
         double sum = 0;
