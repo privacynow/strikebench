@@ -343,13 +343,14 @@ public final class SimulationEngine {
         if (input == null || !(input.atmIv() > 0) || !Double.isFinite(input.atmIv())) return null;
         double iv = input.atmIv();
         int sessions = Math.max(1, horizonSessions);
-        double t = sessions / 252.0;
-        double drift = (riskFreeRate - 0.5 * iv * iv) * t;
-        double width = iv * Math.sqrt(t) * 0.994457883209753;
+        // THE one lognormal terminal (session-clocked here); the range is exp(mu ± width).
+        io.liftandshift.strikebench.pricing.LognormalTerminal term =
+                io.liftandshift.strikebench.pricing.LognormalTerminal.of(spot, iv, sessions / 252.0, riskFreeRate);
+        double width = term.sd() * 0.994457883209753;
         String expiry = input.expiration() == null ? null : input.expiration().toString();
         return new MarketImpliedRange(iv, expiry, sessions, input.expirationCalendarDays(),
-                round2(spot * Math.exp(drift - width)),
-                round2(spot * Math.exp(drift)), round2(spot * Math.exp(drift + width)),
+                round2(Math.exp(term.mu() - width)),
+                round2(Math.exp(term.mu())), round2(Math.exp(term.mu() + width)),
                 "Risk-neutral lognormal range from ATM IV at the listed " + expiry + " expiry ("
                         + input.expirationCalendarDays() + " calendar days away), scaled over the requested "
                         + sessions + " trading sessions; market pricing, not a forecast.");

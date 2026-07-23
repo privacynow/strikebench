@@ -46,8 +46,9 @@ public final class ProbabilityMap {
         if (spot <= 0 || sigma <= 0 || tYears <= 0) {
             return new Result(0, 0, 0, 0, 0, 0, List.of(), "undefined (missing spot/vol/time)");
         }
-        double sd = sigma * Math.sqrt(tYears);
-        double mu = Math.log(spot) + (riskFreeRate - sigma * sigma / 2) * tYears;
+        LognormalTerminal term = LognormalTerminal.of(spot, sigma, tYears, riskFreeRate);
+        double sd = term.sd();
+        double mu = term.mu();
 
         long maxProfit = curve.maxProfitUnbounded() ? Long.MAX_VALUE : curve.maxProfitCents();
         long maxLoss = curve.maxLossUnbounded() ? Long.MAX_VALUE : curve.maxLossCents();
@@ -68,7 +69,7 @@ public final class ProbabilityMap {
             if (b - a < 1e-9) continue;
             double mid = (a + b) / 2;
             long pm = curve.profitAtCents(BigDecimal.valueOf(mid));
-            double mass = cdf(b, mu, sd) - cdf(a, mu, sd);
+            double mass = term.cdf(b) - term.cdf(a);
             if (pm > 0) pAny += mass;
             // Equality with the extreme holds on the whole interval only if BOTH endpoints (and
             // hence the linear segment) sit at the extreme — a single-point peak contributes 0.
@@ -115,7 +116,7 @@ public final class ProbabilityMap {
         for (BigDecimal k : shortStrikes == null ? List.<BigDecimal>of() : shortStrikes) {
             double kk = k.doubleValue();
             if (kk <= 0) continue;
-            double beyond = kk >= spot ? 1 - cdf(kk, mu, sd) : cdf(kk, mu, sd);
+            double beyond = kk >= spot ? 1 - term.cdf(kk) : term.cdf(kk);
             touches.add(new Touch(k, Math.min(1.0, 2 * beyond)));
         }
         String basis = riskFreeRate != 0
@@ -123,13 +124,6 @@ public final class ProbabilityMap {
                 : "zero-rate risk-neutral lognormal approximation (market IV, q=0 assumed) — model odds, not a forecast; touch is a reflection estimate";
         return new Result(round4(pAny), round4(pMaxP), round4(pMaxL), round4(pPartial),
                 cvar95, Math.min(0, stress), touches, basis);
-    }
-
-    /** Lognormal CDF: P(S_T <= s) with ln S_T ~ N(mu, sd^2). Uses THE one normal CDF
-     *  (BlackScholes.normCdf) — no second erf/CDF approximation lives here. */
-    private static double cdf(double s, double mu, double sd) {
-        if (s <= 0) return 0;
-        return BlackScholes.normCdf((Math.log(s) - mu) / sd);
     }
 
     private static double clamp01(double v) { return Math.max(0, Math.min(1, v)); }
