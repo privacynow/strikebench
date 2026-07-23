@@ -800,7 +800,7 @@ public final class MarketDataService {
     // ---- Freshness gates ----
 
     private Quote gateQuote(Quote q) {
-        if (isLive(q.freshness()) && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
+        if (q.freshness().isObservedLive() && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
             return new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
                     q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), q.source(), Freshness.STALE);
         }
@@ -808,15 +808,11 @@ public final class MarketDataService {
     }
 
     private OptionChain gateChain(OptionChain c) {
-        if (isLive(c.freshness()) && ageMs(c.asOfEpochMs()) > CHAIN_STALE_MS) {
+        if (c.freshness().isObservedLive() && ageMs(c.asOfEpochMs()) > CHAIN_STALE_MS) {
             return new OptionChain(c.underlying(), c.expiration(), c.underlyingPrice(), c.calls(), c.puts(),
                     c.asOfEpochMs(), c.source(), Freshness.STALE);
         }
         return c;
-    }
-
-    private static boolean isLive(Freshness f) {
-        return f == Freshness.REALTIME || f == Freshness.DELAYED;
     }
 
     private static long ageMs(long asOfEpochMs) {
