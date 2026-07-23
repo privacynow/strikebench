@@ -462,11 +462,16 @@ final class PlanOutcomeController {
             JsonNode evaluation = candidate.path("evaluation");
             JsonNode assessment = evaluation.path("assessment");
             JsonNode economics = assessment.path("economics");
-            long fees = economics.path("estimatedRoundTripFeesCents").isNumber()
-                    ? economics.path("estimatedRoundTripFeesCents").longValue()
-                    : position.legs().stream().filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
-                    .mapToLong(leg -> Math.max(1, leg.ratio())).sum() * qty * cfg.feePerContractCents() * 2L
-                    + (position.legs().isEmpty() ? 0 : cfg.feePerOrderCents() * 2L);
+            long fees;
+            if (economics.path("estimatedRoundTripFeesCents").isNumber()) {
+                fees = economics.path("estimatedRoundTripFeesCents").longValue();
+            } else {
+                long contracts = position.legs().stream().filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
+                        .mapToLong(leg -> Math.max(1, leg.ratio())).sum() * qty;
+                // THE one fee formula (no option order fee on a stock-only package).
+                fees = io.liftandshift.strikebench.util.Fees.roundTripCents(
+                        contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
+            }
             metadata.put(id, new PlanComparisonMeta(candidate, position, qty, fees));
             try {
                 var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
