@@ -28,8 +28,6 @@ import java.util.List;
  * result from either lens is copied into, averaged with, or allowed to overwrite the other.
  */
 final class PlanAdoptionReviewService {
-    static final String FRESH_EYES_QUESTION =
-            "Would you open the exact position you still own today, ignoring sunk campaign cash?";
     static final String CAMPAIGN_QUESTION =
             "What has the explicitly linked whole campaign earned or lost, beside the frozen adopted baseline?";
 
@@ -152,7 +150,7 @@ final class PlanAdoptionReviewService {
                         analysis = surfacer.surface(owner,
                                 withHistory(owner, row, baseline, matching, analysis));
                     }
-                    freshEyes = new FreshEyesLens(true, FRESH_EYES_QUESTION,
+                    freshEyes = new FreshEyesLens(true, io.liftandshift.strikebench.position.HeldPositionEconomicsService.FRESH_EYES_QUESTION,
                             "Current observed executable marks; sunk campaign cash excluded. "
                                     + "The account's latest objective revision supplies coherence only.",
                             analysis, null);
@@ -240,7 +238,7 @@ final class PlanAdoptionReviewService {
     }
 
     private FreshEyesLens unavailableFreshEyes(String reason) {
-        return new FreshEyesLens(false, FRESH_EYES_QUESTION,
+        return new FreshEyesLens(false, io.liftandshift.strikebench.position.HeldPositionEconomicsService.FRESH_EYES_QUESTION,
                 "Current observed executable marks; sunk campaign cash excluded.", null, reason);
     }
 
