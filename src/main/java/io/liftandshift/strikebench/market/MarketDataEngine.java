@@ -46,7 +46,20 @@ public final class MarketDataEngine {
     public record MarketSnapshot(String symbol, String description, BigDecimal last, BigDecimal bid,
                                  BigDecimal ask, BigDecimal prevClose, boolean optionable,
                                  Freshness freshness, String source, long asOfEpochMs,
-                                 long lastRefreshEpochMs, boolean refreshing, String error) {}
+                                 long lastRefreshEpochMs, boolean refreshing, String error) {
+
+        /** Live/marks path — preserves the snapshot's own freshness tier. */
+        public Quote toQuote() {
+            return new Quote(symbol, description, last, bid, ask, prevClose,
+                    null, null, null, optionable, asOfEpochMs, source, freshness);
+        }
+
+        /** Durable last-known-quote fallback — forces STALE so it can never present as live. */
+        public Quote toStaleQuote() {
+            return new Quote(symbol, description, last, bid, ask, prevClose,
+                    null, null, null, optionable, asOfEpochMs, source, Freshness.STALE);
+        }
+    }
 
     /** Operational status for the Data Center: what's warm, what's stale, what's in flight, latency. */
     public record EngineStatus(boolean enabled, boolean running, boolean marketOpen, int refreshInterval,

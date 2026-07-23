@@ -440,7 +440,9 @@ public final class MarketDataService {
         Optional<Quote> loaded = cached(quoteCache, sym, "quote", () -> {
             Quote q = firstNonEmpty(Domain.QUOTES, p -> p.quote(sym).orElse(null));
             if (q == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
-                try { q = quoteSnapshotStore.load(sym).map(MarketDataService::snapshotQuote).orElse(null); }
+                try { q = quoteSnapshotStore.load(sym)
+                        .map(io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot::toStaleQuote)
+                        .orElse(null); }
                 catch (RuntimeException e) { log.debug("Last-known quote lookup failed for {}", sym, e); }
             }
             return Optional.ofNullable(q);
@@ -448,11 +450,6 @@ public final class MarketDataService {
         Quote q = loaded.orElse(null);
         return Optional.ofNullable(q).map(this::gateQuote)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
-    }
-
-    private static Quote snapshotQuote(io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot s) {
-        return new Quote(s.symbol(), s.description(), s.last(), s.bid(), s.ask(), s.prevClose(),
-                null, null, null, s.optionable(), s.asOfEpochMs(), s.source(), Freshness.STALE);
     }
 
     public List<LocalDate> expirations(String symbol) {
