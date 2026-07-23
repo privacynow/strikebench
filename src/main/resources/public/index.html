@@ -3012,7 +3012,16 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeideasearch>span{color:var(--accent);font-size:var(--f-2xs);font-weight:750;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
 .homeideasearch input,.homeacquirefields input{min-width:0;width:100%;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);color:var(--text);padding:4px 7px;font:650 var(--f-sm) var(--mono);outline:none}
 .homeideasearch input:focus,.homeacquirefields input:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-wash)}
-.homeideamatchhost{min-height:28px}
+.homeideamatchhost{min-height:0}
+.scoutbar{display:flex;align-items:flex-end;gap:8px;margin-top:8px}
+.scoutbar .homeideasearch{flex:1;margin:0}
+.scoutbar .scoutgo{flex:none;min-width:140px;min-height:34px;white-space:nowrap}
+.scoutbar .scoutalt{flex:none;white-space:nowrap}
+.homeworkbenchpanel .homeideamatchhost:empty{display:none}
+.scoutresults{flex:1;min-height:0;margin-top:8px;display:flex;flex-direction:column;overflow:hidden}
+.scoutresults:empty{display:none}
+.scoutidle{flex:1;min-height:0;display:grid;place-items:center;padding:14px;text-align:center;color:var(--faint);font-size:var(--f-xs);line-height:1.5}
+.scoutidle b{color:var(--dim)}
 .homeworkbenchpanel .btn.pri:disabled,.homeworkbenchactions .btn.pri:disabled{opacity:.5;filter:saturate(.55);box-shadow:none;cursor:not-allowed}
 .homeworkbenchpanel .btn.xs{border-color:var(--accent-2);color:var(--accent);background:transparent}
 .homeworkbenchpanel .btn.xs:hover{background:var(--accent-wash);color:var(--accent)}
@@ -3049,9 +3058,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeworkbenchpanel .scoutactivegrid>.scoutidlefield>.scoutidlecard{height:100%;min-height:0}
 /* No dark gap: the idle card fills its column and the goal explanation grows to absorb any
    slack as an intentional accent panel, instead of margin-top:auto opening a black rectangle. */
-.homeworkbenchpanel:not(.emptyopportunitypanel) .scoutgoalread{margin-top:0;flex:1;display:flex;flex-direction:column;justify-content:center}
+.homeworkbenchpanel:not(.emptyopportunitypanel) .scoutgoalread{margin-top:0;flex:none}
 .homeworkbenchpanel:not(.emptyopportunitypanel) .homeworkbenchactions{margin-top:0}
-.homeworkbenchpanel .scoutstartgrid{flex:1;min-height:0}
+.homeworkbenchpanel .scoutstart{height:auto}
+.homeworkbenchpanel .scoutstartgrid{flex:none;min-height:0}
+.homeworkbenchpanel .scoutlaunch{margin-top:8px}
 .compactbookfutures .bookonefacts .authmetric{padding:4px 6px}
 .compactbookfutures .bookonefacts .authmetric{gap:0}
 .compactbookfutures .bookonefacts .authmetric span{font-size:9px;line-height:1.1}
@@ -3070,7 +3081,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book .board,
   .lv-book[data-position-count="1"] .board,
   .lv-book[data-position-count="1"][data-plan-count="0"] .board,
-  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(320px,4fr) minmax(440px,6fr);
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(380px,1.08fr) minmax(360px,0.92fr);
     grid-template-areas:
       "chain chain chain chain chain chain chain chain sector sector news news"
       "map map map map map bookrisk bookrisk bookrisk roster roster univ univ";
@@ -3133,7 +3144,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .homeideamatches{grid-template-columns:1fr}.homeideasearch,.homeacquirefields label{grid-template-columns:1fr}.homeworkbenchactions{align-items:stretch;flex-direction:column}.homeworkbenchactions .btn{width:100%}
 }
 @media(min-width:1001px){
-  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(360px,1.15fr)}
+  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1.35fr) minmax(300px,0.92fr)}
 }
 .lv-book[data-position-count="1"] #bookrisk{display:flex}
 .compactbookfutures .bookfanwrap,.compactbookfutures .bookfanwrap.singleposition{grid-template-columns:minmax(0,1fr)}
@@ -5223,19 +5234,22 @@ function authOpportunityControlsHTML(){
     ideaButtons('Risk','risk',['Conservative','Balanced','Aggressive'],HOME_IDEA.riskMode)+'</div>';
 }
 function authScoutIdleFieldHTML(){
-  var described=authoritativeUniverse()||{},scope=HOME_SCOUT.scope==='broad'?described.scout:described.active,symbols=scope&&Array.isArray(scope.symbols)?scope.symbols.map(function(v){return String(v||'').toUpperCase();}):[];
-  var sectors=authScoutSectorChoices(),selectedSector=sectors.find(function(row){return String(row.key)===String(HOME_SCOUT.sector||'');}),fieldCount=selectedSector?selectedSector.count:symbols.length;
-  var marketLabel=selectedSector?selectedSector.label:'Broad market';
-  var goalReads={INCOME:'Premium income ranked by expected profit after real trading costs — the richest-looking premium never outranks sound economics.',DIRECTIONAL:'Direction, horizon, and the prices you can actually get must all agree before a package ranks.',ACQUIRE:'Your price and share count drive cash-secured puts, capped-risk spreads, and calendars for getting the stock cheaper.',HEDGE:'Protection ranked by the risk it actually offsets and what it really costs to hold.',EXIT:'Basis-aware exits and overwrites for what you already hold — never a hidden new bet.'};
+  var staged=!!HOME_IDEA.symbol,loading=HOME_OPPORTUNITY.phase==='loading';
+  var ready=staged&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
   var acquire=HOME_SCOUT.goal==='ACQUIRE'?'<div class="homeacquirefields"><label><span>Buy at or below</span><input type="number" min="0.01" step="0.01" value="'+(HOME_IDEA.targetCents==null?'':(Number(HOME_IDEA.targetCents)/100).toFixed(2))+'" placeholder="Price" data-auth-workbench-target></label><label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(HOME_IDEA.holdingsShares==null?'':deskEsc(HOME_IDEA.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label></div>':'';
-  var ready=!!HOME_IDEA.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
-  return '<div class="scoutidlefield"><section class="scoutidlecard"><div class="lenshd sub"><span class="eyebrow">'+deskEsc(marketLabel)+'</span><span class="hint">'+fieldCount+' optionable symbols</span></div>'+
-    '<label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type NVDA, XOM, healthcare…" autocomplete="off" data-auth-workbench-query></label><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire+
-    '<div class="scoutgoalread"><b>'+authHuman(HOME_SCOUT.goal)+'.</b> '+deskEsc(goalReads[HOME_SCOUT.goal]||goalReads.INCOME)+'</div>'+
-    '<div class="homeworkbenchactions"><button type="button" class="btn pri" data-auth-workbench-analyze'+(ready?'':' disabled')+'>'+(HOME_IDEA.symbol?'Analyze '+deskEsc(HOME_IDEA.symbol):'Type a ticker to analyze one')+' →</button><span>Scan ranks the whole field; Analyze opens one exact idea with these same settings.</span></div></section></div>';
+  /* ONE minimal bar: a field and ONE adaptive action. Empty field → Scan the current scope;
+     a staged ticker → Analyze that one (with a small "scan the field" alternative). No headers,
+     no explanation boxes, no prose beside the buttons — the controls above declare the scope. */
+  var action=staged
+    ? '<button type="button" class="btn pri scoutgo" data-auth-workbench-analyze'+(ready?'':' disabled')+'>Analyze '+deskEsc(HOME_IDEA.symbol)+' →</button>'
+    : loading
+      ? '<button type="button" class="btn pri scoutgo" disabled>Scanning…</button>'
+      : '<button type="button" class="btn pri scoutgo" data-auth-opportunity-scan>Scan →</button>';
+  var alt=staged&&!loading?'<button type="button" class="btn xs scoutalt" data-auth-opportunity-scan>Scan the field</button>':'';
+  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
 }
 function authOpportunityShell(expanded,controls,body){
-  return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?'<div class="scoutactivegrid">'+authScoutIdleFieldHTML()+'<section class="scoutresultcard">'+body+'</section></div>':body)+'</div>';
+  return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?authScoutIdleFieldHTML()+'<div class="scoutresults">'+body+'</div>':body)+'</div>';
 }
 function authOpportunityRowHTML(symbol,name,detail,value,ev){
   symbol=String(symbol||'').toUpperCase();
@@ -5254,7 +5268,7 @@ function authHomeStrategyFieldHTML(){
   var applicable=entries.filter(function(entry){return entry&&entry.recommendationEnabled!==false&&!entry.blockedByDefault&&Array.isArray(entry.intents)&&entry.intents.indexOf(intent)>=0;}).sort(function(a,b){return Number(a.foundationalRank||99)-Number(b.foundationalRank||99);});
   if(!applicable.length)return '<div class="homecatalogline warn">No supported structure is mapped to this goal.</div>';
   var names=applicable.slice(0,3).map(function(entry){return String(entry.display||authHuman(entry.name)).toLowerCase();});
-  return '<div class="homecatalogline">'+applicable.length+' structures compete for '+deskEsc(authHuman(intent).toLowerCase())+' — '+deskEsc(names.join(', '))+(applicable.length>names.length?', and more':'')+'. Live prices, evidence, risk, and your Book decide the ranking.</div>';
+  return '<div class="homecatalogline" title="'+deskEsc(names.join(', '))+(applicable.length>names.length?', and more':'')+'">'+applicable.length+' structures compete for '+deskEsc(authHuman(intent).toLowerCase())+'. Live prices, evidence, risk, and your Book decide the ranking.</div>';
 }
 function authScoutResultHTML(expanded){
   var state=HOME_OPPORTUNITY;
@@ -5295,11 +5309,7 @@ function authScoutResultHTML(expanded){
     ? 'Find '+goal+' opportunities across '+sector+'the '+scope+', ranked by expected profit after real trading costs.'
     : 'Rank '+goal+' opportunities now, after real trading costs.';
   var scanLabel=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector):HOME_SCOUT.scope==='broad'?'the broad market':'the active universe';
-  if(expanded){
-    var described=authoritativeUniverse()||{},selectedScope=HOME_SCOUT.scope==='broad'?described.scout:described.active,selectedSymbols=selectedScope&&Array.isArray(selectedScope.symbols)?selectedScope.symbols.length:0;
-    var start='<div class="scoutstart"><div class="lenshd sub"><span class="eyebrow">Ready to scan</span><span class="hint">'+selectedSymbols+' symbols · '+deskEsc(authHuman(HOME_SCOUT.goal))+'</span></div><div class="scoutstartgrid">'+authHomeStrategyFieldHTML()+'</div><div class="scoutlaunch"><span>'+deskEsc(prompt)+' Finding nothing worth opening is a good outcome too — you keep your cash.</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div></div>';
-    return start;
-  }
+  if(expanded)return '<div class="scoutidle"><span>Ranked opportunities appear here. Hit <b>Scan</b> for the whole field, or type a ticker to analyze one.</span></div>';
   return '<div class="opportunityprompt"><span>'+deskEsc(prompt)+'</span><button class="btn pri scoutprimary" data-auth-opportunity-scan>Scan '+deskEsc(scanLabel)+' →</button></div>';
 }
 function authOpportunityHTML(expanded){
