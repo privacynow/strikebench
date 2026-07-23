@@ -5622,7 +5622,7 @@ test('favorable economics remain visible when objective fit prevents endorsement
       quality: document.querySelector('.fanr .fvd')?.getAttribute('title'),
       notice: document.querySelector('.dcleft .backendnotice')?.textContent
         .replace(/\s+/g, ' ').trim(),
-      pathNotice: document.querySelector('.evsimstage .backendnotice')?.textContent
+      pathNotice: document.querySelector('.evsimstage .ensembleempty, .evsimstage .backendnotice')?.textContent
         .replace(/\s+/g, ' ').trim()
     }));
     assert.equal(view.deskPickId, null,
@@ -7257,7 +7257,7 @@ test('New Idea measures one elegant overflow list, composes in the left rail, an
     assert.equal(await page.locator('.authcompare .acrow').count(), 3,
       'the Book lens keeps the proposed idea and held position on one comparison receipt');
     assert.match(await page.locator('#dec-inspect-panel').textContent(),
-      /same possible futures.*This idea.*AMD income position/s);
+      /replayed through the .*simulated futures.*This idea.*AMD income position/s);
     assert.equal(await page.locator('#decPay').count(), 1,
       'opening Book comparison preserves the idea financial surface');
     assert.equal(await page.locator('.fanr[data-cand]').count(), 18,
