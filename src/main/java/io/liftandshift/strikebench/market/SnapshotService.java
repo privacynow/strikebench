@@ -137,22 +137,14 @@ public final class SnapshotService {
                     String ivSource = q.iv() != null ? (observed ? "vendor" : "model") : null;
                     boolean anyGreek = q.delta() != null || q.gamma() != null || q.theta() != null || q.vega() != null;
                     String greeksSource = anyGreek ? (observed ? "vendor" : "model") : null;
-                    Db.execOn(c,
-                            "INSERT INTO option_bar (symbol, asof, expiration, strike, opt_type, bid, ask, last, mark, "
-                          + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
-                          + "bid_ask_observed, iv_source, greeks_source) "
-                          + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
-                          + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, "
-                          + "iv=excluded.iv, delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, "
-                          + "vega=excluded.vega, open_interest=excluded.open_interest, volume=excluded.volume, "
-                          + "underlying=excluded.underlying, bid_ask_observed=excluded.bid_ask_observed, "
-                          + "iv_source=excluded.iv_source, greeks_source=excluded.greeks_source",
-                            sym, asof, q.expiration(), q.strike(), q.type().name(),
-                            q.bid(), q.ask(), q.last(), q.mid(),
-                            q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
-                            q.openInterest(), q.volume(), underlying, SOURCE,
-                            baObserved, ivSource, greeksSource);
+                    // THE one option_bar upsert; the snapshot's mark policy is the quote midpoint.
+                    io.liftandshift.strikebench.db.OptionBarWriter.upsertOn(c,
+                            new io.liftandshift.strikebench.db.OptionBarWriter.Row(
+                                    sym, asof, q.expiration(), q.strike(), q.type().name(),
+                                    q.bid(), q.ask(), q.last(), q.mid(),
+                                    q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
+                                    q.openInterest(), q.volume(), underlying, SOURCE,
+                                    baObserved, ivSource, greeksSource));
                     o++;
                 }
             }
