@@ -3102,7 +3102,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(360px,1.15fr)}
 }
 .lv-book[data-position-count="1"] #bookrisk{display:flex}
-.compactbookfutures .bookfanwrap,.compactbookfutures .bookfanwrap.singleposition{grid-template-columns:minmax(0,1fr) minmax(135px,175px)}
+.compactbookfutures .bookfanwrap,.compactbookfutures .bookfanwrap.singleposition{grid-template-columns:minmax(0,1fr)}
+.compactbookfutures .bookfanlegend{flex-direction:row;flex-wrap:wrap}
+.compactbookfutures .bookfanrow{flex:1 1 150px}
+.compactbookfutures .bookonefacts{flex:1 1 100%;grid-template-columns:repeat(4,minmax(0,1fr))}
 .compactbookfutures .bookmapfacet{display:none}
 .compactbookfutures .bookfan{min-height:105px}
 .compactbookfutures .bookfanactions span{display:none}
@@ -6292,6 +6295,11 @@ function deskBackendChanged(payload){
   if(payload&&String(payload.phase||'').indexOf('position-scenario-')===0){authPositionScenarioEvent(payload);return;}
   if(payload&&String(payload.phase||'').indexOf('position-')===0){authPositionEvent(payload);return;}
   if(payload&&payload.phase==='world-transition'){Object.keys(byId||{}).forEach(function(id){var p=byId[id],st=scenPlay[id];if(st&&st.raf)cancelAnimationFrame(st.raf);if(p)window.clearTimeout(p._positionScenarioTimer);});authClearPositionCards();POS=[];byId={};state.level='book';state.focus=null;BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};layoutAuthoritativeBook();window.DeskBackend.loadBook().catch(function(){});}
+  if(payload&&payload.phase==='strategy-catalog'&&!decide){
+    /* the late additive catalog also feeds Home's one-line strategy field */
+    if(state.level==='book'&&typeof authRenderOpportunityOnly==='function')authRenderOpportunityOnly();
+    return;
+  }
   if(!decide)return;
   if(payload&&payload.phase==='strategy-catalog'){
     var catalogState=payload.state||{};

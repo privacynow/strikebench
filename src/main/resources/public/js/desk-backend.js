@@ -2055,21 +2055,7 @@
          catalog. Load the existing server-owned catalog additively so the Desk can show which
          supported families were compared, screened, blocked, or simply belong to another
          intent without forcing every family into the ranking. */
-      var catalogRequest = state.strategyCatalog
-        ? Promise.resolve(state.strategyCatalog)
-        : optionalFresh('/api/strategies').catch(function (error) {
-            // Catalog disclosure is additive to the exact Plan calculation. A transient failure
-            // must not turn a valid quote/chain/recommendation flow into a blank Desk, but the
-            // missing receipt remains explicit when the user opens the catalog rail.
-            state.strategyCatalogError = error && error.message
-              ? String(error.message) : 'The StrategyCatalog receipt is unavailable.';
-            return null;
-          });
-      catalogRequest.then(function (strategyCatalog) {
-        if (strategyCatalog && Array.isArray(strategyCatalog.catalog)) {
-          state.strategyCatalog = strategyCatalog;
-          state.strategyCatalogError = null;
-        }
+      requestStrategyCatalog().then(function () {
         // Catalog disclosure cannot gate Plan/recommendation work. Its independent receipt
         // updates the rail when it arrives without changing or restarting the financial phase.
         if (seq === state.requestSeq) notify('strategy-catalog', {
@@ -2821,6 +2807,29 @@
     }
   }
 
+  var strategyCatalogInFlight = null;
+  function requestStrategyCatalog() {
+    /* The catalog is additive everywhere: one shared in-flight read serves Home's strategy
+       line and the Decide rail, and a transient failure never blanks a financial flow. */
+    if (state.strategyCatalog) return Promise.resolve(state.strategyCatalog);
+    if (strategyCatalogInFlight) return strategyCatalogInFlight;
+    strategyCatalogInFlight = optionalFresh('/api/strategies').then(function (strategyCatalog) {
+      if (strategyCatalog && Array.isArray(strategyCatalog.catalog)) {
+        state.strategyCatalog = strategyCatalog;
+        state.strategyCatalogError = null;
+        if (state.book && state.book.data) state.book.data.strategyCatalog = strategyCatalog;
+      }
+      return strategyCatalog;
+    }).catch(function (error) {
+      state.strategyCatalogError = error && error.message
+        ? String(error.message) : 'The StrategyCatalog receipt is unavailable.';
+      return null;
+    });
+    strategyCatalogInFlight.then(function () { strategyCatalogInFlight = null; },
+      function () { strategyCatalogInFlight = null; });
+    return strategyCatalogInFlight;
+  }
+
   async function focusBookSymbol(rawSymbol) {
     var symbol = String(rawSymbol || '').trim().toUpperCase();
     var book = state.book, data = book && book.data, context = data && data.homeContext;
@@ -2955,8 +2964,7 @@
         readSlot('greeks', '/api/portfolio/greeks'),
         readSlot('bookRisk', '/api/portfolio/book-risk'),
         readSlot('planPortfolio', '/api/plans/portfolio'),
-        readSlot('universe', '/api/universe'),
-        readSlot('strategyCatalog', '/api/strategies')
+        readSlot('universe', '/api/universe')
       ]);
       if (seq !== bookRequestSeq) return null;
       var after = await readIdentitySnapshot();
@@ -2971,8 +2979,7 @@
         greeks: 'The portfolio Greeks receipt',
         bookRisk: 'The Book risk receipt',
         planPortfolio: 'The Plan portfolio',
-        universe: 'The active market universe',
-        strategyCatalog: 'The canonical strategy catalog'
+        universe: 'The active market universe'
       };
       slots = slots.map(function (slot) { return objectSlot(slot, bookLabels[slot.key]); });
       var values = slotsByKey(slots);
@@ -3019,7 +3026,7 @@
         plans: planRows,
         accountPlans: accountPlans,
         universe: values.universe.available ? values.universe.value : null,
-        strategyCatalog: values.strategyCatalog.available ? values.strategyCatalog.value : null,
+        strategyCatalog: state.strategyCatalog,
         positionAnalyses: {},
         positionDetails: {},
         lifecycle: { phase: tradePage.trades.length ? 'loading' : 'empty',
@@ -3039,10 +3046,6 @@
         phase: phase, requestId: seq, identity: before.identity,
         data: data, missing: missing, error: null
       };
-      if (data.strategyCatalog && Array.isArray(data.strategyCatalog.catalog)) {
-        state.strategyCatalog = data.strategyCatalog;
-        state.strategyCatalogError = null;
-      }
       notify('book-' + phase, {
         operation: 'book', requestId: seq, book: state.book, data: data
       });
@@ -3050,6 +3053,12 @@
       // while a cold observed provider or source cache is warming.
       hydrateBookContext(seq, contextSeq, before, data, data.homeContext.symbols);
       hydrateBookLifecycle(seq, before, data, tradePage.trades);
+      requestStrategyCatalog().then(function (strategyCatalog) {
+        if (seq !== bookRequestSeq || !strategyCatalog) return;
+        notify('strategy-catalog', {
+          operation: 'strategy-catalog', strategyCatalog: state.strategyCatalog
+        });
+      });
       return data;
     } catch (error) {
       if (seq !== bookRequestSeq) return null;
