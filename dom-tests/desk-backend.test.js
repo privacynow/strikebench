@@ -2703,9 +2703,9 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         'served Home is not labeled as a fixture after its authoritative empty receipt arrives');
       assert.doesNotMatch(rendered.text, /No open Practice positions/i,
         'a truly empty Book does not spend a full panel apologizing for absent positions');
-      assert.match(rendered.text, /Study a field or shape one exact idea.*Broad market.*Income.*Directional.*Acquire.*Hedge.*Exit/i,
-        'the empty Book leads with the permanent canonical Scout/idea workbench and every supported goal');
-      assert.match(rendered.text, /Market pulse & chain[\s\S]*AAPL[\s\S]*(?:daily bars|stored daily bars)/i,
+      assert.match(rendered.text, /Scan a market or shape one exact idea.*Broad market.*Income.*Directional.*Acquire.*Hedge.*Exit/i,
+        'the empty Book leads with the permanent Scout/idea workbench and every supported goal');
+      assert.match(rendered.text, /Market[\s\S]*AAPL[\s\S]*(?:daily bars|stored daily bars)/i,
         'the empty account retains current market evidence without exposing ingestion receipts');
       assert.match(rendered.text, /Research & news[\s\S]*Backend research sentinel headline/i,
         'the empty account retains research headlines without repeating provenance in the heading');
@@ -2755,19 +2755,23 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       });
       if (viewport.width >= 1200) {
         const { riskMain, chainBand, univBand, sectorBand, newsBand } = rendered.cockpitGeometry;
-        assert.ok(Math.abs(riskMain.top - chainBand.top) < 2,
-          'the Scout and live market pulse form the empty desktop hero row');
-        assert.ok(Math.abs(univBand.top - sectorBand.top) < 2
-          && Math.abs(sectorBand.top - newsBand.top) < 2
-          && univBand.top >= riskMain.bottom - 2,
-          'working ideas, market watch, and news form the second decision row');
-        assert.ok(riskMain.width > chainBand.width * 1.25,
-          'cross-sector opportunity discovery receives the wider hero surface');
-        assert.ok(Math.abs(univBand.width - sectorBand.width) < 3
-          && Math.abs(sectorBand.width - newsBand.width) < 3,
-          'the three supporting Home panels share the second row evenly');
-        assert.equal(rendered.boardOverflows, false,
-          `${viewport.width}px default Home composition has no panel or board scroll`);
+        assert.ok(chainBand.top < riskMain.top - 2,
+          'the market band leads; the workbench row sits beneath it');
+        assert.ok(Math.abs(sectorBand.top - chainBand.top) < 2,
+          'the market watch shares the market band row');
+        assert.ok(Math.abs(univBand.top - riskMain.top) < 2
+          && univBand.top >= chainBand.bottom - 2,
+          'working ideas share the workbench row as its rail');
+        assert.ok(riskMain.width > univBand.width * 1.5,
+          'the workbench is the wide surface of its row; ideas stay a rail');
+        if (viewport.width >= 1500) {
+          assert.ok(Math.abs(newsBand.top - chainBand.top) < 2,
+            'news shares the market band row on the wide desktop');
+          assert.ok(Math.abs(sectorBand.width - newsBand.width) < 3,
+            'watch and news split the market band flank evenly');
+          assert.equal(rendered.boardOverflows, false,
+            `${viewport.width}px default Home composition has no panel or board scroll`);
+        }
       }
       assert.doesNotMatch(rendered.text, /Covered strangle|Short-put campaign|Past stop/i,
         'offline position stories cannot survive in the served empty book');
@@ -2854,38 +2858,42 @@ test('an empty Home with no working ideas gives Scout and market context the who
       const sector = document.getElementById('sectorBand').getBoundingClientRect();
       const news = document.getElementById('newsBand').getBoundingClientRect();
       return {
-        hidden: ['book', 'bookrisk', 'univBand'].map(id => [id, visible(id)]),
-        shown: ['riskMain', 'chainBand', 'sectorBand', 'newsBand'].map(id => [id, visible(id)]),
-        heroAligned: Math.abs(risk.top - chain.top) < 2,
-        supportAligned: Math.abs(sector.top - news.top) < 2 && sector.top >= risk.bottom - 2,
+        hidden: ['book', 'bookrisk'].map(id => [id, visible(id)]),
+        shown: ['riskMain', 'chainBand', 'sectorBand', 'newsBand', 'univBand'].map(id => [id, visible(id)]),
+        marketLeads: chain.top < risk.top - 2 && Math.abs(sector.top - chain.top) < 2
+          && Math.abs(news.top - chain.top) < 2,
+        supportAligned: Math.abs(sector.top - news.top) < 2 && sector.bottom <= risk.top + 2,
         supportWidths: [sector.width, news.width],
         boardOverflow: board.scrollHeight > board.clientHeight + 2,
         horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         scoutButtons: document.querySelectorAll('#riskMain [data-auth-opportunity-scan]').length,
-        sectorSelectors: document.querySelectorAll('[data-auth-home-sector-select]').length,
-        sectorOptions: document.querySelectorAll('[data-auth-home-sector-select] option').length,
+        sectorChipRows: document.querySelectorAll('.homesectorchips').length,
+        sectorChips: document.querySelectorAll('.homesectorchips button').length,
         duplicateSectorTiles: document.querySelectorAll('#riskMain .scoutbreadth').length,
         text: board.textContent.replace(/\s+/g, ' ').trim()
       };
     });
     assert.deepEqual(rendered.hidden, [
-      ['book', false], ['bookrisk', false], ['univBand', false]
-    ], 'zero positions and zero ideas reserve no apology or empty-list cells');
+      ['book', false], ['bookrisk', false]
+    ], 'zero positions reserve no roster or futures cells');
     assert.deepEqual(rendered.shown, [
-      ['riskMain', true], ['chainBand', true], ['sectorBand', true], ['newsBand', true]
-    ]);
-    assert.equal(rendered.heroAligned, true);
+      ['riskMain', true], ['chainBand', true], ['sectorBand', true], ['newsBand', true], ['univBand', true]
+    ], 'the empty Home keeps market, workbench, and the start-an-idea rail all live');
+    assert.equal(rendered.marketLeads, true,
+      'the market band owns the top row; the workbench row sits beneath it');
     assert.equal(rendered.supportAligned, true);
     assert.ok(Math.abs(rendered.supportWidths[0] - rendered.supportWidths[1]) < 3,
       'market watch and news share the supporting row after the empty idea cell disappears');
     assert.equal(rendered.boardOverflow, false);
     assert.equal(rendered.horizontalOverflow, false);
     assert.equal(rendered.scoutButtons, 1);
-    assert.equal(rendered.sectorSelectors, 1);
-    assert.ok(rendered.sectorOptions >= 2);
+    assert.equal(rendered.sectorChipRows, 1,
+      'the persistent market lens is one always-open chip row in the market panel');
+    assert.ok(rendered.sectorChips >= 1,
+      'the broad-market chip is always present; sector chips appear with the described universe');
     assert.equal(rendered.duplicateSectorTiles, 0,
       'the permanent top Market lens owns sector selection without a clipped second sector wall');
-    assert.match(rendered.text, /Study a field or shape one exact idea.*Scan the broad market/i);
+    assert.match(rendered.text, /Scan a market or shape one exact idea.*Scan the broad market/i);
     assert.deepEqual(pageErrors, [], `zero-plan Home emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -2916,11 +2924,11 @@ test('Home renders the synchronized Book total without summing independent posit
       measuredFingerprint: window.DeskBackend.state().book.data.portfolio.bookRisk
         .practice.measuredBook.scenario.jointFingerprint
     }));
-    assert.match(rendered.hint, /book total = synchronized paths/i);
-    assert.match(rendered.hint, /colors = independent positions/i);
-    assert.match(rendered.bookLegend, /BOOKsynchronized total\+\$460 62% gain odds/i);
-    assert.match(rendered.readout, /Book total · synchronized measured paths/i);
-    assert.match(rendered.readout, /colored position projections are independent/i);
+    assert.match(rendered.hint, /BOOK line = everything together/i);
+    assert.match(rendered.hint, /colors = single positions/i);
+    assert.match(rendered.bookLegend, /BOOKeverything together\+\$460 62% gain odds/i);
+    assert.match(rendered.readout, /Whole book · median \+\$460/i);
+    assert.match(rendered.readout, /hover a colored path for that position/i);
     assert.match(rendered.chartText, /BOOK \+\$460/i);
     assert.ok(rendered.aggregatePaths >= 2,
       'the one renderer paints synchronized Book paths and its median from the canonical receipt');
@@ -3611,7 +3619,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(home.authoredSparkPaths, 0,
       'Home leaves mark history blank until a stored marksHistory receipt is loaded');
     assert.equal(home.workingIdeas, 'Working ideas');
-    assert.match(home.riskHint, /(?:independent position projections · never summed|synchronized Book projection)/i);
+    assert.match(home.riskHint, /(?:single-position projections · never summed|synchronized Book projection)/i);
     assert.equal(home.riskPoints, 0,
       'one position does not pretend that a one-dot comparison is a useful risk map');
     assert.equal(home.riskMapCount, 0,
@@ -7625,10 +7633,11 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     await waitForDeskBoot(page);
     await page.waitForSelector('[data-auth-opportunity-scan]');
     const idle = await page.evaluate(() => ({
-      sectors: Array.from(document.querySelectorAll('[data-auth-home-sector-select] option'))
-        .map(node => node.textContent.replace(/\s+/g, ' ').trim()),
-      topSectorSelectors: document.querySelectorAll('.authbooksummaryhost [data-auth-home-sector-select]').length,
-      scoutSectorSelectors: document.querySelectorAll('#riskMain [data-auth-home-sector-select]').length,
+      sectors: Array.from(document.querySelectorAll('.homesectorchips button'))
+        .map(node => (node.textContent + ' ' + (node.getAttribute('title') || ''))
+          .replace(/\s+/g, ' ').trim()),
+      marketSectorChipRows: document.querySelectorAll('#chainBand .homesectorchips').length,
+      scoutSectorSelectors: document.querySelectorAll('#riskMain .homesectorchips').length,
       duplicateSectorWalls: document.querySelectorAll('#riskMain .scoutbreadth').length,
       watch: Array.from(document.querySelectorAll('.authmarketrow'))
         .map(node => node.getAttribute('data-auth-market-row-symbol')),
@@ -7641,8 +7650,8 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     }));
     assert.ok(idle.sectors.some(text => /Energy.*1/i.test(text)));
     assert.ok(idle.sectors.some(text => /Healthcare.*1/i.test(text)));
-    assert.equal(idle.topSectorSelectors, 1,
-      'the persistent market lens belongs to the top Home orientation row');
+    assert.equal(idle.marketSectorChipRows, 1,
+      'the persistent market lens is an always-open chip row on the market panel');
     assert.equal(idle.scoutSectorSelectors, 0,
       'Scout does not own a duplicate selector that disappears with its results');
     assert.equal(idle.duplicateSectorWalls, 0,
@@ -7654,11 +7663,10 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     assert.ok(idle.watchActions.every(row => row.action === 'Shape →'
       && row.focus && row.contextWhiteSpace === 'nowrap'),
     'every market row exposes separate focus and Shape actions without wrapping its receipt');
-    assert.match(idle.heading, /Markets.*sectors.*your focus/i);
-    const homeCatalogText = await page.locator('.homecatalogfield').textContent();
-    assert.ok(['Strategy coverage · canonical catalog', 'Bull put credit spread', 'Call calendar',
-      'Cash-secured put'].every(value => homeCatalogText.includes(value)),
-    'Home discloses the existing goal-matched StrategyCatalog before a scan');
+    assert.match(idle.heading, /Watchlist/i);
+    const homeCatalogText = await page.locator('.homecatalogline').textContent();
+    assert.match(homeCatalogText, /\d+ structures compete for income/i,
+      'Home states the goal-matched structure coverage in one plain sentence');
     assert.doesNotMatch(homeCatalogText, /Naked.*call/i,
       'blocked-by-default catalog families are not presented as viable Scout inputs');
     assert.equal(await page.locator('.opportunitycontrol').first()
@@ -7667,13 +7675,13 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     await page.locator('[data-auth-workbench-query]').fill('healthcare');
     await page.waitForSelector('[data-auth-sector-match][data-auth-scout-sector="HEALTHCARE"]');
     assert.match(await page.locator('[data-auth-sector-match]').first().textContent(),
-      /Healthcare.*governed optionable symbols.*Scout/i,
+      /Healthcare.*optionable symbols.*Scan/i,
       'the unified field accepts a sector name as well as an underlying');
     await page.locator('[data-auth-sector-match][data-auth-scout-sector="HEALTHCARE"]').click();
     await page.waitForFunction(() => window.HOME_SCOUT?.sector === 'HEALTHCARE');
-    assert.equal(await page.locator('[data-auth-home-sector-select]').inputValue(), 'HEALTHCARE',
-      'sector search and the persistent top Market lens are one state');
-    await page.locator('[data-auth-home-sector-select]').selectOption('');
+    assert.match(await page.locator('.homesectorchips button.on').textContent(), /Healthcare/i,
+      'sector search and the persistent Market lens chips are one state');
+    await page.locator('.homesectorchips button[data-auth-scout-sector=""]').click();
     await page.waitForFunction(() => window.HOME_SCOUT?.sector == null);
     await page.locator('[data-auth-opportunity-scan]').click();
     await page.waitForSelector('.opportunityrow');
@@ -7685,7 +7693,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       /MU.*Cash-secured put.*favorable.*qualified.*Book improves.*\+\$161.*EV/i,
       'Home turns the canonical frontier into a useful package and Book-fit lens');
     assert.match(await page.locator('.opportunitycomp').textContent(),
-      /Compensation.*separate view.*MU 77.*27\.3%\/yr on the collateral.*never overrides decision economics/i,
+      /Premium richness.*separate view.*MU 77.*27\.3%\/yr on the collateral.*high premium alone never outranks sound economics/i,
       'carry compensation remains visibly separate from the decision order');
     const request = backend.requests.find(row => row.method === 'POST'
       && row.path === '/api/research/scout');
@@ -7699,7 +7707,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       universe: broadSymbols
     });
     assert.match(await page.locator('.opportunitylens').textContent(),
-      /Broad market 5.*Active universe 3.*Income.*Directional.*Acquire.*Hedge.*Exit.*Bearish.*Neutral.*Bullish.*7 days.*30 days.*45 days.*Conservative.*Balanced.*Aggressive/i,
+      /Broad market 5.*Active names 3.*Income.*Directional.*Acquire.*Hedge.*Exit.*Bearish.*Neutral.*Bullish.*7 days.*30 days.*45 days.*Conservative.*Balanced.*Aggressive/i,
       'Home exposes field, goal, view, horizon, and risk controls without a parallel New idea surface');
   } finally {
     await context.close();
@@ -7757,12 +7765,12 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
       const root = document.querySelector('.homeworkbenchpanel');
       const rootBox = root.getBoundingClientRect();
       const legend = document.getElementById('authBookFanLegend');
-      const catalog = document.querySelector('.homecatalogfield');
+      const catalog = document.querySelector('.homecatalogline');
       const structural = Array.from(root.querySelectorAll(
         '.opportunitycontrols,.scoutactivegrid,.scoutidlecard,.scoutresultcard,'
-          + '.homecatalogfield,.scoutguardrails,.scoutlaunch,.scoutprimary'));
+          + '.homecatalogline,.scoutlaunch,.scoutprimary'));
       const overflowTargets = Array.from(root.querySelectorAll(
-        '.scoutidlecard,.scoutresultcard,.scoutstart,.scoutstartgrid,.scoutguardrails,.homecatalogfield'));
+        '.scoutidlecard,.scoutresultcard,.scoutstart,.scoutstartgrid,.homecatalogline'));
       return {
         workbenchChildrenFit: Array.from(root.children).every(node => {
           const box = node.getBoundingClientRect();
