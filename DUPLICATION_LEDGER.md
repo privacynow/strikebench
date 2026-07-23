@@ -51,10 +51,15 @@ responsibility.
 STATUS — DONE: orchestrator layer (O1–O7), dangerous divergent (X1 fees, X3 politeness; X2/E3
 two-tier), FULL API layer (A1 worldParam, A2 exposure, A4 world-symbols, A5 sim-world predicate,
 A6 receipt-attach). RECLASSIFIED as intentional (not duplication): X2, E3, D2.
-REMAINING: **D3** (observed underlying_bar written in 4 places — real, but a DB-write-semantics change
-needing a Connection-based ObservedCandleWriter overload + quote→Candle + quality-filter reconciliation,
-done carefully with tests) and **U1–U12** (desk frontend: one money/greeks/quote module, delete the
-stale prototypes/desk.html fork — touches the live index.html, needs the DOM suite + visual checks).
+- **2026-07-23 · D3 DONE:** `ObservedCandleWriter.upsertObservedBar` — the full-OHLC underlying_bar
+  upsert now lives once, shared by the read-through/backfill writer AND `UnderlyingCsvIngest` (which
+  keeps its own quality_rank 80 + bar_kind via params → zero data change; the CSV `Bar.volume()` is
+  nullable, preserved with a `Long` param). SnapshotService + HistoricalOptionsIngest write a
+  legitimately-different PARTIAL close-snapshot tier (open=null) that the OHLC validator rejects by
+  design — not the same write, left as-is. DB tests green.
+
+REMAINING: **U1–U12** (desk frontend: one money/greeks/quote module, delete the stale
+prototypes/desk.html fork — touches the live index.html, needs the DOM suite + visual checks).
 
 ---
 
