@@ -228,6 +228,23 @@ public final class AccountService {
     }
 
 
+    static final String SET_BALANCES_SQL =
+            "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?";
+    static final String SET_CASH_TRADED_SQL =
+            "UPDATE accounts SET cash_cents=?, has_traded=1, updated_at=? WHERE id=?";
+
+    /** Balance write (cash + reserved). MUST NOT touch has_traded — distinct from applyCashTraded. */
+    static void applyBalances(Connection c, String accountId, long cashCents, long reservedCents,
+                              String updatedAtIso) throws SQLException {
+        Db.execOn(c, SET_BALANCES_SQL, cashCents, reservedCents, updatedAtIso, accountId);
+    }
+
+    /** Cash + has_traded=1 (equity buy/sell); NO reserved column. Distinct from applyBalances. */
+    static void applyCashTraded(Connection c, String accountId, long cashCents, String updatedAtIso)
+            throws SQLException {
+        Db.execOn(c, SET_CASH_TRADED_SQL, cashCents, updatedAtIso, accountId);
+    }
+
     private String now() {
         return Instant.now(clock).toString();
     }
