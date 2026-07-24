@@ -6394,13 +6394,8 @@ function setMktMode(m,pathChanged){
     }).catch(function(error){toast(error.message||'The market transition did not finish.');});
     return;
   }
-  var laneChanged=m!==MKT_MODE; if(laneChanged){ MKT_MODE=m; }
-  pathChanged=!!pathChanged||laneChanged;
-  var b=document.querySelectorAll('#mktMode .mmseg button'); for(var i=0;i<b.length;i++) b[i].classList.toggle('on', b[i].getAttribute('data-mkt')===m);
-  document.body.classList.toggle('mkt-sim', m==='sim');
-  if(decide){ if(pathChanged)renderAfterDecisionChange(); else renderDecide(); }
-  else if(state.level==='position') refreshManage(state.focus,false);
-  updateThread();   /* re-tint the merged market strip (source tag + violet) immediately */
+  /* J (#1): the served desk always has the backend enabled; the file:// fixture else-fallback that
+     flipped a local MKT_MODE and re-rendered from fixtures is dead and removed. */
 }
 /* the simulated-market control ribbon (Home) — world · seed · speed. Empty in Observed mode. */
 function simRibbon(){ if(MKT_MODE!=='sim')return '';
@@ -6469,7 +6464,6 @@ function importedPosition(trade,real){
 /* the one primitive that puts a position INTO the book — used by imports (and reusable
    for anything else that adds a tracked line). A real imported trade flows through here. */
 function pushToBook(p){ POS.push(p); EXTRA[p.id]=p; byId[p.id]=p;
-  _bookTailCache=null;                  /* the book's concentration/tail must reflect the new position */
   cardEl[p.id]=makeCard(p); }
 
 var GAP_STANCE='base';                       /* the user's standing gap-risk assumption (outlook dial) */
@@ -6483,32 +6477,11 @@ function gapLoss(c){
 function bookGapFrac(){ var secR={}; POS.forEach(function(p){ var s=(univBy[p.sym]||{}).sector||'—'; secR[s]=(secR[s]||0)+p.riskPct; });
   var d=Object.keys(secR).sort(function(a,b){return secR[b]-secR[a];})[0]||'default';
   return {sector:d, gap:(SECTOR_GAP[d]||SECTOR_GAP.default).gap}; }
-var _bookTailCache=null;
-function bookTail(){
-  var sig=GAP_STANCE+'|'+POS.length+'|'+(POS.map(function(p){return p.id;}).join(','));
-  if(_bookTailCache && _bookTailCache.sig===sig) return _bookTailCache.val;
-  var val=bookTailCore(POS); _bookTailCache={sig:sig, val:val}; return val;
-}
-var _bookCandidateCache={};
-function bookWithCandidate(c){
-  var sig=GAP_STANCE+'|'+POS.map(function(p){return p.id;}).join(',')+'|'+hashCand(c);
-  if(_bookCandidateCache[sig])return _bookCandidateCache[sig];
-  var val={before:bookTail(),after:bookTailCore(POS.concat([c]))};
-  _bookCandidateCache[sig]=val;
-  var keys=Object.keys(_bookCandidateCache); if(keys.length>18)delete _bookCandidateCache[keys[0]];
-  return val;
-}
 function candidateSectorRead(c){
   var sector=(univBy[c.sym]||{}).sector||'Other';
   var held=POS.filter(function(p){return ((univBy[p.sym]||{}).sector||'Other')===sector;});
   var exposure=held.reduce(function(n,p){return n+(p.riskPct||0);},0);
   return {sector:sector,held:held,exposure:exposure,diversifies:held.length===0};
-}
-/* ONE hedge entry point — open Decide on the SIZED SMH put in build mode (used by the book lens,
-   the home chip and the sector opportunity, so the proposed hedge is identical everywhere). */
-function openHedge(origin){ var hp=hedgeProposal();
-  enterDecide('idea',null,'Hedge the book',origin,'SMH');
-  if(hp){ decide.buildLegs=[{t:'p',k:hp.K,q:hp.qty}]; decide.mode='build'; renderDecide(); }
 }
 function buildCandidate(legs){
   var u=decideU();
@@ -7551,31 +7524,12 @@ function decisionBrief(c){
   }
   return ''; /* display-only: every served candidate is authoritative; no fixture brief */
 }
-function bookClusterGraphic(c,sr,used,bt){
-  var pts=[[25,24],[61,20],[82,41],[42,49],[66,67],[23,74]], cap=POS.reduce(function(a,p){return a+(p.cap||0);},0), ideaPct=used/Math.max(1,cap+used)*100;
-  var nodes=POS.map(function(p,i){var xy=pts[i%pts.length],sz=30+Math.min(40,(p.riskPct||1)*1.4);return '<span class="bcnode '+(p.tone||'')+'" style="--x:'+xy[0]+'%;--y:'+xy[1]+'%;--sz:'+sz.toFixed(0)+'px"><b>'+p.sym+'</b><em>'+p.riskPct+'%</em></span>';}).join('');
-  nodes+='<span class="bcnode idea" style="--x:83%;--y:76%;--sz:42px"><b>IDEA</b><em>+'+ideaPct.toFixed(1)+'%</em></span>';
-  return '<div class="bookcluster"><div class="bchd"><span>One shared '+sr.sector+' shock</span><b>'+sr.held.length+' held + this idea</b></div><div class="bcstage"><span class="bczone">same factor · size = book risk</span>'+nodes+'<span class="bcshock">−'+bt.after.gapPct+'% shared gap</span></div><div class="bcresult"><span>Existing book <b>'+money(bt.before.gapPL)+'</b></span><i>→</i><span>With idea <b>'+money(bt.after.gapPL)+'</b></span></div></div>';
-}
 function bookImpactPanel(c){
-  if(c.authoritative)return authoritativeComparisonPanel(c);
-  var used=c.cap||c.maxLoss, sr=candidateSectorRead(c), bt=bookWithCandidate(c), gapDelta=bt.after.gapPL-bt.before.gapPL, tailDelta=bt.after.es5-bt.before.es5;
-  var heldNames=sr.held.slice(0,4).map(function(p){return p.sym;});
-  var verdict=sr.diversifies?'Adds a new factor to the book.':'Adds another '+sr.sector+' expression to an existing cluster.';
-  var consequence=sr.diversifies?'This package broadens the book, but its own tail still matters.':'The trade can fit on its own and still worsen a correlated '+sr.sector+' selloff.';
-  return '<div class="upanel bookimpact"><div class="lenshd"><span class="eyebrow">Book impact</span><span class="hint">incremental · if placed</span></div>'+
-    '<div class="paneverdict '+(sr.diversifies?'':'warn')+'"><i></i><div><b>'+verdict+'</b><span>'+POS.length+' held lines → '+(POS.length+1)+' with this exact package.</span></div></div>'+
-    '<div class="bookfacts">'+
-      '<div class="bookfact2"><span>Capital added</span><b>'+money(used)+'</b></div>'+
-      '<div class="bookfact2"><span>'+sr.sector+' exposure now</span><b class="'+(sr.exposure>=40?'warn':'')+'">'+(sr.exposure?sr.exposure+'% across '+sr.held.length:'none')+'</b></div>'+
-      '<div class="bookfact2"><span>Correlated gap</span><b class="'+(bt.after.gapPL<0?'neg':'pos')+'">'+money(bt.before.gapPL)+' → '+money(bt.after.gapPL)+'</b></div>'+
-      '<div class="bookfact2"><span>Worst 5%</span><b class="'+(bt.after.es5<0?'neg':'pos')+'">'+money(bt.before.es5)+' → '+money(bt.after.es5)+'</b></div>'+
-    '</div>'+
-    '<div class="bookcompare"><span>tail change</span><span class="track"><i style="width:'+Math.min(100,Math.max(6,Math.abs(tailDelta)/(Math.abs(bt.before.es5)||1)*100))+'%"></i></span><b class="'+(tailDelta<=0?'neg':'pos')+'">'+signed(tailDelta)+'</b></div>'+
-    '<div class="bookgreeks"><span>Δ contribution<b>'+((c.delta||0)>=0?'+':'')+(c.delta||0).toFixed(2)+'</b></span><span>Θ / day<b class="'+((c.theta||0)>=0?'pos':'neg')+'">'+signed(c.theta||0)+'</b></span><span>Vega<b>'+Math.round(c.vega||0)+'</b></span></div>'+
-    bookClusterGraphic(c,sr,used,bt)+
-    (heldNames.length?'<div class="corrrow"><span class="lbl">Held '+sr.sector+' lines</span>'+heldNames.map(function(s){return '<span class="corrchip">'+s+'</span>';}).join('')+'</div>':'')+
-    '<div class="panefoot"><b>'+consequence+'</b> '+(gapDelta<0?'Gap loss worsens by '+money(Math.abs(gapDelta))+'.':'The shared-gap result improves by '+money(gapDelta)+'.')+'</div></div>';
+  /* J (#5): every served candidate is authoritative — the Book-impact tab is the authoritative
+     comparison. The former non-authoritative fixture branch (bookWithCandidate/bookTail/
+     bookClusterGraphic, all reliant on the deleted bookTailCore) is removed as a dead landmine. */
+  return c.authoritative?authoritativeComparisonPanel(c)
+    :'<div class="upanel"><div class="lenshd"><span class="eyebrow">Book impact</span></div><div class="backendnotice">Book impact appears once this idea is valued on the shared futures.</div></div>';
 }
 function fitBudgetPanel(c){
   var collateral=isCollat(c)||c.undef, cap=collateral?decide.govs.bp:decide.govs.risk, used=c.cap||c.maxLoss, pct=Math.min(100,used/Math.max(1,cap)*100), room=cap-used;
@@ -8395,45 +8349,9 @@ function wireImport(){
   });
 }
 
-/* ---- BOOK-RISK LENS: interrogate the whole book (concentration · expiry · churn ·
-   contradiction · exposure map). Every row drills into the causing positions. ---- */
-/* expiry calendar — used by the folded book-risk governor detail. */
-function expCalHTML(){
-  var byExp={}; POS.forEach(function(p){ var m=(p.legStr.match(/exp ([0-9]{2}-[A-Za-z]{3})/)||p.legStr.match(/([0-9]{2}-[A-Za-z]{3})/)); var k=m?m[1]:'—'; (byExp[k]=byExp[k]||[]).push(p); });
-  var MON={Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
-  function expOrd(k){ var m=k.match(/([0-9]{2})-([A-Za-z]{3})/); return m?(MON[m[2]]||13)*100+(+m[1]):9999; }
-  var expKeys=Object.keys(byExp).sort(function(a,b){return expOrd(a)-expOrd(b);}), maxExpAmt=Math.max.apply(0,expKeys.map(function(k){return byExp[k].reduce(function(a,p){return a+p.cap;},0);}))||1;
-  return expKeys.map(function(k){ var arr=byExp[k], amt=arr.reduce(function(a,p){return a+p.cap;},0), hot=arr.length>=2;
-    return '<button class="expcol'+(hot?' hot':'')+'" data-goto="'+arr[0].id+'"><span class="expamt">'+fmtK(amt)+'</span>'+
-      '<span class="expbarwrap"><i class="expbar" style="height:'+Math.max(10,Math.round(amt/maxExpAmt*100))+'%"></i></span>'+
-      '<span class="expdt">'+k+'</span><span class="expn">'+arr.length+' lot'+(arr.length>1?'s':'')+'</span></button>';
-  }).join('');
-}
-/* concentration "one bet" hero + churn + contradiction — standalone so the Home governor AND the
-   Book-risk overlay both use ONE definition (no duplication). */
-function concHeroHTML(){
-  var semis=POS.filter(function(p){return (univBy[p.sym]&&univBy[p.sym].sector==='Semis');}).reduce(function(a,p){return a+p.riskPct;},0);
-  var semisLines=POS.filter(function(p){return univBy[p.sym]&&univBy[p.sym].sector==='Semis';});
-  var bt=bookTail(), secL=(bt.sector||'one sector').toLowerCase();
-  function chStat(k,v,sub,warn){ return '<div class="chs"><div class="chk">'+k+'</div><div class="chv'+(warn?' warn':'')+'">'+v+'</div><div class="chsub">'+sub+'</div></div>'; }
-  return '<div class="conchero"><div class="ch-verdict">This book is essentially <b>one leveraged, short-vol bet on '+secL+'</b> — not '+POS.length+' independent trades. One '+secL+' gap hits every line on the <b>same</b> draw.</div>'+
-    '<div class="ch-stats">'+
-      chStat('One theme', semis+'%', 'of book risk is '+secL, semis>=60)+
-      chStat('Correlated', semisLines.length+' of '+POS.length, 'lines move on one factor', semisLines.length>=4)+
-      chStat('If '+secL+' −'+bt.gapPct+'%', money(bt.gapPL), 'one shared gap, all lines at once', bt.gapPL<0)+
-      chStat('Worst-5% day', money(bt.es5), 'the concentrated tail — one shock hits every line at once', bt.es5<0)+
-    '</div>'+(function(){ var hp=hedgeProposal(); if(!hp) return '';
-      var cut=Math.round((1-hp.hedgedGapPL/hp.gapPL)*100);
-      return '<div class="ch-hedge"><div class="chh-txt">🛡 <b>Cap the correlated gap:</b> buy <b>SMH '+hp.K+'P × '+hp.qty+'</b> for '+money(-hp.cost)+
-        ' — on a −'+hp.gapPct+'% '+secL+' gap the book goes from <b class="neg">'+money(hp.gapPL)+'</b> to <b class="'+(hp.hedgedGapPL<0?'neg':'pos')+'">'+money(hp.hedgedGapPL)+'</b> ('+cut+'% of the shock absorbed). '+
-        '<span class="chh-note">Won’t touch the worst-5% ('+money(hp.es5)+') — that tail is single-name blow-ups; only diversifying cuts those.</span></div>'+
-        '<button class="btn pri xs" data-risk-act="hedge" data-hk="'+hp.K+'" data-hq="'+hp.qty+'">🛡 Build this hedge</button></div>'; })()+
-    '</div>';
-}
-function contradictionHTML(){ return '<button class="rkcard" data-goto="nvda-ic"><div class="rkct"><span class="eyebrow">Contradiction</span><span class="badge warn">1 flag</span></div>'+
-  '<div class="booktext">Your <b>NVDA condor</b> leans short-vol while its long put wing is your only crash hedge — the rest of the book bleeds if semis gap down, but this one leg pays. Worth keeping, but know it’s the odd one out.</div></button>'; }
-function churnHTML(){ return '<button class="rkcard" data-goto="mu-sp"><div class="rkct"><span class="eyebrow">Churn</span><span class="badge">4 rolls</span></div>'+
-  '<div class="booktext">The <b>MU campaign</b> has rolled four times — real basis down to $957.88. Healthy churn, but each roll pays a spread; round five is in its window now.</div></button>'; }
+/* ---- BOOK-RISK LENS: interrogate the whole book via the exposure map (below). The former fixture
+   governor cards (concentration/expiry/churn/contradiction hero + SMH-hedge) are deleted — they read
+   a hardcoded semis book and the removed bookTail/hedgeProposal, and had no live callers. ---- */
 /* continuous risk-temperature: green(profit) -> amber(caution) -> red(loss) */
 function tempColor(t){ t=Math.max(0,Math.min(1,t));
   var a=[0x41,0xC8,0x92], b=[0xE7,0xAC,0x44], c=[0xF3,0x5D,0x64], lo,hi,f;
@@ -8537,36 +8455,6 @@ function deskGlyph(kind){
     tune:'<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'
   }[kind]||'';
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+body+'</svg>';
-}
-/* The Book Governor keeps every cause visible as a live readout, then explains ONE cause in the
-   remaining space. This is a causal control, not product navigation: the cockpit never leaves Home. */
-function governorDetail(kind){
-  var bt=bookTail(), sec=(bt.sector||'sector').toLowerCase(), hp=hedgeProposal();
-  if(kind==='expiry'){
-    return '<div class="govverdict"><b>Three positions share 07-Aug.</b> A single expiry print decides AMD, QCOM and the largest capital cluster together.</div>'+
-      '<div class="expcal">'+expCalHTML()+'</div>'+
-      '<div class="govfacts"><div class="govfact"><span>Hot date</span><b class="warn">$130.6k</b></div><div class="govfact"><span>Lines exposed</span><b>3 of '+POS.length+'</b></div></div>'+
-      '<div class="govhedge"><span>Calendar pressure is concentration in <b>time</b>: manage the shared date before adding another August line.</span></div>';
-  }
-  if(kind==='churn'){
-    return '<div class="govverdict"><b>MU is a campaign, not a fresh trade.</b> Four rolls have reduced effective basis to $957.88, but every turn paid another spread.</div>'+
-      '<div class="govcampaign"><div class="govround"><span>Round 1</span><b>+$1.5k</b></div><div class="govround"><span>Round 2</span><b>+$1.7k</b></div><div class="govround"><span>Round 3</span><b>+$1.4k</b></div><div class="govround"><span>Round 4</span><b>+$1.6k</b></div></div>'+
-      '<div class="govfacts"><div class="govfact"><span>Premium earned</span><b class="pos">+$6,240</b></div><div class="govfact"><span>Next decision</span><b class="warn">Roll window</b></div></div>'+
-      '<button class="rkcard" data-goto="mu-sp"><div class="rkct"><span class="eyebrow">Inspect the campaign</span><span class="badge">4 rolls</span></div><div class="booktext">Open MU with its complete basis and current roll decision intact.</div></button>';
-  }
-  if(kind==='contra'){
-    return '<div class="govverdict"><b>One line behaves differently in the crash.</b> NVDA is short volatility overall, while its long put wing is the book’s only single-name convex hedge.</div>'+
-      '<div class="govfacts"><div class="govfact"><span>Flags</span><b class="warn">1</b></div><div class="govfact"><span>Affected theme</span><b>Semis</b></div></div>'+
-      contradictionHTML()+
-      '<div class="govhedge"><span>Keep the wing if it is intentional; do not count the whole condor as a hedge. Its short-call side is already under pressure.</span></div>';
-  }
-  var maxRisk=Math.max.apply(0,POS.map(function(p){return p.riskPct;}))||1;
-  var bars=POS.slice().sort(function(a,b){return b.riskPct-a.riskPct;}).map(function(p){return '<button class="govbar" data-goto="'+p.id+'"><b>'+p.sym+'</b><span class="gb"><i style="width:'+Math.round(p.riskPct/maxRisk*100)+'%"></i></span><em>'+p.riskPct+'%</em></button>';}).join('');
-  var cut=hp?Math.round((1-hp.hedgedGapPL/hp.gapPL)*100):0;
-  return '<div class="govverdict">This is effectively <b>one leveraged, short-vol '+sec+' bet</b> — not '+POS.length+' independent trades. The roster and map show who creates it.</div>'+
-    '<div class="govbars">'+bars+'</div>'+
-    '<div class="govfacts"><div class="govfact"><span>If '+sec+' −'+bt.gapPct+'%</span><b class="neg">'+money(bt.gapPL)+'</b></div><div class="govfact"><span>Worst-5% day</span><b class="neg">'+money(bt.es5)+'</b></div></div>'+
-    (hp?'<div class="govhedge"><span><b>SMH '+hp.K+'P × '+hp.qty+'</b> absorbs '+cut+'% of the shared gap for '+money(-hp.cost)+'.</span><button class="iconcta hedge" data-risk-act="hedge" aria-label="Build the SMH cluster hedge" title="Build the SMH cluster hedge">'+deskGlyph('shield')+'</button></div>':'');
 }
 /* ===== market data: OBSERVED (Cboe/live) vs SIMULATED (deterministic per seed+world) ===== */
 function simSeries(base){ var seed=(SIM.seed*2654435761 + hashText(SIM.world))>>>0, rnd=mulberry32(seed), out=[], v=base[0], w=simProfile();
