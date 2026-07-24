@@ -2114,7 +2114,7 @@ async function startNewIdea(page, symbol = 'AMD') {
   await page.waitForSelector('[data-auth-workbench-query]');
   await page.locator('[data-auth-workbench-query]').fill(symbol);
   await page.locator('[data-auth-workbench-query]').press('Enter');
-  await page.waitForFunction(expected => window.HOME_IDEA?.symbol === expected
+  await page.waitForFunction(expected => window.homeIdea?.symbol === expected
     && window.decide == null, symbol);
   await page.locator('[data-auth-workbench-analyze]').click();
 }
@@ -2122,6 +2122,7 @@ async function startNewIdea(page, symbol = 'AMD') {
 async function openAuthoritativeDesk(options = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, options);
@@ -2173,6 +2174,7 @@ async function waitForDeskBoot(page) {
 test('global New idea keeps the underlying absent until the user chooses it', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
@@ -2187,7 +2189,7 @@ test('global New idea keeps the underlying absent until the user chooses it', as
     await page.waitForSelector('[data-auth-workbench-query]');
 
     const absent = await page.evaluate(() => ({
-      symbol: window.HOME_IDEA?.symbol,
+      symbol: window.homeIdea?.symbol,
       decide: window.decide,
       dialogs: document.querySelectorAll('.composepanel').length,
       deskVisible: getComputedStyle(document.querySelector('#stage')).display !== 'none',
@@ -2207,7 +2209,7 @@ test('global New idea keeps the underlying absent until the user chooses it', as
     await page.locator('[data-auth-workbench-query]').fill('AMD');
     await page.locator('[data-auth-workbench-query]').press('Enter');
     const staged = await page.evaluate(() => ({
-      draftSymbol: window.HOME_IDEA?.symbol,
+      draftSymbol: window.homeIdea?.symbol,
       liveDecide: window.decide,
       composer: document.querySelectorAll('.ideacomposer').length,
       analyze: document.querySelector('[data-auth-workbench-analyze]')?.textContent
@@ -2243,6 +2245,7 @@ test('global New idea keeps the underlying absent until the user chooses it', as
 test('Acquire requires an explicit stock-entry price and share quantity before analysis', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { universeSymbols: ['AMD', 'AAPL'] });
@@ -2311,6 +2314,7 @@ test('Acquire requires an explicit stock-entry price and share quantity before a
 test('HTTP Home hydrates ambient universe quotes without Plans, trades, or shares', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -2385,6 +2389,7 @@ test('HTTP Home hydrates ambient universe quotes without Plans, trades, or share
 test('served Home command search retargets symbols and sectors through the backend universe', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -2472,6 +2477,7 @@ test('served Home command search retargets symbols and sectors through the backe
 test('a user focus supersedes slower initial Home market hydration', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -2531,6 +2537,7 @@ test('a user focus supersedes slower initial Home market hydration', async () =>
 test('rapid Home focus changes retain the newest symbol when responses resolve out of order', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -2594,6 +2601,7 @@ test('rapid Home focus changes retain the newest symbol when responses resolve o
 test('HTTP Home renders an authoritative empty Practice book without staged holdings', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const marketDocuments = populatedBookDocuments();
@@ -2831,6 +2839,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
 test('an empty Home with no working ideas gives Scout and market context the whole canvas', async () => {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const marketDocuments = populatedBookDocuments();
@@ -2904,6 +2913,7 @@ test('an empty Home with no working ideas gives Scout and market context the who
 test('Home renders the synchronized Book total without summing independent position fans', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = populatedBookDocuments();
@@ -2947,6 +2957,7 @@ test('Home renders the synchronized Book total without summing independent posit
 test('HTTP Home resumes the exact clicked Plan in the authoritative Desk', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -2979,6 +2990,7 @@ test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including abs
   for (const intent of ['ACQUIRE', 'EXIT']) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
+    page.setDefaultTimeout(8000);
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.stack || error.message));
     const exact = { id: PLAN_ID, symbol: 'AMD', intent, thesis: null, horizonDays: null };
@@ -3050,6 +3062,7 @@ test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including abs
 test('editing a resumed exact Plan declaration updates that Plan instead of minting a replacement', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const exact = {
@@ -3155,6 +3168,7 @@ test('declaration reload clears every scenario pin before rebuilding the exact P
 test('a rejected declaration edit restores the accepted Plan and Retry remains usable', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const exact = {
@@ -3204,6 +3218,7 @@ test('a rejected declaration edit restores the accepted Plan and Retry remains u
 test('HTTP Home lists and hydrates only Plans owned by the active account', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -3245,6 +3260,7 @@ test('HTTP Home lists and hydrates only Plans owned by the active account', asyn
 test('HTTP Home working rail excludes closed, archived, and non-editable Plans', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -3279,6 +3295,7 @@ test('HTTP Home working rail excludes closed, archived, and non-editable Plans',
 test('HTTP Home keeps active trades, share inventory, and market research usable without a Plan', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = populatedBookDocuments();
@@ -3329,6 +3346,7 @@ test('HTTP Home keeps active trades, share inventory, and market research usable
 test('delayed Home context preserves roster and Plan DOM identity, focus, and scroll', async () => {
   const context = await browser.newContext({ viewport: { width: 390, height: 520 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = populatedBookDocuments();
@@ -3381,6 +3399,7 @@ test('delayed Home context preserves roster and Plan DOM identity, focus, and sc
 test('missing observed history leaves Position Bloom usable with its structural trade receipt', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
@@ -3455,6 +3474,7 @@ test('missing observed history leaves Position Bloom usable with its structural 
 test('a structural Position failure renders its error and an in-place retry', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
@@ -3490,6 +3510,7 @@ test('a structural Position failure renders its error and an in-place retry', as
 test('Home 1D and 1W history use their actual sessions instead of shrinking beside a forward cone', async () => {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
@@ -3554,6 +3575,7 @@ test('Home 1D and 1W history use their actual sessions instead of shrinking besi
 test('HTTP Position Bloom renders backend trade, payoff, summary, and Research receipts only', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
@@ -3787,6 +3809,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
 test('global New idea from Position starts blank, then preserves the focused Position after explicit analysis', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
@@ -3819,7 +3842,7 @@ test('global New idea from Position starts blank, then preserves the focused Pos
     await page.locator('#threadNewIdea').click();
     await page.waitForSelector('[data-auth-workbench-query]');
     assert.deepEqual(await page.evaluate(() => ({
-      symbol: window.HOME_IDEA?.symbol,
+      symbol: window.homeIdea?.symbol,
       level: window.state?.level,
       positionFocus: window.state?.focus,
       decide: window.decide
@@ -3895,6 +3918,7 @@ test('global New idea from Position starts blank, then preserves the focused Pos
 test('New idea rotates a stale create idempotency key after a Plan changes declarations', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const stalePlan = plan(14, {
     id: 'plan_changed_after_create', symbol: 'AMD', intent: 'HEDGE',
     thesis: 'bearish', horizonDays: 30
@@ -3932,6 +3956,7 @@ test('New idea rotates a stale create idempotency key after a Plan changes decla
 test('Position opens on the unconditioned stored P/L fan and reuses it for playback', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
@@ -4011,6 +4036,7 @@ test('Position opens on the unconditioned stored P/L fan and reuses it for playb
 test('HTTP Position scenario renders the stored noisy path neighborhood and exact checkpoint journey', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { bookDocuments: populatedBookDocuments() });
@@ -4201,6 +4227,7 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
 test('unpinning a Position scenario during a delayed response cannot restore cleared projection state', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
@@ -4279,6 +4306,7 @@ test('unpinning a Position scenario during a delayed response cannot restore cle
 test('reopening cached Position A after Position B restores adapter ownership before conditioning A', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { bookDocuments: twoPositionBookDocuments() });
@@ -4379,6 +4407,7 @@ test('reopening cached Position A after Position B restores adapter ownership be
 test('Position scenarios condition the owning Plan stored ensemble on the exact authoritative trade', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { bookDocuments: populatedBookDocuments() });
@@ -4486,6 +4515,7 @@ test('Position scenario rejects substituted focused identity without disturbing 
   ]) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
+    page.setDefaultTimeout(8000);
     const backendOptions = { bookDocuments: populatedBookDocuments(), [failure.option]: true };
     const backend = await installBackend(page, backendOptions);
     try {
@@ -4551,6 +4581,7 @@ test('Position scenario rejects substituted focused identity without disturbing 
 test('an interrupted authoritative load renders one actionable state and retries in place', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
@@ -4603,6 +4634,7 @@ test('an interrupted authoritative load renders one actionable state and retries
 test('a zero-candidate backend result remains a stable Desk with screening receipts', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
@@ -4918,6 +4950,7 @@ test('Desk loads the server strategy catalog and accounts for families outside t
 test('a slow additive strategy catalog never blocks the exact Plan and recommendation flow', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { strategyCatalogDelayMs: 1800 });
@@ -5379,6 +5412,7 @@ test('served Desk resumes a canonical observed Plan with its persisted risk post
 test('Home resumes an observed Plan by atomically returning from an active simulated world', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = emptyBookDocuments();
@@ -5511,6 +5545,7 @@ test('an adverse-only competition requires an explicit comparison selection befo
   const adverse = unfavorableCandidate();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { strategyCandidates: [adverse] });
@@ -5609,6 +5644,7 @@ test('favorable economics remain visible when objective fit prevents endorsement
   const mixed = favorableMixedFitCandidate();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const backend = await installBackend(page, { strategyCandidates: [mixed] });
   try {
     await page.goto(deskUrl);
@@ -5642,6 +5678,7 @@ test('a failed explicit comparison selection clears its queued scenario and rest
   const adverse = unfavorableCandidate();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
@@ -6058,6 +6095,7 @@ test('stored ensembles are reused only for the same authoritative quote and mark
 test('a scenario chosen while the exact preview is pending is conditioned after the Plan mutation releases', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { decisionPreviewDelayMs: 900 });
@@ -6990,6 +7028,7 @@ test('a governor refresh clears the prior package and every scenario pin before 
 test('the initial backend selection cannot be superseded by a second idea load', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { selectDelayMs: 180 });
@@ -7334,7 +7373,7 @@ test('New Idea from an active or resumed idea returns to the permanent workbench
     await page.locator('[data-auth-workbench-query]').fill('AAPL');
     await page.locator('[data-auth-workbench-query]').press('Enter');
     assert.deepEqual(await page.evaluate(() => ({
-      stagedSymbol: window.HOME_IDEA?.symbol,
+      stagedSymbol: window.homeIdea?.symbol,
       liveIdea: window.decide,
       workbenches: document.querySelectorAll('.homeworkbenchpanel').length
     })), { stagedSymbol: 'AAPL', liveIdea: null, workbenches: 1 },
@@ -7358,6 +7397,7 @@ test('New Idea from an active or resumed idea returns to the permanent workbench
 test('the initial ensemble build keeps candidate changes behind one coherent mutation', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const adjacent = incoherentCandidate();
@@ -7408,6 +7448,7 @@ test('the initial ensemble build keeps candidate changes behind one coherent mut
 test('backing out of a slow idea load queues a clean re-entry instead of stranding the Desk', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { ensembleDelayMs: 320 });
@@ -7445,6 +7486,7 @@ test('backing out of a slow idea load queues a clean re-entry instead of strandi
 test('a presentation observer exception cannot cancel the authoritative outcome pipeline', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page);
@@ -7507,6 +7549,7 @@ test('a presentation observer exception cannot cancel the authoritative outcome 
 test('a newer server-owned quote observation is accepted without chasing the open market', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { rollQuoteOnFirstEnsemble: true });
@@ -7550,6 +7593,7 @@ test('a newer server-owned quote observation is accepted without chasing the ope
 test('a newer server-owned option calibration is accepted without a second full-chain read', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, { rollChainOnFirstEnsemble: true });
@@ -7590,6 +7634,7 @@ test('a newer server-owned option calibration is accepted without a second full-
 test('Home asks the canonical Scout for the configured-universe redeployment frontier', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const scoutResponse = {
     searched: 105,
     picks: [{
@@ -7721,6 +7766,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
 test('populated Home keeps one permanent idea and Scout workbench without cannibalizing Market', async () => {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
+  page.setDefaultTimeout(8000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = populatedBookDocuments();

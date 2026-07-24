@@ -155,8 +155,12 @@ public final class DataSyncState {
         String src = source == null || source.isBlank() || "auto".equalsIgnoreCase(source)
                 ? null : source.trim().toLowerCase(Locale.ROOT);
         List<LocalDate> rows = src == null
-                ? db.query("SELECT max(earliest_available)::text m FROM data_sync_cursor "
+                // 'auto' (any provider): a range is pre-history only if it predates the EARLIEST
+                // coverage ANY provider has — the MIN boundary. Using MAX (the most-restrictive
+                // provider) wrongly skipped ranges an earlier-starting provider could still serve.
+                ? db.query("SELECT min(earliest_available)::text m FROM data_sync_cursor "
                         + "WHERE symbol=? AND earliest_available IS NOT NULL", r -> date(r.str("m")), sym)
+                // A specific provider clamps to its OWN learned boundary.
                 : db.query("SELECT max(earliest_available)::text m FROM data_sync_cursor "
                         + "WHERE symbol=? AND lower(source_key)=? AND earliest_available IS NOT NULL",
                         r -> date(r.str("m")), sym, src);
