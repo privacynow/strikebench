@@ -3753,8 +3753,8 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>The chart will appear when its position values are ready.</div>')+'</section>'+
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
       '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div><div class="authmetric"><span>Close cost</span><b>'+authMoney(authDollarsFromCents(cur.closeCostCents))+'</b></div>'+
-      '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span>POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
-      '<div class="authmetric"><span>Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span>Theta / day</span><b>'+(authNumber(greeks.thetaPerDay)==null?'—':money(Number(greeks.thetaPerDay)))+'</b></div></div>'+
+      '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span title="Probability of profit — the estimated chance this position is profitable at expiry">POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
+      '<div class="authmetric"><span title="'+deskEsc(greekDesc('delta'))+'">Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span title="'+deskEsc(greekDesc('theta'))+'">Theta / day</span><b>'+(authNumber(greeks.thetaPerDay)==null?'—':money(Number(greeks.thetaPerDay)))+'</b></div></div>'+
       '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+' · touch a control to adjust in a new idea</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
     '<div class="authresearchgrid"><section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
@@ -3899,6 +3899,9 @@ var GSPEC=[
   {key:'gamma',lab:'Γ Gamma',desc:'How fast delta itself changes as the underlying moves — the curvature of your directional exposure',center:false,disp:function(v){return (+v).toFixed(3);}, w:function(v){return Math.min(100,Math.abs(v)/0.2*100);},col:function(){return 'var(--dim)';}, cue:function(){return 'curvature';}, cls:function(){return '';}}
 ];
 function gfmt(sp,v){ return v==null||!Number.isFinite(Number(v))?'—':sp.disp(Number(v)); }
+/* ONE source for greek plain-English definitions — reused wherever a greek label appears (mechGraphic,
+   the position tiles) so the explanation never drifts (no-sprawl). */
+function greekDesc(key){for(var i=0;i<GSPEC.length;i++)if(GSPEC[i].key===key)return GSPEC[i].desc||'';return '';}
 function mechGraphic(c){
   var grid='<div class="mechg">'+GSPEC.map(function(sp){ var raw=c[sp.key],known=raw!=null&&Number.isFinite(Number(raw)),v=known?Number(raw):null;
     return mechTile(sp.lab, gfmt(sp,v), mechBar(known?sp.w(v):0,known?sp.col(v):'var(--line-soft)',sp.center,known?v:1,sp.key), known?sp.cue(v):'backend checkpoint unavailable', known?sp.cls(v):'', sp.key, sp.desc);
