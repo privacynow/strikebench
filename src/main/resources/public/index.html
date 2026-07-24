@@ -5593,8 +5593,6 @@ function layoutForLevel(level,focus){
       e.classList.remove('is-focus'); e.querySelector('.cdetail').classList.remove('reveal'); e._peekDrawn=0;
       bookEl.appendChild(e); }
     for(var i=0;i<POS.length;i++){ drawPlSpark(POS[i]); }   /* always-on P/L spark; mini-payoff draws lazily on peek */
-    renderSummary();
-    drawHomeRisk();
   } else if(level==='position'){
     var recHd=document.getElementById('recHd');
     for(var i=0;i<POS.length;i++){ var p=POS[i], e=cardEl[p.id];
@@ -5774,8 +5772,7 @@ function focusSector(sec){
     if(first){HOME_AUTH_SYMBOL=first;authRenderMarketPanels();}
     window.DeskBackend.focusBookSector(owned?owned.key:sec).then(function(context){if(focusSeq!==HOME_AUTH_FOCUS_SEQ)return;if(!context||context.sectorLens&&context.sectorLens.available===false){toast(context&&context.sectorLens&&context.sectorLens.message||'This sector is unavailable in the active market universe.');return;}if(first)HOME_AUTH_SYMBOL=first;authRenderMarketPanels();}).catch(function(error){if(focusSeq===HOME_AUTH_FOCUS_SEQ)toast(error&&error.message||'Sector context could not load.');});return;
   }
-  SECTOR_FOCUS=sec; if(state.level!=='book')go('book'); renderUniverseBand(); renderSectorBand(); renderNewsBand();
-  drawMarketChart('homeUnivChart', marketSeries(), 'univ'); drawMarketChart('homeSecChart', sectorSeries(), 'sec'); updateThread(); scrollToBand('sectorBand'); }
+  SECTOR_FOCUS=sec; if(state.level!=='book')go('book'); updateThread(); scrollToBand('sectorBand'); }
 function focusSymbol(sym){
   if(deskBackendEnabled()){
     sym=String(sym||'').toUpperCase();var focusSeq=++HOME_AUTH_FOCUS_SEQ;if(state.level!=='book')go('book');
@@ -5783,8 +5780,7 @@ function focusSymbol(sym){
     window.DeskBackend.focusBookSymbol(sym).then(function(context){if(focusSeq!==HOME_AUTH_FOCUS_SEQ)return;if(!context){toast(sym+' is not in the active market universe.');return;}HOME_AUTH_SYMBOL=sym;authRenderMarketPanels();}).catch(function(error){if(focusSeq===HOME_AUTH_FOCUS_SEQ)toast(error&&error.message||sym+' market context could not load.');});return;
   }
   CHAIN_SYM=sym; var u=univBy[sym]; if(u)SECTOR_FOCUS=u.sector;
-  if(state.level!=='book')go('book'); renderChainBand(); renderUniverseBand(); renderSectorBand(); renderNewsBand(); drawHomeChain();
-  drawMarketChart('homeUnivChart', marketSeries(), 'univ'); drawMarketChart('homeSecChart', sectorSeries(), 'sec'); updateThread(); scrollToBand('chainBand'); }
+  if(state.level!=='book')go('book'); updateThread(); scrollToBand('chainBand'); }
 function handleCmd(raw){
   var q=(raw||'').trim().toLowerCase();
   if(!q)return;
@@ -5930,30 +5926,6 @@ function mktStripHTML(){
     (sim?'':'<span class="badge ok">short premium favored</span>')+
     '<div class="heat">'+heat+'</div>';
 }
-function renderSummary(){
-  var net=0, capRisk=0, need=0, needNames=[], real=0, paper=0;
-  for(var i=0;i<POS.length;i++){ var p=POS[i]; net+=p.pnl; capRisk+=p.cap; if(p.need){ need++; needNames.push(p.sym); }
-    if(p.lane==='paper')paper++; else real++; }
-  var bt=bookTail();   /* the honest correlated gap shock — one sector jump hits every line together */
-  /* (the market pulse row is folded into the merged top strip — mktStripHTML in the thread) */
-  /* ROW 2 — YOUR BOOK line: totals · attention · ambient posture · the entry doors */
-  var posture='<div class="posture"><span class="pgt">Posture</span>'+
-    '<button class="pchip" data-posture="goal" title="what your new ideas lean toward">'+POSTURE.goal+'</button>'+
-    '<button class="pchip" data-posture="risk" title="default caps inherited by Decide"><span class="hfull">'+postureName()+'</span><span class="hshort">'+(postureName()==='Conservative'?'Consv.':postureName()==='Aggressive'?'Aggr.':'Bal.')+'</span> <span class="pcsub">$'+(POSTURE.risk/1000)+'k · $'+(POSTURE.bp/1000)+'k</span></button>'+
-    '<button class="pchip" data-posture="lane" title="which lane new orders default to"><span class="hfull">'+(POSTURE.lane==='real'?'Real-first':'Paper-first')+'</span><span class="hshort">'+(POSTURE.lane==='real'?'Real':'Paper')+'</span></button>'+
-    (deskBackendEnabled()?'<span class="pchip static lanes"><span class="ld real">'+POS.length+' staged</span></span>':'<span class="pchip static lanes"><span class="ld real">'+real+' real</span><span class="ld paper">'+paper+' paper</span></span>')+
-  '</div>';
-  var bookline='<div class="bookline">'+
-    '<div class="sblock"><div class="lbl" title="collateral set aside + defined risk committed"><span class="hfull">Capital at work</span><span class="hshort">Capital</span></div><div class="sv">'+money(capRisk)+'</div></div>'+
-    '<button class="sblock sblock-btn" data-open="risk" title="the whole book on ONE shared '+(bt.sector||'sector').toLowerCase()+' gap of −'+bt.gapPct+'% — every line moves together. Jump to the book-risk band."><div class="lbl"><span class="hfull">If '+(bt.sector||'sector').toLowerCase()+' −'+bt.gapPct+'%</span><span class="hshort">'+(bt.sector||'sector')+' −'+bt.gapPct+'%</span></div><div class="sv '+(bt.gapPL<0?'warnv':'pos')+'">'+money(bt.gapPL)+'</div></button>'+
-    (need?'<button class="sneed" data-open="risk" title="'+needNames.join(', ')+' need attention"><span class="badge bad">'+need+' need you</span></button>':'')+
-    posture+
-    '<div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div>'+
-  '</div>';
-  summaryEl.innerHTML=simRibbon()+'<div class="homesummary">'+perfBand()+bookline+'</div>';
-  drawBookEq();
-  wireLanding();
-}
 function wireLanding(){
   var imb=document.getElementById('importBtn'); if(imb) imb.onclick=function(){ openImport(imb.getBoundingClientRect()); };
   /* (book risk is folded into Home as an always-visible band — the old '◈ Book risk' overlay is gone) */
@@ -5974,7 +5946,6 @@ function cyclePosture(kind){
   else if(kind==='lane'){ POSTURE.lane=POSTURE.lane==='real'?'paper':'real'; }
   else if(kind==='risk'){ var idx=0; for(var i=0;i<RISK_PRESETS.length;i++) if(RISK_PRESETS[i].risk===POSTURE.risk) idx=i;
     var np=RISK_PRESETS[(idx+1)%RISK_PRESETS.length]; POSTURE.risk=np.risk; POSTURE.bp=np.bp; }
-  renderSummary();
   toast('Posture · '+POSTURE.goal+' · '+postureName()+' · '+(POSTURE.lane==='real'?'Real-first':'Paper-first')+' — inherited by new ideas');
 }
 
@@ -5992,22 +5963,6 @@ var HOME_NEWS=[
  {scope:'QCOM',kind:'position',tone:'warn',sym:'QCOM',headline:'Assignment probability is now live around the $170 short put into Friday.',source:'Chain + book',age:'1h'},
  {scope:'Semis',kind:'sector',tone:'pos',sector:'Semis',headline:'Relative momentum still leads the broad market despite today’s mixed tape.',source:'Observed history',age:'2h'}
 ];
-function drawMarketChart(svg, series, up){
-  if(typeof svg==='string') svg=document.getElementById(svg);
-  if(!svg)return;
-  var W=Math.max(320,Math.round(svg.clientWidth||600)), H=Math.max(120,Math.round(svg.clientHeight||154));
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  var n=series.length, lo=Math.min.apply(0,series), hi=Math.max.apply(0,series), pad=(hi-lo)*0.16||1; lo-=pad; hi+=pad;
-  var padL=10,padR=10,padT=12,padB=14;
-  var X=function(i){return padL+(W-padL-padR)*i/(n-1);}, Y=function(v){return padT+(H-padT-padB)*(1-(v-lo)/(hi-lo));};
-  var d='';
-  for(var i=0;i<n;i++){ d+=(i?' L ':'M ')+X(i).toFixed(1)+' '+Y(series[i]).toFixed(1); }
-  var area=d+' L '+X(n-1).toFixed(1)+' '+(H-padB)+' L '+padL.toFixed(1)+' '+(H-padB)+' Z';
-  var col=up?'var(--profit)':'var(--loss)', gid='mdg'+(up?'u':'d');
-  svg.innerHTML='<defs><linearGradient id="'+gid+'" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="'+col+'" stop-opacity=".22"/><stop offset="1" stop-color="'+col+'" stop-opacity="0"/></linearGradient></defs>'+
-    '<path d="'+area+'" fill="url(#'+gid+')"/><path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="1.8" stroke-linejoin="round"/>'+
-    '<circle cx="'+X(n-1).toFixed(1)+'" cy="'+Y(series[n-1]).toFixed(1)+'" r="3.2" fill="'+col+'"/>';
-}
 function volSig(r){ return r>=65?'rich':r>=45?'fair':'cheap'; }
 function volScan(list){
   var rows=list.map(function(u){var held=byId2Sym(u.sym), sig=volSig(u.ivRank);
@@ -6629,7 +6584,7 @@ function setMktMode(m,pathChanged){
       if(decide||!result)return;
       var cfg=result.config||{},target=result.target||cfg.world;
       syncMarketModeFromBackend({identity:{marketLane:cfg.marketLane,world:target}});
-      renderSummary();drawHomeRisk();updateThread();
+      if(state.level==='book')layoutAuthoritativeBook();updateThread();
     }).catch(function(error){toast(error.message||'The market transition did not finish.');});
     return;
   }
@@ -6637,7 +6592,6 @@ function setMktMode(m,pathChanged){
   pathChanged=!!pathChanged||laneChanged;
   var b=document.querySelectorAll('#mktMode .mmseg button'); for(var i=0;i<b.length;i++) b[i].classList.toggle('on', b[i].getAttribute('data-mkt')===m);
   document.body.classList.toggle('mkt-sim', m==='sim');
-  if(state.level==='book'){ renderSummary(); drawHomeRisk(); }
   if(decide){ if(pathChanged)renderAfterDecisionChange(); else renderDecide(); }
   else if(state.level==='position') refreshManage(state.focus,false);
   updateThread();   /* re-tint the merged market strip (source tag + violet) immediately */
@@ -8851,7 +8805,7 @@ function wireImport(){
 
 /* ---- BOOK-RISK LENS: interrogate the whole book (concentration · expiry · churn ·
    contradiction · exposure map). Every row drills into the causing positions. ---- */
-/* expiry calendar — used by the folded book-risk band (renderBookBand). */
+/* expiry calendar — used by the folded book-risk governor detail. */
 function expCalHTML(){
   var byExp={}; POS.forEach(function(p){ var m=(p.legStr.match(/exp ([0-9]{2}-[A-Za-z]{3})/)||p.legStr.match(/([0-9]{2}-[A-Za-z]{3})/)); var k=m?m[1]:'—'; (byExp[k]=byExp[k]||[]).push(p); });
   var MON={Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
@@ -8992,19 +8946,6 @@ function deskGlyph(kind){
   }[kind]||'';
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+body+'</svg>';
 }
-/* ===== HOME book-intelligence band: the interactive risk map surfaced on the landing ===== */
-function renderHomeRisk(){
-  var el=document.getElementById('riskMain'); if(!el)return;
-  var bt=bookTail(), secL=(bt.sector||'sector').toLowerCase(), gp=Math.round(bookGapFrac().gap*100);
-  el.innerHTML='<div class="lenshd"><span class="eyebrow">Your book · risk map</span>'+
-      '<span class="rkleg"><span class="rkls" title="dot area = book risk %"><svg width="28" height="15"><circle cx="6" cy="8" r="3" fill="none" stroke="var(--faint)"/><circle cx="20" cy="8" r="6" fill="none" stroke="var(--faint)"/></svg>size = risk</span>'+
-        '<span class="rkls" title="colour = loss on a '+gp+'% '+secL+' gap"><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--profit)"></i><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--caution)"></i><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--loss)"></i> stress</span>'+
-        '<span class="rkls">Δ→ · cap↑</span></span></div>'+
-    '<svg class="decmap rkmap homemap" id="homeRiskMap"></svg>'+
-    '<div class="rkselinfo" id="homeRiskInfo"><div class="rkidletools"><span class="rktemp"><span class="lbl">cool</span><i class="rktempbar"></i><span class="lbl">hot</span></span>'+
-      '<span class="rkgestures"><span class="rkgesture" title="Preview a position">'+deskGlyph('eye')+'</span><span class="rkgesture" title="Open a position">'+deskGlyph('open')+'</span><span class="rkgesture" title="Pool positions">'+deskGlyph('select')+'</span></span></div></div>'+
-    '<div class="mapcard" id="homeRiskMapCard"></div>';
-}
 /* The Book Governor keeps every cause visible as a live readout, then explains ONE cause in the
    remaining space. This is a causal control, not product navigation: the cockpit never leaves Home. */
 function governorDetail(kind){
@@ -9035,19 +8976,6 @@ function governorDetail(kind){
     '<div class="govfacts"><div class="govfact"><span>If '+sec+' −'+bt.gapPct+'%</span><b class="neg">'+money(bt.gapPL)+'</b></div><div class="govfact"><span>Worst-5% day</span><b class="neg">'+money(bt.es5)+'</b></div></div>'+
     (hp?'<div class="govhedge"><span><b>SMH '+hp.K+'P × '+hp.qty+'</b> absorbs '+cut+'% of the shared gap for '+money(-hp.cost)+'.</span><button class="iconcta hedge" data-risk-act="hedge" aria-label="Build the SMH cluster hedge" title="Build the SMH cluster hedge">'+deskGlyph('shield')+'</button></div>':'');
 }
-function renderBookBand(){
-  var el=document.getElementById('bookrisk'); if(!el)return;
-  var netDelta=0,netTheta=0,netVega=0;
-  POS.forEach(function(p){ netDelta+=(+p.delta||0); netTheta+=(+p.theta||0); netVega+=(+p.vega||0); });
-  var semis=POS.filter(function(p){return univBy[p.sym]&&univBy[p.sym].sector==='Semis';}).reduce(function(a,p){return a+p.riskPct;},0);
-  var kpi='<span class="rkhero"><span class="rkh"><span class="lbl">Net Δ</span><b>'+(netDelta>=0?'+':'')+netDelta.toFixed(2)+'</b></span>'+
-    '<span class="rkh"><span class="lbl">Net Θ/day</span><b class="pos">+$'+Math.round(netTheta)+'</b></span>'+
-    '<span class="rkh"><span class="lbl">Net Vega</span><b class="'+(netVega<=0?'warn':'')+'">'+Math.round(netVega)+'</b></span></span>';
-  function tab(k,n,sn,v,cls){return '<button class="govtab'+(HOME_RISK_FACET===k?' on':'')+'" data-bkgov="'+k+'" title="'+n+'"><span class="gk"><span class="gklong">'+n+'</span><span class="gkshort">'+sn+'</span></span><span class="gv '+(cls||'')+'">'+v+'</span></button>';}
-  el.innerHTML='<div class="rkpanel bookband"><div class="lenshd"><span class="eyebrow">Book Governor</span>'+kpi+'</div>'+
-    '<div class="govtabs">'+tab('conc','Concentration','Cluster',semis+'%','warn')+tab('expiry','Expiry cluster','Expiry','3 · 07-Aug','warn')+tab('churn','Churn','Churn','4 rolls','')+tab('contra','Contradiction','Conflict','1 flag','warn')+'</div>'+
-    '<div class="govdetail">'+governorDetail(HOME_RISK_FACET)+'</div></div>';
-}
 /* ===== market data: OBSERVED (Cboe/live) vs SIMULATED (deterministic per seed+world) ===== */
 function simSeries(base){ var seed=(SIM.seed*2654435761 + hashText(SIM.world))>>>0, rnd=mulberry32(seed), out=[], v=base[0], w=simProfile();
   for(var i=0;i<base.length;i++){ v=v*(1+w.dayDrift+(rnd()-0.5)*2*w.dayVol); out.push(v); } return out; }
@@ -9064,115 +8992,11 @@ function sectorSeries(sec){ var base=SECTOR_SERIES[sec||SECTOR_FOCUS]||SEMIS_SER
 function mktStamp(extra){ return MKT_MODE==='sim'
   ? (deskBackendEnabled()?'<span class="srctag sim" title="staged visual panel">◇ VISUAL FIXTURE</span>':'<span class="srctag sim" title="synthetic · deterministic per seed">◈ SIM · '+SIM.world+' · seed '+SIM.seed+'</span>')
   : (deskBackendEnabled()?'<span class="srctag" title="staged visual panel; New idea uses backend data">◇ VISUAL FIXTURE</span>':'<span class="srctag" title="live Cboe option chain, ~2 min delayed">● Cboe · 2m'+(extra?' · '+extra:'')+'</span>'); }
-/* ---- folded MARKET band (was renderMarket) — universe context as a zoomed-out state of Home ---- */
-function renderUniverseBand(){ var el=document.getElementById('univBand'); if(!el)return;
-  var ser=marketSeries(), last=Math.round(ser[ser.length-1]), sim=MKT_MODE==='sim';
-  var sectors=[{n:'Semis',v:32},{n:'Software',v:26},{n:'Tech',v:24},{n:'Autos',v:41},{n:'Index',v:15},{n:'Energy',v:29}];
-  var tiles=sectors.map(function(s){var w=Math.round(s.v/40*100);
-    return '<button class="msector'+(SECTOR_FOCUS===s.n?' you':'')+'" data-secctx="'+s.n+'"><div class="msrow"><b>'+s.n+'</b>'+(s.n==='Semis'?'<span class="badge">book</span>':'')+'</div>'+
-      '<div class="msbar"><i style="width:'+w+'%"></i></div><div class="mssub"><span class="hint">IV '+s.v+'</span></div></button>';}).join('');
-  var byRank=UNIV.slice().sort(function(a,b){return b.ivRank-a.ivRank;});
-  var us=byRank.map(function(u){ var rich=u.ivRank>=65, cur=chainSym()===u.sym;
-    return '<button class="uitem'+(cur?' on':'')+'" data-ufocus="'+u.sym+'"><span class="us">'+u.sym+'</span><span class="un">'+u.name+(u.earn?' · ⚑ '+u.earn:'')+'</span><span class="um '+(rich?'rich':'')+'">'+(u.chg>=0?'+':'')+u.chg.toFixed(1)+'% · '+ordinal(u.ivRank)+'</span></button>'; }).join('');
-  el.innerHTML='<div class="rkpanel marketpanel"><div class="lenshd"><span class="eyebrow">Market / universe</span><span class="hint">'+mktStamp()+'</span></div>'+
-    '<div class="mdrow"><svg class="mdchart mdmini" id="homeUnivChart"></svg>'+
-      '<div class="mdmeta col"><span>SPX <b>'+(sim?last:'5,970')+'</b></span><span>VIX <b>'+(sim?'—':'14.2')+'</b></span><span>Regime <b>'+(sim?SIM.world:'low-vol grind')+'</b></span></div></div>'+
-    '<div class="msgrid tight">'+tiles+'</div>'+
-    '<div class="lenshd sub"><span class="eyebrow">Universe · change / IV rank</span><span class="hint">select to retarget the cockpit</span></div><div class="universegrid">'+us+'</div></div>';
-}
-/* ---- folded SECTOR band (was renderSector) — the FOCUSED sector in depth (SECTOR_FOCUS, set by
-   the symbol⇢sector entry). The book is all-semis, so Semis is the populated sector; others render
-   an honest 'context only' state rather than faking holdings. ---- */
 var SEC_IV={Semis:32,Software:26,Tech:24,Autos:41,Index:15,Energy:29,Financials:19,Health:17,Consumer:21};
 var SEC_PROXY={Semis:'SMH',Software:'IGV',Tech:'XLK',Autos:'CARZ',Index:'SPY',Energy:'XLE',Financials:'XLF',Health:'XLV',Consumer:'XLY'};
-function renderSectorBand(){ var el=document.getElementById('sectorBand'); if(!el)return;
-  var sec=SECTOR_FOCUS, ser=sectorSeries(), last=(ser[ser.length-1]||268).toFixed(2), sim=MKT_MODE==='sim';
-  var secUniv=UNIV.filter(function(u){return u.sector===sec;}).sort(function(a,b){return b.ivRank-a.ivRank;});
-  var held=POS.filter(function(p){return univBy[p.sym]&&univBy[p.sym].sector===sec;});
-  var iv=SEC_IV[sec]||'—';
-  var chips=held.map(function(p){return '<button class="holdchip" data-goto="'+p.id+'">'+p.sym+' <span class="'+(p.pnl>=0?'pos':'neg')+'">'+money(p.pnl)+'</span></button>';}).join('');
-  var risk=held.reduce(function(a,p){return a+p.riskPct;},0);
-  var body, avg=secUniv.length?secUniv.reduce(function(a,u){return a+(u.chg||0);},0)/secUniv.length:0;
-  var netVega=POS.reduce(function(a,p){return a+(+p.vega||0);},0), breadth=secUniv.filter(function(u){return (u.chg||0)>0;}).length;
-  var top=secUniv[0], catalysts=secUniv.filter(function(u){return u.earn;}).slice(0,3).map(function(u){return u.sym+' '+u.earn;}).join(' · ')||'none in the tracked set';
-  if(held.length){
-    body='<div class="holdrow">'+chips+'</div>'+
-      '<div class="sectorfacts">'+
-        '<div class="sectorfact"><span class="sfk">Momentum</span><span><b>'+(avg>=0?'Leading':'Lagging')+' the market</b> · tracked breadth '+(avg>=0?'+':'')+avg.toFixed(1)+'% today.</span><span class="sfsrc">history</span></div>'+
-        '<div class="sectorfact"><span class="sfk">Breadth</span><span><b>'+breadth+' of '+secUniv.length+' advancing</b> · strength is broad, not just one ticker.</span><span class="sfsrc">tape</span></div>'+
-        '<div class="sectorfact"><span class="sfk">Volatility</span><span><b>'+sec+' IV '+iv+'</b> · '+(top?top.sym+' leads at the '+ordinal(top.ivRank)+' percentile.':'no ranked names')+'</span><span class="sfsrc">Cboe</span></div>'+
-        '<div class="sectorfact"><span class="sfk">Catalysts</span><span><b>Upcoming prints</b> · '+catalysts+'.</span><span class="sfsrc">filings</span></div>'+
-        '<div class="sectorfact"><span class="sfk">Book effect</span><span><b>Net vega '+Math.round(netVega)+'</b> · falling IV helps, but a shared gap still dominates.</span><span class="sfsrc">book</span></div></div>';
-  } else {
-    body='<div class="callout"><b>No tracked positions in '+sec+'.</b> Context only — your book is concentrated in semis. '+
-      (secUniv.length?'':'No '+sec.toLowerCase()+' names are in the tracked universe yet.')+'</div>'+
-      '<div class="sectorfacts"><div class="sectorfact"><span class="sfk">Momentum</span><span><b>'+(avg>=0?'Positive':'Negative')+'</b> · tracked breadth '+(avg>=0?'+':'')+avg.toFixed(1)+'%.</span><span class="sfsrc">history</span></div>'+
-      '<div class="sectorfact"><span class="sfk">Volatility</span><span><b>IV '+iv+'</b>'+(top?' · '+top.sym+' ranks '+ordinal(top.ivRank)+'.':'')+'</span><span class="sfsrc">Cboe</span></div></div>';
-  }
-  if(deskBackendEnabled())body=body.replaceAll('>history<','>visual fixture<').replaceAll('>tape<','>visual fixture<')
-    .replaceAll('>Cboe<','>visual fixture<').replaceAll('>filings<','>visual fixture<').replaceAll('>book<','>visual fixture<');
-  el.innerHTML='<div class="rkpanel sectorpanel"><div class="lenshd"><span class="eyebrow">'+sec+' / research</span><span class="hint">'+mktStamp()+'</span></div>'+
-    '<div class="mdrow"><svg class="mdchart mdmini" id="homeSecChart"></svg>'+
-      '<div class="mdmeta col"><span>'+(SEC_PROXY[sec]||sec)+' <b>'+(sim?Math.round(ser[ser.length-1]):last)+'</b></span><span>IV <b>'+(sim?'—':iv)+'</b>'+(sec==='Semis'?' · <b>85th</b>':'')+'</span><span>Book <b class="'+(risk?'warn':'')+'">'+risk+'%</b></span></div></div>'+
-    body+'</div>';
-}
-function renderNewsBand(){ var el=document.getElementById('newsBand'); if(!el)return;
-  var sym=chainSym(), sec=SECTOR_FOCUS;
-  var feed=HOME_NEWS.slice(), u=univBy[sym];
-  if(u&&!feed.some(function(n){return n.sym===sym;})) feed.push({scope:sym,kind:byId2Sym(sym)?'position':'sector',tone:u.chg>=0?'pos':'neg',sym:sym,
-    headline:u.name+' is '+(u.chg>=0?'+':'')+u.chg.toFixed(1)+'% today with IV in the '+ordinal(u.ivRank)+(u.earn?' percentile; next catalyst '+u.earn+'.':' percentile.'),source:'Observed history + Cboe',age:'now'});
-  feed=feed.sort(function(a,b){ var ar=(a.sym===sym?3:a.sector===sec?2:a.kind==='market'?1:0), br=(b.sym===sym?3:b.sector===sec?2:b.kind==='market'?1:0); return br-ar; }).slice(0,6);
-  var rows=feed.map(function(n){ var source=deskBackendEnabled()?'Visual fixture':n.source,age=deskBackendEnabled()?'staged':n.age;return '<button class="nitem wide homenews"'+(n.sym?' data-news-sym="'+n.sym+'"':'')+(n.sector?' data-news-sec="'+n.sector+'"':'')+'>'+
-    '<span class="ndot '+n.tone+'"></span><span><span class="scp '+n.kind+'">'+n.scope+'</span><span class="ht">'+n.headline+'</span><span class="mt">'+source+'</span></span><span class="newsend"><span class="mt">'+age+'</span><span class="scopego" aria-hidden="true">'+deskGlyph('sync')+'</span></span></button>'; }).join('');
-  el.innerHTML='<div class="rkpanel newspanel"><div class="lenshd"><span class="eyebrow">Research / news</span><span class="lensacts"><span class="hint">market · '+sec.toLowerCase()+' · '+sym+'</span><span class="scopeflow" title="Scoped selections synchronize the visible desk">'+deskGlyph('sync')+'</span></span></div><div class="newsfeed">'+rows+'</div></div>';
-}
 /* ---- OPTION CHAIN + CANDLES (Cboe when observed / synthetic when simulated) ---- */
 var CHAIN_SYM=null, CHAIN_TF='1M';
-function chainSym(){ if(!CHAIN_SYM){ var big=POS.slice().sort(function(a,b){return b.cap-a.cap;})[0]; CHAIN_SYM=big?big.sym:'AMD'; } return CHAIN_SYM; }
 function symSpot(sym){ var u=univBy[sym]; if(u)return u.spot; var p=POS.filter(function(x){return x.sym===sym;})[0]; return p?p.spot:100; }
-/* real OHLC candles derived deterministically from the symbol's close series */
-function candleSeries(sym){ var spot=symSpot(sym), n=30, rnd=mulberry32((sym.charCodeAt(0)*131+ (MKT_MODE==='sim'?SIM.seed*7:0))>>>0), bars=[], v=spot*0.94;
-  var drift=(spot-v)/n;
-  for(var i=0;i<n;i++){ var o=v, c=o+drift+(rnd()-0.5)*spot*0.012; var hi=Math.max(o,c)+rnd()*spot*0.006, lo=Math.min(o,c)-rnd()*spot*0.006; bars.push({o:o,c:c,h:hi,l:lo}); v=c; }
-  return bars; }
-function drawCandles(svg, bars){ if(typeof svg==='string')svg=document.getElementById(svg); if(!svg)return;
-  var W=Math.max(280,Math.round(svg.clientWidth||480)), H=Math.max(120,Math.round(svg.clientHeight||150)); svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  var padL=40,padR=8,padT=8,padB=8, lo=1e9,hi=-1e9; bars.forEach(function(b){lo=Math.min(lo,b.l);hi=Math.max(hi,b.h);}); var pad=(hi-lo)*0.06||1; lo-=pad; hi+=pad;
-  var X=function(i){return padL+(W-padL-padR)*(i+0.5)/bars.length;}, Y=function(v){return H-padB-(H-padB-padT)*(v-lo)/((hi-lo)||1);};
-  var bw=Math.max(2,(W-padL-padR)/bars.length*0.62), g='';
-  [0,0.5,1].forEach(function(f){var v=lo+(hi-lo)*f,yy=Y(v);g+='<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)"/>';g+='<text x="'+(padL-4)+'" y="'+(yy+3).toFixed(1)+'" fill="var(--faint)" font-size="10" text-anchor="end" font-family="ui-monospace">'+Math.round(v)+'</text>';});
-  bars.forEach(function(b,i){ var x=X(i), up=b.c>=b.o, col=up?'var(--profit)':'var(--loss)';
-    g+='<line x1="'+x.toFixed(1)+'" y1="'+Y(b.h).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+Y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
-    var y0=Y(Math.max(b.o,b.c)), y1=Y(Math.min(b.o,b.c));
-    g+='<rect x="'+(x-bw/2).toFixed(1)+'" y="'+y0.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,y1-y0).toFixed(1)+'" fill="'+col+'" fill-opacity="'+(up?.55:.8)+'" stroke="'+col+'"/>'; });
-  svg.innerHTML=g; }
-/* option chain: strikes around spot × bid/ask/IV/Δ from the BS engine */
-function renderChain(sym){ var spot=symSpot(sym), T=DEC_T, inc=strikeInc(spot), atm=Math.round(spot/inc)*inc, rows='';
-  /* Keep a single chain component. Tall canvases reveal the outer strikes; existing responsive
-     containment rules trim the same rows to the nearest contracts when vertical room contracts. */
-  for(var k=atm-5*inc; k<=atm+5*inc; k+=inc){ var isATM=Math.abs(k-atm)<inc*0.5;
-    var cp=bsPrice(spot,k,T,ivForK(spot,k),'c'), pp=bsPrice(spot,k,T,ivForK(spot,k),'p'), iv=Math.round(ivForK(spot,k)*100);
-    var cmid=cp.price, pmid=pp.price;
-    rows+='<div class="chrow'+(isATM?' atm':'')+'"><span class="chb">'+cmid.toFixed(2)+'</span><span class="cha">'+(cmid*1.04).toFixed(2)+'</span>'+
-      '<span class="chk">'+k+'</span><span class="chiv">'+iv+'</span>'+
-      '<span class="chb p">'+pmid.toFixed(2)+'</span><span class="cha p">'+(pmid*1.04).toFixed(2)+'</span></div>'; }
-  return '<div class="chaintbl"><div class="chrow chhd"><span>C bid</span><span>C ask</span><span>strike</span><span>IV</span><span>P bid</span><span>P ask</span></div>'+rows+'</div>';
-}
-function renderChainBand(){ var el=document.getElementById('chainBand'); if(!el)return; var sym=chainSym();
-  var syms=[]; POS.forEach(function(p){ if(syms.indexOf(p.sym)<0)syms.push(p.sym); });
-  var picker=syms.map(function(s){return '<button class="chpick'+(s===sym?' on':'')+'" data-chsym="'+s+'">'+s+'</button>';}).join('');
-  var tfs=['1D','5D','1M','3M','6M','1Y'], none={'1D':1,'5D':1};
-  var tfrow=tfs.map(function(t){return '<button class="'+(t===CHAIN_TF?'on':'')+(none[t]?' none':'')+'" data-chtf="'+t+'" title="'+(none[t]?'intraday candles unavailable':'')+'">'+t+'</button>';}).join('');
-  el.innerHTML='<div class="rkpanel chpanel"><div class="lenshd"><span class="eyebrow">'+(deskBackendEnabled()?'Chain + candles sketch':'Chain + candles')+' · '+sym+'</span><span class="hint">'+mktStamp('greeks BS76')+'</span></div>'+
-    '<div class="chpicker">'+picker+'</div>'+
-    '<div class="chtf">'+tfrow+'</div>'+
-    '<div class="chchartwrap"><svg class="mdchart candles" id="homeCandles"></svg></div>'+
-    renderChain(sym)+'</div>';
-}
-function drawHomeChain(){ var sym=chainSym();
-  if(CHAIN_TF==='1D'||CHAIN_TF==='5D'){ var w=document.querySelector('#chainBand .chchartwrap'); if(w){ w.innerHTML='<div class="mdna"><b>No '+CHAIN_TF+' intraday candles</b><span>Candles source: NONE — pick 1M+ (line uses EOD closes).</span></div>'; } return; }
-  drawCandles('homeCandles', candleSeries(sym));
-}
 /* floating readout card near a hovered dot — sibling of showMapCard, reads the held book */
 function showRiskMapCard(id){
   var card=document.getElementById('homeRiskMapCard'), svg=document.getElementById('homeRiskMap'), host=document.getElementById('riskMain');
@@ -9195,35 +9019,6 @@ function showRiskMapCard(id){
 function hideRiskMapCard(){ var c=document.getElementById('homeRiskMapCard'); if(c)c.classList.remove('show'); }
 function hlBookLine(id,on){ if(cardEl[id]){ cardEl[id].classList.toggle('cardhot',on); if(on&&byId[id]) peekDraw(cardEl[id],byId[id]); }
   var svg=document.getElementById('homeRiskMap'); if(svg){ var d=svg.querySelector('.rkdot[data-id="'+id+'"]'); if(d)d.classList.toggle('selon',on); } }
-/* draw + wire the whole Home band (called on book-level entry + resize) */
-function drawHomeRisk(){
-  renderHomeRisk(); renderBookBand(); renderUniverseBand(); renderSectorBand(); renderNewsBand(); renderChainBand();
-  drawExposureMap({svg:'homeRiskMap', info:'homeRiskInfo', hover:true, zoom:true,
-    onHover:function(id,on){ if(on){ showRiskMapCard(id); hlBookLine(id,true); } else { hideRiskMapCard(); hlBookLine(id,false); } }});
-  drawMarketChart('homeUnivChart', marketSeries(), 'univ');
-  drawMarketChart('homeSecChart', sectorSeries(), 'sec');
-  drawHomeChain();
-  /* roster card ⇄ dot link (wire once; delegated so it survives re-render) */
-  if(!bookEl._homeWired){ bookEl._homeWired=1;
-    bookEl.addEventListener('mouseover',function(e){ var c=e.target.closest&&e.target.closest('.card[data-id]'); if(c){ var id=c.getAttribute('data-id'); hlBookLine(id,true); showRiskMapCard(id); } });
-    bookEl.addEventListener('mouseout',function(e){ var c=e.target.closest&&e.target.closest('.card[data-id]'); if(c){ var id=c.getAttribute('data-id'); hlBookLine(id,false); hideRiskMapCard(); } });
-  }
-  /* one delegated handler on #board: contextual controls retarget visible lenses in place. */
-  if(!boardEl._homeWired){ boardEl._homeWired=1;
-    boardEl.addEventListener('click',function(e){ if(state.level!=='book')return;
-      var ha=e.target.closest&&e.target.closest('[data-risk-act="hedge"]'); if(ha){ openHedge(ha.getBoundingClientRect()); return; }
-      var gv=e.target.closest&&e.target.closest('[data-bkgov]'); if(gv){ HOME_RISK_FACET=gv.getAttribute('data-bkgov'); renderBookBand(); return; }
-      var sc=e.target.closest&&e.target.closest('[data-secctx]'); if(sc){ focusSector(sc.getAttribute('data-secctx')); return; }
-      var uf=e.target.closest&&e.target.closest('[data-ufocus]'); if(uf){ focusSymbol(uf.getAttribute('data-ufocus')); return; }
-      var ns=e.target.closest&&e.target.closest('[data-news-sym]'); if(ns){ focusSymbol(ns.getAttribute('data-news-sym')); return; }
-      var nc=e.target.closest&&e.target.closest('[data-news-sec]'); if(nc){ focusSector(nc.getAttribute('data-news-sec')); return; }
-      var ch=e.target.closest&&e.target.closest('[data-chsym]'); if(ch){ focusSymbol(ch.getAttribute('data-chsym')); return; }
-      var tf=e.target.closest&&e.target.closest('[data-chtf]'); if(tf){ CHAIN_TF=tf.getAttribute('data-chtf'); renderChainBand(); drawHomeChain(); return; }
-      var g=e.target.closest&&e.target.closest('#bookrisk [data-goto],#univBand [data-goto],#sectorBand [data-goto],#newsBand [data-goto]'); if(g){ go('position', g.getAttribute('data-goto')); return; } });
-    boardEl.addEventListener('mouseover',function(e){ if(state.level!=='book')return; var g=e.target.closest&&e.target.closest('#bookrisk [data-goto]'); if(g) hlBookLine(g.getAttribute('data-goto'),true); });
-    boardEl.addEventListener('mouseout',function(e){ if(state.level!=='book')return; var g=e.target.closest&&e.target.closest('#bookrisk [data-goto]'); if(g) hlBookLine(g.getAttribute('data-goto'),false); });
-  }
-}
 
 /* ======================================================================
    LEARN — folded in as a SUMMONED LENS, not a nav tab. Teaching blooms on demand
