@@ -1490,6 +1490,19 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .decisionbrief .dbfacts{display:flex;align-items:center;gap:9px;margin-top:8px;flex-wrap:wrap}
 .decisionbrief .dbfact{font-size:var(--f-2xs);color:var(--faint);display:inline-flex;align-items:baseline;gap:4px}
 .decisionbrief .dbfact b{font-family:var(--mono);font-size:var(--f-xs)}
+/* F (#9): ONE EV receipt — the realized-vol lane owns the verdict color; the market-implied lane is
+   muted and carries a persistent (non-tooltip) benchmark caption; premium richness is muted too. */
+.evreceipt{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.evreceipt .evlane{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;column-gap:8px;padding:6px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
+.evreceipt .evlane.primary{border-color:var(--line)}
+.evreceipt .evlane.primary.pos{border-left:3px solid var(--profit)} .evreceipt .evlane.primary.neg{border-left:3px solid var(--loss)}
+.evreceipt .evlabel{font-size:var(--f-2xs);color:var(--dim)} .evreceipt .evlane.muted .evlabel{color:var(--faint)}
+.evreceipt .evlabel small{color:var(--faint);font-weight:400}
+.evreceipt .evval{font-family:var(--mono);font-size:var(--f-sm);color:var(--dim)}
+.evreceipt .evval.pos{color:var(--profit)} .evreceipt .evval.neg{color:var(--loss)}
+.evreceipt .evband{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);font-family:var(--mono);margin-top:2px}
+.evreceipt .evcaption{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);line-height:1.4;margin-top:2px}
+.evreceipt.compact .evlane{padding:5px 7px}
 .inspectrail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
 .inspecttab{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"ico name" "ico value";align-items:center;column-gap:5px;
   border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);color:var(--faint);padding:6px 7px;text-align:left;
@@ -6569,9 +6582,9 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
     ];
     var prose=(mech.reasons||[])[0]||econ.summary||reasons.join(' ')||'The economic assessment is incomplete.';
     var realizedEv=authDollarsFromCents(econ.realizedVolEvAfterCostsCents),evLow=authDollarsFromCents(econ.realisticEvLowAfterCostsCents),evHigh=authDollarsFromCents(econ.realisticEvHighAfterCostsCents),entryCost=authDollarsFromCents(econ.marketEvAfterCostsCents);
-    if(mech.eligible!==false&&economic==='FAVORABLE'&&realizedEv!=null)prose='Realistic after-cost EV '+authSigned(realizedEv)+(evLow!=null&&evHigh!=null?'; tested range '+authSigned(evLow)+' to '+authSigned(evHigh):'')+(entryCost!=null?'. Entry-cost benchmark '+authSigned(entryCost):'')+'.';
-    else if(mech.eligible!==false&&economic==='UNFAVORABLE'&&realizedEv!=null)prose='Realistic after-cost EV '+authSigned(realizedEv)+' at this price; use this as a comparison, not a recommendation.';
-    else if(mech.eligible!==false&&economic==='MIXED'&&realizedEv!=null)prose='Realistic after-cost EV '+authSigned(realizedEv)+', but the evidence or sensitivity is not strong enough for a recommendation.';
+    if(mech.eligible!==false&&economic==='FAVORABLE'&&realizedEv!=null)prose='Realized-volatility EV '+authSigned(realizedEv)+(evLow!=null&&evHigh!=null?'; tested range '+authSigned(evLow)+' to '+authSigned(evHigh):'')+(entryCost!=null?'. Market-implied EV '+authSigned(entryCost):'')+'.';
+    else if(mech.eligible!==false&&economic==='UNFAVORABLE'&&realizedEv!=null)prose='Realized-volatility EV '+authSigned(realizedEv)+' at this price; use this as a comparison, not a recommendation.';
+    else if(mech.eligible!==false&&economic==='MIXED'&&realizedEv!=null)prose='Realized-volatility EV '+authSigned(realizedEv)+', but the evidence or sensitivity is not strong enough for a recommendation.';
     if(authoritativeEvidenceIncomplete(c)&&authoritativeMissingEvidence(c).indexOf('history')>=0)prose='Daily price history is missing, so the realistic edge check is incomplete. Entry mechanics remain available.';
     return {verdict:verdict,word:word,checks:checks,prose:prose,dom:null};
   }
@@ -7391,7 +7404,7 @@ function fanList(){
     '<span class="fnum" title="Chance of profit">chance</span>'+
     '<span class="fnum fcol-stress" title="P/L under a sector gap shock">stress</span>'+
     '<span class="fnum fcol-cap" title="Capital or collateral this ties up">capital</span>'+
-    '<span class="fnum" title="Realistic after-cost expected value — the ranking number">EV</span></div>';
+    '<span class="fnum" title="Realized-volatility EV (after costs) — the ranking number">EV</span></div>';
   var rows=decide.cands.map(function(c){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'), gl=gapLoss(c);
     var gcls=gl==null?'':gl<=-15000?'bad':gl<=-6000?'warn':'ok', fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=c.authoritative?co.prose:c.why;
     var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
@@ -7405,7 +7418,7 @@ function fanList(){
       '<span class="fnum">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
       '<span class="fnum fcol-stress '+gcls+'">'+(gl==null?'—':money(gl))+'</span>'+
       '<span class="fnum fcol-cap">'+money(c.cap)+'</span>'+
-      '<span class="fev '+(evNum==null?'':evNum>=0?'pos':'neg')+'" title="Realistic after-cost EV">'+(evNum==null?'—':signed(evNum))+'</span>'+
+      '<span class="fev '+(evNum==null?'':evNum>=0?'pos':'neg')+'" title="Realized-volatility EV (after costs)">'+(evNum==null?'—':signed(evNum))+'</span>'+
       '</button>';
   }).join('');
   return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+'">'+head+'<div class="fanrows" tabindex="0" aria-label="'+decide.cands.length+' ranked ideas · scroll for genuine overflow">'+rows+'</div><div class="overflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div></div>';
@@ -7485,14 +7498,29 @@ function decCoherence(c){ var co=coherence(c);
   return '<div class="upanel cohpanel"><div class="lenshd"><span class="eyebrow">Coherence</span><span class="cohverdict '+co.verdict+'">'+co.word+'</span></div>'+
     '<div class="cohpips">'+pips+'</div>'+
     '<div class="cohprose">'+co.prose+' '+dom+'</div></div>'; }
+/* F (#9): the single EV-receipt component. Used by decisionBrief AND the inspect fit pane so the two
+   Decide surfaces render identical lanes. The realized-vol lane is the ONLY one that carries verdict
+   color; the market-implied lane is a muted cost benchmark with a persistent visible caption. */
+function evReceiptHTML(econ,opts){opts=opts||{};econ=econ||{};
+  var rv=econ.realizedVolEvAfterCostsCents,mk=econ.marketEvAfterCostsCents,lo=econ.realisticEvLowAfterCostsCents,hi=econ.realisticEvHighAfterCostsCents;
+  var rvTxt=rv==null?'—':signed(Number(rv)/100),mkTxt=mk==null?'—':signed(Number(mk)/100),
+      band=(lo==null||hi==null)?null:signed(Number(lo)/100)+' → '+signed(Number(hi)/100),
+      rvCls=rv==null?'':rv>=0?'pos':'neg',
+      caption=deskEsc(econ.marketEvRole||'Risk-neutral price/cost benchmark; discloses spread and fees, not an independent edge test.');
+  var primary='<div class="evlane primary '+rvCls+'"><span class="evlabel">Realized-volatility EV <small>(after costs)</small></span><b class="evval '+rvCls+'">'+rvTxt+'</b>'+(band?'<span class="evband" title="'+deskEsc(econ.realisticEvBasis||'Realized-volatility sensitivity')+'">sensitivity '+band+'</span>':'')+'</div>';
+  var benchmark='<div class="evlane muted"><span class="evlabel">Market-implied EV <small>(cost benchmark)</small></span><b class="evval">'+mkTxt+'</b><span class="evcaption">'+caption+'</span></div>';
+  var richness=opts.premiumRichness?'<div class="evlane muted"><span class="evlabel">Premium richness <small>(does not change the verdict)</small></span><b class="evval">'+deskEsc(opts.premiumRichness)+'</b><span class="evcaption">High premium alone never promotes adverse economics.</span></div>':'';
+  return '<div class="evreceipt'+(opts.compact?' compact':'')+'">'+primary+benchmark+richness+'</div>';
+}
 function decisionBrief(c){
   if(c.authoritative){
     var ass=authoritativeAssessment(c),co=ass.coherence||{},econ=ass.economics||{},risk=authoritativeRisk(c),raw=String(co.verdict||'UNAVAILABLE').toUpperCase(),
       tone=raw==='INCOHERENT'||String(econ.verdict||'').toUpperCase()==='UNFAVORABLE'?'bad':raw==='MIXED'?'warn':'',
       lead=econ.label||({COHERENT:'Fits the declared objective',MIXED:'Mixed fit on the declared objective',INCOHERENT:'Conflicts with the declared objective'}[raw]||'Assessment incomplete'),
-      tail=risk.tailLossCents==null?'—':money(-Number(risk.tailLossCents)/100),realistic=econ.realizedVolEvAfterCostsCents==null?'—':signed(Number(econ.realizedVolEvAfterCostsCents)/100),market=econ.marketEvAfterCostsCents==null?'—':signed(Number(econ.marketEvAfterCostsCents)/100),range=econ.realisticEvLowAfterCostsCents==null||econ.realisticEvHighAfterCostsCents==null?'—':signed(Number(econ.realisticEvLowAfterCostsCents)/100)+' → '+signed(Number(econ.realisticEvHighAfterCostsCents)/100),read=coherence(c).prose;
-    return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(raw.toLowerCase())+'</span></div><div class="dbread">'+deskEsc(read)+'</div><div class="dbfacts">'+
-      '<span class="dbfact">tail <b class="neg">'+tail+'</b></span><span class="dbfact">realistic EV <b class="'+(econ.realizedVolEvAfterCostsCents==null?'':econ.realizedVolEvAfterCostsCents>=0?'pos':'neg')+'">'+realistic+'</b></span><span class="dbfact" title="'+deskEsc(econ.realisticEvBasis||'Realized-volatility sensitivity')+'">sensitivity <b>'+range+'</b></span><span class="dbfact" title="'+deskEsc(econ.marketEvRole||'Risk-neutral price-consistency and cost benchmark')+'">entry-cost benchmark <b class="'+(econ.marketEvAfterCostsCents==null?'':econ.marketEvAfterCostsCents>=0?'pos':'neg')+'">'+market+'</b></span><span class="dbfact">evidence <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
+      tail=risk.tailLossCents==null?'—':money(-Number(risk.tailLossCents)/100),read=coherence(c).prose;
+    return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(raw.toLowerCase())+'</span></div><div class="dbread">'+deskEsc(read)+'</div>'+
+      evReceiptHTML(econ)+
+      '<div class="dbfacts"><span class="dbfact">tail <b class="neg">'+tail+'</b></span><span class="dbfact">evidence <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
   }
   return ''; /* display-only: every served candidate is authoritative; no fixture brief */
 }
@@ -7639,7 +7667,7 @@ function evidencePanel(c){
     '<div class="evgrid">'+evidenceRows+'</div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+receipt+'</div>';
 }
 function inspectPane(c){
-  if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+tailBlock(c)+fitBudgetPanel(c)+'</div>';
+  if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+(c.authoritative?evReceiptHTML((authoritativeAssessment(c)||{}).economics):'')+tailBlock(c)+fitBudgetPanel(c)+'</div>';
   if(decide.inspect==='mechanics') return '<div class="inspectpane">'+greekInspector(c)+'</div>';
   if(decide.inspect==='book') return '<div class="inspectpane">'+bookImpactPanel(c)+'</div>';
   return '<div class="inspectpane">'+evidencePanel(c)+'</div>';
