@@ -2778,8 +2778,10 @@
       var historySlot = objectSlot(group[2], symbol + ' observed history');
       var expirationsSlot = objectSlot(group[3], symbol + ' option expirations');
       var chainSlot = objectSlot(group[4], symbol + ' option chain');
-      try {
-        if (researchSlot.available) {
+      // G2 (#10): validate each slot INDEPENDENTLY. A lane/symbol failure on one slot demotes only
+      // that slot, leaving the others at whatever they resolved to — never one blanket demotion.
+      if (researchSlot.available) {
+        try {
           assertDocumentSymbol(researchSlot.value, symbol, 'Home Research');
           if (researchSlot.value.marketLane
               && String(researchSlot.value.marketLane).toUpperCase()
@@ -2790,30 +2792,36 @@
             || researchSlot.value.evidence && researchSlot.value.evidence.inputs
               && researchSlot.value.evidence.inputs.quote,
           before.identity.marketLane, 'Home Research quote');
+        } catch (error) {
+          researchSlot = unavailableSlot('research:' + symbol, researchSlot.path, error.message);
         }
-        if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Home News');
-        if (historySlot.available) assertDocumentSymbol(historySlot.value, symbol, 'Home History');
-        if (chainSlot.available) {
+      }
+      if (newsSlot.available) {
+        try { assertDocumentSymbol(newsSlot.value, symbol, 'Home News'); }
+        catch (error) { newsSlot = unavailableSlot('news:' + symbol, newsSlot.path, error.message); }
+      }
+      if (historySlot.available) {
+        try { assertDocumentSymbol(historySlot.value, symbol, 'Home History'); }
+        catch (error) { historySlot = unavailableSlot('history:' + symbol, historySlot.path, error.message); }
+      }
+      if (chainSlot.available) {
+        try {
           assertDocumentSymbol({ symbol: chainSlot.value.underlying }, symbol, 'Home option chain');
           assertEvidenceLane(chainSlot.value.evidence, before.identity.marketLane, 'Home option chain');
-        }
-      } catch (error) {
-        researchSlot = unavailableSlot('research:' + symbol, researchSlot.path, error.message);
-        newsSlot = unavailableSlot('news:' + symbol, newsSlot.path, error.message);
-        historySlot = unavailableSlot('history:' + symbol, historySlot.path, error.message);
-        expirationsSlot = unavailableSlot('expirations:' + symbol, expirationsSlot.path, error.message);
-        chainSlot = unavailableSlot('chain:' + symbol, chainSlot.path, error.message);
+        } catch (error) { chainSlot = unavailableSlot('chain:' + symbol, chainSlot.path, error.message); }
       }
       var current = data.homeContext || {}, rows = (current.rows || []).slice();
       var index = rows.findIndex(function (row) { return row.symbol === symbol; });
       var prior = index >= 0 ? rows[index] : { symbol: symbol };
       var row = {
         symbol: symbol,
+        // Each slot retains its prior resolved value on a transient miss, each carrying its own
+        // reason via `missing` — a demoted research slot never blanks stored news/history/chain.
         research: researchSlot.available ? researchSlot.value : prior.research || null,
-        news: newsSlot.available ? newsSlot.value : null,
-        history: historySlot.available ? historySlot.value : null,
-        expirations: expirationsSlot.available ? expirationsSlot.value : null,
-        chain: chainSlot.available ? chainSlot.value : null,
+        news: newsSlot.available ? newsSlot.value : prior.news || null,
+        history: historySlot.available ? historySlot.value : prior.history || null,
+        expirations: expirationsSlot.available ? expirationsSlot.value : prior.expirations || null,
+        chain: chainSlot.available ? chainSlot.value : prior.chain || null,
         missing: missingSlots([researchSlot, newsSlot, historySlot, expirationsSlot, chainSlot])
       };
       if (index >= 0) rows[index] = row; else rows.push(row);
