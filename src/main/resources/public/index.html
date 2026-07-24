@@ -3786,15 +3786,24 @@ function authPositionChainHTML(p,quote){
   var ctx=p._chainCtx&&p._chainCtx.symbol===p.sym?p._chainCtx:null;
   var chain=ctx&&ctx.row&&ctx.row.chain,exp=chain&&chain.expiration;
   var head='<div class="lenshd"><span class="eyebrow">Option chain</span><span class="hint">'+(exp?'bid / ask · '+deskEsc(exp):'bid / ask')+'</span></div>';
-  if(ctx&&ctx.phase==='ready'&&chain)return head+authHomeChainHTML({chain:chain},authNumber(quote&&quote.last)||p.spot||0,p.sym);
+  if(ctx&&ctx.phase==='ready'){
+    /* H (#11): ready-but-empty is a TERMINAL state, mirroring authHomeChainHTML — never the loading
+       string. authHomeChainHTML itself renders its no-rows terminal message when the chain resolved
+       but carries no strikes; a null chain gets the same honest terminal here. */
+    if(chain)return head+authHomeChainHTML({chain:chain},authNumber(quote&&quote.last)||p.spot||0,p.sym);
+    return head+'<div class="backendnotice">No live option chain for this symbol right now — price history and research remain ready.</div>';
+  }
   if(ctx&&ctx.phase==='error')return head+'<div class="backendnotice">'+deskEsc(ctx.error||'The option chain is unavailable for this symbol.')+'</div>';
-  return head+'<div class="backendnotice">Loading the option chain…</div>';
+  /* "Loading…" is reserved strictly for an in-flight load (or the pre-initiation first paint that
+     authEnsurePositionChain resolves on the same tick). */
+  if(!ctx||ctx.phase==='loading')return head+'<div class="backendnotice">Loading the option chain…</div>';
+  return head+'<div class="backendnotice">The option chain is unavailable for this symbol.</div>';
 }
 function authEnsurePositionChain(p){
   var ctx=p._chainCtx;
   if(ctx&&ctx.symbol===p.sym&&(ctx.phase==='ready'||ctx.phase==='loading'))return;
   ctx={symbol:p.sym,phase:'loading',row:null,error:null};p._chainCtx=ctx;
-  if(!(deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.symbolContext)){ctx.phase='error';ctx.error='Market context is unavailable.';return;}
+  if(!(deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.symbolContext)){ctx.phase='error';ctx.error='Market context is unavailable.';authPatchPositionChain(p);return;}
   window.DeskBackend.symbolContext(p.sym).then(function(row){
     if(p._chainCtx!==ctx)return;ctx.phase='ready';ctx.row=row;authPatchPositionChain(p);
   }).catch(function(error){
