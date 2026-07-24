@@ -193,6 +193,41 @@ class MarketDataServiceTest {
         assertThat(provider.calls).hasValue(2);
     }
 
+    /** A live latest-quote read succeeds while the historical candle range fails — the M2-(c) split. */
+    static final class QuoteOkRangeBrokenProvider implements MarketDataProvider {
+        private final ObservedFixtureProvider inner = new ObservedFixtureProvider(CLOCK);
+        @Override public String name() { return "split"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES, Domain.CANDLES); }
+        @Override public List<SymbolMatch> lookup(String q) { return inner.lookup(q); }
+        @Override public Optional<Quote> quote(String s) { return inner.quote(s); }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) {
+            throw new RuntimeException("historical range unavailable");
+        }
+    }
+
+    @Test
+    void greenQuoteAndFailedHistoricalRangeSurfaceAsTwoDistinctConditions() {
+        MarketDataService svc = new MarketDataService(List.of(new QuoteOkRangeBrokenProvider()), List.of(), List.of());
+        assertThat(svc.quote("AAPL")).isPresent(); // latest-quote read succeeds
+        assertThat(svc.candleSeriesFromProviders("AAPL", LocalDate.of(2020, 1, 1), LocalDate.of(2020, 6, 1))
+                .candles()).isEmpty(); // historical range read fails
+
+        Map<String, List<ProviderStatusInfo>> status = svc.status();
+        ProviderStatusInfo quote = status.get("QUOTES").stream()
+                .filter(s -> s.provider().equals("split")).findFirst().orElseThrow();
+        assertThat(quote.condition()).isEqualTo("QUOTE");
+        assertThat(quote.state()).isEqualTo("OK");
+
+        // The failed historical range is a SEPARATE condition — it is not masked by the green quote,
+        // and it is not collapsed into a single CANDLES verdict.
+        ProviderStatusInfo range = status.get("CANDLES").stream()
+                .filter(s -> s.provider().equals("split")).findFirst().orElseThrow();
+        assertThat(range.condition()).isEqualTo("HISTORICAL_RANGE");
+        assertThat(range.state()).isEqualTo("ERROR");
+    }
+
     @Test
     void observedFailureStaysUnavailableWhileExplicitDemoStillWorks() {
         FixtureProvider fixture = new FixtureProvider(CLOCK);

@@ -134,7 +134,8 @@ public final class MarketDataService {
         for (MarketDataProvider p : this.providers) {
             for (Domain d : p.domains()) {
                 if (d == Domain.RATES || d == Domain.NEWS) continue; // reported via dedicated lists
-                statusByKey.putIfAbsent(key(p.name(), d), ProviderStatusInfo.unknown(p.name(), d.name()));
+                statusByKey.putIfAbsent(key(p.name(), d),
+                        ProviderStatusInfo.unknown(p.name(), d.name(), ReadCondition.nameOrNull(ReadCondition.forDomain(d))));
             }
         }
         for (NewsFilingsProvider p : this.newsProviders) {
@@ -831,41 +832,73 @@ public final class MarketDataService {
 
     // ---- Status bookkeeping ----
 
-    private static String key(String provider, Domain d) { return provider + "|" + d; }
-
-    private void recordOk(String provider, Domain d) {
-        statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "OK", null, System.currentTimeMillis(), null),
-                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), "OK", null, fresh.lastSuccessEpochMs(), old.lastErrorEpochMs()));
+    private static String key(String provider, Domain d) {
+        return key(provider, d, ReadCondition.forDomain(d));
     }
 
-    private void recordEmpty(String provider, Domain d) {
-        statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "EMPTY", "no data for last request", null, null),
+    private static String key(String provider, Domain d, ReadCondition condition) {
+        return provider + "|" + d + "|" + (condition == null ? "" : condition.name());
+    }
+
+    private void recordOk(String provider, Domain d) { recordOk(provider, d, ReadCondition.forDomain(d)); }
+
+    private void recordOk(String provider, Domain d, ReadCondition condition) {
+        String c = ReadCondition.nameOrNull(condition);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, "OK", null, System.currentTimeMillis(), null),
+                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), c, "OK", null, fresh.lastSuccessEpochMs(), old.lastErrorEpochMs()));
+    }
+
+    private void recordEmpty(String provider, Domain d) { recordEmpty(provider, d, ReadCondition.forDomain(d)); }
+
+    private void recordEmpty(String provider, Domain d, ReadCondition condition) {
+        String c = ReadCondition.nameOrNull(condition);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, "EMPTY", "no data for last request", null, null),
                 (old, fresh) -> "OK".equals(old.state())
                         ? old // an earlier success outranks a later miss for health display
-                        : new ProviderStatusInfo(provider, d.name(), "EMPTY", fresh.detail(), old.lastSuccessEpochMs(), old.lastErrorEpochMs()));
+                        : new ProviderStatusInfo(provider, d.name(), c, "EMPTY", fresh.detail(), old.lastSuccessEpochMs(), old.lastErrorEpochMs()));
     }
 
     private void recordError(String provider, Domain d, Exception e) {
-        recordError(provider, d, e, null);
+        recordError(provider, d, e, null, ReadCondition.forDomain(d));
     }
 
     private void recordError(String provider, Domain d, Exception e, String requestContext) {
+        recordError(provider, d, e, requestContext, ReadCondition.forDomain(d));
+    }
+
+    private void recordError(String provider, Domain d, Exception e, String requestContext, ReadCondition condition) {
         String detail = publicProviderFailure(e);
         String diagnostic = e instanceof io.liftandshift.strikebench.market.providers.Http.ProviderHttpException
                 ? e.getMessage()
                 : detail;
+        String c = ReadCondition.nameOrNull(condition);
+        // Structured fields (provider · domain · condition · requestContext) so the read taxonomy is
+        // visible in logs, not just the collapsed domain.
         if (requestContext == null || requestContext.isBlank()) {
-            log.warn("Market source {} could not serve {}: {}", provider, d, diagnostic);
+            log.warn("Market source {} could not serve {}/{}: {}", provider, d, c, diagnostic);
         } else {
-            log.warn("Market source {} could not serve {} for {}: {}",
-                    provider, d, requestContext, diagnostic);
+            log.warn("Market source {} could not serve {}/{} for {}: {}",
+                    provider, d, c, requestContext, diagnostic);
         }
-        log.debug("Market source failure detail for " + provider + " " + d, e);
-        statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "ERROR", detail, null, System.currentTimeMillis()),
-                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), "ERROR", fresh.detail(), old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
+        log.debug("Market source failure detail for " + provider + " " + d + "/" + c, e);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, "ERROR", detail, null, System.currentTimeMillis()),
+                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), c, "ERROR", fresh.detail(), old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
+    }
+
+    /**
+     * Records a typed, NON-failure read condition (for example range-absence PRE_HISTORY or a local
+     * BUDGET_EXHAUSTED denial): a distinct state that must NOT read as a provider outage and never
+     * masks an OK read of a different condition.
+     */
+    private void recordCondition(String provider, Domain d, ReadCondition condition, String state, String detail) {
+        String c = ReadCondition.nameOrNull(condition);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, state, detail, null, System.currentTimeMillis()),
+                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), c, state, fresh.detail(),
+                        old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
     }
 
     static String publicProviderFailure(Exception e) {

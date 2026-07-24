@@ -125,6 +125,10 @@ class ApiIntegrationTest {
         assertThat(json.get("ok").asBoolean()).isTrue();
         assertThat(json.get("domains").has("QUOTES")).isTrue();
         assertThat(json.get("fixturesOnly").asBoolean()).isTrue();
+        // M2-(c): each provider health entry carries its typed read condition on the wire.
+        JsonNode quotes = json.at("/domains/QUOTES");
+        assertThat(quotes.isArray() && quotes.size() > 0).isTrue();
+        assertThat(quotes.get(0).get("condition").asText()).isEqualTo("QUOTE");
     }
 
     @Test
