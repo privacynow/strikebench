@@ -622,6 +622,12 @@
     return value;
   }
 
+  function clearSessionRequestId(identity) {
+    // E (#6): drop the persisted create key so a subsequent Retry cannot reissue a key that the
+    // server has already bound to a different create input (a permanent 409).
+    try { window.sessionStorage.removeItem(sessionRequestKey(identity)); } catch (ignored) { /* storage can be disabled */ }
+  }
+
   function sameNullable(left, right) {
     if (left == null || left === '') return right == null || right === '';
     if (typeof left === 'number') return Number(right) === left;
@@ -766,19 +772,49 @@
       });
     }
     if (!plan) {
-      plan = await createPlan(false);
+      // The session-scoped create key can legitimately outlive the Plan it originally created:
+      // that Plan may no longer match this idea's declarations, OR it may have been frozen since
+      // (a trade was placed, so it is now a Position, not a mutable working inquiry). The
+      // idempotent create then either returns the stale Plan (200) or, when the create INPUT drifted
+      // under the same key, rejects with a hard 409 ("clientRequestId was already used for a
+      // different plan request"). Both need the SAME recovery: re-list so a concurrent *mutable*
+      // Plan wins, otherwise rotate the create key exactly once and retry once. Reusing the stale
+      // key would make Retry a permanent loop.
+      async function recoverFromStaleCreateKey() {
+        var relisted = await api.getFresh('/api/plans');
+        if (seq !== state.requestSeq) return { superseded: true };
+        var match = await freshestMatchingPlan(relisted && relisted.plans, identity, seq);
+        if (match) return { plan: match };
+        if (seq !== state.requestSeq) return { superseded: true };
+        return { plan: await createPlan(true) };
+      }
+      try {
+        plan = await createPlan(false);
+      } catch (createError) {
+        // Only the clientRequestId-conflict 409 is ours. A PlanOutcomeController expectedVersion
+        // optimistic-lock 409 is a different mechanism and must still surface unchanged.
+        if (!createError || createError.status !== 409
+            || !/clientRequestId/i.test(String(createError.message || ''))) throw createError;
+        // CLEAR the failing key up front so any user Retry can never reissue it, THEN run the
+        // single rotated recovery. If it still 409s, surface a DISTINCT terminal error — no loop.
+        clearSessionRequestId(identity);
+        var recovered;
+        try {
+          recovered = await recoverFromStaleCreateKey();
+        } catch (retryError) {
+          if (retryError && retryError.status === 409) {
+            throw new Error('This idea could not be started: the plan request keeps conflicting on the server. Reload the desk before trying again.');
+          }
+          throw retryError;
+        }
+        if (recovered.superseded) return null;
+        plan = recovered.plan;
+      }
       if (seq !== state.requestSeq) return null;
       if (!samePlan(plan, identity) || !mutableWorkingPlan(plan)) {
-        // The session-scoped create key can legitimately outlive the Plan it originally created:
-        // that Plan may no longer match this idea's declarations, OR it may have been frozen since
-        // (a trade was placed, so it is now a Position, not a mutable working inquiry). In both
-        // cases the idempotent create returns the stale Plan. Re-list first so a concurrent
-        // *mutable* Plan wins, otherwise rotate the create key exactly once to mint a fresh Plan.
-        // Reusing the stale key would make Retry a permanent loop on the frozen Plan.
-        var relisted = await api.getFresh('/api/plans');
-        if (seq !== state.requestSeq) return null;
-        plan = await freshestMatchingPlan(relisted && relisted.plans, identity, seq);
-        if (!plan) plan = await createPlan(true);
+        var recoveredStale = await recoverFromStaleCreateKey();
+        if (recoveredStale.superseded) return null;
+        plan = recoveredStale.plan;
       }
     }
     if (seq !== state.requestSeq) return null;
