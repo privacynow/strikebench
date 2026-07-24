@@ -37,7 +37,9 @@ public final class PositionLifecycleDecisionService {
     private static final Set<String> ACTIONS = Set.of("HOLD", "CLOSE_ONE", "CLOSE_K", "CLOSE_ALL",
             "ASSIGNMENT", "CALL_AWAY", "ROLL", "NO_ACTION");
 
-    public enum Verdict { KEEP, HARVEST, REDUCE, DEFEND, ACCEPT_ASSIGNMENT }
+    /** NEEDS_EVIDENCE is NOT an actionable verdict — it is the honest "insufficient evidence to
+     *  decide" state that must win precedence over any hold/defend/harvest recommendation. */
+    public enum Verdict { KEEP, HARVEST, REDUCE, DEFEND, ACCEPT_ASSIGNMENT, NEEDS_EVIDENCE }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Dimension(String name, String status, Verdict policySignal, List<String> reasons) {
@@ -327,8 +329,8 @@ public final class PositionLifecycleDecisionService {
         return close.executable()
                 ? dimension("MECHANICS", "PASS", null,
                 "Executable close evidence is available at the opposite book side with fees.")
-                : dimension("MECHANICS", "BLOCKED", Verdict.DEFEND,
-                "The position cannot be responsibly managed from the current book: "
+                : dimension("MECHANICS", "BLOCKED", Verdict.NEEDS_EVIDENCE,
+                "The current mark is unavailable, so no action can be responsibly recommended: "
                         + close.unavailableReason());
     }
 
@@ -637,6 +639,7 @@ public final class PositionLifecycleDecisionService {
                     : reduction.quantityToClose() + " package(s)") + "; the full Book was recomputed at each quantity.";
             case DEFEND -> "DEFEND: resolve the named mechanical, capacity, hard-limit, or tail trigger before treating carry as permission to hold.";
             case ACCEPT_ASSIGNMENT -> "ACCEPT ASSIGNMENT is active near expiry and fits the exact declared share-and-dollar capacity; economics and Book risk remain visible.";
+            case NEEDS_EVIDENCE -> "NO VERDICT: the current mark is unavailable, so this position cannot be evaluated. Resolve the named missing input before any keep, defend, or harvest decision — no action is recommended.";
         };
     }
 
