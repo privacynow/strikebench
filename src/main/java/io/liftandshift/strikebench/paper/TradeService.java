@@ -2683,12 +2683,17 @@ public final class TradeService {
         // thetaCentsPerDay, vegaCentsPerPoint), aggregated from the same per-leg marks already priced.
         var packageGreeks = packageGreeks(snaps, qty);
         if (packageGreeks != null) out.put("greeks", packageGreeks);
-        // The ±1σ expected move to the nearest expiry (same vol/time basis as the map) — the UI
-        // draws it on the payoff chart so 'shorts inside the expected move' is VISIBLE, not prose.
-        double sdMove = ivAvg * Math.sqrt(t);
+        // The ±1σ expected move to the nearest expiry — THE ONE canonical risk-neutral terminal
+        // (LognormalTerminal session-clocked + the shared 0.994 width, exactly as
+        // SimulationEngine.MarketImpliedRange and the /expected-move endpoint compute it), not a
+        // second exp(±iv·√t) band. The UI draws it on the payoff chart so 'shorts inside the
+        // expected move' is VISIBLE, not prose.
+        var emTerm = io.liftandshift.strikebench.pricing.LognormalTerminal.of(
+                spot, ivAvg, Math.max(1, tte.sessions()) / 252.0, rfr);
+        double emWidth = emTerm.sd() * 0.994457883209753;
         Map<String, Object> em = new LinkedHashMap<>();
-        em.put("lowCents", Math.round(spot * Math.exp(-sdMove) * 100));
-        em.put("highCents", Math.round(spot * Math.exp(sdMove) * 100));
+        em.put("lowCents", Math.round(Math.exp(emTerm.mu() - emWidth) * 100));
+        em.put("highCents", Math.round(Math.exp(emTerm.mu() + emWidth) * 100));
         em.put("oneSessionCents", Math.round(spot * ivAvg * Math.sqrt(1.0 / 252.0) * 100));
         out.put("expectedMove", em);
         // R3: three clocks, separately — the data's own stamp, and when WE judged it. (fetchedAt
