@@ -2827,7 +2827,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .histchart{width:100%;height:172px;min-height:0;display:block;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
 .histchart text{font-family:var(--mono);font-size:10px;fill:var(--faint)}
 .histstrip{width:100%;height:14px;min-height:0;display:block;cursor:grab}
-.histread{min-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.histread{min-height:14px;white-space:normal}
 /* real floor, not min-height:0 — under font-metric pressure (Safari wraps the control rows
    wider than Chromium) a 0-floor lets flex crush the chart to a sliver and clip the chain */
 .authhomehistory .histchart{min-height:112px;height:168px}
@@ -2944,6 +2944,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .scoutidlefield{grid-template-columns:1fr}.scoutidlecard{background:linear-gradient(145deg,var(--panel-2),var(--accent-wash))}
 .opportunityprompt .scoutprimary{flex:none;min-width:170px;min-height:34px;font-weight:800}
 .authmarketrow span small{display:inline-block;margin-right:6px;padding:1px 4px;border:1px solid var(--line-soft);border-radius:4px;color:var(--accent);font-size:9px}
+/* Watch row's middle cell crams sector-group badge + change + freshness on one nowrap line;
+   in the narrow (~200px) watch column that clipped the sector name AND the freshness tag.
+   Stack it into two lines so every fact stays readable without widening the panel. */
+.authmarketrow .authmarketfocus>span{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.2}
+.authmarketrow .authmarketfocus>span small{white-space:normal;max-width:100%;margin-right:0}
 
 /* Sparse books do not reserve empty roster/risk columns. A one-position Book carries lifecycle
    and Greeks in its compact roster cell; the aggregate future and live market keep the top row. */
@@ -5118,7 +5123,7 @@ function authBookFanLegendHTML(){
   return book+rows;
 }
 function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Whole book · median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('worst 5% '+signed(terminal.p5)+' → best 5% '+signed(terminal.p95));parts.push('hover a colored path for that position');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored paths are single-position projections';}
-function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'BOOK line = everything together · colors = single positions':'single-position projections · never summed';}
+function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'BOOK line = all together · colors = each position':'single-position projections · never summed';}
 function bookFanReadoutText(id){
   var p=byId[id],slot=BOOK_FAN.rows[id];
   if(!p||!slot||slot.phase!=='ready'||!slot.frames.length)return bookFanPrompt();
