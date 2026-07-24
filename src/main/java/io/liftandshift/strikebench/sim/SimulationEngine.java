@@ -142,7 +142,28 @@ public final class SimulationEngine {
     /** A separate risk-neutral lens from the options market, never blended with user-scenario odds. */
     public record MarketImpliedRange(double atmIv, String expiration, int horizonSessions,
                                      int expirationCalendarDays, double p16, double p50, double p84,
-                                     String basis) {}
+                                     String basis) {
+        /**
+         * THE risk-neutral 1σ expected-move range from ATM IV, session-clocked through the one
+         * {@link io.liftandshift.strikebench.pricing.LognormalTerminal}. Returns null when IV/spot
+         * are invalid (callers hide the cone rather than fabricate one). Shared by the ensemble
+         * decision map and the standalone /expected-move endpoint — one computation, not two.
+         */
+        public static MarketImpliedRange of(double spot, double atmIv, int horizonSessions,
+                                            String expiration, int expirationCalendarDays, double riskFreeRate) {
+            if (!(atmIv > 0) || !Double.isFinite(atmIv) || !(spot > 0)) return null;
+            int sessions = Math.max(1, horizonSessions);
+            io.liftandshift.strikebench.pricing.LognormalTerminal term =
+                    io.liftandshift.strikebench.pricing.LognormalTerminal.of(spot, atmIv, sessions / 252.0, riskFreeRate);
+            double width = term.sd() * 0.994457883209753;
+            return new MarketImpliedRange(atmIv, expiration, sessions, expirationCalendarDays,
+                    round2(Math.exp(term.mu() - width)),
+                    round2(Math.exp(term.mu())), round2(Math.exp(term.mu() + width)),
+                    "Risk-neutral lognormal range from ATM IV at the listed " + expiration + " expiry ("
+                            + expirationCalendarDays + " calendar days away), scaled over the requested "
+                            + sessions + " trading sessions; market pricing, not a forecast.");
+        }
+    }
 
     /** Immutable identity of the exact path matrix shown to the user. */
     public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
@@ -340,20 +361,10 @@ public final class SimulationEngine {
 
     private static MarketImpliedRange marketImpliedRange(double spot, int horizonSessions, MarketVolInput input,
                                                           double riskFreeRate) {
-        if (input == null || !(input.atmIv() > 0) || !Double.isFinite(input.atmIv())) return null;
-        double iv = input.atmIv();
-        int sessions = Math.max(1, horizonSessions);
-        // THE one lognormal terminal (session-clocked here); the range is exp(mu ± width).
-        io.liftandshift.strikebench.pricing.LognormalTerminal term =
-                io.liftandshift.strikebench.pricing.LognormalTerminal.of(spot, iv, sessions / 252.0, riskFreeRate);
-        double width = term.sd() * 0.994457883209753;
-        String expiry = input.expiration() == null ? null : input.expiration().toString();
-        return new MarketImpliedRange(iv, expiry, sessions, input.expirationCalendarDays(),
-                round2(Math.exp(term.mu() - width)),
-                round2(Math.exp(term.mu())), round2(Math.exp(term.mu() + width)),
-                "Risk-neutral lognormal range from ATM IV at the listed " + expiry + " expiry ("
-                        + input.expirationCalendarDays() + " calendar days away), scaled over the requested "
-                        + sessions + " trading sessions; market pricing, not a forecast.");
+        if (input == null) return null;
+        return MarketImpliedRange.of(spot, input.atmIv(), horizonSessions,
+                input.expiration() == null ? null : input.expiration().toString(),
+                input.expirationCalendarDays(), riskFreeRate);
     }
 
     private static DecisionMap decisionMap(double[][] paths, double spot, int stepsPerDay,
