@@ -121,7 +121,7 @@ public final class PositionsService {
 
     /** The account's market lane: a SIMULATION account's shares price against ITS world. */
     private String worldOf(String accountId) {
-        var rows = db.query("SELECT world_id,type FROM accounts WHERE id=?",
+        var rows = db.query(AccountService.LANE_SQL,
                 r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
         if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
         return rows.getFirst();
