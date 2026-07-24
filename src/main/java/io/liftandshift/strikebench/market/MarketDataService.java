@@ -109,6 +109,9 @@ public final class MarketDataService {
     private final AtomicLong cacheGeneration = new AtomicLong();
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
+    // Per-symbol earliest-available boundary learned from provider range-absence (PRE_HISTORY). A
+    // backfill orchestrator reads this to persist a durable clamp; not a substitute for it.
+    private final Map<String, java.time.LocalDate> preHistoryBoundaries = new ConcurrentHashMap<>();
 
     public MarketDataService(List<MarketDataProvider> providers,
                              List<NewsFilingsProvider> newsProviders,
@@ -608,6 +611,8 @@ public final class MarketDataService {
                     continue;
                 }
                 recordEmpty(p.name(), Domain.CANDLES);
+            } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
+                recordPreHistory(p.name(), norm(symbol), rue);
             } catch (Exception e) {
                 recordError(p.name(), Domain.CANDLES, e,
                         "symbol " + norm(symbol) + " · " + from + " to " + to);
@@ -644,6 +649,11 @@ public final class MarketDataService {
             }
             recordOk(provider.name(), Domain.CANDLES);
             return series;
+        } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
+            // Range-absence is not a failure — record it as PRE_HISTORY and return empty so the
+            // backfill treats it as "nothing older to fetch", not an outage to retry.
+            recordPreHistory(provider.name(), norm(symbol), rue);
+            return CandleSeries.EMPTY;
         } catch (RuntimeException e) {
             recordError(provider.name(), Domain.CANDLES, e,
                     "symbol " + norm(symbol) + " · " + from + " to " + to);
@@ -893,6 +903,23 @@ public final class MarketDataService {
      * BUDGET_EXHAUSTED denial): a distinct state that must NOT read as a provider outage and never
      * masks an OK read of a different condition.
      */
+    /** Learns the symbol's earliest-available boundary and records a PRE_HISTORY (non-failure) state. */
+    private void recordPreHistory(String provider, String symbol,
+                                  io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
+        java.time.LocalDate earliest = rue.earliestAvailable();
+        if (earliest != null) {
+            preHistoryBoundaries.merge(symbol, earliest, (a, b) -> a.isAfter(b) ? a : b);
+        }
+        java.time.LocalDate boundary = preHistoryBoundaries.get(symbol);
+        recordCondition(provider, Domain.CANDLES, ReadCondition.HISTORICAL_RANGE, "PRE_HISTORY",
+                boundary == null ? "no data this far back" : "coverage begins " + boundary);
+    }
+
+    /** The earliest date any provider has said it can serve for this symbol, learned from range-absence. */
+    public java.util.Optional<java.time.LocalDate> preHistoryBoundary(String symbol) {
+        return java.util.Optional.ofNullable(preHistoryBoundaries.get(norm(symbol)));
+    }
+
     private void recordCondition(String provider, Domain d, ReadCondition condition, String state, String detail) {
         String c = ReadCondition.nameOrNull(condition);
         statusByKey.merge(key(provider, d, condition),

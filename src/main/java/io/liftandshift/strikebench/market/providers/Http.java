@@ -82,16 +82,39 @@ public final class Http {
         return s.length() > 200 ? s.substring(0, 200) : s;
     }
 
-    public static final class ProviderHttpException extends RuntimeException {
+    public static class ProviderHttpException extends RuntimeException {
         private final int statusCode;
+        private final String body;
 
         public ProviderHttpException(String url, int status, String detail) {
             super("HTTP " + (status > 0 ? status : "error") + " from " + redact(url)
                     + (detail == null || detail.isBlank() ? "" : ": " + redact(detail)));
             this.statusCode = status;
+            this.body = detail;
         }
 
         public int statusCode() { return statusCode; }
+
+        /** The raw (truncated) response body, retained for deterministic error-body classification. */
+        public String body() { return body; }
+    }
+
+    /**
+     * A deterministic "no data exists for this date range" response (e.g. a request that predates a
+     * symbol's first trading day). It is a 400 like any other bad request, so it does NOT trip the
+     * provider breaker, but it additionally carries the earliest date the source can serve, so a
+     * caller can clamp future requests instead of re-spending the allowance on an impossible range.
+     */
+    public static final class RangeUnavailableException extends ProviderHttpException {
+        private final java.time.LocalDate earliestAvailable;
+
+        public RangeUnavailableException(String url, String detail, java.time.LocalDate earliestAvailable) {
+            super(url, 400, detail);
+            this.earliestAvailable = earliestAvailable;
+        }
+
+        /** Earliest date the source can serve for this symbol/interval, or null if unspecified. */
+        public java.time.LocalDate earliestAvailable() { return earliestAvailable; }
     }
 
     /** Provider errors may reach debug logs; credentials in query strings or JSON stay redacted. */

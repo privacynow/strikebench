@@ -52,6 +52,51 @@ class UnderlyingBackfillTest {
         assertThat(res.note()).contains("refused");
     }
 
+    /** A provider whose whole requested range predates coverage: it throws typed range-absence. */
+    private static final class PreHistoryProvider implements MarketDataProvider {
+        private final LocalDate coverageStart;
+        PreHistoryProvider(LocalDate coverageStart) { this.coverageStart = coverageStart; }
+        @Override public String name() { return "yahoo"; }
+        @Override public java.util.Set<io.liftandshift.strikebench.market.Domain> domains() {
+            return java.util.Set.of(io.liftandshift.strikebench.market.Domain.CANDLES);
+        }
+        @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String s) {
+            return java.util.Optional.empty();
+        }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(String s, LocalDate e) {
+            return java.util.Optional.empty();
+        }
+        @Override public List<io.liftandshift.strikebench.model.Candle> candles(String s, LocalDate f, LocalDate t) {
+            throw new io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException(
+                    "http://test", "Data doesn't exist for startDate", coverageStart);
+        }
+    }
+
+    @Test
+    void preHistoryBackfillPersistsTheBoundaryAndClampsFuturePlansInsteadOfFailing() {
+        db = TestDb.fresh();
+        MarketDataService market = new MarketDataService(
+                List.of(new PreHistoryProvider(LocalDate.parse("2026-06-15"))),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        UnderlyingBackfill bf = new UnderlyingBackfill(market, db, clock);
+
+        // The backfill returns a normal (non-failed) result — range-absence is not an outage.
+        var res = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"), "yahoo", null, null);
+        assertThat(res.rows()).isZero();
+
+        // The learned boundary is persisted durably.
+        assertThat(db.query("SELECT earliest_available::text ea FROM data_sync_cursor "
+                        + "WHERE symbol='AAPL' AND earliest_available IS NOT NULL",
+                r -> r.str("ea")).getFirst()).isEqualTo("2026-06-15");
+
+        // A future plan whose whole span predates coverage never re-spends the allowance.
+        MissingRangePlanner planner = new MissingRangePlanner(db);
+        assertThat(planner.plan("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-14"), "yahoo")
+                .complete()).isTrue();
+    }
+
     @Test
     void backfillIsIdempotent() {
         UnderlyingBackfill bf = backfiller(true);

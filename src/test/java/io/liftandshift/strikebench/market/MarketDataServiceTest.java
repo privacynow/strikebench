@@ -207,6 +207,34 @@ class MarketDataServiceTest {
         }
     }
 
+    /** Candle reads that predate the symbol's coverage throw the typed range-absence exception. */
+    static final class PreHistoryCandleProvider implements MarketDataProvider {
+        @Override public String name() { return "prehistory"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.CANDLES); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String s) { return Optional.empty(); }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) {
+            throw new io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException(
+                    "http://test", "Data doesn't exist for startDate", LocalDate.parse("2010-01-04"));
+        }
+    }
+
+    @Test
+    void rangeAbsenceRecordsPreHistoryNotErrorAndLearnsTheCoverageBoundary() {
+        MarketDataService svc = new MarketDataService(List.of(new PreHistoryCandleProvider()), List.of(), List.of());
+        assertThat(svc.candleSeriesFromProviders("AAPL", LocalDate.parse("2000-01-01"), LocalDate.parse("2000-06-01"))
+                .candles()).isEmpty();
+
+        ProviderStatusInfo candles = svc.status().get("CANDLES").stream()
+                .filter(s -> s.provider().equals("prehistory")).findFirst().orElseThrow();
+        assertThat(candles.condition()).isEqualTo("HISTORICAL_RANGE");
+        assertThat(candles.state()).isEqualTo("PRE_HISTORY"); // NOT ERROR — the breaker is untouched
+        assertThat(candles.detail()).contains("coverage begins 2010-01-04");
+        assertThat(svc.preHistoryBoundary("AAPL")).contains(LocalDate.parse("2010-01-04"));
+    }
+
     @Test
     void greenQuoteAndFailedHistoricalRangeSurfaceAsTwoDistinctConditions() {
         MarketDataService svc = new MarketDataService(List.of(new QuoteOkRangeBrokenProvider()), List.of(), List.of());

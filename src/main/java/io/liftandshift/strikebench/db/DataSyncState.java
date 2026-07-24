@@ -23,7 +23,7 @@ public final class DataSyncState {
     public record Cursor(String userId, String source, String symbol, String status,
                          LocalDate requestedFrom, LocalDate requestedTo, LocalDate lastSuccessDate,
                          String lastAttemptAt, String nextAllowedAt, int failures,
-                         long rowsWritten, String note, String updatedAt) {}
+                         long rowsWritten, String note, String updatedAt, LocalDate earliestAvailable) {}
 
     public record Schedule(String userId, boolean enabled, String source, List<String> symbols,
                            int years, LocalDate lastRunDate,
@@ -103,11 +103,44 @@ public final class DataSyncState {
     public List<Cursor> cursors(String ownerId) {
         return db.query("SELECT user_id,source_key,symbol,status,requested_from::text rf,requested_to::text rt,"
                         + "last_success_date::text ls,last_attempt_at::text la,next_allowed_at::text na,"
-                        + "failure_count,rows_written,note,updated_at::text ua FROM data_sync_cursor "
+                        + "failure_count,rows_written,note,updated_at::text ua,earliest_available::text ea FROM data_sync_cursor "
                         + "WHERE user_id=? ORDER BY updated_at DESC",
                 r -> new Cursor(r.str("user_id"), r.str("source_key"), r.str("symbol"), r.str("status"),
                         date(r.str("rf")), date(r.str("rt")), date(r.str("ls")), r.str("la"), r.str("na"),
-                        r.intv("failure_count"), r.lng("rows_written"), r.str("note"), r.str("ua")), OwnerScope.id(ownerId));
+                        r.intv("failure_count"), r.lng("rows_written"), r.str("note"), r.str("ua"),
+                        date(r.str("ea"))), OwnerScope.id(ownerId));
+    }
+
+    /**
+     * Records a durable pre-history boundary for a (source, symbol) so the missing-range planner
+     * clamps future requests to >= this date. Monotonic: an existing later boundary is kept. The
+     * boundary is a market fact, so it is stored under the SYSTEM scope and read market-wide.
+     */
+    public void recordEarliestAvailable(String source, String symbol, LocalDate earliest) {
+        if (earliest == null) return;
+        String owner = ensureOwner(OwnerScope.SYSTEM);
+        String src = source == null || source.isBlank() ? "auto" : source.trim().toLowerCase(Locale.ROOT);
+        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        db.exec("INSERT INTO data_sync_cursor(user_id,source_key,symbol,earliest_available) VALUES (?,?,?,?) "
+                        + "ON CONFLICT(user_id,source_key,symbol,domain,interval_key) DO UPDATE SET "
+                        + "earliest_available=CASE WHEN data_sync_cursor.earliest_available IS NULL THEN excluded.earliest_available "
+                        + "ELSE greatest(data_sync_cursor.earliest_available,excluded.earliest_available) END,"
+                        + "updated_at=now()",
+                owner, src, sym, earliest);
+    }
+
+    /** The durable earliest-available boundary for a (source, symbol), market-wide; null if unknown. */
+    public LocalDate earliestAvailable(String source, String symbol) {
+        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String src = source == null || source.isBlank() || "auto".equalsIgnoreCase(source)
+                ? null : source.trim().toLowerCase(Locale.ROOT);
+        List<LocalDate> rows = src == null
+                ? db.query("SELECT max(earliest_available)::text m FROM data_sync_cursor "
+                        + "WHERE symbol=? AND earliest_available IS NOT NULL", r -> date(r.str("m")), sym)
+                : db.query("SELECT max(earliest_available)::text m FROM data_sync_cursor "
+                        + "WHERE symbol=? AND lower(source_key)=? AND earliest_available IS NOT NULL",
+                        r -> date(r.str("m")), sym, src);
+        return rows.isEmpty() ? null : rows.getFirst();
     }
 
     public void quarantine(String ownerId, String jobId, String source, String symbol, String rowRef,

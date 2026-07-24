@@ -146,6 +146,40 @@ class YahooFinanceProviderTest {
         assertThat(server.getRequestCount()).isEqualTo(1);
     }
 
+    @Test
+    void preHistoryRangeAbsenceClampsOnlyOlderRangesWithoutPoisoningNewerOnesOrCoolingDown() throws Exception {
+        // A "data doesn't exist for startDate" 400 is range-absence, not a poison symbol.
+        server.enqueue(new MockResponse().setResponseCode(400).setBody(
+                "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Bad Request\","
+                        + "\"description\":\"Data doesn't exist for startDate = 946684800, endDate = 959817600\"}}}"));
+        assertThatThrownBy(() -> provider.candles("AAPL",
+                LocalDate.parse("2000-01-01"), LocalDate.parse("2000-06-01")))
+                .isInstanceOf(Http.RangeUnavailableException.class);
+        assertThat(provider.coolingDown()).isFalse(); // range-absence never trips the breaker
+        assertThat(server.getRequestCount()).isEqualTo(1);
+
+        // A range whose whole span predates coverage is short-circuited — no request is spent.
+        assertThat(provider.candles("AAPL",
+                LocalDate.parse("1999-01-01"), LocalDate.parse("1999-06-01"))).isEmpty();
+        assertThat(server.getRequestCount()).isEqualTo(1);
+
+        // A newer range that reaches into covered dates is STILL requestable in the same process.
+        server.enqueue(new MockResponse().setBody(JSON).addHeader("Content-Type", "application/json"));
+        assertThat(provider.candles("AAPL",
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).hasSize(2);
+        assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void rangeUnavailableCarriesTheEarliestAvailableBoundary() {
+        server.enqueue(new MockResponse().setResponseCode(400).setBody(
+                "{\"chart\":{\"error\":{\"description\":\"Data doesn't exist for startDate = 0, endDate = 0\"}}}"));
+        assertThatThrownBy(() -> provider.candles("AAPL",
+                LocalDate.parse("2001-01-01"), LocalDate.parse("2001-03-01")))
+                .isInstanceOfSatisfying(Http.RangeUnavailableException.class,
+                        e -> assertThat(e.earliestAvailable()).isEqualTo(LocalDate.parse("2001-03-02")));
+    }
+
     private static MockResponse ok(String body) {
         return new MockResponse().setBody(body).addHeader("Content-Type", "application/json");
     }

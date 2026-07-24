@@ -20,25 +20,38 @@ public final class MissingRangePlanner {
 
     private static final int MAX_RANGES = 8;
     private final Db db;
+    private final DataSyncState syncState;
 
-    public MissingRangePlanner(Db db) { this.db = db; }
+    public MissingRangePlanner(Db db) {
+        this.db = db;
+        // Clock is unused by the earliest-available read; a system clock keeps the ctor unchanged.
+        this.syncState = new DataSyncState(db, java.time.Clock.systemUTC());
+    }
 
     public Plan plan(String symbol, LocalDate from, LocalDate to, String source) {
         String sym = normalize(symbol);
         if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("bad date range");
         String src = source == null || source.isBlank() || "auto".equalsIgnoreCase(source)
                 ? null : source.trim().toLowerCase(Locale.ROOT);
+        // M2-(a): a durable pre-history boundary clamps the request. A range entirely before coverage
+        // is not "missing" — it CANNOT exist, so we never re-spend the allowance on it. A range that
+        // reaches into covered dates is clamped up to the boundary; newer dates stay eligible.
+        LocalDate boundary = syncState.earliestAvailable(source, sym);
+        if (boundary != null && boundary.isAfter(to)) {
+            return new Plan(sym, from, to, 0, 0, List.of());
+        }
+        LocalDate effectiveFrom = boundary != null && boundary.isAfter(from) ? boundary : from;
         List<LocalDate> rows = src == null
                 ? db.query("SELECT DISTINCT d::text d FROM underlying_bar WHERE symbol=? AND dataset_id='observed' "
                                 + "AND observed=1 AND d BETWEEN ? AND ?",
-                        r -> LocalDate.parse(r.str("d")), sym, from, to)
+                        r -> LocalDate.parse(r.str("d")), sym, effectiveFrom, to)
                 : db.query("SELECT DISTINCT d::text d FROM underlying_bar WHERE symbol=? AND dataset_id='observed' "
                                 + "AND observed=1 AND lower(source)=? AND d BETWEEN ? AND ?",
-                        r -> LocalDate.parse(r.str("d")), sym, src, from, to);
+                        r -> LocalDate.parse(r.str("d")), sym, src, effectiveFrom, to);
         Set<LocalDate> existing = new HashSet<>(rows);
         List<LocalDate> missing = new ArrayList<>();
         int expected = 0;
-        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+        for (LocalDate d = effectiveFrom; !d.isAfter(to); d = d.plusDays(1)) {
             if (!MarketHours.isTradingDay(d)) continue;
             expected++;
             if (!existing.contains(d)) missing.add(d);
@@ -51,9 +64,11 @@ public final class MissingRangePlanner {
         if (grouped.size() > MAX_RANGES) {
             grouped = List.of(new Range(missing.getFirst(), missing.getLast(), missing.size()));
         }
-        // Re-fetch a short leading overlap so adjusted vendors may revise recent bars after a split.
+        // Re-fetch a short leading overlap so adjusted vendors may revise recent bars after a split,
+        // but never earlier than the coverage boundary.
+        final LocalDate floor = effectiveFrom;
         List<Range> withOverlap = grouped.stream().map(r -> new Range(
-                previousTradingDay(r.from(), 3, from), r.to(), r.missingSessions())).toList();
+                previousTradingDay(r.from(), 3, floor), r.to(), r.missingSessions())).toList();
         return new Plan(sym, from, to, Math.max(0, expected - missing.size()), missing.size(), withOverlap);
     }
 

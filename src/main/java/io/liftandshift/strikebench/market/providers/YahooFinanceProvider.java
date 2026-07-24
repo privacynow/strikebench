@@ -47,12 +47,15 @@ public final class YahooFinanceProvider implements MarketDataProvider {
     // returns empty and the provider chain falls through to other sources.
     private final io.liftandshift.strikebench.market.ProviderPoliteness politeness;
     /**
-     * HTTP 400 is deterministic for the exact Yahoo symbol request. Remember it for this process
-     * so the durable retry job cannot repeatedly spend the daily allowance on the same poison
-     * symbol. A restart deliberately retries once, allowing a corrected alias/provider behavior
-     * to heal without a permanent local blacklist.
+     * HTTP 400 is deterministic for the exact Yahoo symbol request, but not all 400s mean the same
+     * thing. A DELISTED / "no data found" symbol is poison for the whole interval — remember it and
+     * skip it process-wide. A "data doesn't exist for startDate" 400 means only that this RANGE
+     * predates the symbol's coverage: remember the earliest available date and short-circuit ONLY
+     * requests whose whole range is before it, leaving newer ranges eligible. Both survive one
+     * restart (a corrected alias/provider heals without a permanent local blacklist).
      */
-    private final Map<String, Http.ProviderHttpException> rejectedSymbols = new ConcurrentHashMap<>();
+    private final Set<String> poisonSymbols = ConcurrentHashMap.newKeySet();
+    private final Map<String, LocalDate> earliestAvailable = new ConcurrentHashMap<>();
 
     public YahooFinanceProvider(AppConfig cfg) {
         this(cfg, null);
@@ -84,11 +87,14 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         }
         String requestedSymbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
         String yahooSymbol = yahooSymbol(requestedSymbol);
-        Http.ProviderHttpException rejected = rejectedSymbols.get(yahooSymbol);
         // The first malformed request is surfaced and logged with its provider diagnostic. Later
-        // maintenance passes skip it quietly so one poison identifier cannot create a permanent
-        // warning heartbeat or consume another request; the normal provider chain may continue.
-        if (rejected != null) return List.of();
+        // maintenance passes skip a poison identifier quietly so it cannot create a permanent warning
+        // heartbeat or consume another request; the normal provider chain may continue.
+        if (poisonSymbols.contains(yahooSymbol)) return List.of();
+        // A known pre-history boundary short-circuits ONLY requests whose whole range predates it;
+        // a range that reaches into covered dates is still worth one request.
+        LocalDate boundary = earliestAvailable.get(yahooSymbol);
+        if (boundary != null && to.isBefore(boundary)) return List.of();
         long p1 = from.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         // URL-encode the provider-normalized symbol so index/class tickers reach the right path segment.
@@ -110,7 +116,18 @@ public final class YahooFinanceProvider implements MarketDataProvider {
                 return requireUsableChart(body);
             }, null, YahooFinanceProvider::countsAsProviderFailure);
         } catch (Http.ProviderHttpException e) {
-            if (e.statusCode() == 400) rejectedSymbols.putIfAbsent(yahooSymbol, e);
+            if (e.statusCode() == 400) {
+                if (isRangeAbsence(e.body())) {
+                    // Range-absence, not poison: this symbol simply has no data this far back. The
+                    // requested range is entirely before coverage, so coverage begins no earlier than
+                    // the day after this range's end; a later request refines the boundary upward.
+                    LocalDate earliest = to.plusDays(1);
+                    earliestAvailable.merge(yahooSymbol, earliest,
+                            (existing, fresh) -> existing.isAfter(fresh) ? existing : fresh);
+                    throw new Http.RangeUnavailableException(url, e.body(), earliestAvailable.get(yahooSymbol));
+                }
+                poisonSymbols.add(yahooSymbol);
+            }
             throw e;
         }
         if (root == null) return List.of();
@@ -146,6 +163,20 @@ public final class YahooFinanceProvider implements MarketDataProvider {
 
     private static boolean countsAsProviderFailure(Exception failure) {
         return !(failure instanceof Http.ProviderHttpException http && http.statusCode() == 400);
+    }
+
+    /**
+     * Distinguishes a Yahoo 400 that means "this date range predates the symbol's coverage" (a
+     * firstTradeDate/startDate boundary) from a poison-symbol 400 ("no data found, may be delisted").
+     * Body-driven and conservative: only an explicit range/startDate signal classifies as
+     * range-absence; everything else stays poison so an unknown 400 never keeps re-spending requests.
+     */
+    static boolean isRangeAbsence(String body) {
+        if (body == null || body.isBlank()) return false;
+        String b = body.toLowerCase(Locale.ROOT);
+        if (b.contains("no data found") || b.contains("may be delisted")) return false; // poison
+        return b.contains("startdate") || b.contains("data doesn't exist")
+                || b.contains("data doesn&#39;t exist") || b.contains("firsttradedate");
     }
 
     /**

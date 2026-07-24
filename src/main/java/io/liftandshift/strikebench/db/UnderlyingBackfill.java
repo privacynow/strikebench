@@ -103,6 +103,11 @@ public final class UnderlyingBackfill {
                     rows += written.written();
                 }
             }
+            // M2-(a): a provider range-absence teaches us where coverage begins. Persist it durably so
+            // the planner clamps future requests and never re-spends the allowance on the impossible
+            // pre-history interval. Recorded under the same source key the planner reads by.
+            market.preHistoryBoundary(sym).ifPresent(coverageStart ->
+                    syncState.recordEarliestAvailable(sourceRequest, sym, coverageStart));
             MissingRangePlanner.Plan after = planner.plan(sym, from, to,
                     "auto".equals(sourceRequest) ? actualSource : sourceRequest);
             boolean complete = after.complete();

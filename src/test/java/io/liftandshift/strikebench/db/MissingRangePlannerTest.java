@@ -44,6 +44,27 @@ class MissingRangePlannerTest {
     }
 
     @Test
+    void durablePreHistoryBoundaryClampsThePlanAndNeverRequestsTheImpossibleInterval() {
+        db = TestDb.fresh();
+        DataSyncState sync = new DataSyncState(db, java.time.Clock.systemUTC());
+        // Coverage begins 2026-06-03 for this symbol (learned from a provider range-absence 400).
+        sync.recordEarliestAvailable("yahoo", "AAPL", LocalDate.parse("2026-06-03"));
+
+        MissingRangePlanner planner = new MissingRangePlanner(db);
+        var plan = planner.plan("AAPL", LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-05"), "yahoo");
+        assertThat(plan.ranges()).isNotEmpty();
+        // The impossible pre-coverage days (06-01/06-02) are clamped away; nothing is planned before
+        // the boundary, and the revision overlap cannot dip below it either.
+        assertThat(plan.ranges()).allSatisfy(r ->
+                assertThat(r.from()).isAfterOrEqualTo(LocalDate.parse("2026-06-03")));
+
+        // A range whose whole span predates coverage cannot be missing — the plan is already complete.
+        var older = planner.plan("AAPL", LocalDate.parse("2026-05-01"), LocalDate.parse("2026-06-02"), "yahoo");
+        assertThat(older.complete()).isTrue();
+        assertThat(older.ranges()).isEmpty();
+    }
+
+    @Test
     void coverageFromAnotherSourceCannotCompleteThisSourcesPlan() {
         db = TestDb.fresh();
         LocalDate from = LocalDate.parse("2026-06-01"), to = LocalDate.parse("2026-06-05");
