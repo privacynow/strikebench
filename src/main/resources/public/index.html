@@ -5259,7 +5259,7 @@ function authBookReady(){
     if(POS.length===1){
       var oneGreeks=d.portfolio&&d.portfolio.greeks||{},oneSummary=document.createElement('div');
       oneSummary.className='homeonesummary';
-      oneSummary.innerHTML=authLifecycleReceiptHTML(POS[0].lifecycle,true)+'<div class="homeonegreeks"><span><b>'+deskEsc(authNumber(oneGreeks.deltaShares)==null?'—':Number(oneGreeks.deltaShares).toFixed(2))+'</b>delta sh</span><span><b>'+deskEsc(authNumber(oneGreeks.thetaPerDay)==null?'—':money(Number(oneGreeks.thetaPerDay)))+'</b>theta / day</span><span><b>'+deskEsc(authNumber(oneGreeks.vegaPerPoint)==null?'—':money(Number(oneGreeks.vegaPerPoint)))+'</b>vega / pt</span></div>'+authShareInventoryHTML(shares);
+      oneSummary.innerHTML=authLifecycleReceiptHTML(POS[0].lifecycle,true)+'<div class="homeonegreeks"><span title="'+deskEsc(greekDesc('delta'))+'"><b>'+deskEsc(authNumber(oneGreeks.deltaShares)==null?'—':Number(oneGreeks.deltaShares).toFixed(2))+'</b>delta sh</span><span title="'+deskEsc(greekDesc('theta'))+'"><b>'+deskEsc(authNumber(oneGreeks.thetaPerDay)==null?'—':money(Number(oneGreeks.thetaPerDay)))+'</b>theta / day</span><span title="'+deskEsc(greekDesc('vega'))+'"><b>'+deskEsc(authNumber(oneGreeks.vegaPerPoint)==null?'—':money(Number(oneGreeks.vegaPerPoint)))+'</b>vega / pt</span></div>'+authShareInventoryHTML(shares);
       bookEl.appendChild(oneSummary);
     }else if(shares.length){
       var shareSummary=document.createElement('div');shareSummary.className='homeonesummary sharesonly';shareSummary.innerHTML=authShareInventoryHTML(shares);bookEl.appendChild(shareSummary);
