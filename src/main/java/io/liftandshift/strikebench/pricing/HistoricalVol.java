@@ -36,4 +36,19 @@ public final class HistoricalVol {
         var /= (rets.length - 1);
         return Math.sqrt(var * TRADING_DAYS);
     }
+
+    /**
+     * The trailing-{@code days} annualized vol evaluated at every bar — the same close-to-close
+     * log-return stdev as {@link #annualized}, read at each index so a chart can draw one rolling
+     * realized-vol series without a second (divergent) client estimator. {@code NaN} until a bar
+     * has enough trailing history.
+     */
+    public static double[] rollingAnnualized(List<Candle> candles, int days) {
+        int n = candles == null ? 0 : candles.size();
+        double[] out = new double[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = annualized(candles.subList(0, i + 1), days);
+        }
+        return out;
+    }
 }

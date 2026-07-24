@@ -799,6 +799,15 @@ class ApiIntegrationTest {
             assertThat(h.get("candles").size()).isGreaterThan(50);
             assertThat(h.at("/coverage/availableSessions").asInt()).isEqualTo(h.get("candles").size());
             assertThat(h.at("/coverage/requestedSessions").asInt()).isPositive();
+            // The chart draws RV/MA from these backend overlays (one source, not a client estimator):
+            // one value per candle, oldest-first, so each overlay array aligns to the candle series.
+            int bars = h.get("candles").size();
+            for (String series : new String[]{"rv20", "sma20", "sma50"}) {
+                assertThat(h.at("/overlays/" + series).size())
+                        .as("overlay " + series + " aligns one value per candle").isEqualTo(bars);
+            }
+            assertThat(h.at("/overlays/sma20/" + (bars - 1)).isNumber())
+                    .as("SMA20 is populated once enough trailing history exists").isTrue();
         }
         assertThat(Json.parse(get("/api/research/AAPL/history?range=bogus").body()).get("range").asText()).isEqualTo("1y");
 

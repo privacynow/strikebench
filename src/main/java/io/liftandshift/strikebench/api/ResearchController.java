@@ -390,7 +390,33 @@ final class ResearchController {
                 analysisContext.apply(ctx));
         ctx.json(new ApiResponses.History<>(symbol, range, series.candles(), series.source(),
                 series.freshness().name(), series.barBasis(), series.priceBasis(), series.evidence(),
-                CandleCoverage.assess(series.candles(), requestedFrom, today)));
+                CandleCoverage.assess(series.candles(), requestedFrom, today),
+                historyOverlays(series.candles())));
+    }
+
+    /** RV(20) + SMA(20/50) over the SAME candles, one value per bar — the chart draws these instead
+     *  of a second client-side estimator, so realized-vol and moving-average overlays trace to one
+     *  backend source. */
+    private static ApiResponses.HistoryOverlays historyOverlays(
+            List<io.liftandshift.strikebench.model.Candle> candles) {
+        if (candles == null || candles.isEmpty()) {
+            return new ApiResponses.HistoryOverlays(List.of(), List.of(), List.of());
+        }
+        double[] rv = HistoricalVol.rollingAnnualized(candles, 20);
+        List<Double> rv20 = new ArrayList<>(candles.size());
+        for (double v : rv) rv20.add(Double.isFinite(v) ? v : null);
+        return new ApiResponses.HistoryOverlays(rv20, sma(candles, 20), sma(candles, 50));
+    }
+
+    private static List<Double> sma(List<io.liftandshift.strikebench.model.Candle> candles, int p) {
+        List<Double> out = new ArrayList<>(candles.size());
+        double sum = 0;
+        for (int i = 0; i < candles.size(); i++) {
+            sum += candles.get(i).close().doubleValue();
+            if (i >= p) sum -= candles.get(i - p).close().doubleValue();
+            out.add(i >= p - 1 ? sum / p : null);
+        }
+        return out;
     }
 
     private void news(Context ctx) {

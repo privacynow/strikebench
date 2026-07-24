@@ -225,7 +225,14 @@ public final class ApiResponses {
     }
     public record History<T, U>(String symbol, String range, T candles, String source,
                                 String freshness, String barBasis, String priceBasis,
-                                U evidence, Object coverage) {}
+                                U evidence, Object coverage, HistoryOverlays overlays) {}
+    /**
+     * Chart overlay series derived from the SAME authoritative candles this response carries, one
+     * value per candle (oldest-first, {@code null} until enough trailing history). Serving them
+     * keeps realized-vol and moving-average overlays honest to one backend source instead of a
+     * second client estimator. {@code rv20} is annualized realized volatility (a ratio).
+     */
+    public record HistoryOverlays(List<Double> rv20, List<Double> sma20, List<Double> sma50) {}
     public record Sparklines<T>(String range, T sparklines, int totalRequested, String world) {}
     /** Existing Research news route, enriched by the one versioned deterministic scorer. */
     public record ResearchNews<T, U>(String symbol, String scorerVersion, T items, U aggregate,
