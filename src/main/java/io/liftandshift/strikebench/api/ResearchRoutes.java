@@ -16,6 +16,7 @@ public final class ResearchRoutes {
             Handler symbolResearch,
             Handler expirations,
             Handler chain,
+            Handler expectedMove,
             Handler history,
             Handler news,
             Handler lookup,
@@ -40,6 +41,7 @@ public final class ResearchRoutes {
         config.routes.get("/api/research/{symbol}", h.symbolResearch());
         config.routes.get("/api/research/{symbol}/expirations", h.expirations());
         config.routes.get("/api/research/{symbol}/chain", h.chain());
+        config.routes.get("/api/research/{symbol}/expected-move", h.expectedMove());
         config.routes.get("/api/research/{symbol}/history", h.history());
         config.routes.get("/api/research/{symbol}/news", h.news());
         config.routes.get("/api/lookup", h.lookup());

@@ -42,6 +42,21 @@ final class ResearchController {
     record NoteRequest(String title, String body, String tags) {}
     record ResolveRequest(String recommendationId, String status, Long pnlCents) {}
 
+    /**
+     * The backend-owned expected-move receipt (B4): the risk-neutral 1σ range for one expiry, with
+     * its anchor price + freshness so the desk HIDES the cone (available=false) rather than falling
+     * back to any client math when inputs are missing/stale. It is never a predicted path.
+     */
+    record ExpectedMove(String symbol, boolean available, String reason,
+                        Double atmIv, String expiration, Integer horizonSessions, Integer expirationCalendarDays,
+                        Double p16, Double p50, Double p84, String basis,
+                        Double anchorSpot, String anchorSource, String anchorFreshness, String asOf) {
+        static ExpectedMove unavailable(String symbol, String reason) {
+            return new ExpectedMove(symbol, false, reason, null, null, null, null,
+                    null, null, null, null, null, null, null, null);
+        }
+    }
+
     @FunctionalInterface
     interface PlanEligibility {
         PlanController.PlanSymbolEligibility evaluate(String symbol, MarketLane lane, Quote quote,
@@ -87,7 +102,7 @@ final class ResearchController {
                 ctx -> ctx.json(new ApiResponses.Questions<>(questions.catalog())),
                 this::runEventStudy,
                 this::createNote, this::listNotes, this::getNote, this::updateNote, this::deleteNote,
-                this::symbolResearch, this::expirations, this::chain, this::history, this::news, this::lookup,
+                this::symbolResearch, this::expirations, this::chain, this::expectedMove, this::history, this::news, this::lookup,
                 ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
                         Arrays.stream(StrategyFamily.values()).map(Enum::name).toList(),
                         StrategyCatalog.families(), StrategyCatalog.templates())),
@@ -268,6 +283,40 @@ final class ResearchController {
             if (cause instanceof RuntimeException runtime) throw runtime;
             throw new RuntimeException(cause == null ? e : cause);
         }
+    }
+
+    /** B4: the backend expected-move receipt for one expiry (?expiry=YYYY-MM-DD, else the nearest listed). */
+    private void expectedMove(Context ctx) {
+        String symbol = symbol(ctx);
+        String world = activeWorld.apply(ctx);
+        Optional<Quote> quote = market.quote(symbol, world);
+        if (quote.isEmpty() || quote.get().mark() == null) {
+            ctx.json(ExpectedMove.unavailable(symbol, "no authoritative quote")); return;
+        }
+        Quote current = quote.get();
+        double spot = current.mark().doubleValue();
+        LocalDate today = market.laneToday(worldParam(world), clock);
+        LocalDate expiry = resolveExpiry(ctx.queryParam("expiry"), activeExpirationsFor(symbol, world));
+        if (expiry == null) { ctx.json(ExpectedMove.unavailable(symbol, "no listed expiry")); return; }
+        OptionChain chain = market.chain(symbol, expiry, world).orElse(null);
+        Double iv = chain == null ? null : atmIv(chain).orElse(null);
+        if (iv == null) { ctx.json(ExpectedMove.unavailable(symbol, "no ATM implied volatility for " + expiry)); return; }
+        int calendarDays = Math.max(1, (int) java.time.temporal.ChronoUnit.DAYS.between(today, expiry));
+        int sessions = MarketHours.tradingDaysBetween(today, expiry);
+        double rate = market.riskFreeRateQuote(calendarDays, world).annualRate();
+        var range = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                spot, iv, sessions, expiry.toString(), calendarDays, rate);
+        if (range == null) { ctx.json(ExpectedMove.unavailable(symbol, "insufficient inputs")); return; }
+        ctx.json(new ExpectedMove(symbol, true, null, range.atmIv(), range.expiration(),
+                range.horizonSessions(), range.expirationCalendarDays(), range.p16(), range.p50(), range.p84(),
+                range.basis(), spot, current.source(), current.markFreshness().name(), today.toString()));
+    }
+
+    private static LocalDate resolveExpiry(String param, List<LocalDate> active) {
+        if (param != null && !param.isBlank()) {
+            try { return LocalDate.parse(param.trim()); } catch (RuntimeException ignored) { /* fall through */ }
+        }
+        return active.isEmpty() ? null : active.getFirst();
     }
 
     private Optional<Double> atmIv(OptionChain chain) {
