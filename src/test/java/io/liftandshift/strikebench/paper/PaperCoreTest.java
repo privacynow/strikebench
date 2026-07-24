@@ -819,7 +819,7 @@ class PaperCoreTest {
     /** Replays the full ledger and asserts running balances match every row and the account. */
     private void assertLedgerInvariants(String accountId) {
         Account acct = accounts.get(accountId);
-        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE account_id=? ORDER BY id", AccountService::mapLedger, accountId);
+        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE account_id=? ORDER BY id", Ledger::map, accountId);
         long cash = 0, reserved = 0;
         for (LedgerEntry row : rows) {
             if (LedgerEntry.movesCash(row.type())) cash += row.amountCents();
@@ -857,7 +857,7 @@ class PaperCoreTest {
         assertThat(after.buyingPowerCents()).isEqualTo(START - 32000 - 130); // net BP impact = maxLoss + fees
         assertThat(after.hasTraded()).isTrue();
 
-        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE trade_id=? ORDER BY id", AccountService::mapLedger, t.id());
+        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE trade_id=? ORDER BY id", Ledger::map, t.id());
         assertThat(rows).extracting(LedgerEntry::type).containsExactly("PREMIUM_OPEN", "FEE", "RESERVE_HOLD");
         assertLedgerInvariants(acct.id());
     }
@@ -978,7 +978,7 @@ class PaperCoreTest {
         Account after = accounts.get(acct.id());
         assertThat(after.cashCents()).isEqualTo(START);          // full reversal via ADJUSTMENT rows
         assertThat(after.reservedCents()).isZero();
-        List<LedgerEntry> adj = db.query("SELECT * FROM ledger WHERE trade_id=? AND type='ADJUSTMENT' ORDER BY id", AccountService::mapLedger, t.id());
+        List<LedgerEntry> adj = db.query("SELECT * FROM ledger WHERE trade_id=? AND type='ADJUSTMENT' ORDER BY id", Ledger::map, t.id());
         assertThat(adj).hasSize(2);                              // reverses PREMIUM_OPEN and FEE
         assertLedgerInvariants(acct.id());
         // Voided trades cannot be double-deleted or closed
@@ -1593,7 +1593,7 @@ class PaperCoreTest {
                 .isEqualTo(START - 1_000_000 + 11_000 - 65 + stockSale);
         assertThat(accounts.get(acct.id()).reservedCents()).isZero();
         List<LedgerEntry> stockRows = db.query(
-                "SELECT * FROM ledger WHERE trade_id=? AND type='STOCK_SELL'", AccountService::mapLedger, t.id());
+                "SELECT * FROM ledger WHERE trade_id=? AND type='STOCK_SELL'", Ledger::map, t.id());
         assertThat(stockRows).hasSize(1);
         assertThat(stockRows.getFirst().memo()).contains("called away").contains("105");
         assertLedgerInvariants(acct.id());
@@ -1691,7 +1691,7 @@ class PaperCoreTest {
         assertThat(positions.get(acct.id(), "AAPL").avgCostCents()).isEqualTo(10_000);
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore - 1_000_000);
         assertThat(accounts.get(acct.id()).reservedCents()).isZero();
-        long reserveAfter = db.with(c -> TradeService.outstandingReserve(c, opened.id()));
+        long reserveAfter = db.with(c -> Ledger.outstandingReserve(c, opened.id()));
         assertThat(reserveAfter).isZero();
         assertLedgerInvariants(acct.id());
     }
@@ -1984,10 +1984,10 @@ class PaperCoreTest {
         // Physical: 100 sh called away at 105 (+$10,500). Cash: the SECOND short 105C unit
         // settles -(110-105)x100 = -$500; the long 100C settles +(110-100)x100 = +$1,000.
         assertThat(res.trade().closeReason()).contains("100 sh called away");
-        List<LedgerEntry> stockSells = db.query("SELECT * FROM ledger WHERE type='STOCK_SELL'", AccountService::mapLedger);
+        List<LedgerEntry> stockSells = db.query("SELECT * FROM ledger WHERE type='STOCK_SELL'", Ledger::map);
         assertThat(stockSells).hasSize(1);
         assertThat(stockSells.getFirst().amountCents()).isEqualTo(1_050_000);
-        List<LedgerEntry> settleRows = db.query("SELECT * FROM ledger WHERE type='SETTLEMENT'", AccountService::mapLedger);
+        List<LedgerEntry> settleRows = db.query("SELECT * FROM ledger WHERE type='SETTLEMENT'", Ledger::map);
         assertThat(settleRows.getFirst().amountCents()).isEqualTo(-50_000 + 100_000);
         assertThat(db.query("SELECT COUNT(*) AS n FROM positions", r -> r.lng("n")).getFirst()).isZero();
         assertLedgerInvariants(acct.id());

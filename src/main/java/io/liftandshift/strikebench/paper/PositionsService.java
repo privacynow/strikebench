@@ -204,7 +204,7 @@ public final class PositionsService {
                         + " costs " + Money.fmt(cost) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
             }
             String now = now();
-            ledgerRow(c, accountId, now, "STOCK_BUY", -cost, cash, acct.reservedCents(),
+            Ledger.append(c, accountId, null, now, "STOCK_BUY", -cost, cash, acct.reservedCents(),
                     "BUY " + shares + " sh " + sym + " @ " + ask.toPlainString());
             Position p = find(c, accountId, sym);
             if (p == null) {
@@ -255,7 +255,7 @@ public final class PositionsService {
             String now = now();
             long cash = acct.cashCents() + proceeds;
             realized[0] = proceeds - p.avgCostCents() * shares;
-            ledgerRow(c, accountId, now, "STOCK_SELL", proceeds, cash, acct.reservedCents(),
+            Ledger.append(c, accountId, null, now, "STOCK_SELL", proceeds, cash, acct.reservedCents(),
                     "SELL " + shares + " sh " + sym + " @ " + bid.toPlainString()
                             + " (basis " + Money.fmt(p.avgCostCents()) + "/sh, realized " + Money.fmt(realized[0]) + ")");
             long newShares = p.shares() - shares;
@@ -369,11 +369,6 @@ public final class PositionsService {
                 r.lng("avg_cost_cents"), r.str("created_at"), r.str("updated_at"));
     }
 
-    private static void ledgerRow(Connection c, String accountId, String ts, String type,
-                                  long amount, long cashAfter, long reservedAfter, String memo) throws SQLException {
-        Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,NULL,?,?,?,?,?,?)",
-                accountId, ts, type, amount, cashAfter, reservedAfter, memo);
-    }
 
     private void auditSafe(String accountId, String action, Map<String, Object> detail) {
         try {
