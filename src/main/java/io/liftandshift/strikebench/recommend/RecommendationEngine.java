@@ -252,8 +252,8 @@ public final class RecommendationEngine {
         boolean sharesHeld = freeShares >= 100 && (holdBasedIntent
                 || (intent == StrategyIntent.INCOME && holdings != null));
         if (holdBasedIntent && freeShares < 100) {
-            notes.add("You hold " + freeShares + " free shares of " + symbol
-                    + " — options work in 100-share lots, so candidates below include buying the shares (buy-write style)");
+            notes.add("No eligible held shares of " + symbol + " — a " + intent.name().toLowerCase()
+                    + " acts on a position you already own; candidates that would require buying shares are withheld.");
         }
         if (intent == StrategyIntent.ACQUIRE && targetPrice != null && spot != null
                 && targetPrice.compareTo(spot) > 0) {
@@ -285,6 +285,15 @@ public final class RecommendationEngine {
                 // the coherence gate below keeps each offered structure honest to the objective.
                 if (!family.servesIntent(intent) && !family.blockedByDefault()) continue;
                 if (family.blockedByDefault() && !family.servesIntent(intent)) continue;
+            }
+            // HEDGE/EXIT act on an existing holding. With no eligible free shares, a share-backed
+            // family would have to INVENT a 100-share purchase (a buy-write is neither a hedge nor an
+            // exit) — withhold it and name the reason instead of silently fabricating the holding.
+            if (holdBasedIntent && !sharesHeld && family.needsStock()) {
+                rejected.add(new Rejection(family.name(), family.display(), List.of(
+                        "No eligible held shares of " + symbol + " to " + intent.name().toLowerCase()
+                                + "; this structure would require buying shares, which a hedge or exit must not fabricate.")));
+                continue;
             }
             // RISK MODE IS A BUDGET, NOT A COMPLEXITY LADDER (risk/experience decoupling): every
             // mode sees the SAME defined-risk catalog — the actual position's max loss, EV, tail,

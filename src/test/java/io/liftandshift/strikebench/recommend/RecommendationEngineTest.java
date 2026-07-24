@@ -452,6 +452,24 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void hedgeOrExitWithoutEligibleSharesNeverInventsAShareePurchase() {
+        // A hedge or exit acts on a position you ALREADY own. With no eligible free shares, no
+        // candidate may fabricate the 100-share purchase a share-backed structure would require —
+        // the engine must withhold it and say so, not silently emit a buy-write.
+        for (String intent : new String[]{"hedge", "exit"}) {
+            RecommendationEngine.Result r = engine.recommend(intentReq(intent, null, null), BP);
+            assertThat(r.candidates())
+                    .as("intent=%s notes=%s rejected=%s", intent, r.notes(), r.rejected())
+                    .noneMatch(c -> c.legs().stream().anyMatch(l -> "STOCK".equals(l.type())));
+            assertThat(r.notes()).anySatisfy(n -> assertThat(n).contains("No eligible held shares"));
+        }
+        // The withheld share-backed families are NAMED in rejected[] (honest, not silently dropped).
+        RecommendationEngine.Result hedge = engine.recommend(intentReq("hedge", null, null), BP);
+        assertThat(hedge.rejected()).anySatisfy(rej ->
+                assertThat(String.join(" ", rej.reasons())).contains("No eligible held shares"));
+    }
+
+    @Test
     void filtersRejectCandidatesWithHumanReadableReasons() {
         RecommendationEngine.Filters strictPop = new RecommendationEngine.Filters(0.99, null, null, null);
         RecommendationEngine.Result r1 = engine.recommend(intentReq("income", null, strictPop), BP);
