@@ -10,7 +10,7 @@
 
   var httpRuntime = window.location.protocol === 'http:' || window.location.protocol === 'https:';
   var state = {
-    enabled: httpRuntime,
+    enabled: true,   /* Front B E: the desk is always authoritative; the file:// fixture engine is deleted */
     requestSeq: 0,
     animationSeq: 0,
     market: null,

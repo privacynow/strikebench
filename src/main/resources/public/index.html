@@ -3179,7 +3179,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
       <div class="tstate" id="threadState"></div>
       <div class="mktstrip" id="mktStrip"></div>
     </div>
-    <span class="fixtureflag" id="fixtureFlag" hidden title="Staged visual context; New idea uses active StrikeBench services">Visual fixture panels</span>
     <div class="cmd">
       <div class="searchbox sm">
         <button class="cmdsym" id="cmdSym" title="focused underlying — click to search another" style="display:none">◎ <b></b></button>
@@ -3226,120 +3225,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    legs: {t:'s'|'c'|'p', k, q}  ·  s.k=entry, s.q=shares(±) · opt.q=contracts(±)
    payoff(S) = net + Σ  s: q·(S−k) · c: q·100·max(S−k,0) · p: q·100·max(k−S,0)
    ====================================================================== */
-var POS=[
- {id:'amd-cs', sym:'AMD', struct:'Covered strangle', spot:493.00, em:6.2,
-  pnl:-1240.50, riskPct:22, cap:58700, net:5415, delta:0.31, theta:71, vega:-1240, pop:61,
-  maxLoss:38400, maxProfit:8900, attn:'Expiry week', need:true, tone:'warn',
-  legs:[{t:'s',k:462.10,q:300},{t:'c',k:540,q:-3},{t:'p',k:450,q:-3}],
-  legStr:'LONG 300 · SHORT 3×540C · SHORT 3×450P · exp 07-Aug',
-  why:'Core semis holding — the strangle rents both tails while you keep the shares underneath.',
-  news:'AMD MI400 ramp reported on track; Street nudges FY26 numbers up into the 07-Aug print.',
-  plain:'You own 300 AMD and rent a call above $540 and a put below $450. You keep the rent unless AMD breaks that range by 07-Aug.'},
-
- {id:'nvda-ic', sym:'NVDA', struct:'Iron condor', spot:182.40, em:7.4,
-  pnl:-2410.00, riskPct:5, cap:3900, net:1100, delta:-0.14, theta:62, vega:-410, pop:58,
-  maxLoss:3900, maxProfit:1100, attn:'Past stop', need:true, tone:'bad',
-  legs:[{t:'p',k:165,q:5},{t:'p',k:175,q:-5},{t:'c',k:190,q:-5},{t:'c',k:200,q:5}],
-  legStr:'LONG 165P / SHORT 175P · SHORT 190C / LONG 200C · ×5 · exp 07-Aug',
-  why:'A range bet that NVDA cools after its run — the tested call side is why this one is on watch.',
-  news:'NVDA pushes toward 190 on data-center demand; your short call side is now ITM-adjacent.',
-  plain:'A range bet on NVDA between $175 and $190. It pushed toward $190 and the call side is tested — this one is past your stop.'},
-
- {id:'avgo-pcs', sym:'AVGO', struct:'Put credit spread', spot:1685.00, em:5.8,
-  pnl:-1880.00, riskPct:11, cap:24000, net:8000, delta:0.22, theta:45, vega:-360, pop:66,
-  maxLoss:24000, maxProfit:8000, attn:'Earnings 04-Sep', need:false, tone:'warn',
-  legs:[{t:'p',k:1600,q:-8},{t:'p',k:1560,q:8}],
-  legStr:'SHORT 1600P / LONG 1560P · ×8 · exp 20-Sep',
-  why:'Collect premium above 1600 — a defined-risk vote that AVGO holds its uptrend into fall.',
-  news:'AVGO software mix lifts margins; earnings on 04-Sep lands before your 20-Sep expiry.',
-  plain:'You collected $8,000 betting AVGO holds above $1,600. It has slipped, and earnings fall before expiry.'},
-
- {id:'qcom-csp', sym:'QCOM', struct:'Cash-secured put', spot:174.00, em:5.2,
-  pnl:540.00, riskPct:12, cap:68000, net:1820, delta:-0.38, theta:34, vega:-180, pop:63,
-  maxLoss:66180, maxProfit:1820, attn:'Assignment risk', need:true, tone:'warn',
-  legs:[{t:'p',k:170,q:-4}],
-  legStr:'SHORT 4×170P · exp 07-Aug · collateral $68k',
-  why:'Get paid to set a 170 buy price on QCOM — assignment just means owning it a little cheaper.',
-  news:'QCOM hovers at 174, pinned near your 170 strike — assignment is a Friday coin-flip.',
-  plain:'You set aside $68,000 to be ready to buy QCOM at $170 and were paid $1,820 for the wait. Assignment is live into Friday.'},
-
- {id:'smh-cc', sym:'SMH', struct:'Covered calls', spot:268.50, em:4.6,
-  pnl:1340.00, riskPct:8, cap:22300, net:2440, delta:0.72, theta:38, vega:-210, pop:69,
-  maxLoss:101720, maxProfit:12720, attn:'Clear', need:false, tone:'ok',
-  legs:[{t:'s',k:254.30,q:400},{t:'c',k:280,q:-4}],
-  legStr:'LONG 400 · SHORT 4×280C · exp 15-Aug',
-  why:'Own the semis ETF and sell upside you are happy to cap — steady rent on the whole complex.',
-  news:'SMH grinds higher; 280 calls stay comfortably OTM with 15-Aug expiry approaching.',
-  plain:'You own the semis ETF and sell the $280 call for income. Below $280 you keep the rent and the shares.'},
-
- {id:'mu-sp', sym:'MU', struct:'Short-put campaign', spot:971.00, em:8.5,
-  pnl:3120.88, riskPct:16, cap:95788, net:2212, delta:-0.26, theta:58, vega:-640, pop:74,
-  maxLoss:95788, maxProfit:6240, attn:'Roll window', need:true, tone:'warn',
-  legs:[{t:'p',k:980,q:-1}],
-  legStr:'SHORT 1×980P · basis 957.88 · roll open · exp 22-Aug',
-  why:'A multi-round campaign renting the 980 put — four cycles have cut your real basis to 957.88.',
-  news:'MU HBM demand stays tight; premium remains rich enough to keep rolling the campaign.',
-  plain:'You have been paid $6,240 over four rounds to stand ready to buy MU at $980. After the rent, your real cost is $957.88.'}
-];
-/* --- per-position depth layered on top (decision copy, IV, mechanics, book context).
-   Kept as a merge so the original POS literal stays untouched. bookShare == riskPct
-   (the six sum to 74%, matching the market panel). Scenario P/L is NOT stored here —
-   it is computed live from the leg payoff engine so it always matches the curve. --- */
-var EXTRA={
- 'amd-cs':{flagKind:'expiry', day:-180, held:34, iv:42, ivRank:72, event:'Earnings 07-Aug (expiry day)',
-   gamma:-0.02, edge:210, yieldPct:26, assign:6, mark:'+$120 rich',
-   flagNote:'3 sessions to 07-Aug', primary:'Roll to keep the rent →',
-   read:'AMD’s short <b>$540 calls</b> expire in 3 sessions, ~$47 out of the money — you’ll likely keep the full <b>$2,955</b> in rent. Roll them out to keep collecting, or let them expire and hold the shares clean.',
-   mechGloss:'Time decay pays you about <b>$71 a day</b> and you’re mildly long AMD (Δ +0.31), so a drop nicks you a little. The calls sit far out, so getting assigned this week is unlikely (~6%).',
-   conc:'Your <b>biggest line</b> — 22% of book risk. Moves with the SMH covered calls and the NVDA condor; all three lean short-vol on the same semis factor.'},
- 'nvda-ic':{flagKind:'stop', day:-320, held:21, iv:48, ivRank:66, event:'NVDA earnings 27-Aug',
-   gamma:-0.03, edge:-120, yieldPct:0, assign:12, mark:'−$60 cheap',
-   flagNote:'−$2,410 vs −$2,000 stop', primary:'Close & cap the loss →',
-   read:'NVDA pushed to <b>$182</b> and your short <b>$190 call</b> is now tested — the position sits at <b>−$2,410</b>, past your −$2,000 stop. Close it to cap the bleed, or roll the call side up and out if you still want the range.',
-   mechGloss:'Theta still pays ~<b>$62/day</b>, but your short call side is tested (Δ −0.14). Assignment odds have climbed to ~12% as NVDA presses $190 — the reason this one tripped your stop.',
-   conc:'Small at <b>5% of book risk</b>, but it’s your only long put-wing — it pays out if semis gap down while the rest of the book bleeds.'},
- 'avgo-pcs':{flagKind:'earnings', day:140, held:48, iv:38, ivRank:70, event:'Earnings 04-Sep · exp 20-Sep',
-   gamma:-0.01, edge:90, yieldPct:33, assign:9, mark:'fair',
-   flagNote:'earnings 04-Sep, before 20-Sep expiry', primary:'Roll down before 04-Sep →',
-   read:'AVGO slipped toward your short <b>$1,600 put</b> and earnings land <b>04-Sep</b>, before your 20-Sep expiry. You’re still ~66% to keep the <b>$8,000</b> — hold through the print, or roll down / close before it.',
-   mechGloss:'You collect ~<b>$45/day</b> in decay. Delta +0.22 leans mildly bullish; assignment stays unlikely (~9%) unless AVGO breaks $1,600 into the print.',
-   conc:'<b>11% of book risk.</b> Correlated with AMD and MU on the AI-capex theme — a semis pullback hits all three together.'},
- 'qcom-csp':{flagKind:'assignment', day:60, held:12, iv:34, ivRank:58, event:'Expiry 07-Aug',
-   gamma:-0.04, edge:40, yieldPct:11, assign:58, mark:'+$30 rich',
-   flagNote:'pinned at $170 into Friday', primary:'Roll the put out →',
-   read:'QCOM is pinned at <b>$174</b>, right at your <b>$170 strike</b> — assignment into Friday is close to a <b>coin-flip (58%)</b>. Roll the put out to keep renting, or accept the shares at $170, a price you were happy to pay.',
-   mechGloss:'Decay pays ~<b>$34/day</b>, but pinned at your $170 strike the delta is a steep −0.38 and assignment is a coin-flip (~58%) into Friday — own it cheaper, or roll.',
-   conc:'<b>12% of book risk</b>, and the only line that could hand you 400 shares. Less correlated — QCOM trades on handset demand, not AI-capex.'},
- 'smh-cc':{flagKind:'clear', day:95, held:27, iv:26, ivRank:44, event:'Expiry 15-Aug',
-   gamma:-0.02, edge:60, yieldPct:13, assign:8, mark:'fair',
-   flagNote:'', primary:'',
-   read:'<b>Healthy</b> — ~69% chance of keeping the full rent. Your <b>$280 calls</b> sit ~4% above spot with 15-Aug still out, and you keep the shares below. Nothing to do.',
-   mechGloss:'You’re long the ETF (Δ +0.72) and rent the upside for ~<b>$38/day</b>. Calls sit ~4% above spot, so assignment is unlikely (~8%).',
-   conc:'<b>8% of book risk</b> and the whole-complex proxy — when SMH moves, every other line here moves with it.'},
- 'mu-sp':{flagKind:'roll', day:210, held:63, iv:52, ivRank:78, event:'Roll window · 21 DTE',
-   gamma:-0.03, edge:110, yieldPct:16, assign:26, mark:'+$70 rich',
-   flagNote:'roll window · 21 DTE', primary:'Roll into round five →',
-   read:'Round four of the MU campaign is in its <b>roll window</b> — you’ve cut your real basis to <b>$957.88</b> and the $980 put still pays richly. Roll into round five to keep collecting, or close and bank the <b>$3,121</b>.',
-   mechGloss:'The campaign earns ~<b>$58/day</b> in decay. Delta −0.26 means a deeper drop pulls you toward assignment (~26%) — which just starts round five at a lower basis.',
-   conc:'<b>16% of book risk.</b> Memory beta amplifies the semis factor — moves hardest with AMD on AI-demand headlines.'}
-};
-/* the now→at-expiry bridge tail, per structure: names the condition to keep the outcome
-   AND why the gap exists (rent/credit not yet booked; or, for MU, assignment at basis). */
-var SETTLE={
- 'amd-cs':'if AMD holds its range — the rent isn’t booked yet.',
- 'nvda-ic':'if NVDA settles back inside 175–190 — the credit isn’t kept yet.',
- 'avgo-pcs':'if AVGO holds above $1,600 — the credit isn’t kept yet.',
- 'qcom-csp':'if QCOM expires above $170 — the rent isn’t booked yet.',
- 'smh-cc':'if SMH stays under $280 — the rent isn’t booked yet.',
- 'mu-sp':'if MU sits below $980 — assignment lands the shares at your $957.88 basis.'
-};
-var byId={}; POS.forEach(function(p){ var x=EXTRA[p.id]; if(x) for(var k in x) p[k]=x[k]; if(SETTLE[p.id]) p.settle=SETTLE[p.id]; p.isHeld=true;
-  /* held lines carry no lean/undef — derive them so the SAME coherence + risk-type components work on a position */
-  if(p.lean==null) p.lean = (+p.delta||0)>0.15?'bull':(+p.delta||0)<-0.15?'bear':'neutral';
-  if(p.undef==null && p.legs) p.undef = calcUndef(p.legs);
-  if(p.credit==null && p.net!=null) p.credit=p.net;
-  byId[p.id]=p; });
-var FIXTURE_POS=POS;
+var POS=[];
+var byId={};
 
 /* ---- FLAG archetypes: the attention flag DERIVES the recommended action + tone ---- */
 var FLAGS={
@@ -3366,19 +3253,6 @@ var SCEN=[
  {n:'Strong rally',    dsc:'clears the expected range to the upside',m:13, iv:-4, d:10,g:'M2 19 L10 17 L18 13 L27 9 L35 6 L42 3'},
  {n:'Melt-up',          dsc:'accelerates well beyond the expected range',m:20, iv:-6, d:12,g:'M2 20 L11 18 L19 16 L27 11 L34 7 L42 2'}
 ];
-function erf(x){var s=x<0?-1:1;x=Math.abs(x);var t=1/(1+0.3275911*x);var y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);return s*y;}
-function ncdf(x,mu,sd){return 0.5*(1+erf((x-mu)/(sd*Math.SQRT2)));}
-/* Scenario weights = the mass of the SAME tail-aware distribution in each move-band, so the
-   Crash / Gap-down bars carry real probability consistent with POP (not a separate thin Gaussian).
-   SCEN is authored move-ascending. */
-function scenProbs(p){ var tp=tailParams(p), out=[];
-  for(var k=0;k<SCEN.length;k++){
-    var loM=k===0?-95:(SCEN[k-1].m+SCEN[k].m)/2, hiM=k===SCEN.length-1?400:(SCEN[k].m+SCEN[k+1].m)/2;   /* percent-move band edges */
-    var a=Math.log(Math.max(0.05,1+loM/100)), b=Math.log(1+hiM/100), nn=24, dx=(b-a)/nn, s=0;
-    for(var i=0;i<nn;i++) s+=tailDens(tp, a+dx*(i+0.5))*dx;
-    out.push(s); }
-  var tot=out.reduce(function(x,y){return x+y;},0)||1;
-  return out.map(function(v){return v/tot;}); }
 function scenData(p){
   if(p&&p.authoritative){
     var src=p.evaluation&&p.evaluation.risk&&p.evaluation.risk.scenarios||[];
@@ -3403,12 +3277,6 @@ function scenData(p){
     rows.forEach(function(r){if(r.pl>best.pl)best=r;if(r.pl<worst.pl)worst=r;if(Math.abs(r.m-medianMove)<Math.abs(ml.m-medianMove))ml=r;});
     return {rows:rows,best:best,worst:worst,ml:ml,authoritative:true};
   }
-  var probs=scenProbs(p), rows=[];
-  for(var i=0;i<SCEN.length;i++){var s=SCEN[i], px=p.spot*(1+s.m/100);
-    rows.push({i:i,s:s,m:s.m,px:px,pl:payFor(p,px),prob:probs[i]});}
-  var best=rows[0],worst=rows[0],ml=rows[0];
-  rows.forEach(function(r){ if(r.pl>best.pl)best=r; if(r.pl<worst.pl)worst=r; if(r.prob>ml.prob)ml=r; });
-  return {rows:rows,best:best,worst:worst,ml:ml};
 }
 
 /* ---- animation config ---- */
@@ -3532,7 +3400,6 @@ function drawPayoff(svg,p,full,ghost,opts){
   if(opts.pinM!=null){ var pp=p.spot*(1+opts.pinM/100), pad0=(hi-lo)*0.05; lo=Math.min(lo,pp-pad0); hi=Math.max(hi,pp+pad0); }
   /* on the full hero, widen left just enough to SHOW the characteristic gap — the crash region and
      the distribution's fat left tail become visible instead of sitting off-screen. */
-  if(full&&!p.authoritative){ var gpx=p.spot*(1-tailParams(p).gap*1.15); if(gpx<lo) lo=gpx-(hi-lo)*0.02; }
   var mL=full?56:3, mR=full?18:3, mT=full?(compactHero?16:22):5, mB=full?(compactHero?32:38):5;
   var x0=mL, x1=W-mR, y0=mT, y1=H-mB, pw=x1-x0, ph=y1-y0;
   var n=full?200:80, pts=[], vmin=0, vmax=0;
@@ -3559,39 +3426,6 @@ function drawPayoff(svg,p,full,ghost,opts){
   var area=line+' L '+f(sx(pts[pts.length-1][0]))+' '+f(zY)+' L '+f(sx(pts[0][0]))+' '+f(zY)+' Z';
   g+='<path d="'+area+'" fill="url(#gp'+uid+')" clip-path="url(#cp'+uid+')"/>';
   g+='<path d="'+area+'" fill="url(#gl'+uid+')" clip-path="url(#cl'+uid+')"/>';
-  if(full&&!p.authoritative){
-    /* PROBABILITY BELL (ported from plan-desk's hero chart): a Gaussian of where price is likely
-       to land by expiry, lit GREEN only over the profit zone, on an expected-move band, with an
-       on-chart POP annotation. Uses our own engine (payFor spans + p.em). */
-    var em=p.em||6, sig=Math.max(1,p.spot*em/100), bmid=p.spot, bpeak=ph*0.44;
-    var emLoX=sx(Math.max(lo,p.spot*(1-em/100))), emHiX=sx(Math.min(hi,p.spot*(1+em/100)));
-    g+='<rect x="'+f(emLoX)+'" y="'+y0+'" width="'+f(Math.max(0,emHiX-emLoX))+'" height="'+f(ph)+'" fill="var(--violet)" opacity=".05"/>';
-    var spans=[], inp=false, s0=0;
-    for(var bi=0;bi<pts.length;bi++){ var pos=pts[bi][1]>0.5; if(pos&&!inp){inp=true;s0=pts[bi][0];} else if(!pos&&inp){inp=false;spans.push([s0,pts[bi][0]]);} }
-    if(inp)spans.push([s0,pts[pts.length-1][0]]);
-    /* the bell is the TAIL-AWARE distribution (body + down-gaps), so the crash mass shows as a
-       visible fat LEFT tail — the event the owner asked us to make visible, drawn not hidden. */
-    var btp=tailParams(p), BN=110, bys=[], bmax=1e-9;
-    for(var bk=0;bk<=BN;bk++){ var bx0=lo+(hi-lo)*bk/BN, d0=tailDens(btp, Math.log(Math.max(0.05,bx0/p.spot))); bys.push(d0); if(d0>bmax)bmax=d0; }
-    var bell=''; for(var bi2=0;bi2<=BN;bi2++){var bx=lo+(hi-lo)*bi2/BN, by=y1-bpeak*(bys[bi2]/bmax); bell+=(bi2?' L ':'M ')+f(sx(bx))+' '+f(by);}
-    var bellA=bell+' L '+f(sx(hi))+' '+f(y1)+' L '+f(sx(lo))+' '+f(y1)+' Z';
-    g+='<path d="'+bellA+'" fill="var(--violet)" opacity=".07"/>';
-    var wid='win'+uid, wr=spans.map(function(s){return '<rect x="'+f(sx(s[0]))+'" y="'+y0+'" width="'+f(Math.max(0,sx(s[1])-sx(s[0])))+'" height="'+f(ph)+'"/>';}).join('');
-    if(wr){ g+='<clipPath id="'+wid+'">'+wr+'</clipPath><path d="'+bellA+'" fill="var(--profit)" opacity=".15" clip-path="url(#'+wid+')"/>'; }
-    /* the LOSS-side of the same bell, tinted red — the probability mass that lands in a loss, the
-       gap/crash region included, made visible instead of hidden. (complement of the profit spans) */
-    var lrects='', prevx=lo;
-    for(var lsi=0;lsi<spans.length;lsi++){ if(spans[lsi][0]>prevx) lrects+='<rect x="'+f(sx(prevx))+'" y="'+y0+'" width="'+f(Math.max(0,sx(spans[lsi][0])-sx(prevx)))+'" height="'+f(ph)+'"/>'; prevx=spans[lsi][1]; }
-    if(hi>prevx) lrects+='<rect x="'+f(sx(prevx))+'" y="'+y0+'" width="'+f(Math.max(0,sx(hi)-sx(prevx)))+'" height="'+f(ph)+'"/>';
-    if(lrects){ var lid='loss'+uid; g+='<clipPath id="'+lid+'">'+lrects+'</clipPath><path d="'+bellA+'" fill="var(--loss)" opacity=".16" clip-path="url(#'+lid+')"/>'; }
-    var popv=(typeof p.pop==='number'?p.pop:popCalc(p));
-    if(!compactHero) g+='<text class="pfpop" x="'+(x0+3)+'" y="'+(y0+12)+'">'+popv+'% chance of profit</text>';
-    var yt=pfTicks(yLo,yHi,4);
-    for(var i=0;i<yt.length;i++){var t=yt[i], yy=sy(t); if(yy<y0-1||yy>y1+1)continue;
-      if(Math.abs(t)>1e-6) g+='<line x1="'+hx(x0)+'" y1="'+hx(yy)+'" x2="'+hx(x1)+'" y2="'+hx(yy)+'" stroke="var(--line-soft)" stroke-width="1"/>';
-      g+='<text class="pfax" x="'+(x0-7)+'" y="'+f(yy+3)+'" text-anchor="end">'+(t>0?'+$':t<0?'−$':'$')+fmtK(Math.abs(t))+'</text>';
-    }
-  }
   if(full&&p.authoritative){
     var authYTicks=pfTicks(yLo,yHi,4);
     for(var ayi=0;ayi<authYTicks.length;ayi++){var ayt=authYTicks[ayi],ayy=sy(ayt);if(ayy<y0-1||ayy>y1+1)continue;
@@ -4102,8 +3936,8 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
   var ar=p.authoritativeAnimation&&p.authoritativeAnimation.paths&&p.authoritativeAnimation.paths.receipt;
   var authReady=!p.authoritative||!!(p.authoritativeAnimation&&p.authoritativeAnimation.checkpoints);
   var authError=p.authoritative&&p._authoritativeScenarioError;
-  var pinProb=p.authoritative?(ar&&ar.sourcePathCount?Math.round(ar.withinToleranceCount/ar.sourcePathCount*100):null):Math.round((scenProbs(p)[pin]||0)*100);
-  var af=authoritativeFrame(p,t),curPx=af?af.price:p.spot*(1+mag*t/100),curM=(curPx/p.spot-1)*100,ivsh=p.isHeld?0:iv*t,dfwd=af?af.day:days*t,pv=af&&af.pnl!=null?af.pnl:(p.authoritative?null:scenPL(p,curPx,ivsh,dfwd));
+  var pinProb=(ar&&ar.sourcePathCount?Math.round(ar.withinToleranceCount/ar.sourcePathCount*100):null);
+  var af=authoritativeFrame(p,t),curPx=af?af.price:p.spot*(1+mag*t/100),curM=(curPx/p.spot-1)*100,ivsh=p.isHeld?0:iv*t,dfwd=af?af.day:days*t,pv=af&&af.pnl!=null?af.pnl:null;
   var statusRead=authError?'<b class="neg">market story unavailable</b>':
     (p.authoritative?(pin===FAN_STORY?'<b>one exact stored path</b>':pinProb==null?'<b>finding matching paths…</b>':'<b>'+pinProb+'%</b> of paths fit this story'):'<b>'+pinProb+'%</b> likely')+' · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv);
   function stp(key,lbl,val,cls){ return '<span class="mstp" data-asm="'+key+'"><span class="ml">'+lbl+'</span><button data-wf="'+key+'dn">−</button><span class="mv '+(cls||'')+'">'+val+'</span><button data-wf="'+key+'up">+</button></span>'; }
@@ -4134,62 +3968,6 @@ function renderScenbox(p){
 /* ---- C · one quiet depth inspector: research · mechanics · book context ---- */
 var POS_PANE={};
 function ordinal(n){ var s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
-function relStrength(p){
-  var u=univBy[p.sym]||{chg:0,sector:'Semis',iv:p.iv,ivRank:p.ivRank};
-  var peers=UNIV.filter(function(x){return x.sector===u.sector;});
-  var secAvg=peers.length?peers.reduce(function(a,x){return a+(x.chg||0);},0)/peers.length:0;
-  var mkt=0.4;   // SPX today (from the market pulse)
-  var maxAbs=Math.max(Math.abs(u.chg||0),Math.abs(secAvg),Math.abs(mkt),1);
-  function row(lab,v){ return '<div class="relrow"><span class="rell">'+lab+'</span><span class="relbar"><i class="'+(v>=0?'pos':'neg')+'" style="width:'+(Math.abs(v)/maxAbs*100).toFixed(0)+'%"></i></span><span class="relv '+(v>=0?'pos':'neg')+'">'+(v>=0?'+':'')+(v||0).toFixed(1)+'%</span></div>'; }
-  return { html:'<div class="relgrid">'+row(p.sym,u.chg||0)+row(u.sector,secAvg)+row('Market',mkt)+'</div>', u:u, peers:peers, secAvg:secAvg };
-}
-function depthBand(p){
-  var mech='<div class="lens mechlens posmechanics">'+
-    '<div class="lenshd"><span class="eyebrow">Mechanics</span><span class="hint">how it breathes</span></div>'+
-    mechGraphic(p)+
-  '</div>';
-  var rs=relStrength(p);
-  var ivSorted=rs.peers.slice().sort(function(a,b){return b.ivRank-a.ivRank;});
-  var ivPos=ivSorted.map(function(x){return x.sym;}).indexOf(p.sym)+1;
-  var vsSecIV=(univBy[p.sym]?univBy[p.sym].iv:p.iv)-Math.round(rs.peers.reduce(function(a,x){return a+x.iv;},0)/(rs.peers.length||1));
-  var research='<div class="lens posresearch">'+
-    '<div class="lenshd"><span class="eyebrow">Research lens</span><span class="hint">'+p.sym+' · '+rs.u.sector+' · '+p.event+'</span></div>'+
-    '<div class="lenspx"><span class="lpx num" data-live="px">'+p.spot.toFixed(2)+'</span><svg class="plspark"></svg></div>'+
-    '<div class="lblrow"><span class="lbl">Relative strength · today</span></div>'+rs.html+
-    '<div class="ivrow"><span class="badge num">IV '+p.iv+'%</span><span class="hint">'+(vsSecIV>=0?'+':'')+vsSecIV+' vs sector avg</span>'+
-      '<span class="hint" style="margin-left:auto">rank '+p.ivRank+'th · '+ordinal(ivPos)+' richest of '+rs.peers.length+'</span></div>'+
-    '<div class="lenswhy"><span class="lbl">Why you hold this</span><div class="wtext">'+p.why+'</div></div>'+
-    '<div class="lensnews"><span class="sdot" style="background:'+newsDot(p)+'"></span><div>'+p.news+'</div></div>'+
-  '</div>';
-  /* Book context is derived from held lines, not the research universe. */
-  var ranked=POS.slice().sort(function(a,b){return b.riskPct-a.riskPct;}), rank=ranked.map(function(x){return x.id;}).indexOf(p.id)+1;
-  var sameHeld=POS.filter(function(x){return x.id!==p.id&&((univBy[x.sym]||{}).sector===rs.u.sector);});
-  var corr=sameHeld.slice(0,3).map(function(x){return x.sym;}), secRisk=POS.filter(function(x){return (univBy[x.sym]||{}).sector===rs.u.sector;}).reduce(function(n,x){return n+x.riskPct;},0);
-  var bt=bookTail();
-  var book='<div class="lens booklens posbook">'+
-    '<div class="lenshd"><span class="eyebrow">Book context</span><span class="hint">held line · live contribution</span></div>'+
-    '<div class="bookfacts">'+
-      '<div class="bookfact2"><span>Risk rank</span><b class="'+(rank===1?'warn':'')+'">'+ordinal(rank)+' of '+POS.length+'</b></div>'+
-      '<div class="bookfact2"><span>'+rs.u.sector+' cluster</span><b class="'+(secRisk>=40?'warn':'')+'">'+secRisk+'% book risk</b></div>'+
-      '<div class="bookfact2"><span>Shared gap</span><b class="neg">−'+bt.gapPct+'% → '+money(bt.gapPL)+'</b></div>'+
-      '<div class="bookfact2"><span>Worst 5%</span><b class="neg">'+money(bt.es5)+'</b></div>'+
-    '</div>'+
-    '<div class="bookbar big" title="This line contributes '+p.riskPct+'% of book risk"><i style="width:'+Math.min(100,p.riskPct/Math.max(1,ranked[0].riskPct)*100)+'%"></i></div>'+
-    '<div class="bkmeta"><b class="'+(p.riskPct>=20?'warn':'')+'">'+p.riskPct+'%</b> of book risk · scaled against the largest held line</div>'+
-    '<div class="corrrow"><span class="lbl">Held correlates</span>'+corr.map(function(s){return '<span class="corrchip">'+s+'</span>';}).join('')+'</div>'+
-    '<div class="panefoot">'+p.conc+'</div>'+
-  '</div>';
-  var pane=POS_PANE[p.id]||'research', panes={research:research,mechanics:mech,book:book};
-  var panelId='pospane-'+p.id, selectedTabId='postab-'+p.id+'-'+pane;
-  var tabs=[['research','path','Research','IV '+p.ivRank+'th'],['mechanics','tune','Mechanics','Θ '+signed(p.theta)+'/d'],['book','book','Book',p.riskPct+'% risk']].map(function(t){
-    return '<button id="postab-'+p.id+'-'+t[0]+'" class="inspecttab'+(pane===t[0]?' on':'')+'" data-pospane="'+t[0]+'" data-posid="'+p.id+'" aria-pressed="'+(pane===t[0])+'" aria-controls="'+panelId+'">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';
-  }).join('');
-  var paneHtml=['research','mechanics','book'].map(function(k){
-    return '<div class="pospane '+k+(pane===k?' on':'')+'" data-pospane-panel="'+k+'" role="region" aria-labelledby="postab-'+p.id+'-'+k+'">'+panes[k]+'</div>';
-  }).join('');
-  return '<div class="depth posdepth"><div class="inspectrail posinspectrail" role="group" aria-label="Position detail">'+tabs+'</div><div id="'+panelId+'" class="posinspectwell" role="group" aria-labelledby="'+selectedTabId+'">'+paneHtml+'</div></div>';
-}
-
 /* Front B S2: positionContextStrip (fixture univBy quote/event/news) removed — the held surface
    is display-only; provenance/market bearing comes from the backend position detail. */
 
@@ -4310,9 +4088,9 @@ function applyAdjust(p){
   layoutForLevel('position',p.id); updateThread();
   window.setTimeout(function(){ toast('Adjustment placed — '+p.sym+' '+p.struct.toLowerCase()+' updated in your book'); },80);
 }
-/* Front B S2: legChip + adjChip (fixture leg chip priced live from the client BS engine —
-   bsPrice/ivForK) removed. The one editable leg component is backendDecisionLegChip, fed the
-   backend chain receipt; the held surface is display-only. */
+/* Front B S2: legChip + adjChip (fixture leg chips from the retired client engine) removed.
+   The one editable leg component is backendDecisionLegChip, fed the backend chain receipt; the
+   held surface is display-only. */
 function adjNums(p,c){
   var b=(adjust&&adjust.base)||baseCand(p);
   function delta(nv,ov,lowerBetter){ var x=Math.round(nv-ov); if(x===0)return '<span class="adjd flat">no change</span>'; var good=lowerBetter?x<0:x>0; return '<span class="adjd '+(good?'pos':'neg')+'">'+(x>0?'+':'−')+'$'+Math.abs(x).toLocaleString()+'</span>'; }
@@ -4623,19 +4401,18 @@ function renderAtPrice(s){
   var baseCanvas=p.isHeld&&authPositionEnsemble(p)&&authPositionEnsemble(p).preview&&authPositionEnsemble(p).preview.canvas,baseUnderlying=baseCanvas&&baseCanvas.underlying||[];
   var baseIv=p.isHeld?(baseUnderlying.length&&baseUnderlying[0].atmIv):(decide&&decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.marketImplied&&decide.ensemble.preview.marketImplied.atmIv);
   var ivsh=auth&&auth.iv!=null&&baseIv!=null?(auth.iv-baseIv)*100:(p.authoritative?0:(pinned?ivOf(p)*t:0)), dfwd=auth?auth.day:(p.authoritative?0:(pinned?daysOf(p)*t:0));
-  var pv=auth&&auth.pnl!=null?auth.pnl:(p.authoritative?null:(pinned?scenPL(p,curPx,ivsh,dfwd):payFor(p,p.spot)));
+  var pv=auth&&auth.pnl!=null?auth.pnl:null;
   if(pinned){
     var m=root.querySelector('.wf-main'), psi=(p.id in pinnedScen)?+pinnedScen[p.id]:0, pp,lead;
     if(p.authoritative){var rr=p.authoritativeAnimation&&p.authoritativeAnimation.paths&&p.authoritativeAnimation.paths.receipt;
       pp=rr&&rr.sourcePathCount?Math.round(rr.withinToleranceCount/rr.sourcePathCount*100):null;
       lead=p._authoritativeScenarioError?'<b class="neg">market story unavailable</b>':psi===FAN_STORY?'<b>one exact stored path</b>':pp==null?'<b>finding matching paths…</b>':'<b>'+pp+'%</b> of paths fit this story';}
-    else {pp=Math.round((scenProbs(p)[psi]||0)*100);lead='<b>'+pp+'%</b> likely';}
     if(m) m.innerHTML=lead+(p._authoritativeScenarioError?'':p.authoritative&&!auth?' · <span>valuing this path…</span>':' · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv));
     var sc=root.querySelector('.scenplay .scrub'); if(sc && document.activeElement!==sc) sc.value=Math.round(st.t*100);
   }
   if(p.authoritative&&!auth){if(decide&&decide.mcOn)drawMCFan();return;}
   /* greeks breathe — respond to price, vol AND time; baseline+modelled-change so t=0 sits on the shown numbers */
-  var lg=(auth?auth.greeks:liveGreeks(p,curPx,ivsh,dfwd))||{};
+  var lg=(auth&&auth.greeks)||{};
   GSPEC.forEach(function(sp){ var v=lg[sp.key];
     if(v==null||!Number.isFinite(Number(v)))return;
     var vEl=root.querySelector('[data-live="'+sp.key+'"]'); if(vEl){ vEl.textContent=gfmt(sp,v); vEl.className='mgv '+sp.cls(v); if(pinned)vEl.classList.add('breath'); else vEl.classList.remove('breath'); }
@@ -4716,7 +4493,7 @@ var AUTH_BOOK_PANEL_IDS=['book','riskMain','bookrisk','chainBand','univBand','se
 var HOME_AUTH_SYMBOL=null;
 var HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
 var HOME_SCOUT={scope:'broad',goal:'INCOME',sector:null};
-var HOME_IDEA={symbol:null,query:'',view:'Neutral',horizon:'45 days',riskMode:'Balanced',
+var homeIdea={symbol:null,query:'',view:'Neutral',horizon:'45 days',riskMode:'Balanced',
   targetCents:null,holdingsShares:null};
 var HOME_SCOUT_SEQ=0,HOME_SCOUT_RAF=0;
 /* The bridge rejects stale data publication; this UI generation separately rejects stale promise
@@ -5091,15 +4868,15 @@ function authHomeWorkbenchSymbols(){
   return symbols;
 }
 function authHomeUnderlyingMatchesHTML(){
-  var query=String(HOME_IDEA.query||'').trim().toLowerCase(),symbols=authHomeWorkbenchSymbols();
-  if(HOME_IDEA.symbol&&symbols.indexOf(HOME_IDEA.symbol)<0)symbols=[HOME_IDEA.symbol].concat(symbols);
+  var query=String(homeIdea.query||'').trim().toLowerCase(),symbols=authHomeWorkbenchSymbols();
+  if(homeIdea.symbol&&symbols.indexOf(homeIdea.symbol)<0)symbols=[homeIdea.symbol].concat(symbols);
   var sectorMatches=query?authScoutSectorChoices().filter(function(row){return row.key.toLowerCase().indexOf(query)>=0||row.label.toLowerCase().indexOf(query)>=0;}).slice(0,3):[];
   var matches=query?symbols.filter(function(symbol){var known=univBy[symbol]||{};return symbol.toLowerCase().indexOf(query)>=0||String(known.name||'').toLowerCase().indexOf(query)>=0;}).slice(0,Math.max(0,6-sectorMatches.length)):[];
-  var chosen=HOME_IDEA.symbol?'<div class="homeideachosen"><span><b>'+deskEsc(HOME_IDEA.symbol)+'</b> selected underlying</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
+  var chosen=homeIdea.symbol?'<div class="homeideachosen"><span><b>'+deskEsc(homeIdea.symbol)+'</b> selected underlying</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
   var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Scan →</em></button>';}).join('')+
-    matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(HOME_IDEA.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
+    matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(homeIdea.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
   if(!query&&!chosen)return '<div class="homeideahelp">Type a ticker or company. Choosing a match only stages it; nothing loads until Analyze.</div>';
-  if(query&&!rows)return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(HOME_IDEA.query)+'”. Try another name, or choose Broad market above.</div>';
+  if(query&&!rows)return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(homeIdea.query)+'”. Try another name, or choose Broad market above.</div>';
   return chosen+(rows?'<div class="homeideamatches">'+rows+'</div>':'');
 }
 function authOpportunityControlsHTML(){
@@ -5109,24 +4886,24 @@ function authOpportunityControlsHTML(){
   function ideaButtons(label,key,values,current){return control(label,values.map(function(value){return '<button type="button" class="'+(String(current).toLowerCase()===String(value).toLowerCase()?'on':'')+'" data-auth-workbench-'+key+'="'+deskEsc(value)+'" aria-pressed="'+(String(current).toLowerCase()===String(value).toLowerCase())+'">'+deskEsc(value)+'</button>';}).join(''));}
   return '<div class="opportunitycontrols" aria-label="Scan and idea controls">'+control('Market',scopeButton('broad','Broad market',Array.isArray(broad.symbols)?broad.symbols.length:0)+scopeButton('active','Active names',Array.isArray(active.symbols)?active.symbols.length:0))+
     control('Goal',goals.map(function(row){return '<button type="button" class="'+(HOME_SCOUT.goal===row[0]?'on':'')+'" data-auth-scout-goal="'+row[0]+'" aria-pressed="'+(HOME_SCOUT.goal===row[0])+'">'+row[1]+'</button>';}).join(''),'goals')+
-    ideaButtons('View','view',['Bearish','Neutral','Bullish'],HOME_IDEA.view)+
-    ideaButtons('Horizon','horizon',['7 days','30 days','45 days'],HOME_IDEA.horizon)+
-    ideaButtons('Risk','risk',['Conservative','Balanced','Aggressive'],HOME_IDEA.riskMode)+'</div>';
+    ideaButtons('View','view',['Bearish','Neutral','Bullish'],homeIdea.view)+
+    ideaButtons('Horizon','horizon',['7 days','30 days','45 days'],homeIdea.horizon)+
+    ideaButtons('Risk','risk',['Conservative','Balanced','Aggressive'],homeIdea.riskMode)+'</div>';
 }
 function authScoutIdleFieldHTML(){
-  var staged=!!HOME_IDEA.symbol,loading=HOME_OPPORTUNITY.phase==='loading';
-  var ready=staged&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
-  var acquire=HOME_SCOUT.goal==='ACQUIRE'?'<div class="homeacquirefields"><label><span>Buy at or below</span><input type="number" min="0.01" step="0.01" value="'+(HOME_IDEA.targetCents==null?'':(Number(HOME_IDEA.targetCents)/100).toFixed(2))+'" placeholder="Price" data-auth-workbench-target></label><label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(HOME_IDEA.holdingsShares==null?'':deskEsc(HOME_IDEA.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label></div>':'';
+  var staged=!!homeIdea.symbol,loading=HOME_OPPORTUNITY.phase==='loading';
+  var ready=staged&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(homeIdea.targetCents)>0&&Number(homeIdea.holdingsShares)>0);
+  var acquire=HOME_SCOUT.goal==='ACQUIRE'?'<div class="homeacquirefields"><label><span>Buy at or below</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="Price" data-auth-workbench-target></label><label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label></div>':'';
   /* ONE minimal bar: a field and ONE adaptive action. Empty field → Scan the current scope;
      a staged ticker → Analyze that one (with a small "scan the field" alternative). No headers,
      no explanation boxes, no prose beside the buttons — the controls above declare the scope. */
   var action=staged
-    ? '<button type="button" class="btn pri scoutgo" data-auth-workbench-analyze'+(ready?'':' disabled')+'>Analyze '+deskEsc(HOME_IDEA.symbol)+' →</button>'
+    ? '<button type="button" class="btn pri scoutgo" data-auth-workbench-analyze'+(ready?'':' disabled')+'>Analyze '+deskEsc(homeIdea.symbol)+' →</button>'
     : loading
       ? '<button type="button" class="btn pri scoutgo" disabled>Scanning…</button>'
       : '<button type="button" class="btn pri scoutgo" data-auth-opportunity-scan>Scan →</button>';
   var alt=staged&&!loading?'<button type="button" class="btn xs scoutalt" data-auth-opportunity-scan>Scan the field</button>':'';
-  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(HOME_IDEA.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
+  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(homeIdea.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
 }
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?authScoutIdleFieldHTML()+'<div class="scoutresults">'+body+'</div>':body)+'</div>';
@@ -5212,9 +4989,9 @@ function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=
 function authResetOpportunity(){HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};authRenderOpportunityFrame();}
 function authRunOpportunityScan(){
   if(HOME_OPPORTUNITY.phase==='loading'||!window.DeskBackend||!window.DeskBackend.scoutOpportunities)return;
-  var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=/^7\b/.test(HOME_IDEA.horizon)?'week':'month';
+  var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=/^7\b/.test(homeIdea.horizon)?'week':'month';
   HOME_OPPORTUNITY={phase:'loading',data:null,error:null,progress:{phase:'STARTING',completed:0,total:(explicit||described.scout&&described.scout.symbols||[]).length||1,message:'Preparing the governed universe.'},partial:[]};authRenderOpportunityFrame();
-  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:[horizon],maxPicks:5,riskMode:String(HOME_IDEA.riskMode||'Balanced').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:String(HOME_IDEA.view||'Neutral').toLowerCase()},function(progress){
+  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:[horizon],maxPicks:5,riskMode:String(homeIdea.riskMode||'Balanced').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:String(homeIdea.view||'Neutral').toLowerCase()},function(progress){
     if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY.progress=progress||HOME_OPPORTUNITY.progress;
     if(progress&&progress.pick){var pick=progress.pick,key=String(pick.symbol||'')+'|'+String(pick.intent||''),found=-1;for(var i=0;i<HOME_OPPORTUNITY.partial.length;i++){var row=HOME_OPPORTUNITY.partial[i];if(String(row.symbol||'')+'|'+String(row.intent||'')===key){found=i;break;}}if(found>=0)HOME_OPPORTUNITY.partial[found]=pick;else HOME_OPPORTUNITY.partial.push(pick);}
     authScheduleOpportunityPaint();
@@ -5248,28 +5025,28 @@ async function authOpenPlan(plan,origin){if(!plan||AUTH_PLAN_OPEN_PENDING)return
 function authOpenSymbol(symbol,origin){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase());}
 function authStageHomeSymbol(symbol){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
-  HOME_IDEA.symbol=symbol;HOME_IDEA.query=symbol;focusSymbol(symbol);authRenderOpportunityOnly();
+  homeIdea.symbol=symbol;homeIdea.query=symbol;focusSymbol(symbol);authRenderOpportunityOnly();
   window.requestAnimationFrame(function(){var input=document.querySelector('[data-auth-workbench-query]');if(input)input.focus({preventScroll:true});});
 }
 function authAnalyzeHomeSymbol(symbol,origin){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
-  HOME_IDEA.symbol=symbol;HOME_IDEA.query=symbol;authOpenHomeIdea(origin);
+  homeIdea.symbol=symbol;homeIdea.query=symbol;authOpenHomeIdea(origin);
 }
 function authOpenHomeIdea(origin){
-  if(!HOME_IDEA.symbol)return;
-  if(HOME_SCOUT.goal==='ACQUIRE'&&(!(Number(HOME_IDEA.targetCents)>0)||!(Number(HOME_IDEA.holdingsShares)>0))){authRenderOpportunityOnly();return;}
+  if(!homeIdea.symbol)return;
+  if(HOME_SCOUT.goal==='ACQUIRE'&&(!(Number(homeIdea.targetCents)>0)||!(Number(homeIdea.holdingsShares)>0))){authRenderOpportunityOnly();return;}
   /* opening one exact idea supersedes any running scan: abort it so the churning universe scan
      stops holding the market provider and can't starve this ticker's chain load */
   HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();
   if(HOME_OPPORTUNITY.phase==='loading')HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
-  enterDecide('idea',null,'New idea',origin,String(HOME_IDEA.symbol).toUpperCase(),null,{
-    goal:HOME_SCOUT.goal,view:HOME_IDEA.view,horizon:HOME_IDEA.horizon,riskMode:HOME_IDEA.riskMode,
-    targetCents:HOME_IDEA.targetCents,holdingsShares:HOME_IDEA.holdingsShares
+  enterDecide('idea',null,'New idea',origin,String(homeIdea.symbol).toUpperCase(),null,{
+    goal:HOME_SCOUT.goal,view:homeIdea.view,horizon:homeIdea.horizon,riskMode:homeIdea.riskMode,
+    targetCents:homeIdea.targetCents,holdingsShares:homeIdea.holdingsShares
   });
 }
 function authRefreshHomeIdeaAction(){
-  var button=document.querySelector('[data-auth-workbench-analyze]'),ready=!!HOME_IDEA.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(HOME_IDEA.targetCents)>0&&Number(HOME_IDEA.holdingsShares)>0);
-  if(button){button.disabled=!ready;button.textContent=(HOME_IDEA.symbol?'Analyze '+HOME_IDEA.symbol:'Type a ticker to analyze one')+' →';}
+  var button=document.querySelector('[data-auth-workbench-analyze]'),ready=!!homeIdea.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(homeIdea.targetCents)>0&&Number(homeIdea.holdingsShares)>0);
+  if(button){button.disabled=!ready;button.textContent=(homeIdea.symbol?'Analyze '+homeIdea.symbol:'Type a ticker to analyze one')+' →';}
 }
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
     var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(fanSurface){ev.preventDefault();var nearestSeries=nearestBookFanSeries(ev);if(nearestSeries)go('position',nearestSeries);return;}
@@ -5280,20 +5057,20 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var ideaButton=ev.target.closest&&ev.target.closest('[data-auth-newidea-symbol]');if(ideaButton){authStageHomeSymbol(ideaButton.getAttribute('data-auth-newidea-symbol'));return;}
     var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){focusSymbol(marketButton.getAttribute('data-auth-market-symbol'));return;}
     var workbenchSymbol=ev.target.closest&&ev.target.closest('[data-auth-workbench-symbol]');if(workbenchSymbol){authStageHomeSymbol(workbenchSymbol.getAttribute('data-auth-workbench-symbol'));return;}
-    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){HOME_IDEA.symbol=null;HOME_IDEA.query='';authRenderOpportunityOnly();return;}
-    var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){HOME_IDEA.view=workbenchView.getAttribute('data-auth-workbench-view');authRenderOpportunityOnly();return;}
-    var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){HOME_IDEA.horizon=workbenchHorizon.getAttribute('data-auth-workbench-horizon');authResetOpportunity();return;}
-    var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){HOME_IDEA.riskMode=workbenchRisk.getAttribute('data-auth-workbench-risk');authResetOpportunity();return;}
+    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){homeIdea.symbol=null;homeIdea.query='';authRenderOpportunityOnly();return;}
+    var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){homeIdea.view=workbenchView.getAttribute('data-auth-workbench-view');authRenderOpportunityOnly();return;}
+    var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){homeIdea.horizon=workbenchHorizon.getAttribute('data-auth-workbench-horizon');authResetOpportunity();return;}
+    var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){homeIdea.riskMode=workbenchRisk.getAttribute('data-auth-workbench-risk');authResetOpportunity();return;}
     var workbenchAnalyze=ev.target.closest&&ev.target.closest('[data-auth-workbench-analyze]');if(workbenchAnalyze&&!workbenchAnalyze.disabled){authOpenHomeIdea(workbenchAnalyze.getBoundingClientRect());return;}
     var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){HOME_SCOUT.scope=nextScope;HOME_SCOUT.sector=null;authBookSummary();authResetOpportunity();}return;}
-    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null;if(scoutSector.hasAttribute('data-auth-sector-match')){HOME_IDEA.symbol=null;HOME_IDEA.query='';}if(nextSector!==HOME_SCOUT.sector){HOME_SCOUT.sector=nextSector;authBookSummary();authResetOpportunity();focusSector(nextSector);}else authRenderOpportunityOnly();return;}
+    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null;if(scoutSector.hasAttribute('data-auth-sector-match')){homeIdea.symbol=null;homeIdea.query='';}if(nextSector!==HOME_SCOUT.sector){HOME_SCOUT.sector=nextSector;authBookSummary();authResetOpportunity();focusSector(nextSector);}else authRenderOpportunityOnly();return;}
     var scoutGoal=ev.target.closest&&ev.target.closest('[data-auth-scout-goal]');if(scoutGoal){var nextGoal=scoutGoal.getAttribute('data-auth-scout-goal');if(nextGoal!==HOME_SCOUT.goal){HOME_SCOUT.goal=nextGoal;authResetOpportunity();}return;}
     var opportunityScan=ev.target.closest&&ev.target.closest('[data-auth-opportunity-scan]');if(opportunityScan){authRunOpportunityScan();return;}
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
   });boardEl.addEventListener('input',function(ev){if(state.level!=='book')return;
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){HOME_IDEA.query=ev.target.value;var host=document.querySelector('.homeideamatchhost');if(host)host.innerHTML=authHomeUnderlyingMatchesHTML();return;}
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);HOME_IDEA.targetCents=dollars>0?Math.round(dollars*100):null;authRefreshHomeIdeaAction();return;}
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);HOME_IDEA.holdingsShares=shares>0?Math.round(shares):null;authRefreshHomeIdeaAction();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){homeIdea.query=ev.target.value;var host=document.querySelector('.homeideamatchhost');if(host)host.innerHTML=authHomeUnderlyingMatchesHTML();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);homeIdea.targetCents=dollars>0?Math.round(dollars*100):null;authRefreshHomeIdeaAction();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);homeIdea.holdingsShares=shares>0?Math.round(shares):null;authRefreshHomeIdeaAction();return;}
   });boardEl.addEventListener('keydown',function(ev){
     if(ev.key==='Enter'&&ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){var first=document.querySelector('.homeideamatch');if(first){ev.preventDefault();first.click();}return;}
     if(ev.key!=='Enter'&&ev.key!==' ')return;var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(!riskPoint)return;ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));});
@@ -5794,15 +5571,14 @@ function focusSector(sec){
     if(first){HOME_AUTH_SYMBOL=first;authRenderMarketPanels();}
     window.DeskBackend.focusBookSector(owned?owned.key:sec).then(function(context){if(focusSeq!==HOME_AUTH_FOCUS_SEQ)return;if(!context||context.sectorLens&&context.sectorLens.available===false){toast(context&&context.sectorLens&&context.sectorLens.message||'This sector is unavailable in the active market universe.');return;}if(first)HOME_AUTH_SYMBOL=first;authRenderMarketPanels();}).catch(function(error){if(focusSeq===HOME_AUTH_FOCUS_SEQ)toast(error&&error.message||'Sector context could not load.');});return;
   }
-  SECTOR_FOCUS=sec; if(state.level!=='book')go('book'); updateThread(); scrollToBand('sectorBand'); }
+}
 function focusSymbol(sym){
   if(deskBackendEnabled()){
     sym=String(sym||'').toUpperCase();var focusSeq=++HOME_AUTH_FOCUS_SEQ;if(state.level!=='book')go('book');
     HOME_AUTH_SYMBOL=sym;authRenderMarketPanels();
     window.DeskBackend.focusBookSymbol(sym).then(function(context){if(focusSeq!==HOME_AUTH_FOCUS_SEQ)return;if(!context){toast(sym+' is not in the active market universe.');return;}HOME_AUTH_SYMBOL=sym;authRenderMarketPanels();}).catch(function(error){if(focusSeq===HOME_AUTH_FOCUS_SEQ)toast(error&&error.message||sym+' market context could not load.');});return;
   }
-  CHAIN_SYM=sym; var u=univBy[sym]; if(u)SECTOR_FOCUS=u.sector;
-  if(state.level!=='book')go('book'); updateThread(); scrollToBand('chainBand'); }
+}
 function handleCmd(raw){
   var q=(raw||'').trim().toLowerCase();
   if(!q)return;
@@ -5845,7 +5621,6 @@ function handleCmd(raw){
 /* pre-baked posture presets (Risk chip cycles through them; inherited into Decide's caps) */
 var RISK_PRESETS=[{k:'Conservative',risk:2500,bp:25000},{k:'Balanced',risk:5000,bp:50000},{k:'Aggressive',risk:10000,bp:80000}];
 function postureName(){ for(var i=0;i<RISK_PRESETS.length;i++) if(RISK_PRESETS[i].risk===POSTURE.risk) return RISK_PRESETS[i].k; return 'Custom'; }
-var SECHEAT=[{n:'Semis',v:32,you:true},{n:'Soft',v:26},{n:'Enrg',v:29},{n:'Fin',v:19},{n:'Hlth',v:17},{n:'Cons',v:21}];
 /* book-performance hero — an equity curve + the numbers that tell the book's story (lifted from
    portfolio.html's KPI set: realized YTD, premium working, win rate — plus live net greeks). */
 var BOOK_REALIZED=18420, BOOK_WINRATE=68, BOOK_DAY=184;
@@ -5921,14 +5696,11 @@ function drawBookEq(){ var svg=document.getElementById('bookEq'); if(!svg)return
   svg.innerHTML=g; }
 
 /* what the chain + sector lenses point at (driven by the symbol⇢sector entry). */
-var SECTOR_FOCUS='Semis';
 /* THE MARKET STRIP — one canonical builder for the merged top row's middle zone (was the .pulse row).
    Observed vs Simulated is signalled ONCE here: the .mktsrc source tag flips teal→violet and the
    caller adds .sim to tint the numbers. Sim honestly nulls the indices it can't synthesize. */
 function mktStripHTML(){
   var sim=MKT_MODE==='sim';
-  var heat=SECHEAT.map(function(s){var h=Math.max(22,Math.round((s.v-12)/24*100));
-    return '<span class="hx'+(s.you?' you':'')+'" title="'+s.n+' · IV '+s.v+'"><span class="hxbar"><i style="height:'+h+'%"></i></span><em>'+s.n+'</em></span>';}).join('');
   if(deskBackendEnabled()){
     var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.summary||{},a=authAccount(d),phase=BOOK_AUTH.phase;
     if(!BOOK_AUTH.data)return '<span class="mktsrc">● PRACTICE</span><span class="idx"><b>Loading your book…</b></span>';
@@ -5936,17 +5708,6 @@ function mktStripHTML(){
       '<span class="idx">Equity <b>'+authMoney(authDollarsFromCents(s.totalValueCents))+'</b></span><span class="idx">BP <b>'+authMoney(authDollarsFromCents(s.buyingPowerCents))+'</b></span><span class="pdiv"></span>'+
       '<span class="mktsec">'+Number(s.openTradesCount||0)+' packages · '+Number(s.sharesPositions||0)+' share positions</span>'+(status?'<span class="badge warn">'+deskEsc(status)+'</span>':'');
   }
-  var src=sim ? '◈ SIM · '+SIM.world+' · seed '+SIM.seed : '● Cboe · 15:42';
-  var spx=sim ? Math.round(marketSeries()[MKT_SERIES.length-1]) : '5,970';
-  var sec=SECTOR_FOCUS;
-  return '<span class="mktsrc" title="'+(sim?'synthetic · deterministic per seed':'live Cboe · ~15 min')+'">'+src+'</span>'+
-    '<span class="idx">SPX <b>'+spx+'</b>'+(sim?'':' <i class="pos">+0.4%</i>')+'</span>'+
-    '<span class="idx">NDX <b>'+(sim?'—':'21,880')+'</b>'+(sim?'':' <i class="pos">+0.6%</i>')+'</span>'+
-    '<span class="idx">VIX <b>'+(sim?'—':'14.2')+'</b>'+(sim?'':' <i class="neg">−3.1%</i>')+'</span>'+
-    '<span class="pdiv"></span>'+
-    '<span class="mktsec">'+sec.toUpperCase()+' IV <b>'+(sim?'—':'32')+'</b>'+(sim?'':' 85th')+'</span>'+
-    (sim?'':'<span class="badge ok">short premium favored</span>')+
-    '<div class="heat">'+heat+'</div>';
 }
 function wireLanding(){
   var imb=document.getElementById('importBtn'); if(imb) imb.onclick=function(){ openImport(imb.getBoundingClientRect()); };
@@ -5972,8 +5733,6 @@ function cyclePosture(kind){
 }
 
 /* ---- data-lens primitives (shared by the sector + market zoom-out research) ---- */
-var MKT_SERIES=[5820,5835,5828,5851,5866,5858,5872,5889,5905,5898,5916,5931,5925,5949,5970];
-var SEMIS_SERIES=[252.4,255.1,258.0,254.6,260.2,264.1,262.3,268.0,266.4,270.1,265.8,268.9,272.2,269.6,268.5];
 var HOME_RISK_FACET='conc';
 /* One contextual feed: position, focused-sector and market facts share the same Home lens.
    TODO after desktop sign-off: Beginner/Expert presentation lenses and measured mobile layouts. */
@@ -6500,15 +6259,6 @@ function updateAuthoritativeDeclaration(key,value){
   change.catch(function(){/* the bridge publishes the typed declaration failure */});
 }
 
-/* lightweight Black–Scholes for Build-your-own pricing (ported from compose) */
-function ivForK(S,K){var m=(K-S)/S;return Math.max(0.28,Math.min(0.95,0.44-m*0.55+Math.abs(m)*0.25));}
-function bsPrice(S,K,T,sig,type){
-  if(T<=0)T=1/365; if(sig<=0)sig=0.01;
-  var sq=Math.sqrt(T), d1=(Math.log(S/K)+(sig*sig/2)*T)/(sig*sq), d2=d1-sig*sq;
-  var Nd1=ncdf(d1,0,1), pdf=Math.exp(-d1*d1/2)/Math.sqrt(2*Math.PI), price, delta;
-  if(type==='c'){price=S*Nd1-K*ncdf(d2,0,1);delta=Nd1;} else {price=K*ncdf(-d2,0,1)-S*ncdf(-d1,0,1);delta=Nd1-1;}
-  return {price:Math.max(0.02,price),delta:delta,gamma:pdf/(S*sig*sq),vega:S*pdf*sq/100,theta:(-(S*pdf*sig)/(2*sq))/365};
-}
 
 /* candidate = a POS-shaped object so drawPayoff / the scenario spectrum / breakevens all work unchanged.
    maxLoss/maxProfit are computed from the curve so they always match it. */
@@ -6529,36 +6279,10 @@ function candLegStr(c){return c.legs.map(function(l){
 /* Front B S2: the curated AMD ROLLCANDS / IDEACANDS fixture fans (incl. the invented 300-share
    covered-call holdings) are removed. Ranked candidates come from the backend strategy engine. */
 
-/* ======================================================================
-   UNDERLYING UNIVERSE + parametric candidate generator.
-   Decide is NO LONGER AMD-locked: any symbol here can seed a New idea,
-   an import, or a symbol jump, and the engine builds a coherent fan for it.
-   ====================================================================== */
-/* 'earn' = next scheduled earnings/catalyst date (a real event calendar). A catalyst that lands
-   BEFORE a candidate's expiry fattens that name's gap risk (see tailParams evSoon). ETFs: none. */
-var UNIV=[
- {sym:'AMD', name:'Adv. Micro Devices',spot:493.00, em:6.2, iv:42, ivRank:72, sector:'Semis',    chg:1.8, earn:'07-Aug'},
- {sym:'NVDA',name:'NVIDIA',            spot:182.40, em:7.4, iv:48, ivRank:66, sector:'Semis',    chg:2.4, earn:'27-Aug'},
- {sym:'AVGO',name:'Broadcom',          spot:1685.00,em:5.8, iv:38, ivRank:70, sector:'Semis',    chg:-0.6,earn:'04-Sep'},
- {sym:'QCOM',name:'Qualcomm',          spot:174.00, em:5.2, iv:34, ivRank:58, sector:'Semis',    chg:0.4, earn:'30-Jul'},
- {sym:'SMH', name:'Semis ETF',         spot:268.50, em:4.6, iv:26, ivRank:44, sector:'Semis',    chg:0.9},
- {sym:'MU',  name:'Micron',            spot:971.00, em:8.5, iv:52, ivRank:78, sector:'Semis',    chg:3.1, earn:'26-Sep'},
- {sym:'MRVL',name:'Marvell',           spot:118.50, em:8.1, iv:55, ivRank:84, sector:'Semis',    chg:2.7, earn:'28-Aug'},
- {sym:'INTC',name:'Intel',             spot:34.20,  em:6.5, iv:44, ivRank:81, sector:'Semis',    chg:-0.9,earn:'24-Jul'},
- {sym:'ARM', name:'Arm Holdings',      spot:158.00, em:9.2, iv:60, ivRank:76, sector:'Semis',    chg:1.9, earn:'30-Jul'},
- {sym:'LRCX',name:'Lam Research',      spot:98.00,  em:6.8, iv:46, ivRank:71, sector:'Semis',    chg:0.8, earn:'23-Jul'},
- {sym:'TSM', name:'Taiwan Semi',       spot:208.00, em:5.4, iv:36, ivRank:62, sector:'Semis',    chg:1.2, earn:'16-Oct'},
- {sym:'AAPL',name:'Apple',             spot:227.50, em:4.1, iv:24, ivRank:38, sector:'Tech',     chg:0.3, earn:'31-Jul'},
- {sym:'TSLA',name:'Tesla',             spot:412.00, em:9.6, iv:58, ivRank:69, sector:'Autos',    chg:-1.4,earn:'23-Jul'},
- {sym:'MSFT',name:'Microsoft',         spot:468.00, em:3.6, iv:22, ivRank:34, sector:'Software', chg:0.5, earn:'29-Jul'},
- {sym:'SPY', name:'S&P 500 ETF',       spot:596.00, em:2.8, iv:15, ivRank:28, sector:'Index',    chg:0.4}
-];
 var MONTHS={Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
 var TODAY_ORD=719;   /* 19-Jul, the desk's "now" (matches the rest of the mock calendar) */
 function dateOrd(str){ var m=(''+str).match(/([0-9]{1,2})-([A-Za-z]{3})/); return m?((MONTHS[m[2]]||13)*100+ +m[1]):9999; }
-var univBy={}; UNIV.forEach(function(u){univBy[u.sym]=u;});
-/* held positions ride on their own richer spot/iv; mirror them into the universe so a jump lands right */
-POS.forEach(function(p){ if(univBy[p.sym]){ univBy[p.sym].spot=p.spot; univBy[p.sym].em=p.em; if(p.iv)univBy[p.sym].iv=p.iv; if(p.ivRank)univBy[p.sym].ivRank=p.ivRank; } });
+var univBy={};
 
 /* AMBIENT POSTURE — your standing defaults, shown on the landing and INHERITED into Decide
    (goal lean, risk/collateral caps, and which lane a new order defaults to). */
@@ -6639,104 +6363,6 @@ function calcUndef(legs){
       longStk=legs.some(function(l){return l.t==='s'&&l.q>0;});
   return shortC&&!longC&&!longStk;
 }
-/* fill net/greeks/pop/cap/edge/assign/risk on a {sym,spot,em,legs,...meta} object from the leg engine.
-   Shared by buildCandidate, genCands and imports so numbers are consistent everywhere. */
-function finishCand(c){
-  var spot=c.spot, T=DEC_T, net=0,dl=0,th=0,vg=0,gm=0,coll=0,hasStock=false,shortOpt=0;
-  c.legs.forEach(function(l){
-    if(l.t==='s'){dl+=l.q/100;hasStock=true;coll+=Math.abs(l.q)*spot;return;}
-    if(l.q<0)shortOpt+=Math.abs(l.q);
-    var pr=bsPrice(spot,l.k,T,ivForK(spot,l.k),l.t);
-    net+=-l.q*pr.price*100; dl+=l.q*pr.delta; th+=l.q*pr.theta*100; vg+=l.q*pr.vega*100; gm+=l.q*pr.gamma*100;
-    if(l.q<0&&l.t==='p')coll+=l.k*100*Math.abs(l.q);
-  });
-  c.net=Math.round(net); c.credit=c.net;
-  c.delta=Math.round(dl*100)/100; c.theta=Math.round(th); c.vega=Math.round(vg); c.gamma=Math.round(gm*100)/100;
-  if(c.undef==null)c.undef=calcUndef(c.legs);
-  candStats(c); c.pop=popCalc(c);
-  /* capital committed: a DEFINED spread ties up only its max loss (the long leg caps it);
-     a collateralized short (CSP / covered) ties up the collateral / stock value; an uncovered
-     short ties up margin. (Previously spreads wrongly used the naked short-leg collateral.) */
-  c.cap=Math.round(c.undef ? spot*100*shortOpt*0.20 : ((isCollat(c)||hasStock) ? Math.max(coll,c.maxLoss) : c.maxLoss));
-  c.edge=Math.round(c.credit*0.06);
-  if(c.assign==null)c.assign=Math.max(4,Math.round((100-c.pop)*0.5));
-  if(!c.risk)c.risk=c.undef?'high':c.maxLoss<2500?'low':c.maxLoss<9000?'mid':'high';
-  return c;
-}
-/* net greeks under a scenario's assumptions — arbitrary price px, IV-point shift, days elapsed.
-   Same leg engine as finishCand; drives the mechanics panel as a scenario scrubs (see liveGreeks). */
-function greeksAt(c, px, ivShift, daysFwd){
-  var T=Math.max(1/365, DEC_T-(daysFwd||0)/365), dl=0,th=0,vg=0,gm=0, shortITM=0;
-  c.legs.forEach(function(l){
-    if(l.t==='s'){ dl+=l.q/100; return; }
-    var pr=bsPrice(px,l.k,T,Math.max(0.05,ivForK(px,l.k)+(ivShift||0)/100),l.t);
-    dl+=l.q*pr.delta; th+=l.q*pr.theta*100; vg+=l.q*pr.vega*100; gm+=l.q*pr.gamma*100;
-    if(l.q<0) shortITM=Math.max(shortITM, Math.abs(pr.delta));   /* P(ITM)≈|Δ| of the nearest short */
-  });
-  return {delta:dl, theta:th, vega:vg, gamma:gm, assign:Math.round(shortITM*100)};
-}
-/* the DISPLAYED greeks: the position's shown baseline + the modelled CHANGE from now→(px,iv,days),
-   so t=0 lands exactly on the baseline numbers and the move is what animates (no jump on play). */
-function liveGreeks(c, px, ivShift, daysFwd){
-  var g0=greeksAt(c,c.spot,0,0), g=greeksAt(c,px,ivShift,daysFwd);
-  return {
-    delta:(+c.delta||0)+(g.delta-g0.delta),
-    theta:(+c.theta||0)+(g.theta-g0.theta),
-    vega:(+c.vega||0)+(g.vega-g0.vega),
-    gamma:(+c.gamma||0)+(g.gamma-g0.gamma),
-    assign:Math.max(0,Math.min(100,(+c.assign||0)+(g.assign-g0.assign)))
-  };
-}
-/* MARK-TO-MARKET value under a scenario (via BS, so IV expansion + time decay visibly move the
-   number — the at-expiry payoff can't show either). Anchored at the line's real open P/L so t=0
-   shows today's number and you watch it change. */
-function scenMarkRaw(c, px, ivShift, daysFwd){
-  var T=Math.max(1/365, DEC_T-(daysFwd||0)/365), t=(c.net||0);
-  c.legs.forEach(function(l){
-    if(l.t==='s'){ t+=l.q*(px-l.k); return; }
-    var pr=bsPrice(px,l.k,T,Math.max(0.05,ivForK(px,l.k)+(ivShift||0)/100),l.t);
-    t+=l.q*pr.price*100;
-  });
-  return t;
-}
-function scenPL(c, px, ivShift, daysFwd){
-  var base=(typeof c.pnl==='number')?c.pnl:0;
-  return base + (scenMarkRaw(c,px,ivShift,daysFwd) - scenMarkRaw(c,c.spot,0,0));
-}
-/* the engine's fan for an underlying: six coherent income/defined-risk expressions at
-   spot-relative strikes, ranked so cands[0] is a sensible top pick (penalise undefined/high risk). */
-function genCands(u){
-  var s=u.spot, q=s>600?1:3, ex='21-Aug';
-  var defs=[
-   {id:'g-bps',short:rk(s,.955)+'/'+rk(s,.935)+' put spread',name:'Bull put spread '+rk(s,.955)+'/'+rk(s,.935),lean:'neutral',
-     legs:[{t:'p',k:rk(s,.955),q:-q},{t:'p',k:rk(s,.935),q:q}],
-     why:'Highest-chance income line on a neutral-to-bullish view — defined risk, wins while '+u.sym+' holds above ~'+rk(s,.955)+'.'},
-   {id:'g-csp',short:rk(s,.92)+' cash-secured put',name:'Cash-secured put '+rk(s,.92),lean:'bull',risk:'high',
-     legs:[{t:'p',k:rk(s,.92),q:-q}],
-     why:'Get paid to set a '+rk(s,.92)+' buy price on '+u.sym+' — assignment just means owning it a little cheaper.'},
-   {id:'g-ic',short:rk(s,.94)+'/'+rk(s,1.06)+' condor',name:'Iron condor '+rk(s,.94)+'/'+rk(s,1.06),lean:'neutral',
-     legs:[{t:'p',k:rk(s,.92),q:q},{t:'p',k:rk(s,.94),q:-q},{t:'c',k:rk(s,1.06),q:-q},{t:'c',k:rk(s,1.08),q:q}],
-     why:'A pure range bet — defined risk both sides, best when '+u.sym+' chops between '+rk(s,.94)+' and '+rk(s,1.06)+'.'},
-   {id:'g-bcs',short:rk(s,1.06)+'/'+rk(s,1.08)+' call spread',name:'Bear call spread '+rk(s,1.06)+'/'+rk(s,1.08),lean:'bear',
-     legs:[{t:'c',k:rk(s,1.06),q:-q},{t:'c',k:rk(s,1.08),q:q}],
-     why:'The bearish-lean income leg — wins unless '+u.sym+' squeezes up through '+rk(s,1.06)+'.'},
-   {id:'g-cc',short:rk(s,1.05)+' covered call',name:'Covered call '+rk(s,1.05),lean:'bull',risk:'high',
-     legs:[{t:'s',k:s,q:100*q},{t:'c',k:rk(s,1.05),q:-q}],
-     why:'Own '+(100*q)+' '+u.sym+' and rent the upside — income now, gains capped at '+rk(s,1.05)+', downside is the stock.'},
-   {id:'g-str',short:rk(s,.94)+'/'+rk(s,1.06)+' strangle',name:'Short strangle '+rk(s,.94)+'/'+rk(s,1.06),lean:'neutral',risk:'high',undef:true,
-     legs:[{t:'p',k:rk(s,.94),q:-q},{t:'c',k:rk(s,1.06),q:-q}],
-     why:'Biggest credit, undefined risk — only if you have the buying power; add wings to define it.'}
-  ];
-  defs.forEach(function(d){ d.sym=u.sym; d.spot=s; d.em=u.em; d.exp=ex;
-    d.analog='12 similar '+d.name.split(' ')[0].toLowerCase()+' setups modeled'; d.ivnote='IV rank '+u.ivRank+(u.iv>34?' · rich to realized':' · near realized');
-    finishCand(d); });
-  return defs.sort(function(a,b){ return (b.pop-(b.undef?22:0)-(b.risk==='high'?7:0)) - (a.pop-(a.undef?22:0)-(a.risk==='high'?7:0)); });
-}
-/* the fixture fan factory (used only on the retired file:// fixture path; the served desk ranks
-   candidates in the backend). Front B S2 dropped the curated AMD ROLLCANDS/IDEACANDS sets. */
-function candsFor(kind,u){
-  return genCands(u);
-}
 
 /* ======================================================================
    IMPORTED POSITIONS — a trade brought in from an external brokerage.
@@ -6783,80 +6409,13 @@ function importedPosition(trade,real){
 /* the one primitive that puts a position INTO the book — used by imports (and reusable
    for anything else that adds a tracked line). A real imported trade flows through here. */
 function pushToBook(p){ POS.push(p); EXTRA[p.id]=p; byId[p.id]=p;
-  try{ if(!p.authoritative)p.pop=popCalc(p); }catch(e){}   /* fixture lines only; a served line keeps its backend popEntry */
   _bookTailCache=null;                  /* the book's concentration/tail must reflect the new position */
   cardEl[p.id]=makeCard(p); }
 
-/* ======================================================================
-   TAIL / GAP-RISK MODEL — the terminal-price distribution is a quiet diffusion
-   BODY plus a rare, calibrated DOWN-GAP, so a tail-exposed credit trade can no
-   longer hide a catastrophic gap behind a benign win-rate. General & per-symbol:
-   calibrated from IV (expected move), IV-rank, sector and known events — no AI.
-   The jump variance is CARVED OUT of the IV-implied total so we don't double-count
-   the fear already priced into IV. Feeds popCalc, the Monte-Carlo, the bell and
-   the tail readout — one distribution, one source of truth.
-   ====================================================================== */
 var GAP_STANCE='base';                       /* the user's standing gap-risk assumption (outlook dial) */
-var GAP_DIAL={calm:0.5, base:1, tense:1.9};
-/* per-sector priors (NOT a fit): jump intensity over the horizon + characteristic down-gap. em is
-   the only real market anchor. IV-rank scales the intensity; a known catalyst fattens it. */
-var SECTOR_GAP={ Semis:{lam:0.09,gap:0.15}, Autos:{lam:0.09,gap:0.16}, Tech:{lam:0.05,gap:0.11},
-  Software:{lam:0.04,gap:0.10}, Index:{lam:0.025,gap:0.07}, Health:{lam:0.045,gap:0.10}, default:{lam:0.05,gap:0.11} };
-function tailParams(c){
-  var u=univBy[c.sym]||{}, sec=SECTOR_GAP[u.sector]||SECTOR_GAP.default;
-  var ivr=(typeof u.ivRank==='number'?u.ivRank:55), dial=GAP_DIAL[GAP_STANCE]||1;
-  /* a known catalyst (earnings) that lands in the future BUT BEFORE this trade's expiry fattens the
-     jump — the scheduled-event counterpart to the sector base rate. */
-  var evSoon=false, evName=null;
-  if(u.earn){ var eo=dateOrd(u.earn), xo=c.exp?dateOrd(c.exp):9999; if(eo>=TODAY_ORD && eo<=xo){ evSoon=true; evName=u.earn; } }
-  var evMult=evSoon?1.7:1;
-  var L=Math.max(0.015,Math.min(0.45, sec.lam*(0.7+ivr/100*0.7)*evMult*dial));  /* jump intensity over the horizon */
-  var gap=Math.max(0.05,Math.min(0.30, sec.gap*(1+(ivr-50)/100*0.3)*(evSoon?1.1:1)));  /* characteristic down-gap size (a touch wider through an event) */
-  var muJ=Math.log(1-gap), dJ=0.05;            /* log-return jump: mean = the gap, small dispersion */
-  var vBody=Math.pow((c.em||6)/100,2);         /* body keeps the full IV-implied vol; gaps are EXTRA tail risk the smooth IV under-prices */
-  var drift=-0.5*vBody;                        /* martingale BODY only — the down-jumps are left UNCOMPENSATED, so the distribution
-                                                  carries an honest downside skew (POP is a real-world 'will I profit?', not a pricing question) */
-  return {L:L, muJ:muJ, dJ:dJ, vDiff:vBody, sigBody:Math.sqrt(vBody), drift:drift, gap:gap, sector:u.sector||'—', evSoon:evSoon, evName:evName};
-}
-function nlpdf(x,m,s){ var z=(x-m)/s; return Math.exp(-0.5*z*z)/(s*2.5066282746310002); }
-function tailDens(tp,x){ var w=Math.exp(-tp.L), sum=0;   /* Merton Poisson-Gaussian terminal density (log-return) */
-  for(var k=0;k<=6;k++){ sum+=w*nlpdf(x, tp.drift+k*tp.muJ, Math.sqrt(tp.vDiff+k*tp.dJ*tp.dJ)); w*=tp.L/(k+1); }
-  return sum; }
-function popCalc(c){
-  var tp=tailParams(c), spot=c.spot, n=340, loX=Math.log(0.35), hiX=Math.log(1.9), dx=(hiX-loX)/n, p=0, tot=0;
-  for(var i=0;i<n;i++){ var x=loX+dx*(i+0.5), px=spot*Math.exp(x), d=tailDens(tp,x); tot+=d; if(payFor(c,px)>0)p+=d; }
-  return Math.max(1,Math.min(99,Math.round(p/tot*100)));
-}
-/* Fast terminal expected shortfall for the always-visible brief. It integrates the same tail
-   density without constructing the 1,500 multi-session paths; Run simulation therefore brackets
-   the actual path build instead of revealing work that an earlier render already performed. */
-var TAIL_ES_CACHE={};
-function tailExpectedShortfall(c){
-  var key=GAP_STANCE+'|'+hashCand(c), cached=TAIL_ES_CACHE[key]; if(cached!=null)return cached;
-  var tp=tailParams(c), n=340, loX=Math.log(0.35), hiX=Math.log(1.9), dx=(hiX-loX)/n, rows=[], tot=0;
-  for(var i=0;i<n;i++){ var x=loX+dx*(i+0.5), w=tailDens(tp,x); rows.push({pl:payFor(c,c.spot*Math.exp(x)),w:w}); tot+=w; }
-  rows.sort(function(a,b){return a.pl-b.pl;});
-  var target=Math.max(1e-9,tot*.05), used=0, sum=0;
-  for(var j=0;j<rows.length&&used<target;j++){ var take=Math.min(rows[j].w,target-used); sum+=rows[j].pl*take; used+=take; }
-  var out=Math.round(sum/Math.max(1e-9,used)); TAIL_ES_CACHE[key]=out; return out;
-}
-/* the honest tail readout — same distribution: deterministic cost of a characteristic gap + expected shortfall */
-function tailStats(c){
-  var tp=tailParams(c), dn=payFor(c, c.spot*(1-tp.gap)), up=payFor(c, c.spot*(1+tp.gap));
-  /* stress the side that HURTS: down-gaps are the usual equity crash, but an upside-loss trade
-     (short call / call spread) is threatened by an UP-gap — show whichever is worse, honestly. */
-  var worse=dn<=up?{pl:dn,dir:'−'}:{pl:up,dir:'+'};
-  /* A completed child valuation may refine the cheap brief, but it is valid only for this exact
-     package AND this exact market ensemble. A lane/world/seed change can never reuse it. */
-  var ready=(typeof decide==='object'&&decide&&decide._mc&&decide._mcId===hashCand(c)&&decide._mcEnsembleKey===ensembleKey(c));
-  var es=ready?decide._mc.es5:tailExpectedShortfall(c);
-  return {gapPct:Math.round(tp.gap*100), gapPL:Math.round(worse.pl), gapDir:worse.dir, es5:es,
-    atMaxLoss:!c.undef && (worse.pl<=-c.maxLoss*0.98), undef:!!c.undef, sector:tp.sector, lamPct:Math.round(tp.L*100), evName:tp.evName};
-}
 /* The served Desk reads the backend risk grid; only the file:// fixture uses the local tail sketch. */
 function gapLoss(c){
   if(c&&c.authoritative){var rows=authoritativeScenarioRows(c);return rows.length?Math.min.apply(null,rows.map(function(row){return row.pnl;})):null;}
-  var tp=tailParams(c); return Math.min(payFor(c,c.spot*(1-tp.gap)), payFor(c,c.spot*(1+tp.gap)));
 }
 /* BOOK-level tail — the concentration bites here: ONE shared sector jump hits every line in that
    sector together (not independent per-name tails), so the book's worst-case is far worse than the
@@ -6864,30 +6423,6 @@ function gapLoss(c){
 function bookGapFrac(){ var secR={}; POS.forEach(function(p){ var s=(univBy[p.sym]||{}).sector||'—'; secR[s]=(secR[s]||0)+p.riskPct; });
   var d=Object.keys(secR).sort(function(a,b){return secR[b]-secR[a];})[0]||'default';
   return {sector:d, gap:(SECTOR_GAP[d]||SECTOR_GAP.default).gap}; }
-/* the tail of ANY position set, correlated on the BOOK's dominant sector — used both for the book
-   itself and for a hypothetical hedged book (POS + a protective put). */
-function bookTailCore(positions){
-  var bg=bookGapFrac(), domSec=bg.sector, dsp=SECTOR_GAP[domSec]||SECTOR_GAP.default;   /* dominant sector = the book's, not the arg's */
-  var TP=positions.map(function(p){return tailParams(p);});
-  var betas=positions.map(function(p){return ((univBy[p.sym]||{}).sector===domSec)?1:0.35;});
-  var gapPL=0; positions.forEach(function(p,i){ gapPL+=payFor(p, p.spot*(1-betas[i]*TP[i].gap)); });
-  var sysLam=Math.max(0.02,Math.min(0.55, dsp.lam*(GAP_DIAL[GAP_STANCE]||1))), domGap=dsp.gap;
-  var rnd=mulberry32(90210), n=1200, pls=[];
-  for(var it=0;it<n;it++){
-    var sys=(rnd()<sysLam)?(Math.log(1-domGap)+0.05*mcGauss(rnd)):0;
-    var bp=0;
-    for(var i2=0;i2<positions.length;i2++){ var p=positions[i2], tp=TP[i2];
-      var x=tp.drift+tp.sigBody*mcGauss(rnd)+betas[i2]*sys;
-      var k=mcPoisson(rnd, tp.L*0.5);
-      for(var j=0;j<k;j++) x+=tp.muJ+tp.dJ*mcGauss(rnd);
-      var ST=p.spot*Math.exp(x); if(ST<0.01)ST=0.01; bp+=payFor(p,ST);
-    }
-    pls.push(bp);
-  }
-  pls.sort(function(a,b){return a-b;});
-  var kk=Math.max(1,Math.floor(0.05*n)), es=0; for(var t=0;t<kk;t++)es+=pls[t]; es=es/kk;
-  return {gapPct:Math.round(domGap*100), gapPL:Math.round(gapPL), es5:Math.round(es), sector:domSec};
-}
 var _bookTailCache=null;
 function bookTail(){
   var sig=GAP_STANCE+'|'+POS.length+'|'+(POS.map(function(p){return p.id;}).join(','));
@@ -6908,22 +6443,6 @@ function candidateSectorRead(c){
   var held=POS.filter(function(p){return ((univBy[p.sym]||{}).sector||'Other')===sector;});
   var exposure=held.reduce(function(n,p){return n+(p.riskPct||0);},0);
   return {sector:sector,held:held,exposure:exposure,diversifies:held.length===0};
-}
-/* size a protective SMH put to cap ~half the book's worst-5% tail, and measure the hedged tail. */
-function hedgeProposal(){
-  var bt=bookTail(), u=univBy['SMH']; if(!u) return null;
-  var g=bookGapFrac().gap, K=Math.round(u.spot*0.93/5)*5;                 /* ~7% OTM SMH put */
-  var prem=Math.max(0.2, bsPrice(u.spot,K,DEC_T,ivForK(u.spot,K),'p').price)*100;  /* $/contract */
-  var payAtGap=Math.max(1,(K-u.spot*(1-g)))*100;                          /* intrinsic on a sector gap */
-  /* size to offset the CORRELATED sector gap (the part an SMH put can actually hedge — the
-     residual is idiosyncratic single-name risk, which no sector hedge touches). */
-  var qty=Math.max(1, Math.round(Math.abs(bt.gapPL)*0.85/payAtGap));
-  var hedge={id:'hedge',sym:'SMH',spot:u.spot,em:u.em,riskPct:0,cap:Math.round(prem*qty),
-    legs:[{t:'p',k:K,q:qty}], net:-Math.round(prem*qty), undef:false, maxLoss:Math.round(prem*qty)};
-  /* value is measured on the CORRELATED sector gap — the part a sector put can hedge. (The worst-5%
-     is dominated by idiosyncratic single-name blowups SMH can't touch — surfaced as the honest caveat.) */
-  var hedgeGapPay=payFor(hedge, u.spot*(1-g));
-  return {K:K, qty:qty, cost:Math.round(prem*qty), gapPL:Math.round(bt.gapPL), hedgedGapPL:Math.round(bt.gapPL+hedgeGapPay), gapPct:bt.gapPct, es5:bt.es5, hedge:hedge};
 }
 /* ONE hedge entry point — open Decide on the SIZED SMH put in build mode (used by the book lens,
    the home chip and the sector opportunity, so the proposed hedge is identical everywhere). */
@@ -7107,47 +6626,6 @@ function trimMcCaches(){
   if(ek.length>12) delete MC_ENSEMBLE_CACHE[ek[0]];
   if(vk.length>48) delete MC_VALUE_CACHE[vk[0]];
 }
-function mcEnsemble(c){
-  var key=ensembleKey(c); if(MC_ENSEMBLE_CACHE[key])return MC_ENSEMBLE_CACHE[key];
-  var ctx=ensembleContext(c), tp=tailParams(ctx), n=1500, steps=21, rnd=mulberry32(hashEnsemble(c));
-  var wp=MKT_MODE==='sim'?simProfile():SIM_WORLD_PROFILE['Base case'];
-  var bodyVar=tp.vDiff*wp.volScale*wp.volScale;
-  var all=[], frames=[], sig=Math.sqrt(bodyVar)/Math.sqrt(steps), drift=(-.5*bodyVar+wp.terminalDrift)/steps, lam=(tp.L*wp.jumpScale)/steps;
-  for(var i=0;i<n;i++){
-    var x=0,path=[ctx.spot];
-    for(var d=1;d<=steps;d++){
-      x+=drift+sig*mcGauss(rnd);
-      var jumps=mcPoisson(rnd,lam); for(var j=0;j<jumps;j++)x+=tp.muJ*wp.gapScale+tp.dJ*Math.min(1.8,wp.volScale)*mcGauss(rnd);
-      path.push(Math.max(0.01,ctx.spot*Math.exp(x)));
-    }
-    all.push(path);
-  }
-  function quantile(vals,p){ vals.sort(function(a,b){return a-b;}); return vals[Math.min(vals.length-1,Math.max(0,Math.floor(p*(vals.length-1))))]; }
-  for(var day=0;day<=steps;day++){
-    var vals=all.map(function(p){return p[day];});
-    frames.push({p10:quantile(vals.slice(),.10),p50:quantile(vals.slice(),.50),p90:quantile(vals.slice(),.90)});
-  }
-  var ranked=all.slice().sort(function(a,b){return a[steps]-b[steps];});
-  var picks=[.02,.08,.20,.50,.80,.92,.98].map(function(p){return ranked[Math.floor(p*(ranked.length-1))];});
-  var fp=('00000000'+hashEnsemble(c).toString(16)).slice(-8);
-  var out={key:key,n:n,steps:steps,all:all,frames:frames,paths:picks,fingerprint:'ens-'+fp};
-  MC_ENSEMBLE_CACHE[key]=out; trimMcCaches(); return out;
-}
-function mcSim(c){
-  var ens=mcEnsemble(c), vkey=ens.key+'|'+hashCand(c), cached=MC_VALUE_CACHE[vkey]; if(cached)return cached;
-  var n=ens.n, pls=[], wins=0, sum=0;
-  for(var i=0;i<n;i++){
-    var ST=ens.all[i][ens.steps], pl=payFor(c,ST); pls.push(pl); if(pl>0)wins++; sum+=pl;
-  }
-  pls.sort(function(a,b){return a-b;});
-  function q(p){ return pls[Math.min(n-1,Math.max(0,Math.floor(p*n)))]; }
-  var tail=Math.max(1,Math.floor(n*0.05)), es=0; for(var kk=0;kk<tail;kk++)es+=pls[kk]; es=es/tail;  /* expected shortfall (worst 5%) */
-  var valHash=hashText(ens.fingerprint+'|'+hashCand(c));
-  var out={n:n,pls:pls,pProfit:Math.round(wins/n*100),p10:q(.10),p50:q(.50),p90:q(.90),ev:Math.round(sum/n),
-    min:pls[0],max:pls[n-1],es5:Math.round(es),frames:ens.frames,paths:ens.paths,steps:ens.steps,
-    fingerprint:ens.fingerprint,valuationFingerprint:'val-'+('00000000'+valHash.toString(16)).slice(-8)};
-  MC_VALUE_CACHE[vkey]=out; trimMcCaches(); return out;
-}
 function drawMCFan(){ var svg=document.getElementById('mcFan'),live=decide&&authoritativeCandidate(),res=decisionFan(live); if(!svg||!res)return;
   var W=Math.max(300,Math.round(svg.clientWidth||520)), H=Math.max(120,Math.round(svg.clientHeight||150));
   svg.setAttribute('viewBox','0 0 '+W+' '+H);svg.setAttribute('data-path-space',res.space||'price');svg.setAttribute('data-ensemble-fingerprint',res.fingerprint||'');if(res.valuationFingerprint)svg.setAttribute('data-valuation-fingerprint',res.valuationFingerprint);else svg.removeAttribute('data-valuation-fingerprint');
@@ -7280,10 +6758,7 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
   var planContext=planOverride&&planOverride.context||{},declaration=declarationOverride||null;
   var authoritativeIdea=deskBackendEnabled()&&kind==='idea';
   var symbolRequired=kind==='idea'&&!u;
-  var fan=kind==='close'||authoritativeIdea||!u?[]:candsFor(kind,u);
-  /* recompute every candidate's win-odds through the tail-aware model so hand-authored fans
-     (e.g. AMD's) reflect gap risk too — no candidate keeps a stale thin-tailed POP. */
-  fan.forEach(function(c){ c.pop=popCalc(c); });
+  var fan=[];
   decide={kind:kind,posId:posId,act:actLabel||(kind==='idea'?'New idea':kind==='close'?'Close':'Roll'),
     sym:u&&u.sym||null,u:u,spot:u&&u.spot,em:u&&u.em,
     goal:planOverride?(planOverride.intent?authHuman(planOverride.intent):'Undeclared'):declaration?authHuman(declaration.goal):POSTURE.goal,
@@ -7821,7 +7296,6 @@ function ideaUniverse(){
   if(described&&described.scout&&Array.isArray(described.scout.symbols))symbols=symbols.concat(described.scout.symbols);
   if(described&&described.active&&Array.isArray(described.active.symbols))symbols=symbols.concat(described.active.symbols);
   (described&&Array.isArray(described.sectors)?described.sectors:[]).forEach(function(sector){if(sector&&Array.isArray(sector.symbols))symbols=symbols.concat(sector.symbols);});
-  if(!symbols.length)symbols=UNIV.map(function(row){return row.sym;});
   return symbols.map(function(raw){return String(raw||'').trim().toUpperCase();}).filter(function(symbol){if(!symbol||seen[symbol])return false;seen[symbol]=true;return true;}).map(function(symbol){return univBy[symbol]||{sym:symbol,name:symbol,spot:null,chg:null};});
 }
 /* the UNDERLYING chip — a search-and-select picker when the idea isn't tied to a held line,
@@ -8432,7 +7906,7 @@ function markDecisionValuationStale(){
        backend accepts and evaluates the edited package. */
     return;
   }
-  decide._mc=null; decide._mcId=null; decide._mcEnsembleKey=null; decide._mcRunKey=++MC_RUN_SEQ;
+  decide._mc=null; decide._mcId=null; decide._mcRunKey=++MC_RUN_SEQ;
   if(decide.mcOn)decide.mcRunning=true;
 }
 function queueDecisionSimulation(){
@@ -8442,16 +7916,6 @@ function queueDecisionSimulation(){
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
     renderDecide(); return;
   }
-  var runKey=++MC_RUN_SEQ;
-  decide.inspect='paths'; decide.mcOn=true; decide.mcRunning=true; decide._mc=null; decide._mcId=null; decide._mcEnsembleKey=null; decide._mcRunKey=runKey;
-  renderDecide();
-  /* Do not gate the work behind requestAnimationFrame: Safari suspends rAF for a backgrounded
-     tab, which could strand the operation in its pending state. The short timer still gives the
-     browser a paint boundary for the shared running treatment, and continues while hidden. */
-  window.setTimeout(function(){
-    if(!decide||!decide.mcOn||decide._mcRunKey!==runKey)return;
-    var cur=activeCand(); decide._mc=mcSim(cur); decide._mcId=hashCand(cur); decide._mcEnsembleKey=ensembleKey(cur); decide.mcRunning=false; renderDecide();
-  },420);
 }
 var DRAFT_PREVIEW_TIMER=0;
 function backendDraftCatalog(){
@@ -8652,9 +8116,6 @@ function wireDecide(){
       else if(swa==='daysdn') adjustAsm(ss,'days',-1); else if(swa==='daysup') adjustAsm(ss,'days',1);
       else if(swa.indexOf('tu-')===0) setTUnit(ss, swa.slice(3));
       else if(swa==='playtoggle') toggleScenPlay(ss); else if(swa==='spd') setScenSpeed(ss,+swf.getAttribute('data-s')); else if(swa==='scrub'){} else pinScen(ss,null); return; }
-    var gd=t.closest('[data-gapdial]'); if(gd){ GAP_STANCE=gd.getAttribute('data-gapdial');
-      decide.cands.forEach(function(c){ if(!c.authoritative)c.pop=popCalc(c); }); POS.forEach(function(p){ if(!p.authoritative)p.pop=popCalc(p); }); _bookTailCache=null;
-      if(authoritativeCandidate())renderDecide();else renderAfterDecisionChange();return; }
     var b=t.closest('[data-dec]'); if(b){ decAction(b.getAttribute('data-dec'), b); return; }
     var ob=t.closest('[data-obj]'); if(ob){var declarationKey=ob.getAttribute('data-obj'),declarationValue=ob.getAttribute('data-val');
       if(decide.kind==='idea'&&decide.intentOpen){var draft=ensureIdeaDraft(),prior=draft[declarationKey];draft[declarationKey]=declarationValue;if(declarationKey==='goal'&&String(prior||'').toLowerCase()!==String(declarationValue||'').toLowerCase()){draft.targetCents=null;draft.holdingsShares=null;draft.assignmentPreference=null;}renderDecide();}
@@ -8883,7 +8344,7 @@ function drawExposureMap(cfg){
   var X=function(d){return padL+(W-padL-padR)*(d+dMax)/(2*dMax);};
   var Y=function(v){return H-padB-(H-padB-padT)*(v-cLo)/((cHi-cLo)||1);};
   /* stress = loss on the characteristic sector gap; drives temperature (honest — a collateralised CSP that only dips stays cool, not scary-red) */
-  var gapF=1-bookGapFrac().gap, stress=POS.map(function(p){var v=payFor(p,p.spot*gapF);return v<0?-v:0;});
+  var gapF=1-0.11, stress=POS.map(function(p){var v=payFor(p,p.spot*gapF);return v<0?-v:0;});   /* Front B E: fixed characteristic-gap stress; the fixture per-sector gap model is deleted */
   var maxStress=Math.max.apply(0,stress)||1;
   var g='';
   var xz=X(0);
@@ -8946,7 +8407,7 @@ function wireExpMapSelect(svg, info, cfg){
     var lines=POS.filter(function(p){return sel.indexOf(p.id)>=0;});
     svg.querySelectorAll('.rkdot').forEach(function(c){c.classList.toggle('selon',sel.indexOf(c.getAttribute('data-id'))>=0);});
     if(!lines.length){ if(info)info.innerHTML='<b>Nothing enclosed.</b> Drag a box around two or more dots to pool them.'; return; }
-    var gapF2=1-bookGapFrac().gap, cap=0,nd=0,st=0,risk=0; lines.forEach(function(p){cap+=p.cap;nd+=(+p.delta||0);st+=Math.max(0,-payFor(p,p.spot*gapF2));risk+=p.riskPct;});
+    var gapF2=1-0.11, cap=0,nd=0,st=0,risk=0; lines.forEach(function(p){cap+=p.cap;nd+=(+p.delta||0);st+=Math.max(0,-payFor(p,p.spot*gapF2));risk+=p.riskPct;});
     if(info)info.innerHTML='<div class="rkselttl">'+lines.length+' lines pooled — '+lines.map(function(p){return p.sym;}).join(' · ')+'</div>'+
       '<div class="rkselstats"><span><i>Capital</i>'+money(cap)+'</span><span><i>Net Δ</i>'+(nd>=0?'+':'')+nd.toFixed(2)+'</span>'+
       '<span><i>Book risk</i>'+Math.round(risk)+'%</span><span class="'+(st>0?'warnv':'')+'"><i>If −10%</i>'+money(-st)+'</span></div>'+
@@ -9001,16 +8462,6 @@ function governorDetail(kind){
 /* ===== market data: OBSERVED (Cboe/live) vs SIMULATED (deterministic per seed+world) ===== */
 function simSeries(base){ var seed=(SIM.seed*2654435761 + hashText(SIM.world))>>>0, rnd=mulberry32(seed), out=[], v=base[0], w=simProfile();
   for(var i=0;i<base.length;i++){ v=v*(1+w.dayDrift+(rnd()-0.5)*2*w.dayVol); out.push(v); } return out; }
-function marketSeries(){ return MKT_MODE==='sim'?simSeries(MKT_SERIES):MKT_SERIES; }
-var SECTOR_SERIES={
-  Semis:SEMIS_SERIES,
-  Software:[438,441,439,445,449,452,450,454,457,455,460,463,461,466,468],
-  Tech:[215,216,214,218,219,221,220,223,224,222,225,226,224,227,228],
-  Autos:[388,392,389,396,401,398,403,407,405,409,406,411,414,410,412],
-  Index:[582,584,583,585,587,586,588,589,591,590,592,593,592,595,597],
-  Energy:[89,90,89,91,92,91,93,94,93,94,92,93,95,94,95]
-};
-function sectorSeries(sec){ var base=SECTOR_SERIES[sec||SECTOR_FOCUS]||SEMIS_SERIES; return MKT_MODE==='sim'?simSeries(base):base; }
 function mktStamp(extra){ return MKT_MODE==='sim'
   ? (deskBackendEnabled()?'<span class="srctag sim" title="staged visual panel">◇ VISUAL FIXTURE</span>':'<span class="srctag sim" title="synthetic · deterministic per seed">◈ SIM · '+SIM.world+' · seed '+SIM.seed+'</span>')
   : (deskBackendEnabled()?'<span class="srctag" title="staged visual panel; New idea uses backend data">◇ VISUAL FIXTURE</span>':'<span class="srctag" title="live Cboe option chain, ~2 min delayed">● Cboe · 2m'+(extra?' · '+extra:'')+'</span>'); }
@@ -9018,7 +8469,6 @@ var SEC_IV={Semis:32,Software:26,Tech:24,Autos:41,Index:15,Energy:29,Financials:
 var SEC_PROXY={Semis:'SMH',Software:'IGV',Tech:'XLK',Autos:'CARZ',Index:'SPY',Energy:'XLE',Financials:'XLF',Health:'XLV',Consumer:'XLY'};
 /* ---- OPTION CHAIN + CANDLES (Cboe when observed / synthetic when simulated) ---- */
 var CHAIN_SYM=null, CHAIN_TF='1M';
-function symSpot(sym){ var u=univBy[sym]; if(u)return u.spot; var p=POS.filter(function(x){return x.sym===sym;})[0]; return p?p.spot:100; }
 /* floating readout card near a hovered dot — sibling of showMapCard, reads the held book */
 function showRiskMapCard(id){
   var card=document.getElementById('homeRiskMapCard'), svg=document.getElementById('homeRiskMap'), host=document.getElementById('riskMain');
@@ -9146,12 +8596,12 @@ function wireGloss(){ var pop=document.getElementById('glossPop'); if(!pop||pop.
   document.addEventListener('mouseout',function(e){ var g=e.target.closest&&e.target.closest('.gloss[data-term]'); if(g){ pop.classList.remove('on'); pop.style.display='none'; } }); }
 
 function boot(){
-  var served=deskBackendEnabled(),fixtureFlag=document.getElementById('fixtureFlag');if(fixtureFlag)fixtureFlag.hidden=served;
+  var served=deskBackendEnabled();
   if(served){POS=[];byId={};state.focus=null;BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};}
   /* one POP definition everywhere: run held positions through the SAME tail-aware model as
      candidates, so a card's 'Chance' matches its own bell + scenario bars (no stale literals).
      Parse each line's expiry so the event-calendar check knows whether a catalyst lands in-window. */
-  POS.forEach(function(p){ if(!p.exp){ var m=(p.legStr||'').match(/exp ([0-9]{2}-[A-Za-z]{3})/); if(m)p.exp=m[1]; } if(!p.authoritative)p.pop=popCalc(p); });
+  POS.forEach(function(p){ if(!p.exp){ var m=(p.legStr||'').match(/exp ([0-9]{2}-[A-Za-z]{3})/); if(m)p.exp=m[1]; } });
   stageEl=document.getElementById('stage');
   boardEl=document.getElementById('board');
   bookEl=document.getElementById('book');
@@ -9192,7 +8642,7 @@ function boot(){
   var tni=document.getElementById('threadNewIdea');
   if(tni) tni.onclick=function(){
     if(importOpen)closeImport(); if(decide)exitDecide();
-    HOME_IDEA.symbol=null;HOME_IDEA.query='';HOME_IDEA.targetCents=null;HOME_IDEA.holdingsShares=null;
+    homeIdea.symbol=null;homeIdea.query='';homeIdea.targetCents=null;homeIdea.holdingsShares=null;
     go('book');authRenderOpportunityOnly();
     var input=document.querySelector('[data-auth-workbench-query]');
     if(input){input.focus({preventScroll:true});if(input.select)input.select();input.scrollIntoView({block:'nearest'});} };
