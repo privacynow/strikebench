@@ -1367,9 +1367,12 @@
   function candidateToDesk(candidate, market) {
     var qty = Math.max(1, Number(candidate.qty || 1));
     var riskProfile = candidate.evaluation && candidate.evaluation.risk || {};
-    // Per-candidate greeks (canonical unit) ride the candidate when present; a previewed/exact
-    // package attaches them from its preview analytics after this map (see buildExactPackageCandidate).
-    var candidateGreeks = canonicalGreeks(candidate.greeks);
+    // Per-candidate greeks (canonical unit): the numeric receipt rides the exact package's preview
+    // analytics; candidate.greeks is only a provenance label. Prefer the preview greeks, then any
+    // numeric candidate.greeks. applyGreeks (preview flow) still refreshes them after this map.
+    var previewGreeks = candidate.executionPreview && candidate.executionPreview.analytics
+      && candidate.executionPreview.analytics.greeks;
+    var candidateGreeks = canonicalGreeks(previewGreeks) || canonicalGreeks(candidate.greeks);
     var terminalPayoff = riskProfile.terminalPayoff || {};
     var payoffPoints = terminalPayoff.available === true && Array.isArray(terminalPayoff.points)
       ? terminalPayoff.points.map(function (point) {
@@ -1450,6 +1453,7 @@
       ivnote: candidate.freshness ? String(candidate.freshness) + ' market inputs' : 'Market input receipt attached',
       breakevens: candidate.breakevens || [],
       evaluation: candidate.evaluation || null,
+      jumpTail: riskProfile.jumpTail || null,
       greeks: candidateGreeks,
       delta: candidateGreeks ? candidateGreeks.deltaShares : null,
       gamma: candidateGreeks ? candidateGreeks.gammaSharesPerDollar : null,
