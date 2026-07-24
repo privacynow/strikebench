@@ -4441,8 +4441,8 @@ function ensureHist(sym){
     /* RV(20) + SMA(20/50) ride the SAME candles from the backend history endpoint — the chart
        draws them instead of a second client-side estimator. Attached per bar (before filtering)
        so each value travels with its own candle and stays aligned. */
-    var ov=doc&&doc.overlays||{},ovRv=ov.rv20||[],ovS20=ov.sma20||[],ovS50=ov.sma50||[];
-    var bars=(doc&&doc.candles||[]).map(function(c,i){return {date:String(c.date||''),o:authNumber(c.open==null?c.o:c.open),h:authNumber(c.high==null?c.h:c.high),l:authNumber(c.low==null?c.l:c.low),c:authNumber(c.close==null?c.c:c.close),v:authNumber(c.volume==null?c.v:c.volume),rv:authNumber(ovRv[i]),sma20:authNumber(ovS20[i]),sma50:authNumber(ovS50[i])};}).filter(function(b){return b.c!=null&&b.c>0;});
+    var ov=doc&&doc.overlays||{},ovS20=ov.sma20||[],ovS50=ov.sma50||[],ovBandUp=ov.bandUp||[],ovBandDn=ov.bandDn||[];
+    var bars=(doc&&doc.candles||[]).map(function(c,i){return {date:String(c.date||''),o:authNumber(c.open==null?c.o:c.open),h:authNumber(c.high==null?c.h:c.high),l:authNumber(c.low==null?c.l:c.low),c:authNumber(c.close==null?c.c:c.close),v:authNumber(c.volume==null?c.v:c.volume),sma20:authNumber(ovS20[i]),sma50:authNumber(ovS50[i]),bandUp:authNumber(ovBandUp[i]),bandDn:authNumber(ovBandDn[i])};}).filter(function(b){return b.c!=null&&b.c>0;});
     bars.forEach(function(b){if(b.o==null)b.o=b.c;if(b.h==null)b.h=Math.max(b.o,b.c);if(b.l==null)b.l=Math.min(b.o,b.c);});
     if(bars.length<2){HIST_STORE[sym]={phase:'error',bars:[],source:doc&&doc.source||null,freshness:doc&&doc.freshness||'MISSING',error:'Stored daily history is unavailable.'};redrawMarketCharts();return;}
     HIST_STORE[sym]={phase:'ready',bars:bars,source:doc.source||'stored',freshness:doc.freshness||'',error:null};
@@ -4561,9 +4561,9 @@ function drawHistChart(wrap){
   var ticks=pfTicks(lo,hi,3);
   ticks.forEach(function(v){var yy=Yv(v);if(yy<padT-1||yy>plotB+1)return;g+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+x1+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)" stroke-dasharray="2 4"/><text x="'+(x0-4)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end">'+(v>=1000?'$'+(v/1000).toFixed(1)+'k':'$'+Math.round(v))+'</text>';});
   (rows.length===1?[0]:[0,1]).forEach(function(f){var idx=Math.round(f*(rows.length-1)),b=rows[idx];if(!b)return;g+='<text x="'+barX(idx).toFixed(1)+'" y="'+(H-3)+'" text-anchor="'+(rows.length===1?'middle':f===0?'start':'end')+'">'+deskEsc(String(b.date).slice(5))+'</text>';});
-  /* realized ±1σ month envelope from the backend RV(20) series — SMA20 · exp(±σ·√(21/252)), σ
-     annualized (one backend source, not a second client estimator) */
-  if(MKT_CHART.ov.band){var bandPts=[];for(var bi=0;bi<rows.length;bi++){var gIdx=weekly?Math.min(bars.length-1,win.start+Math.round((bi+0.5)*rowUnit)):win.start+bi;var gb=bars[gIdx]||{},m=gb.sma20,rv=gb.rv;if(m==null||rv==null){bandPts.push(null);continue;}bandPts.push({x:barX(bi),up:Yv(m*Math.exp(rv*Math.sqrt(21/252))),dn:Yv(m*Math.exp(-rv*Math.sqrt(21/252)))});}
+  /* realized ±1σ month envelope — the backend HistoryOverlays receipt (bandUp/bandDn, =SMA20·exp(±σ·√(21/252))
+     computed server-side off the same RV(20)/SMA20), plotted verbatim — no client estimator */
+  if(MKT_CHART.ov.band){var bandPts=[];for(var bi=0;bi<rows.length;bi++){var gIdx=weekly?Math.min(bars.length-1,win.start+Math.round((bi+0.5)*rowUnit)):win.start+bi;var gb=bars[gIdx]||{},bu=gb.bandUp,bd=gb.bandDn;if(bu==null||bd==null){bandPts.push(null);continue;}bandPts.push({x:barX(bi),up:Yv(bu),dn:Yv(bd)});}
     var seg=bandPts.filter(Boolean);if(seg.length>2){var up='',dn='';seg.forEach(function(pt,ix){up+=(ix?' L ':'M ')+pt.x.toFixed(1)+' '+pt.up.toFixed(1);});for(var ri=seg.length-1;ri>=0;ri--)dn+=' L '+seg[ri].x.toFixed(1)+' '+seg[ri].dn.toFixed(1);g+='<path d="'+up+dn+' Z" fill="var(--violet)" fill-opacity=".07"/>';}}
   if(hasVol){var vmax=Math.max.apply(0,rows.map(function(b){return b.v||0;}))||1,vy0=H-padB,vh=volH;
     rows.forEach(function(b,i){if(!(b.v>0))return;var bw=Math.max(1.2,Math.min(8,plotW/U*.7)),vhh=Math.max(1,vh*(b.v/vmax));g+='<rect x="'+(barX(i)-bw/2).toFixed(1)+'" y="'+(vy0-vhh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+vhh.toFixed(1)+'" fill="'+(b.c>=b.o?'var(--profit)':'var(--loss)')+'" fill-opacity=".38"/>';});}
