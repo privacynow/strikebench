@@ -190,7 +190,17 @@ class ApiIntegrationTest {
         assertThat(news.at("/aggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
         assertThat(news.get("eventRisk")).isEmpty();
 
-        assertThat(get("/api/research/NOPE").statusCode()).isEqualTo(404);
+        // #10-backend: an unknown/quote-less symbol no longer 404s the whole bundle. It returns 200
+        // with the quote slot marked unavailable (with a reason) while every other slot reports its
+        // own independent state, so the desk can render per-slot receipts instead of one blanket error.
+        HttpResponse<String> nope = get("/api/research/NOPE");
+        assertThat(nope.statusCode()).isEqualTo(200);
+        JsonNode nopeBody = Json.parse(nope.body());
+        // The server mapper omits null fields, so an absent quote is either an explicit null or missing.
+        assertThat(nopeBody.path("quote").isNull() || nopeBody.path("quote").isMissingNode()).isTrue();
+        assertThat(nopeBody.get("quoteUnavailableReason").asText()).contains("NOPE");
+        assertThat(nopeBody.at("/evidence/inputs/quote/provenance").asText()).isEqualTo("MISSING");
+        assertThat(nopeBody.get("planEligible").asBoolean()).isFalse();
     }
 
     @Test
@@ -541,9 +551,12 @@ class ApiIntegrationTest {
         assertThat(get("/api/trades/tr_doesnotexist").statusCode()).isEqualTo(404);
         assertThat(get("/api/backtests/bt_doesnotexist").statusCode()).isEqualTo(404);
         assertThat(post("/api/trades/tr_doesnotexist/refresh", "{}").statusCode()).isEqualTo(404);
-        // handler-written 404 bodies survive (not clobbered by the generic mapper)
-        JsonNode research = Json.parse(get("/api/research/NOPE").body());
-        assertThat(research.get("error").asText()).isEqualTo("unknown_symbol");
+        // #10-backend: an unknown research symbol no longer 404s the whole bundle — it returns 200
+        // with the quote slot marked unavailable, so the desk renders per-slot receipts.
+        HttpResponse<String> unknownResearch = get("/api/research/NOPE");
+        assertThat(unknownResearch.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(unknownResearch.body()).get("quoteUnavailableReason").asText()).contains("NOPE");
+        // handler-written 404 bodies still survive (not clobbered by the generic mapper):
         // chains only exist for listed expirations — nothing fabricated
         assertThat(get("/api/research/AAPL/chain?expiration=2026-07-09").statusCode()).isEqualTo(404);
         // expired contracts cannot be opened

@@ -163,24 +163,23 @@ final class ResearchController {
     private void symbolResearch(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
-        Optional<Quote> quote = market.quote(symbol, world);
-        if (quote.isEmpty()) {
-            ctx.attribute("apiErrorWritten", true);
-            ctx.status(404).json(new ApiResponses.ErrorBody("unknown_symbol", "No data for " + symbol));
-            return;
-        }
-        Quote current = quote.get();
         AnalysisContext context = analysisContext.apply(ctx);
         MarketLane lane = MarketLane.of(world, cfg.fixturesOnly(), context);
         MarketLane requiredEvidence = lane == MarketLane.SCENARIO ? MarketLane.OBSERVED : lane;
-        if (!current.evidence().usableIn(requiredEvidence)) {
-            ctx.attribute("apiErrorWritten", true);
-            ctx.status(409).json(new ApiResponses.ErrorBody("market_lane_mismatch",
-                    "The " + lane + " workflow cannot use " + current.evidence().provenance()
-                            + " quote data from " + current.evidence().source()));
-            return;
-        }
         LocalDate today = market.laneToday(worldParam(world), clock);
+        // #10-backend: a missing or lane-mismatched quote no longer 404/409s the WHOLE bundle. The
+        // quote is one input among several — mark it unavailable+reason and keep computing history,
+        // options, benchmarks and regime, so each data slot reports its own state independently.
+        Quote current = market.quote(symbol, world).orElse(null);
+        String quoteUnavailableReason = null;
+        if (current == null) {
+            quoteUnavailableReason = "No " + lane.name().toLowerCase(Locale.ROOT)
+                    + "-lane quote is available for " + symbol + " right now.";
+        } else if (!current.evidence().usableIn(requiredEvidence)) {
+            quoteUnavailableReason = "The " + lane + " workflow cannot use " + current.evidence().provenance()
+                    + " quote data from " + current.evidence().source();
+            current = null; // present but unusable in this lane — treat the quote slot as unavailable
+        }
 
         record IvExp(List<LocalDate> expirations, Double atmIv, DataEvidence evidence) {}
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
@@ -230,15 +229,24 @@ final class ResearchController {
                 earnings = events.earnings(symbol);
             }
             Map<String, DataEvidence> inputs = new LinkedHashMap<>();
-            inputs.put("quote", current.evidence());
+            inputs.put("quote", current != null ? current.evidence() : DataEvidence.missing("quote"));
             inputs.put("history", candles.isEmpty()
                     ? DataEvidence.missing("daily history") : candles.evidence());
-            if (current.optionable()) inputs.put("options", option.evidence());
+            // Include the option-surface evidence whenever we could not rule options out — i.e. the
+            // quote is unavailable (optionable unknown) or the symbol is optionable.
+            if (current == null || current.optionable()) inputs.put("options", option.evidence());
             var evidence = new ApiResponses.EvidenceSummary<>(
                     DataEvidence.aggregate(inputs.values()), inputs);
-            MarketLane planLane = MarketLane.of(world, cfg.fixturesOnly());
-            var eligibility = planEligibility.evaluate(
-                    symbol, planLane, current, option.expirations(), option.evidence());
+            PlanController.PlanSymbolEligibility eligibility;
+            if (current == null) {
+                eligibility = new PlanController.PlanSymbolEligibility(false,
+                        symbol + " has no usable quote in the active market, so an options Plan "
+                                + "cannot be built until the quote returns.");
+            } else {
+                MarketLane planLane = MarketLane.of(world, cfg.fixturesOnly());
+                eligibility = planEligibility.evaluate(
+                        symbol, planLane, current, option.expirations(), option.evidence());
+            }
             EventService.EarningsProximity eventProximity;
             if ("observed".equals(world)) {
                 eventProximity = events.earningsProximity(symbol,
@@ -263,8 +271,10 @@ final class ResearchController {
                     "demo".equals(world) ? "demo sessions (fabricated teaching data)"
                             : world != null && !"observed".equals(world) ? "this simulated world's sessions"
                             : "observed sessions"));
-            ctx.json(new ApiResponses.ResearchDetail<>(symbol, current, current.mark(),
-                    current.usesPreviousCloseFallback(), lane.name(), current.optionable(), option.atmIv(),
+            ctx.json(new ApiResponses.ResearchDetail<>(symbol, current,
+                    current != null ? current.mark() : null, quoteUnavailableReason,
+                    current != null && current.usesPreviousCloseFallback(), lane.name(),
+                    current != null && current.optionable(), option.atmIv(),
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
                     volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
                     volatility.source(), earnings,
@@ -274,7 +284,8 @@ final class ResearchController {
                     demoHistory, candles.barBasis(), candles.priceBasis(), evidence,
                     option.expirations().stream().map(LocalDate::toString).toList(),
                     eligibility.eligible(), eligibility.detail(), benchmarkFuture.get(),
-                    current.markFreshness().name(), today.toString(), regime));
+                    current != null ? current.markFreshness().name() : "UNAVAILABLE",
+                    today.toString(), regime));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);

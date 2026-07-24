@@ -196,6 +196,7 @@ public final class ApiResponses {
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
     public record ResearchDetail<T, U, V, W>(String symbol, T quote, BigDecimal displayPrice,
+                                              String quoteUnavailableReason,
                                               boolean priceIsPreviousClose, String marketLane,
                                               boolean optionable, Double ivAtm,
                                               boolean ivRankAvailable, Double ivRankPct,
