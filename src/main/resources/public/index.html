@@ -6986,7 +6986,7 @@ function renderClose(){
     '<div class="kv"><span>Realized P/L</span><span class="num '+(realized>=0?'pos':'neg')+'">'+money(realized)+'</span></div>'+
     '<div class="kv"><span>Est. cost to close</span><span class="num neg">−$'+closeCost.toLocaleString()+'</span></div>'+
     '<div class="psec" style="margin-top:10px"><div class="field-lbl"><span class="lbl">Lane</span><span class="hint">paper vs real</span></div>'+
-      '<div class="seg" role="group"><button class="'+(o.lane==='paper'?'on':'')+'" data-lane="paper">Paper</button><button class="'+(o.lane==='real'?'on':'')+'" data-lane="real">Real</button></div></div>'+
+      seg3(o.lane,[['paper','Paper'],['real','Real']],'data-lane')+'</div>'+
     (o.review?
       '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext" style="margin-top:6px">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · est. −$'+closeCost.toLocaleString()+' · realizes <b>'+money(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
       :'<div class="placefoot"><button class="btn pri place" data-dec="review">Review &amp; close →</button><span class="placenote">Nothing is sent until you confirm.</span></div>')+
@@ -7997,7 +7997,7 @@ function renderImportPreview(){
     '<div class="mechrow" style="margin-top:12px">'+mechGraphic(p)+'</div>'+
     /* real vs paper flag */
     '<div class="impflag"><div class="field-lbl"><span class="lbl">Is this a real trade?</span><span class="hint">made outside with real money?</span></div>'+
-      '<div class="seg" role="group"><button class="'+(imp.real?'on':'')+'" data-imp-real="1">Real — held at '+t.broker+'</button><button class="'+(!imp.real?'on':'')+'" data-imp-real="0">Paper — hypothetical</button></div>'+
+      seg3(imp.real?'1':'0',[['1','Real — held at '+t.broker],['0','Paper — hypothetical']],'data-imp-real')+
       '<div class="hint" style="margin-top:8px;line-height:1.5">'+laneNote+'</div></div>'+
     '<div class="placefoot"><button class="btn pri wide" data-imp-act="add">↧ Add to book &amp; track — '+(imp.real?'real':'paper')+' lane</button>'+
       '<div class="placenote">'+(imp.real?'It’s a position you already hold; this just brings it in to track and analyse.':'Tracked on the practice lane.')+'</div></div>'+
