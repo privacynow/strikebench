@@ -3715,6 +3715,14 @@ function authLifecyclePriority(verdict){return {DEFEND:0,REDUCE:1,HARVEST:2,ACCE
 function authLifecycleClass(verdict){var v=String(verdict||'').toUpperCase();return v==='DEFEND'?'bad':v==='REDUCE'?'warn':v==='HARVEST'?'pick':v==='ACCEPT_ASSIGNMENT'?'violet':'ok';}
 function authLifecycleLabel(verdict,compact){var v=String(verdict||'').toUpperCase();if(v==='DEFEND')return compact?'Action required':'Defend · action required';if(compact){if(v==='HARVEST')return 'Take profit';if(v==='REDUCE')return 'Trim';if(v==='KEEP')return 'On plan';if(v==='ACCEPT_ASSIGNMENT')return 'Assignment likely';}return authHuman(verdict);}
 function authLifecycleRead(analysis){var decision=analysis&&analysis.decision||{},life=analysis&&analysis.lifecycle||{},carry=life.carryCollateral||{},history=life.history||{},close=life.currentChoice&&life.currentChoice.close||{},events=life.assignmentExit&&life.assignmentExit.eventCrossings||[];return {verdict:decision.verdict||null,summary:decision.summary||null,remaining:authDollarsFromCents(carry.grossRemainingPremiumCents),annualized:authNumber(carry.grossAnnualizedRemainingPremiumPct),captured:authNumber(history.grossPremiumCapturedPct),closeCost:authDollarsFromCents(close.signedNetCloseCashCents==null?null:Math.max(0,-Number(close.signedNetCloseCashCents))),events:Array.isArray(events)?events:[],reduction:decision.reduction||null,dimensions:Array.isArray(decision.dimensions)?decision.dimensions:[]};}
+/* B9: a DEFEND driven only by the MECHANICS dimension being BLOCKED means the position cannot be
+   evaluated from the current book (no executable close evidence) — it is "reviewing / data
+   unavailable", NOT an actionable trigger. A substantive DEFEND (tail, event, capacity, hard
+   limit) still reads "Action required". */
+function authLifecycleBlockedByEvidence(read){
+  if(!read||String(read.verdict||'').toUpperCase()!=='DEFEND')return false;
+  return (read.dimensions||[]).some(function(d){return String(d.name||'').toUpperCase()==='MECHANICS'&&String(d.status||'').toUpperCase()==='BLOCKED';});
+}
 function authAccount(data){var a=data&&data.account||{};return a.account||a;}
 function authPlanRows(data){if(data&&Array.isArray(data.accountPlans))return data.accountPlans;var src=data&&data.planPortfolio&&data.planPortfolio.plans||data&&data.plans||[];return Array.isArray(src)?src:[];}
 function authPlanMutable(plan){var status=String(plan&&plan.status||'').toUpperCase();return !!plan&&plan.open!==false&&plan.assumptionsEditable!==false&&(status==='DRAFT'||status==='ACTIVE');}
@@ -3744,10 +3752,10 @@ function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},ne
   /* faces render once more AFTER the roster order exists, so each card's identity color matches
      its fan line from the very first paint */
   POS.forEach(function(row){var face=cardEl[row.id]&&cardEl[row.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(row);});}
-function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{},lr=authLifecycleRead(p.lifecycle),verdict=lr.verdict;
+function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{},lr=authLifecycleRead(p.lifecycle),verdict=lr.verdict,lifeBlocked=authLifecycleBlockedByEvidence(lr);
   /* the dot is the position's CANONICAL identity color — the same color its fan line, legend
      row, and every future surface use. One palette, matched everywhere. */
-  var exception=authExceptionStatus(prov.freshness);return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(verdict?'<span class="badge lifebadge '+authLifecycleClass(verdict)+'" title="'+(String(verdict).toUpperCase()==='DEFEND'?'A named mechanical, capacity, hard-limit, or tail trigger needs resolution before holding.':'Lifecycle policy verdict')+'">'+deskEsc(authLifecycleLabel(verdict,true))+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
+  var exception=authExceptionStatus(prov.freshness);return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(lifeBlocked?'<span class="badge lifebadge" title="Close evidence is unavailable, so this position cannot be evaluated from the current book right now.">reviewing · data unavailable</span>':verdict?'<span class="badge lifebadge '+authLifecycleClass(verdict)+'" title="'+(String(verdict).toUpperCase()==='DEFEND'?'A named mechanical, capacity, hard-limit, or tail trigger needs resolution before holding.':'Lifecycle policy verdict')+'">'+deskEsc(authLifecycleLabel(verdict,true))+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
     '<div class="cshareRow"><span class="cshare" title="share of maximum loss"><i style="width:'+share.toFixed(1)+'%"></i></span><span class="csharev">'+(share?share.toFixed(0)+'%':'—')+'</span><svg class="cplspark" id="plsp-'+deskEsc(p.id)+'" title="mark history"></svg></div>'+
     '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?authMoney(p.cap)+' max loss':authMoney(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
 }
@@ -3837,7 +3845,7 @@ function authManagementHTML(p,data){var plan=data&&data.plan||p._plan,mg=data&&d
     '<button type="button" class="btn xs" data-auth-manage="forward" title="Play this position through its stored market fan — the honest forward test">▶ Forward test</button></div>';
   var list=rows.length?'<div class="authlist">'+rows.map(function(r){return '<div class="authlistrow"><b>'+deskEsc(r[0])+'</b><span>'+deskEsc(r[1])+'</span></div>';}).join('')+'</div>':'<div class="backendnotice">No linked idea or management review is available for this position.</div>';
   return list+acts;}
-function authLifecycleReceiptHTML(analysis,compact){if(!analysis)return '<div class="backendnotice">Today’s lifecycle receipt is unavailable. P/L remains history, not a hold signal.</div>';var r=authLifecycleRead(analysis),verdict=r.verdict||'KEEP',facts=[],trigger=String(verdict).toUpperCase()==='DEFEND'&&r.dimensions.find(function(row){return String(row.policySignal||'').toUpperCase()==='DEFEND'||String(row.status||'').toUpperCase().indexOf('DEFEND')>=0||String(row.status||'').toUpperCase().indexOf('BLOCK')>=0;});if(trigger)facts.push(authHuman(trigger.name)+' trigger');if(r.remaining!=null)facts.push(authMoney(r.remaining)+' gross premium left');if(r.closeCost!=null)facts.push(authMoney(r.closeCost)+' executable close');if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');if(r.reduction)facts.push('close '+r.reduction.quantityToClose+' restores policy');return '<div class="authlifecycle '+authLifecycleClass(verdict)+'"><span class="badge lifebadge '+authLifecycleClass(verdict)+'">'+deskEsc(authLifecycleLabel(verdict,compact))+'</span><b>'+deskEsc(compact?'Today’s decision':(analysis.lifecycle&&analysis.lifecycle.currentChoice&&analysis.lifecycle.currentChoice.freshEyesQuestion||'Would you open this position today?'))+'</b><p>'+deskEsc(r.summary||'The named lifecycle policy keeps economics, events, capacity, and history separate.')+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';}
+function authLifecycleReceiptHTML(analysis,compact){if(!analysis)return '<div class="backendnotice">Today’s lifecycle receipt is unavailable. P/L remains history, not a hold signal.</div>';var r=authLifecycleRead(analysis),verdict=r.verdict||'KEEP',blocked=authLifecycleBlockedByEvidence(r),facts=[],trigger=String(verdict).toUpperCase()==='DEFEND'&&r.dimensions.find(function(row){return String(row.policySignal||'').toUpperCase()==='DEFEND'||String(row.status||'').toUpperCase().indexOf('DEFEND')>=0||String(row.status||'').toUpperCase().indexOf('BLOCK')>=0;});if(trigger)facts.push(authHuman(trigger.name)+' trigger');if(r.remaining!=null)facts.push(authMoney(r.remaining)+' gross premium left');if(r.closeCost!=null)facts.push(authMoney(r.closeCost)+' executable close');if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');if(r.reduction)facts.push('close '+r.reduction.quantityToClose+' restores policy');return '<div class="authlifecycle '+(blocked?'':authLifecycleClass(verdict))+'"><span class="badge lifebadge '+(blocked?'':authLifecycleClass(verdict))+'">'+deskEsc(blocked?'Reviewing · data unavailable':authLifecycleLabel(verdict,compact))+'</span><b>'+deskEsc(compact?'Today’s decision':(analysis.lifecycle&&analysis.lifecycle.currentChoice&&analysis.lifecycle.currentChoice.freshEyesQuestion||'Would you open this position today?'))+'</b><p>'+deskEsc(r.summary||'The named lifecycle policy keeps economics, events, capacity, and history separate.')+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';}
 function authPositionEnsemble(p){return p&&p._positionData&&p._positionData.positionEnsemble||null;}
 function authPositionFocusedScenario(p){var response=p&&p.authoritativeAnimation,rows=response&&response.checkpoints&&response.checkpoints.positions||[];return rows.find(function(row){return String(row&&row.key||'')===String(p.id);})||null;}
 function authPositionScenarioTargetIndex(p,steps){steps=steps||[];if(!steps.length)return -1;var pins=p&&p.authoritativeAnimation&&p.authoritativeAnimation.receipt&&p.authoritativeAnimation.receipt.conditioningAssumptions&&p.authoritativeAnimation.receipt.conditioningAssumptions.waypoints||[],target=pins.length?pins.reduce(function(max,row){return Math.max(max,Number(row.dayIndex||0));},0):Infinity,best=0;steps.forEach(function(row,index){var progress=Number(row.sessionProgress==null?row.step==null?index:row.step:row.sessionProgress);if(progress<=target)best=index;});return best;}
@@ -4119,50 +4127,9 @@ function renderScenbox(p){
   '</div>';
 }
 
-/* The position's book map is the Home exposure map under the active scenario frame: horizontal
-   motion is live net delta, vertical position remains committed capital, and colour is projected
-   mark P/L. Axes stay fixed while the frame plays, so motion communicates changing exposure rather
-   than a rescaling chart. */
-function positionRiskMap(p){
-  return '<div class="posrisk"><div class="lenshd"><span class="eyebrow">Book in this move</span><span class="hint">all held lines · Δ→ · capital↑</span></div>'+
-    '<svg class="posriskmap" id="posRiskMap-'+p.id+'"></svg>'+
-    '<div class="posriskread"><span>same market frame across the book</span><b data-live="bookmap">'+signed(0)+'</b></div></div>';
-}
-function drawPositionRiskMap(focusP){
-  var svg=document.getElementById('posRiskMap-'+focusP.id); if(!svg)return;
-  var W=Math.max(280,Math.round(svg.clientWidth||620)), H=Math.max(52,Math.round(svg.clientHeight||130));
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  /* Leave a full bubble radius inside the viewBox. Safari otherwise clips the highest-capital
-     and lowest-capital nodes when this same map contracts into the short desktop composition. */
-  var padL=19,padR=14,padT=20,padB=20,cHi=Math.max.apply(0,POS.map(function(p){return p.cap;}))||1;
-  var moves=[-20,0,20], dMax=1.15;
-  POS.forEach(function(p){ moves.forEach(function(m){ var gg=liveGreeks(p,p.spot*(1+m/100),m<0?8:-3,m<0?3:8); dMax=Math.max(dMax,Math.abs(gg.delta)*1.14); }); });
-  var X=function(d){return padL+(W-padL-padR)*(Math.max(-dMax,Math.min(dMax,d))+dMax)/(2*dMax);};
-  var Y=function(cap){return H-padB-(H-padB-padT)*Math.max(0,Math.min(cHi,cap))/cHi;};
-  var xz=X(0), g='<line x1="'+xz.toFixed(1)+'" y1="'+padT+'" x2="'+xz.toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line)" stroke-dasharray="3 3"/>'+
-    '<text x="'+(padL+1)+'" y="10" fill="var(--faint)" font-size="9">short Δ</text><text x="'+(W-padR-1)+'" y="10" fill="var(--faint)" font-size="9" text-anchor="end">long Δ</text>';
-  POS.forEach(function(p){ var r=9+Math.min(6,(p.riskPct||1)/4), x=X(+p.delta||0), y=Y(p.cap), identity=p.sym+' · '+p.struct+' · '+money(p.cap)+' capital';
-    g+='<g class="prnode" data-prid="'+p.id+'" transform="translate('+x.toFixed(1)+' '+y.toFixed(1)+')" role="img" tabindex="0" aria-label="'+identity+'">'+
-      '<title>'+identity+'</title>'+
-      (p.id===focusP.id?'<circle class="prfocus" r="'+(r+4).toFixed(1)+'"/>':'')+
-      '<circle class="prbody" r="'+r.toFixed(1)+'" fill="var(--accent-2)" fill-opacity=".32" stroke="var(--accent-2)" stroke-width="1.3"/></g>'; });
-  svg.innerHTML=g; svg._posrisk={X:X,Y:Y,dMax:dMax};
-  var st=scenSt(focusP.id), tgt=magOf(focusP), t=st.t, m=tgt==null?0:tgt*t;
-  updatePositionRiskMap(focusP,m,tgt==null?0:ivOf(focusP)*t,tgt==null?0:daysOf(focusP)*t);
-}
-function updatePositionRiskMap(focusP,curM,ivsh,dfwd){
-  var svg=document.getElementById('posRiskMap-'+focusP.id); if(!svg||!svg._posrisk)return;
-  var frame=[], maxLoss=1, total=0;
-  POS.forEach(function(p){ var px=p.spot*(1+curM/100), gg=liveGreeks(p,px,ivsh,dfwd), pl=scenPL(p,px,ivsh,dfwd);
-    frame.push({p:p,d:gg.delta,pl:pl}); if(pl<0)maxLoss=Math.max(maxLoss,-pl); total+=pl; });
-  frame.forEach(function(fm){ var n=svg.querySelector('[data-prid="'+fm.p.id+'"]'); if(!n)return;
-    var x=svg._posrisk.X(fm.d), y=svg._posrisk.Y(fm.p.cap); n.setAttribute('transform','translate('+x.toFixed(1)+' '+y.toFixed(1)+')');
-    var body=n.querySelector('.prbody'), col=fm.pl>=0?'var(--profit)':tempColor(Math.min(1,-fm.pl/maxLoss));
-    if(body){ body.setAttribute('fill',col); body.setAttribute('stroke',col); body.setAttribute('fill-opacity',fm.pl>=0?'.28':'.34'); }
-  });
-  var read=(cardEl[focusP.id]||{}).querySelector?cardEl[focusP.id].querySelector('[data-live="bookmap"]'):null;
-  if(read){ read.textContent=signed(total); read.className=total>=0?'pos':'neg'; }
-}
+/* Front B S2: the position book-map (fixture delta/mark colored by the client BS engine
+   liveGreeks/scenPL) is removed — the held surface is display-only and the authoritative book
+   exposure map (drawExposureMap) is the single book scatter. */
 
 /* ---- C · one quiet depth inspector: research · mechanics · book context ---- */
 var POS_PANE={};
@@ -4223,14 +4190,8 @@ function depthBand(p){
   return '<div class="depth posdepth"><div class="inspectrail posinspectrail" role="group" aria-label="Position detail">'+tabs+'</div><div id="'+panelId+'" class="posinspectwell" role="group" aria-labelledby="'+selectedTabId+'">'+paneHtml+'</div></div>';
 }
 
-/* Preserve market/research bearing while the inspector changes panes or an adjustment opens.
-   Book/Position is still staged, so served values stay explicitly labeled as visual fixtures. */
-function positionContextStrip(p){
-  var u=univBy[p.sym]||{},chg=Number(u.chg||0),source=deskBackendEnabled()?'Visual fixture · Book backend pending':'Offline visual fixture';
-  return '<div class="poscontext" role="note"><span class="pcsource">'+source+'</span>'+
-    '<span class="pcquote">'+p.sym+' '+p.spot.toFixed(2)+' <b class="'+(chg>=0?'pos':'neg')+'">'+(chg>=0?'+':'')+chg.toFixed(1)+'%</b> · IV '+p.iv+'%</span>'+
-    '<span class="pcevent">'+deskEsc(p.event)+'</span><span class="pcnews">'+deskEsc(p.news)+'</span></div>';
-}
+/* Front B S2: positionContextStrip (fixture univBy quote/event/news) removed — the held surface
+   is display-only; provenance/market bearing comes from the backend position detail. */
 
 /* ---- D · the manage rail; recommended verb (from the flag) is the primary ---- */
 /* ---- D · the manage area. TIER 1 (inline adjust) lives here: Roll/Adjust/Add open a
@@ -4243,28 +4204,9 @@ function strikeInc(spot){ return spot>800?10:spot>300?5:spot>80?2.5:1; }
 /* ONE add-leg primitive (bloom + Decide both call this — no duplicate add logic) */
 function pushNewLeg(legs, spot){ legs.push({t:'p', k:rk(spot,0.90), q:(spot>600?1:3)}); }
 var closingId=null;
-/* Held structure workbench. The held package is always rendered with the same leg controls used
-   by Roll; the first manipulation creates a proposed adjustment and the ghost payoff preserves
-   the before/after distinction. Nothing silently mutates the held lots. */
-function renderLegs(p){
-  var editing=adjust&&adjust.posId===p.id;
-  var legs=editing?adjust.legs:p.legs;
-  var chips=legs.map(function(l,i){return adjChip(p,l,i);}).join('');
-  return '<div class="legspanel'+(editing?' editing':'')+'">'+
-    '<div class="legshd"><span class="eyebrow">Structure workbench</span>'+
-      '<span class="badge '+(editing?'ok':'')+'">'+(editing?'Proposed':'Held')+'</span>'+
-      '<span class="hint">'+(editing?'compare the draft with the dotted held curve':'use any leg control to begin an adjustment')+'</span>'+
-      (editing?'<span class="mstp expchip"><span class="ml">exp</span><button data-madj="exp-prev">−</button><span class="mv">'+adjust.exp+'</span><button data-madj="exp-next">+</button></span>':'')+
-    '</div>'+
-    '<div class="legrow">'+chips+'<button class="addleg sm" data-madj="add">＋ Add hedge leg</button></div>'+
-  '</div>';
-}
-/* the bottom manage bar: pending-edit controls · close confirm · or the quick actions */
-function manageRail(p){
-  if(closingId===p.id) return renderCloseConfirm(p);
-  if(adjust&&adjust.posId===p.id) return renderPendingBar(p);
-  return '';
-}
+/* Front B S2: renderLegs + manageRail (fixture BS-priced structure workbench / manage rail)
+   removed — the held surface is display-only. The one interactive leg component is
+   backendDecisionLegChip; held-package edits fork a fresh idea via authForkPositionLegs. */
 function renderPendingBar(p){
   var c=adjustCand();
   return '<div class="pendingbar"><div class="pendintro"><span class="eyebrow">Adjustment impact</span><span class="hint">held curve stays dotted · not placed</span></div><div class="adjnums inline">'+adjNums(p,c)+'</div>'+
@@ -4311,8 +4253,7 @@ function openAdjust(posId,kind){
 function closeAdjust(){ var pid=adjust&&adjust.posId; adjust=null; if(pid) refreshManage(pid, true); }   // morph back to current
 function refreshManage(pid, animate){
   var card=cardEl[pid]; if(!card)return; var p=byId[pid];
-  var legsBox=card.querySelector('.bd-legs'); if(legsBox) legsBox.innerHTML=renderLegs(p);
-  var box=card.querySelector('.bd-manage'); if(box) box.innerHTML=manageRail(p);
+  /* Front B S2: the fixture .bd-legs / .bd-manage boxes no longer exist on the display-only card. */
   redrawBloomPayoff(p, animate);
 }
 function adjLeg(p,act,i,d){
@@ -4369,22 +4310,9 @@ function applyAdjust(p){
   layoutForLevel('position',p.id); updateThread();
   window.setTimeout(function(){ toast('Adjustment placed — '+p.sym+' '+p.struct.toLowerCase()+' updated in your book'); },80);
 }
-/* ONE editable leg chip, shared by the bloom (data-adjleg/data-ali) and Decide (data-leg/data-li) */
-function legChip(l,i,a,idx,spot){
-  spot=spot||DEC_SPOT;
-  var side='<button class="tgl '+(l.q<0?'sell':'buy')+'" data-'+a+'="side" data-'+idx+'="'+i+'">'+(l.q<0?'SELL':'BUY')+'</button>';
-  var type=l.t==='s'?'<span class="tgl stockc">STOCK</span>':'<button class="tgl '+(l.t==='c'?'callc':'putc')+'" data-'+a+'="type" data-'+idx+'="'+i+'">'+(l.t==='c'?'CALL':'PUT')+'</button>';
-  var strike=l.t==='s'?'':'<span class="mstp"><span class="ml">K</span><button data-'+a+'="strike" data-'+idx+'="'+i+'" data-d="-1">−</button><span class="mv">'+l.k+'</span><button data-'+a+'="strike" data-'+idx+'="'+i+'" data-d="1">+</button></span>';
-  var qty='<span class="mstp"><span class="ml">'+(l.t==='s'?'Sh':'Qty')+'</span><button data-'+a+'="qty" data-'+idx+'="'+i+'" data-d="-1">−</button><span class="mv">'+Math.abs(l.q)+'</span><button data-'+a+'="qty" data-'+idx+'="'+i+'" data-d="1">+</button></span>';
-  var rm=l.t==='s'?'':'<button class="lrm" data-'+a+'="rm" data-'+idx+'="'+i+'" title="Remove">✕</button>';
-  /* per-leg IV / delta / credit (reclaimed from compose — priced live from our BS engine) */
-  var meta;
-  if(l.t==='s'){ meta='<span class="lgm">'+Math.abs(l.q)+' sh @ '+spot.toFixed(spot>=100?0:2)+' · Δ '+(l.q<0?'−':'+')+'1.00</span>'; }
-  else { var pr=bsPrice(spot,l.k,DEC_T,ivForK(spot,l.k),l.t), iv=Math.round(ivForK(spot,l.k)*100), cr=Math.round(-l.q*pr.price*100);
-    meta='<span class="lgm">IV '+iv+' · Δ'+(pr.delta>=0?'+':'')+pr.delta.toFixed(2)+' · <b class="'+(cr>=0?'pos':'neg')+'">'+(cr>=0?'+':'−')+'$'+Math.abs(cr).toLocaleString()+'</b></span>'; }
-  return '<div class="legr"><div class="legr-top">'+side+type+strike+qty+rm+'</div>'+meta+'</div>';
-}
-function adjChip(p,l,i){ return legChip(l,i,'adjleg','ali',p.spot); }
+/* Front B S2: legChip + adjChip (fixture leg chip priced live from the client BS engine —
+   bsPrice/ivForK) removed. The one editable leg component is backendDecisionLegChip, fed the
+   backend chain receipt; the held surface is display-only. */
 function adjNums(p,c){
   var b=(adjust&&adjust.base)||baseCand(p);
   function delta(nv,ov,lowerBetter){ var x=Math.round(nv-ov); if(x===0)return '<span class="adjd flat">no change</span>'; var good=lowerBetter?x<0:x>0; return '<span class="adjd '+(good?'pos':'neg')+'">'+(x>0?'+':'−')+'$'+Math.abs(x).toLocaleString()+'</span>'; }
@@ -4726,7 +4654,6 @@ function renderAtPrice(s){
   var rows=root.querySelectorAll('.srow[data-si]');
   if(rows.length){ var best=-1,bd=1e9; for(var i=0;i<rows.length;i++){ var si=+rows[i].getAttribute('data-si'), mm=SCEN[si]?SCEN[si].m:0, dd=Math.abs(mm-curM); if(dd<bd){bd=dd;best=i;} }
     for(var j=0;j<rows.length;j++) rows[j].classList.toggle('live', pinned && j===best); }
-  if(root.querySelector('.posriskmap')&&!(p.authoritative&&p.isHeld)) updatePositionRiskMap(p,curM,ivsh,dfwd);
   if(p.isHeld&&root.querySelector('.authscenrisk')){drawAuthoritativePositionRisk(p);overlayAuthoritativePositionPayoff(p);}
   if(p.authoritative&&decide&&decide.mcOn)drawMCFan();
 }
@@ -4763,87 +4690,12 @@ function bookMaxRisk(){ var m=1; for(var i=0;i<POS.length;i++) if(POS[i].riskPct
 /* draw a card's peek mini-payoff once, the first time it's revealed (hover or map-hot) */
 function peekDraw(el,p){ if(!el||el._peekDrawn)return; el._peekDrawn=1; var sv=el.querySelector('.cspark'); if(sv) drawPayoff(sv,p,false); }
 function makeCard(p){
+  /* Front B S2: the held surface is display-only. Every position in the served book is
+     authoritative, so makeCard delegates to the backend-fed card. The former fixture body
+     (client BS-priced payoff/legs/manage rail) is removed; the retired file:// fixture path
+     renders a bare placeholder rather than feeding non-authoritative data to the auth renderer. */
   if(p&&p.authoritative)return makeAuthoritativeCard(p);
-  var el=document.createElement('div');
-  var holdAtSpot=payFor(p,p.spot);
-  el.className='card'+(p.need?' needs '+p.tone:''); el.setAttribute('data-id',p.id);
-  el.innerHTML=
-   /* COMPACT SCALABLE FACE — density earned by focus: a short row (name·struct·P/L, then a
-      share-of-book bar + always-on P/L sparkline) that peeks (attn·cap·mini-payoff) on hover and
-      blooms full on click. N positions never clip because rows are short + the roster scrolls. */
-   '<div class="cface">'+
-     '<div class="crow1"><span class="crisk" style="background:'+riskCharCol(p)+'" title="risk character"></span>'+
-       '<span class="csym">'+p.sym+'</span><span class="cstruct">'+p.struct+'</span>'+
-       '<span class="cpnl '+(p.pnl>=0?'pos':'neg')+'">'+money(p.pnl)+'</span></div>'+
-     '<div class="cshareRow">'+
-       '<span class="cshare" title="share of book risk"><i style="width:'+Math.round(p.riskPct/bookMaxRisk()*100)+'%;background:'+(p.tone==='bad'?'var(--loss)':p.tone==='warn'?'var(--caution)':'var(--accent)')+'"></i></span>'+
-       '<span class="csharev">'+p.riskPct+'%</span>'+
-       '<svg class="cplspark" id="plsp-'+p.id+'" title="P/L trend · 15 sessions"></svg></div>'+
-     '<div class="cpeek"><span class="badge '+(p.need?p.tone:'ok')+'">'+p.attn+'</span>'+
-       '<span class="ccap">'+money(p.cap)+' cap</span><svg class="cspark"></svg></div>'+
-   '</div>'+
-   '<div class="cdetail">'+
-     decband(p)+
-     '<div class="bd-cols">'+   /* one causal stack: payoff → scenarios, with the scenario component shared with Decide */
-       '<div class="bd-hero">'+
-         '<div class="paytitle"><span class="lbl"><span class="payfull">Where it stands — </span>payoff at expiry</span>'+
-           '<span class="payread"><span>mark <b class="'+(p.pnl>=0?'pos':'neg')+'">'+money(p.pnl)+'</b></span><i>→</i><span data-live="heroLab">expiry</span><b data-live="heroProj" class="'+(holdAtSpot>=0?'pos':'neg')+'">'+money(holdAtSpot)+'</b></span>'+
-           (learnStrat(p.struct)?'<button class="llearn" data-learn="'+p.struct+'" title="learn this structure">＋ learn '+p.struct.toLowerCase()+'</button>':'')+'</div>'+
-         '<div class="paywrap"><svg class="cbig"></svg><div class="paycross"></div><div class="paytip"></div></div>'+
-         stratKPIs(p,{calm:true})+
-       '</div>'+
-       '<div class="bd-right">'+renderScenbox(p)+positionRiskMap(p)+'</div>'+   /* stable scenario + linked book frame */
-     '</div>'+
-     '<div class="bd-legs">'+renderLegs(p)+'</div>'+
-     positionContextStrip(p)+
-     depthBand(p)+
-     '<div class="bd-manage">'+manageRail(p)+'</div>'+
-   '</div>';
-  el.addEventListener('click',function(){
-    if(state.level==='position'&&state.focus===p.id)return;
-    go('position',p.id);
-  });
-  /* mini-payoff draws lazily the first time the row peeks (its .cspark sits in a collapsed .cpeek
-     until hover, so an eager draw would render into a 0-height box — the blank-SVG bug) */
-  el.addEventListener('mouseenter',function(){ if(state.level==='book') peekDraw(el,p); });
-  /* delegated: manage + inline-leg-edit + scenario controls (survive re-rendering) */
-  var surf=bloomSurf(p);
-  el.addEventListener('click',function(ev){
-    var pp=ev.target.closest('[data-pospane]'); if(pp){ ev.stopPropagation(); var nextPane=pp.getAttribute('data-pospane'); POS_PANE[p.id]=nextPane;
-      var old=el.querySelector('.posdepth'); if(old)old.outerHTML=depthBand(p);
-      var nextTab=el.querySelector('[data-pospane="'+nextPane+'"]'); if(nextTab)nextTab.focus();
-      var ps=el.querySelector('.plspark'); if(ps)priceSpark(ps,p); renderAtPrice(surf); return; }
-    var ll=ev.target.closest('[data-learn]'); if(ll){ ev.stopPropagation(); var ls=learnStrat(ll.getAttribute('data-learn')); if(ls)openLearn({type:'strat',s:ls}, ll.getBoundingClientRect()); return; }
-    var da=ev.target.closest('[data-act]'); if(da){ ev.stopPropagation(); handleBandAction(p,da.getAttribute('data-act')); return; }
-    var mj=ev.target.closest('[data-madj]'); if(mj){ ev.stopPropagation(); handleManage(p,mj.getAttribute('data-madj')); return; }
-    var al=ev.target.closest('[data-adjleg]'); if(al){ ev.stopPropagation(); adjLeg(p,al.getAttribute('data-adjleg'),+al.getAttribute('data-ali'),+(al.getAttribute('data-d')||0)); return; }
-    var sc=ev.target.closest&&ev.target.closest('.srow[data-si]'); if(sc&&!ev.target.closest('.srow-ctl')){ ev.stopPropagation(); pinScen(surf,sc.getAttribute('data-si')); return; }   /* a click on the inline controls must NOT unpin the row */
-    var wf=ev.target.closest&&ev.target.closest('[data-wf]'); if(wf){ ev.stopPropagation(); var wa=wf.getAttribute('data-wf');
-      if(wa==='adjust') openAdjust(p.id,'adjust'); else if(wa==='magdn') adjustAsm(surf,'mag',-1); else if(wa==='magup') adjustAsm(surf,'mag',1);
-      else if(wa==='ivdn') adjustAsm(surf,'iv',-2); else if(wa==='ivup') adjustAsm(surf,'iv',2);
-      else if(wa==='daysdn') adjustAsm(surf,'days',-1); else if(wa==='daysup') adjustAsm(surf,'days',1);
-      else if(wa.indexOf('tu-')===0) setTUnit(surf, wa.slice(3));
-      else if(wa==='playtoggle') toggleScenPlay(surf); else if(wa==='spd') setScenSpeed(surf,+wf.getAttribute('data-s')); else if(wa==='scrub'){} else pinScen(surf,null); return; }
-  });
-  /* delegated: scrub the scenario timeline (range input) */
-  el.addEventListener('input',function(ev){ var sc=ev.target.closest&&ev.target.closest('.scrub[data-wf="scrub"]'); if(sc){ scenScrub(surf, +sc.value/100); } });
-  /* DRAG a strike handle on the payoff — direct manipulation (enters a live adjustment) */
-  el.addEventListener('pointerdown',function(ev){
-    var h=ev.target.closest&&ev.target.closest('[data-legk]'); if(!h)return;
-    ev.preventDefault(); ev.stopPropagation(); startStrikeDrag(p, +h.getAttribute('data-legk'), ev);
-  });
-  /* HOVER the payoff → value-at-price tooltip + crosshair */
-  var bigSvg=el.querySelector('.cbig');
-  if(bigSvg){
-    bigSvg.addEventListener('pointermove',function(ev){ if(ev.target.closest&&ev.target.closest('[data-legk]')){ hidePayoffTip(p); return; } payoffHover(p, ev); });
-    bigSvg.addEventListener('pointerleave',function(){ hidePayoffTip(p); });
-  }
-  /* delegated hover survives refreshScenbox(), which replaces the scenario tiles after pin/edit. */
-  el.addEventListener('mouseover',function(ev){ var r=ev.target.closest&&ev.target.closest('.srow[data-si]');
-    if(!r||!el.contains(r)||(ev.relatedTarget&&r.contains(ev.relatedTarget)))return; hlScen(p.id,r.getAttribute('data-si'),true); });
-  el.addEventListener('mouseout',function(ev){ var r=ev.target.closest&&ev.target.closest('.srow[data-si]');
-    if(!r||!el.contains(r)||(ev.relatedTarget&&r.contains(ev.relatedTarget)))return; hlScen(p.id,r.getAttribute('data-si'),false); });
-  return el;
+  var el=document.createElement('div');el.className='card';el.setAttribute('data-id',p&&p.id||'');return el;
 }
 
 /* hover-wire: light-up a scenario's point on the payoff (and its row) */
@@ -5752,7 +5604,6 @@ function layoutForLevel(level,focus){
     var fp=byId[focus];
     redrawBloomPayoff(fp);
     priceSpark(cardEl[focus].querySelector('.plspark'),fp);
-    drawPositionRiskMap(fp);
   }
 }
 
@@ -6218,7 +6069,6 @@ function redraw(){
     var fp=byId[state.focus];
     redrawBloomPayoff(fp);
     priceSpark(cardEl[state.focus].querySelector('.plspark'),fp);
-    drawPositionRiskMap(fp);
   }
 }
 
@@ -6699,49 +6549,8 @@ function candLegStr(c){return c.legs.map(function(l){
   if(l.t==='s')return (l.q>=0?'LONG ':'SHORT ')+Math.abs(l.q)+' sh';
   return (l.q<0?'SHORT ':'LONG ')+Math.abs(l.q)+'×'+l.k+(l.t==='c'?'C':'P');}).join(' · ');}
 
-/* AMD ROLL fan (covered-call framing on the held shares) */
-var ROLLCANDS=[
- {id:'r-545',short:'Sep 545C',name:'Roll to Sep 545C',sym:'AMD',spot:493,em:6.2,exp:'19-Sep',lean:'neutral',risk:'high',
-  legs:[{t:'s',k:493,q:300},{t:'c',k:545,q:-3}],net:1180,credit:1180,pop:71,cap:0,delta:0.34,theta:52,vega:-860,gamma:-0.02,edge:320,yieldPct:24,assign:16,
-  why:'Keeps the most room above spot while still collecting — best odds of keeping BOTH the shares and the rent.',
-  analog:'12 similar rolls · 9/12 kept the calls',ivnote:'IV 42 vs 34 realized — still rich'},
- {id:'r-540',short:'Sep 540C',name:'Roll to Sep 540C',sym:'AMD',spot:493,em:6.2,exp:'19-Sep',lean:'neutral',risk:'high',
-  legs:[{t:'s',k:493,q:300},{t:'c',k:540,q:-3}],net:1620,credit:1620,pop:66,cap:0,delta:0.38,theta:55,vega:-900,gamma:-0.02,edge:260,yieldPct:29,assign:24,
-  why:'More credit up front, but caps your upside $5 lower and lifts the odds of being called away.',
-  analog:'12 similar rolls · 7/12 kept the calls',ivnote:'IV 43 vs 34 realized'},
- {id:'r-560',short:'Sep 560C',name:'Roll up to Sep 560C',sym:'AMD',spot:493,em:6.2,exp:'19-Sep',lean:'neutral',risk:'high',
-  legs:[{t:'s',k:493,q:300},{t:'c',k:560,q:-3}],net:720,credit:720,pop:76,cap:0,delta:0.29,theta:47,vega:-780,gamma:-0.02,edge:180,yieldPct:18,assign:9,
-  why:'Highest chance to keep the shares; you give up most of the credit for the extra headroom.',
-  analog:'12 similar rolls · 10/12 kept the calls',ivnote:'IV 41 vs 34 realized'}
-];
-/* AMD NEW-IDEA fan */
-var IDEACANDS=[
- {id:'i-bps',short:'470/460 put spread',name:'Bull put spread 470/460',sym:'AMD',spot:493,em:6.2,exp:'21-Aug',lean:'neutral',risk:'low',
-  legs:[{t:'p',k:470,q:-3},{t:'p',k:460,q:3}],net:1080,credit:1080,pop:71,cap:1920,delta:0.16,theta:22,vega:-49,gamma:-0.02,edge:210,yieldPct:0,assign:11,
-  why:'Highest-chance income line on a neutral-to-bullish view — defined $1,920 risk, wins as long as AMD holds ~$470.',
-  analog:'12 similar setups · 8/12 held the range',ivnote:'IV rank 72 · rich to realized'},
- {id:'i-csp',short:'450 put',name:'Cash-secured put 450',sym:'AMD',spot:493,em:6.2,exp:'21-Aug',lean:'bull',risk:'high',
-  legs:[{t:'p',k:450,q:-3}],net:2955,credit:2955,pop:68,cap:42045,delta:0.28,theta:18,vega:-41,gamma:-0.02,edge:146,yieldPct:57,assign:32,
-  why:'Paid $2,955 to stand ready to buy AMD at $450 — assignment just means owning it a little cheaper.',
-  analog:'12 similar puts · 9/12 expired worthless',ivnote:'IV 42 vs 34 realized'},
- {id:'i-ic',short:'468/518 condor',name:'Iron condor 468/518',sym:'AMD',spot:493,em:6.2,exp:'21-Aug',lean:'neutral',risk:'mid',
-  legs:[{t:'p',k:448,q:3},{t:'p',k:468,q:-3},{t:'c',k:518,q:-3},{t:'c',k:538,q:3}],net:2040,credit:2040,pop:64,cap:3960,delta:0.01,theta:31,vega:-88,gamma:-0.02,edge:190,yieldPct:0,assign:12,
-  why:'A pure range bet centered on spot — defined risk on both sides, best when AMD chops between $468 and $518.',
-  analog:'12 similar condors · 7/12 finished in range',ivnote:'IV rank 72'},
- {id:'i-bcs',short:'540/550 call spread',name:'Bear call spread 540/550',sym:'AMD',spot:493,em:6.2,exp:'21-Aug',lean:'bear',risk:'mid',
-  legs:[{t:'c',k:540,q:-3},{t:'c',k:550,q:3}],net:900,credit:900,pop:70,cap:2100,delta:-0.15,theta:14,vega:-33,gamma:-0.02,edge:70,yieldPct:0,assign:8,
-  why:'The bearish-lean income leg — wins unless AMD squeezes up through $540.',
-  analog:'12 similar setups · 8/12 stayed below',ivnote:'IV 40 vs 34 realized'},
- {id:'i-cc',short:'520 covered call',name:'Covered call 520',sym:'AMD',spot:493,em:6.2,exp:'21-Aug',lean:'bull',risk:'high',
-  legs:[{t:'s',k:493,q:300},{t:'c',k:520,q:-3}],net:1120,credit:1120,pop:62,cap:49300,delta:0.71,theta:9,vega:-22,gamma:-0.01,edge:90,yieldPct:11,assign:34,
-  why:'Buy 300 shares and rent them out — income now, upside capped at $520, downside is the stock.',
-  analog:'12 similar calls · 7/12 stayed below strike',ivnote:'IV 39 vs 34 realized'},
- {id:'i-str',short:'460/525 strangle',name:'Short strangle 460/525',sym:'AMD',spot:493,em:6.2,exp:'21-Aug',lean:'neutral',risk:'high',undef:true,
-  legs:[{t:'p',k:460,q:-3},{t:'c',k:525,q:-3}],net:3900,credit:3900,pop:60,cap:46000,delta:-0.01,theta:52,vega:-140,gamma:-0.03,edge:230,yieldPct:0,assign:38,
-  why:'Biggest credit, undefined risk — only here because you have the buying power; add wings to define it.',
-  analog:'12 similar strangles · 7/12 stayed inside',ivnote:'IV 42 vs 34 realized'}
-];
-ROLLCANDS.forEach(candStats); IDEACANDS.forEach(candStats);
+/* Front B S2: the curated AMD ROLLCANDS / IDEACANDS fixture fans (incl. the invented 300-share
+   covered-call holdings) are removed. Ranked candidates come from the backend strategy engine. */
 
 /* ======================================================================
    UNDERLYING UNIVERSE + parametric candidate generator.
@@ -6947,9 +6756,9 @@ function genCands(u){
     finishCand(d); });
   return defs.sort(function(a,b){ return (b.pop-(b.undef?22:0)-(b.risk==='high'?7:0)) - (a.pop-(a.undef?22:0)-(a.risk==='high'?7:0)); });
 }
-/* choose the fan: keep the curated AMD sets; generate for every other symbol */
+/* the fixture fan factory (used only on the retired file:// fixture path; the served desk ranks
+   candidates in the backend). Front B S2 dropped the curated AMD ROLLCANDS/IDEACANDS sets. */
 function candsFor(kind,u){
-  if(u.sym==='AMD'){ if(kind==='roll')return ROLLCANDS; if(kind==='idea'||kind==='add')return IDEACANDS; }
   return genCands(u);
 }
 
@@ -7848,17 +7657,9 @@ function leftCol(c){
   }
   return '<div class="deccol dcleft">'+modebar+notice+strategyCoverageBar()+fanList()+'<div class="leftsupport">'+decLegWorkbench(c)+map+'</div>'+drawer+'</div>';
 }
-/* one-click starting structures (reclaimed from compose's templates) */
-var STRAT_TEMPLATES=[
- {k:'bps',n:'Bull put',f:function(s){return [{t:'p',k:rk(s,.955),q:-3},{t:'p',k:rk(s,.935),q:3}];}},
- {k:'bcs',n:'Bear call',f:function(s){return [{t:'c',k:rk(s,1.045),q:-3},{t:'c',k:rk(s,1.065),q:3}];}},
- {k:'ic',n:'Iron condor',f:function(s){return [{t:'p',k:rk(s,.92),q:3},{t:'p',k:rk(s,.94),q:-3},{t:'c',k:rk(s,1.06),q:-3},{t:'c',k:rk(s,1.08),q:3}];}},
- {k:'csp',n:'Cash-secured put',f:function(s){return [{t:'p',k:rk(s,.92),q:-3}];}},
- {k:'cc',n:'Covered call',f:function(s){return [{t:'s',k:s,q:300},{t:'c',k:rk(s,1.05),q:-3}];}},
- {k:'str',n:'Short strangle',f:function(s){return [{t:'p',k:rk(s,.94),q:-3},{t:'c',k:rk(s,1.06),q:-3}];}}
-];
-function renderTemplates(){ var short={bps:'Bull put',bcs:'Bear call',ic:'Condor',csp:'CSP',cc:'Covered',str:'Strangle'};
-  return '<div class="tmplrow"><span class="lbl">Start from</span>'+STRAT_TEMPLATES.map(function(t){return '<button class="tmplbtn" data-tmpl="'+t.k+'"><span class="tmpllong">'+t.n+'</span><span class="tmplshort">'+short[t.k]+'</span></button>';}).join('')+'</div>'; }
+/* Front B S2: STRAT_TEMPLATES + renderTemplates (one-click fixture structures, incl. the invented
+   300-share covered-call template) removed. The served desk composes packages from the backend
+   chain; leg drafts fork through newBackendDecisionLeg against listed strikes. */
 function decLegWorkbench(c){
   var build=decide.mode==='build';
   if(c.authoritative&&!build){
@@ -7886,7 +7687,6 @@ function decLegWorkbench(c){
       '<span class="declegstate">'+(build?'Your draft':'Engine')+'</span><span class="badge">exp '+c.exp+'</span></div>'+
     '<div class="declegs">'+c.legs.map(function(l,i){return backendDecisionLegChip(l,i,true,decide.sym);}).join('')+
       '<button class="addleg sm" data-addleg="1" aria-label="Add another leg">＋ <span class="addlong">Add leg</span></button></div>'+
-    (build?renderTemplates():'')+
   '</div>';
 }
 function decisionLegQuote(l,ownSymbol){
@@ -8249,14 +8049,9 @@ function fitBudgetPanel(c){
     '<div class="tailtrack"><i style="width:'+pct.toFixed(1)+'%;background:'+(room>=0?'var(--accent)':'var(--loss)')+'"></i></div><div class="tailsub" style="margin-top:5px">'+(room>=0?money(room)+' remains after this package.':'Over the stated cap by '+money(-room)+'.')+'</div></div>';
 }
 function greekInspector(c){
-  if(c.authoritative)return authoritativeGreekInspector(c);
-  var shock=liveGreeks(c,c.spot*.94,4,3), vol=liveGreeks(c,c.spot,8,0), time=liveGreeks(c,c.spot,0,10);
-  function sens(label,val,mark,cls){return '<div class="sensrow"><span>'+label+'</span><i style="--mark:'+Math.max(4,Math.min(96,mark))+'%"></i><b class="'+(cls||'')+'">'+val+'</b></div>';}
-  var legs=c.legs.map(function(l){var side=l.q<0?'sell':'buy',body=l.t==='s'?Math.abs(l.q)+' shares':Math.abs(l.q)+'× '+Math.round(l.k)+(l.t==='c'?'C':'P');return '<span class="lsleg '+side+'"><i>'+(side==='sell'?'−':'+')+'</i><b>'+body+'</b></span>';}).join('');
-  return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Greeks</span><span class="hint">exact package · per set</span></div>'+mechGraphic(c)+
-    '<div class="sensitivity"><span class="lbl">How the mechanics move</span>'+sens('Price −6%','Δ '+(shock.delta>=0?'+':'')+shock.delta.toFixed(2),50+shock.delta*35,shock.delta>=0?'pos':'neg')+
-      sens('IV +8','Vega '+Math.round(vol.vega),50+vol.vega/35,vol.vega>=0?'pos':'warn')+sens('10 days','Θ '+signed(Math.round(time.theta)),50+time.theta/2,time.theta>=0?'pos':'neg')+'</div>'+
-    '<div class="legreceipt"><span class="lbl" style="flex-basis:100%">Exact legs</span>'+legs+'</div></div>';
+  /* Front B S2: the fixture branch (liveGreeks BS-engine sensitivities) is removed. Greeks are
+     the one canonical backend contract, rendered by authoritativeGreekInspector. */
+  return authoritativeGreekInspector(c);
 }
 function authoritativeGreekInspector(c){
   var source=authoritativeCanvas(c),position=authoritativePosition(source,c),now=authoritativeFrame(c,0),target=authoritativeFrame(c,1),base=Object.assign({},c,now&&now.greeks||{}),days=position&&position.days||[];
@@ -8905,9 +8700,7 @@ function wireDecide(){
         decide.buildLegs.push(backendLeg);
       } else pushNewLeg(decide.buildLegs, decide.spot||DEC_SPOT);
       renderAfterDecisionChange(); return; }
-    var tp=t.closest('[data-tmpl]'); if(tp){ var tpl=STRAT_TEMPLATES.filter(function(x){return x.k===tp.getAttribute('data-tmpl');})[0];
-      if(deskBackendEnabled()&&authoritativeCandidate())return;
-      if(tpl){ decide.buildLegs=tpl.f(decide.spot||DEC_SPOT); decide.mode='build'; renderAfterDecisionChange(); } return; }
+    /* Front B S2: the [data-tmpl] one-click fixture template row was removed with STRAT_TEMPLATES. */
   });
   /* LINK the two views: hover a map dot OR a list row highlights both + shows the card */
   decideEl.addEventListener('mousemove',function(e){ if(!decide)return;
