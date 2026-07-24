@@ -1802,8 +1802,15 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegs .tgl{padding:2px 5px;font-size:var(--f-2xs)}
 .declegs .mstp{border-radius:4px}
 .declegs .mstp .ml{display:none}                 /* type implies call/put; drop the K/Qty labels for width */
-.declegs .mstp button{width:17px;height:20px;font-size:var(--f-sm)}
-.declegs .mstp .mv{min-width:22px;font-size:var(--f-sm);padding:0 2px}
+.declegs .mstp button{width:22px;height:26px;font-size:var(--f-sm)}
+.declegs .mstp .mv{min-width:30px;font-size:var(--f-sm);padding:0 2px}
+/* Touch/coarse pointers need a real 44px target — the compact desktop sizes are unusable by finger.
+   The single-column mobile leg book has the room, so grow every micro-control there. */
+@media (pointer:coarse){
+  .declegs .mstp button,.mstp button,.smstps .mstp button{min-width:44px;min-height:44px}
+  .declegs .tgl,.tgl,.declegs .lrm,.lrm,.scenplay .playb{min-width:44px;min-height:44px}
+  .declegs .mstp,.mstp{min-height:44px}
+}
 .declegs .lrm{font-size:var(--f-2xs);padding:0 2px}
 .declegshint{flex-basis:100%;color:var(--faint);margin-top:0}
 .modebar{display:flex;align-items:center;gap:10px;margin:4px 0 10px}
@@ -1955,8 +1962,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 @media (min-width:901px){
   /* Desktop has enough horizontal room for one leg per line. Keep every control readable while
      making four-leg packages vertically compact; only strategies beyond the bounded rail scroll. */
-  .declegpanel .declegs .legr{display:grid;grid-template-columns:minmax(175px,auto) minmax(0,1fr);align-items:center;column-gap:8px;padding:4px 7px}
-  .declegpanel .declegs .legr-top{flex-wrap:nowrap}
+  .declegpanel .declegs .legr{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);align-items:center;column-gap:8px;padding:4px 7px}
+  /* Controls WRAP within their column rather than overflowing the panel (the old nowrap + auto
+     column let the leg row clip its rightmost control by ~26px). Bigger tap targets now fit. */
+  .declegpanel .declegs .legr-top{flex-wrap:wrap;row-gap:3px}
   .declegpanel .declegs .lgm{min-width:0;text-align:right;overflow:hidden;line-height:1.15}
   /* text-overflow on the flex CONTAINER is inert — each detail cell truncates itself, so a
      squeezed cell ends in an ellipsis instead of painting across its neighbor (Safari included) */
