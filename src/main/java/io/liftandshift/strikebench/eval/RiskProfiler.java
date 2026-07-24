@@ -1,7 +1,9 @@
 package io.liftandshift.strikebench.eval;
 
+import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.pricing.JumpMixtureTerminal;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.LegView;
@@ -29,6 +31,8 @@ public final class RiskProfiler {
 
         List<RiskProfile.Scenario> scenarios = new ArrayList<>();
         RiskProfile.TerminalPayoff terminalPayoff;
+        // The real-world / tail lane rides the SAME single-expiration curve as the terminal payoff.
+        JumpMixtureTerminal.Tail jumpTail;
         long worstPnl = 0;
         boolean have = false;
         boolean exactLossBounded = false;
@@ -41,6 +45,8 @@ public final class RiskProfiler {
         if (distinctExpirations > 1) {
             terminalPayoff = unavailableTerminalPayoff(
                     "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
+            jumpTail = unavailableJumpTail(
+                    "A mixed-expiration package requires supplied-path valuation; no single-expiration jump-mixture tail was substituted.");
         } else try {
             PayoffCurve pc = payoffCurve(c, ctx);
             exactLossBounded = !pc.maxLossUnbounded();
@@ -79,10 +85,26 @@ public final class RiskProfiler {
                     TERMINAL_PAYOFF_MODEL, !points.isEmpty(), ctx.underlyingCents(), expiration,
                     "EXPIRATION_INTRINSIC", "CAPTURED_CANDIDATE_NET", false, points,
                     points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
+            // Real-world / tail lane over the same curve: sector prior from the symbol, IV-rank and
+            // event proximity from the regime, body vol from the horizon expected move (IV*sqrt(T)).
+            // The desk's former client Merton tail, now a backend receipt — one per calm/base/tense.
+            String sectorLabel = ctx.symbol() == null || ctx.symbol().isBlank()
+                    ? null : Universes.allocationSectorLabel(ctx.symbol());
+            double ivRankPct = ctx.regime() != null && ctx.regime().ivRankPct() != null
+                    ? ctx.regime().ivRankPct() : 55.0;
+            double expectedMovePct = ctx.atmIv() != null && ctx.atmIv() > 0 && ctx.daysToExpiry() > 0
+                    ? ctx.atmIv() * Math.sqrt(ctx.daysToExpiry() / 365.0) * 100.0 : 0.0;
+            boolean eventSoon = ctx.regime() != null && Boolean.TRUE.equals(ctx.regime().eventSoon());
+            jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel, ivRankPct, expectedMovePct,
+                    eventSoon, null, !points.isEmpty(), pc.maxLossUnbounded(), maxLoss,
+                    s -> pc.profitAtCents(BigDecimal.valueOf(s)),
+                    points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
         } catch (RuntimeException e) {
             // Degrade to extremes-only rather than fail the whole evaluation.
             terminalPayoff = unavailableTerminalPayoff(
                     "The exact terminal payoff could not be produced from the captured candidate.");
+            jumpTail = unavailableJumpTail(
+                    "The jump-mixture tail could not be produced from the captured candidate.");
         }
         // The visible +/-20% scenarios are checkpoints, not the complete tail envelope. For an
         // exact bounded curve the tail receipt is the pre-known maximum loss even when a distant
@@ -112,12 +134,16 @@ public final class RiskProfiler {
             basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
         return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
-                scenarios, terminalPayoff, evHistVol, basisNote);
+                scenarios, terminalPayoff, evHistVol, basisNote, jumpTail);
     }
 
     private static RiskProfile.TerminalPayoff unavailableTerminalPayoff(String reason) {
         return new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA, TERMINAL_PAYOFF_MODEL,
                 false, null, null, null, null, false, List.of(), reason);
+    }
+
+    private static JumpMixtureTerminal.Tail unavailableJumpTail(String reason) {
+        return JumpMixtureTerminal.tail(0.0, null, 55.0, 0.0, false, null, false, false, 0L, null, reason);
     }
 
     /**

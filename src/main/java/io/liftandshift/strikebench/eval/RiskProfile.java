@@ -19,10 +19,22 @@ public record RiskProfile(
         List<Scenario> scenarios,     // ordered by underlyingMovePct ascending
         TerminalPayoff terminalPayoff,// exact server-owned curve receipt, explicit when unavailable
         Long evHistVolCents,         // EV at REALIZED vol, zero drift — a HISTORICAL-VOL SCENARIO, not the physical measure; null w/o history
-        String evBasisNote            // the two lanes, spelled out — never one falsely precise number
+        String evBasisNote,           // the two lanes, spelled out — never one falsely precise number
+        // The SEPARATE real-world / tail lane: a Merton jump-mixture (body + calibrated down-gap) that
+        // owns the tail-aware POP, expected shortfall and calm/base/tense gap dial. It sits ALONGSIDE
+        // the risk-neutral lognormal `pop` above, never replacing it. Null when unavailable/not computed.
+        io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail
 ) {
     public RiskProfile {
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
+    }
+
+    /** Compatibility constructor for callers that produce presentation checkpoints but no tail lane. */
+    public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
+                       long tailLossCents, double tailMovePct, List<Scenario> scenarios,
+                       TerminalPayoff terminalPayoff, Long evHistVolCents, String evBasisNote) {
+        this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
+                scenarios, terminalPayoff, evHistVolCents, evBasisNote, null);
     }
 
     /** Compatibility constructor for callers that do not produce presentation checkpoints. */
@@ -30,7 +42,7 @@ public record RiskProfile(
                        long tailLossCents, double tailMovePct, List<Scenario> scenarios,
                        Long evHistVolCents, String evBasisNote) {
         this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, null, evHistVolCents, evBasisNote);
+                scenarios, null, evHistVolCents, evBasisNote, null);
     }
 
     /**

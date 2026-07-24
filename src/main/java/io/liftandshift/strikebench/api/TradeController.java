@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.SnapshotService;
+import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
@@ -175,10 +176,12 @@ final class TradeController {
                                 mark.decisionUnrealizedCents() == null
                                         ? mark.unrealizedCents() : mark.decisionUnrealizedCents());
                     }
-                    // B2 + B6: the held bloom/spectrum and greeks strip read a server receipt off
-                    // the roster row itself, so activeTrades never falls back to a client leg engine.
+                    // B2 + B6 + B13: the held bloom/spectrum, greeks strip and tail lane read a server
+                    // receipt off the roster row itself, so activeTrades never falls back to a client
+                    // leg engine or the deleted client Merton tail.
                     row = row.withHeldReceipts(heldTerminalPayoff(trade),
-                            mark != null && mark.greeks() != null ? mark.greeks().canonical() : null);
+                            mark != null && mark.greeks() != null ? mark.greeks().canonical() : null,
+                            heldJumpTail(trade));
                 } catch (Exception ignored) {
                     // A missing live mark leaves these optional list values unavailable.
                 }
@@ -481,7 +484,8 @@ final class TradeController {
         TradeView view = TradeView.of(trade);
         if (TradeRecord.ACTIVE.equals(trade.status())) {
             view = view.withHeldReceipts(heldTerminalPayoff(trade),
-                    current != null && current.greeks() != null ? current.greeks().canonical() : null);
+                    current != null && current.greeks() != null ? current.greeks().canonical() : null,
+                    heldJumpTail(trade));
         }
         return new ApiResponses.TradeDetail<>(view, current,
                 trades.marksHistory(id, 50), audit.forTrade(id, 50), payoffPoints(trade), analysis);
@@ -906,6 +910,36 @@ final class TradeController {
                 !points.isEmpty(), trade.entryUnderlyingCents(), expiration,
                 "EXPIRATION_INTRINSIC", "RECORDED_TRADE_NET", false, points,
                 points.isEmpty() ? "No positive underlying anchor is recorded for this trade." : null);
+    }
+
+    /**
+     * B13: the real-world / tail lane (Merton jump-mixture) for a HELD line, so the roster's
+     * {@code trade.popEntry} can read a tail-aware POP and the desk gap dial reads a backend receipt.
+     * The sector prior comes from the symbol; IV-rank and expected move use the desk's documented
+     * fallbacks (55, 6%) here, because this list row carries no live IV — the position-detail analysis
+     * (via the evaluator's {@code evaluation.risk.jumpTail}) carries the full-fidelity tail.
+     */
+    static io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail heldJumpTail(TradeRecord trade) {
+        boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
+                .map(Leg::expiration).distinct().count() > 1;
+        if (mixedExpirations) {
+            return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(0.0, null, 55.0, 0.0,
+                    false, null, false, false, 0L, null,
+                    "A mixed-expiration package requires supplied-path valuation; no single-expiration jump-mixture tail was substituted.");
+        }
+        BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
+        double spotD = spot.doubleValue();
+        if (spotD <= 0) {
+            return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(0.0, null, 55.0, 0.0,
+                    false, null, false, false, 0L, null,
+                    "No positive underlying anchor is recorded for this trade.");
+        }
+        PayoffCurve curve = heldPayoffCurve(trade, spot);
+        String sectorLabel = trade.symbol() == null || trade.symbol().isBlank()
+                ? null : Universes.allocationSectorLabel(trade.symbol());
+        return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(spotD, sectorLabel, 55.0,
+                0.0, false, null, true, curve.maxLossUnbounded(), curve.maxLossCents(),
+                s -> curve.profitAtCents(BigDecimal.valueOf(s)), null);
     }
 
     private static Double percentage(long numerator, Long denominator) {
