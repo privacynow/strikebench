@@ -985,6 +985,8 @@
     }).filter(function (point) {
       return Number.isFinite(point.price) && Number.isFinite(point.profit);
     });
+    if (preview.analytics && preview.analytics.time) desk.time = preview.analytics.time;
+    applyGreeks(desk, canonicalGreeks(preview.analytics && preview.analytics.greeks));
     return desk;
   }
 
@@ -1156,6 +1158,9 @@
       }).filter(function (point) {
         return Number.isFinite(point.price) && Number.isFinite(point.profit);
       });
+      var customAnalytics = response.preview && response.preview.analytics;
+      if (customAnalytics && customAnalytics.time) presentation.time = customAnalytics.time;
+      applyGreeks(presentation, canonicalGreeks(customAnalytics && customAnalytics.greeks));
       if (!state.ensemble || !state.ensemble.ensemble
           || !ensembleIdentity
           || state.ensemble.ensemble.id !== ensembleIdentity.id
@@ -1334,9 +1339,37 @@
     return null;
   }
 
+  /* THE one canonical greeks contract the desk reads: deltaShares, gammaSharesPerDollar,
+     thetaCentsPerDay, vegaCentsPerPoint — pure pass-through of the backend receipt, never math. */
+  function canonicalGreeks(source) {
+    if (!source) return null;
+    function num(v) { var n = Number(v); return v == null || !Number.isFinite(n) ? null : n; }
+    var delta = num(source.deltaShares);
+    var gamma = num(source.gammaSharesPerDollar);
+    var theta = num(source.thetaCentsPerDay);
+    var vega = num(source.vegaCentsPerPoint);
+    if (delta == null && gamma == null && theta == null && vega == null) return null;
+    return { deltaShares: delta, gammaSharesPerDollar: gamma,
+      thetaCentsPerDay: theta, vegaCentsPerPoint: vega };
+  }
+
+  /* Attach a canonical greeks object onto a desk candidate/position, exposing the flat fields the
+     greeks strip reads. One unit, one place — so idea/held/canvas never silently disagree. */
+  function applyGreeks(target, greeks) {
+    target.greeks = greeks || null;
+    target.delta = greeks ? greeks.deltaShares : null;
+    target.gamma = greeks ? greeks.gammaSharesPerDollar : null;
+    target.theta = greeks ? greeks.thetaCentsPerDay : null;
+    target.vega = greeks ? greeks.vegaCentsPerPoint : null;
+    return target;
+  }
+
   function candidateToDesk(candidate, market) {
     var qty = Math.max(1, Number(candidate.qty || 1));
     var riskProfile = candidate.evaluation && candidate.evaluation.risk || {};
+    // Per-candidate greeks (canonical unit) ride the candidate when present; a previewed/exact
+    // package attaches them from its preview analytics after this map (see buildExactPackageCandidate).
+    var candidateGreeks = canonicalGreeks(candidate.greeks);
     var terminalPayoff = riskProfile.terminalPayoff || {};
     var payoffPoints = terminalPayoff.available === true && Array.isArray(terminalPayoff.points)
       ? terminalPayoff.points.map(function (point) {
@@ -1376,6 +1409,7 @@
       sym: candidate.symbol || market.quote.symbol,
       spot: market.spot,
       em: null,
+      time: candidate.time || null,
       exp: optionLeg && optionLeg.expiration || market.expiration,
       lean: null,
       risk: explicitDefinedRisk == null ? 'unknown' : explicitDefinedRisk ? 'defined' : 'undefined',
@@ -1416,6 +1450,11 @@
       ivnote: candidate.freshness ? String(candidate.freshness) + ' market inputs' : 'Market input receipt attached',
       breakevens: candidate.breakevens || [],
       evaluation: candidate.evaluation || null,
+      greeks: candidateGreeks,
+      delta: candidateGreeks ? candidateGreeks.deltaShares : null,
+      gamma: candidateGreeks ? candidateGreeks.gammaSharesPerDollar : null,
+      theta: candidateGreeks ? candidateGreeks.thetaCentsPerDay : null,
+      vega: candidateGreeks ? candidateGreeks.vegaCentsPerPoint : null,
       authoritative: true,
       backend: candidate
     };

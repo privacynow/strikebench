@@ -19,8 +19,8 @@ public final class RiskProfiler {
 
     private static final double[] MOVES = {-0.20, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20};
     private static final double TAIL_MOVE = 0.20;
-    private static final String TERMINAL_PAYOFF_SCHEMA = "risk-terminal-payoff-1";
-    private static final String TERMINAL_PAYOFF_MODEL = "payoff-curve-1";
+    private static final String TERMINAL_PAYOFF_SCHEMA = RiskProfile.TerminalPayoff.SCHEMA;
+    private static final String TERMINAL_PAYOFF_MODEL = RiskProfile.TerminalPayoff.MODEL;
 
     public RiskProfile profile(Candidate c, EvalContext ctx) {
         long maxLoss = Math.max(0, c.combinedMaxLossCents() != null

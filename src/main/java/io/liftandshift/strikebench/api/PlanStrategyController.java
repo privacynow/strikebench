@@ -70,6 +70,9 @@ final class PlanStrategyController {
     public record PlanScoutSpawnRequest(String clientRequestId, String candidateId, String role) {}
     void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(root.ownerId(ctx), ctx.pathParam("id"));
+        // B5: a restored competition rebuilds its candidates from persisted rows, so re-attach the
+        // live trading-sessions-to-expiry receipt at read time (sessions REMAINING now, not stale).
+        if (saved != null) discoveryController.attachCandidateTimes(saved.result(), root.activeWorld(ctx));
         ctx.json(new ApiResponses.StrategyState<>(saved,
                 planStrategy.selectedCandidate(root.ownerId(ctx), ctx.pathParam("id"))));
     }

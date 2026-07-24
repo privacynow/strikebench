@@ -114,7 +114,23 @@ public final class TradeService {
     }
 
     /** Position greeks: share-equivalent delta/gamma, $ per day theta, $ per vol-point vega. Model stats, not money. */
-    public record PositionGreeks(Double deltaShares, Double gammaShares, Double thetaPerDay, Double vegaPerPoint, boolean complete) {}
+    public record PositionGreeks(Double deltaShares, Double gammaShares, Double thetaPerDay, Double vegaPerPoint, boolean complete) {
+        /**
+         * THE one greeks contract, expressed in the canonical
+         * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks} units
+         * (deltaShares, gammaSharesPerDollar, thetaCentsPerDay, vegaCentsPerPoint) so a held
+         * position, an idea candidate and the scenario canvas all report greeks in ONE unit.
+         * This is a pure unit adapter (theta/vega dollars -> cents), never a re-pricing.
+         * Null when any component is missing, so an incomplete strip stays honestly absent.
+         */
+        public io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks canonical() {
+            if (deltaShares == null || gammaShares == null || thetaPerDay == null || vegaPerPoint == null) {
+                return null;
+            }
+            return new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
+                    deltaShares, gammaShares, thetaPerDay * 100.0, vegaPerPoint * 100.0);
+        }
+    }
 
     /** Dollar-delta exposure for a lane-aware before/after assessment. */
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
@@ -2660,6 +2676,13 @@ public final class TradeService {
         out.put("executionQuality", exec);
 
         out.put("managementPlan", dtePlan(tte, entryNet >= 0));
+        // B5: the exact trading-sessions/calendar-days-to-expiry receipt (MarketHours via OptionTime),
+        // the SAME time convention the ticket and outcome use — so a preview and its order agree.
+        out.put("time", tte);
+        // B6: package greeks in the ONE canonical unit (deltaShares, gammaSharesPerDollar,
+        // thetaCentsPerDay, vegaCentsPerPoint), aggregated from the same per-leg marks already priced.
+        var packageGreeks = packageGreeks(snaps, qty);
+        if (packageGreeks != null) out.put("greeks", packageGreeks);
         // The ±1σ expected move to the nearest expiry (same vol/time basis as the map) — the UI
         // draws it on the payoff chart so 'shorts inside the expected move' is VISIBLE, not prose.
         double sdMove = ivAvg * Math.sqrt(t);
@@ -2714,6 +2737,47 @@ public final class TradeService {
         out.put("verdict", verdict);
         out.put("verdictReason", reason);
         return out;
+    }
+
+    /**
+     * Package greeks in the ONE canonical unit, aggregated from the per-leg marks already priced
+     * for this preview (sign x per-share greek x deliverable x ratio x qty). This is the same
+     * sign/deliverable convention {@link #computeMark} uses for held positions, so an idea and the
+     * position it becomes report greeks identically. Never a re-pricing; null when any option leg
+     * lacks a mark, so the strip stays honestly absent rather than understated.
+     */
+    private static io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks packageGreeks(
+            List<Map<String, Object>> snaps, int qty) {
+        if (snaps == null || snaps.isEmpty()) return null;
+        double dDelta = 0, dGamma = 0, dTheta = 0, dVega = 0;
+        boolean any = false;
+        for (Map<String, Object> snap : snaps) {
+            String type = String.valueOf(snap.get("type"));
+            if ("STOCK".equalsIgnoreCase(type)) continue; // stock delta rides the held-share context, not the option strip
+            Double delta = asDouble(snap.get("delta"));
+            if (delta == null) return null; // an option leg without a mark makes the package greek incomplete
+            int sign = "SELL".equalsIgnoreCase(String.valueOf(snap.get("action"))) ? -1 : 1;
+            double mult = sign * asInt(snap.get("multiplier"), 100) * (double) asInt(snap.get("ratio"), 1) * qty;
+            dDelta += delta * mult;
+            Double gamma = asDouble(snap.get("gamma"));
+            Double theta = asDouble(snap.get("theta"));
+            Double vega = asDouble(snap.get("vega"));
+            dGamma += (gamma == null ? 0 : gamma) * mult;
+            dTheta += (theta == null ? 0 : theta) * mult;
+            dVega += (vega == null ? 0 : vega) * mult;
+            any = true;
+        }
+        if (!any) return null;
+        return new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
+                round2(dDelta), round4(dGamma), round2(dTheta * 100.0), round2(dVega * 100.0));
+    }
+
+    private static Double asDouble(Object v) {
+        return v instanceof Number n ? n.doubleValue() : null;
+    }
+
+    private static int asInt(Object v, int fallback) {
+        return v instanceof Number n ? n.intValue() : fallback;
     }
 
     /** DTE-aware management plan: a 3-day trade must never be told to 'roll at 21 DTE'. */

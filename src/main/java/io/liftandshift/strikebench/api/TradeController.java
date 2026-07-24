@@ -175,8 +175,12 @@ final class TradeController {
                                 mark.decisionUnrealizedCents() == null
                                         ? mark.unrealizedCents() : mark.decisionUnrealizedCents());
                     }
+                    // B2 + B6: the held bloom/spectrum and greeks strip read a server receipt off
+                    // the roster row itself, so activeTrades never falls back to a client leg engine.
+                    row = row.withHeldReceipts(heldTerminalPayoff(trade),
+                            mark != null && mark.greeks() != null ? mark.greeks().canonical() : null);
                 } catch (Exception ignored) {
-                    // A missing live mark leaves this optional list value unavailable.
+                    // A missing live mark leaves these optional list values unavailable.
                 }
             }
             rows.add(row);
@@ -474,7 +478,12 @@ final class TradeController {
                 log.debug("Practice lifecycle analysis detail for " + id, e);
             }
         }
-        return new ApiResponses.TradeDetail<>(TradeView.of(trade), current,
+        TradeView view = TradeView.of(trade);
+        if (TradeRecord.ACTIVE.equals(trade.status())) {
+            view = view.withHeldReceipts(heldTerminalPayoff(trade),
+                    current != null && current.greeks() != null ? current.greeks().canonical() : null);
+        }
+        return new ApiResponses.TradeDetail<>(view, current,
                 trades.marksHistory(id, 50), audit.forTrade(id, 50), payoffPoints(trade), analysis);
     }
 
@@ -844,6 +853,15 @@ final class TradeController {
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations) return List.of();
         BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
+        PayoffCurve curve = heldPayoffCurve(trade, spot);
+        return curve.chartPoints(spot).stream()
+                .map(point -> new ApiResponses.PayoffPoint(
+                        point.price().toPlainString(), point.profitCents()))
+                .toList();
+    }
+
+    /** The one held-line payoff curve (folds locked shares in as a synthetic lot at entry spot). */
+    private static PayoffCurve heldPayoffCurve(TradeRecord trade, BigDecimal spot) {
         List<Leg> chartLegs = trade.legs();
         long heldShares = TradeService.heldShareContextSharesForDisplay(trade);
         long sharesPerUnit = trade.qty() > 0 ? heldShares / trade.qty() : 0;
@@ -854,11 +872,40 @@ final class TradeController {
         }
         long tradedLegEntry = PayoffCurve.of(trade.legs(), trade.qty()).entryNetPremiumCents();
         long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
-        PayoffCurve curve = PayoffCurve.of(chartLegs, trade.qty(), adjustment);
-        return curve.chartPoints(spot).stream()
-                .map(point -> new ApiResponses.PayoffPoint(
-                        point.price().toPlainString(), point.profitCents()))
-                .toList();
+        return PayoffCurve.of(chartLegs, trade.qty(), adjustment);
+    }
+
+    /**
+     * B2: the exact terminal-payoff receipt for a HELD line — the SAME schema/shape the idea
+     * candidate carries (see {@code RiskProfiler}), so the held bloom/spectrum interpolates a
+     * server-owned curve instead of reconstructing it from legs. Mixed-expiry packages are
+     * explicitly unavailable (they need supplied-path valuation), never a false single-date curve.
+     */
+    static io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff heldTerminalPayoff(TradeRecord trade) {
+        boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
+                .map(Leg::expiration).distinct().count() > 1;
+        if (mixedExpirations) {
+            return new io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff(
+                    io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.SCHEMA,
+                    io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.MODEL,
+                    false, null, null, null, null, false, List.of(),
+                    "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
+        }
+        BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
+        String expiration = trade.legs().stream().filter(leg -> !leg.isStock())
+                .map(Leg::expiration).filter(Objects::nonNull)
+                .min(LocalDate::compareTo).map(LocalDate::toString).orElse(null);
+        List<io.liftandshift.strikebench.eval.RiskProfile.PayoffPoint> points =
+                heldPayoffCurve(trade, spot).chartPoints(spot).stream()
+                        .map(p -> new io.liftandshift.strikebench.eval.RiskProfile.PayoffPoint(
+                                p.price(), p.profitCents()))
+                        .toList();
+        return new io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff(
+                io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.SCHEMA,
+                io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.MODEL,
+                !points.isEmpty(), trade.entryUnderlyingCents(), expiration,
+                "EXPIRATION_INTRINSIC", "RECORDED_TRADE_NET", false, points,
+                points.isEmpty() ? "No positive underlying anchor is recorded for this trade." : null);
     }
 
     private static Double percentage(long numerator, Long denominator) {

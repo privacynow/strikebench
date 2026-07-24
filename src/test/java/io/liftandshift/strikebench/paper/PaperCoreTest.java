@@ -1363,6 +1363,27 @@ class PaperCoreTest {
         assertThat(view.legGreeks()).hasSize(2);
         assertThat(view.legGreeks().getFirst()).containsKeys("leg", "delta", "bid", "ask");
 
+        // B6: the ONE canonical greeks contract — a pure unit adapter (theta/vega $ -> cents).
+        var canon = view.greeks().canonical();
+        assertThat(canon).isNotNull();
+        assertThat(canon.deltaShares()).isEqualTo(40.0);
+        assertThat(canon.gammaSharesPerDollar()).isEqualTo(view.greeks().gammaShares());
+        assertThat(canon.thetaCentsPerDay()).isEqualTo(600.0);   // 6.0 $/day -> 600 cents/day
+        assertThat(canon.vegaCentsPerPoint()).isEqualTo(-1000.0); // -10.0 $/pt -> -1000 cents/pt
+
+        // B5 + B6: the same-shape package greeks and the trading-sessions receipt ride the preview.
+        TradePreview preview = trades.preview(creditPutSpread(acct.id(), 2));
+        var pkgGreeks = (io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks)
+                preview.analytics().get("greeks");
+        assertThat(pkgGreeks).isNotNull();
+        assertThat(pkgGreeks.deltaShares()).isEqualTo(40.0);
+        assertThat(pkgGreeks.thetaCentsPerDay()).isEqualTo(600.0);
+        assertThat(pkgGreeks.vegaCentsPerPoint()).isEqualTo(-1000.0);
+        var previewTime = (io.liftandshift.strikebench.market.OptionTime.Measure)
+                preview.analytics().get("time");
+        assertThat(previewTime).isNotNull();
+        assertThat(previewTime.sessions()).isGreaterThanOrEqualTo(0);
+
         Map<String, Object> pg = trades.portfolioGreeks(acct.id());
         assertThat((Double) pg.get("deltaShares")).isEqualTo(40.0);
         assertThat((Boolean) pg.get("complete")).isTrue();

@@ -59,6 +59,11 @@ public record RiskProfile(
             List<PayoffPoint> points,
             String unavailableReason
     ) {
+        /** THE one terminal-payoff receipt schema, shared by the candidate profiler and the
+         *  held-trade serializer so an idea and the position it becomes speak the same shape. */
+        public static final String SCHEMA = "risk-terminal-payoff-1";
+        public static final String MODEL = "payoff-curve-1";
+
         public TerminalPayoff {
             points = points == null ? List.of() : List.copyOf(points);
         }

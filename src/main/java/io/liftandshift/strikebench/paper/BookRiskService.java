@@ -98,6 +98,15 @@ public final class BookRiskService {
 
     public record BetaRow(String symbol, Double beta, int sessions, boolean weighted) {}
 
+    /**
+     * BOOK-level greeks are intentionally dollar-delta (and beta-weighted), NOT the per-position
+     * share contract: raw share delta is not additive across names, so the aggregate rides
+     * {@code net/betaWeightedDollarDeltaCents}. The option-vol greeks are already in the ONE
+     * canonical unit — {@code vegaPerPointCents} is cents per vol point, matching
+     * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks#vegaCentsPerPoint()};
+     * {@code gammaPer1PctCents} is the book's cents-per-1%-move presentation. Per-position and
+     * per-candidate strips use the canonical share/cent Greeks (see TradeService.PositionGreeks#canonical).
+     */
     public record GreekBlock(Long betaWeightedDollarDeltaCents, Long netDollarDeltaCents,
                              Long vegaPerPointCents, Long gammaPer1PctCents,
                              int optionLots, int markedOptionLots, int unmarkedOptionLots,

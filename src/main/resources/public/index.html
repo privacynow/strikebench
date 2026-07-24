@@ -3726,9 +3726,15 @@ function authLegs(trade){return (trade.legs||[]).map(function(l){var sign=String
   ratio:Number(l.ratio||1),multiplier:Number(l.multiplier||1),expiration:l.expiration||null,entryPrice:authNumber(l.entryPrice),positionEffect:l.positionEffect||'OPEN'};});}
 function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portfolio.heat||{},total=Math.max(0,Number(heat.totalMaxLossCents||0)),loss=Math.max(0,Number(trade.maxLossCents||0));
   var planRow=authPlanForTrade(data,trade),plan=planRow&&planRow.plan||null,pnl=authDollarsFromCents(trade.unrealizedPnlCents),spot=authDollarsFromCents(trade.entryUnderlyingCents),lifecycle=authLifecycleAnalysis(data,String(trade.id));
+  /* B2: the held bloom/spectrum interpolates a SERVER terminal-payoff curve (never a leg engine).
+     Absent (mixed-expiry) leaves payoffPoints empty so payFor stays honestly null. */
+  var tp=trade.terminalPayoff,payoffPoints=(tp&&tp.available===true&&Array.isArray(tp.points))?tp.points.map(function(pt){return {price:Number(pt.price),profit:Number(pt.profitCents)/100};}).filter(function(pt){return Number.isFinite(pt.price)&&Number.isFinite(pt.profit);}):[];
+  /* B6: held greeks in the ONE canonical unit (deltaShares/gammaSharesPerDollar/thetaCentsPerDay/vegaCentsPerPoint). */
+  var g=trade.greeks||null;
   return {id:String(trade.id),sym:String(trade.symbol||'').toUpperCase(),struct:authHuman(trade.strategy),spot:spot||0,em:0,pnl:pnl,
     riskPct:total>0?Math.max(0,Math.min(100,loss/total*100)):0,cap:authDollarsFromCents(trade.maxLossCents),net:authDollarsFromCents(trade.entryNetPremiumCents),
     pop:authNumber(trade.popEntry)==null?null:Number(trade.popEntry)*100,maxLoss:authDollarsFromCents(trade.maxLossCents),maxProfit:authDollarsFromCents(trade.maxProfitCents),
+    payoffPoints:payoffPoints,terminalPayoff:tp||null,greeks:g,delta:g?authNumber(g.deltaShares):null,gamma:g?authNumber(g.gammaSharesPerDollar):null,theta:g?authNumber(g.thetaCentsPerDay):null,vega:g?authNumber(g.vegaCentsPerPoint):null,
     breakevens:(trade.breakevens||[]).map(Number).filter(Number.isFinite),need:false,tone:'ok',attn:String(trade.dataAge||trade.dataProvenance||'backend'),
     legs:authLegs(trade),legStr:'',authoritative:true,isHeld:true,lane:trade.isLive?'real':'paper',_trade:trade,_plan:plan,_planRow:planRow,
     provenance:{lane:trade.dataProvenance||null,freshness:trade.dataAge||null,source:trade.dataSource||null},lifecycle:lifecycle,_positionPhase:'idle'};}

@@ -319,6 +319,12 @@ class PlanApiIntegrationTest {
             assertThat(candidate.at("/legs")).isNotEmpty();
             assertThat(candidate.at("/identity/family").asText()).isEqualTo(candidate.get("strategy").asText());
             assertThat(candidate.at("/identity/definedRisk").isBoolean()).isTrue();
+            // B5: the exact trading-sessions/calendar-days-to-expiry receipt rides each candidate and
+            // survives the strategy/latest restore byte-identically.
+            assertThat(candidate.at("/time/sessions").asInt()).isGreaterThanOrEqualTo(0);
+            assertThat(candidate.at("/time/calendarDays").asLong()).isGreaterThanOrEqualTo(0);
+            assertThat(candidate.at("/time/basis").asText()).contains("trading session");
+            assertThat(restored.at("/time/sessions").asInt()).isEqualTo(candidate.at("/time/sessions").asInt());
             assertThat(restored.get("identity")).isEqualTo(candidate.get("identity"));
             assertThat(restored.at("/legs").size()).isEqualTo(candidate.at("/legs").size());
             for (int i = 0; i < candidate.at("/legs").size(); i++) {

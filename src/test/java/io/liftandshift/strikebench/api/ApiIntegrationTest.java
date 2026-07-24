@@ -377,6 +377,19 @@ class ApiIntegrationTest {
         // List / detail
         JsonNode list = Json.parse(get("/api/trades?status=ACTIVE").body());
         assertThat(list.get("total").asLong()).isEqualTo(1);
+        // B2: the roster row itself carries the exact terminal-payoff curve (>= 2 points) so the
+        // held bloom/spectrum interpolates a server receipt, never a client leg engine.
+        JsonNode rowPayoff = list.at("/trades/0/terminalPayoff");
+        assertThat(rowPayoff.get("available").asBoolean()).isTrue();
+        assertThat(rowPayoff.get("schemaVersion").asText()).isEqualTo("risk-terminal-payoff-1");
+        assertThat(rowPayoff.get("points").size()).isGreaterThanOrEqualTo(2);
+        assertThat(rowPayoff.at("/points/0/price").asDouble()).isPositive();
+        // B6: held greeks in the ONE canonical unit ride the roster row (short-put-spread => positive delta).
+        JsonNode rowGreeks = list.at("/trades/0/greeks");
+        assertThat(rowGreeks.get("deltaShares").asDouble()).isGreaterThan(0);
+        assertThat(rowGreeks.has("thetaCentsPerDay")).isTrue();
+        assertThat(rowGreeks.has("vegaCentsPerPoint")).isTrue();
+        assertThat(rowGreeks.has("gammaSharesPerDollar")).isTrue();
         JsonNode beforeLifecycleRead = Json.parse(get("/api/account").body());
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/trade/id").asText()).isEqualTo(tradeId);
@@ -475,6 +488,12 @@ class ApiIntegrationTest {
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/current/greeks/deltaShares").asDouble()).isGreaterThan(0);
         assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
+        // B6: the trade VIEW carries the canonical greeks contract (thetaCentsPerDay == thetaPerDay*100).
+        JsonNode canonical = detail.at("/trade/greeks");
+        assertThat(canonical.get("deltaShares").asDouble()).isGreaterThan(0);
+        assertThat(canonical.get("thetaCentsPerDay").asDouble())
+                .isCloseTo(detail.at("/current/greeks/thetaPerDay").asDouble() * 100.0,
+                        org.assertj.core.data.Offset.offset(0.5));
 
         transform(tradeId, "VOID");
     }
