@@ -232,12 +232,16 @@ public final class CboeProvider implements MarketDataProvider {
      * (HTTP 404, or a body without a data object). Other failures propagate.
      */
     private CachedPayload fetchData(String symbol) {
-        // Circuit breaker: while cooling down from a 429, make NO Cboe request (for any symbol) — this
-        // is what stops the retry storm and the ongoing hammering. Callers fall through the chain.
-        if (coolingDown()) return null;
         String cacheKey = BroadBasedIndexOptions.canonicalRoot(symbol)
                 .orElseGet(() -> symbol == null ? "" : symbol.trim().toUpperCase(java.util.Locale.ROOT));
+        // Circuit breaker: while cooling from a 429 the politeness gate makes NO Cboe request (returns
+        // empty) — this stops the retry storm — EXCEPT for one spaced half-open probe that tests
+        // recovery so a healed provider unblocks in seconds, not 15 minutes. A probe that succeeds
+        // caches its payload and closes the breaker; a plain cooling miss must NOT poison the 120s
+        // cache, or the symbol would stay empty long after the provider came back.
+        boolean cooling = coolingDown();
         Optional<CachedPayload> cached = payloadCache.get(cacheKey, this::fetchDataUncached);
+        if (cooling && (cached == null || cached.isEmpty())) payloadCache.invalidate(cacheKey);
         return cached == null ? null : cached.orElse(null);
     }
 

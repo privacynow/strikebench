@@ -29,14 +29,25 @@ public final class ProviderPoliteness {
     private final long cooldownMs;
     private volatile long cooldownUntilMs = 0;
     private long nextAllowedMs = 0; // guarded by `this`
+    private long lastProbeMs = 0;   // guarded by `this`
+    private final long probeIntervalMs;
     private EventBus events;        // optional
     private final AtomicInteger consecutiveFailures = new AtomicInteger();
 
     public ProviderPoliteness(String provider, int maxConcurrency, long spacingMs, long cooldownMs) {
+        // Half-open cadence: while cooling, let a single recovery probe through this often, so a
+        // provider that healed unblocks in seconds instead of waiting out the whole cooldown.
+        // Capped at the cooldown itself, so a short cooldown never probes before it simply expires.
+        this(provider, maxConcurrency, spacingMs, cooldownMs, Math.min(45_000L, Math.max(1_000, cooldownMs)));
+    }
+
+    /** Test seam: explicit half-open probe cadence. */
+    ProviderPoliteness(String provider, int maxConcurrency, long spacingMs, long cooldownMs, long probeIntervalMs) {
         this.provider = provider;
         this.concurrency = new Semaphore(Math.max(1, maxConcurrency), true);
         this.spacingMs = Math.max(0, spacingMs);
         this.cooldownMs = Math.max(1_000, cooldownMs);
+        this.probeIntervalMs = Math.max(1, probeIntervalMs);
     }
 
     public void setEvents(EventBus events) { this.events = events; }
@@ -52,8 +63,11 @@ public final class ProviderPoliteness {
      */
     public void seedCooldown(long untilMs) {
         long now = System.currentTimeMillis();
-        if (untilMs > now) cooldownUntilMs = Math.max(cooldownUntilMs, untilMs);
+        if (untilMs > now) { cooldownUntilMs = Math.max(cooldownUntilMs, untilMs); noteCooldownStart(now); }
     }
+
+    /** The first half-open probe waits one full interval AFTER a trip/restore, never immediately. */
+    private synchronized void noteCooldownStart(long now) { lastProbeMs = now; }
 
     /** Healthy AND a permit free — the only state in which speculative (prefetch) work may run. */
     public boolean prefetchBudget() { return !coolingDown() && concurrency.availablePermits() > 0; }
@@ -75,15 +89,22 @@ public final class ProviderPoliteness {
      */
     public <T> T call(Callable<T> request, T coolingDownFallback,
                       Predicate<Exception> countsAsProviderFailure) {
-        if (coolingDown()) return coolingDownFallback;
+        boolean probing = false;
+        if (coolingDown()) {
+            // Half-open: at most one spaced recovery probe actually runs; everything else falls
+            // back immediately without touching the provider.
+            if (!claimProbe()) return coolingDownFallback;
+            probing = true;
+        }
         boolean acquired = false;
         try {
             concurrency.acquire();
             acquired = true;
             pace();
-            if (coolingDown()) return coolingDownFallback; // tripped while we waited
+            if (!probing && coolingDown()) return coolingDownFallback; // tripped while we waited
             T value = request.call();
             consecutiveFailures.set(0);
+            if (probing) recover(); // the probe succeeded — the provider is back; resume normal traffic
             return value;
         } catch (Exception e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
@@ -104,10 +125,29 @@ public final class ProviderPoliteness {
     /** Trips the provider-wide breaker and announces it (idempotent while already cooling). */
     public void trip() {
         boolean wasCooling = coolingDown();
-        cooldownUntilMs = System.currentTimeMillis() + cooldownMs;
+        long now = System.currentTimeMillis();
+        cooldownUntilMs = now + cooldownMs;
+        noteCooldownStart(now);
         if (!wasCooling && events != null) {
             events.publish("provider.cooldown", Map.of("provider", provider, "untilMs", cooldownUntilMs));
         }
+    }
+
+    /** Half-open gate: grants at most one recovery probe per {@code probeIntervalMs} while cooling. */
+    private synchronized boolean claimProbe() {
+        long now = System.currentTimeMillis();
+        if (now < cooldownUntilMs && now - lastProbeMs >= probeIntervalMs) {
+            lastProbeMs = now;
+            return true;
+        }
+        return false;
+    }
+
+    /** A recovery probe came back clean — close the breaker so normal traffic resumes at once. The
+     *  persisted deadline (if any) is left to expire or be overwritten; a later restart re-probes. */
+    private void recover() {
+        cooldownUntilMs = 0;
+        consecutiveFailures.set(0);
     }
 
     /** Serializes a minimum gap between request starts, shared across all threads. */
