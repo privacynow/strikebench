@@ -225,7 +225,7 @@ public final class PositionsService {
                         newShares, newBasis, now, p.id());
                 p = new Position(p.id(), accountId, sym, newShares, newBasis, p.createdAt(), now);
             }
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?, has_traded=1, updated_at=? WHERE id=?", cash, now, accountId);
+            AccountService.applyCashTraded(c, accountId, cash, now);
             return p;
         });
         auditSafe(accountId, "POSITION_BUY", Map.of("symbol", sym, "shares", shares, "costCents", cost));
@@ -264,7 +264,7 @@ public final class PositionsService {
             } else {
                 Db.execOn(c, "UPDATE positions SET shares=?, updated_at=? WHERE id=?", newShares, now, p.id());
             }
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?, has_traded=1, updated_at=? WHERE id=?", cash, now, accountId);
+            AccountService.applyCashTraded(c, accountId, cash, now);
             return new Position(p.id(), accountId, sym, newShares, p.avgCostCents(), p.createdAt(), now);
         });
         auditSafe(accountId, "POSITION_SELL", Map.of("symbol", sym, "shares", shares,

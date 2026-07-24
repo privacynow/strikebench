@@ -1050,8 +1050,7 @@ public final class TradeService {
                     survivingQuantity, survivingEntry, survivingMaxLoss, survivingMaxProfit,
                     survivingOpenFees, closeFeesToDate, totalRealized, totalDecision, survivingShares,
                     survivingProposed, snapshot, at, trade.id());
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
-                    cash, reserved, at, account.id());
+            AccountService.applyBalances(c, account.id(), cash, reserved, at);
             TradeRecord survivor = getOn(c, trade.id());
             if (Ledger.outstandingReserve(c, trade.id()) != survivingReserve) {
                 throw new IllegalStateException("Partial-close reserve allocation did not reconcile.");
@@ -1193,8 +1192,7 @@ public final class TradeService {
                     exactPlan.entryNet(), snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
                     entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
                     entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
-                    cash, reserved, at, account.id());
+            AccountService.applyBalances(c, account.id(), cash, reserved, at);
             TradeRecord survivor = getOn(c, trade.id());
             if (Ledger.outstandingReserve(c, trade.id()) != exactPlan.reserve()) {
                 throw new IllegalStateException("Adjusted-position reserve did not reconcile.");
@@ -1299,8 +1297,7 @@ public final class TradeService {
                         entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
                         entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
             }
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
-                    cash, reserved, at, account.id());
+            AccountService.applyBalances(c, account.id(), cash, reserved, at);
             TradeRecord changed = getOn(c, trade.id());
             if (Ledger.outstandingReserve(c, trade.id()) != projected.reserveAfterCents()) {
                 throw new IllegalStateException("Lifecycle conversion reserve did not reconcile.");
@@ -1509,7 +1506,7 @@ public final class TradeService {
             String closeReason = "SETTLED" + assignNote + memoSuffix;
             Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
                     TradeRecord.EXPIRED, closeReason, realizedToDate, decisionPnlToDate, nowTs, nowTs, t.id());
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, nowTs, acct.id());
+            AccountService.applyBalances(c, acct.id(), cash, reserved, nowTs);
             CloseResult closed = new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
             if (hook != null) hook.afterMutation(c, closed.trade(),
                     closed.actionRealizedPnlCents(), closed.realizedPnlCents());
@@ -1558,7 +1555,7 @@ public final class TradeService {
             }
             Db.execOn(c, "UPDATE trades SET status=?, close_reason='DELETED_BY_USER', closed_at=?, updated_at=? WHERE id=?",
                     TradeRecord.DELETED, now, now, tradeId);
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, now, acct.id());
+            AccountService.applyBalances(c, acct.id(), cash, reserved, now);
             TradeRecord deleted = getOn(c, tradeId);
             if (hook != null) hook.afterMutation(c, deleted, null, null);
             return deleted;
@@ -2783,7 +2780,7 @@ public final class TradeService {
         }
         Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
                 newStatus, closeReason, closeFeesToDate, realizedToDate, decisionPnlToDate, now, now, t.id());
-        Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, updated_at=? WHERE id=?", cash, reserved, now, acct.id());
+        AccountService.applyBalances(c, acct.id(), cash, reserved, now);
         return new CloseResult(getOn(c, t.id()), realizedToDate, actionRealized);
     }
 
