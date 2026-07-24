@@ -6241,11 +6241,6 @@ function cohCtx(ctx){ if(ctx)return ctx; if(typeof decide==='object'&&decide&&de
   /* a HELD position is judged on thesis fit (view · goal), not re-litigated against entry caps —
      the capital is already committed — so the cap gates are off; only view/goal/edge drive the verdict. */
   return {view:POSTURE.view, goal:POSTURE.goal, govs:{risk:Infinity,bp:Infinity,minPop:0,maxAsn:100,gapLoss:0}, cands:[]}; }
-function candFit(c,ctx){ctx=cohCtx(ctx); var v=ctx.view.toLowerCase(),ln=c.lean||'neutral';
-  if(v==='neutral')return ln==='neutral'?'on':'mid';
-  if(v==='bullish')return ln==='bull'?'on':(ln==='bear'?'off':'mid');
-  if(v==='bearish')return ln==='bear'?'on':(ln==='bull'?'off':'mid');
-  return 'mid';}
 function candGated(c,ctx){if(c&&c.authoritative)return null;ctx=cohCtx(ctx); var g=ctx.govs, risk=c.undef?60000:c.maxLoss;
   if(!c.undef&&!isCollat(c)&&risk>g.risk)return 'risk';
   if((isCollat(c)||c.undef)&&c.cap>g.bp)return 'bp';
@@ -6255,18 +6250,6 @@ function candGated(c,ctx){if(c&&c.authoritative)return null;ctx=cohCtx(ctx); var
   return null;}
 /* ---- coherence verdict: does the candidate match your GOAL · VIEW · BUDGET, and does
    anything strictly beat it (Pareto)? One verdict, four honest checks, plain-English why. ---- */
-function goalFit(c,ctx){ ctx=cohCtx(ctx); var g=(ctx.goal||'Income').toLowerCase();
-  if(g==='income')      return c.credit>0?(c.pop>=62?'on':'mid'):'off';
-  if(g==='directional') return (c.lean&&c.lean!=='neutral')?'on':'mid';
-  if(g==='hedge')       return c.lean==='bear'?'on':(c.undef?'off':'mid');
-  return 'mid'; }
-function candRiskVal(c){ return c.undef?Infinity:(c.maxLoss||0); }
-function dominatedBy(c,ctx){ ctx=cohCtx(ctx); var best=null;
-  (ctx.cands||[]).forEach(function(o){ if(o===c||o.id===c.id||candGated(o,ctx))return;
-    var ro=candRiskVal(o), rc=candRiskVal(c), eo=o.edge||0, ec=c.edge||0;
-    if(o.pop>=c.pop && eo>=ec && ro<=rc && (o.pop>c.pop||eo>ec||ro<rc)){
-      if(!best || (o.pop-(o.assign||0))>(best.pop-(best.assign||0))) best=o; } });
-  return best; }
 function coherence(c,ctx){ ctx=cohCtx(ctx);
   if(c&&c.authoritative){
     var ass=authoritativeAssessment(c),co=ass.coherence||{},mech=ass.mechanics||{},econ=ass.economics||{},raw=String(co.verdict||'UNAVAILABLE').toUpperCase();
@@ -6295,25 +6278,8 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
     if(authoritativeEvidenceIncomplete(c)&&authoritativeMissingEvidence(c).indexOf('history')>=0)prose='Daily price history is missing, so the realistic edge check is incomplete. Entry mechanics remain available.';
     return {verdict:verdict,word:word,checks:checks,prose:prose,dom:null};
   }
-  var vf=candFit(c,ctx), gf=goalFit(c,ctx), gate=candGated(c,ctx), dom=dominatedBy(c,ctx);
-  var v=ctx.view.toLowerCase(), gl=ctx.goal.toLowerCase();
-  var gn={risk:'over your defined-risk cap',bp:'over your collateral cap',pop:'win-odds below your screen',assign:'assignment odds above your screen',gaploss:'a sector gap would lose more than your gap-loss cap'};
-  var checks=[
-    {k:'View',   s:vf,              note: vf==='on'?'expresses your '+v+' view':vf==='off'?'fights your '+v+' view':'view-neutral — not a clean '+v+' bet'},
-    {k:'Goal',   s:gf,              note: gf==='on'?'fits your '+gl+' goal':gf==='off'?'not really a '+gl+' structure':'only loosely a '+gl+' play'},
-    {k:'Budget', s:gate?'off':'on', note: gate?gn[gate]:'inside every cap and screen'},
-    {k:'Edge',   s:dom?'mid':'on',  note: dom?dom.short+' beats it on odds, edge & risk':'nothing here strictly beats it'}
-  ];
-  var verdict=(vf==='off'||gf==='off'||gate)?'off':((vf==='mid'||gf==='mid'||dom)?'mid':'on');
-  var word=verdict==='on'?'Coherent':verdict==='mid'?'Worth a look':'Doesn’t fit';
-  var prose;
-  if(gate)          prose='Screened out — '+gn[gate]+'. Loosen that cap or pick another line.';
-  else if(vf==='off')prose='This pays best if '+c.sym+' runs opposite your '+v+' call — an odd fit for the view you set.';
-  else if(gf==='off')prose='Sound trade, but it isn’t a '+gl+' structure — make sure the goal still holds before you place it.';
-  else if(dom)      prose='Fine alone, but '+dom.short+' dominates it — better odds and edge for equal-or-less risk. Worth comparing before you commit.';
-  else if(verdict==='on')prose='Lines up on all four: your '+v+' view, your '+gl+' goal, your caps, and nothing here beats it.';
-  else              prose='A reasonable read on your view — the tilt is soft, so weigh it against the desk pick.';
-  return {verdict:verdict, word:word, checks:checks, prose:prose, dom:dom};
+  /* non-authoritative candidates no longer exist (display-only desk) — the client-side view/goal/budget/Pareto evaluator was removed */
+  return {verdict:'mid', word:'Comparison only', checks:[], prose:'', dom:null};
 }
 /* The boxed KPI numrow is one shared component for the Position and New Idea heroes. */
 function stratKPIs(c, opts){ opts=opts||{};
