@@ -165,7 +165,9 @@
     if (context && Object.prototype.hasOwnProperty.call(context, 'horizon')
         && (raw == null || String(raw).trim() === '')) return null;
     var parsed = raw == null ? null : Number(String(raw).match(/\d+/) && String(raw).match(/\d+/)[0]);
-    return parsed && parsed > 0 ? Math.min(756, parsed) : 45;
+    // Absence is a declaration fact (like intentOf/thesisOf): an undeclared horizon stays null and
+    // is surfaced as "horizon undeclared" — the adapter never fabricates a 45-session default.
+    return parsed && parsed > 0 ? Math.min(756, parsed) : null;
   }
 
   function intentOf(goal) {
@@ -186,13 +188,10 @@
   function riskModeOf(context) {
     var explicit = String(context && context.riskMode || '').trim().toLowerCase();
     if (explicit === 'conservative' || explicit === 'balanced' || explicit === 'aggressive') return explicit;
-    if (context && Object.prototype.hasOwnProperty.call(context, 'riskMode')) return null;
-    var risk = number(context && context.governors && context.governors.risk);
-    if (risk == null && window.decide && window.decide.govs) risk = number(window.decide.govs.risk);
-    if (risk == null && window.POSTURE) risk = number(window.POSTURE.risk);
-    if (risk != null && risk <= 2500) return 'conservative';
-    if (risk != null && risk >= 10000) return 'aggressive';
-    return 'balanced';
+    // Absence is a declaration fact. Never infer a posture from a global POSTURE/governor default the
+    // user did not declare AS a risk posture — an undeclared risk posture stays null (surfaced as
+    // "risk undeclared"), which is what prevents state loss masquerading as a silent "Balanced".
+    return null;
   }
 
   function dateParts(raw) {
