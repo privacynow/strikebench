@@ -45,10 +45,27 @@ public final class RiskProfiler {
             PayoffCurve pc = payoffCurve(c, ctx);
             exactLossBounded = !pc.maxLossUnbounded();
             BigDecimal spot = cents(ctx.underlyingCents());
-            for (double m : MOVES) {
+            double spotD = spot.doubleValue();
+            // The SAME risk-neutral lognormal that owns pop — used only to weight each checkpoint
+            // by its probability mass (Voronoi bins over MOVES). Null when no ATM IV / degenerate.
+            io.liftandshift.strikebench.pricing.LognormalTerminal term =
+                    (ctx.atmIv() != null && ctx.atmIv() > 0 && spotD > 0 && ctx.daysToExpiry() > 0)
+                            ? io.liftandshift.strikebench.pricing.LognormalTerminal.of(
+                                    spotD, ctx.atmIv(), ctx.daysToExpiry() / 365.0, ctx.riskFreeRate())
+                            : null;
+            for (int i = 0; i < MOVES.length; i++) {
+                double m = MOVES[i];
                 BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
                 long pnl = pc.profitAtCents(s);
-                scenarios.add(new RiskProfile.Scenario(m, pnl));
+                Double prob = null;
+                if (term != null) {
+                    double lo = i == 0 ? 0 : spotD * (1.0 + (MOVES[i - 1] + m) / 2.0);
+                    double hiEdge = i == MOVES.length - 1
+                            ? Double.POSITIVE_INFINITY : spotD * (1.0 + (m + MOVES[i + 1]) / 2.0);
+                    double mass = (Double.isInfinite(hiEdge) ? 1.0 : term.cdf(hiEdge)) - term.cdf(lo);
+                    prob = io.liftandshift.strikebench.util.Numbers.round4(Math.max(0, Math.min(1, mass)));
+                }
+                scenarios.add(new RiskProfile.Scenario(m, pnl, prob));
                 worstPnl = have ? Math.min(worstPnl, pnl) : pnl;
                 have = true;
             }
