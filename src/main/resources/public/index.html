@@ -6597,10 +6597,10 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
 }
 /* The boxed KPI numrow is one shared component for the Position and New Idea heroes. */
 function stratKPIs(c, opts){ opts=opts||{};
-  var credit=(c.credit!=null?c.credit:c.net),creditKnown=credit!=null&&Number.isFinite(Number(credit));if(creditKnown)credit=Number(credit);
+  var credit=(candCollect(c)!=null?candCollect(c):c.net),creditKnown=credit!=null&&Number.isFinite(Number(credit));if(creditKnown)credit=Number(credit);
   if(opts.calm){
     var primary=[
-      kcell(!creditKnown?'Package net':credit>=0?'Collect':'Cost', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
+      kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
       kcell('Max loss', maxLossDisp(c), 'neg'),
       kcell('Chance', (c.pop!=null?c.pop:'—')+'<small> %</small>', '')
     ];
@@ -6609,7 +6609,7 @@ function stratKPIs(c, opts){ opts=opts||{};
       '<span>Capital <b>'+(c.cap==null?'—':money(c.cap))+'</b></span><span>Break-even <b>'+beLabel(c)+'</b></span></div>';
   }
   var cells=[
-    kcell(!creditKnown?'Package net':credit>=0?'Collect':'Cost', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
+    kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
     kcell('Max loss', maxLossDisp(c), 'neg'),
     kcell('Max profit', maxProfitDisp(c), 'pos'),
     kcell('Chance', (c.pop!=null?c.pop:'—')+'<small> %</small>', ''),
@@ -7375,10 +7375,18 @@ function fanVerdictIcon(co,gated){
   var glyph=kind==='ok'?'✓':kind==='bad'?'✕':kind==='neg'?'▾':kind==='scr'?'⊘':kind==='inc'?'':'~';
   return '<span class="fvd '+kind+'" title="'+deskEsc(tip)+'">'+glyph+'</span>';
 }
+/* D (#12): the collect cell shows OPTION-only net premium when the structure has a stock leg
+   (equals entry net otherwise); the stock outlay is represented only by the Capital column. One
+   helper feeds all four display sites so they never diverge. */
+function candCollect(c){return c&&c.optionNet!=null?c.optionNet:(c?c.credit:null);}
+function candCollectLabel(c){var v=candCollect(c);return v==null?'Net premium':v>=0?'Net credit':'Net debit';}
 function fanList(){
   /* ONE row per idea. Labels live ONCE in the header; rows are the numbers, colored by meaning. */
+  var netVals=decide.cands.map(candCollect).filter(function(v){return v!=null&&Number.isFinite(Number(v));});
+  var allCr=netVals.length&&netVals.every(function(v){return v>=0;}),allDb=netVals.length&&netVals.every(function(v){return v<0;});
+  var collectHdr=allCr?'net credit':allDb?'net debit':'net';
   var head='<div class="fanhead" aria-hidden="true"><span></span><span class="fh-name">idea</span><span class="fh-i" title="fit verdict — hover any glyph">fit</span>'+
-    '<span class="fnum" title="Cash at open — negative means you pay to open">collect</span>'+
+    '<span class="fnum" title="Option-only net premium at open — credit is positive, debit negative; any stock outlay shows under capital">'+collectHdr+'</span>'+
     '<span class="fnum" title="Defined maximum loss">max loss</span>'+
     '<span class="fnum" title="Chance of profit">chance</span>'+
     '<span class="fnum fcol-stress" title="P/L under a sector gap shock">stress</span>'+
@@ -7392,7 +7400,7 @@ function fanList(){
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
       '<span class="fanname"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span><small class="fsub">'+deskEsc(exact||co.prose||whyRead||'Exact package priced from the current chain')+'</small></span>'+
       fanVerdictIcon(co,gt)+
-      '<span class="fnum '+(c.credit>=0?'pos':'neg')+'">'+signed(c.credit)+'</span>'+
+      '<span class="fnum '+(candCollect(c)>=0?'pos':'neg')+'" title="'+deskEsc(candCollectLabel(c))+'">'+signed(candCollect(c))+'</span>'+
       '<span class="fnum">'+maxLossDisp(c)+'</span>'+
       '<span class="fnum">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
       '<span class="fnum fcol-stress '+gcls+'">'+(gl==null?'—':money(gl))+'</span>'+
@@ -7922,7 +7930,7 @@ function showMapCard(id){
   var gt=candGated(c);
   var co=coherence(c);
   card.innerHTML='<div class="mcnm"><span class="mcrisk" style="background:'+riskCharCol(c)+'"></span>'+c.short+'</div>'+
-    '<div class="mcg"><span class="kk">'+(c.credit>=0?'Collect':'Cost')+'</span><span class="vv '+(c.credit>=0?'pos':'neg')+'">'+signed(c.credit)+'</span>'+
+    '<div class="mcg"><span class="kk">'+(candCollect(c)>=0?'Net credit':'Net debit')+'</span><span class="vv '+(candCollect(c)>=0?'pos':'neg')+'">'+signed(candCollect(c))+'</span>'+
     '<span class="kk">'+(riskChar(c)==='collat'?'If assigned':'Max loss')+'</span><span class="vv neg">'+maxLossDisp(c)+'</span>'+
     '<span class="kk">Chance</span><span class="vv">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
     '<span class="kk">Capital</span><span class="vv">'+(c.cap?money(c.cap):'$0')+'</span></div>'+

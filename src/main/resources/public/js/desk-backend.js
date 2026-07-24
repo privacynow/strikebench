@@ -1387,6 +1387,9 @@
       return String(leg.type || '').toUpperCase() !== 'STOCK';
     });
     var entry = candidate.entryNetPremiumCents == null ? null : Number(candidate.entryNetPremiumCents) / 100;
+    // D (#12): option-only net premium (credit>0/debit<0) — equals entry for non-stock structures;
+    // the stock outlay stays represented only by Capital, never folded into the collect cell.
+    var optionNet = candidate.optionNetPremiumCents == null ? null : Number(candidate.optionNetPremiumCents) / 100;
     var identity = candidate.positionIdentity || candidate.identity || null;
     var explicitDefinedRisk = identity && typeof identity.definedRisk === 'boolean'
       ? identity.definedRisk : typeof candidate.definedRisk === 'boolean' ? candidate.definedRisk : null;
@@ -1421,6 +1424,7 @@
       legs: (candidate.legs || []).map(function (leg) { return legToDesk(leg, qty); }),
       net: entry,
       credit: entry,
+      optionNet: optionNet,
       creditAmount: entry == null ? null : entry > 0 ? entry : 0,
       debitAmount: entry == null ? null : entry < 0 ? -entry : 0,
       entryEconomics: entry == null ? 'UNAVAILABLE' : entry > 0 ? 'CREDIT' : entry < 0 ? 'DEBIT' : 'EVEN',
