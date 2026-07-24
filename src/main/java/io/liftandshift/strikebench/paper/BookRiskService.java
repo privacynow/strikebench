@@ -1015,7 +1015,7 @@ public final class BookRiskService {
 
     private String practiceWorld(String accountId) {
         record AccountLane(String type, String worldId) {}
-        List<AccountLane> rows = db.query("SELECT type,world_id FROM accounts WHERE id=?",
+        List<AccountLane> rows = db.query(AccountService.LANE_SQL,
                 r -> new AccountLane(r.str("type"), r.str("world_id")), accountId);
         if (rows.isEmpty()) throw new IllegalArgumentException("no such Practice account " + accountId);
         AccountLane lane = rows.getFirst();

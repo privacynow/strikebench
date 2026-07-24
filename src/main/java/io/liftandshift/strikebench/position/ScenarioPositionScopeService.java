@@ -157,7 +157,7 @@ public final class ScenarioPositionScopeService {
 
     /** The cost basis belongs to the account's own lane; Demo/simulation basis is never observed. */
     private PositionDomain.PriceAuthority practiceHoldingAuthority(String accountId) {
-        List<AccountMarket> rows = db.query("SELECT type,world_id FROM accounts WHERE id=?",
+        List<AccountMarket> rows = db.query(io.liftandshift.strikebench.paper.AccountService.LANE_SQL,
                 r -> new AccountMarket(r.str("type"), r.str("world_id")), accountId);
         if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
         AccountMarket account = rows.getFirst();

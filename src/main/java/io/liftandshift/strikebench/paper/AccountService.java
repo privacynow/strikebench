@@ -228,6 +228,8 @@ public final class AccountService {
     }
 
 
+    /** The account's market-lane fetch. Callers keep their own record + lane interpretation + throw. */
+    public static final String LANE_SQL = "SELECT type,world_id FROM accounts WHERE id=?";
     static final String SET_BALANCES_SQL =
             "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?";
     static final String SET_CASH_TRADED_SQL =
