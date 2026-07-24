@@ -1082,11 +1082,7 @@
 .authscenstage{min-width:0;flex:1 1 auto;min-height:0;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:10px;display:flex;flex-direction:column;gap:8px}
 .authscenarioarea{display:grid;grid-template-columns:minmax(540px,1.12fr) minmax(400px,.88fr);gap:10px;min-width:0;flex:1;min-height:max(245px,27vh)}
 .authscenpanel,.authpathpanel{min-width:0;min-height:0;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);padding:9px;overflow:hidden}
-.authscenpanel{display:flex;flex-direction:column;gap:7px}.authscengrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
-.authscenrow{position:relative;min-width:0;min-height:68px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);text-align:left;cursor:pointer;transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease),transform var(--mo-quick) var(--mo-ease)}
-.authscenrow:hover,.authscenrow:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}.authscenrow.pinned{border-color:var(--accent);background:var(--accent-wash);box-shadow:inset 2px 0 0 var(--accent)}
-.authscenrow .asname{display:flex;align-items:baseline;justify-content:space-between;gap:6px;color:var(--text);font-size:var(--f-xs);font-weight:750}.authscenrow .asname b{font-family:var(--mono);font-size:var(--f-2xs);font-weight:650;white-space:nowrap}.authscenrow .asdesc{display:block;margin-top:4px;min-height:28px;font-size:var(--f-2xs);line-height:1.35;color:var(--faint);overflow:hidden}.authscenrow .asvalue{display:block;margin-top:4px;font-family:var(--mono);font-size:var(--f-xs);font-weight:750;color:var(--dim)}
-.authscenrow .asvalue.pos{color:var(--profit)}.authscenrow .asvalue.neg{color:var(--loss)}.authscenwait{margin-top:auto;color:var(--faint);font-size:var(--f-2xs);line-height:1.4}
+.authscenpanel{display:flex;flex-direction:column;gap:7px}
 .authpathpanel{display:grid;grid-template-rows:auto minmax(150px,1fr) auto;gap:6px}.authpathviewport{min-width:0;min-height:0;display:flex}.authpathviewport>.authpositionnotice{flex:1}.authpathchart{width:100%;height:100%;min-height:145px;display:block}.authpathchart .grid{stroke:var(--line-soft);stroke-dasharray:3 4}.authpathchart .context{fill:none;stroke:var(--dim);stroke-opacity:.18;stroke-width:.85}.authpathchart .focusghost{fill:none;stroke:var(--accent);stroke-opacity:.24;stroke-width:1.25}.authpathchart .focuspath{fill:none;stroke:var(--accent);stroke-width:2.2}.authpathchart .pathhit{fill:none;stroke:transparent;stroke-width:12;pointer-events:stroke;cursor:pointer}.authpathchart .pathband{fill:var(--accent);fill-opacity:.09}.authpathchart .pathband.inner{fill-opacity:.18}.authpathchart text{font-family:var(--mono);font-size:9px;fill:var(--faint)}
 .authscenmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.authscenmetric{min-width:0;padding:6px 7px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2)}.authscenmetric span{display:block;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.authscenmetric b{display:block;margin-top:2px;font-family:var(--mono);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.authscenmetric b.pos{color:var(--profit)}.authscenmetric b.neg{color:var(--loss)}
 .authscenrisk{width:100%;height:44px;display:block;margin-top:5px}.authscenrisk .track{stroke:var(--line);stroke-width:1}.authscenrisk .checkpoint{fill:var(--dim);fill-opacity:.35}.authscenrisk .live{fill:var(--accent);stroke:var(--text);stroke-width:1.2;filter:drop-shadow(0 0 3px rgba(70,213,181,.45))}
@@ -1108,7 +1104,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authposside .authleg{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"side qty mark" "contract contract contract";gap:3px 6px;padding:5px 6px}
   .authposside .authleg .side{grid-area:side}.authposside .authleg>span:nth-child(2){grid-area:qty;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authposside .authleg .contract{grid-area:contract}.authposside .authleg .mark{grid-area:mark}
 }
-@media(max-width:700px){.authscengrid{grid-template-columns:repeat(2,minmax(0,1fr))}.authscenmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}.authscenarioarea{min-height:0}.authpathpanel{min-height:235px}.authscenrow{min-height:62px}.authscenrow .asdesc{display:none}.authleg{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"side qty mark" "side contract contract"}.authleg .side{grid-area:side}.authleg>span:nth-child(2){grid-area:qty}.authleg .contract{grid-area:contract}.authleg .mark{grid-area:mark}.authmarketfacts.compact{grid-template-columns:repeat(2,minmax(0,1fr))}.authhomehistorymeta{flex-direction:column;gap:2px}.authresearchpulse{grid-template-columns:1fr}.authchainhead,.authchainrow{grid-template-columns:minmax(0,1fr) 62px minmax(0,1fr)}.authpaykey{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.authscenmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}.authscenarioarea{min-height:0}.authpathpanel{min-height:235px}.authleg{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"side qty mark" "side contract contract"}.authleg .side{grid-area:side}.authleg>span:nth-child(2){grid-area:qty}.authleg .contract{grid-area:contract}.authleg .mark{grid-area:mark}.authmarketfacts.compact{grid-template-columns:repeat(2,minmax(0,1fr))}.authhomehistorymeta{flex-direction:column;gap:2px}.authresearchpulse{grid-template-columns:1fr}.authchainhead,.authchainrow{grid-template-columns:minmax(0,1fr) 62px minmax(0,1fr)}.authpaykey{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @keyframes authpulse{50%{background-position:100% 0;opacity:.58}}
 .authcompare{display:grid;gap:7px;margin-top:8px}.authcompare .acrow{display:grid;grid-template-columns:minmax(120px,1fr) repeat(4,minmax(64px,.62fr));gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:6px;font-size:var(--f-xs)}
 .authcompare button.acrow{width:100%;background:var(--panel);color:inherit;text-align:inherit;cursor:pointer}.authcompare button.acrow:hover,.authcompare button.acrow.on{border-color:var(--accent-2);background:var(--accent-wash)}
@@ -3241,18 +3237,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 var POS=[];
 var byId={};
 
-/* ---- FLAG archetypes: the attention flag DERIVES the recommended action + tone ---- */
-var FLAGS={
- expiry:    {verb:'Roll',   alt:['Let it expire','Close'],    tone:'warn'},
- stop:      {verb:'Close',  alt:['Roll up & out','Hold'],     tone:'bad'},
- assignment:{verb:'Roll',   alt:['Accept assignment','Close'],tone:'warn'},
- earnings:  {verb:'Adjust', alt:['Close pre-earnings','Hold'],tone:'warn'},
- roll:      {verb:'Roll',   alt:['Close & bank it','Hold'],   tone:'warn'},
- clear:     {verb:null,     alt:['Roll up','Add'],            tone:'ok'},
- imported:  {verb:'Adjust', alt:['Stress-test','Roll','Close'],       tone:'ok'},   /* real/paper import, defined risk */
- importedu: {verb:'Adjust', alt:['Add a wing','Stress-test','Close'], tone:'warn'}  /* import with undefined risk — never rejected */
-};
-
 /* ---- MARKET SCENARIOS (ported from plan-desk: price-path glyphs + Gaussian odds) ---- */
 /* each scenario carries editable ASSUMPTIONS: m = price move %, iv = vol-point shift (a crash
    spikes IV, a rally compresses it), d = days elapsed (how long the move takes to play out). */
@@ -3304,14 +3288,6 @@ try{ reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce
 var LEVELS=['book','position'];   /* market + sector are now folded INTO Home (book), not separate zoom levels */
 var state={level:'book', focus:POS.length?POS[0].id:null};
 var BOOK_AUTH={phase:'fixture',data:null,missing:[],error:null,requestId:0};
-/* The underlying currently in focus is available to explicit Analyze actions. The global
-   “New idea” command starts blank so an ambient chart can never silently become the request. */
-function currentContextSym(){
-  if(typeof decide==='object' && decide && decide.sym) return decide.sym;
-  if(state.level==='position' && typeof byId!=='undefined' && byId[state.focus]) return byId[state.focus].sym;
-  return null;
-}
-
 /* ---- element handles ---- */
 var stageEl, boardEl, bookEl, recedeEl, focusEl, summaryEl, crumbsEl, cmdEl, toastEl;
 var cardEl={};
@@ -3934,37 +3910,6 @@ function mechGraphic(c){
   return grid+stats;
 }
 
-/* ---- A · the decision band (spine): P/L hero + situation read + recommended action ---- */
-function decband(p){
-  var f=FLAGS[p.flagKind]||FLAGS.clear;
-  var pl='<div class="decpl"><div class="lbl">Open P/L</div>'+
-    '<div class="decplv '+(p.pnl>=0?'pos':'neg')+'">'+money(p.pnl)+'</div>'+
-    '<div class="decsub"><span>since entry · held '+p.held+'d</span>'+
-      '<span class="'+(p.day>=0?'pos':'neg')+'">'+signed(p.day)+' today</span></div></div>';
-  var main;
-  if(p.flagKind==='clear'){
-    main='<div class="decmain">'+
-      '<div class="deceyebrow"><span class="badge ok">Clear</span><span class="hint">'+p.event+'</span></div>'+
-      '<div class="verdict"><span class="vdot"></span><div>'+p.read+'</div></div>'+
-      '<div class="decacts">'+f.alt.map(function(a){return '<button class="btn" data-act="'+a+'">'+a+'</button>';}).join('')+'</div>'+
-    '</div>';
-  } else {
-    main='<div class="decmain">'+
-      '<div class="deceyebrow"><span class="badge '+(p.tone||f.tone)+'">'+p.attn+'</span><span class="hint">'+p.flagNote+'</span></div>'+
-      '<div class="decread">'+p.read+'</div>'+
-      '<div class="decacts"><button class="btn pri" data-act="'+f.verb+'">'+p.primary+'</button>'+
-        f.alt.map(function(a){return '<button class="btn" data-act="'+a+'">'+a+'</button>';}).join('')+'</div>'+
-    '</div>';
-  }
-  /* bridge: today's mark → the at-expiry value if price simply HOLDS at spot (same engine
-     as the payoff curve & scenarios). The gap between them is the time value still to collect. */
-  var hold=payFor(p,p.spot);
-  var bridge='<div class="decbridge"><span class="nowv">'+money(p.pnl)+' on today’s mark</span>'+
-    '<span class="arrow">→</span>'+
-    '<span class="expv '+(hold>=0?'pos':'neg')+'" data-live="proj">'+signed(hold)+' at expiry</span> '+
-    '<span class="brq">'+p.settle+'</span></div>';
-  return '<div class="decband tone-'+f.tone+'"><div class="decrow">'+pl+main+'</div>'+bridge+'</div>';
-}
 
 /* the scenarios box — ACTIONABLE: click a tile to pin it as a what-if; one shared full-width
    control ribbon (readout + scrub + canonical steppers) opens under the spectrum. Shared bloom + Decide. */
@@ -3980,7 +3925,7 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
   var timeStp='<span class="mstp" data-asm="days"><span class="ml">time</span><button data-wf="daysdn">−</button><span class="mv">+'+tDisp(days,tu)+'</span><button data-wf="daysup">+</button>'+
     (p.authoritative?'<span class="tunit"><button class="on" data-wf="tu-d" title="trading sessions">d</button></span>':'<span class="tunit">'+['d','h','m'].map(function(u){return '<button class="'+(tu===u?'on':'')+'" data-wf="tu-'+u+'" title="'+({d:'days',h:'hours',m:'minutes'}[u])+'">'+u+'</button>';}).join('')+'</span>')+'</span>';
   return '<div class="srow-ctl">'+
-    '<div class="srx-read"><span class="wf-main">'+statusRead+'</span> '+(p.isHeld?'':'<button class="microcta" data-wf="adjust" aria-label="Use these scenario assumptions" title="Use these scenario assumptions">'+deskGlyph('tune')+'</button> ')+'<button class="microcta" data-wf="unpin" aria-label="Clear the pinned scenario" title="Clear the pinned scenario">×</button></div>'+
+    '<div class="srx-read"><span class="wf-main">'+statusRead+'</span> '+'<button class="microcta" data-wf="unpin" aria-label="Clear the pinned scenario" title="Clear the pinned scenario">×</button></div>'+
     '<div class="scenplay"><button class="playb'+(st.playing?' on':'')+'" data-wf="playtoggle" title="'+(authReady?'Play through the move':'Finding paths for this story')+'" '+(authReady?'':'disabled')+'>'+(st.playing?'❚❚':'▶')+'</button>'+
       '<span class="tk now">now</span>'+
       '<input class="scrub" type="range" min="0" max="100" value="'+Math.round(st.t*100)+'" data-wf="scrub" aria-label="scrub through the move" '+(authReady?'':'disabled')+'>'+
@@ -3990,19 +3935,12 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
       '<span class="spd">'+[1,2,4].map(function(s){return '<button class="'+(st.speed===s?'on':'')+'" data-wf="spd" data-s="'+s+'">'+s+'×</button>';}).join('')+'</span></div>'+
     '<div class="smstps">'+stp('mag','move',(mag>0?'+':'')+mag+'%',mag>=0?'pos':'neg')+(p.isHeld?'':stp('iv','vol',(iv>0?'+':'')+iv+' IV',iv>0?'warn':''))+timeStp+'</div>'+
   '</div>'; }
-function renderScenbox(p){
-  return '<div class="scenbox">'+
-    '<div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">±'+p.em+'% · value at expiry</span></div>'+
-    decScenSpectrum(p)+
-  '</div>';
-}
 
 /* Front B S2: the position book-map (fixture delta/mark colored by the client BS engine
    liveGreeks/scenPL) is removed — the held surface is display-only and the authoritative book
    exposure map (drawExposureMap) is the single book scatter. */
 
 /* ---- C · one quiet depth inspector: research · mechanics · book context ---- */
-var POS_PANE={};
 function ordinal(n){ var s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
 /* Front B S2: positionContextStrip (fixture univBy quote/event/news) removed — the held surface
    is display-only; provenance/market bearing comes from the backend position detail. */
@@ -4012,7 +3950,6 @@ function ordinal(n){ var s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10
    compact tray IN THE BLOOM — minor tweaks never unroll the full Decide carpet. The full
    workbench is one click away when you actually need it (fan / governors / from-scratch). ---- */
 var adjust=null;   // {posId, kind, legs:[...], exp}
-var EXP_LADDER=['07-Aug','15-Aug','21-Aug','19-Sep','17-Oct','21-Nov','19-Dec'];
 function posExp(p){ var m=p.legStr.match(/exp ([0-9]{2}-[A-Za-z]{3})/)||p.legStr.match(/([0-9]{2}-[A-Za-z]{3})/); return m?m[1]:'21-Aug'; }
 function strikeInc(spot){ return spot>800?10:spot>300?5:spot>80?2.5:1; }
 /* ONE add-leg primitive (bloom + Decide both call this — no duplicate add logic) */
@@ -4021,18 +3958,6 @@ var closingId=null;
 /* Front B S2: renderLegs + manageRail (fixture BS-priced structure workbench / manage rail)
    removed — the held surface is display-only. The one interactive leg component is
    backendDecisionLegChip; held-package edits fork a fresh idea via authForkPositionLegs. */
-function renderPendingBar(p){
-  var c=adjustCand();
-  return '<div class="pendingbar"><div class="pendintro"><span class="eyebrow">Adjustment impact</span><span class="hint">held curve stays dotted · not placed</span></div><div class="adjnums inline">'+adjNums(p,c)+'</div>'+
-    '<div class="pendacts"><button class="btn pri" data-madj="place">Place adjustment →</button>'+
-      '<button class="btn" data-madj="cancel">Cancel</button>'+
-      '<button class="linklike" data-madj="workbench">full workbench →</button></div></div>';
-}
-function renderCloseConfirm(p){
-  var closeCost=Math.round(Math.abs(p.net||1000)*0.32), realized=p.pnl, hasSh=p.legs.some(function(l){return l.t==='s';});
-  return '<div class="closebar"><div class="closetext">Close your <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — buy back the options'+(hasSh?' and keep the shares':'')+', locking in <b class="'+(realized>=0?'pos':'neg')+'">'+money(realized)+'</b> now (est. −$'+closeCost.toLocaleString()+' to close).</div>'+
-    '<div class="pendacts"><button class="btn pri" data-madj="close-confirm">Confirm close →</button><button class="btn" data-madj="close-cancel">Cancel</button></div></div>';
-}
 function closePosition(p){
   closingId=null;
   var idx=POS.indexOf(p); if(idx>=0) POS.splice(idx,1);
@@ -4052,89 +3977,9 @@ function baseCand(p){   /* the CURRENT structure run through the same engine, so
   var b={id:'base',sym:p.sym,spot:p.spot,em:p.em,exp:posExp(p),legs:p.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};}),undef:null};
   return finishCand(b);
 }
-function openAdjust(posId,kind){
-  var p=byId[posId]; if(!p)return;
-  var legs=p.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};});
-  var exp=posExp(p);
-  if(kind==='roll'){
-    for(var i=0;i<legs.length;i++){ if(legs[i].t!=='s'&&legs[i].q<0){ var inc=strikeInc(p.spot); legs[i].k=legs[i].k+(legs[i].t==='c'?inc:-inc); } }
-    var ei=EXP_LADDER.indexOf(exp); if(ei>=0&&ei<EXP_LADDER.length-1) exp=EXP_LADDER[ei+1];
-  }
-  if(kind==='add'){ legs.push({t:'p',k:rk(p.spot,0.90),q:(p.spot>600?1:3)}); }
-  adjust={posId:posId,kind:kind,legs:legs,exp:exp,base:baseCand(p)};
-  refreshManage(posId, kind==='roll');   // a Roll preset morphs the curve into the rolled shape
-}
-function closeAdjust(){ var pid=adjust&&adjust.posId; adjust=null; if(pid) refreshManage(pid, true); }   // morph back to current
-function refreshManage(pid, animate){
-  var card=cardEl[pid]; if(!card)return; var p=byId[pid];
-  /* Front B S2: the fixture .bd-legs / .bd-manage boxes no longer exist on the display-only card. */
-  redrawBloomPayoff(p, animate);
-}
-function adjLeg(p,act,i,d){
-  if(!adjust||adjust.posId!==p.id) openAdjust(p.id,'adjust');   // touching a leg starts a live adjustment
-  var L=adjust.legs, l=L[i];
-  if(act==='rm'){ if(l&&l.t!=='s') L.splice(i,1); }
-  else if(l){
-    if(act==='side') l.q=-l.q;
-    else if(act==='type') l.t=(l.t==='c'?'p':'c');
-    else if(act==='strike'){ var inc=strikeInc(p.spot); l.k=Math.max(inc,l.k+d*inc); }
-    else if(act==='qty'){ var sgn=l.q<0?-1:1; if(l.t==='s') l.q=sgn*Math.max(100,Math.abs(l.q)+d*100); else l.q=sgn*Math.max(1,Math.abs(l.q)+d); }
-  }
-  refreshManage(p.id, true);   // stepper edit → morph the curve
-}
-function handleManage(p,kind){
-  if(kind==='roll'){ openAdjust(p.id,'roll'); return; }
-  if(kind==='add'||kind==='addwing'){ if(!adjust||adjust.posId!==p.id) openAdjust(p.id,'adjust');
-    pushNewLeg(adjust.legs, p.spot); refreshManage(p.id, false); return; }
-  if(kind==='close'){ adjust=null; closingId=p.id; refreshManage(p.id); return; }
-  if(kind==='close-cancel'){ closingId=null; refreshManage(p.id); return; }
-  if(kind==='close-confirm'){ closePosition(p); return; }
-  if(kind==='workbench'){
-    var legs=(adjust&&adjust.posId===p.id)?adjust.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};}):null;
-    var rect=(cardEl[p.id]||{}).getBoundingClientRect?cardEl[p.id].getBoundingClientRect():null;
-    adjust=null; enterDecide('roll',p.id,'Adjust',rect);
-    if(legs){ decide.mode='build'; decide.buildLegs=legs; renderDecide(); }
-    return;
-  }
-  if(kind==='exp-prev'||kind==='exp-next'){ if(!adjust)return; var i=EXP_LADDER.indexOf(adjust.exp),n=EXP_LADDER.length; i=(i+(kind==='exp-next'?1:-1)+n)%n; adjust.exp=EXP_LADDER[i]; refreshManage(p.id, true); return; }
-  if(kind==='place'){ applyAdjust(p); return; }
-  if(kind==='cancel'){ closeAdjust(); return; }
-}
-function handleBandAction(p,action){
-  var a=(action||'').toLowerCase();
-  if(a.indexOf('roll')===0){ handleManage(p,'roll'); return; }
-  if(a.indexOf('close')===0){ handleManage(p,'close'); return; }
-  if(a.indexOf('adjust')===0){ openAdjust(p.id,'adjust'); return; }
-  if(a.indexOf('add a wing')===0){ handleManage(p,'addwing'); return; }
-  if(a.indexOf('add')===0){ handleManage(p,'add'); return; }
-  if(a.indexOf('stress')===0){ pinScen(bloomSurf(p),0); return; }
-  if(a.indexOf('let')===0||a.indexOf('hold')===0||a.indexOf('accept')===0){
-    toast(action+' selected — no order is sent.');
-  }
-}
-function applyAdjust(p){
-  var c=adjustCand();
-  p.legs=adjust.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};});
-  p.maxLoss=c.maxLoss; p.maxProfit=c.maxProfit; p.pop=c.pop; p.delta=c.delta; p.theta=c.theta; p.vega=c.vega; p.gamma=c.gamma; p.cap=c.cap; p.net=c.credit;
-  p.legStr=candLegStr(c)+' · exp '+adjust.exp;
-  adjust=null;
-  var oldEl=cardEl[p.id];
-  cardEl[p.id]=makeCard(p);
-  if(oldEl&&oldEl.parentNode) oldEl.parentNode.removeChild(oldEl);   // drop the stale element so the tray doesn't linger
-  layoutForLevel('position',p.id); updateThread();
-  window.setTimeout(function(){ toast('Adjustment placed — '+p.sym+' '+p.struct.toLowerCase()+' updated in your book'); },80);
-}
 /* Front B S2: legChip + adjChip (fixture leg chips from the retired client engine) removed.
    The one editable leg component is backendDecisionLegChip, fed the backend chain receipt; the
    held surface is display-only. */
-function adjNums(p,c){
-  var b=(adjust&&adjust.base)||baseCand(p);
-  function delta(nv,ov,lowerBetter){ var x=Math.round(nv-ov); if(x===0)return '<span class="adjd flat">no change</span>'; var good=lowerBetter?x<0:x>0; return '<span class="adjd '+(good?'pos':'neg')+'">'+(x>0?'+':'−')+'$'+Math.abs(x).toLocaleString()+'</span>'; }
-  var dp=c.pop-b.pop, dcr=Math.round(c.credit-b.credit);
-  return '<div class="adjn"><span class="lbl">Net</span><b class="'+(c.credit>=0?'pos':'neg')+'">'+signed(c.credit)+'</b>'+(dcr===0?'<span class="adjd flat">no change</span>':'<span class="adjd '+(dcr>=0?'pos':'neg')+'">'+(dcr>0?'+':'−')+'$'+Math.abs(dcr).toLocaleString()+'</span>')+'</div>'+
-    '<div class="adjn"><span class="lbl">Max loss</span><b class="neg">−$'+Math.round(c.maxLoss).toLocaleString()+'</b>'+delta(c.maxLoss,b.maxLoss,true)+'</div>'+
-    '<div class="adjn"><span class="lbl">Chance</span><b>'+c.pop+'%</b>'+(dp===0?'<span class="adjd flat">no change</span>':'<span class="adjd '+(dp>=0?'pos':'neg')+'">'+(dp>=0?'+':'')+dp+' pts</span>')+'</div>';
-}
 /* draw the bloom payoff — interactive strike handles + before/after ghost + pinned scenario */
 var pinnedScen={};
 /* sentinel pin: the active scenario is an EXACT path chosen from the market fan, not a named
@@ -4170,14 +4015,6 @@ function beginStrikeDrag(ev, cfg){
   document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
   move(ev);
 }
-function startStrikeDrag(p, legIdx, ev){
-  beginStrikeDrag(ev, { spot:p.spot, legIdx:legIdx,
-    getSvg:function(){ return cardEl[p.id]&&cardEl[p.id].querySelector('.cbig'); },
-    getLegs:function(){ return adjust?adjust.legs:p.legs; },
-    onStart:function(){ if(!adjust||adjust.posId!==p.id) openAdjust(p.id,'adjust'); hidePayoffTip(p); },
-    onMove:function(){ refreshManage(p.id, false); },
-    onEnd:function(){ refreshManage(p.id, false); } });
-}
 /* click a scenario in "How it reacts" → pin it, then PLAY the position through the move over time.
    The engine binds to a "surface" {obj,el,redraw,refresh} so ONE implementation drives both the
    position bloom (.cbig) and the Decide hero (#decPay) — no duplication. */
@@ -4198,8 +4035,6 @@ function scrubMag(p){ var m=magOf(p); if(m==null)return null;
      frame's real price — the linear story ramp remains only the fixture-lane approximation */
   if(p.authoritative&&p.spot>0){var af=authoritativeFrame(p,scenSt(p.id).t);if(af&&authNumber(af.price)!=null)return (Number(af.price)/p.spot-1)*100;}
   return m*scenSt(p.id).t; }
-function refreshScenbox(p){ var card=cardEl[p.id]; if(card){ var box=card.querySelector('.scenbox'); if(box) box.outerHTML=renderScenbox(p); } redrawBloomPayoff(p, true); }
-function bloomSurf(p){ return { obj:function(){return p;}, el:function(){return cardEl[p.id];}, root:function(){return cardEl[p.id];}, redraw:function(a){redrawBloomPayoff(p,a);}, refresh:function(){refreshScenbox(p);} }; }
 function positionSurf(p){return {obj:function(){return p;},el:function(){return cardEl[p.id];},root:function(){return cardEl[p.id];},redraw:function(){var svg=document.getElementById('authPay-'+p.id);if(svg)drawPayoff(svg,p,true,null,{hideScenarios:true,labelRails:true});drawAuthoritativePositionScenario(p);},refresh:function(){refreshAuthoritativePositionScenario(p);}};}
 function authoritativeHorizon(p){var stored=p&&p.isHeld&&authPositionEnsemble(p),preview=stored&&stored.preview||{},animation=p&&p.authoritativeAnimation,assumptions=animation&&animation.receipt&&animation.receipt.conditioningAssumptions||{};if(p&&p.isHeld)return Math.max(1,Number(preview.horizonDays||assumptions.horizonDays||1));return p&&p.authoritative&&decide&&decide.ensemble?Math.max(1,Number(decide.ensemble.preview.horizonDays||1)):45;}
 /* These are explicit UI hypothesis pins, not generated prices. The backend uses them only to
@@ -5675,79 +5510,9 @@ function handleCmd(raw){
 /* pre-baked posture presets (Risk chip cycles through them; inherited into Decide's caps) */
 var RISK_PRESETS=[{k:'Conservative',risk:2500,bp:25000},{k:'Balanced',risk:5000,bp:50000},{k:'Aggressive',risk:10000,bp:80000}];
 function postureName(){ for(var i=0;i<RISK_PRESETS.length;i++) if(RISK_PRESETS[i].risk===POSTURE.risk) return RISK_PRESETS[i].k; return 'Custom'; }
-/* book-performance hero — an equity curve + the numbers that tell the book's story (lifted from
-   portfolio.html's KPI set: realized YTD, premium working, win rate — plus live net greeks). */
-var BOOK_REALIZED=18420, BOOK_WINRATE=68, BOOK_DAY=184;
-function bookEquity(net){ var rnd=mulberry32(70414), n=30, out=[], v=0;
-  for(var i=0;i<n;i++){ v+=(i<19?280:-560)+(rnd()-0.5)*1200; out.push(v); }   /* climb, then a recent give-back */
-  var shift=net-out[n-1]; return out.map(function(x){return Math.round(x+shift);}); }
-function pstat(k,v,good){ var sh={'Realized YTD':'Realized','Premium working':'Working','Win rate':'Win'}[k]||k;
-  return '<div class="pfs"><span class="pfk"><span class="hfull">'+k+'</span><span class="hshort">'+sh+'</span></span><span class="pfv '+(good==null?'':good?'pos':'neg')+'">'+v+'</span></div>'; }
-function perfBand(){
-  var net=0,prem=0; POS.forEach(function(p){net+=p.pnl;prem+=Math.max(0,+p.net||0);});
-  return '<div class="perfband">'+
-    '<div class="pf-lead"><span class="lbl"><span class="hfull">Book P/L · 30 sessions</span><span class="hshort">Book P/L · 30d</span></span>'+
-      '<span class="pf-net '+(net>=0?'pos':'neg')+'">'+money(net)+'</span>'+
-      '<span class="pf-day '+(BOOK_DAY>=0?'pos':'neg')+'">'+(BOOK_DAY>=0?'▲':'▼')+' '+money(Math.abs(BOOK_DAY))+' today</span></div>'+
-    '<svg class="pf-eq" id="bookEq"></svg>'+
-    '<div class="pf-stats">'+
-      pstat('Realized YTD', money(BOOK_REALIZED), BOOK_REALIZED>=0)+
-      pstat('Premium working', money(prem), true)+
-      pstat('Win rate', BOOK_WINRATE+'%', BOOK_WINRATE>=50)+
-    '</div></div>';
-}
-/* per-position P/L history — a mini equity curve on each card, same visual language as the book's */
-function posEquity(p){ var seed=0; var id=String(p.id); for(var k=0;k<id.length;k++) seed=(seed*31+id.charCodeAt(k))>>>0;
-  var rnd=mulberry32(seed^ (p.pnl|0)), n=15, out=[], v=0, amp=Math.max(300,Math.abs(p.pnl)/3);
-  for(var i=0;i<n;i++){ v+=(rnd()-0.48)*amp; out.push(v); }
-  var shift=(p.pnl||0)-out[n-1]; return out.map(function(x){return x+shift;}); }
 function drawPlSpark(p){ var svg=document.getElementById('plsp-'+p.id); if(!svg)return;
   if(p&&p.authoritative){var vals=(p.marksHistory||[]).map(function(m){return authDollarsFromCents(m.unrealizedCents);}).filter(function(v){return v!=null;});var aw=Math.max(38,Math.round(svg.clientWidth||48)),ah=Math.max(12,Math.round(svg.clientHeight||16));svg.setAttribute('viewBox','0 0 '+aw+' '+ah);if(vals.length<2){svg.innerHTML='<line x1="1" y1="'+(ah/2)+'" x2="'+(aw-1)+'" y2="'+(ah/2)+'" stroke="var(--line)" stroke-dasharray="2 3"/>';return;}var alo=Math.min.apply(0,vals),ahi=Math.max.apply(0,vals),apad=(ahi-alo)*.2||1;alo-=apad;ahi+=apad;var ad='';vals.forEach(function(v,i){var x=1+(aw-2)*i/(vals.length-1),y=1.5+(ah-3)*(1-(v-alo)/(ahi-alo));ad+=(i?' L ':'M ')+x.toFixed(1)+' '+y.toFixed(1);});var acol=vals[vals.length-1]>=0?'var(--profit)':'var(--loss)';svg.innerHTML='<path d="'+ad+'" fill="none" stroke="'+acol+'" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>';return;}
-  var s=posEquity(p), n=s.length, W=Math.max(38,Math.round(svg.clientWidth||48)), H=Math.max(12,Math.round(svg.clientHeight||16));
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  var lo=Math.min.apply(0,s), hi=Math.max.apply(0,s), pad=(hi-lo)*0.2||1; lo-=pad; hi+=pad;
-  var X=function(i){return 1+(W-2)*i/(n-1);}, Y=function(v){return 1.5+(H-3)*(1-(v-lo)/(hi-lo));};
-  var line=''; for(var i=0;i<n;i++) line+=(i?' L ':'M ')+X(i).toFixed(1)+' '+Y(s[i]).toFixed(1);
-  var col=(p.pnl||0)>=0?'var(--profit)':'var(--loss)';
-  svg.innerHTML='<path d="'+line+'" fill="none" stroke="'+col+'" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>'+
-    '<circle cx="'+X(n-1).toFixed(1)+'" cy="'+Y(s[n-1]).toFixed(1)+'" r="1.7" fill="'+col+'"/>'; }
-function drawBookEq(){ var svg=document.getElementById('bookEq'); if(!svg)return;
-  var net=0; POS.forEach(function(p){net+=p.pnl;});
-  var s=bookEquity(net), n=s.length;
-  var W=Math.max(200,Math.round(svg.clientWidth||320)), H=Math.max(44,Math.round(svg.clientHeight||58));
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  var lo=Math.min.apply(0,s.concat([0])), hi=Math.max.apply(0,s.concat([0])), pad=(hi-lo)*0.16||1; lo-=pad; hi+=pad;
-  var padL=8,padR=98,padT=16,padB=7;   /* crisp annotation lanes without making the hero taller */
-  var X=function(i){return padL+(W-padL-padR)*i/(n-1);}, Y=function(v){return padT+(H-padT-padB)*(1-(v-lo)/(hi-lo));};
-  var zY=Y(0), line='', i, pk=0;
-  for(i=0;i<n;i++){ line+=(i?' L ':'M ')+X(i).toFixed(1)+' '+Y(s[i]).toFixed(1); if(s[i]>s[pk])pk=i; }
-  var area=line+' L '+X(n-1).toFixed(1)+' '+zY.toFixed(1)+' L '+X(0).toFixed(1)+' '+zY.toFixed(1)+' Z';
-  var cur=s[n-1], curCol=cur>=0?'var(--profit)':'var(--loss)', plotB=H-padB, plotW=W-padL-padR;
-  var pkX=X(pk),pkY=Y(s[pk]),pkLabelX=Math.max(padL+68,Math.min(W-padR-68,pkX));
-  var pkLabelY=pkY<padT+12?pkY+15:pkY-7;
-  var zeroLabelY=Math.max(padT+11,Math.min(plotB-3,zY-4));
-  var nowY=Math.max(padT+10,Math.min(plotB-1,Y(cur)+4));
-  var highText='30d high '+(s[pk]>=0?'+$':'−$')+fmtK(Math.abs(s[pk]));
-  var nowText='Now '+(cur>=0?'+$':'−$')+fmtK(Math.abs(cur));
-  var g='<defs><linearGradient id="beqpos" x1="0" y1="'+padT+'" x2="0" y2="'+zY.toFixed(1)+'" gradientUnits="userSpaceOnUse">'+
-      '<stop offset="0" stop-color="var(--profit)" stop-opacity=".34"/><stop offset="1" stop-color="var(--profit)" stop-opacity=".015"/></linearGradient>'+
-    '<linearGradient id="beqneg" x1="0" y1="'+zY.toFixed(1)+'" x2="0" y2="'+plotB+'" gradientUnits="userSpaceOnUse">'+
-      '<stop offset="0" stop-color="var(--loss)" stop-opacity=".015"/><stop offset="1" stop-color="var(--loss)" stop-opacity=".28"/></linearGradient>'+
-    '<clipPath id="beqcp"><rect x="'+padL+'" y="'+padT+'" width="'+plotW+'" height="'+Math.max(0,zY-padT).toFixed(1)+'"/></clipPath>'+
-    '<clipPath id="beqcl"><rect x="'+padL+'" y="'+zY.toFixed(1)+'" width="'+plotW+'" height="'+Math.max(0,plotB-zY).toFixed(1)+'"/></clipPath></defs>'+
-    '<path d="'+area+'" fill="url(#beqpos)" clip-path="url(#beqcp)"/>'+
-    '<path d="'+area+'" fill="url(#beqneg)" clip-path="url(#beqcl)"/>'+
-    '<line x1="'+padL+'" y1="'+zY.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+zY.toFixed(1)+'" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4 4" opacity=".48"/>'+
-    '<text class="beq-zero" x="'+(padL+2)+'" y="'+zeroLabelY.toFixed(1)+'">$0</text>'+
-    '<path d="'+line+'" fill="none" stroke="var(--accent)" stroke-width="5.8" stroke-linejoin="round" stroke-linecap="round" opacity=".13"/>'+
-    '<path d="'+line+'" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'+
-    '<circle cx="'+pkX.toFixed(1)+'" cy="'+pkY.toFixed(1)+'" r="4.5" fill="var(--panel-2)" stroke="var(--profit)" stroke-width="1.4"/>'+
-    '<circle cx="'+pkX.toFixed(1)+'" cy="'+pkY.toFixed(1)+'" r="1.7" fill="var(--profit)"/>'+
-    '<text class="beq-high" x="'+pkLabelX.toFixed(1)+'" y="'+pkLabelY.toFixed(1)+'" text-anchor="middle">'+highText+'</text>'+
-    '<circle cx="'+X(n-1).toFixed(1)+'" cy="'+Y(cur).toFixed(1)+'" r="6.4" fill="'+curCol+'" opacity=".16"/>'+
-    '<circle cx="'+X(n-1).toFixed(1)+'" cy="'+Y(cur).toFixed(1)+'" r="3.3" fill="'+curCol+'" stroke="var(--ground)" stroke-width="1.5"/>'+
-    '<text class="beq-now" x="'+(X(n-1)+10).toFixed(1)+'" y="'+nowY.toFixed(1)+'" fill="'+curCol+'">'+nowText+'</text>';
-  svg.innerHTML=g; }
+}
 
 /* what the chain + sector lenses point at (driven by the symbol⇢sector entry). */
 /* THE MARKET STRIP — one canonical builder for the merged top row's middle zone (was the .pulse row).
@@ -5788,38 +5553,7 @@ function cyclePosture(kind){
 
 /* ---- data-lens primitives (shared by the sector + market zoom-out research) ---- */
 var HOME_RISK_FACET='conc';
-/* One contextual feed: position, focused-sector and market facts share the same Home lens.
-   TODO after desktop sign-off: Beginner/Expert presentation lenses and measured mobile layouts. */
-var HOME_NEWS=[
- {scope:'AMD',kind:'position',tone:'pos',sym:'AMD',headline:'MI400 ramp remains on track; estimates edge higher into the August print.',source:'Reuters',age:'12m'},
- {scope:'Semis',kind:'sector',tone:'warn',sector:'Semis',headline:'Semiconductor breadth is strong, but implied volatility sits in the 85th percentile.',source:'Cboe + desk',age:'18m'},
- {scope:'Market',kind:'market',tone:'warn',headline:'Treasury yields firm while index volatility stays compressed — a fragile low-vol mix.',source:'FRED + Cboe',age:'31m'},
- {scope:'NVDA',kind:'position',tone:'neg',sym:'NVDA',headline:'Price is pressing the condor’s short-call side; the position remains beyond its stop.',source:'Position review',age:'44m'},
- {scope:'QCOM',kind:'position',tone:'warn',sym:'QCOM',headline:'Assignment probability is now live around the $170 short put into Friday.',source:'Chain + book',age:'1h'},
- {scope:'Semis',kind:'sector',tone:'pos',sector:'Semis',headline:'Relative momentum still leads the broad market despite today’s mixed tape.',source:'Observed history',age:'2h'}
-];
 function volSig(r){ return r>=65?'rich':r>=45?'fair':'cheap'; }
-function volScan(list){
-  var rows=list.map(function(u){var held=byId2Sym(u.sym), sig=volSig(u.ivRank);
-    var eo=u.earn?dateOrd(u.earn):9999, catalyst=(eo>=TODAY_ORD && eo<=921);   /* earnings within ~2 months */
-    return '<button class="vsrow'+(held?' you':'')+'" data-vsym="'+u.sym+'">'+
-      '<span class="vsym">'+u.sym+(held?' <span class="uheld">•</span>':'')+(catalyst?' <span class="vscat" title="earnings '+u.earn+' — gap risk elevated">⚑</span>':'')+'</span>'+
-      '<span class="vname">'+u.name+(catalyst?' <span class="vncat">· earns '+u.earn+'</span>':'')+'</span>'+
-      '<span class="vv">'+u.iv+'</span><span class="vv">'+ordinal(u.ivRank)+'</span>'+
-      '<span class="vscell"><span class="vsig '+sig+'">'+(sig==='rich'?'IV rich':sig==='fair'?'fair':'IV cheap')+'</span>'+
-        '<span class="vsgo">'+(held?'zoom in ›':'build ›')+'</span></span></button>';
-  }).join('');
-  return '<div class="vshd"><span>Sym</span><span>Name</span><span>IV</span><span>Rank</span><span>Signal</span></div><div class="volscan">'+rows+'</div>';
-}
-function providerStrip(){
-  if(deskBackendEnabled())return '<div class="provider"><span class="pvchip"><span class="pvdot warn"></span>Visual fixture panels · provider status not loaded here</span></div>';
-  return '<div class="provider">'+
-    '<span class="pvchip"><span class="pvdot"></span>Cboe · options · live</span>'+
-    '<span class="pvchip"><span class="pvdot"></span>Polygon · equities · live</span>'+
-    '<span class="pvchip"><span class="pvdot warn"></span>Yahoo · backfill · 15m</span>'+
-    '<span class="pvchip"><span class="pvdot"></span>coverage 98.6% · 512 names</span>'+
-  '</div>';
-}
 function wireVolScan(panel){
   var rows=panel.querySelectorAll('.vsrow');
   for(var i=0;i<rows.length;i++){ (function(row){ row.onclick=function(){ var sym=row.getAttribute('data-vsym');
@@ -5850,7 +5584,6 @@ function redraw(){
     return;
   }
   if(state.level==='book'){
-    drawBookEq();
     for(var i=0;i<POS.length;i++){ var ce=cardEl[POS[i].id]; drawPlSpark(POS[i]);   /* always-on spark; re-draw peeked mini-payoffs only */
       if(ce._peekDrawn) drawPayoff(ce.querySelector('.cspark'),POS[i],false); }
     if(document.getElementById('homeRiskMap')) drawExposureMap({svg:'homeRiskMap', info:'homeRiskInfo', hover:true, zoom:true,
@@ -5866,7 +5599,7 @@ function redraw(){
    DECIDE — merged Plan + Compose + Trades, reusing the bloom template.
    Overlay stage; the zoom/FLIP state machine below is left untouched.
    ====================================================================== */
-var DEC_SPOT=493, DEC_EM=6.2, DEC_T=45/365, DEC_BOOKCAP=272688, DEC_HOT=-1;
+var DEC_SPOT=493, DEC_BOOKCAP=272688, DEC_HOT=-1;
 var decideEl, decide=null;
 
 function deskBackendEnabled(){ return !!(window.DeskBackend&&window.DeskBackend.enabled()); }
@@ -6320,18 +6053,6 @@ function updateAuthoritativeDeclaration(key,value){
 }
 
 
-/* candidate = a POS-shaped object so drawPayoff / the scenario spectrum / breakevens all work unchanged.
-   maxLoss/maxProfit are computed from the curve so they always match it. */
-function candStats(c){
-  var d=payDomain(c),lo=d[0],hi=d[1],n=200,mn=1e18,mx=-1e18;
-  for(var i=0;i<=n;i++){var v=payFor(c,lo+(hi-lo)*i/n); if(v<mn)mn=v; if(v>mx)mx=v;}
-  /* extend to the TRUE tails so downside isn't understated: S→0 (a short put / long stock
-     bottoms out there) and a far up-move (an uncovered short call blows up). The domain alone
-     only spans ~±1.7 expected moves, which badly understated CSP/short-put max loss. */
-  var v0=payFor(c,0.01), vUp=payFor(c,c.spot*5);
-  if(v0<mn)mn=v0; if(vUp<mn)mn=vUp;
-  c.maxProfit=Math.max(0,mx); c.maxLoss=Math.max(0,-mn); return c;
-}
 function candLegStr(c){return c.legs.map(function(l){
   if(l.t==='s')return (l.q>=0?'LONG ':'SHORT ')+Math.abs(l.q)+' sh';
   return (l.q<0?'SHORT ':'LONG ')+Math.abs(l.q)+'×'+l.k+(l.t==='c'?'C':'P');}).join(' · ');}
@@ -6350,17 +6071,6 @@ var POSTURE={goal:'Income', view:'Neutral', risk:5000, bp:50000, lane:'paper'};
 /* market mode: 'observed' = live Cboe data · 'sim' = synthetic/deterministic demo (seed + scenario world) */
 var MKT_MODE='observed', SIM={seed:7, world:'Base case', speed:1}, BACKEND_MARKET_LANE=null, BACKEND_MARKET_WORLD=null;
 var SIM_WORLDS=['Base case','Risk-off','Melt-up','Vol spike','Grind higher','Chop'];
-/* One world vocabulary drives both the Home tape and the path ensemble. The first two values are
-   per-session tape drift/vol; the remaining values reshape the terminal ensemble honestly. */
-var SIM_WORLD_PROFILE={
-  'Base case':   {dayDrift:.0012,dayVol:.009,terminalDrift:0,    volScale:1,   jumpScale:1,   gapScale:1},
-  'Risk-off':    {dayDrift:-.007,dayVol:.022,terminalDrift:-.10,volScale:1.5, jumpScale:1.7, gapScale:1.15},
-  'Melt-up':     {dayDrift:.009, dayVol:.013,terminalDrift:.12, volScale:1.15,jumpScale:.6,  gapScale:.8},
-  'Vol spike':   {dayDrift:-.001,dayVol:.032,terminalDrift:-.02,volScale:2,   jumpScale:1.25,gapScale:1.1},
-  'Grind higher':{dayDrift:.004, dayVol:.006,terminalDrift:.06, volScale:.7,  jumpScale:.7,  gapScale:.85},
-  'Chop':        {dayDrift:0,    dayVol:.016,terminalDrift:0,   volScale:1.25,jumpScale:.9,  gapScale:.9}
-};
-function simProfile(){ return SIM_WORLD_PROFILE[SIM.world]||SIM_WORLD_PROFILE['Base case']; }
 function syncMarketModeFromBackend(market){
   var identity=market&&market.identity||{}, lane=String(identity.marketLane||'').toUpperCase(), world=String(identity.world||'').toLowerCase();
   BACKEND_MARKET_LANE=lane||null;BACKEND_MARKET_WORLD=world||null;
@@ -6412,13 +6122,6 @@ function simRibbon(){ if(MKT_MODE!=='sim')return '';
 
 /* round a spot·pct level to a sensible strike increment for the price band */
 function rk(spot,pct){ var raw=spot*pct, inc=spot>800?10:spot>300?5:spot>80?2.5:1; return Math.round(raw/inc)*inc; }
-/* an uncovered short CALL = genuinely unlimited risk (a short put/CSP is bounded to strike→0) */
-function calcUndef(legs){
-  var shortC=legs.some(function(l){return l.t==='c'&&l.q<0;}), longC=legs.some(function(l){return l.t==='c'&&l.q>0;}),
-      longStk=legs.some(function(l){return l.t==='s'&&l.q>0;});
-  return shortC&&!longC&&!longStk;
-}
-
 /* ======================================================================
    IMPORTED POSITIONS — a trade brought in from an external brokerage.
    Flagged REAL → it is a position you ALREADY hold, so it is ADDED TO THE
@@ -6471,12 +6174,6 @@ var GAP_STANCE='base';                       /* the user's standing gap-risk ass
 function gapLoss(c){
   if(c&&c.authoritative){var rows=authoritativeScenarioRows(c);return rows.length?Math.min.apply(null,rows.map(function(row){return row.pnl;})):null;}
 }
-/* BOOK-level tail — the concentration bites here: ONE shared sector jump hits every line in that
-   sector together (not independent per-name tails), so the book's worst-case is far worse than the
-   sum of the parts. That is the '74% is one bet' bloodbath, quantified. */
-function bookGapFrac(){ var secR={}; POS.forEach(function(p){ var s=(univBy[p.sym]||{}).sector||'—'; secR[s]=(secR[s]||0)+p.riskPct; });
-  var d=Object.keys(secR).sort(function(a,b){return secR[b]-secR[a];})[0]||'default';
-  return {sector:d, gap:(SECTOR_GAP[d]||SECTOR_GAP.default).gap}; }
 function candidateSectorRead(c){
   var sector=(univBy[c.sym]||{}).sector||'Other';
   var held=POS.filter(function(p){return ((univBy[p.sym]||{}).sector||'Other')===sector;});
@@ -6637,28 +6334,11 @@ function stratKPIs(c, opts){ opts=opts||{};
    strategy. Every candidate is therefore valued over the same 1,500 paths; only
    its exact legs change the terminal P/L. This mirrors the production contract:
    one fingerprinted ensemble, many additive valuations. */
-function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; var t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
 function hashText(s){ var h=2166136261; for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return h>>>0; }
 /* Package identity is economic, not presentational: labels and candidate ids cannot change a
    valuation receipt. The ensemble is folded into the child fingerprint separately below. */
 function hashCand(c){ var s=[c.sym,c.spot,c.exp||'',c.net||0,(c.legs||[]).map(function(l){return l.t+':'+l.k+':'+l.q;}).join(',')].join('|');
   return hashText(s); }
-function ensembleContext(c){
-  var anchor=(decide&&decide.cands&&decide.cands[0])||c;
-  return {sym:c.sym,spot:c.spot,em:c.em,exp:anchor.exp||c.exp};
-}
-function ensembleKey(c){ var x=ensembleContext(c);
-  return [x.sym,x.spot,x.em,x.exp||'',decide&&decide.horizon||'21 sessions',GAP_STANCE,MKT_MODE,
-    MKT_MODE==='sim'?SIM.world:'observed',MKT_MODE==='sim'?SIM.seed:'live'].join('|'); }
-function hashEnsemble(c){ return hashText(ensembleKey(c)); }
-function mcGauss(rnd){ var u1=rnd()||1e-9, u2=rnd(); return Math.sqrt(-2*Math.log(u1))*Math.cos(2*Math.PI*u2); }
-function mcPoisson(rnd,L){ var t=Math.exp(-L), k=0, p=1; do{ k++; p*=rnd()||1e-9; } while(p>t); return k-1; }
-var MC_ENSEMBLE_CACHE={}, MC_VALUE_CACHE={};
-function trimMcCaches(){
-  var ek=Object.keys(MC_ENSEMBLE_CACHE),vk=Object.keys(MC_VALUE_CACHE);
-  if(ek.length>12) delete MC_ENSEMBLE_CACHE[ek[0]];
-  if(vk.length>48) delete MC_VALUE_CACHE[vk[0]];
-}
 function drawMCFan(){ var svg=document.getElementById('mcFan'),live=decide&&authoritativeCandidate(),res=decisionFan(live); if(!svg||!res)return;
   var W=Math.max(300,Math.round(svg.clientWidth||520)), H=Math.max(120,Math.round(svg.clientHeight||150));
   svg.setAttribute('viewBox','0 0 '+W+' '+H);svg.setAttribute('data-path-space',res.space||'price');svg.setAttribute('data-ensemble-fingerprint',res.fingerprint||'');if(res.valuationFingerprint)svg.setAttribute('data-valuation-fingerprint',res.valuationFingerprint);else svg.removeAttribute('data-valuation-fingerprint');
@@ -8456,16 +8136,6 @@ function deskGlyph(kind){
   }[kind]||'';
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+body+'</svg>';
 }
-/* ===== market data: OBSERVED (Cboe/live) vs SIMULATED (deterministic per seed+world) ===== */
-function simSeries(base){ var seed=(SIM.seed*2654435761 + hashText(SIM.world))>>>0, rnd=mulberry32(seed), out=[], v=base[0], w=simProfile();
-  for(var i=0;i<base.length;i++){ v=v*(1+w.dayDrift+(rnd()-0.5)*2*w.dayVol); out.push(v); } return out; }
-function mktStamp(extra){ return MKT_MODE==='sim'
-  ? (deskBackendEnabled()?'<span class="srctag sim" title="staged visual panel">◇ VISUAL FIXTURE</span>':'<span class="srctag sim" title="synthetic · deterministic per seed">◈ SIM · '+SIM.world+' · seed '+SIM.seed+'</span>')
-  : (deskBackendEnabled()?'<span class="srctag" title="staged visual panel; New idea uses backend data">◇ VISUAL FIXTURE</span>':'<span class="srctag" title="live Cboe option chain, ~2 min delayed">● Cboe · 2m'+(extra?' · '+extra:'')+'</span>'); }
-var SEC_IV={Semis:32,Software:26,Tech:24,Autos:41,Index:15,Energy:29,Financials:19,Health:17,Consumer:21};
-var SEC_PROXY={Semis:'SMH',Software:'IGV',Tech:'XLK',Autos:'CARZ',Index:'SPY',Energy:'XLE',Financials:'XLF',Health:'XLV',Consumer:'XLY'};
-/* ---- OPTION CHAIN + CANDLES (Cboe when observed / synthetic when simulated) ---- */
-var CHAIN_SYM=null, CHAIN_TF='1M';
 /* floating readout card near a hovered dot — sibling of showMapCard, reads the held book */
 function showRiskMapCard(id){
   var card=document.getElementById('homeRiskMapCard'), svg=document.getElementById('homeRiskMap'), host=document.getElementById('riskMain');
