@@ -11,6 +11,12 @@ optionslab.properties
 node_modules/
 nohup.out
 
+# Browser review captures are generated artifacts; CI preserves them separately.
+dom-tests/shots/*.png
+
 # Local engineering log / agent handoff notes — not part of the shipped codebase
 CLAUDE.md
 AGENTS.md
+.DS_Store
+.claude/
+.tmp/

@@ -14,16 +14,26 @@ public final class AuditLog {
 
     private final Db db;
     private final Clock clock;
+    private volatile java.util.function.Consumer<String> accountChanged = ignored -> {};
 
     public AuditLog(Db db, Clock clock) {
         this.db = db;
         this.clock = clock;
     }
 
+    /** Post-commit attention invalidation. The hook must only schedule work and never throw. */
+    public void setAccountChangedHook(java.util.function.Consumer<String> hook) {
+        accountChanged = hook == null ? ignored -> {} : hook;
+    }
+
     public void log(String accountId, String tradeId, String action, String level, Map<String, Object> detail) {
         db.exec("INSERT INTO audit(ts, account_id, trade_id, action, level, detail_json) VALUES (?,?,?,?,?,?)",
                 Instant.now(clock).toString(), accountId, tradeId, action, level,
                 detail == null ? null : Json.write(detail));
+        if (accountId != null && (action == null || !action.endsWith("_REJECTED"))) {
+            try { accountChanged.accept(accountId); }
+            catch (RuntimeException ignored) { /* mutation already committed; GET remains authoritative */ }
+        }
     }
 
     public List<Map<String, Object>> forTrade(String tradeId, int limit) {

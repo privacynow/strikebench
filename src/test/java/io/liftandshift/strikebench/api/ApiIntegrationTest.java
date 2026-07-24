@@ -1,8 +1,10 @@
 package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.javalin.Javalin;
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.pricing.HistoricalVol;
 import io.liftandshift.strikebench.support.TestDb;
 import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterAll;
@@ -23,6 +25,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,6 +40,7 @@ class ApiIntegrationTest {
     private static HttpClient http;
     private static String base;
     private static Path tmpDir;
+    private static final AtomicInteger PLAN_SEQ = new AtomicInteger();
 
     @BeforeAll
     static void startServer() throws IOException {
@@ -81,6 +85,14 @@ class ApiIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> postAccept(String path, String body, String accept) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path))
+                        .header("Content-Type", "application/json")
+                        .header("Accept", accept)
+                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
     private static HttpResponse<String> put(String path, String body) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path))
                 .header("Content-Type", "application/json")
@@ -90,6 +102,18 @@ class ApiIntegrationTest {
     private static HttpResponse<String> delete(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static JsonNode planStrategies(String symbol, String intent, String thesis, String riskMode,
+                                           String controls) throws Exception {
+        String requestId = "api-plan-" + PLAN_SEQ.incrementAndGet();
+        JsonNode plan = Json.parse(post("/api/plans", """
+                {"clientRequestId":"%s","symbol":"%s","intent":"%s",
+                 "thesis":"%s","horizonDays":30,"riskMode":"%s"}
+                """.formatted(requestId, symbol, intent, thesis, riskMode)).body());
+        JsonNode response = Json.parse(post("/api/plans/" + plan.get("id").asText() + "/strategy/run",
+                controls == null ? "{}" : controls).body());
+        return response.at("/strategy/result");
     }
 
     @Test
@@ -128,6 +152,13 @@ class ApiIntegrationTest {
         assertThat(aapl.get("optionable").asBoolean()).isTrue();
         assertThat(aapl.get("ivAtm").asDouble()).isBetween(0.05, 2.0);
         assertThat(aapl.get("hv30").asDouble()).isGreaterThan(0.01);
+        assertThat(aapl.get("hvHistoryDays").asInt()).isGreaterThanOrEqualTo(HistoricalVol.MIN_OBSERVATIONS);
+        assertThat(aapl.get("ivRankAvailable").asBoolean()).isFalse();
+        assertThat(aapl.path("ivRankPct").isMissingNode() || aapl.path("ivRankPct").isNull()).isTrue();
+        assertThat(aapl.get("ivHistoryDays").asInt()).isZero();
+        assertThat(aapl.get("ivRankRequiredDays").asInt()).isEqualTo(10);
+        assertThat(aapl.get("ivRankNote").asText()).contains("need 10");
+        assertThat(aapl.get("hvRequiredDays").asInt()).isEqualTo(HistoricalVol.MIN_OBSERVATIONS);
         assertThat(aapl.get("expirations").size()).isEqualTo(8);
         assertThat(aapl.get("benchmarks").size()).isEqualTo(2);
 
@@ -143,14 +174,49 @@ class ApiIntegrationTest {
         assertThat(vtsax.get("optionable").asBoolean()).isFalse();
         assertThat(vtsax.get("expirations").size()).isZero();
 
+        JsonNode news = Json.parse(get("/api/research/AAPL/news").body());
+        assertThat(news.get("scorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
+        assertThat(news.get("evidence").asText()).isEqualTo("DEMO_FABRICATED");
+        assertThat(news.get("items")).isNotEmpty();
+        for (JsonNode item : news.get("items")) {
+            assertThat(item.get("classification").asText()).isEqualTo("UNAVAILABLE");
+            assertThat(item.path("score").isMissingNode() || item.path("score").isNull()).isTrue();
+            assertThat(item.get("positiveKeywords")).isEmpty();
+            assertThat(item.get("negativeKeywords")).isEmpty();
+            assertThat(item.get("eventRisk").asBoolean()).isFalse();
+        }
+        assertThat(news.at("/aggregate/available").asBoolean()).isFalse();
+        assertThat(news.at("/aggregate/trend").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(news.at("/aggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
+        assertThat(news.get("eventRisk")).isEmpty();
+
         assertThat(get("/api/research/NOPE").statusCode()).isEqualTo(404);
+    }
+
+    @Test
+    @Order(4)
+    void exactLegIdentityUsesTheServerCatalogWithoutPricingOrPersistence() throws Exception {
+        HttpResponse<String> response = post("/api/strategies/identify", """
+                {"symbol":"AAPL","qty":1,"legs":[
+                  {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-21",
+                   "ratio":1,"entryPrice":null,"multiplier":100,"positionEffect":"OPEN"},
+                  {"action":"SELL","type":"CALL","strike":"260","expiration":"2026-08-21",
+                   "ratio":1,"entryPrice":null,"multiplier":100,"positionEffect":"OPEN"}
+                ]}
+                """);
+        assertThat(response.statusCode()).isEqualTo(200);
+        JsonNode identity = Json.parse(response.body());
+        assertThat(identity.get("family").asText()).isEqualTo("DEBIT_CALL_SPREAD");
+        assertThat(identity.get("label").asText()).isEqualTo("Bull call (debit) spread");
+
+        assertThat(post("/api/strategies/identify", "{\"symbol\":\"AAPL\",\"qty\":1,\"legs\":[]}")
+                .statusCode()).isEqualTo(400);
     }
 
     @Test
     @Order(5)
     void recommendReturnsCandidatesAndRejectsNaked() throws Exception {
-        HttpResponse<String> res = post("/api/recommend",
-                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"conservative\"}");
+        HttpResponse<String> res = get("/api/welcome/teaching-example");
         assertThat(res.statusCode()).isEqualTo(200);
         JsonNode json = Json.parse(res.body());
         assertThat(json.get("candidates").size()).isGreaterThan(0);
@@ -164,23 +230,96 @@ class ApiIntegrationTest {
     @Test
     @Order(5)
     void autoScoutReturnsPicksWithSignalsAndTargets() throws Exception {
-        HttpResponse<String> res = post("/api/recommend/auto", """
-                {"horizons":["week","month"],"targetProfitCents":25000,"riskMode":"balanced"}""");
+        HttpResponse<String> res = post("/api/research/scout", """
+                {"horizons":["week","month"],"targetProfitCents":25000,"riskMode":"balanced",
+                 "intents":["DIRECTIONAL"]}""");
         assertThat(res.statusCode()).isEqualTo(200);
         JsonNode json = Json.parse(res.body());
         assertThat(json.get("picks").size()).isGreaterThan(0);
         JsonNode pick = json.get("picks").get(0);
         assertThat(pick.at("/signals/thesis").asText()).isIn("BULLISH", "BEARISH", "NEUTRAL", "VOLATILE");
         assertThat(pick.at("/signals/rationale").size()).isGreaterThan(0);
+        assertThat(pick.at("/signals/sentimentScorerVersion").asText()).isEqualTo("sentiment-keyword-v1");
+        assertThat(pick.at("/signals/sentimentAggregate/available").asBoolean()).isFalse();
+        assertThat(pick.at("/signals/sentimentAggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
+        assertThat(pick.at("/opportunity/goal").asText()).isEqualTo("DIRECTIONAL");
+        assertThat(pick.at("/opportunity/score").asDouble()).isBetween(0.0, 1.0);
+        assertThat(pick.at("/opportunity/volatilityEvidence/impliedSource").asText())
+                .isEqualTo("fixture");
+        assertThat(pick.at("/opportunity/eventEvidence/basis").asText())
+                .isEqualTo("DEMO_FABRICATED");
+        assertThat(pick.at("/bestIdea/available").asBoolean()).isTrue();
+        assertThat(pick.at("/bestIdea/family").asText()).isNotBlank();
+        assertThat(pick.at("/bestIdea/economicVerdict").asText())
+                .isIn("FAVORABLE", "MIXED", "UNFAVORABLE", "UNAVAILABLE");
         assertThat(pick.get("horizons").size()).isEqualTo(2);
+        JsonNode frontier = json.get("frontier");
+        assertThat(frontier.at("/schemaVersion").asText()).isEqualTo("redeployment-frontier-v1");
+        assertThat(frontier.at("/universe/label").asText()).isNotBlank();
+        assertThat(frontier.at("/universe/symbols").size()).isGreaterThan(0);
+        assertThat(frontier.at("/destinationAccountId").asText()).isNotBlank();
+        assertThat(frontier.at("/decisionRanking").size()).isGreaterThan(0);
+        assertThat(frontier.at("/decisionRanking/0/bookImpacts").size()).isGreaterThan(0);
+        assertThat(frontier.at("/decisionRanking/0/qualification").asText()).isIn(
+                "QUALIFIED", "COMPARE_CAREFULLY", "ECONOMICS_UNAVAILABLE", "UNFAVORABLE",
+                "ACCOUNT_BLOCKED", "MECHANICALLY_BLOCKED");
+        assertThat(frontier.get("compensationRanking")).isEqualTo(json.get("compensation"));
+        assertThat(frontier.at("/notes/0").asText())
+                .contains("Decision economics and compensation are independent rankings");
         JsonNode candidates = pick.get("horizons").get(0).get("candidates");
         if (candidates.size() > 0) {
             assertThat(candidates.get(0).get("targetFit").asText()).isNotBlank();
-            assertThat(candidates.get(0).at("/candidate/maxLossCents").asLong()).isPositive();
+            assertThat(candidates.get(0).at("/evaluation/candidate/maxLossCents").asLong()).isPositive();
+            assertThat(candidates.get(0).has("candidate")).isFalse();
+            assertThat(candidates.get(0).has("decisionScore")).isFalse();
         }
         assertThat(json.get("disclaimer").asText()).containsIgnoringCase("not predictions");
-        // Empty body works with defaults too
-        assertThat(post("/api/recommend/auto", "").statusCode()).isEqualTo(200);
+        HttpResponse<String> missing = post("/api/research/scout", "");
+        assertThat(missing.statusCode()).isEqualTo(400);
+        assertThat(missing.body()).contains("goal (intents)", "horizon", "risk posture")
+                .contains("no decision default was substituted");
+        assertThat(post("/api/research/scout", """
+                {"horizons":["someday"],"riskMode":"mystery","intents":["DIRECTIONAL"]}
+                """).statusCode()).isEqualTo(400);
+        HttpResponse<String> missingConstruction = post("/api/optimize", "{}");
+        assertThat(missingConstruction.statusCode()).isEqualTo(400);
+        assertThat(missingConstruction.body()).contains("goal (intent)", "market view (thesis)",
+                "horizon", "risk posture", "ranking objective");
+    }
+
+    @Test
+    @Order(5)
+    void autoScoutStreamsProgressiveCanonicalResultsOnTheSameEndpoint() throws Exception {
+        HttpResponse<String> res = postAccept("/api/research/scout", """
+                {"universe":["AAPL","SPY"],"horizons":["month"],"maxPicks":2,
+                 "riskMode":"balanced","intents":["INCOME"]}
+                """, "application/x-ndjson");
+        assertThat(res.statusCode()).as(res.body()).isEqualTo(200);
+        assertThat(res.headers().firstValue("Content-Type").orElse(""))
+                .contains("application/x-ndjson");
+        assertThat(res.body()).startsWith(" ".repeat(2048) + "\n");
+        java.util.List<JsonNode> frames = res.body().lines()
+                .filter(line -> !line.isBlank()).map(Json::parse).toList();
+        assertThat(frames).anySatisfy(frame -> assertThat(frame.path("type").asText())
+                .isEqualTo("progress"));
+        assertThat(frames.stream().filter(frame -> "progress".equals(frame.path("type").asText()))
+                .map(frame -> frame.at("/progress/phase").asText()).toList())
+                .contains("SIGNALS", "IDEAS", "BOOK");
+        int firstUsableSignal = java.util.stream.IntStream.range(0, frames.size())
+                .filter(i -> "SIGNALS".equals(frames.get(i).at("/progress/phase").asText())
+                        && !frames.get(i).at("/progress/pick/symbol").asText().isBlank())
+                .findFirst().orElseThrow();
+        int firstPricedIdea = java.util.stream.IntStream.range(0, frames.size())
+                .filter(i -> "IDEAS".equals(frames.get(i).at("/progress/phase").asText()))
+                .findFirst().orElseThrow();
+        assertThat(firstUsableSignal).isLessThan(firstPricedIdea);
+        assertThat(frames.get(firstUsableSignal).at("/progress/pick/horizons").size())
+                .as("the early row is honest evidence, not fabricated package pricing").isZero();
+        JsonNode complete = frames.stream()
+                .filter(frame -> "complete".equals(frame.path("type").asText()))
+                .findFirst().orElseThrow();
+        assertThat(complete.at("/result/picks").size()).isGreaterThan(0);
+        assertThat(complete.at("/result/frontier/decisionRanking").size()).isGreaterThan(0);
     }
 
     @Test
@@ -188,8 +327,9 @@ class ApiIntegrationTest {
     void unsafeNakedCallIs422AndAccountUnchanged() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         HttpResponse<String> res = post("/api/trades", """
-                {"symbol":"AAPL","strategy":"NAKED_CALL","qty":1,
-                 "legs":[{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(exp));
+                {"symbol":"AAPL","strategy":"NAKED_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp));
         assertThat(res.statusCode()).isEqualTo(422);
         JsonNode json = Json.parse(res.body());
         assertThat(json.get("error").asText()).isEqualTo("trade_rejected");
@@ -207,8 +347,11 @@ class ApiIntegrationTest {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String spreadBody = """
                 {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"thesis":"bullish","horizon":"month","riskMode":"conservative",
-                 "legs":[{"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1},
-                         {"action":"BUY","type":"PUT","strike":"245","expiration":"%s","ratio":1}]}""".formatted(exp, exp);
+                 "source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"},
+                         {"action":"BUY","type":"PUT","strike":"245","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp, exp);
         HttpResponse<String> previewRes = post("/api/trades/preview", spreadBody);
         assertThat(previewRes.statusCode()).isEqualTo(200);
         JsonNode preview = Json.parse(previewRes.body());
@@ -234,23 +377,41 @@ class ApiIntegrationTest {
         // List / detail
         JsonNode list = Json.parse(get("/api/trades?status=ACTIVE").body());
         assertThat(list.get("total").asLong()).isEqualTo(1);
+        JsonNode beforeLifecycleRead = Json.parse(get("/api/account").body());
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/trade/id").asText()).isEqualTo(tradeId);
         assertThat(detail.get("payoff").size()).isGreaterThan(30);
         assertThat(detail.at("/current/popNow").asDouble()).isBetween(0.0, 1.0);
+        assertThat(detail.at("/analysis/lifecycle/history/available").asBoolean()).isTrue();
+        assertThat(detail.at("/analysis/lifecycle/currentChoice/freshEyesQuestion").asText())
+                .contains("Would you open the exact position");
+        assertThat(detail.at("/analysis/bookActions/positionFingerprint").asText())
+                .isEqualTo(detail.at("/analysis/lifecycle/positionFingerprint").asText());
+        assertThat(detail.at("/analysis/bookActions/actions").findValuesAsText("action"))
+                .contains("HOLD", "CLOSE_ALL", "ROLL");
+        assertThat(detail.at("/analysis/capacity/objectiveDeclared").asBoolean()).isFalse();
+        assertThat(detail.at("/analysis/decision/verdict").asText()).isNotBlank();
+        assertThat(detail.at("/analysis/bookActions/actions/0/snapshot/encumbrance/cents").asLong())
+                .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
+        JsonNode afterLifecycleRead = Json.parse(get("/api/account").body());
+        assertThat(afterLifecycleRead.at("/account/cashCents").asLong())
+                .isEqualTo(beforeLifecycleRead.at("/account/cashCents").asLong());
+        assertThat(afterLifecycleRead.at("/account/reservedCents").asLong())
+                .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
 
         // Refresh writes a mark
         assertThat(post("/api/trades/" + tradeId + "/refresh", "{}").statusCode()).isEqualTo(200);
         JsonNode detail2 = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail2.get("marksHistory").size()).isEqualTo(1);
 
-        // Unwind without confirm -> 400; with confirm -> realized P/L and reserve released
-        assertThat(post("/api/trades/" + tradeId + "/unwind", "{}").statusCode()).isEqualTo(400);
-        HttpResponse<String> unwindRes = post("/api/trades/" + tradeId + "/unwind", "{\"confirm\":true}");
-        assertThat(unwindRes.statusCode()).isEqualTo(200);
-        JsonNode unwound = Json.parse(unwindRes.body());
+        // A mutation without a signed preview is rejected; the canonical close freezes its receipt.
+        assertThat(post("/api/position-transformations/apply",
+                "{\"source\":\"PRACTICE_TRADE\",\"sourceId\":\"" + tradeId
+                        + "\",\"action\":\"CLOSE\"}").statusCode()).isEqualTo(400);
+        JsonNode unwound = transform(tradeId, "CLOSE");
         assertThat(unwound.at("/trade/status").asText()).isEqualTo("CLOSED");
-        assertThat(unwound.get("realizedPnlCents").isNumber()).isTrue();
+        assertThat(unwound.get("realizedPnlToDateCents").isNumber()).isTrue();
+        assertThat(unwound.at("/transformation/action").asText()).isEqualTo("CLOSE");
 
         JsonNode finalAccount = Json.parse(get("/api/account").body());
         assertThat(finalAccount.at("/account/reservedCents").asLong()).isZero();
@@ -258,39 +419,40 @@ class ApiIntegrationTest {
 
     @Test
     @Order(8)
-    void deleteRequiresConfirmAndVoidsTrade() throws Exception {
+    void voidRequiresSignedPreviewAndKeepsTheCorrectionReceipt() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
-        assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(400); // no confirm
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        assertThat(delete("/api/trades/" + tradeId).statusCode()).isEqualTo(404);
+        JsonNode voided = transform(tradeId, "VOID");
+        assertThat(voided.at("/transformation/action").asText()).isEqualTo("VOID");
+        assertThat(voided.get("receiptId").asText()).isNotBlank();
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/trade/status").asText()).isEqualTo("DELETED");
     }
 
     @Test
     @Order(9)
-    void settleRequiresExplicitConfirmAndBadDatesAre400() throws Exception {
+    void lifecycleMutationRequiresSignedPreviewAndBadDatesAre400() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
-        // No/empty body or missing confirm flag must NOT settle (was auto-confirming)
-        assertThat(post("/api/trades/" + tradeId + "/settle", "").statusCode()).isEqualTo(400);
-        assertThat(post("/api/trades/" + tradeId + "/settle", "{}").statusCode()).isEqualTo(400);
-        // With confirm it advances to the domain check (legs not expired -> 422)
-        assertThat(post("/api/trades/" + tradeId + "/settle", "{\"confirm\":true}").statusCode()).isEqualTo(422);
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        assertThat(post("/api/trades/" + tradeId + "/settle", "{\"confirm\":true}").statusCode()).isEqualTo(404);
+        String lifecycle = "{\"source\":\"PRACTICE_TRADE\",\"sourceId\":\"" + tradeId
+                + "\",\"action\":\"EXPIRATION\",\"legIndex\":0}";
+        assertThat(post("/api/position-transformations/preview", lifecycle).statusCode()).isEqualTo(422);
+        transform(tradeId, "VOID");
 
         // Malformed dates are client errors, not 500s
         assertThat(get("/api/research/AAPL/chain?expiration=garbage").statusCode()).isEqualTo(400);
-        HttpResponse<String> badBt = post("/api/backtest", "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"from\":\"nope\",\"to\":\"2026-06-30\"}");
-        assertThat(badBt.statusCode()).isEqualTo(400);
     }
 
     @Test
@@ -298,8 +460,9 @@ class ApiIntegrationTest {
     void portfolioGreeksAggregateActivePositions() throws Exception {
         String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1}]}""".formatted(exp);
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         JsonNode greeks = Json.parse(get("/api/portfolio/greeks").body());
@@ -313,7 +476,7 @@ class ApiIntegrationTest {
         assertThat(detail.at("/current/greeks/deltaShares").asDouble()).isGreaterThan(0);
         assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
 
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        transform(tradeId, "VOID");
     }
 
     @Test
@@ -334,33 +497,6 @@ class ApiIntegrationTest {
     }
 
     @Test
-    @Order(13)
-    void backtestRunsAndPersists() throws Exception {
-        HttpResponse<String> res = post("/api/backtest", """
-                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","from":"2026-03-02","to":"2026-06-30"}""");
-        assertThat(res.statusCode()).isEqualTo(200);
-        JsonNode report = Json.parse(res.body());
-        assertThat(report.get("sampleSize").asInt()).isGreaterThan(0);
-        assertThat(report.get("daysCovered").asInt()).isGreaterThan(0);
-        assertThat(report.get("pricingMode").asText()).isEqualTo("MODELED_FROM_UNDERLYING");
-        assertThat(report.get("assumptions").has("slippagePctPerLeg")).isTrue();
-        assertThat(report.get("skipped").isArray()).isTrue();
-        assertThat(report.get("confidence").asText()).isNotBlank();
-        assertThat(report.get("disclaimer").asText()).containsIgnoringCase("educational");
-
-        JsonNode list = Json.parse(get("/api/backtests").body());
-        assertThat(list.get("backtests").size()).isGreaterThanOrEqualTo(1);
-        String id = report.get("id").asText();
-        JsonNode loaded = Json.parse(get("/api/backtests/" + id).body());
-        assertThat(loaded.get("id").asText()).isEqualTo(id);
-
-        // Undefined-risk strategy rejected with 400
-        HttpResponse<String> naked = post("/api/backtest", """
-                {"symbol":"AAPL","strategy":"NAKED_CALL","from":"2026-03-02","to":"2026-06-30"}""");
-        assertThat(naked.statusCode()).isEqualTo(400);
-    }
-
-    @Test
     @Order(14)
     void brokerStatusReportsUnconfigured() throws Exception {
         JsonNode json = Json.parse(get("/api/broker/status").body());
@@ -373,9 +509,9 @@ class ApiIntegrationTest {
     @Test
     @Order(15)
     void malformedBodiesAreClientErrorsNever500() throws Exception {
-        for (String path : java.util.List.of("/api/trades", "/api/trades/preview", "/api/recommend", "/api/backtest", "/api/recommend/auto")) {
+        for (String path : java.util.List.of("/api/trades", "/api/trades/preview", "/api/research/scout")) {
             assertThat(post(path, "{").statusCode()).as(path + " invalid json").isEqualTo(400);
-            assertThat(post(path, "").statusCode()).as(path + " empty body").isIn(200, 400); // auto allows empty
+            assertThat(post(path, "").statusCode()).as(path + " empty body").isEqualTo(400);
         }
         assertThat(post("/api/trades", "{\"symbol\":\"AAPL\",\"qty\":\"abc\"}").statusCode()).isEqualTo(400);
     }
@@ -393,8 +529,9 @@ class ApiIntegrationTest {
         assertThat(get("/api/research/AAPL/chain?expiration=2026-07-09").statusCode()).isEqualTo(404);
         // expired contracts cannot be opened
         HttpResponse<String> past = createAcknowledged("""
-                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"2020-01-17","ratio":1}]}""");
+                {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"2020-01-17","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""");
         assertThat(past.statusCode()).isEqualTo(422);
         assertThat(past.body()).contains("expired");
     }
@@ -406,9 +543,11 @@ class ApiIntegrationTest {
         String near = exps.get(2).asText();
         String far = exps.get(6).asText();
         String body = """
-                {"symbol":"AAPL","strategy":"DIAGONAL_CALL","qty":1,
-                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1},
-                         {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1}]}""".formatted(far, near);
+                {"symbol":"AAPL","strategy":"DIAGONAL_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
+                 "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"},
+                         {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
+                           "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(far, near);
         JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
         HttpResponse<String> created = createAcknowledged(body);
@@ -416,7 +555,7 @@ class ApiIntegrationTest {
         JsonNode trade = Json.parse(created.body()).get("trade");
         assertThat(trade.get("entryNetPremiumCents").asLong()).isNegative(); // debit
         assertThat(trade.path("maxProfitCents").isMissingNode()).isTrue();   // null = omitted (model-dependent)
-        assertThat(delete("/api/trades/" + trade.get("id").asText() + "?confirm=true").statusCode()).isEqualTo(200);
+        transform(trade.get("id").asText(), "VOID");
     }
 
     @Test
@@ -429,9 +568,9 @@ class ApiIntegrationTest {
 
     @Test
     void appWideObservedDataJobsShareOneAuthorizationClassification() {
-        assertThat(ApiServer.privilegedDataJobKind("sync_underlying")).isTrue();
-        assertThat(ApiServer.privilegedDataJobKind("import_options_csv")).isTrue();
-        assertThat(ApiServer.privilegedDataJobKind("refresh_now")).isFalse();
+        assertThat(DataController.privilegedDataJobKind("sync_underlying")).isTrue();
+        assertThat(DataController.privilegedDataJobKind("import_options_csv")).isTrue();
+        assertThat(DataController.privilegedDataJobKind("refresh_now")).isFalse();
     }
 
     @Test
@@ -464,8 +603,7 @@ class ApiIntegrationTest {
                 .isEqualTo(cashBefore - cost);
 
         // EXIT-intent ideas read the real position and propose a covered call on the held shares
-        JsonNode rec = Json.parse(post("/api/recommend",
-                "{\"symbol\":\"AAPL\",\"intent\":\"exit\",\"riskMode\":\"balanced\"}").body());
+        JsonNode rec = planStrategies("AAPL", "EXIT", "neutral", "balanced", "{}");
         assertThat(rec.get("intent").asText()).isEqualTo("EXIT");
         JsonNode cc = null;
         for (JsonNode c : rec.get("candidates")) if (c.get("strategy").asText().equals("COVERED_CALL")) cc = c;
@@ -483,10 +621,11 @@ class ApiIntegrationTest {
                 .append("\",\"type\":\"").append(l.get("type").asText())
                 .append("\",\"strike\":\"").append(l.get("strike").asText())
                 .append("\",\"expiration\":\"").append(l.get("expiration").asText())
-                .append("\",\"ratio\":1}");
+                .append("\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}");
         }
         legs.append(']');
         String body = "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"qty\":1,\"intent\":\"exit\","
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\","
                 + "\"useHeldShares\":true,\"legs\":" + legs + "}";
         JsonNode preview = Json.parse(post("/api/trades/preview", body).body());
         assertThat(preview.at("/preview/ok").asBoolean()).as(preview.toString()).isTrue();
@@ -508,7 +647,7 @@ class ApiIntegrationTest {
         assertThat(Json.parse(get("/api/trades?symbol=AAPL&intent=INCOME&status=ACTIVE").body()).get("total").asLong()).isZero();
 
         // Void the call, sell the shares back — clean slate for later tests
-        assertThat(delete("/api/trades/" + tradeId + "?confirm=true").statusCode()).isEqualTo(200);
+        transform(tradeId, "VOID");
         HttpResponse<String> sold = post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}");
         assertThat(sold.statusCode()).as(sold.body()).isEqualTo(200);
         assertThat(Json.parse(sold.body()).get("realizedPnlCents").isNumber()).isTrue();
@@ -524,20 +663,20 @@ class ApiIntegrationTest {
         assertThat(unknown.statusCode()).isEqualTo(422);
         assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":10}").statusCode()).isEqualTo(422);
         // Filters flow through recommend: an impossible POP floor rejects everything, loudly
-        JsonNode rec = Json.parse(post("/api/recommend",
-                "{\"symbol\":\"AAPL\",\"intent\":\"income\",\"filters\":{\"minPop\":0.99}}").body());
+        JsonNode rec = planStrategies("AAPL", "INCOME", "neutral", "balanced",
+                "{\"filters\":{\"minPop\":0.99}}");
         assertThat(rec.get("candidates")).isEmpty();
         assertThat(rec.get("rejected").toString()).contains("below your minimum");
         // Unknown intent is a 400, not a 500
-        assertThat(post("/api/recommend", "{\"symbol\":\"AAPL\",\"intent\":\"yolo\"}").statusCode()).isEqualTo(400);
+        assertThat(post("/api/plans", "{\"clientRequestId\":\"bad-intent\",\"symbol\":\"AAPL\",\"intent\":\"yolo\"}")
+                .statusCode()).isEqualTo(400);
     }
     @Test
     @Order(19)
     void acquireIgnoresExistingSharesAndNullBodiesAre400s() throws Exception {
         // Owning shares must not scale NEW purchases: acquire defaults to one 100-share lot
         assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(201);
-        JsonNode rec = Json.parse(post("/api/recommend",
-                "{\"symbol\":\"AAPL\",\"intent\":\"acquire\",\"riskMode\":\"balanced\"}").body());
+        JsonNode rec = planStrategies("AAPL", "ACQUIRE", "neutral", "balanced", "{}");
         for (JsonNode c : rec.get("candidates")) {
             if (c.get("strategy").asText().equals("CASH_SECURED_PUT")) {
                 assertThat(c.get("qty").asInt()).isEqualTo(1);
@@ -547,16 +686,17 @@ class ApiIntegrationTest {
 
         // The literal JSON document "null" is client error territory, never a 500
         assertThat(post("/api/positions/buy", "null").statusCode()).isEqualTo(400);
-        assertThat(post("/api/recommend", "null").statusCode()).isEqualTo(400);
-        assertThat(post("/api/recommend/auto", "null").statusCode()).isEqualTo(200); // defaults, like empty
+        assertThat(post("/api/research/scout", "null").statusCode()).isEqualTo(400);
         assertThat(post("/api/trades/preview", "null").statusCode()).isEqualTo(400);
 
         // Covered call without the shares: the reason names the shortfall, not "add a wing"
         JsonNode exps = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
         String exp = exps.get(2).asText();
         HttpResponse<String> noShares = post("/api/trades",
-                "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"useHeldShares\":true,"
-                + "\"legs\":[{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"265\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}");
+                "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"qty\":1,\"useHeldShares\":true,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\","
+                + "\"legs\":[{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"265\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}");
         assertThat(noShares.statusCode()).isEqualTo(422);
         assertThat(noShares.body()).contains("free shares");
     }
@@ -608,8 +748,25 @@ class ApiIntegrationTest {
         assertThat(Json.parse(get("/api/quotes").body()).get("quotes").size())
                 .isEqualTo(u.at("/active/symbols").size());
 
-        // The scout's default scan list is the selected universe
-        JsonNode scan = Json.parse(post("/api/recommend/auto", "{}").body());
+        String fifty = java.util.stream.IntStream.range(0, 50)
+                .mapToObj(i -> "SYM" + i).collect(java.util.stream.Collectors.joining(","));
+        JsonNode completeBatch = Json.parse(get("/api/quotes?symbols=" + fifty).body());
+        assertThat(completeBatch.get("requested").asInt()).isEqualTo(50);
+        assertThat(completeBatch.get("considered").asInt()).isEqualTo(50);
+        assertThat(completeBatch.get("truncated").asBoolean()).isFalse();
+
+        String tooMany = java.util.stream.IntStream.range(0, 125)
+                .mapToObj(i -> "SYM" + i).collect(java.util.stream.Collectors.joining(","));
+        JsonNode boundedBatch = Json.parse(get("/api/quotes?symbols=" + tooMany).body());
+        assertThat(boundedBatch.get("requested").asInt()).isEqualTo(125);
+        assertThat(boundedBatch.get("considered").asInt()).isEqualTo(120);
+        assertThat(boundedBatch.get("truncated").asBoolean()).isTrue();
+        assertThat(boundedBatch.get("limit").asInt()).isEqualTo(120);
+
+        // The market scope may derive from the selected universe; decision inputs may not.
+        JsonNode scan = Json.parse(post("/api/research/scout",
+                "{\"horizons\":[\"month\"],\"riskMode\":\"balanced\","
+                        + "\"intents\":[\"DIRECTIONAL\"]}").body());
         java.util.Set<String> activeSymbols = new java.util.LinkedHashSet<>();
         u.at("/active/symbols").forEach(s -> activeSymbols.add(s.asText()));
         for (JsonNode pick : scan.get("picks")) {
@@ -621,6 +778,8 @@ class ApiIntegrationTest {
             JsonNode h = Json.parse(get("/api/research/AAPL/history?range=" + range).body());
             assertThat(h.get("range").asText()).isEqualTo(range);
             assertThat(h.get("candles").size()).isGreaterThan(50);
+            assertThat(h.at("/coverage/availableSessions").asInt()).isEqualTo(h.get("candles").size());
+            assertThat(h.at("/coverage/requestedSessions").asInt()).isPositive();
         }
         assertThat(Json.parse(get("/api/research/AAPL/history?range=bogus").body()).get("range").asText()).isEqualTo("1y");
 
@@ -629,11 +788,18 @@ class ApiIntegrationTest {
     @Test
     @Order(22)
     void strikeLaddersAreIntentNative() throws Exception {
+        HttpResponse<String> missingDeclaration = post("/api/research/AAPL/intent-ladder", "{}");
+        assertThat(missingDeclaration.statusCode()).isEqualTo(400);
+        assertThat(missingDeclaration.body()).contains("goal (intent)", "market view (thesis)",
+                "horizon", "risk posture");
         // ACQUIRE: rungs step DOWN from spot; each rung names your price with full honesty metrics
-        JsonNode acq = Json.parse(post("/api/recommend/ladder",
-                "{\"symbol\":\"AAPL\",\"intent\":\"acquire\",\"riskMode\":\"balanced\"}").body());
+        JsonNode acq = Json.parse(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"acquire\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\"}").body());
         assertThat(acq.get("intent").asText()).isEqualTo("ACQUIRE");
         assertThat(acq.get("rungs").size()).isGreaterThanOrEqualTo(4);
+        assertThat(acq.at("/rungs/0/evaluation/score/components").isArray()).isTrue();
+        assertThat(acq.at("/rungs/0/evaluation/management/rules").isArray()).isTrue();
         double prev = Double.MAX_VALUE;
         for (JsonNode r : acq.get("rungs")) {
             double strike = Double.parseDouble(r.get("legs").get(0).get("strike").asText());
@@ -648,23 +814,26 @@ class ApiIntegrationTest {
 
         // The ladder is another view of the same request, not an escape hatch around its hard
         // screens. An impossible income floor excludes every rung and explains why.
-        JsonNode screened = Json.parse(post("/api/recommend/ladder",
-                "{\"symbol\":\"AAPL\",\"intent\":\"acquire\",\"riskMode\":\"balanced\","
+        JsonNode screened = Json.parse(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"acquire\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\","
                         + "\"filters\":{\"minAnnualizedYieldPct\":10000}}").body());
         assertThat(screened.get("rungs")).isEmpty();
         assertThat(screened.get("notes").toString()).contains("excluded by your selected limits")
                 .contains("No ladder rung passed every selected limit");
 
         // EXIT/HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
-        JsonNode exitWithoutShares = Json.parse(post("/api/recommend/ladder",
-                "{\"symbol\":\"AAPL\",\"intent\":\"exit\",\"maxLossCents\":100000}").body());
+        JsonNode exitWithoutShares = Json.parse(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"exit\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\",\"maxLossCents\":100000}").body());
         assertThat(exitWithoutShares.get("rungs")).isEmpty();
         assertThat(exitWithoutShares.get("notes").toString()).contains("starts from shares you own");
 
         // EXIT with held shares: rungs climb ABOVE spot, sized to the shares, no new cash
         assertThat(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(201);
-        JsonNode exit = Json.parse(post("/api/recommend/ladder",
-                "{\"symbol\":\"AAPL\",\"intent\":\"exit\"}").body());
+        JsonNode exit = Json.parse(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"exit\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\"}").body());
         assertThat(exit.get("rungs").size()).isGreaterThanOrEqualTo(4);
         double prevUp = 0;
         for (JsonNode r : exit.get("rungs")) {
@@ -678,8 +847,9 @@ class ApiIntegrationTest {
         }
 
         // HEDGE: floors below spot, each rung costs its premium
-        JsonNode hedge = Json.parse(post("/api/recommend/ladder",
-                "{\"symbol\":\"AAPL\",\"intent\":\"hedge\",\"riskMode\":\"aggressive\",\"maxLossCents\":100000}").body());
+        JsonNode hedge = Json.parse(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"hedge\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"aggressive\",\"maxLossCents\":100000}").body());
         assertThat(hedge.get("rungs").size()).isGreaterThanOrEqualTo(3);
         for (JsonNode r : hedge.get("rungs")) {
             assertThat(r.get("maxLossCents").asLong()).isPositive();
@@ -689,7 +859,9 @@ class ApiIntegrationTest {
         assertThat(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").statusCode()).isEqualTo(200);
 
         // Directional has no ladder — clean 400, not a mystery
-        assertThat(post("/api/recommend/ladder", "{\"symbol\":\"AAPL\",\"intent\":\"directional\"}").statusCode()).isEqualTo(400);
+        assertThat(post("/api/research/AAPL/intent-ladder",
+                "{\"intent\":\"directional\",\"thesis\":\"neutral\",\"horizon\":\"month\","
+                        + "\"riskMode\":\"balanced\"}").statusCode()).isEqualTo(400);
     }
 
     @Test
@@ -700,16 +872,33 @@ class ApiIntegrationTest {
         JsonNode research = Json.parse(get("/api/research/AAPL").body());
         String exp = research.get("expirations").get(3).asText();
 
-        String spread = "{\"symbol\":\"AAPL\",\"strategy\":\"CREDIT_PUT_SPREAD\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"250\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
-                + "{\"action\":\"BUY\",\"type\":\"PUT\",\"strike\":\"245\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        String spread = "{\"symbol\":\"AAPL\",\"strategy\":\"CREDIT_PUT_SPREAD\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"250\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"},"
+                + "{\"action\":\"BUY\",\"type\":\"PUT\",\"strike\":\"245\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode spreadResponse = Json.parse(post("/api/trades/preview", spread).body());
         JsonNode p = spreadResponse.get("preview");
         assertThat(p.get("ok").asBoolean()).isTrue();
         assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
-        assertThat(spreadResponse.get("economics").get("verdict").asText()).isNotBlank();
-        assertThat(spreadResponse.get("economics").has("marketEvAfterCostsCents")).isTrue();
-        long afterCosts = spreadResponse.get("economics").get("marketEvAfterCostsCents").asLong();
+        JsonNode evaluation = spreadResponse.get("evaluation");
+        JsonNode economics = evaluation.at("/assessment/economics");
+        assertThat(economics.get("verdict").asText()).isNotBlank();
+        assertThat(economics.has("marketEvAfterCostsCents")).isTrue();
+        assertThat(evaluation.get("capital").get("incrementalCents").asLong()).isPositive();
+        assertThat(evaluation.get("risk").get("scenarios").size()).isEqualTo(7);
+        assertThat(evaluation.get("evidence").get("perDimension").has("pricing")).isTrue();
+        assertThat(evaluation.get("management").get("rules").isArray()).isTrue();
+        assertThat(evaluation.get("score").has("riskAdjustedScore")).isTrue();
+        assertThat(evaluation.get("stance").has("dollarDeltaCents")).isTrue();
+        assertThat(evaluation.get("participation").has("localParticipationBps")).isTrue();
+        assertThat(evaluation.get("impliedStance").get("label").asText()).isNotBlank();
+        assertThat(evaluation.get("ivContext").get("message").asText()).isNotBlank();
+        assertThat(evaluation.get("coverage").get("inputs").has("pricing")).isTrue();
+        assertThat(evaluation.has("economics")).isFalse();
+        assertThat(evaluation.get("explanation").get("assumptions").isArray()).isTrue();
+        long afterCosts = economics.get("marketEvAfterCostsCents").asLong();
         if (afterCosts < 0) {
             String evAck = "";
             for (JsonNode ack : spreadResponse.path("requiredAcks")) {
@@ -747,15 +936,19 @@ class ApiIntegrationTest {
         }
 
         // A long call has no short strike: assignmentProb is null, upside uncapped
-        String longCall = "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        String longCall = "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode lc = Json.parse(post("/api/trades/preview", longCall).body()).get("preview");
         assertThat(lc.has("assignmentProb")).isFalse(); // NON_NULL mapper: no shorts -> field absent
         assertThat(lc.get("payoff").size()).isGreaterThan(30);
 
         // Undefined risk is BLOCKED but the payoff still charts the cliff (education, not a dead end)
-        String naked = "{\"symbol\":\"AAPL\",\"strategy\":\"CUSTOM\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"260\",\"expiration\":\"" + exp + "\",\"ratio\":1}]}";
+        String naked = "{\"symbol\":\"AAPL\",\"strategy\":\"CUSTOM\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"260\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode nk = Json.parse(post("/api/trades/preview", naked).body()).get("preview");
         assertThat(nk.get("ok").asBoolean()).isFalse();
         assertThat(nk.get("blockReasons").toString()).contains("Undefined");
@@ -764,15 +957,18 @@ class ApiIntegrationTest {
 
         // Calendars: no expiration payoff curve (model-dependent), honestly empty
         String exp2 = research.get("expirations").get(5).asText();
-        String calendar = "{\"symbol\":\"AAPL\",\"strategy\":\"CALENDAR_CALL\",\"qty\":1,\"legs\":["
-                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp + "\",\"ratio\":1},"
-                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp2 + "\",\"ratio\":1}]}";
+        String calendar = "{\"symbol\":\"AAPL\",\"strategy\":\"CALENDAR_CALL\",\"qty\":1,"
+                + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
+                + "{\"action\":\"SELL\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"},"
+                + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp2
+                + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode calendarResponse = Json.parse(post("/api/trades/preview", calendar).body());
         JsonNode cal = calendarResponse.get("preview");
         assertThat(cal.get("payoff").size()).isZero();
         assertThat(cal.get("legs").size()).isEqualTo(2);
-        assertThat(calendarResponse.get("economics").get("verdict").asText()).isEqualTo("UNAVAILABLE");
-        assertThat(calendarResponse.get("economics").get("summary").asText())
+        assertThat(calendarResponse.at("/evaluation/assessment/economics/verdict").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(calendarResponse.at("/evaluation/assessment/economics/summary").asText())
                 .contains("cannot support an economic verdict");
     }
 
@@ -793,6 +989,11 @@ class ApiIntegrationTest {
         assertThat(sum.get("note").asText()).contains("BEFORE close fees");
         assertThat(sum.get("freshness").asText()).isNotEmpty();
         assertThat(sum.has("complete")).isTrue();
+        assertThat(sum.at("/liquidity/reconciliationStatus").asText()).isEqualTo("RECONCILED");
+        assertThat(sum.at("/liquidity/genuinelyFreeBuyingPower/cents").asLong())
+                .isEqualTo(sum.get("buyingPowerCents").asLong());
+        assertThat(sum.at("/liquidity/recordedOrReportedReserve/cents").asLong())
+                .isEqualTo(sum.get("reservedCents").asLong());
     }
 
     @Test
@@ -803,15 +1004,18 @@ class ApiIntegrationTest {
         assertThat(ov.statusCode()).isEqualTo(200);
         JsonNode j = Json.parse(ov.body());
         assertThat(j.has("engine")).isTrue();
-        assertThat(j.get("jobKinds").toString()).contains("backfill_underlying");
-        // Source cards disclose license/use mode (Yahoo = personal-only).
-        JsonNode sources = Json.parse(get("/api/data/sources").body()).get("sources");
-        assertThat(sources.toString()).contains("Yahoo Finance").contains("PERSONAL");
+        assertThat(j.get("jobKinds").toString()).contains("sync_underlying").doesNotContain("backfill_underlying");
+        // Daily-history connectors have one authoritative catalog; supporting feeds are distinct.
         JsonNode sourceDoc = Json.parse(get("/api/data/sources").body());
-        assertThat(sourceDoc.get("connectors").toString()).contains("Your price-history CSV");
+        assertThat(sourceDoc.get("connectors").toString())
+                .contains("Yahoo Finance").contains("standing authorization").contains("Your price-history CSV");
+        assertThat(sourceDoc.get("feeds").toString()).contains("Cboe").contains("SEC EDGAR")
+                .contains("Reviewed issuer events").contains("payload fingerprint");
+        assertThat(sourceDoc.get("feeds").toString()).doesNotContain("Yahoo Finance");
         JsonNode sync = Json.parse(get("/api/data/sync").body());
         assertThat(sync.get("note").asText()).contains("once after a completed market session");
         assertThat(sync.has("cursors")).isTrue();
+        assertThat(sync.has("systemSchedule")).isTrue();
         // A local user-owned daily CSV enters the observed store through multipart upload; the
         // browser never fetches a provider endpoint or sends a server filesystem path.
         String boundary = "StrikeBenchBoundary";
@@ -826,33 +1030,56 @@ class ApiIntegrationTest {
                         .POST(HttpRequest.BodyPublishers.ofString(multipart)).build(), HttpResponse.BodyHandlers.ofString());
         assertThat(imported.statusCode()).isEqualTo(200);
         assertThat(Json.parse(imported.body()).get("barBasis").asText()).isEqualTo("CLOSE_ONLY");
+        // Reviewed issuer evidence enters through the same Data owner and becomes the one event
+        // receipt consumed by Research (and, by construction, evaluation/alerts/scenarios/Scout).
+        HttpResponse<String> importedEvent = post("/api/data/import/event", """
+                {"symbol":"AAPL","status":"CONFIRMED","date":"2026-07-22",
+                 "session":"AFTER_CLOSE","authority":"ISSUER_CONFIRMED",
+                 "source":"Apple Investor Relations","sourceUrl":"https://investor.apple.com/events",
+                 "basis":"issuer-published earnings call","rawPayload":"reviewed fixture receipt"}
+                """);
+        assertThat(importedEvent.statusCode()).isEqualTo(201);
+        JsonNode event = Json.parse(importedEvent.body());
+        assertThat(event.get("status").asText()).isEqualTo("CONFIRMED");
+        assertThat(event.get("session").asText()).isEqualTo("AFTER_CLOSE");
+        assertThat(event.get("payloadFingerprint").asText()).hasSize(64);
+        JsonNode researchEvent = Json.parse(get("/api/research/AAPL").body()).get("earningsEstimate");
+        assertThat(researchEvent.get("status").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(researchEvent.get("note").asText()).contains("demo market");
         // Coverage responds with a matrix + summary.
         assertThat(get("/api/data/coverage").statusCode()).isEqualTo(200);
         // Reset without confirm is refused.
         assertThat(post("/api/data/reset", "{\"tier\":\"MARKET_DATA\"}").statusCode()).isEqualTo(400);
-        // Admin gate: a PROXIED request (X-Forwarded-For present, auth off) can't wipe — 401, not 200.
+        // Admin gate: a PROXIED request (X-Forwarded-For present, auth off) can't wipe — 403, not 200.
         HttpResponse<String> proxied = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/reset"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .POST(HttpRequest.BodyPublishers.ofString("{\"tier\":\"EVERYTHING\",\"confirm\":true}")).build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(proxied.statusCode()).isEqualTo(401);
+        assertThat(proxied.statusCode()).isEqualTo(403);
         HttpResponse<String> proxiedSchedule = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/sync/schedule"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .PUT(HttpRequest.BodyPublishers.ofString("{\"enabled\":true,\"source\":\"auto\",\"symbols\":[\"AAPL\"],\"years\":1}"))
                         .build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(proxiedSchedule.statusCode()).isEqualTo(401);
+        assertThat(proxiedSchedule.statusCode()).isEqualTo(403);
+        HttpResponse<String> proxiedEvent = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/import/event"))
+                        .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
+                        .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                        .build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(proxiedEvent.statusCode()).isEqualTo(403);
         HttpResponse<String> proxiedSync = http.send(HttpRequest.newBuilder(URI.create(base + "/api/data/jobs"))
                         .header("Content-Type", "application/json").header("X-Forwarded-For", "203.0.113.7")
                         .POST(HttpRequest.BodyPublishers.ofString("{\"kind\":\"sync_underlying\",\"params\":{\"symbols\":[\"AAPL\"]}}"))
                         .build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(proxiedSync.statusCode()).isEqualTo(401);
-        // A backfill job can be started and is listed.
+        assertThat(proxiedSync.statusCode()).isEqualTo(403);
+        // A current data job can be started and is listed; retired job payloads are rejected.
         HttpResponse<String> start = post("/api/data/jobs",
-                "{\"kind\":\"backfill_underlying\",\"params\":{\"symbols\":[\"AAPL\"],\"from\":\"2026-04-01\",\"to\":\"2026-06-30\"}}");
+                "{\"kind\":\"warm_universe\",\"params\":{\"symbols\":[\"AAPL\"]}}");
         assertThat(start.statusCode()).isEqualTo(200);
         String jobId = Json.parse(start.body()).get("id").asText();
         assertThat(jobId).isNotBlank();
         assertThat(get("/api/data/jobs").body()).contains(jobId);
+        assertThat(post("/api/data/jobs", "{\"kind\":\"backfill_underlying\",\"params\":{}}")
+                .statusCode()).isEqualTo(400);
     }
 
     @Test
@@ -928,9 +1155,11 @@ class ApiIntegrationTest {
 
         // A preview now judges size against MY denominators, not the paper account's.
         var prev = post("/api/trades/preview", """
-                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"legs":[
-                  {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-21","ratio":1},
-                  {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-21","ratio":1}]}""");
+                {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"2026-08-21","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"},
+                  {"action":"BUY","type":"PUT","strike":"245","expiration":"2026-08-21","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"}]}""");
         assertThat(prev.statusCode()).isEqualTo(200);
         var body = io.liftandshift.strikebench.util.Json.parse(prev.body());
         assertThat(body.has("accountFit")).isTrue();
@@ -986,7 +1215,8 @@ class ApiIntegrationTest {
                 {"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
                   "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                   "position":{"key":"BUY_AND_HOLD","qty":1,"entryCostCents":12345,
-                    "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1}]},
+                    "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1,
+                              "multiplier":1,"positionEffect":"OPEN"}]},
                   "over":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
                           "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                           "jumpVol":0,"tailNu":0,"seed":7,"paths":100},
@@ -1016,7 +1246,8 @@ class ApiIntegrationTest {
             {"operation":"POSITION","basis":"PARAMETRIC",
               "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
               "position":{"key":"LONG_CALL","qty":1,"entryCostCents":1000,
-                "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1}]},
+                "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1,
+                          "multiplier":100,"positionEffect":"OPEN"}]},
               "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
                       "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                       "jumpVol":0,"tailNu":6,"seed":17,"paths":40}}""";
@@ -1130,8 +1361,8 @@ class ApiIntegrationTest {
         }
         // Internal wire aliases are not a product capability: an obsolete mode is rejected
         // instead of silently changing the caller's capital budget.
-        assertThat(post("/api/recommend",
-                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"learning\"}")
+        assertThat(post("/api/plans",
+                "{\"clientRequestId\":\"bad-risk-mode\",\"symbol\":\"AAPL\",\"intent\":\"DIRECTIONAL\",\"riskMode\":\"learning\"}")
                 .statusCode()).isEqualTo(400);
         // Clean up so later-ordered tests keep the uncapped budget expectations.
         assertThat(put("/api/account/risk-context", "{}").statusCode()).isEqualTo(200);
@@ -1185,16 +1416,16 @@ class ApiIntegrationTest {
                 .filter(m -> "balanced".equals(m.get("mode").asText()))
                 .findFirst().orElseThrow().get("effectiveBudgetCents").asLong();
         assertThat(expected).isLessThanOrEqualTo(cap);
-        JsonNode manual = Json.parse(post("/api/recommend",
-                "{\"symbol\":\"AAPL\",\"thesis\":\"bullish\",\"horizon\":\"month\",\"riskMode\":\"balanced\"}").body());
+        JsonNode manual = planStrategies("AAPL", "DIRECTIONAL", "bullish", "balanced", "{}");
         assertThat(manual.get("riskBudgetCents").asLong()).isEqualTo(expected);
-        JsonNode auto = Json.parse(post("/api/recommend/auto",
-                "{\"universe\":[\"AAPL\"],\"riskMode\":\"balanced\"}").body());
+        JsonNode auto = Json.parse(post("/api/research/scout",
+                "{\"universe\":[\"AAPL\"],\"horizons\":[\"month\"],"
+                        + "\"riskMode\":\"balanced\",\"intents\":[\"DIRECTIONAL\"]}").body());
         assertThat(auto.get("riskBudgetCents").asLong()).isEqualTo(expected);
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode hz : pick.get("horizons")) {
                 for (JsonNode c : hz.get("candidates")) {
-                    assertThat(c.get("candidate").get("maxLossCents").asLong())
+                    assertThat(c.at("/evaluation/candidate/maxLossCents").asLong())
                             .as("every scouted candidate sized under the declared capital")
                             .isLessThanOrEqualTo(cap);
                 }
@@ -1240,44 +1471,75 @@ class ApiIntegrationTest {
     @Test
     @Order(36)
     void everyIdeaCarriesEconomicMeaningWithoutDeletingTeachingCases() throws Exception {
-        JsonNode r = Json.parse(post("/api/recommend", """
-                {"symbol":"AAPL","thesis":"neutral","horizon":"month","riskMode":"conservative"}
-                """).body());
+        JsonNode r = planStrategies("AAPL", "DIRECTIONAL", "neutral", "conservative", "{}");
         assertThat(r.get("candidates")).isNotEmpty();
         assertThat(r.get("economicPolicy").asText()).isEqualTo("decision_score");
         assertThat(r.get("economicMessage").asText()).isNotBlank();
-        boolean teachingCase = false;
+        boolean adverseCounterexample = false;
         boolean favorableTeachingCase = false;
+        boolean splitEvidenceTeachingCase = false;
         double previousDecisionScore = Double.MAX_VALUE;
         for (JsonNode c : r.get("candidates")) {
-            assertThat(c.has("structurallyEligible")).isTrue();
-            assertThat(c.has("economicVerdict")).isTrue();
-            assertThat(c.has("economics")).isTrue();
-            double decisionScore = c.get("decisionScore").asDouble();
+            JsonNode evaluation = c.get("evaluation");
+            JsonNode economics = evaluation.at("/assessment/economics");
+            assertThat(evaluation.has("viable")).isTrue();
+            assertThat(economics.get("verdict").asText()).isNotBlank();
+            assertThat(c.has("economics")).isFalse();
+            assertThat(c.has("decisionScore")).isFalse();
+            assertThat(evaluation.at("/assessment/portfolioImpacts/practice/lane").asText())
+                    .isEqualTo("PRACTICE");
+            assertThat(evaluation.at("/assessment/portfolioImpacts/real").isMissingNode()).isTrue();
+            double decisionScore = evaluation.get("decisionScore").asDouble();
             assertThat(decisionScore).isLessThanOrEqualTo(previousDecisionScore);
             previousDecisionScore = decisionScore;
-            if ("FAVORABLE".equals(c.get("economicVerdict").asText())) {
-                assertThat(c.get("economics").get("observedEvidence").asBoolean()).isFalse();
-                assertThat(c.get("economics").get("label").asText()).containsIgnoringCase("teaching market");
+            if ("FAVORABLE".equals(economics.get("verdict").asText())) {
+                assertThat(economics.get("observedEvidence").asBoolean()).isFalse();
+                assertThat(economics.get("label").asText()).containsIgnoringCase("teaching market");
                 favorableTeachingCase = true;
             }
-            teachingCase |= "UNFAVORABLE".equals(c.get("economicVerdict").asText());
+            if ("MIXED".equals(economics.get("verdict").asText())
+                    && !economics.get("observedEvidence").asBoolean()
+                    && economics.path("marketEvAfterCostsCents").asLong() < 0
+                    && economics.path("realizedVolEvAfterCostsCents").asLong() > 0) {
+                splitEvidenceTeachingCase = true;
+            }
+            long realisticPoint = economics.path("realizedVolEvAfterCostsCents").asLong(Long.MAX_VALUE);
+            long materiality = economics.path("realisticEvMaterialityCents").asLong();
+            if (realisticPoint < -materiality) {
+                assertThat(economics.get("verdict").asText())
+                        .as("a materially adverse realistic-measure point remains an unfavorable teaching case")
+                        .isEqualTo("UNFAVORABLE");
+            }
+            adverseCounterexample |= realisticPoint < 0
+                    && ("MIXED".equals(economics.get("verdict").asText())
+                        || "UNFAVORABLE".equals(economics.get("verdict").asText()));
         }
-        assertThat(favorableTeachingCase)
-                .as("the deterministic teaching world demonstrates a favorable case without rigging every result positive")
+        assertThat(favorableTeachingCase || splitEvidenceTeachingCase)
+                .as("the deterministic teaching world demonstrates either a favorable case or an honestly split model comparison without rigging an endorsement")
                 .isTrue();
-        assertThat(teachingCase).as("unfavorable structures stay visible as counterexamples").isTrue();
-        assertThat(r.get("economicMessage").asText()).containsIgnoringCase("generated teaching market")
-                .containsIgnoringCase("not evidence of a live-market edge");
+        assertThat(adverseCounterexample)
+                .as("adverse structures stay visible as non-endorsed counterexamples even when their point estimate is inside the materiality band")
+                .isTrue();
+        if (favorableTeachingCase) {
+            assertThat(r.get("economicMessage").asText()).containsIgnoringCase("generated teaching market")
+                    .containsIgnoringCase("not evidence of a live-market edge");
+        } else {
+            assertThat(r.get("economicMessage").asText()).containsIgnoringCase("no setup currently shows")
+                    .containsIgnoringCase("after-cost edge")
+                    .containsIgnoringCase("comparison and learning");
+        }
 
-        JsonNode auto = Json.parse(post("/api/recommend/auto", """
-                {"universe":["SPY"],"horizons":["month"],"riskMode":"conservative"}
+        JsonNode auto = Json.parse(post("/api/research/scout", """
+                {"universe":["SPY"],"horizons":["month"],"riskMode":"conservative",
+                 "intents":["DIRECTIONAL"]}
                 """).body());
         for (JsonNode pick : auto.get("picks")) {
             for (JsonNode horizon : pick.get("horizons")) {
                 for (JsonNode c : horizon.get("candidates")) {
-                    assertThat(c.has("economics")).isTrue();
-                    assertThat(c.has("decisionScore")).isTrue();
+                    assertThat(c.at("/evaluation/assessment/economics/verdict").asText()).isNotBlank();
+                    assertThat(c.at("/evaluation/decisionScore").isNumber()).isTrue();
+                    assertThat(c.has("economics")).isFalse();
+                    assertThat(c.has("decisionScore")).isFalse();
                 }
             }
         }
@@ -1305,5 +1567,405 @@ class ApiIntegrationTest {
         JsonNode current = Json.parse(get("/api/world").body());
         assertThat(current.get("world").asText()).isEqualTo("demo");
         assertThat(current.get("revision").asLong()).isEqualTo(finished.get("revision").asLong());
+    }
+
+    @Test
+    @Order(38)
+    void deletedRecommendationRoutesHaveNoCompatibilitySurface() throws Exception {
+        for (String path : java.util.List.of("/api/recommend", "/api/recommend/auto", "/api/recommend/ladder")) {
+            assertThat(post(path, "{}").statusCode()).as(path).isEqualTo(404);
+        }
+    }
+
+    @Test
+    @Order(39)
+    void obsoleteExternalTradeRouteDoesNotExist() throws Exception {
+        assertThat(post("/api/trades/external", "{}").statusCode()).isEqualTo(404);
+    }
+
+    @Test
+    @Order(40)
+    void heldSharePlanSnapshotsTheOwningAccountsFreeShares() throws Exception {
+        JsonNode bought = Json.parse(post("/api/positions/buy", "{\"symbol\":\"AAPL\",\"shares\":100}").body());
+        assertThat(bought.get("sharesTraded").asLong()).isEqualTo(100);
+
+        JsonNode plan = Json.parse(post("/api/plans", """
+                {"clientRequestId":"held-plan-context","symbol":"AAPL","intent":"EXIT",
+                 "thesis":"neutral","horizonDays":30,"riskMode":"conservative"}
+                """).body());
+        assertThat(plan.at("/context/holdingsShares").asLong()).isEqualTo(100);
+        assertThat(plan.at("/context/costBasisCents").asLong()).isPositive();
+
+        JsonNode strategy = Json.parse(post("/api/plans/" + plan.get("id").asText() + "/strategy/run", "{}").body());
+        assertThat(strategy.at("/strategy/result/candidates")).isNotEmpty();
+        assertThat(java.util.stream.StreamSupport.stream(
+                        strategy.at("/strategy/result/candidates").spliterator(), false)
+                .anyMatch(candidate -> candidate.path("usesHeldShares").asBoolean(false)))
+                .as("the Plan ranking should retain a held-share expression").isTrue();
+
+        JsonNode sold = Json.parse(post("/api/positions/sell", "{\"symbol\":\"AAPL\",\"shares\":100}").body());
+        assertThat(sold.get("sharesTraded").asLong()).isEqualTo(100);
+    }
+
+    @Test
+    @Order(41)
+    void selectedRiskBudgetRequiresTheSameServerEnforcedCapitalAcknowledgment() throws Exception {
+        JsonNode research = Json.parse(get("/api/research/AAPL").body());
+        String exp = research.get("expirations").get(3).asText();
+        String cashSecuredPut = """
+                {"symbol":"AAPL","strategy":"CASH_SECURED_PUT","qty":1,"riskMode":"conservative",
+                 "source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(exp);
+
+        JsonNode preview = Json.parse(post("/api/trades/preview", cashSecuredPut).body());
+        assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
+        JsonNode capitalAck = java.util.stream.StreamSupport.stream(
+                        preview.withArray("requiredAcks").spliterator(), false)
+                .filter(ack -> "ack-capital".equals(ack.path("id").asText()))
+                .findFirst().orElseThrow();
+        assertThat(capitalAck.path("label").asText())
+                .contains("theoretical max loss")
+                .contains("selected per-trade risk budget");
+        assertThat(preview.path("ackToken").asText()).isNotBlank();
+
+        HttpResponse<String> unacknowledged = post("/api/trades", cashSecuredPut);
+        assertThat(unacknowledged.statusCode()).isEqualTo(422);
+        assertThat(unacknowledged.body()).contains("ack-capital");
+    }
+
+    @Test
+    @Order(42)
+    void trackedPortfolioApiKeepsExternalAccountingSeparateAndExportsRealFiles() throws Exception {
+        HttpResponse<String> created = post("/api/portfolio/accounts", """
+                {"name":"Taxable review book","accountType":"TAXABLE","broker":"Review broker",
+                 "lotMethod":"FIFO","shortTermTaxRateBps":3000,"longTermTaxRateBps":1500,
+                 "ordinaryTaxRateBps":2400,"stateTaxRateBps":400,"openingCashCents":10000000}
+                """);
+        assertThat(created.statusCode()).isEqualTo(201);
+        String id = Json.parse(created.body()).get("id").asText();
+
+        String expiration = Json.parse(get("/api/research/AAPL").body())
+                .withArray("expirations").get(2).asText();
+        String trackedAnalysisRequest = """
+                {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":1,"source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"BUY","type":"CALL","strike":"250","expiration":"%s","ratio":1,"multiplier":100,"positionEffect":"OPEN"},
+                  {"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,"multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(expiration, expiration);
+        HttpResponse<String> analyzedResponse = post("/api/portfolio/accounts/" + id + "/analyze",
+                trackedAnalysisRequest);
+        assertThat(analyzedResponse.statusCode()).as(analyzedResponse.body()).isEqualTo(200);
+        JsonNode analyzed = Json.parse(analyzedResponse.body());
+        assertThat(analyzed.get("marketLane").asText()).isEqualTo("DEMO");
+        assertThat(analyzed.get("note").asText()).contains("demo evidence").contains("never changes tracked lots");
+        assertThat(analyzed.at("/evaluation/participation/localParticipationBps").isNumber()).isTrue();
+        assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/lane").asText()).isEqualTo("REAL");
+        assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/practice").isMissingNode()).isTrue();
+        assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/grossExposureBeforeCents").asLong())
+                .isZero();
+        assertThat(analyzed.at("/evaluation/coverage/inputs/pricing/level").asText()).isNotBlank();
+        assertThat(analyzed.at("/lifecycle/schemaVersion").asText()).isEqualTo("position-lifecycle-v1");
+        assertThat(analyzed.at("/lifecycle/currentChoice/freshEyesEconomicsRef").asText())
+                .isEqualTo("evaluation.assessment.economics");
+        assertThat(analyzed.at("/lifecycle/currentChoice/stanceRef").asText()).isEqualTo("evaluation.stance");
+        assertThat(analyzed.at("/lifecycle/evidence/policyFingerprint").asText()).isEqualTo("FACTS_ONLY");
+        assertThat(analyzed.at("/lifecycle/positionFingerprint").asText()).hasSize(64);
+        assertThat(analyzed.at("/lifecycle/carryCollateral/concurrentCollateralIncome/authority").asText())
+                .isEqualTo("UNAVAILABLE");
+        assertThat(analyzed.at("/bookActions/schemaVersion").asText())
+                .isEqualTo("book-action-projection-v1");
+        assertThat(analyzed.at("/bookActions/positionFingerprint").asText())
+                .isEqualTo(analyzed.at("/lifecycle/positionFingerprint").asText());
+        assertThat(java.util.stream.StreamSupport.stream(
+                        analyzed.withObject("/bookActions").withArray("actions").spliterator(), false)
+                .map(row -> row.get("action").asText()).toList())
+                .contains("HOLD", "CLOSE_ALL", "ROLL");
+        assertThat(analyzed.at("/capacity/packageMatchStatus").asText())
+                .isEqualTo("NO_OBJECTIVE_REVISION");
+        assertThat(analyzed.at("/decision/analysis/schemaVersion").asText())
+                .isEqualTo("position-lifecycle-decision-v1");
+        assertThat(analyzed.at("/decision/receiptFingerprint").asText()).hasSize(64);
+        assertThat(analyzed.at("/decision/analysis/dimensions")).hasSize(7);
+
+        String positionFingerprint = analyzed.at("/lifecycle/positionFingerprint").asText();
+        HttpResponse<String> capacityRevision = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"DIRECTIONAL","direction":"BULLISH","assignmentPreference":"ACCEPT",
+                 "packageCapacities":[{"positionFingerprint":"%s","symbol":"AAPL",
+                   "acceptedCallAwayShares":100,"acceptedCallAwayProceedsCents":2600000}],
+                 "capacityPolicy":{"symbolCeilings":[{"key":"AAPL","maxCents":5000000,
+                   "enforcement":"ADVISORY"}],"expiryCeilings":[{"key":"%s","maxCents":7500000,
+                   "enforcement":"HARD"}],"encumbranceCeiling":{"maxCents":10000000,
+                   "enforcement":"HARD"}}}
+                """.formatted(positionFingerprint, expiration));
+        assertThat(capacityRevision.statusCode()).as(capacityRevision.body()).isEqualTo(201);
+        JsonNode analyzedWithCapacity = Json.parse(post("/api/portfolio/accounts/" + id + "/analyze",
+                trackedAnalysisRequest).body());
+        assertThat(analyzedWithCapacity.at("/capacity/packageMatchStatus").asText())
+                .isEqualTo("EXACT_FINGERPRINT");
+        assertThat(analyzedWithCapacity.at("/capacity/packageCapacity/acceptedCallAwayShares").asLong())
+                .isEqualTo(100L);
+        assertThat(analyzedWithCapacity.at("/capacity/basis").asText()).contains("never valuation or EV");
+        assertThat(analyzedWithCapacity.at("/evaluation/assessment/economics"))
+                .as("capacity declarations may alter fit later, but cannot alter EV inputs or outputs")
+                .isEqualTo(analyzed.at("/evaluation/assessment/economics"));
+        assertThat(analyzedWithCapacity.at("/decision/analysis/policy/policyId").asText())
+                .isEqualTo("STANDARD_V1");
+        String lifecycleReceiptId = analyzedWithCapacity.at("/decision/receiptId").asText();
+        HttpResponse<String> redeploymentResponse = post("/api/research/scout", """
+                {"universe":["AAPL"],"horizons":["month"],"maxPicks":1,
+                 "riskMode":"balanced","intents":["DIRECTIONAL"],
+                 "destinationAccountId":"%s","redeployment":{
+                   "lifecycleReceiptId":"%s","action":"CLOSE_ALL","quantity":1}}
+                """.formatted(id, lifecycleReceiptId));
+        assertThat(redeploymentResponse.statusCode()).isEqualTo(400);
+        assertThat(redeploymentResponse.body())
+                .contains("generated-market Scout cannot project a trade into a real tracked account");
+        HttpResponse<String> personalDecision = post("/api/portfolio/accounts/" + id
+                + "/lifecycle-decisions", """
+                {"receiptId":"%s","decision":"KEEP","selectedAction":"HOLD",
+                 "note":"Personal choice stays beside the named policy."}
+                """.formatted(lifecycleReceiptId));
+        assertThat(personalDecision.statusCode()).as(personalDecision.body()).isEqualTo(201);
+        JsonNode resurfaced = Json.parse(post("/api/portfolio/accounts/" + id + "/analyze",
+                trackedAnalysisRequest).body());
+        assertThat(resurfaced.at("/decision/latestUserDecision/decision").asText()).isEqualTo("KEEP");
+        assertThat(resurfaced.at("/decision/latestUserDecision/note").asText())
+                .contains("stays beside");
+        assertThat(resurfaced.at("/decision/analysis/verdict").asText()).isNotBlank();
+        assertThat(post("/api/portfolio/accounts/" + id + "/lifecycle-decisions", """
+                {"receiptId":"missing","decision":"KEEP","selectedAction":"HOLD"}
+                """).statusCode()).isEqualTo(404);
+
+        HttpResponse<String> recorded = post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-07-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"BROKER",
+                 "externalRef":"BROKER-FILL-1","notes":"Recorded external fill","legs":[
+                   {"instrumentType":"STOCK","action":"BUY","positionEffect":"OPEN","symbol":"AAPL",
+                    "quantity":10,"multiplier":1,"price":250.00}]}
+                """);
+        assertThat(recorded.statusCode()).isEqualTo(201);
+        JsonNode summary = Json.parse(get("/api/portfolio/accounts/" + id + "/summary").body());
+        assertThat(summary.get("bookCashCents").asLong()).isEqualTo(9_750_000L);
+        assertThat(summary.get("complete").asBoolean()).isFalse();
+        assertThat(summary.has("totalValueCents")).isFalse();
+        assertThat(summary.get("valuationBasis").asText())
+                .contains("Demo, simulated, and modeled marks are never applied");
+        assertThat(summary.get("positions")).singleElement().satisfies(p -> {
+            assertThat(p.get("symbol").asText()).isEqualTo("AAPL");
+            assertThat(p.get("complete").asBoolean()).isFalse();
+            assertThat(p.get("provenance").asText()).isEqualTo("MISSING");
+        });
+        assertThat(Json.parse(get("/api/account").body()).at("/account/startingCashCents").asLong())
+                .as("tracked brokerage activity never mutates practice money").isEqualTo(10_000_000L);
+
+        HttpResponse<String> reconciled = put("/api/portfolio/accounts/" + id + "/tax/2026/reconciliation", """
+                {"status":"RECONCILED","formReference":"Corrected broker package",
+                 "shortTermGainCents":12500,"interestCents":300,"notes":"Compared outside forms"}
+                """);
+        assertThat(reconciled.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(reconciled.body()).get("status").asText()).isEqualTo("RECONCILED");
+        JsonNode tax = Json.parse(get("/api/portfolio/accounts/" + id + "/tax?year=2026").body());
+        assertThat(tax.at("/rules/status").asText()).isEqualTo("PROVISIONAL");
+        assertThat(tax.at("/reconciliation/formReference").asText()).isEqualTo("Corrected broker package");
+        assertThat(tax.at("/reconciliation/shortTermGain/brokerCents").asLong()).isEqualTo(12_500L);
+        assertThat(tax.at("/reconciliation/shortTermGain/differenceCents").asLong()).isEqualTo(12_500L);
+
+        HttpResponse<String> csv = get("/api/portfolio/accounts/" + id + "/export.csv");
+        assertThat(csv.statusCode()).isEqualTo(200);
+        assertThat(csv.headers().firstValue("Content-Disposition").orElse("")).contains(".csv");
+        assertThat(csv.body()).contains("BROKER-FILL-1", "gross_amount_cents");
+
+        HttpResponse<byte[]> xlsx = http.send(HttpRequest.newBuilder(
+                        URI.create(base + "/api/portfolio/accounts/" + id + "/export.xlsx?year=2026")).GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+        assertThat(xlsx.statusCode()).isEqualTo(200);
+        assertThat(xlsx.headers().firstValue("Content-Type").orElse(""))
+                .contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        assertThat(xlsx.body()).startsWith((byte) 'P', (byte) 'K');
+
+        assertThat(delete("/api/portfolio/accounts/" + id).statusCode()).isEqualTo(200);
+        assertThat(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"eventType":"INTEREST","cashAmountCents":100,"source":"MANUAL"}
+                """).statusCode()).isEqualTo(409);
+        assertThat(post("/api/portfolio/accounts/" + id + "/restore", "{}").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @Order(43)
+    void trackedPortfolioCsvImportIsGroupAtomicForgivingAndIdempotencyProtected() throws Exception {
+        String id = Json.parse(post("/api/portfolio/accounts", """
+                {"name":"Imported IRA","accountType":"ROTH_IRA","lotMethod":"FIFO"}
+                """).body()).get("id").asText();
+        HttpResponse<String> template = get("/api/portfolio/import-template.csv");
+        assertThat(template.statusCode()).isEqualTo(200);
+        assertThat(template.body()).contains("transaction_ref", "position_effect", "Opening vertical");
+
+        String csv = "transaction_ref,occurred_at,event_type,cash_effect_cents,fees_cents,tax_category,notes,leg_no,instrument,action,position_effect,symbol,option_type,strike,expiration,quantity,multiplier,price\n"
+                + "deposit-1,2026-07-01,DEPOSIT,5000000,0,,Opening cash,,,,,,,,,,,\n"
+                + "stock-1,2026-07-02,TRADE,,0,,Broker fill,0,STOCK,BUY,OPEN,AAPL,,,,10,1,250\n";
+        String boundary = "PortfolioImportBoundary";
+        String multipart = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"portfolio.csv\"\r\n"
+                + "Content-Type: text/csv\r\n\r\n" + csv + "\r\n--" + boundary + "--\r\n";
+        HttpRequest request = HttpRequest.newBuilder(URI.create(base + "/api/portfolio/accounts/" + id + "/import.csv"))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofString(multipart)).build();
+        HttpResponse<String> imported = http.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(imported.statusCode()).isEqualTo(201);
+        assertThat(Json.parse(imported.body()).get("transactionsWritten").asInt()).isEqualTo(2);
+        assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/summary").body()).get("positions")).hasSize(1);
+
+        HttpResponse<String> duplicate = http.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(duplicate.statusCode()).isEqualTo(201);
+        assertThat(Json.parse(duplicate.body()).get("transactionsWritten").asInt()).isZero();
+        assertThat(Json.parse(duplicate.body()).get("rejectedRows").asInt()).isEqualTo(2);
+        assertThat(Json.parse(duplicate.body()).get("quarantine").toString()).contains("already recorded");
+        assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/transactions?size=20").body())
+                .get("transactions")).hasSize(2);
+    }
+
+    private static JsonNode transform(String tradeId, String action) throws Exception {
+        ObjectNode request = Json.MAPPER.createObjectNode();
+        request.put("source", "PRACTICE_TRADE");
+        request.put("sourceId", tradeId);
+        request.put("action", action);
+        HttpResponse<String> previewResponse = post("/api/position-transformations/preview", request.toString());
+        assertThat(previewResponse.statusCode()).withFailMessage(previewResponse.body()).isEqualTo(200);
+        JsonNode preview = Json.parse(previewResponse.body());
+        request.put("previewToken", preview.get("previewToken").asText());
+        HttpResponse<String> applied = post("/api/position-transformations/apply", request.toString());
+        assertThat(applied.statusCode()).withFailMessage(applied.body()).isEqualTo(200);
+        return Json.parse(applied.body());
+    }
+
+    @Test
+    @Order(44)
+    void accountObjectiveIsAnImmutableRevisionSeriesAppliedProspectively() throws Exception {
+        String id = Json.parse(post("/api/portfolio/accounts", """
+                {"name":"Objective book","accountType":"TAXABLE","lotMethod":"FIFO"}
+                """).body()).get("id").asText();
+
+        JsonNode blank = Json.parse(get("/api/portfolio/accounts/" + id + "/objective").body());
+        assertThat(blank.hasNonNull("latest")).isFalse();
+        assertThat(blank.withArray("history").size()).isZero();
+
+        HttpResponse<String> first = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"income","assignmentPreference":"prefer_below_basis"}
+                """);
+        assertThat(first.statusCode()).as(first.body()).isEqualTo(201);
+        assertThat(Json.parse(first.body()).get("revisionNo").asInt()).isEqualTo(1);
+
+        HttpResponse<String> second = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"DIRECTIONAL","direction":"BULLISH","targetExposureCents":2500000}
+                """);
+        assertThat(second.statusCode()).as(second.body()).isEqualTo(201);
+        JsonNode revised = Json.parse(second.body());
+        assertThat(revised.get("revisionNo").asInt()).isEqualTo(2);
+        assertThat(revised.get("assignmentPreference").asText()).isEqualTo("ACCEPT");
+
+        JsonNode series = Json.parse(get("/api/portfolio/accounts/" + id + "/objective").body());
+        assertThat(series.at("/latest/objective").asText()).isEqualTo("DIRECTIONAL");
+        assertThat(series.at("/latest/direction").asText()).isEqualTo("BULLISH");
+        assertThat(series.withArray("history").size()).isEqualTo(2);
+        assertThat(series.at("/history/0/objective").asText())
+                .as("history is oldest-first and revision 1 is never rewritten")
+                .isEqualTo("INCOME");
+
+        HttpResponse<String> junk = post("/api/portfolio/accounts/" + id + "/objective", """
+                {"objective":"GET_RICH_QUICK"}
+                """);
+        assertThat(junk.statusCode()).isEqualTo(400);
+        assertThat(junk.body()).contains("objective must be one of");
+
+        assertThat(post("/api/portfolio/accounts/acct_nope/objective", """
+                {"objective":"INCOME"}
+                """).statusCode()).isEqualTo(404);
+        assertThat(Json.parse(get("/api/portfolio/accounts/" + id + "/objective").body())
+                .withArray("history").size()).as("rejected declarations leave no revision behind").isEqualTo(2);
+    }
+
+    @Test
+    @Order(45)
+    void campaignsProposeTheirRollChainAndAssembleOnlyConfirmedMembers() throws Exception {
+        String id = Json.parse(post("/api/portfolio/accounts", """
+                {"name":"Campaign book","accountType":"TAXABLE","lotMethod":"FIFO","openingCashCents":10000000}
+                """).body()).get("id").asText();
+        String tx1 = Json.parse(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-05-01","eventType":"TRADE","fillNature":"EXECUTED","feesCents":0,"source":"MANUAL","legs":[
+                  {"instrumentType":"OPTION","action":"SELL","positionEffect":"OPEN","symbol":"MU","optionType":"PUT",
+                   "strike":95,"expiration":"2026-06-19","quantity":1,"multiplier":100,"price":2.50}]}
+                """).body()).get("id").asText();
+        String tx2 = Json.parse(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-06-01","eventType":"ROLL","fillNature":"EXECUTED","feesCents":0,"source":"MANUAL","legs":[
+                  {"instrumentType":"OPTION","action":"BUY","positionEffect":"CLOSE","symbol":"MU","optionType":"PUT",
+                   "strike":95,"expiration":"2026-06-19","quantity":1,"multiplier":100,"price":1.00},
+                  {"instrumentType":"OPTION","action":"SELL","positionEffect":"OPEN","symbol":"MU","optionType":"PUT",
+                   "strike":95,"expiration":"2026-07-17","quantity":1,"multiplier":100,"price":3.00}]}
+                """).body()).get("id").asText();
+
+        HttpResponse<String> created = post("/api/campaigns", """
+                {"title":"MU accumulation","symbol":"MU"}
+                """);
+        assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
+        String campaignId = Json.parse(created.body()).get("id").asText();
+
+        assertThat(post("/api/campaigns/" + campaignId + "/members", """
+                {"type":"TRANSACTION","id":"%s"}
+                """.formatted(tx1)).statusCode()).isEqualTo(201);
+
+        // The roll is PROPOSED through the lot/roll chain — never silently attached.
+        JsonNode proposals = Json.parse(get("/api/campaigns/" + campaignId + "/proposals").body());
+        assertThat(proposals.withArray("proposals").findValuesAsText("id")).contains(tx2);
+        JsonNode view = Json.parse(get("/api/campaigns/" + campaignId).body());
+        assertThat(view.withArray("members").size()).isEqualTo(1);
+
+        assertThat(post("/api/campaigns/" + campaignId + "/members", """
+                {"type":"TRANSACTION","id":"%s"}
+                """.formatted(tx2)).statusCode()).isEqualTo(201);
+        view = Json.parse(get("/api/campaigns/" + campaignId).body());
+        assertThat(view.get("netOptionCashCents").asLong()).isEqualTo(45_000L);
+        assertThat(view.at("/yield/peakCommittedCapitalCents").asLong()).isEqualTo(925_000L);
+        assertThat(view.at("/economicBasis/available").asBoolean()).isFalse();
+        assertThat(view.withArray("receipts").toString()).contains("never the accounting source");
+        assertThat(view.withArray("ledger").size()).isEqualTo(2);
+
+        // Vocabulary boundary at the API: interest requires the explicit campaign tag.
+        String interest = Json.parse(post("/api/portfolio/accounts/" + id + "/transactions", """
+                {"occurredAt":"2026-06-15","eventType":"INTEREST","cashAmountCents":500,
+                 "fillNature":"NOT_APPLICABLE","source":"MANUAL"}
+                """).body()).get("id").asText();
+        HttpResponse<String> untagged = post("/api/campaigns/" + campaignId + "/members", """
+                {"type":"TRANSACTION","id":"%s"}
+                """.formatted(interest));
+        assertThat(untagged.statusCode()).isEqualTo(400);
+        assertThat(untagged.body()).contains("never auto-assigned");
+
+        assertThat(delete("/api/campaigns/" + campaignId + "/members/TRANSACTION/" + tx2)
+                .statusCode()).isEqualTo(200);
+        assertThat(Json.parse(get("/api/campaigns").body()).withArray("campaigns")
+                .findValuesAsText("id")).contains(campaignId);
+
+        JsonNode closed = Json.parse(put("/api/campaigns/" + campaignId, """
+                {"status":"CLOSED","lessonNote":"Do not treat a profitable hedge as an isolated winner."}
+                """).body());
+        assertThat(closed.get("lessonNote").asText()).contains("profitable hedge");
+        assertThat(closed.get("closedAt").asText()).isNotBlank();
+        assertThat(closed.at("/review/finalReview").asBoolean()).isTrue();
+        assertThat(closed.at("/review/authoredVsRealized/available").asBoolean()).isFalse();
+        assertThat(closed.at("/review/authoredVsRealized/note").asText())
+                .contains("no confirmed Plan member");
+        assertThat(closed.at("/review/executionLanes").isArray()).isTrue();
+        String frozenClose = closed.get("closedAt").asText();
+        JsonNode lessonEdit = Json.parse(put("/api/campaigns/" + campaignId, """
+                {"lessonNote":"Price the whole package before changing one leg."}
+                """).body());
+        assertThat(lessonEdit.get("closedAt").asText()).isEqualTo(frozenClose);
+        assertThat(lessonEdit.get("lessonNote").asText()).startsWith("Price the whole package");
+
+        String tooLong = "x".repeat(4_001);
+        HttpResponse<String> rejectedLesson = put("/api/campaigns/" + campaignId,
+                Json.MAPPER.createObjectNode().put("lessonNote", tooLong).toString());
+        assertThat(rejectedLesson.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(get("/api/campaigns/" + campaignId).body()).get("lessonNote").asText())
+                .isEqualTo("Price the whole package before changing one leg.");
     }
 }

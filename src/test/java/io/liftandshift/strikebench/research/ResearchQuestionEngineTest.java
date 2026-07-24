@@ -210,6 +210,11 @@ class ResearchQuestionEngineTest {
     }
 
     @Test
+    void simulatedHistoryKeepsItsDistinctEvidenceLabel() {
+        assertThat(ResearchQuestionEngine.evidenceLabel(Freshness.SIMULATED)).isEqualTo("SIMULATED");
+    }
+
+    @Test
     void tooFewSignalsIsHonest() {
         // A 35% one-day drop essentially never happens in the gentle series → too-few verdict.
         var r = run(engine(walk(), Freshness.EOD), new ResearchQuestionEngine.RunRequest(
@@ -277,8 +282,12 @@ class ResearchQuestionEngineTest {
                 io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP,
                 a.forwardDays(), 1, 0, 0.3, 0, 0, 0, 0, null, 1L, abs.length);
         var sim = new io.liftandshift.strikebench.sim.ScenarioSimulator().runOnPaths(
-                abs, spot,
-                java.util.List.of(new io.liftandshift.strikebench.sim.ScenarioSimulator.SimLeg("BUY", "STOCK", 0, 0, 1)),
+                abs,
+                new io.liftandshift.strikebench.sim.PathPosition(
+                        java.time.LocalDate.parse("2026-07-06"),
+                        java.util.List.of(io.liftandshift.strikebench.model.Leg.stock(
+                                io.liftandshift.strikebench.model.LegAction.BUY, 1,
+                                java.math.BigDecimal.ZERO))),
                 1, spec, null, 0.03, null, null, 0);
         org.assertj.core.api.Assertions.assertThat(sim.paths()).isEqualTo(abs.length);
         double meanTerminal = a.analogPaths().stream().mapToDouble(pp -> pp.getLast() - 1.0).average().orElse(0);

@@ -30,7 +30,6 @@ public record Candidate(
         double liquidityScore,        // 0..1
         String freshness,
         List<String> warnings,
-        double score,                 // 0..100 composite rank
         double confidence,            // 0..1
         String whyConsidered,
         String bestUpside,

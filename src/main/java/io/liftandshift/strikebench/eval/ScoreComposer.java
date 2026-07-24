@@ -6,9 +6,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * THE DecisionPolicy: the one scorer behind every ranked surface (manual ideas, /api/recommend
- * decision ordering, intent ladders, opportunity scans, the Decision page). A hard GATE, a
- * weighted NORMALIZE over named 0..1 components — EXPECTED VALUE included as primary economics —
+ * THE DecisionPolicy: the one scorer behind every ranked surface (Plan Strategy, Research Scout,
+ * decision ordering, intent ladders, and opportunity scans). A hard GATE, a
+ * weighted NORMALIZE over named 0..1 components — realistic-measure expected value included as
+ * primary economics while market-implied EV remains a separate cost disclosure —
  * then a RISK-ADJUST haircut by evidence uncertainty, tail risk and gamma/DTE concentration. The
  * single number never travels without this breakdown, and negative-EV packages are never ranked
  * as if the market were paying them.
@@ -20,7 +21,6 @@ public final class ScoreComposer {
         // ---- GATE: hard validity ----
         List<String> gateFailures = new ArrayList<>();
         if (risk.maxLossCents() <= 0) gateFailures.add("no finite, positive max loss (cannot be risk-screened)");
-        if (evidence.rollup() == EvidenceLevel.UNKNOWN) gateFailures.add("evidence unknown for a required dimension");
         if (cap.incrementalCents() > ctx.buyingPowerCents())
             gateFailures.add("insufficient buying power ($" + dollars(cap.incrementalCents())
                     + " needed vs $" + dollars(ctx.buyingPowerCents()) + ")");
@@ -48,26 +48,28 @@ public final class ScoreComposer {
         } else { rr = 0.8; rrNote = "uncapped/model-dependent upside"; }
         comps.add(comp("Reward vs risk", 0.08, rr, rrNote));
 
-        // EXPECTED VALUE is the primary economics: POP and reward:risk are its ingredients, and
-        // scoring them separately without EV let a low-POP/high-payout package double-dip (the MU
-        // condor scored 0.34 POP but 0.58 reward:risk while its EV was decidedly negative).
+        // EXPECTED VALUE is the primary economics, but the market-implied lane is not an edge
+        // forecast: at executable prices under the market's own risk-neutral measure it mostly
+        // restates spread and fees. Rank within an economic tier by the observed-history
+        // realistic-measure lane when available; missing history is neutral, never silently
+        // replaced by the risk-neutral cost benchmark.
         double evComp;
         String evNote;
-        Long ev = risk.expectedValueCents();
+        Long ev = risk.evHistVolCents();
         if (ev != null && risk.maxLossCents() > 0) {
-            // R9: judged NET of round-trip commissions — a thin edge that fees eat is no edge.
-            // Contract count matches what the ledger actually charges: OPTION legs only —
-            // commissions on a buy-write's stock leg were a phantom tax on hedged structures.
-            long contracts = c.legs() == null ? 0
-                    : c.legs().stream().filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
-                        .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, c.qty());
-            long costs = contracts * ctx.feePerContractCents() * 2
-                    + (c.legs() == null || c.legs().isEmpty() ? 0 : ctx.feePerOrderCents() * 2); // open + close
+            // R9: judged NET of round-trip commissions — a thin edge that fees eat is no edge. THE
+            // one fee formula (EconomicAssessment.roundTripFees) so the score and the verdict never
+            // net different fees off the same EV.
+            long costs = EconomicAssessment.roundTripFees(c, ctx);
             long evNet = ev - costs;
-            evComp = clamp01(0.5 + (double) evNet / (2.0 * risk.maxLossCents())); // -maxLoss -> 0, 0 -> .5, +maxLoss -> 1
-            evNote = String.format("model EV $%s net of ~$%s round-trip fees, vs max loss $%s (risk-neutral)",
-                    dollars(evNet), dollars(costs), dollars(risk.maxLossCents()));
-        } else { evComp = 0.5; evNote = "EV not computable — assumed neutral"; }
+            long scale = EconomicAssessment.realisticPayoffScaleCents(c, risk, ctx);
+            evComp = clamp01(0.5 + (double) evNet / (2.0 * scale));
+            evNote = String.format("realized-volatility scenario EV $%s net of ~$%s round-trip fees, vs structure payoff scale $%s; market-implied EV is disclosed separately as a cost benchmark",
+                    dollars(evNet), dollars(costs), dollars(scale));
+        } else {
+            evComp = 0.5;
+            evNote = "realistic-measure EV unavailable — neutral score; market-implied cost disclosure was not substituted";
+        }
         comps.add(comp("Expected value", 0.35, evComp, evNote));
 
         comps.add(comp("Liquidity", 0.12, clamp01(c.liquidityScore()), "tighter spreads / more open interest score higher"));
@@ -76,14 +78,58 @@ public final class ScoreComposer {
         String capNote;
         if (cap.returnOnCapitalPct() != null) {
             capComp = clamp01(cap.returnOnCapitalPct() / (cap.returnOnCapitalPct() + 50.0));
-            capNote = String.format("%.0f%% best-case return on economic capital", cap.returnOnCapitalPct());
+            capNote = String.format("%.0f%% best-case return on economic exposure", cap.returnOnCapitalPct());
         } else { capComp = 0.4; capNote = "return on capital not defined"; }
         comps.add(comp("Capital efficiency", 0.05, capComp, capNote));
 
-        double evidComp = 1.0 - evidence.rollup().uncertainty() / 5.0;
+        // Missing evidence is a data limitation, not a payoff or account failure. Keep the
+        // package visible for comparison, but give UNKNOWN no evidence-quality credit and let
+        // EconomicAssessment name the unavailable lane instead of calling it mechanical.
+        double evidComp = clamp01(1.0 - evidence.rollup().uncertainty() / 5.0);
         comps.add(comp("Evidence quality", 0.15, evidComp, evidence.rollup().label()));
 
         comps.add(comp("Thesis confidence", 0.15, clamp01(c.confidence()), "engine confidence in the fit"));
+
+        // ---- OBJECTIVE LENS: the declared assignment preference reweights every
+        // assignment-bearing structure. ACCEPT declares indifference and adds no component;
+        // structures with no short legs have nothing to be assigned on and are never touched.
+        DeclaredObjective declared = ctx.declared();
+        String pref = declared == null ? null : declared.assignmentPreference();
+        if (pref != null && !"ACCEPT".equals(pref) && c.assignmentProb() != null) {
+            double p = clamp01(c.assignmentProb());
+            int pct = (int) Math.round(p * 100);
+            boolean acquires = acquiresShares(c);
+            double fit;
+            String note;
+            switch (pref) {
+                case "AVOID" -> {
+                    fit = 1.0 - p;
+                    note = "you declared: avoid assignment — this structure carries a " + pct
+                            + "% chance of being assigned";
+                }
+                case "SEEK" -> {
+                    fit = p;
+                    note = "you declared: seek assignment — a " + pct
+                            + "% chance of being assigned counts in this structure's favor";
+                }
+                case "PREFER_BELOW_BASIS" -> {
+                    fit = acquires ? p : 1.0 - p;
+                    note = acquires
+                            ? "you declared: welcome assignment that adds shares below your basis — "
+                                + pct + "% chance this one buys at its strike"
+                            : "you declared: welcome assignment only when it ADDS shares — this one would "
+                                + "sell yours (" + pct + "% chance), so higher odds score lower";
+                }
+                default -> { fit = 0.5; note = "unrecognized assignment preference — treated as neutral"; }
+            }
+            comps.add(comp("Assignment fit", 0.10, fit, note));
+        }
+        // Composite-objective lenses (registry-driven — see ObjectiveLenses): additional named
+        // components for declared composites like income-while-accumulating.
+        for (var lensComponent : ObjectiveLenses.apply(declared, c, ctx).components()) {
+            comps.add(comp(lensComponent.name(), lensComponent.weight(), lensComponent.value(),
+                    lensComponent.note()));
+        }
 
         double weighted = 0, weight = 0;
         for (var k : comps) { weighted += k.contribution(); weight += k.weight(); }
@@ -102,8 +148,17 @@ public final class ScoreComposer {
         return new ScoreBreakdown(gatePassed, gateFailures, round(normalized), round(riskAdjusted), comps);
     }
 
+    /** Whether this structure's assignment would BUY shares (short puts) rather than sell held ones. */
+    private static boolean acquiresShares(Candidate c) {
+        if ("ACQUIRE".equalsIgnoreCase(c.intent())) return true;
+        if ("EXIT".equalsIgnoreCase(c.intent())) return false;
+        return c.legs() != null && c.legs().stream().anyMatch(l ->
+                "PUT".equalsIgnoreCase(l.type()) && "SELL".equalsIgnoreCase(l.action()));
+    }
+
     private static ScoreBreakdown.Component comp(String name, double weight, double value, String note) {
-        return new ScoreBreakdown.Component(name, weight, round(value), round(weight * value), note);
+        double normalized = clamp01(value);
+        return new ScoreBreakdown.Component(name, weight, round(normalized), round(weight * normalized), note);
     }
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }

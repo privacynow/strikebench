@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
+import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.support.ObservedFixtureProvider;
@@ -18,6 +19,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,6 +30,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MarketDataServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
+
+    @Test
+    void laneTodayResolvesTheObservedTradingDateInEasternRegardlessOfTheHostClockZone() {
+        MarketDataService svc = new MarketDataService(List.of(new FixtureProvider()), List.of(), List.of());
+        // 02:00 UTC on Jan 16 is 21:00 EST on Jan 15 — the US trading date is the 15th. A host clock
+        // in UTC (or any non-Eastern zone) must NOT make the observed "today" the 16th. This pins the
+        // C7 consolidation: laneToday is Eastern by construction, not the deploy host's local zone.
+        Clock utcClock = Clock.fixed(Instant.parse("2026-01-16T02:00:00Z"), java.time.ZoneOffset.UTC);
+        assertThat(svc.laneToday(null, utcClock)).isEqualTo(LocalDate.of(2026, 1, 15));
+        assertThat(svc.laneToday("", utcClock)).isEqualTo(LocalDate.of(2026, 1, 15));
+        // laneNow stays a pure instant — zone-independent.
+        assertThat(svc.laneNow(null, utcClock)).isEqualTo(Instant.parse("2026-01-16T02:00:00Z"));
+    }
+
+    @Test
+    void partialObservedHistoryRechecksSoonerThanCompleteHistory() {
+        assertThat(MarketDataService.candleCacheTtl(true)).isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(MarketDataService.candleCacheTtl(false)).isEqualTo(java.time.Duration.ofHours(1));
+    }
 
     /** Wraps the fixture and counts calls, to observe caching and chain traversal. */
     static final class CountingProvider implements MarketDataProvider {
@@ -48,6 +72,51 @@ class MarketDataServiceTest {
         @Override public List<LocalDate> expirations(String s) { throw new RuntimeException("boom"); }
         @Override public Optional<OptionChain> chain(String s, LocalDate e) { throw new RuntimeException("boom"); }
         @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { throw new RuntimeException("boom"); }
+    }
+
+    /** Empty observed source with counters: empty is a real cacheable result, not an exception. */
+    static final class EmptyCountingProvider implements MarketDataProvider {
+        final AtomicInteger quoteCalls = new AtomicInteger();
+        final AtomicInteger chainCalls = new AtomicInteger();
+        @Override public String name() { return "empty-observed"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES, Domain.OPTIONS); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String s) {
+            quoteCalls.incrementAndGet();
+            try { Thread.sleep(75); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return Optional.empty();
+        }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) {
+            chainCalls.incrementAndGet();
+            return Optional.empty();
+        }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { return List.of(); }
+    }
+
+    static final class GenerationProvider implements MarketDataProvider {
+        final AtomicInteger calls = new AtomicInteger();
+        final CountDownLatch firstEntered = new CountDownLatch(1);
+        final CountDownLatch releaseFirst = new CountDownLatch(1);
+        @Override public String name() { return "generation-observed"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String symbol) {
+            int call = calls.incrementAndGet();
+            if (call == 1) {
+                firstEntered.countDown();
+                try { releaseFirst.await(2, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            String price = call == 1 ? "100.00" : "200.00";
+            return Optional.of(new Quote(symbol, "Generation " + call, new java.math.BigDecimal(price),
+                    null, null, null, null, null, null, true, CLOCK.millis(), name(),
+                    io.liftandshift.strikebench.model.Freshness.DELAYED));
+        }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) { return List.of(); }
     }
 
     /** A provider accidentally mounted in the observed chain but explicitly returning modeled evidence. */
@@ -75,6 +144,56 @@ class MarketDataServiceTest {
     }
 
     @Test
+    void concurrentEmptyReadsSingleflightAndNegativeCacheUntilInvalidated() throws Exception {
+        EmptyCountingProvider p = new EmptyCountingProvider();
+        MarketDataService svc = new MarketDataService(List.of(p), List.of(), List.of());
+        CountDownLatch start = new CountDownLatch(1);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<Optional<Quote>>> calls = java.util.stream.IntStream.range(0, 12)
+                    .mapToObj(i -> executor.submit(() -> {
+                        start.await(2, TimeUnit.SECONDS);
+                        return svc.quote("MISSING");
+                    })).toList();
+            start.countDown();
+            for (Future<Optional<Quote>> call : calls) assertThat(call.get(2, TimeUnit.SECONDS)).isEmpty();
+        }
+        assertThat(p.quoteCalls).hasValue(1);
+        assertThat(svc.quote("MISSING")).isEmpty();
+        assertThat(p.quoteCalls).hasValue(1);
+
+        LocalDate expiry = LocalDate.of(2026, 8, 21);
+        assertThat(svc.chain("MISSING", expiry)).isEmpty();
+        assertThat(svc.chain("MISSING", expiry)).isEmpty();
+        assertThat(p.chainCalls).hasValue(1);
+
+        svc.invalidateAll();
+        assertThat(svc.quote("MISSING")).isEmpty();
+        assertThat(svc.chain("MISSING", expiry)).isEmpty();
+        assertThat(p.quoteCalls).hasValue(2);
+        assertThat(p.chainCalls).hasValue(2);
+    }
+
+    @Test
+    void invalidationStartsANewFlightAndLateOldLoadCannotRepopulateCache() throws Exception {
+        GenerationProvider provider = new GenerationProvider();
+        MarketDataService svc = new MarketDataService(List.of(provider), List.of(), List.of());
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<Optional<Quote>> oldFlight = executor.submit(() -> svc.quote("AAPL"));
+            assertThat(provider.firstEntered.await(1, TimeUnit.SECONDS)).isTrue();
+
+            svc.invalidateAll();
+            Future<Optional<Quote>> newFlight = executor.submit(() -> svc.quote("AAPL"));
+            assertThat(newFlight.get(1, TimeUnit.SECONDS).orElseThrow().last()).isEqualByComparingTo("200.00");
+            provider.releaseFirst.countDown();
+            assertThat(oldFlight.get(1, TimeUnit.SECONDS).orElseThrow().last()).isEqualByComparingTo("100.00");
+        }
+
+        assertThat(provider.calls).hasValue(2);
+        assertThat(svc.quote("AAPL").orElseThrow().last()).isEqualByComparingTo("200.00");
+        assertThat(provider.calls).hasValue(2);
+    }
+
+    @Test
     void observedFailureStaysUnavailableWhileExplicitDemoStillWorks() {
         FixtureProvider fixture = new FixtureProvider(CLOCK);
         MarketDataService svc = new MarketDataService(List.of(new BrokenProvider()), List.of(), List.of());
@@ -88,6 +207,65 @@ class MarketDataServiceTest {
         List<ProviderStatusInfo> quotes = status.get("QUOTES");
         assertThat(quotes).extracting(ProviderStatusInfo::provider).containsExactly("broken");
         assertThat(quotes.stream().filter(s -> s.provider().equals("broken")).findFirst().orElseThrow().state()).isEqualTo("ERROR");
+    }
+
+    @Test
+    void observedProviderGapUsesTheEnginesDurableLastKnownQuoteWithoutChangingItsLane() {
+        MarketDataService svc = new MarketDataService(List.of(new BrokenProvider()), List.of(), List.of());
+        var snapshot = new MarketDataEngine.MarketSnapshot("AAPL", "Apple", new java.math.BigDecimal("316.48"),
+                new java.math.BigDecimal("316.40"), new java.math.BigDecimal("316.50"),
+                new java.math.BigDecimal("315.32"), true, io.liftandshift.strikebench.model.Freshness.DELAYED,
+                "cboe", CLOCK.millis() - 60_000, CLOCK.millis() - 60_000, false, null);
+        svc.setQuoteSnapshotStore(new io.liftandshift.strikebench.market.ports.SnapshotStore() {
+            @Override public void save(MarketDataEngine.MarketSnapshot ignored) {}
+            @Override public List<MarketDataEngine.MarketSnapshot> loadAll() { return List.of(snapshot); }
+            @Override public Optional<MarketDataEngine.MarketSnapshot> load(String symbol) {
+                return "AAPL".equals(symbol) ? Optional.of(snapshot) : Optional.empty();
+            }
+        });
+
+        Quote q = svc.quote("AAPL").orElseThrow();
+        assertThat(q.last()).isEqualByComparingTo("316.48");
+        assertThat(q.freshness()).isEqualTo(io.liftandshift.strikebench.model.Freshness.STALE);
+        assertThat(q.evidence().provenance()).isEqualTo(io.liftandshift.strikebench.model.DataProvenance.OBSERVED);
+        assertThat(svc.quote("MSFT")).isEmpty();
+    }
+
+    @Test
+    void exhaustedOptionProviderServesTheLastKnownWarmChainInsteadOfNothing() {
+        // The live options provider yields nothing (rate-limited / exhausted / absent). Without a
+        // warm store the scan would see "no listed options"; with one, the last-known stored chain
+        // is served (EOD-observed), so a scan reads warm data rather than an empty result.
+        EmptyCountingProvider empty = new EmptyCountingProvider();
+        MarketDataService svc = new MarketDataService(List.of(empty), List.of(), List.of());
+        LocalDate exp = LocalDate.parse("2026-08-21");
+        OptionQuote call = new OptionQuote("AAPL", null, io.liftandshift.strikebench.model.OptionType.CALL,
+                new java.math.BigDecimal("320"), exp, new java.math.BigDecimal("5.00"),
+                new java.math.BigDecimal("5.20"), new java.math.BigDecimal("5.10"), 100L, 500L,
+                0.25, 0.45, null, null, null, CLOCK.millis(), "stored",
+                io.liftandshift.strikebench.model.Freshness.EOD);
+        OptionChain stored = new OptionChain("AAPL", exp, new java.math.BigDecimal("318"),
+                List.of(call), List.of(), CLOCK.millis(), "stored",
+                io.liftandshift.strikebench.model.Freshness.EOD);
+        svc.setWarmOptionStore(new io.liftandshift.strikebench.market.ports.WarmOptionStore() {
+            @Override public Optional<Read> latestChain(String symbol, LocalDate expiration) {
+                return "AAPL".equals(symbol) && exp.equals(expiration)
+                        ? Optional.of(new Read(stored, exp)) : Optional.empty();
+            }
+            @Override public List<LocalDate> latestExpirations(String symbol) {
+                return "AAPL".equals(symbol) ? List.of(exp) : List.of();
+            }
+        });
+
+        assertThat(svc.expirations("AAPL")).containsExactly(exp);
+        OptionChain served = svc.chain("AAPL", exp).orElseThrow();
+        assertThat(served.source()).isEqualTo("stored");
+        assertThat(served.evidence().provenance())
+                .isEqualTo(io.liftandshift.strikebench.model.DataProvenance.OBSERVED);
+        assertThat(served.calls()).hasSize(1);
+        // A symbol with no warm capture still reports nothing — the fallback is not a fabricator.
+        assertThat(svc.expirations("MSFT")).isEmpty();
+        assertThat(svc.chain("MSFT", exp)).isEmpty();
     }
 
     @Test
@@ -123,7 +301,9 @@ class MarketDataServiceTest {
                 new java.math.BigDecimal("101"), new java.math.BigDecimal("99"),
                 new java.math.BigDecimal("100.50"), 1_000, true);
         io.liftandshift.strikebench.market.ports.CandleStore badStore =
-                (symbol, f, t, dataset) -> Optional.of(new CandleSeries(List.of(candle), "fixture", io.liftandshift.strikebench.model.Freshness.FIXTURE));
+                (symbol, f, t, dataset) -> Optional.of(new io.liftandshift.strikebench.market.ports.CandleStore.Read(
+                        new CandleSeries(List.of(candle), "fixture", io.liftandshift.strikebench.model.Freshness.FIXTURE),
+                        CandleCoverage.assess(List.of(candle), f, t)));
         MarketDataService svc = new MarketDataService(List.of(), List.of(), List.of(), badStore);
         assertThat(svc.candleSeries("AAPL", from, to).isEmpty()).isTrue();
     }

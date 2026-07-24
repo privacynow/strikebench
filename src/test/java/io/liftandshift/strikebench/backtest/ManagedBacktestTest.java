@@ -1,9 +1,12 @@
 package io.liftandshift.strikebench.backtest;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.StoredCandleStore;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
+import io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
@@ -11,6 +14,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +27,7 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -68,7 +73,11 @@ class ManagedBacktestTest {
         assertThat(report.concurrentPeak()).isGreaterThanOrEqualTo(1);
         assertThat(report.pricingMode()).isEqualTo("PAYOFF_ONLY");
         assertThat(report.demoUnderlying()).isTrue();
+        assertThat(report.assumptions()).containsKeys("annualRate", "rateSource", "rateProvenance",
+                "fallbackVolatility", "volatilityConvention");
         assertThat(backtester.get(report.id()).get("strategy")).isEqualTo("CREDIT_PUT_SPREAD");
+        assertThat(Json.parse(Json.write(backtester.get(report.id()))))
+                .isEqualTo(Json.parse(Json.write(report)));
 
         for (var trade : report.trades()) {
             assertThat(trade.maxLossCents()).isGreaterThan(0);
@@ -120,16 +129,16 @@ class ManagedBacktestTest {
         Leg shortCall = Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("250"),
                 expiration, 1, BigDecimal.ZERO);
 
-        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, asOf,
-                HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence)).isEqualTo(60_000);
-        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, asOf,
-                HistoricalReplayKernel.PriceIntent.EXIT, false, evidence)).isEqualTo(40_000);
-        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, asOf,
-                HistoricalReplayKernel.PriceIntent.MARK, false, evidence)).isEqualTo(50_000);
-        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, asOf,
-                HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence)).isEqualTo(-40_000);
-        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, asOf,
-                HistoricalReplayKernel.PriceIntent.EXIT, false, evidence)).isEqualTo(-60_000);
+        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence)).isEqualTo(60_000);
+        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.EXIT, false, evidence)).isEqualTo(40_000);
+        assertThat(kernel.valueCents("AAPL", List.of(longCall), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.MARK, false, evidence)).isEqualTo(50_000);
+        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence)).isEqualTo(-40_000);
+        assertThat(kernel.valueCents("AAPL", List.of(shortCall), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.EXIT, false, evidence)).isEqualTo(-60_000);
         assertThat(evidence.observedMarks()).isEqualTo(5);
         assertThat(evidence.totalMarks()).isEqualTo(5);
 
@@ -139,10 +148,21 @@ class ManagedBacktestTest {
                 null, new BigDecimal("6.00"), new BigDecimal("5.00"), "orats");
         Leg missingBidShort = Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("255"),
                 expiration, 1, BigDecimal.ZERO);
-        kernel.valueCents("AAPL", List.of(missingBidShort), 1, 250, 0.30, asOf,
-                HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
+        kernel.valueCents("AAPL", List.of(missingBidShort), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
         assertThat(evidence.observedMarks()).isEqualTo(5);
         assertThat(evidence.totalMarks()).isEqualTo(6);
+
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source,"
+                        + "bid_ask_observed,iv_source,dataset_id) VALUES (?,?,?,?,?,?,?,?,?,1,'vendor','observed')",
+                "AAPL", asOf, expiration, new BigDecimal("260"), "CALL",
+                new BigDecimal("7.00"), new BigDecimal("6.00"), new BigDecimal("6.50"), "orats");
+        Leg crossedLong = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("260"),
+                expiration, 1, BigDecimal.ZERO);
+        kernel.valueCents("AAPL", List.of(crossedLong), 1, 250, 0.30, 0.04, asOf,
+                AnalysisContext.OBSERVED, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
+        assertThat(evidence.observedMarks()).isEqualTo(5); // crossed historical book fell to the model
+        assertThat(evidence.totalMarks()).isEqualTo(7);
     }
 
     @Test
@@ -156,10 +176,81 @@ class ManagedBacktestTest {
                     new BigDecimal("4.00"), new BigDecimal("4.20"), new BigDecimal("4.10"), "orats");
         }
         HistoricalReplayKernel kernel = new HistoricalReplayKernel(market, db);
-        assertThat(kernel.listedExpirationNear("AAPL", asOf, 45, OptionType.PUT)).isEqualTo(expiration);
-        assertThat(kernel.listedExpirationNear("AAPL", asOf, 45, OptionType.CALL)).isNull();
-        assertThat(kernel.listedStrikes("AAPL", asOf, expiration, OptionType.PUT))
+        assertThat(kernel.listedExpirationNear("AAPL", asOf, 45, OptionType.PUT, AnalysisContext.OBSERVED))
+                .isEqualTo(expiration);
+        assertThat(kernel.listedExpirationNear("AAPL", asOf, 45, OptionType.CALL, AnalysisContext.OBSERVED)).isNull();
+        assertThat(kernel.listedStrikes("AAPL", asOf, expiration, OptionType.PUT, AnalysisContext.OBSERVED))
                 .containsExactly(240.0, 245.0);
-        assertThat(kernel.listedStrikes("AAPL", asOf, expiration, OptionType.CALL)).isEmpty();
+        assertThat(kernel.listedStrikes("AAPL", asOf, expiration, OptionType.CALL, AnalysisContext.OBSERVED)).isEmpty();
+    }
+
+    @Test
+    void syntheticReplayNeverSplicesObservedOptionBooksOrStrikeGrids() {
+        LocalDate asOf = LocalDate.parse("2026-03-02");
+        LocalDate expiration = LocalDate.parse("2026-04-17");
+        db.exec("INSERT INTO option_bar(symbol,asof,expiration,strike,opt_type,bid,ask,mark,source," +
+                        "bid_ask_observed,iv_source,dataset_id) VALUES (?,?,?,?,?,?,?,?,?,1,'vendor','observed')",
+                "AAPL", asOf, expiration, new BigDecimal("250"), "CALL",
+                new BigDecimal("4.00"), new BigDecimal("6.00"), new BigDecimal("5.00"), "orats");
+        AnalysisContext scenario = new AnalysisContext(null, "scenario-without-options");
+        HistoricalReplayKernel kernel = new HistoricalReplayKernel(market, db);
+        var evidence = new HistoricalReplayKernel.Evidence();
+        Leg call = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("250"),
+                expiration, 1, BigDecimal.ZERO);
+
+        long modeled = kernel.valueCents("AAPL", List.of(call), 1, 250, 0.30, 0.04, asOf,
+                scenario, HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
+
+        assertThat(modeled).isNotEqualTo(60_000L);
+        assertThat(evidence.observedMarks()).isZero();
+        assertThat(evidence.totalMarks()).isEqualTo(1);
+        assertThat(kernel.listedExpirationNear("AAPL", asOf, 45, OptionType.CALL, scenario)).isNull();
+        assertThat(kernel.listedStrikes("AAPL", asOf, expiration, OptionType.CALL, scenario)).isEmpty();
+    }
+
+    @Test
+    void syntheticBacktestNeverCallsObservedChainProvidersAndLabelsTheModeledRun() {
+        String dataset = "scenario-replay";
+        db.exec("INSERT INTO dataset(id,name,kind,symbol,spec) VALUES(?,?,?,?,'{}'::jsonb)",
+                dataset, "Scenario replay", "SYNTHETIC_PURE", "AAPL");
+        LocalDate day = LocalDate.parse("2026-01-02");
+        int index = 0;
+        while (!day.isAfter(LocalDate.parse("2026-06-01"))) {
+            if (day.getDayOfWeek().getValue() <= 5) {
+                BigDecimal close = BigDecimal.valueOf(240 + index * 0.25);
+                db.exec("INSERT INTO underlying_bar(symbol,d,open,high,low,close,source,observed,dataset_id) " +
+                                "VALUES(?,?,?,?,?,?,?,0,?)", "AAPL", day, close, close, close, close,
+                        "scenario", dataset);
+                index++;
+            }
+            day = day.plusDays(1);
+        }
+        AtomicInteger historicalCalls = new AtomicInteger();
+        HistoricalOptionsProvider observedProvider = new HistoricalOptionsProvider() {
+            @Override public String name() { return "observed-spy"; }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> historicalChain(
+                    String symbol, LocalDate asOf, LocalDate expiration) {
+                historicalCalls.incrementAndGet();
+                return java.util.Optional.empty();
+            }
+            @Override public List<LocalDate> historicalExpirations(String symbol, LocalDate asOf) {
+                historicalCalls.incrementAndGet();
+                return List.of(asOf.plusDays(30));
+            }
+        };
+        MarketDataService scenarioMarket = new MarketDataService(List.of(), List.of(), List.of(),
+                new StoredCandleStore(db));
+        Backtester scenarioBacktester = new Backtester(scenarioMarket, List.of(observedProvider),
+                new AppConfig(Map.of()), db, CLOCK);
+
+        Backtester.BacktestReport report = scenarioBacktester.run(
+                new Backtester.BacktestRequest("AAPL", "DEBIT_CALL_SPREAD", "2026-02-02", "2026-05-29",
+                        30, 5, 1, 0.0, 10_000_000L), new AnalysisContext(null, dataset));
+
+        assertThat(historicalCalls).hasValue(0);
+        assertThat(report.pricingMode()).isEqualTo("MODELED_FROM_UNDERLYING");
+        assertThat(report.confidence()).isEqualTo("modeled (generated underlying)");
+        assertThat(report.notes()).anyMatch(note -> note.contains("generated analysis dataset " + dataset)
+                && note.contains("not mixed"));
     }
 }

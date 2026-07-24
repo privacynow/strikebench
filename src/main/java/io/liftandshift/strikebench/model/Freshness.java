@@ -15,6 +15,15 @@ public enum Freshness {
     // its own lane, but it must never roll up as more trustworthy than real (even delayed) data.
     private static final Freshness[] RANK = {REALTIME, DELAYED, EOD, STALE, SIMULATED, MODELED, FIXTURE, MISSING};
 
+    /**
+     * A LIVE observed tier — a real feed that a staleness gate may downgrade to STALE once it ages
+     * past its window. Kept lock-step with {@code DataEvidence.executableIn}'s observed-age branch
+     * (see FreshnessObservedLiveTest): adding a live tier must update both.
+     */
+    public boolean isObservedLive() {
+        return this == REALTIME || this == DELAYED;
+    }
+
     /** The less trustworthy of the two — for aggregating a position's overall freshness. */
     public static Freshness worse(Freshness a, Freshness b) {
         if (a == null) return b == null ? MISSING : b;

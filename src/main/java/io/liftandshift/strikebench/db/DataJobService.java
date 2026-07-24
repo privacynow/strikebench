@@ -7,11 +7,15 @@ import io.liftandshift.strikebench.market.SnapshotService;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -23,7 +27,7 @@ import java.util.concurrent.Executors;
 /**
  * The Data Center's background-job engine: cancellable, resumable, idempotent jobs with per-item
  * progress. Each kind's per-item work is idempotent (engine warm, snapshot upsert, underlying
- * backfill upsert, CSV ingest upsert), so retrying a failed job re-does only what's missing.
+ * history-sync upsert, CSV ingest upsert), so retrying a failed job re-does only what's missing.
  * Jobs run on a small daemon pool; orphaned RUNNING jobs (server restarted mid-run) are marked
  * FAILED on boot so they can be retried.
  */
@@ -33,7 +37,7 @@ public final class DataJobService {
 
     public static final List<String> KINDS = List.of(
             "warm_universe", "refresh_now", "snapshot_now", "sync_underlying",
-            "backfill_underlying", "import_options_csv");
+            "import_options_csv");
 
     private final Db db;
     private final Clock clock;
@@ -43,11 +47,15 @@ public final class DataJobService {
     private final UniverseService universe;
     private final AppConfig cfg;
     private final DataConnectorCatalog connectors;
+    private final MarketDataMaintenanceGate maintenance;
 
     private final ExecutorService jobPool = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "data-job"); t.setDaemon(true); return t;
     });
     private final Map<String, Boolean> cancelRequested = new ConcurrentHashMap<>();
+    private final java.util.Set<String> activeRunners = ConcurrentHashMap.newKeySet();
+    private final Object lifecycleLock = new Object();
+    private boolean acceptingJobs = true;
     private io.liftandshift.strikebench.util.EventBus events; // optional: live progress to the UI
     private Runnable dataChangedHook = () -> {}; // clears negative/history caches after durable writes
     private volatile long lastProgressPublishMs = 0;
@@ -79,6 +87,13 @@ public final class DataJobService {
     public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
                           UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
                           DataConnectorCatalog connectors) {
+        this(db, clock, engine, snapshots, backfill, universe, cfg, connectors,
+                new MarketDataMaintenanceGate());
+    }
+
+    public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
+                          UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
+                          DataConnectorCatalog connectors, MarketDataMaintenanceGate maintenance) {
         this.db = db;
         this.clock = clock;
         this.engine = engine;
@@ -87,7 +102,10 @@ public final class DataJobService {
         this.universe = universe;
         this.cfg = cfg;
         this.connectors = connectors;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
     }
+
+    MarketDataMaintenanceGate maintenanceGate() { return maintenance; }
 
     public record DataJob(String id, String kind, String status, int total, int done, long rowsWritten,
                           String message, String error, String createdAt, String updatedAt) {}
@@ -127,17 +145,75 @@ public final class DataJobService {
         List<String> labels = itemsFor(k, p);
         String id = Ids.newId("job");
         String paramsJson = Json.write(p);
-        db.tx(c -> {
-            Db.execOn(c, "INSERT INTO data_job (id, kind, status, params, total, done, user_id) VALUES (?,?,?,?::jsonb,?,0,?)",
-                    id, k, "QUEUED", paramsJson, labels.size(), userId);
-            for (int i = 0; i < labels.size(); i++) {
-                Db.execOn(c, "INSERT INTO data_job_item (job_id, seq, label, status) VALUES (?,?,?,?)",
-                        id, i, labels.get(i), "PENDING");
+        String owner = OwnerScope.id(userId);
+        synchronized (lifecycleLock) {
+            if (!acceptingJobs) {
+                throw new IllegalStateException(
+                        "Data maintenance is paused for a safe reset; retry after the reset completes.");
             }
-            return null;
-        });
-        jobPool.submit(() -> run(id, k, p, labels, userId));
+            maintenance.write(() -> db.tx(c -> {
+                OwnerScope.ensure(c, owner);
+                Db.execOn(c, "INSERT INTO data_job (id, kind, status, params, total, done, user_id) VALUES (?,?,?,?::jsonb,?,0,?)",
+                        id, k, "QUEUED", paramsJson, labels.size(), owner);
+                for (int i = 0; i < labels.size(); i++) {
+                    Db.execOn(c, "INSERT INTO data_job_item (job_id, seq, label, status) VALUES (?,?,?,?)",
+                            id, i, labels.get(i), "PENDING");
+                }
+                return null;
+            }));
+            activeRunners.add(id);
+            try {
+                jobPool.submit(() -> run(id, k, p, labels, owner));
+            } catch (RuntimeException submitFailure) {
+                activeRunners.remove(id);
+                lifecycleLock.notifyAll();
+                db.exec("UPDATE data_job SET status='FAILED', error='background worker unavailable', updated_at=now() WHERE id=?", id);
+                throw submitFailure;
+            }
+        }
         return get(id).job();
+    }
+
+    /** Stop admission, cancel queued/running work, and wait until no provider writer remains. */
+    public void quiesceForReset(Duration timeout) {
+        Duration bounded = timeout == null || timeout.isNegative() ? Duration.ZERO : timeout;
+        synchronized (lifecycleLock) {
+            acceptingJobs = false;
+        }
+        List<String> activeIds = db.query(
+                "SELECT id FROM data_job WHERE status IN ('QUEUED','RUNNING') ORDER BY created_at",
+                r -> r.str("id"));
+        activeIds.forEach(this::cancel);
+
+        long deadline = System.nanoTime() + bounded.toNanos();
+        synchronized (lifecycleLock) {
+            while (!activeRunners.isEmpty()) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    acceptingJobs = true;
+                    throw new IllegalStateException(
+                            "Active data maintenance did not stop safely; the reset was not started.");
+                }
+                try {
+                    long millis = Math.max(1L, Math.min(1_000L,
+                            java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining)));
+                    lifecycleLock.wait(millis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    acceptingJobs = true;
+                    throw new IllegalStateException(
+                            "Data reset was interrupted before background writers stopped.", e);
+                }
+            }
+        }
+    }
+
+    /** Re-open admission after a reset transaction completes or aborts. */
+    public void resumeAfterReset() {
+        synchronized (lifecycleLock) {
+            acceptingJobs = true;
+            lifecycleLock.notifyAll();
+        }
     }
 
     public void cancel(String jobId) {
@@ -151,7 +227,7 @@ public final class DataJobService {
     /** Re-run a finished/failed job with the same kind + params (idempotent → effectively a resume). */
     public DataJob retry(String jobId, String userId) {
         JobView v = get(jobId);
-        if (v.job() == null) throw new java.util.NoSuchElementException("no such job: " + jobId);
+        if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job: " + jobId);
         JsonNode params = v.paramsJson() == null ? Json.obj() : Json.parse(v.paramsJson());
         Map<String, Object> p = Json.read(params.toString(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
         return start(v.job().kind(), p, userId);
@@ -176,7 +252,7 @@ public final class DataJobService {
         return new JobView((DataJob) head.getFirst()[0], items, (String) head.getFirst()[1]);
     }
 
-    /** The owner user_id of a job (null = local/anonymous), or null if the job doesn't exist. */
+    /** The owner user_id of a job, or null if the job doesn't exist. */
     public String ownerOf(String jobId) {
         return db.query("SELECT user_id FROM data_job WHERE id=?", r -> r.str("user_id"), jobId)
                 .stream().findFirst().orElse(null);
@@ -195,11 +271,11 @@ public final class DataJobService {
         return db.query(
                 "SELECT id, kind, status, total, done, rows_written, message, error, "
               + "created_at::text ca, updated_at::text ua FROM data_job "
-              + "WHERE user_id IS NOT DISTINCT FROM ? ORDER BY created_at DESC LIMIT ?",
+              + "WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
                 r -> new DataJob(r.str("id"), r.str("kind"), r.str("status"), (int) r.lng("total"),
                         (int) r.lng("done"), r.lng("rows_written"), r.str("message"), r.str("error"),
                         r.str("ca"), r.str("ua")),
-                userId, lim);
+                OwnerScope.id(userId), lim);
     }
 
     public List<DataJob> recent(int limit) {
@@ -215,6 +291,18 @@ public final class DataJobService {
     public boolean hasActive(String kind) {
         return db.query("SELECT count(*) c FROM data_job WHERE kind=? AND status IN ('QUEUED','RUNNING')",
                 r -> r.lng("c"), kind).getFirst() > 0;
+    }
+
+    /**
+     * Durable retry gate based on the terminal job timestamp. The scheduler uses this instead of
+     * an in-memory timer, so a restart cannot erase a provider-friendly cooldown.
+     */
+    boolean retryReady(String jobId, Duration cooldown) {
+        if (jobId == null || cooldown == null) return true;
+        OffsetDateTime threshold = OffsetDateTime.ofInstant(
+                clock.instant().minus(cooldown.isNegative() ? Duration.ZERO : cooldown), ZoneOffset.UTC);
+        return db.query("SELECT count(*) c FROM data_job WHERE id=? AND updated_at<=?",
+                r -> r.lng("c"), jobId, threshold).getFirst() > 0;
     }
 
     // ---- Runner ----
@@ -233,8 +321,11 @@ public final class DataJobService {
                 }
                 String label = labels.get(seq);
                 try {
-                    ItemResult res = work(id, kind, label, params, userId);
-                    setItem(id, seq, res.rows > 0 || res.ok ? "DONE" : "SKIPPED", res.rows, res.note);
+                    ItemResult res = maintenance.write(() -> work(id, kind, label, params, userId));
+                    // Rows written do not imply requested coverage is complete. Preserve PARTIAL
+                    // distinctly so the durable schedule can retry only the still-missing ranges.
+                    setItem(id, seq, res.ok ? "DONE" : res.rows > 0 ? "PARTIAL" : "SKIPPED",
+                            res.rows, res.note);
                     totalRows += res.rows;
                 } catch (Exception e) {
                     failed++;
@@ -273,6 +364,10 @@ public final class DataJobService {
         } finally {
             if (totalRows > 0 && !dataChangedNotified) notifyDataChanged();
             cancelRequested.remove(id);
+            synchronized (lifecycleLock) {
+                activeRunners.remove(id);
+                lifecycleLock.notifyAll();
+            }
         }
     }
 
@@ -320,19 +415,17 @@ public final class DataJobService {
                         + " underlying + " + r.optionRows() + " option bars"
                         + (r.errors().isEmpty() ? "" : " (" + r.errors().size() + " errors)"));
             }
-            case "backfill_underlying", "sync_underlying" -> {
+            case "sync_underlying" -> {
                 LocalDate to = dateParam(params, "to", LocalDate.now(clock));
                 LocalDate completed = DataSyncScheduler.latestCompletedSession(clock);
                 if (to.isAfter(completed)) to = completed;
                 LocalDate from = dateParam(params, "from", to.minusYears(yearsParam(params)));
                 String source = strParam(params, "source", "auto").trim().toLowerCase(Locale.ROOT);
-                if ("sync_underlying".equals(kind)) {
-                    source = connectors.requireAutomated(source).key();
-                    // Compact Alpha access intentionally fetches only the recent window. Do not
-                    // pretend a five-year request can be fulfilled without the entitled full endpoint.
-                    if ("alphavantage".equals(source) && !cfg.alphaVantageFullHistoryEnabled()) {
-                        from = from.isBefore(to.minusDays(160)) ? to.minusDays(160) : from;
-                    }
+                source = connectors.requireAutomated(source).key();
+                // Compact Alpha access intentionally fetches only the recent window. Do not
+                // pretend a five-year request can be fulfilled without the entitled full endpoint.
+                if ("alphavantage".equals(source) && !cfg.alphaVantageFullHistoryEnabled()) {
+                    from = from.isBefore(to.minusDays(160)) ? to.minusDays(160) : from;
                 }
                 var r = backfill.backfill(label, from, to, source, userId, jobId);
                 return new ItemResult(r.rows(), r.complete(), r.note());
@@ -356,7 +449,7 @@ public final class DataJobService {
 
     private List<String> itemsFor(String kind, Map<String, Object> params) {
         return switch (kind) {
-            case "warm_universe", "refresh_now", "backfill_underlying", "sync_underlying" -> symbolsParam(params);
+            case "warm_universe", "refresh_now", "sync_underlying" -> symbolsParam(params);
             case "snapshot_now" -> List.of("active universe");
             case "import_options_csv" -> List.of(strParam(params, "path", ""));
             default -> List.of();

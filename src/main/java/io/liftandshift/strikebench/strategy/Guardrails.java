@@ -31,7 +31,7 @@ public final class Guardrails {
     /**
      * @param quotes current contract quotes aligned by index with legs (null entries for stock legs)
      * @param spot current underlying price, may be null when unknown
-     * @param lockedShareLots 100-share lots of HELD underlying shares the account will lock to this
+     * @param lockedShares exact HELD underlying shares the account will lock to this
      *                        trade (total across qty). Held shares cover short calls the way an
      *                        explicit stock leg would — they turn a "naked" call into a covered one.
      */
@@ -47,7 +47,7 @@ public final class Guardrails {
             boolean allowUndefinedRisk,
             boolean earningsSoon,
             boolean exDividendSoon,
-            long lockedShareLots
+            long lockedShares
     ) {
         /** Historical shape without held-share coverage. */
         public Proposal(StrategyFamily family, List<Leg> legs, int qty, List<OptionQuote> quotes,
@@ -59,6 +59,17 @@ public final class Guardrails {
     }
 
     public static Verdict check(Proposal p) {
+        return check(p, false);
+    }
+
+    /** Strategy discovery may analyze same-lane prior-close observations when they are labeled
+     * stale. This never relaxes placement: trade preview and commitment continue to call
+     * {@link #check(Proposal)}, where stale marks are blocking. */
+    public static Verdict checkForAnalysis(Proposal p) {
+        return check(p, true);
+    }
+
+    private static Verdict check(Proposal p, boolean analysisOnly) {
         List<String> blocks = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
@@ -81,6 +92,7 @@ public final class Guardrails {
 
         // Marks / chain availability
         boolean anyOption = p.legs().stream().anyMatch(l -> !l.isStock());
+        boolean staleAnalysisMarks = false;
         for (int i = 0; i < p.legs().size(); i++) {
             Leg leg = p.legs().get(i);
             if (leg.isStock()) continue;
@@ -91,7 +103,12 @@ public final class Guardrails {
                 continue;
             }
             if (q.markFreshness() == Freshness.STALE || q.markFreshness() == Freshness.MISSING) {
-                blocks.add("Quote for " + q.occSymbol() + " is " + q.markFreshness() + "; refusing to size a trade against it");
+                if (analysisOnly && q.markFreshness() == Freshness.STALE) {
+                    staleAnalysisMarks = true;
+                } else {
+                    blocks.add("Quote for " + q.occSymbol() + " is " + q.markFreshness()
+                            + "; refusing to size a trade against it");
+                }
             }
             // Impossible price: an option marked below intrinsic vs the same feed's underlying
             if (p.spot() != null && q.mid() != null) {
@@ -118,17 +135,18 @@ public final class Guardrails {
         // Risk shape. Held shares locked to the trade act as call cover: evaluate the position
         // as if the locked lots were explicit long-stock legs (that is exactly what they are,
         // economically — the trade layer enforces the lock).
-        int lotsPerUnit = p.qty() > 0 ? (int) Math.min(Integer.MAX_VALUE, p.lockedShareLots() / p.qty()) : 0;
+        long sharesPerUnit = p.qty() > 0 ? p.lockedShares() / p.qty() : 0;
         List<Leg> riskLegs = p.legs();
-        if (lotsPerUnit > 0 && p.spot() != null) {
+        if (sharesPerUnit > 0 && p.spot() != null) {
             riskLegs = new ArrayList<>(p.legs());
-            riskLegs.add(Leg.stock(LegAction.BUY, lotsPerUnit, p.spot()));
+            riskLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(sharesPerUnit), p.spot()));
         }
         boolean mixedExpirations = p.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations) {
             long net = PayoffCurve.of(p.legs(), p.qty()).entryNetPremiumCents();
-            boolean shareCovered = lotsPerUnit > 0 && CoverageCheck.uncoveredShorts(p.legs(), lotsPerUnit).isEmpty();
+            boolean shareCovered = sharesPerUnit > 0
+                    && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
             if (net >= 0 && !p.allowUndefinedRisk() && !shareCovered) {
                 blocks.add("Multi-expiration credit positions can carry undefined risk after the near leg expires; blocked by default");
             }
@@ -137,16 +155,23 @@ public final class Guardrails {
             // calendars, inverted diagonals, net-short ratios that look like harmless "debits"
             // to a premium-sign test.
             if (!p.allowUndefinedRisk()) {
-                blocks.addAll(CoverageCheck.uncoveredShorts(p.legs(), lotsPerUnit));
+                blocks.addAll(CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit));
             }
             if (net < 0 && -net > p.buyingPowerCents()) {
                 blocks.add("Debit " + Money.fmt(-net) + " exceeds available buying power " + Money.fmt(p.buyingPowerCents()));
             }
         } else {
             PayoffCurve optionCurve = PayoffCurve.of(p.legs(), p.qty());
+            // Held shares cover the call side. A cash-secured short put beside them (covered
+            // strangle) fails the pure share-coverage test yet the COMBINED position is bounded —
+            // the shares-plus-legs curve is the arbiter of defined risk, not string matching.
+            boolean coverageClean = sharesPerUnit > 0
+                    && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
+            PayoffCurve combined = riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty()) : optionCurve;
             boolean shareCovered = optionCurve.maxLossUnbounded()
-                    && lotsPerUnit > 0 && CoverageCheck.uncoveredShorts(p.legs(), lotsPerUnit).isEmpty();
-            PayoffCurve curve = shareCovered && riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty()) : optionCurve;
+                    && sharesPerUnit > 0
+                    && (coverageClean || !combined.maxLossUnbounded());
+            PayoffCurve curve = shareCovered ? combined : optionCurve;
             if (curve.maxLossUnbounded() && !p.allowUndefinedRisk()) {
                 blocks.add("Undefined (unlimited) maximum loss — blocked. Add a protective wing to cap the risk.");
             } else if (!curve.maxLossUnbounded()) {
@@ -158,7 +183,7 @@ public final class Guardrails {
                 }
             }
             if (shareCovered) {
-                warnings.add("Short calls are covered by " + p.lockedShareLots() * 100
+                warnings.add("Short calls are covered by " + p.lockedShares()
                         + " held shares locked to this trade — upside above the strike is given up, and the shares keep their own downside");
             }
         }
@@ -169,8 +194,8 @@ public final class Guardrails {
             warnings.add("0DTE position: gamma risk is extreme and the value can go to zero within hours");
         }
         if (p.earningsSoon()) {
-            warnings.add("Event-like news detected (earnings/guidance keywords in recent headlines) — "
-                    + "implied volatility and price can gap around events. This is a news signal, not a confirmed calendar date.");
+            warnings.add("Earnings evidence falls inside this position's life — implied volatility and price can gap "
+                    + "around the event. The event receipt identifies whether the date is confirmed or estimated.");
         }
         if (p.exDividendSoon()) {
             warnings.add("Ex-dividend date falls before expiration");
@@ -183,7 +208,9 @@ public final class Guardrails {
                 }
             }
         }
-        if (p.freshness() == Freshness.DELAYED || p.freshness() == Freshness.EOD) {
+        if (analysisOnly && (staleAnalysisMarks || p.freshness() == Freshness.STALE)) {
+            warnings.add("Analysis uses STALE same-lane observations from the prior close — it is not executable now");
+        } else if (p.freshness() == Freshness.DELAYED || p.freshness() == Freshness.EOD) {
             warnings.add("Pricing uses " + p.freshness() + " data — real quotes may differ");
         }
 

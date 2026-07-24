@@ -71,6 +71,7 @@ public final class ResearchQuestionEngine {
 
     /** Bumped whenever detection/stats change — persisted study keys must not collide across engines. */
     static final int ENGINE_VERSION = 3;
+    public static final String MODEL_VERSION = "research-question-" + ENGINE_VERSION;
 
     /** Order-sensitive fold over every bar's date + close: any content change changes the hash. */
     static String contentHash(java.util.List<Candle> candles, String source) {
@@ -120,9 +121,7 @@ public final class ResearchQuestionEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();
 
-        LocalDate laneToday = market.simInstant(worldId)
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate laneToday = market.laneToday(worldId, clock);
         LocalDate to = parseDate(req.to(), laneToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
@@ -493,9 +492,10 @@ public final class ResearchQuestionEngine {
         };
     }
 
-    private static String evidenceLabel(Freshness f) {
+    static String evidenceLabel(Freshness f) {
         if (f == Freshness.MISSING) return "MISSING";
         if (f == Freshness.FIXTURE) return "DEMO_FIXTURE";
+        if (f == Freshness.SIMULATED) return "SIMULATED";
         if (f == Freshness.EOD || f == Freshness.STALE) return "OBSERVED_EOD";
         if (f == Freshness.DELAYED) return "OBSERVED_DELAYED";
         if (f == Freshness.REALTIME) return "OBSERVED_LIVE";

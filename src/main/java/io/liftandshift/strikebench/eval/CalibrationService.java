@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.Ids;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.time.Clock;
 import java.util.ArrayList;
@@ -28,8 +29,12 @@ public final class CalibrationService {
     /** Records that an evaluation was surfaced to a user (the calibration sample). */
     public String record(String evaluationId, String userId, String context) {
         String id = Ids.newId("rec");
-        db.exec("INSERT INTO recommendation(id, user_id, evaluation_id, context) VALUES (?,?,?,?)",
-                id, userId, evaluationId, context);
+        db.tx(c -> {
+            String owner = OwnerScope.ensure(c, userId);
+            Db.execOn(c, "INSERT INTO recommendation(id, user_id, evaluation_id, context) VALUES (?,?,?,?)",
+                    id, owner, evaluationId, context);
+            return null;
+        });
         return id;
     }
 
@@ -63,12 +68,12 @@ public final class CalibrationService {
                 SELECT e.pop AS pop, e.score AS score, r.outcome_pnl_cents AS pnl
                 FROM recommendation r JOIN strategy_evaluation e ON e.id = r.evaluation_id
                 WHERE r.outcome_pnl_cents IS NOT NULL
-                  AND (r.user_id = ?::text OR (?::text IS NULL AND r.user_id IS NULL))
+                  AND r.user_id=?::text
                 """, r -> new double[]{
                         r.dblOrNull("pop") == null ? -1 : r.dbl("pop"),
                         r.dblOrNull("score") == null ? -1 : r.dbl("score"),
                         r.lng("pnl")
-                }, userId, userId);
+                }, OwnerScope.id(userId));
 
         int n = rows.size();
         long wins = rows.stream().filter(x -> x[2] > 0).count();

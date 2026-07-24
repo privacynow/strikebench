@@ -23,10 +23,16 @@ import java.util.Set;
  */
 public final class ObservedFixtureProvider implements MarketDataProvider {
     private final FixtureProvider fixture;
+    private final String sourceName;
 
-    public ObservedFixtureProvider(Clock clock) { this.fixture = new FixtureProvider(clock); }
+    public ObservedFixtureProvider(Clock clock) { this(clock, "observed-test-feed"); }
 
-    @Override public String name() { return "observed-test-feed"; }
+    public ObservedFixtureProvider(Clock clock, String sourceName) {
+        this.fixture = new FixtureProvider(clock);
+        this.sourceName = sourceName;
+    }
+
+    @Override public String name() { return sourceName; }
     @Override public Set<Domain> domains() { return fixture.domains(); }
     @Override public List<SymbolMatch> lookup(String query) { return fixture.lookup(query); }
 

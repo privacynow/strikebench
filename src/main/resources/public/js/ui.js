@@ -8,11 +8,11 @@
     attrs = attrs || {};
     Object.keys(attrs).forEach(function (k) {
       var v = attrs[k];
-      if (v === null || v === undefined) return;
+      if (v === null || v === undefined || v === false) return;
       if (k === 'class') node.className = v;
       else if (k === 'html') node.innerHTML = v;
       else if (k.indexOf('on') === 0 && typeof v === 'function') node.addEventListener(k.slice(2), v);
-      else node.setAttribute(k, v);
+      else node.setAttribute(k, v === true ? '' : v);
     });
     for (var i = 2; i < arguments.length; i++) append(node, arguments[i]);
     return node;
@@ -23,6 +23,55 @@
     if (Array.isArray(child)) { child.forEach(function (c) { append(node, c); }); return; }
     node.appendChild(typeof child === 'string' || typeof child === 'number'
       ? document.createTextNode(String(child)) : child);
+  }
+
+  var fieldSequence = 0;
+
+  /** Keep every visible form label programmatically tied to its control. */
+  function field(labelContent, control, opts) {
+    opts = opts || {};
+    if (!control.id) control.id = 'ui-field-' + (++fieldSequence);
+    var labelAttrs = { for: control.id };
+    if (opts.labelClass) labelAttrs.class = opts.labelClass;
+    var wrap = el('div', { class: 'field' + (opts.className ? ' ' + opts.className : '') },
+      el('label', labelAttrs, labelContent), control);
+    if (opts.hint) wrap.appendChild(el('span', { class: 'muted small' }, opts.hint));
+    return wrap;
+  }
+
+  /** Apply one roving-tabstop keyboard contract to locally composed tab lists. */
+  function bindTabList(list, onActivate) {
+    list._activateTab = onActivate;
+    if (!list._tabKeysBound) {
+      list._tabKeysBound = true;
+      list.addEventListener('keydown', function (event) {
+        var current = event.target.closest('[role="tab"]');
+        if (!current || !list.contains(current)) return;
+        var tabs = Array.from(list.querySelectorAll('[role="tab"]')).filter(function (tab) {
+          return !tab.disabled && getComputedStyle(tab).display !== 'none';
+        });
+        var index = tabs.indexOf(current), next = null;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = tabs[(index + 1) % tabs.length];
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = tabs[(index - 1 + tabs.length) % tabs.length];
+        else if (event.key === 'Home') next = tabs[0];
+        else if (event.key === 'End') next = tabs[tabs.length - 1];
+        if (!next) return;
+        event.preventDefault();
+        tabs.forEach(function (tab) {
+          tab.setAttribute('aria-selected', tab === next ? 'true' : 'false');
+          tab.tabIndex = tab === next ? 0 : -1;
+        });
+        next.focus();
+        if (typeof list._activateTab === 'function') list._activateTab(next, tabs.indexOf(next));
+      });
+    }
+    list.syncTabs = function () {
+      var tabs = Array.from(list.querySelectorAll('[role="tab"]'));
+      var selected = tabs.find(function (tab) { return tab.getAttribute('aria-selected') === 'true'; }) || tabs[0];
+      tabs.forEach(function (tab) { tab.tabIndex = tab === selected ? 0 : -1; });
+    };
+    list.syncTabs();
+    return list;
   }
 
   // ---- formatting ----
@@ -112,6 +161,7 @@
     if (!evidence) return null;
     if (typeof evidence === 'string') evidence = { provenance: evidence };
     var p = String(evidence.provenance || 'MISSING').toUpperCase();
+    if (p === 'UNKNOWN') p = 'MISSING';
     var age = String(evidence.age || '').toUpperCase();
     var compact = !!(opts && opts.compact);
     var label = p === 'DEMO' ? (compact ? 'DEMO' : 'DEMO · FABRICATED')
@@ -128,8 +178,38 @@
       : p === 'DEMO' ? 'badge-warn'
       : p === 'SIMULATED' ? 'badge-sim'
       : p === 'MODELED' || p === 'MIXED' ? 'badge-caution' : 'badge-dim';
-    return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : ''),
-      title: evidence.source ? ('Source: ' + evidence.source) : null }, label);
+    // The badge already states the user-facing evidence contract. Provider ids belong in
+    // Data diagnostics; exposing them as native hover text leaks implementation detail and
+    // creates a second tooltip that merely competes with the visible label.
+    return el('span', { class: 'badge evidence-badge ' + cls + (opts && opts.className ? ' ' + opts.className : '') }, label);
+  }
+
+  function economicVerdictLabel(value) {
+    var verdict = String(value || 'UNAVAILABLE').toUpperCase();
+    return ({
+      FAVORABLE: 'Worth investigating',
+      MIXED: 'Promising, incomplete',
+      UNFAVORABLE: 'Not supported',
+      UNAVAILABLE: 'Incomplete evidence',
+      MECHANICALLY_INELIGIBLE: 'Not tradable as entered'
+    })[verdict] || 'Not assessed';
+  }
+
+  function rehearsalSelectionLabel(value) {
+    return ({ RANDOM: 'Random', TYPICAL: 'Typical', FAVORABLE: 'Favorable', ADVERSE: 'Adverse',
+      STRESS: 'Stress', SAMPLE: 'Selected sample' })[String(value || '').toUpperCase()] || 'Selected';
+  }
+
+  function positionStatusLabel(value) {
+    return ({ ACTIVE: 'Open', CLOSED: 'Closed', EXPIRED: 'Expired', DELETED: 'Voided',
+      CANCELLED: 'Cancelled' })[String(value || '').toUpperCase()] || 'Complete';
+  }
+
+  function statusLabel(value) {
+    return ({ RUNNING: 'Running', PAUSED: 'Paused', READY: 'Ready', PREPARING: 'Preparing',
+      FINISHED: 'Finished', FAILED: 'Failed', PENDING: 'Pending', QUEUED: 'Queued', DONE: 'Complete',
+      CANCELLED: 'Cancelled', ACTIVE: 'Active', DISABLED: 'Off', SKIPPED: 'Skipped' })[
+      String(value || '').toUpperCase()] || 'Unknown';
   }
 
   function explain(text) {
@@ -168,6 +248,13 @@
       el('div', { class: 'label' }, label),
       el('div', { class: 'value' }, valueNode),
       explainText ? explain(explainText) : null);
+  }
+
+  /** Compact decision fact used by strategy, scenario, and comparison surfaces. */
+  function fact(label, valueNode, className) {
+    return el('div', { class: 'fact' + (className ? ' ' + className : '') },
+      el('div', { class: 'f-label' }, label),
+      el('div', { class: 'f-value' }, valueNode));
   }
 
   var _bmSeq = 0;
@@ -239,13 +326,36 @@
    * a detail block. detail can be a node or a lazy function () => node.
    */
   function expandable(summaryContent, detail, opts) {
-    opts = opts || {};
+    opts = typeof opts === 'boolean' ? { open: opts } : (opts || {});
+    if (!expandableOccurrenceResetQueued) {
+      expandableOccurrenceResetQueued = true;
+      Promise.resolve().then(function () {
+        expandableOccurrences.clear();
+        expandableOccurrenceResetQueued = false;
+      });
+    }
     var body = el('div', { class: 'xp-body' });
     var built = false;
-    var chevron = el('span', { class: 'xp-chevron' }, '\u203A');
-    var head = el('button', { class: 'xp-head', 'aria-expanded': 'false' }, chevron, summaryContent);
-    var wrap = el('div', { class: 'xp' + (opts.open ? ' open' : '') }, head, body);
-    function toggle(force) {
+    var chevron = el('span', { class: 'xp-chevron', 'aria-hidden': 'true' }, '\u203A');
+    var head = el('button', { type: 'button', class: 'xp-head', 'aria-expanded': 'false' }, chevron, summaryContent);
+    var route = (window.location && window.location.hash || '#/').split('?')[0];
+    var summaryKey = String(head.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    var baseKey = route + '::' + (opts.stateKey || summaryKey);
+    var occurrence = expandableOccurrences.get(baseKey) || 0;
+    expandableOccurrences.set(baseKey, occurrence + 1);
+    var stateKey = opts.persist === false ? null : baseKey + (opts.stateKey ? '' : '::' + occurrence);
+    var persisted = stateKey && expandableState.has(stateKey) ? expandableState.get(stateKey) : null;
+    var defaultOpen = opts.open === 'desktop'
+      ? !!(window.matchMedia && window.matchMedia('(min-width: 900px)').matches)
+      : opts.open === 'mobile'
+        ? !!(window.matchMedia && window.matchMedia('(max-width: 899px)').matches)
+        : !!opts.open;
+    // Re-evaluate a viewport default on each mount until the user explicitly toggles
+    // this stable key. A deliberate user choice then wins for the session.
+    var initiallyOpen = persisted === null ? defaultOpen : persisted;
+    var wrap = el('div', { class: 'xp' + (initiallyOpen ? ' open' : ''),
+      'data-expandable-key': stateKey || null }, head, body);
+    function toggle(force, remember) {
       var open = force !== undefined ? force : !wrap.classList.contains('open');
       if (open && !built) {
         append(body, typeof detail === 'function' ? detail() : detail);
@@ -253,10 +363,58 @@
       }
       wrap.classList.toggle('open', open);
       head.setAttribute('aria-expanded', String(open));
+      if (stateKey && remember !== false) {
+        expandableState.set(stateKey, open);
+        if (expandableState.size > 300) expandableState.delete(expandableState.keys().next().value);
+      }
     }
-    head.addEventListener('click', function () { toggle(); });
-    if (opts.open) toggle(true);
+    head.addEventListener('click', function () { toggle(undefined, true); });
+    if (initiallyOpen) toggle(true, false);
     return wrap;
+  }
+
+  var expandableState = new Map();
+  var expandableOccurrences = new Map();
+  var expandableOccurrenceResetQueued = false;
+
+  function beginExpandableRender() {
+    expandableOccurrences.clear();
+  }
+
+  function vocabulary(key, display) {
+    var item = window.Learn && Learn.VOCABULARY && Learn.VOCABULARY[key];
+    if (!item) throw new Error('Unknown product vocabulary key: ' + key);
+    var node = term(item.infoKey, display || item.label);
+    node.setAttribute('data-vocabulary', key);
+    return node;
+  }
+
+  function vocabularyText(key) {
+    var item = window.Learn && Learn.VOCABULARY && Learn.VOCABULARY[key];
+    if (!item) throw new Error('Unknown product vocabulary key: ' + key);
+    return item.label;
+  }
+
+  function actionFeedback(kind, title, detail) {
+    return el('div', { class: 'inline-action-feedback ' + (kind || 'ok'), role: kind === 'danger' ? 'alert' : 'status',
+      'aria-live': kind === 'danger' ? 'assertive' : 'polite' },
+      icon(kind === 'danger' ? 'warn' : kind === 'caution' ? 'info' : 'check', 16),
+      el('div', {}, el('b', {}, title), detail ? el('span', {}, detail) : null));
+  }
+
+  function setActionFeedback(host, kind, title, detail) {
+    if (!host) return null;
+    var old = host.querySelector(':scope > .inline-action-feedback');
+    if (old) old.remove();
+    var next = actionFeedback(kind, title, detail);
+    host.appendChild(next);
+    return next;
+  }
+
+  function positionWorkbench(editor, visual) {
+    return el('div', { class: 'position-entry-workbench' },
+      el('section', { class: 'position-entry-legs' }, editor),
+      el('aside', { class: 'position-entry-visual', 'aria-live': 'polite' }, visual));
   }
 
   /** A term of art with tap-to-define glossary popover (Beginner level). */
@@ -269,7 +427,21 @@
       if (infoUsed.indexOf(key) < 0) infoUsed.push(key);
       var t2 = el('button', { class: 'term', type: 'button', 'data-term': key,
         'aria-expanded': 'false' }, display || word);
-      t2.addEventListener('click', function (e) { e.stopPropagation(); openInfo(t2, key); });
+      // The word IS the hover target (no injected icon), so it already matches the desktop
+      // model — just make it snappy and hover-dismissable like the label path.
+      var hoverTimer = null;
+      t2.addEventListener('mouseenter', function () {
+        if (!hoverCapable()) return;
+        cancelInfoClose();
+        hoverTimer = setTimeout(function () { openInfo(t2, key, { hover: true }); }, 160);
+      });
+      t2.addEventListener('mouseleave', function () {
+        if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+        if (infoPop && infoPop.__forTerm === key) scheduleInfoClose();
+      });
+      t2.addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation(); openInfo(t2, key);
+      });
       t2.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t2, key); });
       return t2;
     }
@@ -279,7 +451,7 @@
     }
     var node = el('button', { class: 'term', type: 'button' }, display || word);
     node.addEventListener('click', function (e) {
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       showPopover(node, word, def);
     });
     return node;
@@ -311,7 +483,7 @@
   }
 
   /** Confirmation modal. body may be a node; onConfirm is async. */
-  function confirmModal(title, bodyNode, confirmLabel, onConfirm, danger) {
+  function confirmModal(title, bodyNode, confirmLabel, onConfirm, danger, onCancel) {
     var root = document.getElementById('modal-root');
     var returnFocus = document.activeElement;
     var titleId = 'modal-title-' + Date.now().toString(36);
@@ -365,6 +537,7 @@
       closed = true;
       document.removeEventListener('keydown', onKey);
       root.innerHTML = '';
+      if (!force && typeof onCancel === 'function') onCancel();
       if (returnFocus && returnFocus.isConnected && returnFocus.focus) returnFocus.focus();
     }
     root.appendChild(backdrop);
@@ -600,16 +773,13 @@
       svg.append('text').attr('class', 'tick').attr('x', padL - 8).attr('y', y(t) + 4)
         .attr('text-anchor', 'end').text(fmtNum(t, t >= 1000 ? 0 : 2));
     });
-    var labelEvery = Math.max(1, Math.round(bars.length / 5));
+    // Five evenly-spaced labels include both endpoints. The old modulo+append approach could
+    // create a sixth label only a few sessions before the final date, making those two collide.
+    var labelCount = Math.min(5, bars.length);
     var labelIndexes = [];
-    bars.forEach(function (b, i) { if (i % labelEvery === 0) labelIndexes.push(i); });
-    var lastIndex = bars.length - 1;
-    if (labelIndexes[labelIndexes.length - 1] !== lastIndex) {
-      var prior = labelIndexes[labelIndexes.length - 1];
-      var priorX = prior === undefined ? -Infinity : x(bars[prior].date) + x.bandwidth() / 2;
-      var lastX = x(bars[lastIndex].date) + x.bandwidth() / 2;
-      if (lastX - priorX < 86) labelIndexes.pop();
-      labelIndexes.push(lastIndex);
+    for (var li = 0; li < labelCount; li++) {
+      var labelIndex = labelCount === 1 ? 0 : Math.round(li * (bars.length - 1) / (labelCount - 1));
+      if (labelIndexes.indexOf(labelIndex) < 0) labelIndexes.push(labelIndex);
     }
     labelIndexes.forEach(function (i) {
       var b = bars[i];
@@ -716,7 +886,7 @@
     });
 
     var zeroY = Y(0);
-    var line = points.map(function (p, i) { return (i ? 'L' : 'M') + X(xs[i]).toFixed(1) + ' ' + Y(ys[i]).toFixed(1); }).join(' ');
+    var line = xs.map(function (x, i) { return (i ? 'L' : 'M') + X(x).toFixed(1) + ' ' + Y(ys[i]).toFixed(1); }).join(' ');
     // gain/loss shading against the zero line
     var closed = line + ' L' + X(xMax).toFixed(1) + ' ' + zeroY.toFixed(1) + ' L' + X(xMin).toFixed(1) + ' ' + zeroY.toFixed(1) + ' Z';
     var clipId = 'clip' + Math.floor(Math.random() * 1e9);
@@ -797,7 +967,10 @@
         var nx = X(k);
         lineEl.setAttribute('x1', nx); lineEl.setAttribute('x2', nx);
         grip.setAttribute('cx', nx);
-        placeLabel(nx, k === cur ? h.label : h.label.replace(/[\d.]+$/, '') + k);
+        var nextLabel = k === cur ? h.label : h.label.replace(/[\d.]+$/, '') + k;
+        grip.setAttribute('aria-valuenow', String(k));
+        grip.setAttribute('aria-valuetext', nextLabel);
+        placeLabel(nx, nextLabel);
       }
       grip.addEventListener('pointerdown', function (ev) {
         ev.stopPropagation(); ev.preventDefault();
@@ -842,7 +1015,6 @@
         var next = ev.key === 'ArrowLeft' ? inDomain[Math.max(0, idx - 1)] : inDomain[Math.min(inDomain.length - 1, idx + 1)];
         if (next !== undefined && next !== snapped) {
           snapped = next; moveTo(next);
-          grip.setAttribute('aria-valuenow', String(next));
         }
       });
     });
@@ -877,7 +1049,12 @@
     if (opts.baseline !== undefined && series[series.length - 1].value < opts.baseline) {
       svg.classList.add('chart-down');
     }
+    var compareKey = opts.compareKey;
+    var hasComparison = !!compareKey && series.every(function (p) {
+      return Number.isFinite(Number(p[compareKey]));
+    });
     var ys = series.map(function (p) { return p.value; });
+    if (hasComparison) ys = ys.concat(series.map(function (p) { return Number(p[compareKey]); }));
     var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
     if (yMin === yMax) { yMin -= 1; yMax += 1; }
     var yPad = (yMax - yMin) * 0.08;
@@ -904,9 +1081,17 @@
       d: line + ' L' + X(series.length - 1).toFixed(1) + ' ' + (H - padB) + ' L' + padL + ' ' + (H - padB) + ' Z'
     }));
     svg.appendChild(svgEl('path', { class: 'line', d: line }));
+    if (hasComparison) {
+      var compareLine = series.map(function (p, i) {
+        return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(Number(p[compareKey])).toFixed(1);
+      }).join(' ');
+      svg.appendChild(svgEl('path', { class: 'benchmark-line', d: compareLine }));
+    }
 
-    [0, Math.floor(series.length / 2), series.length - 1].forEach(function (i, idx) {
-      var anchor = idx === 0 ? 'start' : idx === 1 ? 'middle' : 'end';
+    [0, Math.floor(series.length / 2), series.length - 1].filter(function (i, idx, all) {
+      return all.indexOf(i) === idx;
+    }).forEach(function (i) {
+      var anchor = i === 0 ? 'start' : i === series.length - 1 ? 'end' : 'middle';
       var t = svgEl('text', { x: X(i), y: H - padB + 16, 'text-anchor': anchor });
       t.textContent = series[i].date;
       svg.appendChild(t);
@@ -919,16 +1104,23 @@
       i = Math.max(0, Math.min(series.length - 1, i));
       var v = series[i].value;
       var pct = first ? ((v - first) / Math.abs(first)) * 100 : 0;
+      var lines = [
+        series[i].date,
+        { text: (opts.primaryLabel ? opts.primaryLabel + ' ' : '') + (opts.money ? fmtMoney(v) : fmtNum(v, 2)), cls: '' },
+        { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' }
+      ];
+      if (hasComparison) {
+        var comparison = Number(series[i][compareKey]);
+        lines.push({ text: (opts.compareLabel || 'Comparison') + ' ' + (opts.money ? fmtMoney(comparison) : fmtNum(comparison, 2)), cls: '' });
+      }
       return {
         x: X(i), y: Y(v),
-        lines: [
-          series[i].date,
-          // Full precision under the cursor even when the axis rounds (prices deserve cents)
-          { text: opts.money ? fmtMoney(v) : fmtNum(v, 2), cls: '' },
-          { text: (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% in window', cls: pct >= 0 ? 'gain' : 'loss' }
-        ]
+        // Full precision under the cursor even when the axis rounds (prices deserve cents).
+        lines: lines
       };
-    }, 'Price history chart. Use left and right arrow keys to inspect dates and values.');
+    }, hasComparison
+      ? 'Account value and benchmark comparison chart. Use left and right arrow keys to inspect dates and values.'
+      : 'Price history chart. Use left and right arrow keys to inspect dates and values.');
   }
 
   // ---- SVG icon system: the ONLY pictographic language in the app (no emoji, ever). ----
@@ -954,6 +1146,9 @@
     check: '<path d="M5 12.5l4.2 4.2L19 7"/>',
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/>',
     magnifier: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4L21 21"/>',
+    archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/>',
+    trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
     'chevron-right': '<path d="M9 5l7 7-7 7"/>'
   };
   function icon(name, size) {
@@ -980,9 +1175,31 @@
   }
   function maxProfitLabel(strategy, structureGroup, value, beginner, legs) {
     var kind = profitCeilingKind(strategy, structureGroup, value, legs);
-    if (kind === 'finite') return fmtMoney(value);
-    if (kind === 'model-dependent') return 'model-dependent';
+    if (kind === 'finite') {
+      // A "best possible profit" that is not positive is not a profit — never launder a loss
+      // (or a break-even) as a gain under a "best possible profit" heading.
+      if (value <= 0) {
+        return beginner ? fmtMoney(value) + ' — this position cannot make money'
+          : fmtMoney(value) + ' (no profit possible)';
+      }
+      return fmtMoney(value);
+    }
+    if (kind === 'model-dependent') {
+      return beginner ? 'No single dollar ceiling'
+        : 'No fixed front-expiry ceiling';
+    }
     return beginner ? 'no fixed ceiling' : 'uncapped';
+  }
+
+  /**
+   * The fact/stat tone for a "best possible profit" cell. Green ('f-ok') only when genuine
+   * upside exists; a non-positive ceiling reads as loss/neutral, never green — the AMD
+   * bear-call-priced-as-a-debit made a −$175 "max profit" show up green and broke trust.
+   */
+  function maxProfitTone(strategy, structureGroup, value, legs) {
+    var kind = profitCeilingKind(strategy, structureGroup, value, legs);
+    if (kind === 'finite' && value <= 0) return 'f-danger';
+    return 'f-ok';
   }
 
   /**
@@ -1012,7 +1229,14 @@
   var infoUsed = window.__usedInfoTerms = window.__usedInfoTerms || [];
   var infoTrigger = null; // the trigger that owns the open bubble (focus returns to it on close)
   var infoSuppressFocusOpen = false; // Escape's return-focus must not immediately reopen
+  var infoCloseTimer = null; // grace timer for hover-opened bubbles (pointer can travel into it)
+  function hoverCapable() {
+    return !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+  }
+  function cancelInfoClose() { if (infoCloseTimer) { clearTimeout(infoCloseTimer); infoCloseTimer = null; } }
+  function scheduleInfoClose() { cancelInfoClose(); infoCloseTimer = setTimeout(function () { closeInfo(); }, 180); }
   function closeInfo(returnFocus) {
+    cancelInfoClose();
     if (infoPop) {
       if (infoPop._detachTriggerKey) infoPop._detachTriggerKey();
       infoPop.remove(); infoPop = null;
@@ -1037,8 +1261,13 @@
   // structural anchoring, no scroll listeners, no floating over unrelated numbers. Resize
   // still closes (the layout genuinely changed).
   function onInfoScroll() { closeInfo(); }
-  function openInfo(trigger, key) {
+  function openInfo(trigger, key, opts) {
     if (!trigger.isConnected) return; // a re-render replaced the trigger mid-hover
+    var anchorEl = (opts && opts.anchor && opts.anchor.isConnected) ? opts.anchor : trigger;
+    var hover = !!(opts && opts.hover);
+    // Re-opening the SAME term that is already showing (pointer re-entered the label) is a no-op
+    // beyond cancelling the pending close — never flicker the bubble.
+    if (infoPop && infoPop.__forTerm === key && infoPop.isConnected) { cancelInfoClose(); return; }
     closeInfo();
     var def = window.Learn && Learn.INFO && Learn.INFO[key];
     if (!def) return;
@@ -1048,6 +1277,7 @@
     // role=dialog, not tooltip: it CONTAINS an interactive control (the expand button), and the
     // trigger references it via aria-describedby so screen readers announce the content.
     infoPop = el('div', { class: 'info-pop', role: 'dialog', 'aria-label': def.short, id: 'info-pop' });
+    infoPop.__forTerm = key;
     trigger.setAttribute('aria-expanded', 'true');
     trigger.setAttribute('aria-describedby', 'info-pop');
     var body = el('div', { class: 'info-short' }, def.short);
@@ -1078,8 +1308,14 @@
       if (ev.key === 'Tab') { ev.preventDefault(); closeInfo(true); }
     });
     infoPop._detachTriggerKey = function () { trigger.removeEventListener('keydown', onTriggerKey); };
+    // A hover-opened bubble stays alive while the pointer is inside it, and dismisses on leave —
+    // the standard hover-card grace so the pointer can travel from label into the bubble.
+    if (hover) {
+      infoPop.addEventListener('mouseenter', cancelInfoClose);
+      infoPop.addEventListener('mouseleave', scheduleInfoClose);
+    }
     function place() {
-      var r = trigger.getBoundingClientRect();
+      var r = anchorEl.getBoundingClientRect();
       var w = infoPop.offsetWidth, h = infoPop.offsetHeight;
       var left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8) + window.scrollX;
       var top = r.bottom + 6 + window.scrollY;
@@ -1094,29 +1330,53 @@
       window.addEventListener('resize', onInfoScroll, true);
     }, 0);
   }
-  /** A visible, quiet info trigger for a registry term. Never pairs with a native title. */
+  /**
+   * The explanation affordance for a registry term. DESKTOP (fine pointer): the LABEL that
+   * hosts this trigger is the hover target — the explanation pops on hovering the label, and
+   * the injected 'i' is hidden by CSS so it can never break the label's baseline or spacing.
+   * TOUCH/keyboard: the visible baseline 'i' remains a tap/focus target. One deliberate carve-out
+   * from card navigation (stopPropagation) so the info tap never also opens the surrounding card.
+   */
   function info(termKey) {
     if (infoUsed.indexOf(termKey) < 0) infoUsed.push(termKey);
     var t = el('button', { class: 'info-trigger', type: 'button', 'data-term': termKey,
       'aria-expanded': 'false', 'aria-label': 'What does this mean?' }, 'i');
-    var hoverTimer = null;
-    t.addEventListener('mouseenter', function () {
-      hoverTimer = setTimeout(function () { openInfo(t, termKey); }, 550);
-    });
-    t.addEventListener('mouseleave', function () {
-      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
-      // the bubble persists so the pointer can travel into it; outside-click/Escape closes
-    });
     t.addEventListener('click', function (ev) {
-      // Info triggers sometimes live inside a destination card. Their one deliberate
-      // exception to card navigation must suppress both bubbling and the anchor default.
       ev.preventDefault(); ev.stopPropagation(); openInfo(t, termKey);
     });
     t.addEventListener('focus', function () { if (!infoSuppressFocusOpen) openInfo(t, termKey); });
     t.addEventListener('blur', function () { setTimeout(function () {
       if (infoPop && !infoPop.contains(document.activeElement) && document.activeElement !== t) closeInfo();
     }, 150); });
+    bindInfoHost(t, termKey);
     return t;
+  }
+
+  /**
+   * After the caller wires this trigger into its label, adopt the label (parent) as the
+   * desktop hover target: hovering anywhere on the label opens the explanation, anchored to
+   * the label. Deferred a microtask so the parent link exists (el() appends children
+   * synchronously). No-op on touch — the visible 'i' handles taps there.
+   */
+  function bindInfoHost(trigger, termKey) {
+    Promise.resolve().then(function () {
+      var host = trigger.parentNode;
+      if (!host || host.nodeType !== 1 || host.__infoHostBound) return;
+      host.__infoHostBound = true;
+      host.classList.add('has-info');
+      var openTimer = null;
+      host.addEventListener('mouseenter', function () {
+        if (!hoverCapable()) return;
+        cancelInfoClose();
+        openTimer = setTimeout(function () {
+          openInfo(trigger, termKey, { hover: true, anchor: host });
+        }, 160);
+      });
+      host.addEventListener('mouseleave', function () {
+        if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+        if (infoPop && infoPop.__forTerm === termKey) scheduleInfoClose();
+      });
+    });
   }
 
   /**
@@ -1129,6 +1389,11 @@
     opts = opts || {};
     var h = opts.height || 40;
     if (!spark || !spark.available || !spark.closes || spark.closes.length < 2) {
+      if (opts.quietMissing) {
+        return el('div', { class: 'spark spark-empty spark-empty-quiet', style: 'height:' + h + 'px',
+          'aria-label': opts.missingText || 'Price history unavailable' },
+          el('span', { class: 'muted' }, opts.missingText || 'No chart'));
+      }
       return el('div', { class: 'spark spark-empty', style: 'height:' + h + 'px' },
         el('span', { class: 'muted' }, 'history unavailable'), info('historycoverage'));
     }
@@ -1338,15 +1603,129 @@
     return wrap;
   }
 
+  /*
+   * Control-language primitives (Program ONE §3). A parameter control is never a bare
+   * listbox: it is a purpose-built choice with a plain label, explanation coverage, and a
+   * LIVE CONSEQUENCE line that says what the current value means before anything runs.
+   * Level is a lens: Expert sees the same control with its underlying values revealed —
+   * never a different control, never a different outcome.
+   *
+   * cfg: { label, info?, options: [{ value, label, sub?, detail? }], value, onChange(value),
+   *       consequence?(value) -> string|Node|Promise, revealDetails? ('expert'|true|false),
+   *       multi?: false, name? }
+   * Returns a node with .value() and .set(value) so callers re-render nothing to read it.
+   */
+  function choiceControl(kind, cfg) {
+    var options = cfg.options || [];
+    if (!options.length) throw new Error('choiceControl needs options');
+    var current = cfg.value !== undefined ? cfg.value : options[0].value;
+    var beginner = window.Learn && Learn.currentLevel && Learn.currentLevel() === 'beginner';
+    var reveal = cfg.revealDetails === true || (cfg.revealDetails === 'expert' && !beginner);
+    var group = el('div', { class: 'choice-group choice-' + kind, role: 'radiogroup',
+      'aria-label': typeof cfg.label === 'string' ? cfg.label : (cfg.name || 'Choice') });
+    var consequenceHost = cfg.consequence ? el('div', { class: 'control-consequence muted', 'aria-live': 'polite' }) : null;
+    var consequenceToken = 0;
+
+    function paintConsequence() {
+      if (!consequenceHost) return;
+      var token = ++consequenceToken;
+      var result = cfg.consequence(current);
+      function apply(value) {
+        if (token !== consequenceToken) return;
+        consequenceHost.innerHTML = '';
+        append(consequenceHost, value);
+      }
+      if (result && typeof result.then === 'function') {
+        consequenceHost.classList.add('pending');
+        result.then(function (value) { consequenceHost.classList.remove('pending'); apply(value); },
+          function () { consequenceHost.classList.remove('pending'); });
+      } else {
+        apply(result);
+      }
+    }
+    function paintButtons() {
+      group.innerHTML = '';
+      var hasActive = options.some(function (option) { return option.value === current; });
+      options.forEach(function (option, optionIndex) {
+        var active = option.value === current;
+        group.appendChild(el('button', { type: 'button', role: 'radio',
+          class: 'choice-option' + (active ? ' active' : ''),
+          'data-value': String(option.value),
+          'aria-checked': active ? 'true' : 'false',
+          tabindex: active || (!hasActive && optionIndex === 0) ? '0' : '-1',
+          onclick: function () { select(option.value, true); },
+          onkeydown: function (e) {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            var index = options.findIndex(function (o) { return o.value === current; });
+            // With an explicit blank value there is no selected radio yet. Navigation starts
+            // from the button that actually owns focus, not from the synthetic index -1.
+            if (index < 0) index = optionIndex;
+            var next = options[(index + (e.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length];
+            select(next.value, true);
+          } },
+          el('span', { class: 'choice-option-label' }, option.label),
+          option.sub ? el('span', { class: 'choice-option-sub muted' }, option.sub) : null,
+          reveal && option.detail !== undefined
+            ? el('span', { class: 'choice-option-detail' }, String(option.detail)) : null));
+      });
+    }
+    function select(value, focus) {
+      if (value === current) return;
+      current = value;
+      paintButtons();
+      paintConsequence();
+      if (focus) {
+        var active = group.querySelector('.choice-option.active');
+        if (active) active.focus();
+      }
+      if (cfg.onChange) cfg.onChange(value);
+    }
+
+    var labelNode = cfg.label
+      ? el('div', { class: 'field-label' }, cfg.label, cfg.info ? UI.info(cfg.info) : null)
+      : null;
+    var wrap = el('div', { class: 'field choice-field', id: cfg.id || null }, labelNode, group, consequenceHost);
+    paintButtons();
+    paintConsequence();
+    wrap.value = function () { return current; };
+    wrap.set = function (value) { select(value); };
+    return wrap;
+  }
+  function segmented(cfg) { return choiceControl('segmented', cfg); }
+  function chipSet(cfg) { return choiceControl('chips', cfg); }
+
+  /**
+   * Simulation lineage (Program ONE §2.3): one ensemble per plan-context. This chip names
+   * the exact stored simulation a surface is quoting, so the fan at the hypothesis and the
+   * outcomes on a structure are visibly the SAME simulation — never a second, unexplained one.
+   * ref: ApiResponses.EnsembleRef { id, fingerprint, basis }.
+   */
+  function lineageChip(ref, note) {
+    if (!ref || !ref.fingerprint) return null;
+    var shortPrint = String(ref.fingerprint).slice(0, 6);
+    return el('span', { class: 'chip lineage-chip',
+      title: 'Simulation ' + shortPrint + (ref.basis ? ' · ' + ref.basis : '')
+        + (note ? ' · ' + note : '') + ' — every band quotes this same stored simulation.' },
+      el('span', { class: 'chip-label' }, 'Simulation', UI.info('simulationLineage')),
+      el('b', {}, '#' + shortPrint, note ? el('span', { class: 'muted' }, ' · ' + note) : null));
+  }
+
   window.UI = {
+    segmented: segmented,
+    chipSet: chipSet,
+    lineageChip: lineageChip,
     info: info,
     sparkline: sparkline,
     symbolContext: symbolContext,
     fmtDate: fmtDate,
     el: el,
+    field: field,
+    bindTabList: bindTabList,
     icon: icon,
     profitCeilingKind: profitCeilingKind,
     maxProfitLabel: maxProfitLabel,
+    maxProfitTone: maxProfitTone,
     skeleton: skeleton,
     rangeChart: rangeChart,
     brandMark: brandMark,
@@ -1360,10 +1739,15 @@
     delta: delta,
     freshnessBadge: freshnessBadge,
     evidenceBadge: evidenceBadge,
+    economicVerdictLabel: economicVerdictLabel,
+    rehearsalSelectionLabel: rehearsalSelectionLabel,
+    positionStatusLabel: positionStatusLabel,
+    statusLabel: statusLabel,
     explain: explain,
     alertBox: alertBox,
     toast: toast,
     stat: stat,
+    fact: fact,
     chip: chip,
     table: table,
     spinner: spinner,
@@ -1375,6 +1759,12 @@
     lineChart: lineChart,
     candleChart: candleChart,
     expandable: expandable,
-    term: term
+    beginExpandableRender: beginExpandableRender,
+    term: term,
+    vocabulary: vocabulary,
+    vocabularyText: vocabularyText,
+    actionFeedback: actionFeedback,
+    setActionFeedback: setActionFeedback,
+    positionWorkbench: positionWorkbench
   };
 })();

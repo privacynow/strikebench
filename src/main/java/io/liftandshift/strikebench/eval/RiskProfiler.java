@@ -19,6 +19,8 @@ public final class RiskProfiler {
 
     private static final double[] MOVES = {-0.20, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20};
     private static final double TAIL_MOVE = 0.20;
+    private static final String TERMINAL_PAYOFF_SCHEMA = "risk-terminal-payoff-1";
+    private static final String TERMINAL_PAYOFF_MODEL = "payoff-curve-1";
 
     public RiskProfile profile(Candidate c, EvalContext ctx) {
         long maxLoss = Math.max(0, c.combinedMaxLossCents() != null
@@ -26,23 +28,69 @@ public final class RiskProfiler {
         Long maxProfit = c.maxProfitCents();
 
         List<RiskProfile.Scenario> scenarios = new ArrayList<>();
+        RiskProfile.TerminalPayoff terminalPayoff;
         long worstPnl = 0;
         boolean have = false;
-        try {
-            CurveInput input = curveInput(c, ctx);
-            PayoffCurve pc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+        boolean exactLossBounded = false;
+        long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
+                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
+                .map(LegView::expiration).distinct().count();
+        String expiration = c.legs() == null ? null : c.legs().stream()
+                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
+                .map(LegView::expiration).findFirst().orElse(null);
+        if (distinctExpirations > 1) {
+            terminalPayoff = unavailableTerminalPayoff(
+                    "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
+        } else try {
+            PayoffCurve pc = payoffCurve(c, ctx);
+            exactLossBounded = !pc.maxLossUnbounded();
             BigDecimal spot = cents(ctx.underlyingCents());
-            for (double m : MOVES) {
+            double spotD = spot.doubleValue();
+            // The SAME risk-neutral lognormal that owns pop — used only to weight each checkpoint
+            // by its probability mass (Voronoi bins over MOVES). Null when no ATM IV / degenerate.
+            io.liftandshift.strikebench.pricing.LognormalTerminal term =
+                    (ctx.atmIv() != null && ctx.atmIv() > 0 && spotD > 0 && ctx.daysToExpiry() > 0)
+                            ? io.liftandshift.strikebench.pricing.LognormalTerminal.of(
+                                    spotD, ctx.atmIv(), ctx.daysToExpiry() / 365.0, ctx.riskFreeRate())
+                            : null;
+            for (int i = 0; i < MOVES.length; i++) {
+                double m = MOVES[i];
                 BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
                 long pnl = pc.profitAtCents(s);
-                scenarios.add(new RiskProfile.Scenario(m, pnl));
+                Double prob = null;
+                if (term != null) {
+                    double lo = i == 0 ? 0 : spotD * (1.0 + (MOVES[i - 1] + m) / 2.0);
+                    double hiEdge = i == MOVES.length - 1
+                            ? Double.POSITIVE_INFINITY : spotD * (1.0 + (m + MOVES[i + 1]) / 2.0);
+                    double mass = (Double.isInfinite(hiEdge) ? 1.0 : term.cdf(hiEdge)) - term.cdf(lo);
+                    prob = io.liftandshift.strikebench.util.Numbers.round4(Math.max(0, Math.min(1, mass)));
+                }
+                scenarios.add(new RiskProfile.Scenario(m, pnl, prob));
                 worstPnl = have ? Math.min(worstPnl, pnl) : pnl;
                 have = true;
             }
+            // A single-expiration package has one exact terminal curve. Time spreads require the
+            // supplied-ensemble valuation model instead, so they deliberately expose no false
+            // single-date polyline here.
+            var points = pc.chartPoints(spot).stream()
+                    .map(p -> new RiskProfile.PayoffPoint(p.price(), p.profitCents()))
+                    .toList();
+            terminalPayoff = new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA,
+                    TERMINAL_PAYOFF_MODEL, !points.isEmpty(), ctx.underlyingCents(), expiration,
+                    "EXPIRATION_INTRINSIC", "CAPTURED_CANDIDATE_NET", false, points,
+                    points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
         } catch (RuntimeException e) {
             // Degrade to extremes-only rather than fail the whole evaluation.
+            terminalPayoff = unavailableTerminalPayoff(
+                    "The exact terminal payoff could not be produced from the captured candidate.");
         }
-        long tailLoss = have ? Math.max(0, -worstPnl) : maxLoss;
+        // The visible +/-20% scenarios are checkpoints, not the complete tail envelope. For an
+        // exact bounded curve the tail receipt is the pre-known maximum loss even when a distant
+        // wing lies outside that scenario grid. Undefined-risk structures retain the modeled
+        // stress loss. This keeps the headline risk from understating the same max-loss receipt.
+        long tailLoss = exactLossBounded
+                ? maxLoss
+                : have ? Math.max(0, -worstPnl) : maxLoss;
         // The HISTORICAL-VOL SCENARIO lane: the same EV integral at REALIZED volatility (zero
         // drift). When implied >> realized, market-implied EV of short premium is negative while
         // this scenario EV is positive — that gap IS the volatility risk premium, and the two
@@ -50,15 +98,11 @@ public final class RiskProfiler {
         Long evHistVol = null;
         String basisNote = String.format("market EV = present-value risk-neutral approximation "
                 + "(market IV, r=%.2f%%, q=0 assumed); pre-commission", ctx.riskFreeRate() * 100);
-        long distinctExpirations = c.legs() == null ? 0 : c.legs().stream()
-                .filter(l -> l.expiration() != null && !l.expiration().isBlank())
-                .map(LegView::expiration).distinct().count();
         if (distinctExpirations <= 1
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
             try {
-                CurveInput input = curveInput(c, ctx);
-                PayoffCurve ppc = PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+                PayoffCurve ppc = payoffCurve(c, ctx);
                 double t = ctx.daysToExpiry() / 365.0;
                 evHistVol = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
                 basisNote += "; history EV = realized-vol " + Math.round(ctx.realizedVol30() * 100)
@@ -68,7 +112,12 @@ public final class RiskProfiler {
             basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
         return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
-                scenarios, evHistVol, basisNote);
+                scenarios, terminalPayoff, evHistVol, basisNote);
+    }
+
+    private static RiskProfile.TerminalPayoff unavailableTerminalPayoff(String reason) {
+        return new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA, TERMINAL_PAYOFF_MODEL,
+                false, null, null, null, null, false, List.of(), reason);
     }
 
     /**
@@ -77,6 +126,15 @@ public final class RiskProfiler {
      * held-share candidates add one stock lot PER package unit. {@code sharesNeeded} is the total
      * across quantity, so using it directly as a leg ratio would multiply quantity twice.
      */
+    static PayoffCurve payoffCurve(Candidate c, EvalContext ctx) {
+        CurveInput input = curveInput(c, ctx);
+        return PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+    }
+
+    static List<Leg> combinedLegs(Candidate c, EvalContext ctx) {
+        return curveInput(c, ctx).legs();
+    }
+
     private static CurveInput curveInput(Candidate c, EvalContext ctx) {
         int qty = Math.max(1, c.qty());
         List<Leg> optionPackage = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
@@ -84,8 +142,8 @@ public final class RiskProfiler {
         long entryAdjustment = c.entryNetPremiumCents() - markedEntry;
         List<Leg> combined = new ArrayList<>(optionPackage);
         if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
-            int lotsPerUnit = Math.max(1, c.sharesNeeded() / (Leg.SHARES_PER_CONTRACT * qty));
-            combined.add(Leg.stock(LegAction.BUY, lotsPerUnit, cents(ctx.underlyingCents())));
+            int sharesPerUnit = Math.max(1, c.sharesNeeded() / qty);
+            combined.add(Leg.stockShares(LegAction.BUY, sharesPerUnit, cents(ctx.underlyingCents())));
         }
         return new CurveInput(combined, entryAdjustment);
     }

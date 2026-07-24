@@ -45,23 +45,45 @@ class SignalEngineTest {
         assertThat(s.thesis()).isIn("BULLISH", "BEARISH", "NEUTRAL", "VOLATILE");
         assertThat(s.confidence()).isBetween(0.0, 1.0);
         assertThat(s.rationale()).isNotEmpty();
-        // AAPL fixture news has one clearly positive and one clearly negative headline
-        assertThat(s.positiveHeadlines()).anySatisfy(h -> assertThat(h).containsIgnoringCase("beats"));
-        assertThat(s.negativeHeadlines()).anySatisfy(h -> assertThat(h).containsIgnoringCase("probe"));
-        assertThat(s.eventRisk()).isTrue(); // "quarterly earnings call" headline
+        assertThat(s.positiveHeadlines()).isEmpty();
+        assertThat(s.negativeHeadlines()).isEmpty();
+        assertThat(s.sentimentScore()).isZero();
+        assertThat(s.eventRisk()).isFalse();
+        assertThat(s.sentimentScorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
+        assertThat(s.sentimentAggregate().available()).isFalse();
+        assertThat(s.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
+        assertThat(s.headlineSentiment()).isEmpty();
+        assertThat(s.volatilityEvidence().impliedAvailable()).isTrue();
+        assertThat(s.volatilityEvidence().realizedAvailable()).isTrue();
+        assertThat(s.volatilityEvidence().impliedSource()).isEqualTo("fixture");
+        assertThat(s.volatilityEvidence().realizedSource()).isEqualTo("fixture");
+        assertThat(s.volatilityEvidence().realizedObservations()).isGreaterThan(30);
+        assertThat(s.volatilityEvidence().unavailableReasons()).isEmpty();
+        assertThat(s.eventEvidence().available()).isFalse();
+        assertThat(s.eventEvidence().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
+        assertThat(s.eventEvidence().scorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
+        assertThat(s.rationale()).noneSatisfy(r -> assertThat(r)
+                .containsIgnoringCase("earnings/guidance-type"));
         assertThat(s.liquidityScore()).isBetween(0.0, 1.0);
     }
 
     @Test
-    void sentimentDiffersAcrossFixtureSymbols() {
+    void fabricatedFixtureHeadlinesNeverInfluenceDemoSignals() {
         SignalEngine.Signals spy = engine.analyze("SPY").orElseThrow();
-        assertThat(spy.positiveHeadlines()).isNotEmpty(); // "rally to record close ... cools"
+        assertThat(spy.positiveHeadlines()).isEmpty();
         assertThat(spy.negativeHeadlines()).isEmpty();
-        assertThat(spy.sentimentScore()).isGreaterThan(0);
+        assertThat(spy.sentimentScore()).isZero();
+        assertThat(spy.eventRisk()).isFalse();
+        assertThat(spy.sentimentAggregate().available()).isFalse();
+        assertThat(spy.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
 
         SignalEngine.Signals tsla = engine.analyze("TSLA").orElseThrow();
-        assertThat(tsla.positiveHeadlines()).isNotEmpty();
-        assertThat(tsla.negativeHeadlines()).isNotEmpty(); // recall/scrutiny
+        assertThat(tsla.positiveHeadlines()).isEmpty();
+        assertThat(tsla.negativeHeadlines()).isEmpty();
+        assertThat(tsla.sentimentScore()).isZero();
+        assertThat(tsla.eventRisk()).isFalse();
+        assertThat(tsla.sentimentScorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
+        assertThat(tsla.sentimentAggregate().available()).isFalse();
     }
 
     @Test
@@ -69,6 +91,9 @@ class SignalEngineTest {
         SignalEngine.Signals vtsax = engine.analyze("VTSAX").orElseThrow();
         assertThat(vtsax.optionable()).isFalse();
         assertThat(vtsax.ivAtm()).isNull();
+        assertThat(vtsax.volatilityEvidence().impliedAvailable()).isFalse();
+        assertThat(vtsax.volatilityEvidence().unavailableReasons())
+                .anySatisfy(reason -> assertThat(reason).contains("No listed option chain"));
         assertThat(engine.analyze("ZZZZ")).isEmpty();
     }
 

@@ -24,7 +24,7 @@ const JAVA = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'ja
   await page.evaluate(() => { localStorage.setItem('strikebench.welcomed', '1'); });
 
   const openFutures = async () => {
-    await page.click('#research-workspace-tabs [data-research-tab="view"]');
+    await page.click('#research-flow [data-band="evidence"] .flow-band-invitation');
     await page.waitForSelector('[data-research-panel="view"]:not([hidden])');
     await page.click('#research-outcomes-nav .outcome-basis[data-basis="futures"]');
     await page.waitForSelector('#whatif-card');

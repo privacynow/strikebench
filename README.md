@@ -23,7 +23,7 @@ java -jar target/strikebench.jar
 # open http://localhost:7070
 ```
 
-First launch opens the welcome page. Pick your path:
+First launch opens the welcome page. Pick your presentation level:
 
 - **Teach me** — plain language everywhere, a tap-to-define glossary, question-driven flows,
   and a safety checklist before anything is placed.
@@ -31,49 +31,70 @@ First launch opens the welcome page. Pick your path:
   per-leg analytics, inline filters.
 
 You can switch levels any time with the Beginner / Expert control in the header, and the
-brand mark in the top-left always brings your working desk back. The tour remains linked from Home.
+brand mark in the top-left always brings your Desk back. Beginner and Expert use the same
+controls, decisions, math, and saved state; Expert reveals denser parameters and provenance.
 
 ## What you can do
 
-**Home** — your account at a glance, live market tiles for your chosen universe, sector pulse,
-and one-tap paths into everything else.
+**Desk** — see what needs attention, resume the one active Plan, inspect today's argued ideas,
+and open the bounded Plan-library drawer. Alerts for protocol breaches, expiries, event proximity,
+assignment/pin heuristics, and unresolved imports drive the order; the Desk does not duplicate the
+journeys that own those actions.
 
-**Research** — explore 13 sector universes as live quote tiles; tap any stock for an
-interactive candle chart (1M to MAX, crosshair readout), what's coming up (option expirations,
-earnings mentions, SEC filings), headlines, the full option chain with greeks, and
-"what you can do with this stock" — live per-goal suggestions computed from the active market lane.
+**Workspace** — explore 13 sector universes, search a stock, inspect its chart, events, news,
+filings, option chain, and regime context, then carry that question into one durable Plan. The Plan
+is a progressively revealed document: **Your view → Evidence → Strategy → Outcomes → Commitment →
+Live**. It requires an explicit direction, horizon, and risk posture before ranking; absent choices
+stay visibly absent instead of becoming a neutral view or a hidden one-month assumption. The
+argued-idea hero, runner-ups, exact Builder/custom package, Scout, and cash baseline all use the
+same server-owned catalog and decision policy. Unfavorable and over-budget ideas remain visible as
+named teaching cases.
 
-**Trade → Ideas** — start from what you're *trying to do*: trade a view, earn income, buy a
-stock at a discount, sell your shares at a target, or protect them. Name a ticker or let the
-scout scan the market for you — every pick shows its evidence (momentum, news sentiment,
-volatility) and every refused idea says exactly why it was refused. Screen by what matters:
-chance of profit, assignment risk, income rate, cash outlay, worst case.
+Evidence creates one fingerprinted fan for the declared hypothesis. Outcomes reprice the selected
+package on that same fan beside market-implied odds, historical analogs, and no-look-ahead replay.
+**Scenario Canvas** is the deep editor for that same artifact: author price waypoints and IV paths,
+apply an event template, choose symbol or position scope, compare structures, and save a provenance
+receipt. Exact conditional fills and guided non-Gaussian interpolation are labeled distinctly.
 
-**Trade → Builder** — every structure a broker menu carries (verticals, condors, butterflies,
-calendars, collars, straddles…), built leg by leg. Beginners get a story per leg and its live
-impact; experts get a terminal with per-leg market data and toggles. On the payoff chart you
-can **drag any strike** — it snaps to real chain strikes and re-prices the position live, so
-you can *feel* what moving a strike does to your worst case and odds. A fine-tune panel gives
-you the exact numbers when you want them.
+**Book** — use the isolated Practice book or maintain owner-scoped tracked taxable, IRA, and 401(k)
+records without changing practice cash. Construct multi-symbol allocations; record normalized
+stock and option transactions; manage exact FIFO/LIFO/HIFO lots; inspect P/L, performance, cash
+obligations, allocation, and reviewed-year tax facts; and export exact CSV or a six-sheet workbook.
+Generated Demo, simulated, or modeled prices never mark an external account, and an unavailable
+observed mark remains unavailable rather than zero.
 
-**Trade → Backtest** — before risking even paper money on a rule like "sell a monthly covered
-call," see how it would actually have gone, trade by trade, with honest labels on what is real
-data and what is modeled.
+The Book also owns the full outside-position journey. Paste a supported broker statement or export,
+review parser inferences and a current observed re-mark, map source accounts, then confirm exact
+transactions or quarantine package-net facts in the pending queue. Resolve a package as provisional
+`USER_ALLOCATED` or attested `BROKER_REPORTED`, and batch-adopt confirmed lots into Plans with frozen
+ADOPTION receipts. Adopted positions receive separate fresh-eyes and campaign-to-date reviews.
+Campaigns preserve economic basis, realized-versus-headline yield, counterfactuals, churn,
+authored-versus-realized overlays, protocol adherence, and lessons. Book Risk aggregates lots into
+per-account and cross-account dollar Greeks, stressed assignment, expiry clusters, theme
+classification, contradictions, and coverage disclosures.
 
-**Trade → Place** — review with explicit money effects (what you pay or collect, worst case,
-buying power after, fees) and a plain-language safety check, then place it in the paper
-account. Track it in **Portfolio**: total value, P/L since start, your shares, every trade's
-live marks, and an append-only ledger of every cent.
-
-**Data → Simulated market** — a practice market that *moves*, any day, at any speed. Pick a
-story (steady climb, sell-off then rebound, volatility event...), name your symbols, and
+**Data** — inspect source coverage, datasets, jobs, and administration, or run a simulated market
+that *moves*, any day, at any speed. Pick a story (steady climb, sell-off then rebound,
+volatility event...), name your symbols, and
 generated prices and option chains stream through every screen — on a virtual exchange clock
 that honors sessions, so time decay and expirations behave correctly, and playback speed never
 changes what happens, only how fast you watch it. It is a *model*, loudly labeled SIMULATED
 everywhere (no dividends, no real order book), a dedicated simulation account keeps your real
 practice account untouched, and the same seed plus the session's event log replays the
-identical market — reviews are reproducible. One click returns you to the real market
-instantly.
+identical market — reviews are reproducible. One click returns you to the prior base market
+(Observed or Demo) instantly.
+
+**Learn** — search the same vocabulary, explanations, and strategy guides used by the inline
+information controls. It links each concept back to the canonical Workspace or Book action.
+
+## One mounted app, from 2560 to mobile
+
+StrikeBench is a real SPA: the shell stays mounted, stage links move attention inside one live
+Workspace document, and ordinary updates preserve drafts, focus, scroll, expanded explanations,
+pending commands, and subscriptions. The layout is tested at 2560 CSS pixels on a fully expanded
+5K display, plus 2048, 1920, 1440, 1280, 1000, 390, 375, and 320. Wide screens use additional space
+for useful comparisons and related results; mobile sequences the same capabilities without hiding
+them or changing their calculations.
 
 ## Honest numbers, by design
 
@@ -89,8 +110,10 @@ instantly.
 
 ## Market data
 
-Works with **zero keys** for delayed option chains and quotes from Cboe, SEC EDGAR filings,
-and US Treasury yields when those sources answer. Missing observed data stays unavailable.
+Works with **zero API keys** for delayed option chains and quotes from Cboe and US Treasury
+yields when those sources answer. SEC EDGAR additionally requires `EDGAR_USER_AGENT` with
+this installation's app name and contact email; StrikeBench has no compiled-in owner identity.
+Missing observed data stays unavailable.
 Built-in fabricated data exists only after you explicitly enter the isolated **Demo** market;
 it never fills a gap in Observed.
 
@@ -102,11 +125,22 @@ grants storage or redistribution rights; the source's plan and terms remain auth
 | Your own CSV export | Broker/vendor/Yahoo-exported daily OHLCV or closes, validated and stored locally with its source and raw/adjusted basis |
 | `POLYGON_API_KEY` | Official keyed daily history and plan-dependent historical option data; your subscribed terms apply |
 | `ALPHAVANTAGE_API_KEY` | Official keyed adjusted daily history; compact access is request-limited and full history requires an entitled plan |
-| Authorized Yahoo automation | Disabled unless both local opt-in and permission confirmation are set; never a hosted default |
+| Yahoo daily history | Enabled under the product owner's standing authorization; serialized, budgeted, persisted locally, and explicitly disabled with `YAHOO_ENABLED=false` |
 
 Data → Sources & jobs previews missing sessions and request cost before downloading, resumes
-per symbol after interruption, quarantines invalid rows, and can run once after each completed
-market session. Daily bars are intentionally not re-downloaded every hour.
+per symbol after interruption, quarantines invalid rows, and runs Yahoo enrichment once after each
+completed market session for the canonical curated universe. The durable store serves complete
+ranges without another request. Daily bars are intentionally not re-downloaded every hour.
+
+For destructive local-development database recreation, `scripts/dev-market-snapshot.sh` maintains
+a transient observed-data recovery bundle under `.tmp/`. A format-3 capture is taken from one
+read-only repeatable-read database snapshot, preserves durable provider request usage and persisted
+cooldowns, and versions the prior verified bundle before installing a new one. By default it refuses
+to lose any canonical Yahoo symbol or established per-symbol coverage, important option/quote
+sentinels, or prior provider usage. `SNAPSHOT_ALLOW_REGRESSION=true` is the explicit emergency
+override. Hydration merges only when the bundle row is newer or higher quality and never lowers a
+request count or cooldown. This helper is a development recovery artifact, not a product data
+fallback.
 
 ## Good to know
 
@@ -125,3 +159,22 @@ market session. Daily bars are intentionally not re-downloaded every hour.
 
 Build instructions, architecture, test suites, configuration reference, and deployment live
 in [DEVELOPER.md](DEVELOPER.md).
+
+The current local verification entry points are:
+
+```bash
+docker compose up -d db
+mvn -q clean package
+cd dom-tests
+npm ci
+npx playwright install chromium
+npm run test:ci       # declarations, SPA, fixture, grown-state, responsive, auth, Book, Learn
+npm run test:live     # observed-provider journey; requires network/source availability
+
+# Read-only quote, chain, research, history, and news capture from an already-running
+# local server (defaults to NVDA); files go to a private temporary directory.
+scripts/live-market-probe.sh
+```
+
+CI records one TAP report per browser suite and runs `node scripts/release-matrix.mjs`; the
+generated report is the source of exact test totals for that branch tip.

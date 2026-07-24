@@ -12,9 +12,20 @@
     }
   }
 
+  // Reads that belong to a route render are cancellable as a group. A hash navigation starts
+  // a new group synchronously, so a provider request that never answers cannot hold the SPA's
+  // serialized renderer hostage. Mutations deliberately do not inherit this signal: leaving a
+  // screen must never cancel a write whose server transaction may already have committed.
+  var navigationAbort = null;
+  function beginNavigation() {
+    if (navigationAbort) navigationAbort.abort();
+    navigationAbort = typeof AbortController === 'function' ? new AbortController() : null;
+  }
+
   async function request(method, path, body) {
     if (method !== 'GET') assertMutableRuntime();
     var opts = { method: method, headers: { 'Accept': 'application/json' } };
+    if (method === 'GET' && navigationAbort) opts.signal = navigationAbort.signal;
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -41,6 +52,7 @@
   var CACHE_MAX = 40;
   var NEVER_CACHE = /^\/api\/(health|status)\b/; // staleness/diagnostics must never be stale
   var cache = new Map(); // path -> {at, promise}
+  var cacheGeneration = 0;
 
   function cachedGet(path) {
     if (NEVER_CACHE.test(path)) return request('GET', path);
@@ -50,19 +62,23 @@
       cache.delete(path); cache.set(path, hit); // LRU bump
       return hit.promise;
     }
+    var entry;
     var p = request('GET', path).catch(function (e) {
-      cache.delete(path); // never cache failures
+      // A superseded request must not evict a newer answer for the same path.
+      if (cache.get(path) === entry) cache.delete(path);
       throw e;
     });
-    cache.set(path, { at: now, promise: p });
+    entry = { at: now, promise: p };
+    cache.set(path, entry);
     while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
     return p;
   }
 
-  function flushCache() { cache.clear(); }
+  function flushCache() { cacheGeneration++; cache.clear(); }
 
   /** Drop only cache keys under the given path prefixes (targeted invalidation). */
   function invalidate(prefixes) {
+    cacheGeneration++;
     Array.from(cache.keys()).forEach(function (k) {
       for (var i = 0; i < prefixes.length; i++) {
         if (k.indexOf(prefixes[i]) === 0) { cache.delete(k); return; }
@@ -72,13 +88,13 @@
 
   // POSTs that change NO server state — never touch the cache (the builder previews on every
   // keystroke; Research event studies and Trade shaping tools are pure compute).
-  var PURE_COMPUTE = /^\/api\/(recommend($|\/)|trades\/preview$|research\/event-studies$|builder\/exposure$)/;
+  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|strategies\/identify$|plans\/[^/]+\/(outcomes\/ensemble\/paths|decision\/preview)$)/;
   // Writes that only persist UI state — flushing market/account caches for them would defeat
   // the cache entirely (the workspace autosaves every few seconds).
   var STATE_WRITER = /^\/api\/workspace$/;
   // POSTs that ONLY write evaluation/recommendation history — read back solely by /api/evaluations
   // and /api/calibration. Invalidate JUST those views so market/account/quote caches stay warm.
-  var HISTORY_WRITER = /^\/api\/(evaluate$|opportunities$|optimize$)/;
+  var HISTORY_WRITER = /^\/api\/(evaluate$|optimize$)/;
   var HISTORY_KEYS = ['/api/evaluations', '/api/calibration'];
 
   function mutate(method) {
@@ -127,6 +143,8 @@
       // decoration still need the VALUE. Returning null here made a second Home/Research render
       // erase otherwise-available sparklines after reload or a level switch.
       if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.promise;
+      var mine = cacheGeneration;
+      var priorEntry = hit;
       var p = fetch(path, { headers: { 'Accept': 'application/json', 'X-Priority': 'prefetch' } })
         .then(function (res) {
           if (res.status !== 200) throw new Error('prefetch declined');
@@ -134,7 +152,8 @@
         })
         .then(function (t) { return t ? JSON.parse(t) : null; });
       p.then(function (json) {
-        // Seed only on success — a denied prefetch must never poison a real read.
+        // Seed only if no invalidation or newer real read superseded this speculation.
+        if (mine !== cacheGeneration || cache.get(path) !== priorEntry) return;
         cache.set(path, { at: Date.now(), promise: Promise.resolve(json) });
         while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
       }).catch(function () { /* silent by design */ });
@@ -144,13 +163,14 @@
 
   window.API = {
     get: cachedGet,
-    getFresh: function (path) { cache.delete(path); return cachedGet(path); },
+    getFresh: function (path) { cacheGeneration++; cache.delete(path); return cachedGet(path); },
     post: mutate('POST'),
     put: mutate('PUT'),
     del: del,
     invalidate: invalidate,
     flushCache: flushCache,
     upload: upload,
-    prefetch: prefetch
+    prefetch: prefetch,
+    beginNavigation: beginNavigation
   };
 })();

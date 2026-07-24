@@ -6,23 +6,29 @@ import java.util.Collections;
 public final class VolatilityProfiler {
 
     /** Below this many history points, rank/percentile are null rather than fabricated. */
-    private static final int MIN_HISTORY = 10;
+    public static final int MIN_HISTORY = 10;
 
     public VolatilityProfile profile(EvalContext ctx) {
-        Double atm = ctx.atmIv();
-        Double rv = ctx.realizedVol30();
-        Double vrp = (atm != null && rv != null) ? atm - rv : null;
-        Double expectedMove = (atm != null && ctx.daysToExpiry() > 0)
-                ? atm * Math.sqrt(ctx.daysToExpiry() / 365.0) : null;
+        return profile(ctx.atmIv(), ctx.realizedVol30(), ctx.ivHistory(), ctx.daysToExpiry());
+    }
 
-        int n = ctx.ivHistory().size();
+    /** Shared read model for Research and candidate evaluation. Keeping the rank calculation here
+     * prevents a detail page from inventing different thresholds or percentile math. */
+    public VolatilityProfile profile(Double atm, Double rv, java.util.List<Double> ivHistory,
+                                     int daysToExpiry) {
+        ivHistory = ivHistory == null ? java.util.List.of() : ivHistory;
+        Double vrp = (atm != null && rv != null) ? atm - rv : null;
+        Double expectedMove = (atm != null && daysToExpiry > 0)
+                ? atm * Math.sqrt(daysToExpiry / 365.0) : null;
+
+        int n = ivHistory.size();
         Double rank = null, pct = null;
         String source;
         if (atm != null && n >= MIN_HISTORY) {
-            double min = Collections.min(ctx.ivHistory());
-            double max = Collections.max(ctx.ivHistory());
+            double min = Collections.min(ivHistory);
+            double max = Collections.max(ivHistory);
             rank = max > min ? clamp(100.0 * (atm - min) / (max - min)) : 50.0;
-            long below = ctx.ivHistory().stream().filter(v -> v < atm).count();
+            long below = ivHistory.stream().filter(v -> v < atm).count();
             pct = 100.0 * below / n;
             source = "IV rank/percentile over " + n + " observed days of snapshots";
         } else if (atm == null) {

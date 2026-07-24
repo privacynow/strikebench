@@ -16,6 +16,7 @@ import io.liftandshift.strikebench.util.Money;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 
 /** Shared no-look-ahead data, pricing and evidence rules for every historical replay mode. */
@@ -24,6 +25,14 @@ public final class HistoricalReplayKernel {
 
     public record Window(CandleSeries series, List<Candle> all, List<Candle> requested) {
         public boolean demo() { return series.isFixture(); }
+    }
+
+    /** One trading day together with the complete evidence visible as of that day. */
+    public record ReplayDay(Candle candle, List<Candle> known, int index) {}
+
+    @FunctionalInterface
+    public interface DayHandler<S> {
+        void accept(S state, ReplayDay day);
     }
 
     /** Mutable only within one replay invocation; never retained on a service singleton. */
@@ -38,7 +47,6 @@ public final class HistoricalReplayKernel {
         public boolean mostlyObserved() { return totalMarks > 0 && observedMarks * 10 >= totalMarks * 9; }
     }
 
-    private static final double RATE = 0.04;
     private final MarketDataService market;
     private final Db db;
 
@@ -50,14 +58,29 @@ public final class HistoricalReplayKernel {
     public Window window(String symbol, LocalDate from, LocalDate to, int warmupDays,
                          AnalysisContext analysis) {
         CandleSeries series = market.candleSeries(symbol, from.minusDays(warmupDays), to, analysis);
-        List<Candle> all = series.candles();
+        List<Candle> all = series.candles().stream()
+                .sorted(Comparator.comparing(Candle::date))
+                .toList();
         List<Candle> requested = all.stream()
                 .filter(c -> !c.date().isBefore(from) && !c.date().isAfter(to)).toList();
         return new Window(series, all, requested);
     }
 
-    public static List<Candle> known(List<Candle> all, LocalDate date) {
-        return all.stream().filter(c -> !c.date().isAfter(date)).toList();
+    /**
+     * The sole historical calendar traversal. The visibility cursor advances monotonically, so
+     * every consumer gets exactly the bars dated on or before the replay day and cannot look ahead.
+     */
+    public <S> S forEachDay(Window window, S state, DayHandler<S> handler) {
+        int visible = 0;
+        for (int index = 0; index < window.requested().size(); index++) {
+            Candle candle = window.requested().get(index);
+            while (visible < window.all().size()
+                    && !window.all().get(visible).date().isAfter(candle.date())) {
+                visible++;
+            }
+            handler.accept(state, new ReplayDay(candle, window.all().subList(0, visible), index));
+        }
+        return state;
     }
 
     public static double volatility(List<Candle> known, int window, double fallback) {
@@ -65,8 +88,9 @@ public final class HistoricalReplayKernel {
         return Double.isNaN(hv) || hv <= 0 ? fallback : hv;
     }
 
-    public long valueCents(String symbol, List<Leg> legs, int qty, double spot, double iv,
-                           LocalDate asOf, PriceIntent intent, boolean payoffOnly, Evidence evidence) {
+    public long valueCents(String symbol, List<Leg> legs, int qty, double spot, double iv, double annualRate,
+                           LocalDate asOf, AnalysisContext analysis, PriceIntent intent,
+                           boolean payoffOnly, Evidence evidence) {
         double total = 0;
         for (Leg leg : legs) {
             double value;
@@ -74,9 +98,9 @@ public final class HistoricalReplayKernel {
                 value = spot;
             } else {
                 evidence.totalMarks++;
-                Double observed = observedPrice(symbol, asOf, leg, intent);
+                Double observed = storedPrice(symbol, asOf, leg, analysis, intent);
                 if (observed != null) {
-                    evidence.observedMarks++;
+                    if (!analysis.synthetic()) evidence.observedMarks++;
                     value = observed;
                 } else {
                     double t = ChronoUnit.DAYS.between(asOf, leg.expiration()) / 365.0;
@@ -86,12 +110,12 @@ public final class HistoricalReplayKernel {
                     } else {
                         double smileIv = VolSurface.smile(iv, spot, strike, t);
                         value = BlackScholes.price(leg.type() == OptionType.CALL, spot, strike,
-                                t, RATE, 0, smileIv);
+                                t, annualRate, 0, smileIv);
                     }
                 }
             }
             double sign = leg.action() == LegAction.BUY ? 1 : -1;
-            total += sign * value * Leg.SHARES_PER_CONTRACT * leg.ratio() * qty;
+            total += sign * value * leg.multiplier() * leg.ratio() * qty;
         }
         return Money.toCents(BigDecimal.valueOf(total));
     }
@@ -101,51 +125,54 @@ public final class HistoricalReplayKernel {
         for (Leg leg : legs) {
             long sign = leg.action() == LegAction.BUY ? 1 : -1;
             total += sign * Money.centsFromPrice(leg.intrinsicPerShare(spot),
-                    (long) Leg.SHARES_PER_CONTRACT * leg.ratio() * qty);
+                    (long) leg.multiplier() * leg.ratio() * qty);
         }
         return total;
     }
 
-    private Double observedPrice(String symbol, LocalDate date, Leg leg, PriceIntent intent) {
+    private Double storedPrice(String symbol, LocalDate date, Leg leg, AnalysisContext analysis,
+                               PriceIntent intent) {
         if (db == null || leg.isStock()) return null;
         var rows = db.query(
                 "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
-              + "AND opt_type=? AND dataset_id='observed' AND bid_ask_observed=1 LIMIT 1",
-                r -> new Double[]{r.dblOrNull("mark"), r.dblOrNull("bid"), r.dblOrNull("ask")},
-                symbol, date, leg.expiration(), leg.strike(), leg.type().name());
+              + "AND opt_type=? AND dataset_id=? AND bid_ask_observed=1 LIMIT 1",
+                r -> new BigDecimal[]{r.bd("mark"), r.bd("bid"), r.bd("ask")},
+                symbol, date, leg.expiration(), leg.strike(), leg.type().name(), analysis.datasetId());
         if (rows.isEmpty()) return null;
-        Double mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
-        Double side = switch (intent) {
-            case ENTRY -> leg.action() == LegAction.BUY ? ask : bid;
-            case EXIT -> leg.action() == LegAction.BUY ? bid : ask;
+        BigDecimal mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
+        BigDecimal side = switch (intent) {
+            case ENTRY -> io.liftandshift.strikebench.market.ExecutablePrice.forAction(bid, ask, leg.action());
+            case EXIT -> io.liftandshift.strikebench.market.ExecutablePrice.forAction(
+                    bid, ask, leg.action().opposite());
             case MARK -> null;
         };
         if (intent != PriceIntent.MARK) {
             // An observed mark is not an executable fill. Missing historical bid/ask falls back to
             // the model and therefore lowers the run's observed-evidence ratio.
-            return side != null && side >= 0 ? side : null;
+            return side == null ? null : side.doubleValue();
         }
-        if (mark != null) return mark;
-        return bid != null && ask != null && ask >= bid ? (bid + ask) / 2.0 : null;
+        if (mark != null) return mark.doubleValue();
+        BigDecimal midpoint = io.liftandshift.strikebench.market.ExecutablePrice.midpoint(bid, ask);
+        return midpoint == null ? null : midpoint.doubleValue();
     }
 
     public List<Double> listedStrikes(String symbol, LocalDate date, LocalDate expiration,
-                                      OptionType type) {
+                                      OptionType type, AnalysisContext analysis) {
         if (db == null || expiration == null) return List.of();
         return db.query("SELECT DISTINCT strike FROM option_bar WHERE symbol=? AND asof=? AND expiration=? "
-                        + "AND opt_type=? AND dataset_id='observed' ORDER BY strike",
-                r -> r.bd("strike").doubleValue(), symbol, date, expiration, type.name());
+                        + "AND opt_type=? AND dataset_id=? ORDER BY strike",
+                r -> r.bd("strike").doubleValue(), symbol, date, expiration, type.name(), analysis.datasetId());
     }
 
     public LocalDate listedExpirationNear(String symbol, LocalDate date, int targetDte,
-                                          OptionType type) {
+                                          OptionType type, AnalysisContext analysis) {
         if (db == null) return null;
         LocalDate target = date.plusDays(targetDte);
         List<LocalDate> rows = db.query(
                 "SELECT DISTINCT expiration::text e FROM option_bar WHERE symbol=? AND asof=? "
-              + "AND opt_type=? AND dataset_id='observed' AND expiration > ? "
+              + "AND opt_type=? AND dataset_id=? AND expiration > ? "
               + "GROUP BY expiration HAVING COUNT(DISTINCT strike) >= 2",
-                r -> LocalDate.parse(r.str("e")), symbol, date, type.name(), date);
+                r -> LocalDate.parse(r.str("e")), symbol, date, type.name(), analysis.datasetId(), date);
         return rows.stream().min(java.util.Comparator.comparingLong(e ->
                 Math.abs(ChronoUnit.DAYS.between(e, target)))).orElse(null);
     }

@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.support.TestDb;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -84,7 +85,8 @@ class BacktesterTest {
         assertThat(report.confidence()).isEqualTo("none (demo data)");
         assertThat(report.equityCurve()).hasSize(report.daysCovered());
         assertThat(report.startingCents()).isEqualTo(10_000_000L);
-        assertThat(report.assumptions()).containsKeys("slippagePctPerLeg", "feePerContractCents", "ivModel", "fills");
+        assertThat(report.assumptions()).containsKeys("slippagePctPerLeg", "feePerContractCents", "ivModel", "fills",
+                "annualRate", "rateSource", "rateProvenance", "rateConvention", "fallbackVolatility");
         assertThat(report.maxDrawdownPct()).isBetween(0.0, 1.0);
         assertThat(report.winRate()).isBetween(0.0, 1.0);
         assertThat(report.disclaimer()).containsIgnoringCase("not real historical option prices");
@@ -139,6 +141,7 @@ class BacktesterTest {
         assertThat(all.getFirst().get("id")).isEqualTo(report.id());
         Map<String, Object> loaded = backtester.get(report.id());
         assertThat(loaded.get("strategy")).isEqualTo("LONG_CALL");
+        assertThat(Json.parse(Json.write(loaded))).isEqualTo(Json.parse(Json.write(report)));
         assertThatThrownBy(() -> backtester.get("bt_nope")).isInstanceOf(java.util.NoSuchElementException.class);
         assertThatThrownBy(() -> backtester.run(new Backtester.BacktestRequest(
                 "AAPL", "LONG_CALL", "2026-04-01", "2026-06-30", 30, 5, 1, null, -100L)))

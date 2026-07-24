@@ -3,7 +3,9 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
+import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
+import io.liftandshift.strikebench.util.Money;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -62,10 +64,180 @@ class RecommendationEngineTest {
                 true, false, null, null, null);
     }
 
+    private static MarketDataProvider staleObservedProvider(Clock clock) {
+        FixtureProvider fixture = new FixtureProvider(clock);
+        return new MarketDataProvider() {
+            @Override public String name() { return "cboe-test"; }
+            @Override public Set<io.liftandshift.strikebench.market.Domain> domains() { return fixture.domains(); }
+            @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) {
+                return fixture.lookup(q);
+            }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String symbol) {
+                return fixture.quote(symbol).map(q -> new io.liftandshift.strikebench.model.Quote(
+                        q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
+                        q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(),
+                        "cboe-test", io.liftandshift.strikebench.model.Freshness.STALE));
+            }
+            @Override public List<LocalDate> expirations(String symbol) { return fixture.expirations(symbol); }
+            @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(
+                    String symbol, LocalDate expiration) {
+                return fixture.chain(symbol, expiration).map(chain -> new io.liftandshift.strikebench.model.OptionChain(
+                        chain.underlying(), chain.expiration(), chain.underlyingPrice(),
+                        chain.calls().stream().map(this::stale).toList(),
+                        chain.puts().stream().map(this::stale).toList(), chain.asOfEpochMs(),
+                        "cboe-test", io.liftandshift.strikebench.model.Freshness.STALE));
+            }
+            private io.liftandshift.strikebench.model.OptionQuote stale(
+                    io.liftandshift.strikebench.model.OptionQuote quote) {
+                return new io.liftandshift.strikebench.model.OptionQuote(
+                        quote.underlying(), quote.occSymbol(), quote.type(), quote.strike(), quote.expiration(),
+                        quote.bid(), quote.ask(), quote.last(), quote.volume(), quote.openInterest(), quote.iv(),
+                        quote.delta(), quote.gamma(), quote.theta(), quote.vega(), quote.asOfEpochMs(),
+                        "cboe-test", io.liftandshift.strikebench.model.Freshness.STALE);
+            }
+            @Override public List<io.liftandshift.strikebench.model.Candle> candles(
+                    String symbol, LocalDate from, LocalDate to) {
+                return List.of();
+            }
+        };
+    }
+
+    @Test
+    void staleObservedCloseSupportsLabeledStrategyAnalysis() {
+        Clock closed = Clock.fixed(Instant.parse("2026-07-08T22:00:00Z"), ZoneId.of("America/New_York"));
+        MarketDataProvider provider = staleObservedProvider(closed);
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(provider), List.of(), List.of()), closed);
+
+        RecommendationEngine.Result result = observed.recommend(
+                req("AAPL", "neutral", "week", "conservative"), BP);
+
+        assertThat(result.candidates())
+                .as("notes=%s rejected=%s", result.notes(), result.rejected()).isNotEmpty();
+        assertThat(result.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.freshness()).isEqualTo("STALE"));
+        assertThat(result.notes()).anySatisfy(note ->
+                assertThat(note).contains("market is closed").contains("PRIOR CLOSE"));
+    }
+
+    @Test
+    void everyViableExpiryReachesDecisionPolicyBeforePerFamilySelection() {
+        MarketDataProvider provider = staleObservedProvider(CLOCK);
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(provider), List.of(), List.of()), CLOCK);
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "aggressive", null, null, null,
+                List.of("LONG_CALL"), true, false, "DIRECTIONAL", null, null);
+
+        RecommendationEngine.Result result = observed.recommend(request, BP);
+        Set<String> expirations = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("LONG_CALL"))
+                .flatMap(candidate -> candidate.legs().stream())
+                .map(LegView::expiration)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertThat(expirations)
+                .as("raw EV/max-loss must not collapse expiry alternatives before DecisionPolicy")
+                .hasSizeGreaterThan(1);
+    }
+
+    @Test
+    void boundedStrikeAndWidthAlternativesReachDecisionPolicy() {
+        MarketDataProvider provider = staleObservedProvider(CLOCK);
+        RecommendationEngine observed = new RecommendationEngine(
+                new MarketDataService(List.of(provider), List.of(), List.of()), CLOCK);
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "neutral", "30d", "aggressive", null, null, null,
+                List.of("CREDIT_PUT_SPREAD"), true, false, "INCOME", null, null);
+
+        RecommendationEngine.Result result = observed.recommend(request, BP);
+        var byExpiration = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CREDIT_PUT_SPREAD"))
+                .collect(java.util.stream.Collectors.groupingBy(candidate ->
+                        candidate.legs().getFirst().expiration()));
+
+        assertThat(byExpiration).isNotEmpty();
+        assertThat(byExpiration).hasSizeLessThanOrEqualTo(4);
+        assertThat(byExpiration.values()).allSatisfy(packages ->
+                assertThat(packages).hasSizeLessThanOrEqualTo(StrategyBuilder.MAX_SEARCH_ALTERNATIVES));
+        assertThat(result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CREDIT_PUT_SPREAD")))
+                .hasSizeLessThanOrEqualTo(4 * StrategyBuilder.MAX_SEARCH_ALTERNATIVES);
+        assertThat(byExpiration.values()).anySatisfy(packages -> {
+            assertThat(packages).hasSizeBetween(2, StrategyBuilder.MAX_SEARCH_ALTERNATIVES);
+            assertThat(packages.stream().map(Candidate::label).distinct().count())
+                    .isEqualTo(packages.size());
+        });
+    }
+
+    @Test
+    void internalIncomeFallbackIsThirtySessionsAndNeverRewritesAnExplicitHorizon() {
+        assertThat(RecommendationEngine.effectiveHorizon(
+                null, io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isEqualTo("30d");
+        assertThat(RecommendationEngine.effectiveHorizon(
+                "1d", io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isEqualTo("1d");
+    }
+
+    @Test
+    void ironCondorRejectsPennyCreditAgainstTenDollarWings() {
+        Candidate pennyCondor = condorCandidate(100L, 99_900L); // $1 total credit / $1,000 gross width
+        Candidate viableCondor = condorCandidate(10_000L, 90_000L); // $100 / $1,000 = 10%
+
+        assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, pennyCondor))
+                .contains("is 0.1%")
+                .contains("minimum 10%")
+                .contains("not an automatic recommendation");
+        assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, viableCondor))
+                .isNull();
+    }
+
+    @Test
+    void ironCondorRejectsWildlyAsymmetricProtectionEvenWhenCreditClearsOldFloor() {
+        Candidate brokenWing = condorCandidate(10_500L, 179_500L,
+                "575", "594", "788", "792");
+
+        assertThat(RecommendationEngine.packageViability(StrategyFamily.IRON_CONDOR, brokenWing))
+                .contains("5.5% of the widest wing")
+                .contains("21.1% of the wider wing")
+                .contains("broken-wing package")
+                .contains("not an automatic recommendation");
+    }
+
+    private static Candidate condorCandidate(long creditCents, long maxLossCents) {
+        return condorCandidate(creditCents, maxLossCents, "90", "100", "110", "120");
+    }
+
+    private static Candidate condorCandidate(long creditCents, long maxLossCents,
+                                              String longPut, String shortPut,
+                                              String shortCall, String longCall) {
+        return new Candidate("IRON_CONDOR", "Iron condor", "range_credit", "four-leg package",
+                List.of(
+                        new LegView("BUY", "PUT", longPut, "2026-08-21", 1, "0.10", 100, "OPEN"),
+                        new LegView("SELL", "PUT", shortPut, "2026-08-21", 1, "0.40", 100, "OPEN"),
+                        new LegView("SELL", "CALL", shortCall, "2026-08-21", 1, "0.40", 100, "OPEN"),
+                        new LegView("BUY", "CALL", longCall, "2026-08-21", 1, "0.10", 100, "OPEN")),
+                1, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
+                0.50, "DELAYED", List.of(), 0.50, "range income", "credit", "wing risk",
+                "breakout", "four defined-risk legs", "INCOME", List.of("INCOME"),
+                0.20, null, null, null, false, null, null);
+    }
+
     private static RecommendationEngine.Request intentReq(String intent, RecommendationEngine.Holdings holdings,
                                                           RecommendationEngine.Filters filters) {
         return new RecommendationEngine.Request("AAPL", null, "month", "balanced", null, null, null, null,
                 true, false, intent, holdings, filters);
+    }
+
+    @Test
+    void fabricatedDemoHeadlinesNeverBecomeCandidateEventWarnings() {
+        RecommendationEngine.Result result = engine.recommend(
+                req("QQQ", "bullish", "month", "balanced"), BP);
+
+        assertThat(result.candidates()).isNotEmpty();
+        assertThat(result.candidates()).allSatisfy(candidate ->
+                assertThat(candidate.warnings()).noneSatisfy(warning -> assertThat(warning)
+                        .containsIgnoringCase("event-like news")));
     }
 
     @Test
@@ -94,6 +266,30 @@ class RecommendationEngineTest {
                 .filter(c -> !StrategyFamily.valueOf(c.strategy()).needsStock()
                         && !c.strategy().equals("CASH_SECURED_PUT"))
                 .forEach(c -> assertThat(c.annualizedYieldPct()).isNull());
+    }
+
+    @Test
+    void beginnerCopySeparatesBuyWritePackageDebitFromOptionCredit() {
+        RecommendationEngine.Result result = engine.recommend(intentReq("income", null, null), BP);
+        Candidate coveredCall = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("COVERED_CALL"))
+                .filter(candidate -> candidate.legs().stream().anyMatch(leg -> leg.type().equals("STOCK")))
+                .findFirst().orElseThrow();
+        long optionCredit = coveredCall.legs().stream()
+                .filter(leg -> !leg.type().equals("STOCK"))
+                .mapToLong(leg -> {
+                    long cents = Money.centsFromPrice(new BigDecimal(leg.entryPrice()),
+                            Math.multiplyExact((long) leg.ratio() * coveredCall.qty(), leg.multiplier()));
+                    return leg.action().equals("SELL") ? cents : -cents;
+                }).sum();
+
+        assertThat(coveredCall.entryNetPremiumCents()).isNegative();
+        assertThat(optionCredit).isPositive();
+        assertThat(coveredCall.beginnerExplanation())
+                .contains("complete stock-plus-options package costs "
+                        + Money.fmt(-coveredCall.entryNetPremiumCents()))
+                .contains("option legs collect " + Money.fmt(optionCredit) + " net")
+                .doesNotContain("most you can lose on the options portion");
     }
 
     @Test
@@ -152,6 +348,61 @@ class RecommendationEngineTest {
         assertThat(csp.intentNote()).contains("buy 100 shares").contains("below today's");
         // The blocked naked-put educational rejection should mention undefined risk
         assertThat(result.rejected()).anySatisfy(r -> assertThat(r.strategy()).isEqualTo("NAKED_PUT"));
+    }
+
+    @Test
+    void acquireComparesDirectSharesWithExistingDefinedRiskAndTimeStructures() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(300, null, 25_000L);
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire", h, null), BP);
+        var byFamily = result.candidates().stream()
+                .collect(java.util.stream.Collectors.toMap(Candidate::strategy, candidate -> candidate,
+                        (first, ignored) -> first));
+
+        assertThat(byFamily).containsKeys("CASH_SECURED_PUT", "CREDIT_PUT_SPREAD",
+                "DEBIT_CALL_SPREAD", "CALENDAR_PUT");
+        assertThat(byFamily.get("CASH_SECURED_PUT").intentNote()).contains("buy 300 shares");
+        assertThat(byFamily.get("CREDIT_PUT_SPREAD").intentNote())
+                .contains("Capped-risk alternative").contains("not a reliable way to receive shares");
+        BigDecimal creditPutShort = byFamily.get("CREDIT_PUT_SPREAD").legs().stream()
+                .filter(leg -> "SELL".equals(leg.action()) && "PUT".equals(leg.type()))
+                .map(leg -> new BigDecimal(leg.strike())).findFirst().orElseThrow();
+        assertThat(creditPutShort)
+                .as("the insured acquisition alternative must honor the declared buy ceiling")
+                .isLessThanOrEqualTo(new BigDecimal("250"));
+        assertThat(byFamily.get("DEBIT_CALL_SPREAD").intentNote())
+                .contains("cannot deliver shares").contains("defined risk");
+        assertThat(byFamily.get("CALENDAR_PUT").intentNote())
+                .contains("farther-dated long put").contains("does not guarantee share delivery");
+
+        long ordinaryRiskBudget = RiskBudgetPolicy.requestBudgetCents(
+                RecommendationEngine.RiskMode.BALANCED, BP, null, null);
+        for (String family : List.of("CREDIT_PUT_SPREAD", "DEBIT_CALL_SPREAD", "CALENDAR_PUT")) {
+            assertThat(byFamily.get(family).maxLossCents())
+                    .as(family + " stays inside the risk budget rather than consuming acquisition buying power")
+                    .isLessThanOrEqualTo(ordinaryRiskBudget);
+        }
+    }
+
+    @Test
+    void candidateLegsCarryTheExactExecutableBookReceipt() {
+        RecommendationEngine.Result result = engine.recommend(intentReq("acquire",
+                new RecommendationEngine.Holdings(null, null, 24_000L), null), BP);
+        Candidate csp = result.candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CASH_SECURED_PUT"))
+                .findFirst().orElseThrow();
+        LegView shortPut = csp.legs().getFirst();
+
+        assertThat(shortPut.action()).isEqualTo("SELL");
+        assertThat(shortPut.quoteBid()).isNotBlank();
+        assertThat(shortPut.quoteAsk()).isNotBlank();
+        assertThat(shortPut.entryPrice())
+                .as("a SELL candidate must be priced from the captured bid")
+                .isEqualTo(shortPut.quoteBid());
+        assertThat(new BigDecimal(shortPut.quoteAsk()))
+                .isGreaterThanOrEqualTo(new BigDecimal(shortPut.quoteBid()));
+        assertThat(shortPut.quoteAsOfEpochMs()).isPositive();
+        assertThat(shortPut.quoteSource()).isNotBlank();
+        assertThat(shortPut.quoteFreshness()).isEqualTo("FIXTURE");
     }
 
     @Test
@@ -247,6 +498,23 @@ class RecommendationEngineTest {
                 engine.recommend(req("AAPL", "bullish", "month", "learning"), BP))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("riskMode");
+    }
+
+    @Test
+    void overBudgetTeachingReasonNamesOneLotRiskAndPlanBudget() {
+        RecommendationEngine.Request request = new RecommendationEngine.Request(
+                "AAPL", "bullish", "month", "conservative", 1_000L, null, null,
+                List.of("LONG_CALL"), true, false, "DIRECTIONAL", null, null);
+        RecommendationEngine.Result result = engine.recommend(request, BP);
+
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.rejected()).filteredOn(rejection -> rejection.strategy().equals("LONG_CALL"))
+                .singleElement().satisfies(rejection -> {
+            assertThat(rejection.strategy()).isEqualTo("LONG_CALL");
+            assertThat(String.join(" ", rejection.reasons()))
+                    .contains("One lot risks")
+                    .contains("above this Plan's $10.00 budget");
+        });
     }
 
     @Test
@@ -352,17 +620,14 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void candidatesAreRankedByScoreDescendingAndComplete() {
-        // RANKING TRUTH: the engine returns the COMPLETE score-sorted list — presentation may
-        // summarize with diverse representatives, but the engine never hides a ranked candidate.
+    void candidateConstructionReturnsTheCompleteFieldForDecisionPolicy() {
+        // The engine constructs the COMPLETE field. DecisionPolicy is the only component allowed
+        // to rank it; presentation may summarize with diverse representatives but cannot hide one.
         RecommendationEngine.Result result = engine.recommend(req("AAPL", "neutral", "month", "aggressive"), BP);
         List<Candidate> c = result.candidates();
         assertThat(c.size()).isGreaterThanOrEqualTo(2);
-        for (int i = 1; i < c.size(); i++) {
-            assertThat(c.get(i - 1).score()).isGreaterThanOrEqualTo(c.get(i).score());
-        }
-        // Every defined-risk family that fits the thesis and passed screens is present — no
-        // top-N cap, no structural-group trim (a neutral month view offers many structures).
+        // Every defined-risk family that fits the thesis and passed screens is present: no top-N
+        // cap and no structural-group trim (a neutral month view offers many structures).
         assertThat(c.size()).isGreaterThanOrEqualTo(5);
     }
 
@@ -382,5 +647,97 @@ class RecommendationEngineTest {
             assertThat(c.maxProfitCents()).isNull();                        // uncapped either way
             assertThat(c.breakevens()).hasSize(2);                          // one below, one above
         }
+    }
+
+    @Test
+    void heldSharesSurfaceTheCompositeIncomeStructures() {
+        RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(100, 20_000L, null);
+        RecommendationEngine.Result result = engine.recommend(intentReq("INCOME", h, null), BP);
+        var families = result.candidates().stream().map(Candidate::strategy).toList();
+        assertThat(families).contains("COVERED_CALL");
+        assertThat(families)
+                .as("the folded-Phase-9 composites compete beside the covered call, never replacing it")
+                .contains("COVERED_STRANGLE", "COVERED_CALL_PUT_SPREAD", "COVERED_CALL_CALL_OVERLAY");
+        result.candidates().stream()
+                .filter(c -> c.strategy().startsWith("COVERED_"))
+                .forEach(c -> assertThat(c.usesHeldShares())
+                        .as(c.strategy() + " rides the held shares").isTrue());
+    }
+
+    private java.util.List<String> incomeFan(String view) {
+        return engine.recommend(new RecommendationEngine.Request("AAPL", view, "month", "balanced",
+                        null, null, null, null, true, false, "INCOME", null, null), BP)
+                .candidates().stream().map(Candidate::strategy).toList();
+    }
+
+    @Test
+    void anExplicitViewTiltsIncomeRankingButNeverGatesTheCatalog() {
+        // REGRESSION (owner report): "earn income · bearish" surfaced a SINGLE bear call spread while
+        // "neutral" showed a full fan. The market view is a ranking tilt for objective flows, never a
+        // catalog gate, so the income catalog must be identical across declared views — and never one trade.
+        var bearish = incomeFan("bearish");
+        var neutral = incomeFan("neutral");
+        var bullish = incomeFan("bullish");
+        assertThat(bearish).as("a bearish income view must still return a diverse fan, not one trade")
+                .hasSizeGreaterThan(1);
+        assertThat(bearish).as("view must not change WHICH income structures are offered")
+                .containsExactlyInAnyOrderElementsOf(neutral);
+        assertThat(bullish).containsExactlyInAnyOrderElementsOf(neutral);
+    }
+
+    @Test
+    void noIncomeCandidateContradictsEarningIncome() {
+        // Objective-coherence gate: nothing offered under INCOME may pay to be held (a pure-option,
+        // single-expiration income structure must COLLECT a credit), no diagonal may sit on the income
+        // menu, and no bounded structure that cannot profit may be offered.
+        for (String view : List.of("bearish", "bullish", "neutral")) {
+            var candidates = engine.recommend(new RecommendationEngine.Request("AAPL", view, "month", "balanced",
+                    null, null, null, null, true, false, "INCOME", null, null), BP).candidates();
+            assertThat(candidates).as(view + " income fan is non-empty").isNotEmpty();
+            for (Candidate c : candidates) {
+                StrategyFamily fam = StrategyFamily.valueOf(c.strategy());
+                assertThat(c.strategy()).as("no diagonal on the income menu").doesNotContain("DIAGONAL");
+                if (!fam.multiExpiration() && !fam.needsStock()) {
+                    assertThat(c.entryNetPremiumCents())
+                            .as(view + " income " + c.strategy() + " must collect a credit, not pay a debit")
+                            .isPositive();
+                }
+                if (c.maxProfitCents() != null) {
+                    assertThat(c.maxProfitCents())
+                            .as(c.strategy() + " must be able to profit at executable prices").isPositive();
+                }
+            }
+        }
+    }
+
+    @Test
+    void incomeCatalogNamesUndefinedRiskFamiliesAsExcludedInsteadOfSilentlyDroppingThem() {
+        RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
+                "AAPL", "neutral", "month", "balanced", null, null, null, null,
+                true, false, "INCOME", null, null), BP);
+
+        assertThat(result.candidates()).extracting(Candidate::strategy)
+                .doesNotContain("NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+        assertThat(result.rejected()).extracting(Rejection::strategy)
+                .contains("NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+        assertThat(result.rejected())
+                .filteredOn(rejection -> java.util.Set.of(
+                        "NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE")
+                        .contains(rejection.strategy()))
+                .allSatisfy(rejection -> assertThat(rejection.reasons())
+                        .anySatisfy(reason -> assertThat(reason)
+                                .contains("undefined risk").contains("blocked by default")));
+
+        var accounted = new java.util.HashSet<String>();
+        result.candidates().forEach(candidate -> accounted.add(candidate.strategy()));
+        result.rejected().forEach(rejection -> accounted.add(rejection.strategy()));
+        var applicableCatalog = java.util.Arrays.stream(StrategyFamily.values())
+                .filter(family -> family.servesIntent(
+                        io.liftandshift.strikebench.strategy.StrategyIntent.INCOME))
+                .map(Enum::name)
+                .toList();
+        assertThat(accounted)
+                .as("every income family is either offered or returned with an exact exclusion reason")
+                .containsAll(applicableCatalog);
     }
 }

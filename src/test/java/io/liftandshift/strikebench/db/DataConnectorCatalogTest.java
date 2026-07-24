@@ -17,16 +17,20 @@ class DataConnectorCatalogTest {
     @AfterEach void close() { if (db != null) db.close(); }
 
     @Test
-    void yahooAutomationNeedsPermissionNotJustAnEnableFlag() {
+    void yahooIsOwnerAuthorizedByDefaultAndEitherFlagCanRevokeIt() {
         db = TestDb.fresh();
-        var catalog = catalog(Map.of("YAHOO_ENABLED", "true"));
-        var yahoo = catalog.all().stream().filter(c -> c.key().equals("yahoo")).findFirst().orElseThrow();
+        var defaults = catalog(Map.of());
+        var yahoo = defaults.all().stream().filter(c -> c.key().equals("yahoo")).findFirst().orElseThrow();
         assertThat(yahoo.configured()).isTrue();
-        assertThat(yahoo.eligible()).isFalse();
-        assertThatThrownBy(() -> catalog.requireAutomated("yahoo")).hasMessageContaining("not eligible");
+        assertThat(yahoo.eligible()).isTrue();
+        assertThat(defaults.requireAutomated("auto").key()).isEqualTo("yahoo");
 
-        var permitted = catalog(Map.of("YAHOO_ENABLED", "true", "YAHOO_AUTOMATION_PERMISSION_CONFIRMED", "true"));
-        assertThat(permitted.requireAutomated("yahoo").eligible()).isTrue();
+        var disabled = catalog(Map.of("YAHOO_ENABLED", "false"));
+        assertThatThrownBy(() -> disabled.requireAutomated("yahoo")).hasMessageContaining("not eligible");
+
+        var revoked = catalog(Map.of("YAHOO_ENABLED", "true",
+                "YAHOO_AUTOMATION_PERMISSION_CONFIRMED", "false"));
+        assertThatThrownBy(() -> revoked.requireAutomated("yahoo")).hasMessageContaining("not eligible");
     }
 
     @Test
@@ -36,6 +40,24 @@ class DataConnectorCatalogTest {
         assertThat(catalog.recommendedSource()).isEqualTo("alphavantage");
         assertThat(catalog.requireAutomated("auto").key()).isEqualTo("alphavantage");
         assertThatThrownBy(() -> catalog.requireAutomated("user_csv")).hasMessageContaining("manual import");
+    }
+
+    @Test
+    void fixturesOnlyNeverAdvertisesAnObservedProviderAsRunnable() {
+        db = TestDb.fresh();
+        var catalog = catalog(Map.of(
+                "FIXTURES_ONLY", "true",
+                "YAHOO_ENABLED", "true",
+                "YAHOO_AUTOMATION_PERMISSION_CONFIRMED", "true",
+                "ALPHAVANTAGE_API_KEY", "configured-but-not-mounted"));
+
+        assertThat(catalog.all().stream().filter(DataConnectorCatalog.Connector::automated))
+                .allSatisfy(connector -> assertThat(connector.eligible()).isFalse());
+        var yahoo = catalog.all().stream().filter(c -> c.key().equals("yahoo")).findFirst().orElseThrow();
+        assertThat(yahoo.configured()).isTrue();
+        assertThat(yahoo.setup()).contains("Fixtures-only Demo mode");
+        assertThat(catalog.recommendedSource()).isEqualTo("none");
+        assertThatThrownBy(() -> catalog.requireAutomated("auto")).hasMessageContaining("not eligible");
     }
 
     private DataConnectorCatalog catalog(Map<String, String> config) {

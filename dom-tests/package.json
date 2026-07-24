@@ -3,7 +3,23 @@
   "version": "1.0.0",
   "description": "Playwright DOM tests driving StrikeBench end-to-end",
   "scripts": {
-    "test": "node --test dom.test.js"
+    "test": "node --test dom.test.js",
+    "test:defaults": "node --test no-silent-defaults.test.js",
+    "test:scenario": "node --test scenario-form.test.js",
+    "test:spa": "node --test spa-identity.test.js",
+    "test:fixture": "node --test dom.test.js",
+    "test:contracts": "npm run test:defaults && npm run test:scenario && npm run test:spa",
+    "test:journeys": "node run-journey-shards.mjs",
+    "test:seeded": "node --test dom-seeded.test.js",
+    "test:audit": "node --test dom-audit.test.js",
+    "test:auth": "node --test dom-auth.test.js",
+    "test:bookrisk": "node --test dom-bookrisk.test.js",
+    "test:adoption": "node --test adoption-review.test.js",
+    "test:desk": "node --test desk-prototype.test.js",
+    "test:learn:coverage": "node --test dom-learn-coverage.test.js",
+    "test:learn": "npm run test:learn:coverage && node --test dom-learn.test.js",
+    "test:live": "node --test dom-live.test.js",
+    "test:ci": "npm run test:contracts && npm run test:journeys && npm run test:seeded && npm run test:audit && npm run test:auth && npm run test:bookrisk && npm run test:adoption && npm run test:desk && npm run test:learn"
   },
   "type": "commonjs",
   "devDependencies": {

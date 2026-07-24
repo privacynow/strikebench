@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.market;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
 
 /**
  * Curated sector universes: liquid, optionable US names plus the sector ETF, sized so a scout
@@ -18,14 +19,65 @@ public final class Universes {
 
     public static final Map<String, Sector> SECTORS = build();
 
+    private static final List<String> ALLOCATION_SECTOR_ORDER = List.of(
+            "SEMICONDUCTORS", "TECH", "HEALTHCARE", "DEFENSE", "STAPLES", "DISCRETIONARY",
+            "ENERGY", "FINANCIALS", "INDUSTRIALS", "COMMUNICATIONS", "UTILITIES", "ETFS");
+
+    /** One non-overlapping sector label for portfolio allocation; discovery lists remain overlapping. */
+    public static String allocationSectorLabel(String rawSymbol) {
+        String symbol = normalize(rawSymbol);
+        for (String key : ALLOCATION_SECTOR_ORDER) {
+            Sector sector = SECTORS.get(key);
+            if (sector != null && sector.symbols().contains(symbol)) return sector.label();
+        }
+        return "Other / unclassified";
+    }
+
+    /** Same-sector discovery set, preserving the curated order and excluding the anchor. */
+    public static List<String> peersOf(String rawSymbol) {
+        String symbol = normalize(rawSymbol);
+        LinkedHashSet<String> peers = new LinkedHashSet<>();
+        for (Sector sector : SECTORS.values()) {
+            if ("CORE".equals(sector.key()) || "ETFS".equals(sector.key()) || "DEMO".equals(sector.key())) continue;
+            if (sector.symbols().contains(symbol)) peers.addAll(sector.symbols());
+        }
+        if (peers.isEmpty()) {
+            for (Sector sector : SECTORS.values()) if (sector.symbols().contains(symbol)) peers.addAll(sector.symbols());
+        }
+        peers.remove(symbol);
+        return List.copyOf(peers);
+    }
+
+    /** Liquid sector/macro instruments suitable for a separately-evaluated complement Plan. */
+    public static List<String> complementsFor(String rawSymbol) {
+        String symbol = normalize(rawSymbol);
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (Sector sector : SECTORS.values()) {
+            if (!sector.symbols().contains(symbol)) continue;
+            sector.symbols().stream().filter(Universes::looksLikeSectorEtf).forEach(out::add);
+        }
+        out.addAll(List.of("SPY", "QQQ", "IWM", "TLT", "GLD"));
+        out.remove(symbol);
+        return List.copyOf(out);
+    }
+
+    private static boolean looksLikeSectorEtf(String symbol) {
+        return symbol.startsWith("XL") || List.of("SMH", "ITA").contains(symbol);
+    }
+
+    private static String normalize(String symbol) {
+        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("symbol is required");
+        return symbol.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
     private static Map<String, Sector> build() {
         Map<String, Sector> m = new LinkedHashMap<>();
         put(m, "CORE", "Core (indexes + megacaps)",
                 "SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,TSLA,AMZN,GOOGL");
         put(m, "TECH", "Technology",
                 "AAPL,MSFT,NVDA,GOOGL,META,CRM,ORCL,ADBE,NOW,IBM,XLK");
-        put(m, "SEMICONDUCTORS", "Semiconductors",
-                "NVDA,AMD,AVGO,TSM,MU,QCOM,INTC,ARM,SMH");
+        put(m, "SEMICONDUCTORS", "Semiconductors, memory & storage",
+                "NVDA,AMD,AVGO,TSM,MU,QCOM,INTC,ARM,STX,WDC,SNDK,SMH");
         put(m, "HEALTHCARE", "Healthcare",
                 "UNH,LLY,JNJ,PFE,MRK,ABBV,TMO,AMGN,CVS,XLV");
         put(m, "DEFENSE", "Defense & aerospace",

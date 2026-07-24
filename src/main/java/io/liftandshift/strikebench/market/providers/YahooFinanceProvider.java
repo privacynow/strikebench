@@ -21,16 +21,18 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Keyless daily OHLCV candles from Yahoo Finance's public chart endpoint:
  * {@code GET {base}/v8/finance/chart/{SYMBOL}?period1=..&period2=..&interval=1d}, which returns JSON
  * with a parallel {@code timestamp[]} and {@code indicators.quote[0].{open,high,low,close,volume}}.
  *
- * <p>PERSONAL / LOCAL-CLONE ONLY (off by default via {@code YAHOO_ENABLED}): Yahoo's terms restrict
- * automated/commercial reuse, so this is an opt-in <em>underlying</em> backfill for self-hosting
- * users — never a hosted default. Covers EQUITY/ETF/index prices only, <b>not options</b>. Candles
- * only; every other domain returns empty so the provider chain falls through cleanly.
+ * <p>This is an attributable <em>underlying</em> history source, enabled under the product owner's
+ * standing authorization until {@code YAHOO_ENABLED=false}. Covers EQUITY/ETF/index prices only,
+ * <b>not options</b>. Candles only; every other domain returns empty so the provider chain falls
+ * through cleanly. Successful observed reads are persisted by the canonical candle store rather
+ * than repeatedly downloaded.
  */
 public final class YahooFinanceProvider implements MarketDataProvider {
 
@@ -40,10 +42,17 @@ public final class YahooFinanceProvider implements MarketDataProvider {
     private final int dailyLimit;
     // The backfill job walks whole universes through this endpoint — same politeness discipline
     // as Cboe: capped concurrency, spaced starts, and a provider-wide breaker on rate limits
-    // (Yahoo answers 429 or its legacy 999). While cooling, candles() returns empty and the
-    // provider chain falls through to other sources.
-    private final io.liftandshift.strikebench.market.ProviderPoliteness politeness =
-            new io.liftandshift.strikebench.market.ProviderPoliteness("yahoo", 2, 250, 10 * 60_000L);
+    // (Yahoo answers 429 or its legacy 999). Repeated ordinary upstream failures also trip it,
+    // so an outage cannot be retried across the rest of the universe. While cooling, candles()
+    // returns empty and the provider chain falls through to other sources.
+    private final io.liftandshift.strikebench.market.ProviderPoliteness politeness;
+    /**
+     * HTTP 400 is deterministic for the exact Yahoo symbol request. Remember it for this process
+     * so the durable retry job cannot repeatedly spend the daily allowance on the same poison
+     * symbol. A restart deliberately retries once, allowing a corrected alias/provider behavior
+     * to heal without a permanent local blacklist.
+     */
+    private final Map<String, Http.ProviderHttpException> rejectedSymbols = new ConcurrentHashMap<>();
 
     public YahooFinanceProvider(AppConfig cfg) {
         this(cfg, null);
@@ -54,10 +63,15 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         this.baseUrl = Http.normalizeBase(cfg.yahooBaseUrl());
         this.budget = budget;
         this.dailyLimit = cfg.yahooDailyRequestLimit();
+        this.politeness = new io.liftandshift.strikebench.market.ProviderPoliteness(
+                "yahoo", cfg.yahooMaxConcurrency(), cfg.yahooMinSpacingMs(),
+                cfg.yahooCooldownMinutes() * 60_000L);
     }
 
     public void setEvents(io.liftandshift.strikebench.util.EventBus events) { politeness.setEvents(events); }
     public boolean coolingDown() { return politeness.coolingDown(); }
+    /** A restart must not erase an active upstream cooldown. */
+    public void seedCooldown(long untilMs) { politeness.seedCooldown(untilMs); }
 
     @Override public String name() { return "yahoo"; }
 
@@ -65,24 +79,43 @@ public final class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
+        if (from == null || to == null || from.isAfter(to)) {
+            throw new IllegalArgumentException("Yahoo candle range requires from <= to");
+        }
+        String requestedSymbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String yahooSymbol = yahooSymbol(requestedSymbol);
+        Http.ProviderHttpException rejected = rejectedSymbols.get(yahooSymbol);
+        // The first malformed request is surfaced and logged with its provider diagnostic. Later
+        // maintenance passes skip it quietly so one poison identifier cannot create a permanent
+        // warning heartbeat or consume another request; the normal provider chain may continue.
+        if (rejected != null) return List.of();
         long p1 = from.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
-        // URL-encode the symbol so index/class tickers (^GSPC, BRK-B) reach the right path segment.
-        String enc = java.net.URLEncoder.encode(symbol.trim().toUpperCase(Locale.ROOT), java.nio.charset.StandardCharsets.UTF_8);
+        // URL-encode the provider-normalized symbol so index/class tickers reach the right path segment.
+        String enc = java.net.URLEncoder.encode(yahooSymbol, java.nio.charset.StandardCharsets.UTF_8);
         String url = baseUrl + "/v8/finance/chart/" + enc
                 + "?period1=" + p1 + "&period2=" + p2 + "&interval=1d&events=div%2Csplit";
         // A browser-like User-Agent avoids the occasional bot interstitial; still a plain GET.
         // The politeness gate spaces/limits requests and short-circuits during a rate-limit cooldown.
-        String body = politeness.call(() -> {
-            if (budget != null) budget.acquire(name(), dailyLimit);
-            return http.get(url, Map.of("User-Agent",
-                    "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)"));
-        }, null);
-        if (body == null || body.isBlank()) return List.of();
+        JsonNode root;
+        try {
+            root = politeness.call(() -> {
+                if (budget != null) budget.acquire(name(), dailyLimit);
+                String body = http.get(url, Map.of("User-Agent",
+                        "Mozilla/5.0 (compatible; StrikeBench/1.0; +https://strikebench.com)"));
+                // Validation belongs inside the breaker call. Yahoo and intervening anti-bot layers can
+                // answer HTTP 200 with HTML, malformed JSON, chart.error, or an empty chart. Treating
+                // those as successful calls reset the failure counter and let a universe job keep
+                // sweeping an unhealthy endpoint.
+                return requireUsableChart(body);
+            }, null, YahooFinanceProvider::countsAsProviderFailure);
+        } catch (Http.ProviderHttpException e) {
+            if (e.statusCode() == 400) rejectedSymbols.putIfAbsent(yahooSymbol, e);
+            throw e;
+        }
+        if (root == null) return List.of();
 
-        JsonNode root = Json.parse(body);
         JsonNode result = root.path("chart").path("result");
-        if (!result.isArray() || result.isEmpty()) return List.of();
         JsonNode r0 = result.get(0);
         JsonNode ts = r0.path("timestamp");
         JsonNode quote = r0.path("indicators").path("quote");
@@ -109,6 +142,66 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         }
         out.sort(Comparator.comparing(Candle::date));
         return out;
+    }
+
+    private static boolean countsAsProviderFailure(Exception failure) {
+        return !(failure instanceof Http.ProviderHttpException http && http.statusCode() == 400);
+    }
+
+    /**
+     * Yahoo uses a dash for US share classes while broker/import notation commonly uses a dot.
+     * Keep this provider alias at the boundary; canonical StrikeBench identity remains untouched.
+     */
+    static String yahooSymbol(String requested) {
+        if (requested == null || requested.isBlank()) throw new IllegalArgumentException("symbol is required");
+        String normalized = requested.trim().toUpperCase(Locale.ROOT);
+        if (normalized.matches("[A-Z]{1,6}\\.[A-Z]")) normalized = normalized.replace('.', '-');
+        if (!normalized.matches("[A-Z0-9^=._\\-]{1,20}")) {
+            throw new IllegalArgumentException("symbol is not supported by Yahoo daily history: " + requested);
+        }
+        return normalized;
+    }
+
+    private static JsonNode requireUsableChart(String body) {
+        if (body == null || body.isBlank()) {
+            throw new IllegalStateException("Yahoo chart response was empty");
+        }
+        JsonNode root = Json.parse(body);
+        JsonNode chart = root.path("chart");
+        JsonNode error = chart.path("error");
+        if (!error.isMissingNode() && !error.isNull()) {
+            String code = error.path("code").asText("upstream error");
+            String description = error.path("description").asText("");
+            throw new IllegalStateException("Yahoo chart error: " + code
+                    + (description.isBlank() ? "" : " — " + description));
+        }
+        JsonNode result = chart.path("result");
+        if (!result.isArray() || result.isEmpty()) {
+            throw new IllegalStateException("Yahoo chart returned no result");
+        }
+        JsonNode r0 = result.get(0);
+        JsonNode timestamps = r0.path("timestamp");
+        JsonNode quotes = r0.path("indicators").path("quote");
+        JsonNode closes = quotes.isArray() && !quotes.isEmpty()
+                ? quotes.get(0).path("close") : null;
+        if (!timestamps.isArray() || timestamps.isEmpty()
+                || !quotes.isArray() || quotes.isEmpty()
+                || closes == null || !closes.isArray() || closes.isEmpty()) {
+            throw new IllegalStateException("Yahoo chart result contained no usable daily prices");
+        }
+        boolean usable = false;
+        for (int i = 0; i < Math.min(timestamps.size(), closes.size()); i++) {
+            if (timestamps.path(i).canConvertToLong()
+                    && closes.path(i).isNumber()
+                    && closes.path(i).decimalValue().signum() > 0) {
+                usable = true;
+                break;
+            }
+        }
+        if (!usable) {
+            throw new IllegalStateException("Yahoo chart result contained no usable daily prices");
+        }
+        return root;
     }
 
     private static BigDecimal dec(JsonNode n) {

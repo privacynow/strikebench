@@ -52,4 +52,43 @@ class ProviderPolitenessTest {
         assertThat(p.call(() -> "ok", null)).isEqualTo("ok");
         assertThat(p.coolingDown()).isFalse();
     }
+
+    @Test
+    void repeatedOrdinaryFailuresBackOffInsteadOfSweepingTheWholeUniverse() {
+        ProviderPoliteness p = new ProviderPoliteness("yahoo", 1, 0, 60_000);
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(() -> p.call(() -> { throw new RuntimeException("HTTP 500 upstream"); }, null))
+                    .hasMessageContaining("500");
+            assertThat(p.coolingDown()).isFalse();
+        }
+        assertThatThrownBy(() -> p.call(() -> { throw new RuntimeException("HTTP 500 upstream"); }, null))
+                .hasMessageContaining("500");
+        assertThat(p.coolingDown()).isTrue();
+    }
+
+    @Test
+    void requestLocalFailuresDoNotPoisonTheProviderWideBreaker() {
+        ProviderPoliteness p = new ProviderPoliteness("yahoo", 1, 0, 60_000);
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(() -> p.call(
+                    () -> { throw new RuntimeException("HTTP 400 unsupported symbol"); },
+                    null, ignored -> false)).hasMessageContaining("400");
+        }
+        assertThat(p.coolingDown()).isFalse();
+        assertThat(p.call(() -> "healthy symbol", null)).isEqualTo("healthy symbol");
+    }
+
+    @Test
+    void restoredCooldownShortCircuitsAndExpiredStateIsIgnored() {
+        ProviderPoliteness restored = new ProviderPoliteness("yahoo", 1, 0, 60_000);
+        restored.seedCooldown(System.currentTimeMillis() + 60_000);
+        AtomicInteger calls = new AtomicInteger();
+        assertThat(restored.call(() -> { calls.incrementAndGet(); return "wire"; }, "stored"))
+                .isEqualTo("stored");
+        assertThat(calls).hasValue(0);
+
+        ProviderPoliteness expired = new ProviderPoliteness("yahoo", 1, 0, 60_000);
+        expired.seedCooldown(System.currentTimeMillis() - 1);
+        assertThat(expired.call(() -> "wire", "stored")).isEqualTo("wire");
+    }
 }

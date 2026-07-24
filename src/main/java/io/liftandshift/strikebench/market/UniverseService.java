@@ -115,6 +115,13 @@ public final class UniverseService {
                 "sectorKey", a.sectorKey() == null ? "" : a.sectorKey(),
                 "label", a.sectorLabel(),
                 "symbols", a.symbols()));
+        List<String> opportunitySymbols = warmSymbols();
+        out.put("scout", Map.of(
+                "source", cfg.fixturesOnly() ? "DEMO" : "CURATED",
+                "label", cfg.fixturesOnly()
+                        ? "Demo opportunity universe"
+                        : "Curated cross-sector opportunity universe",
+                "symbols", opportunitySymbols));
         out.put("sectors", sectors);
         out.put("maxCustom", MAX_CUSTOM);
         if (cfg.fixturesOnly()) {
@@ -124,14 +131,11 @@ public final class UniverseService {
     }
 
     private String setting(String k) {
-        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), k);
-        return rows.isEmpty() ? null : rows.getFirst();
+        return io.liftandshift.strikebench.db.SettingsStore.read(db, k).orElse(null);
     }
 
     private void putSetting(String k, String v) {
-        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                + "ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                k, v, Instant.now(clock).toString());
+        io.liftandshift.strikebench.db.SettingsStore.upsert(db, k, v, Instant.now(clock)); // injected clock preserved
     }
 
     private static List<String> parseList(String csv) {

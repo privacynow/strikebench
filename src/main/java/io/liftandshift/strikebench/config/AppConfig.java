@@ -93,9 +93,6 @@ public final class AppConfig {
     public String dbUser() { return get("DB_USER", "strikebench"); }
     public String dbPassword() { return get("DB_PASSWORD", "strikebench"); }
 
-    /** Legacy SQLite file path — used only by the one-time SQLite->Postgres migration tool. */
-    public String dbPath() { return get("DB_PATH", "data/strikebench.db"); }
-
     /** When true, only deterministic fixture data is served; no network calls are made. */
     public boolean fixturesOnly() { return getBool("FIXTURES_ONLY", false); }
 
@@ -131,7 +128,8 @@ public final class AppConfig {
     /** EDGAR submissions live on a different host than the ticker file. */
     public String edgarDataBaseUrl() { return get("EDGAR_DATA_BASE_URL", "https://data.sec.gov"); }
     /** Contact info EDGAR requires in the User-Agent header. */
-    public String edgarUserAgent() { return get("EDGAR_USER_AGENT", "StrikeBench/1.0 (babarahmedfaraz@gmail.com)"); }
+    public String edgarUserAgent() { return get("EDGAR_USER_AGENT", "").trim(); }
+    public boolean edgarConfigured() { return !edgarUserAgent().isBlank(); }
     public String treasuryBaseUrl() { return get("TREASURY_BASE_URL", "https://home.treasury.gov"); }
     public String fredBaseUrl() { return get("FRED_BASE_URL", "https://api.stlouisfed.org"); }
     public String polygonBaseUrl() { return get("POLYGON_BASE_URL", "https://api.polygon.io"); }
@@ -144,17 +142,34 @@ public final class AppConfig {
     /** Polygon/Massive plans vary. Zero means do not invent a cap; the user's plan remains authoritative. */
     public int polygonDailyRequestLimit() { return getInt("POLYGON_DAILY_REQUEST_LIMIT", 0); }
 
-    // ---- Yahoo Finance keyless equity candles (PERSONAL / LOCAL-CLONE ONLY) ----
-    // Yahoo's chart API is a public JSON endpoint, but its terms restrict automated/commercial reuse.
-    // OFF by default so strikebench.com never enables it implicitly; a self-hosting user opts in and
-    // owns the source terms. Covers EQUITY/ETF/index OHLCV only — NOT options.
-    public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", false); }
-    /** Automated Yahoo access is permission-gated separately from the legacy enable switch. */
+    // ---- Yahoo Finance keyless equity candles ----
+    // The product owner has authorized this source for the persistent observed-history lane. It is
+    // enabled in Observed by default until explicitly disabled, but remains absent from Fixtures-only
+    // runs. Covers EQUITY/ETF/index OHLCV only — NOT options — and never changes its provenance label.
+    public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", !fixturesOnly()); }
+    /**
+     * Retains an explicit revocation/permission control. The product-owner grant is the built-in
+     * default; either YAHOO_ENABLED=false or YAHOO_AUTOMATION_PERMISSION_CONFIRMED=false stops access.
+     */
     public boolean yahooAutomationPermissionConfirmed() {
-        return getBool("YAHOO_AUTOMATION_PERMISSION_CONFIRMED", false);
+        return getBool("YAHOO_AUTOMATION_PERMISSION_CONFIRMED", yahooEnabled());
     }
-    public int yahooDailyRequestLimit() { return getInt("YAHOO_DAILY_REQUEST_LIMIT", 100); }
+    /** Durable process-independent budget; enough for the curated universe once, not repeated sweeps. */
+    public int yahooDailyRequestLimit() {
+        return Math.max(1, Math.min(500, getInt("YAHOO_DAILY_REQUEST_LIMIT", 160)));
+    }
     public String yahooBaseUrl() { return get("YAHOO_BASE_URL", "https://query1.finance.yahoo.com"); }
+    /** Yahoo is deliberately serial and slow: history is daily, so burst latency has no product value. */
+    public int yahooMaxConcurrency() { return Math.max(1, Math.min(2, getInt("YAHOO_MAX_CONCURRENCY", 1))); }
+    public long yahooMinSpacingMs() { return Math.max(500L, getLong("YAHOO_MIN_SPACING_MS", 1_500L)); }
+    public int yahooCooldownMinutes() { return Math.max(5, getInt("YAHOO_COOLDOWN_MINUTES", 30)); }
+    /** Once-per-completed-session durable enrichment of the canonical observed universe. */
+    public boolean yahooHistorySyncEnabled() {
+        return getBool("YAHOO_HISTORY_SYNC_ENABLED", yahooEnabled() && yahooAutomationPermissionConfirmed());
+    }
+    public int yahooHistorySyncYears() {
+        return Math.max(1, Math.min(20, getInt("YAHOO_HISTORY_SYNC_YEARS", 2)));
+    }
     /** Stooq currently serves an anti-bot interstitial to this client; keep it opt-in, never a noisy default. */
     public boolean stooqEnabled() { return getBool("STOOQ_ENABLED", false); }
     /** Keyless per-symbol news headlines via the Google News RSS search feed. Blank disables it. */
@@ -173,10 +188,12 @@ public final class AppConfig {
     /** Mark the session cookie Secure (HTTPS-only). Set true in prod behind the TLS proxy;
      *  false for plain-http local dev so login still works. */
     public boolean authCookieSecure() { return getBool("AUTH_COOKIE_SECURE", false); }
+    /** Idle server-session lifetime. Short values are useful only for hermetic expiry tests. */
+    public int authSessionIdleSeconds() { return Math.max(1, getInt("AUTH_SESSION_IDLE_SECONDS", 1800)); }
     /** Comma-separated allowlist of permitted emails. Empty = any Google account with a verified email. */
     public java.util.List<String> authAllowedEmails() { return emailList("AUTH_ALLOWED_EMAILS"); }
 
-    /** Emails allowed to run destructive admin ops (data reset, CSV import). Empty = fall back to the entry allowlist. */
+    /** Emails allowed to run destructive admin ops (data reset, CSV import). Empty = nobody. */
     public java.util.List<String> authAdminEmails() { return emailList("AUTH_ADMIN_EMAILS"); }
 
     /** Shared secret gating destructive admin ops when auth is OFF (sent as X-Admin-Token). Empty = local-only. */
@@ -201,6 +218,27 @@ public final class AppConfig {
     /** 10 min: with snapshots now default-on in live mode, boot must not fire a full-universe
      *  chain sweep while the user's first screens are still warming (politeness first). */
     public int snapshotInitialDelaySeconds() { return getInt("SNAPSHOT_INITIAL_DELAY_SECONDS", 600); }
+
+    // ---- Tracked-portfolio valuation history ----
+    /** Observed mode records executable-side account valuations automatically. Demo mode defaults
+     *  off so generated teaching prices can never enter an external portfolio book. */
+    public boolean portfolioNavEnabled() { return getBool("PORTFOLIO_NAV_ENABLED", !fixturesOnly()); }
+    /** Give the observed quote engine time to warm before the first account valuation. */
+    public int portfolioNavInitialDelaySeconds() { return getInt("PORTFOLIO_NAV_INITIAL_DELAY_SECONDS", 30); }
+    /** Fixed cadence for the durable account-value curve. */
+    public int portfolioNavIntervalMinutes() { return getInt("PORTFOLIO_NAV_INTERVAL_MINUTES", 15); }
+
+    // ---- Durable computed-artifact retention ----
+    /** Cleanup is deliberately independent of market mode: local Demo sessions can create the
+     *  same dense path artifacts as Observed sessions. Decision, rehearsal, accounting, audit,
+     *  calibration, and market-history records are never eligible. */
+    public boolean artifactRetentionEnabled() { return getBool("ARTIFACT_RETENTION_ENABLED", true); }
+    /** Stale/blocked intermediate Plan calculations remain available for this many days. */
+    public int stalePlanArtifactRetentionDays() { return getInt("STALE_PLAN_ARTIFACT_RETENTION_DAYS", 30); }
+    /** Unreferenced dense ensemble payloads remain available for deduplication for this many days. */
+    public int orphanEnsembleRetentionDays() { return getInt("ORPHAN_ENSEMBLE_RETENTION_DAYS", 90); }
+    public int artifactRetentionInitialDelaySeconds() { return getInt("ARTIFACT_RETENTION_INITIAL_DELAY_SECONDS", 300); }
+    public int artifactRetentionIntervalHours() { return getInt("ARTIFACT_RETENTION_INTERVAL_HOURS", 24); }
 
     // ---- In-memory market-data engine (warm cache + background refresh + streaming) ----
     /** When true (default), the engine warms the active universe on boot and refreshes in the background. */
@@ -229,7 +267,7 @@ public final class AppConfig {
     public java.util.List<String> autoUniverse() {
         String raw = fixturesOnly()
                 ? get("AUTO_UNIVERSE", "AAPL,SPY,QQQ,TSLA")
-                : get("AUTO_UNIVERSE", "SPY,QQQ,IWM,AAPL,MSFT,NVDA,TSLA,AMZN,META,GOOGL");
+                : get("AUTO_UNIVERSE", "SPY,QQQ,IWM,AAPL,MSFT,NVDA,TSLA,AMZN,META,GOOGL,SMH,MU,STX,WDC,SNDK");
         return java.util.Arrays.stream(raw.split(","))
                 .map(s -> s.trim().toUpperCase(Locale.ROOT))
                 .filter(s -> !s.isBlank())

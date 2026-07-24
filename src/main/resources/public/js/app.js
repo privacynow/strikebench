@@ -2,52 +2,209 @@
 (function () {
   'use strict';
 
+  // The SPA owns destination resets and the one deliberate Research explorer restore.
+  // Native browser restoration races those asynchronous paints on Back and can overwrite
+  // the saved explorer position after the cards finish loading.
+  if (window.history && 'scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
+
+  /** Parses '#/plan/<id>(/<stage>)?' into {id, stage} — null for any other route. */
+  function planStageOf(hash) {
+    var match = /^#\/plan\/([^/]+)(?:\/([^/]+))?$/.exec(String(hash || '').split('?')[0]);
+    if (!match) return null;
+    var args = match[2] ? [match[1], match[2]] : [match[1]];
+    return window.Product && Product.Routes.valid('plan', args)
+      ? { id: match[1], stage: match[2] || 'understand' } : null;
+  }
+
+  /** Public Research bands are positions inside one mounted market document. */
+  function researchBandOf(hash) {
+    var raw = String(hash || '');
+    var path = raw.split('?')[0];
+    var match = /^#\/research\/([^/]+)$/.exec(path);
+    if (!match) return null;
+    var query = raw.indexOf('?') >= 0 ? raw.slice(raw.indexOf('?') + 1) : '';
+    var requested = new URLSearchParams(query).get('view');
+    var view = requested || 'overview';
+    return { symbol: decodeURIComponent(match[1]).toUpperCase(),
+      band: ['overview', 'evidence', 'options'].indexOf(view) >= 0 ? view : null,
+      canonical: path };
+  }
+
+  function workspaceRoute(hash) {
+    var path = String(hash || '#/').split('?')[0];
+    var plan = /^#\/plan\/([^/]+)(?:\/([^/]+))?/.exec(path);
+    // The Workspace is ONE flow document: a stage is a position inside it, never a new
+    // screen. Moving between stages of the same Plan preserves scroll — the flow itself
+    // choreographs the move to the target band (Program ONE §2.2).
+    if (plan) return 'plan:' + plan[1];
+    var trade = /^#\/portfolio\/trade\/([^/]+)/.exec(path);
+    if (trade) return 'trade:' + trade[1];
+    var book = /^#\/portfolio\/book(?:\/([^/]+))?/.exec(path);
+    if (book) return 'book';
+    var research = /^#\/research(?:\/([^/]+))?/.exec(path);
+    if (research) return 'research:' + (research[1] || 'index');
+    return path.split('/').slice(0, 2).join('/');
+  }
+
+  /** Keep keyboard position through an in-place band/lens repaint. */
+  function mountedFocusBookmark(root) {
+    var active = document.activeElement;
+    if (!active || !root || !root.contains(active) || active === root) return null;
+    var mark = { id: active.id || null, start: active.selectionStart, end: active.selectionEnd };
+    if (!mark.id && active.matches && active.matches('.choice-option[data-value]')) {
+      var field = active.closest('.choice-field[id]');
+      if (field) { mark.fieldId = field.id; mark.value = active.getAttribute('data-value'); }
+    }
+    return mark.id || mark.fieldId ? mark : null;
+  }
+
+  function restoreMountedFocus(root, mark) {
+    if (!mark || !root) return;
+    var target = mark.id ? document.getElementById(mark.id) : null;
+    if (!target && mark.fieldId) {
+      var field = document.getElementById(mark.fieldId);
+      if (field) target = Array.from(field.querySelectorAll('.choice-option[data-value]')).find(function (node) {
+        return node.getAttribute('data-value') === mark.value;
+      });
+    }
+    if (!target || !root.contains(target) || typeof target.focus !== 'function') return;
+    target.focus({ preventScroll: true });
+    if (mark.start != null && typeof target.setSelectionRange === 'function') {
+      try { target.setSelectionRange(mark.start, mark.end == null ? mark.start : mark.end); }
+      catch (e) { /* number/date inputs do not support text selection */ }
+    }
+  }
+
+  /**
+   * A non-Flow destination still owns one durable route mount. Older views used App.render()
+   * for every local mutation, which tore that mount out of #app and lost keyboard position,
+   * drafts, disclosure state, scroll and route-owned pending UI. Capture only editable control
+   * values here; the view remains the owner of its presentation and rebuilds inside the SAME
+   * mount. Server-rendered facts are deliberately not copied back over the fresh presentation.
+   */
+  function destinationDraft(root) {
+    if (!root) return [];
+    var occurrences = {};
+    return Array.from(root.querySelectorAll('input,select,textarea,[contenteditable="true"]')).map(function (node) {
+      if (node.type === 'file') return null; // browsers intentionally forbid restoring file handles
+      var base = node.id ? 'id:' + node.id
+        : node.name ? 'name:' + node.name : 'tag:' + node.tagName.toLowerCase() + ':' + (node.type || '');
+      var occurrence = occurrences[base] || 0;
+      occurrences[base] = occurrence + 1;
+      return {
+        key: base, occurrence: occurrence, value: node.isContentEditable ? node.textContent : node.value,
+        checked: 'checked' in node ? node.checked : null
+      };
+    }).filter(Boolean);
+  }
+
+  function restoreDestinationDraft(root, draft) {
+    if (!root || !draft || !draft.length) return;
+    var occurrences = {};
+    Array.from(root.querySelectorAll('input,select,textarea,[contenteditable="true"]')).forEach(function (node) {
+      if (node.type === 'file') return;
+      var base = node.id ? 'id:' + node.id
+        : node.name ? 'name:' + node.name : 'tag:' + node.tagName.toLowerCase() + ':' + (node.type || '');
+      var occurrence = occurrences[base] || 0;
+      occurrences[base] = occurrence + 1;
+      var saved = draft.find(function (entry) { return entry.key === base && entry.occurrence === occurrence; });
+      if (!saved) return;
+      if (node.isContentEditable) node.textContent = saved.value;
+      else if (node.type !== 'submit' && node.type !== 'button') {
+        if (node.tagName !== 'SELECT' || Array.from(node.options).some(function (option) {
+          return option.value === saved.value;
+        })) node.value = saved.value;
+      }
+      if (saved.checked !== null && 'checked' in node) node.checked = saved.checked;
+    });
+  }
+
+  function waitForComponentIdle(root) {
+    if (!root || !root.querySelector('[aria-busy="true"]')) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var settled = false;
+      var observer = new MutationObserver(function () {
+        if (!root.isConnected || !root.querySelector('[aria-busy="true"]')) finish();
+      });
+      function finish() {
+        if (settled) return;
+        settled = true; observer.disconnect(); clearTimeout(timeout); resolve();
+      }
+      observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['aria-busy'] });
+      var timeout = setTimeout(finish, 30000);
+    });
+  }
+
   var App = {
-    state: { ticket: null, serverStale: false,
-      marketContext: { symbol: null, goal: null, horizon: null, thesis: null } },
+    state: { serverStale: false, plans: [], planCollections: {}, activePlanId: null,
+      activePlanByMarket: {}, provisionalPlansByMarket: {}, planUi: {} },
     navToken: 0,
 
-    /** One lane-owned decision context. Placed tickets remain locked snapshots of it. */
+    /** Read active Plan facts, or the current market's provisional Plan before promotion. */
     context: {
+      source: function () {
+        var onPlan = /^#\/plan\//.test(window.location.hash || '');
+        var active = window.PlanStore && PlanStore.active ? PlanStore.active() : null;
+        if (onPlan && active) return active;
+        var key = (App.state.world || (App.config && App.config.world) || 'observed');
+        var draft = (App.state.provisionalPlansByMarket || {})[key];
+        return draft || {};
+      },
       symbol: function (fallback) {
-        var value = App.state.marketContext && App.state.marketContext.symbol;
+        var value = App.context.source().symbol;
         return (value || fallback || '').toUpperCase();
       },
       goal: function (fallback) {
-        return (App.state.marketContext && App.state.marketContext.goal) || fallback || null;
+        var source = App.context.source();
+        return source.intent || fallback || null;
       },
       horizon: function (fallback) {
-        return (App.state.marketContext && App.state.marketContext.horizon) || fallback || null;
+        var source = App.context.source();
+        var days = source.context && source.context.horizonDays !== undefined
+          ? source.context.horizonDays : source.horizonDays;
+        return source.horizon || (days ? days + 'd' : null) || fallback || null;
       },
       thesis: function (fallback) {
-        return (App.state.marketContext && App.state.marketContext.thesis) || fallback || null;
+        var source = App.context.source();
+        return (source.context && source.context.thesis) || source.thesis || fallback || null;
       },
       update: function (patch) {
         patch = patch || {};
-        var next = Object.assign({}, App.state.marketContext || {});
+        var key = (App.state.world || (App.config && App.config.world) || 'observed');
+        App.state.provisionalPlansByMarket = App.state.provisionalPlansByMarket || {};
+        var next = Object.assign({}, App.state.provisionalPlansByMarket[key] || {});
         if (patch.symbol !== undefined) {
           var symbol = String(patch.symbol || '').trim().toUpperCase();
+          if (symbol && next.symbol && symbol !== next.symbol) {
+            if (patch.goal === undefined) next.intent = null;
+            if (patch.thesis === undefined) next.thesis = null;
+            if (patch.horizon === undefined) { next.horizon = null; next.horizonDays = null; }
+            if (patch.targetCents === undefined) next.targetCents = null;
+          }
           next.symbol = symbol || null;
         }
         if (patch.goal !== undefined) {
           var goal = patch.goal === null ? '' : String(patch.goal).trim().toUpperCase();
-          if (!goal || goal === 'ALL' || goal === 'BROWSE') next.goal = null;
-          else if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.goal = goal;
+          if (!goal || goal === 'ALL' || goal === 'BROWSE') next.intent = null;
+          else if (['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'].indexOf(goal) >= 0) next.intent = goal;
         }
         if (patch.horizon !== undefined) {
           var horizon = String(patch.horizon || '').trim();
           next.horizon = horizon || null;
+          next.horizonDays = horizon ? Product.Horizon.sessions(horizon, next.horizonDays) : null;
         }
         if (patch.thesis !== undefined) {
           var thesis = String(patch.thesis || '').trim().toLowerCase();
           next.thesis = thesis || null;
         }
-        var oldSymbol = App.state.marketContext && App.state.marketContext.symbol;
-        App.state.marketContext = next;
-        if (next.symbol && oldSymbol !== next.symbol
-            && App.state.evidencePrefill && App.state.evidencePrefill.symbol !== next.symbol) {
-          App.state.evidencePrefill = null;
+        if (patch.targetCents !== undefined) {
+          var targetCents = Number(patch.targetCents);
+          next.targetCents = Number.isFinite(targetCents) && targetCents > 0
+            ? Math.round(targetCents) : null;
         }
+        App.state.provisionalPlansByMarket[key] = next;
         return Object.assign({}, next);
       },
       selectSymbol: function (raw) {
@@ -76,15 +233,45 @@
     alive: function (token) { return token === App.navToken; },
 
     navigate: function (hash) {
-      // A destination route starts at its own top. Research's sector explorer is the
-      // deliberate exception: it restores its saved position after the index repaints.
-      window.scrollTo(0, 0);
+      var preservePosition = workspaceRoute(window.location.hash) === workspaceRoute(hash);
+      App._preserveNextRoutePosition = preservePosition;
+      if (!preservePosition) window.scrollTo(0, 0);
       if (window.location.hash === hash) {
-        App._scrollOnRender = true;
-        App.render();
+        App._scrollOnRender = !preservePosition;
+        // A same-hash command is usually an attention/refetch request inside the mounted
+        // Workspace. Keep the live document (forms, focus, subscriptions and retained fan)
+        // instead of treating it as a page reload. Legacy destinations still fall back to
+        // the ordinary route renderer through this guarded helper.
+        App.refreshCurrentDestination(hash).catch(function (error) {
+          if (window.UI && UI.toast) UI.toast(error.message || 'This workspace could not refresh.', 'error');
+        });
       } else {
+        // The URL and readiness marker are one navigation commit. Hashchange is delivered on
+        // the next task, so leaving the outgoing document marked ready after changing the URL
+        // lets assistive tooling (and any route-aware consumer) mistake stale content for the
+        // destination. Drop readiness synchronously; the owning render restores it only after
+        // the new mounted destination has settled.
+        var appRoot = document.getElementById('app');
+        if (appRoot) appRoot.setAttribute('data-ready', 'false');
         window.location.hash = hash;
       }
+    },
+
+    restoreScroll: function (value) {
+      var requested = Math.max(0, Number(value) || 0);
+      App._restoreScrollOnRender = requested;
+      var attempts = 0;
+      function apply() {
+        if (App._restoreScrollOnRender !== requested) return;
+        if (App._scrollOnRender) { requestAnimationFrame(apply); return; }
+        window.scrollTo(0, requested);
+        if (Math.abs(window.scrollY - requested) > 1 && attempts++ < 12) {
+          requestAnimationFrame(apply);
+          return;
+        }
+        App._restoreScrollOnRender = null;
+      }
+      requestAnimationFrame(apply);
     },
 
     /** One explicit market context for every outcome engine. It asserts the active lane. */
@@ -100,16 +287,24 @@
     },
 
     outcomePosition: function (key, legs, qty, entryCostCents, expirations) {
+      if (!Number.isInteger(Number(qty)) || Number(qty) < 1) {
+        throw new Error('Outcome position requires an explicit positive quantity.');
+      }
       return {
-        key: key || 'POSITION', qty: qty || 1,
+        key: key || 'POSITION', qty: Number(qty),
         entryCostCents: typeof entryCostCents === 'number' ? entryCostCents : null,
         legs: (legs || []).map(function (leg, i) {
+          if (!Number.isInteger(Number(leg.ratio)) || Number(leg.ratio) < 1
+              || !Number.isInteger(Number(leg.multiplier)) || Number(leg.multiplier) < 1) {
+            throw new Error('Every outcome leg requires an explicit positive ratio and multiplier.');
+          }
           return {
             action: leg.action, type: leg.type || (leg.stock ? 'STOCK' : null),
             strike: leg.strike == null ? null : leg.strike,
             expiration: expirations && expirations[i] || leg.expiration || null,
             expiryDay: leg.expiryDay == null ? null : leg.expiryDay,
-            ratio: leg.ratio || 1
+            ratio: Number(leg.ratio),
+            multiplier: Number(leg.multiplier)
           };
         })
       };
@@ -130,11 +325,215 @@
       return App.evaluateEnvelope(operation, basis, symbol, payload).then(function (response) { return response.result; });
     },
 
+    /** Repaint one component-owned host without replacing its route mount or neighboring UI. */
+    refreshComponent: async function (host, render, options) {
+      options = options || {};
+      if (!host || !host.isConnected || typeof render !== 'function') return false;
+      if (options.waitForIdle) await waitForComponentIdle(host);
+      if (!host.isConnected || (options.validate && !options.validate())) return false;
+      var appRoot = document.getElementById('app');
+      var focus = mountedFocusBookmark(host);
+      var preserveDraft = options.preserveDraft !== false;
+      var draft = preserveDraft ? destinationDraft(host) : [];
+      var scroll = { x: window.scrollX, y: window.scrollY };
+      if (options.pruneToken !== undefined) {
+        App._eventHandlers = (App._eventHandlers || []).filter(function (handler) {
+          return handler.token !== options.pruneToken;
+        });
+      }
+      if (options.manageReady !== false && appRoot) appRoot.setAttribute('data-ready', 'false');
+      host.replaceChildren();
+      try {
+        if (UI.beginExpandableRender) UI.beginExpandableRender();
+        await render(host);
+      } catch (error) {
+        if (host.isConnected && options.routeError) {
+          host.replaceChildren(renderRouteError(options.routeError, error));
+        } else throw error;
+      }
+      if (!host.isConnected || (options.validate && !options.validate())) return false;
+      if (preserveDraft) restoreDestinationDraft(host, draft);
+      restoreMountedFocus(host, focus);
+      window.scrollTo(scroll.x, scroll.y);
+      if (options.manageReady !== false && appRoot) appRoot.setAttribute('data-ready', 'true');
+      if (window.Workspace) Workspace.save();
+      return true;
+    },
+
+    /**
+     * Ask the current component to repaint inside its durable route mount. This is the SPA
+     * seam for Home, Book, Data and other non-Flow destinations: #app and .route-mount stay
+     * connected, while that destination's own view function refreshes its facts. A small DOM
+     * draft captures keystrokes that have not reached component state yet.
+     */
+    refreshDestination: async function (seam, options) {
+      seam = seam || App._destinationSeam;
+      options = options || {};
+      if (!seam || !seam.mount || !seam.mount.isConnected) return false;
+      if ((window.location.hash || '#/home') !== seam.hash || !App.alive(seam.token)) return false;
+      if (seam.refreshing) {
+        seam.queued = true;
+        return seam.refreshing;
+      }
+      seam.refreshing = (async function () {
+        do {
+          seam.queued = false;
+          var refreshed = await App.refreshComponent(seam.mount, function (host) {
+            return seam.view(host, seam.params.slice());
+          }, {
+            waitForIdle: options.waitForIdle, pruneToken: seam.token, routeError: seam.route,
+            validate: function () {
+              return (window.location.hash || '#/home') === seam.hash && App.alive(seam.token);
+            }
+          });
+          if (!refreshed) return false;
+        } while (seam.queued);
+        return true;
+      })();
+      try { return await seam.refreshing; }
+      finally { seam.refreshing = null; }
+    },
+
+    /** Recompute only the mounted destination's presentation when Beginner/Expert changes. */
+    refreshLens: async function () {
+      var root = document.getElementById('app');
+      var focus = mountedFocusBookmark(root);
+      var mounted = App._flowSeam && App._flowSeam.refreshLens ? App._flowSeam
+        : App._researchSeam && App._researchSeam.refreshLens ? App._researchSeam : null;
+      if (!mounted) return App.refreshDestination(null, { waitForIdle: true });
+      var token = App.navToken;
+      var renderGeneration = App._renderRequestGeneration;
+      var generation = App._mountedRefreshGeneration = (App._mountedRefreshGeneration || 0) + 1;
+      var refreshError = null;
+      root.setAttribute('data-ready', 'false');
+      try {
+        await mounted.refreshLens();
+      } catch (error) {
+        refreshError = error;
+      } finally {
+        var stillOwns = generation === App._mountedRefreshGeneration && App.alive(token)
+          && renderGeneration === App._renderRequestGeneration
+          && document.getElementById('app') === root
+          && (App._flowSeam === mounted || App._researchSeam === mounted);
+        if (stillOwns) {
+          root.setAttribute('data-ready', 'true');
+          restoreMountedFocus(root, focus);
+          if (window.Workspace) Workspace.save();
+        }
+      }
+      if (refreshError && stillOwns) throw refreshError;
+    },
+
+    /** Refresh the mounted destination after an in-place mutation; fall back for legacy views. */
+    refreshMounted: async function () {
+      var root = document.getElementById('app');
+      var focus = mountedFocusBookmark(root);
+      var mounted = App._flowSeam && App._flowSeam.reload ? App._flowSeam
+        : App._researchSeam && App._researchSeam.reload ? App._researchSeam : null;
+      if (!mounted) return App.refreshDestination();
+      var token = App.navToken;
+      var renderGeneration = App._renderRequestGeneration;
+      var generation = App._mountedRefreshGeneration = (App._mountedRefreshGeneration || 0) + 1;
+      var refreshError = null;
+      root.setAttribute('data-ready', 'false');
+      try {
+        await mounted.reload();
+      } catch (error) {
+        refreshError = error;
+      } finally {
+        var stillOwns = generation === App._mountedRefreshGeneration && App.alive(token)
+          && renderGeneration === App._renderRequestGeneration
+          && document.getElementById('app') === root
+          && (App._flowSeam === mounted || App._researchSeam === mounted);
+        if (stillOwns) {
+          root.setAttribute('data-ready', 'true');
+          restoreMountedFocus(root, focus);
+          if (window.Workspace) Workspace.save();
+        }
+      }
+      if (refreshError && stillOwns) throw refreshError;
+    },
+
+    /**
+     * Reconcile the destination currently on screen without assuming that a seam captured
+     * before an async mutation still owns the URL. Market/dataset/workspace commands can
+     * legitimately redirect to Home while they await the server; in that case hashchange
+     * owns the new destination and this function does nothing. A mounted Plan or Research
+     * document reloads in place; a genuinely different/legacy destination uses render().
+     */
+    refreshCurrentDestination: async function (expectedHash) {
+      var hash = window.location.hash || '#/home';
+      if (expectedHash && hash !== expectedHash) return false;
+      var root = document.getElementById('app');
+      var plan = planStageOf(hash);
+      var research = researchBandOf(hash);
+      var ownsPlan = !!(plan && App._flowSeam && App._flowSeam.key === 'plan:' + plan.id
+        && root && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow'));
+      var ownsResearch = !!(research && research.band && App._researchSeam
+        && App._researchSeam.key === 'research:' + research.symbol
+        && root && root.getAttribute('data-route') === 'research' && root.querySelector('#research-flow'));
+      var destination = App._destinationSeam;
+      var ownsDestination = !!(destination && destination.mount && destination.mount.isConnected
+        && destination.hash === hash && destination.token === App.navToken);
+      if (ownsPlan || ownsResearch) {
+        await App.refreshMounted();
+        return true;
+      }
+      if (ownsDestination) return App.refreshDestination(destination);
+      // Re-check after deriving ownership: a synchronous hash mutation belongs to its own
+      // hashchange render, not to the destination that requested this reconciliation.
+      if (expectedHash && (window.location.hash || '#/home') !== expectedHash) return false;
+      await App.render();
+      return false;
+    },
+
     /** Renders the current route into #app. Sets data-ready="true" when done (used by tests). */
     render: async function () {
-      // Serialize: a render kicked off mid-render (filter change -> blur -> render, then a tab
-      // click -> hashchange -> render) must wait, or both append into the same cleared root.
+      // Serialize DOM commits, but supersede the active producer immediately. Its route owns a
+      // generation-isolated mount, so any late continuation can only mutate detached DOM. This
+      // preserves ordering without making Back, another destination, or a level change wait for
+      // a provider request that may never answer.
       App._renderQueued = true;
+      App._renderRequestGeneration = (App._renderRequestGeneration || 0) + 1;
+      if (App._activeRender && App._activeRender.cancel) App._activeRender.cancel();
+      var nextHash = window.location.hash || '#/home';
+      var canonicalResearch = researchBandOf(nextHash);
+      var invalidResearchCanonicalized = false;
+      if (canonicalResearch && canonicalResearch.band == null) {
+        window.history.replaceState(null, '', canonicalResearch.canonical);
+        nextHash = canonicalResearch.canonical;
+        invalidResearchCanonicalized = true;
+      }
+      var root = document.getElementById('app');
+      // If an invalid query was typed while its canonical Research document is already
+      // mounted, correcting the address is the entire operation. Remounting the same Flow
+      // would throw away charts and form state merely because an unknown query value was
+      // rejected. A destination still loading takes the normal full-render path below.
+      if (invalidResearchCanonicalized && !App._rendering && App._lastRenderedHash === nextHash && root
+          && root.getAttribute('data-route') === 'research'
+          && root.getAttribute('data-ready') === 'true' && root.querySelector('#research-flow')
+          && App._researchSeam && App._researchSeam.key === 'research:' + canonicalResearch.symbol) {
+        App._renderQueued = false;
+        return;
+      }
+      var planFrom = planStageOf(App._lastRenderedRoute);
+      var planTo = planStageOf(nextHash);
+      var researchFrom = researchBandOf(App._lastRenderedHash);
+      var researchTo = researchBandOf(nextHash);
+      var mountedPositionMove = !!(root && (
+        (App._flowSeam && planFrom && planTo && planFrom.id === planTo.id
+          && planFrom.stage !== planTo.stage && App._flowSeam.key === 'plan:' + planTo.id
+          && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow'))
+        || (App._researchSeam && researchFrom && researchTo && researchFrom.band && researchTo.band
+          && researchFrom.symbol === researchTo.symbol && researchFrom.band !== researchTo.band
+          && App._researchSeam.key === 'research:' + researchTo.symbol
+          && root.getAttribute('data-route') === 'research' && root.querySelector('#research-flow'))));
+      // navToken is the mounted-document lifetime used by live subscriptions. A band move
+      // keeps it; a real destination/remount retires it and its route-owned GET group.
+      if (!mountedPositionMove) {
+        App.navToken += 1;
+        if (window.API && API.beginNavigation) API.beginNavigation();
+      }
       if (App._rendering) return;
       App._rendering = true;
       try {
@@ -149,14 +548,105 @@
 
     _renderOnce: async function () {
       var root = document.getElementById('app');
+      var hash = window.location.hash || '#/home';
+      var parts = hash.replace(/^#\//, '').split('?')[0].split('/').filter(function (p) { return p.length; });
+      var route = parts[0] || 'home';
+      var params = parts.slice(1);
+      var token = App.navToken;
+      var renderGeneration = App._renderRequestGeneration;
+      var cancelRender;
+      var cancelled = new Promise(function (resolve) { cancelRender = resolve; });
+      var renderHandle = { token: token, cancel: cancelRender };
+      App._activeRender = renderHandle;
+      function settle(promise) {
+        return Promise.race([
+          Promise.resolve(promise).then(function (value) { return { value: value }; },
+            function (error) { return { error: error }; }),
+          cancelled.then(function () { return { cancelled: true }; })
+        ]);
+      }
+
+      // Validate before either mounted seam runs. Invalid Plan stages cannot be interpreted as
+      // the default band, and an invalid Research view is canonicalized visibly instead of
+      // rendering Overview beneath a URL the app does not understand.
+      if (!Product.Routes.valid(route, params)) {
+        window.history.replaceState(null, '', '#/home');
+        hash = '#/home'; route = 'home'; params = [];
+      } else {
+        var parsedResearch = researchBandOf(hash);
+        if (parsedResearch && parsedResearch.band == null) {
+          window.history.replaceState(null, '', parsedResearch.canonical);
+          hash = parsedResearch.canonical;
+        }
+      }
+
+      // Public Research has the same in-place seam as a durable Plan: Overview, Evidence,
+      // and Options are bands in one live document. Hashes remain deep-linkable and browser
+      // history remains truthful, while the mounted charts and form state stay connected.
+      var researchFrom = researchBandOf(App._lastRenderedHash);
+      var researchTo = researchBandOf(hash);
+      if (App._researchSeam && researchFrom && researchTo
+          && researchFrom.band && researchTo.band
+          && researchFrom.symbol === researchTo.symbol && researchFrom.band !== researchTo.band
+          && App._researchSeam.key === 'research:' + researchTo.symbol
+          && root.getAttribute('data-route') === 'research' && root.querySelector('#research-flow')) {
+        root.setAttribute('data-ready', 'false');
+        try {
+          var researchSettled = await settle(App._researchSeam.apply(researchTo.band, renderGeneration));
+          if (researchSettled.cancelled || !App.alive(token)) return;
+          if (researchSettled.error) throw researchSettled.error;
+          App._lastRenderedHash = hash;
+          var researchAnnouncer = document.getElementById('route-announcer');
+          if (researchAnnouncer) researchAnnouncer.textContent = researchTo.band + ' section';
+          root.setAttribute('data-ready', 'true');
+          if (window.Workspace) Workspace.save();
+          return;
+        } catch (researchSeamError) {
+          if (!App.alive(token)) return;
+          // The full destination render below remains the correctness fallback.
+        }
+      }
+
+      // ---- The flow seam: moving between stages of ONE plan is a position change inside
+      // the same live document, not a new screen. The mounted workspace registered a handle;
+      // apply it in place — no route generation bump (subscriptions and async refinements
+      // stay alive), no teardown, no skeleton. Anything unexpected falls through to the
+      // full render, which is always correct.
+      var seamFrom = planStageOf(App._lastRenderedRoute);
+      var seamTo = planStageOf('#/' + [route].concat(params).join('/'));
+      if (App._flowSeam && seamFrom && seamTo && seamFrom.id === seamTo.id
+          && seamFrom.stage !== seamTo.stage && App._flowSeam.key === 'plan:' + seamTo.id
+          && root.getAttribute('data-route') === 'plan' && root.querySelector('#plan-flow')) {
+        root.setAttribute('data-ready', 'false');
+        try {
+          var seamSettled = await settle(App._flowSeam.apply(seamTo.stage, renderGeneration));
+          if (seamSettled.cancelled || !App.alive(token)) return;
+          if (seamSettled.error) throw seamSettled.error;
+          var seamRouteKey = '#/' + [route].concat(params).join('/');
+          App._lastRenderedRoute = seamRouteKey;
+          App._lastRenderedHash = hash;
+          App._lastAnnouncedRoute = seamRouteKey;
+          var announcer = document.getElementById('route-announcer');
+          if (announcer) announcer.textContent = seamTo.stage.replace(/-/g, ' ');
+          root.setAttribute('data-ready', 'true');
+          if (window.Workspace) Workspace.save();
+          prefetchForRoute(route, params); // same idle warm-up the full render performs
+          return;
+        } catch (seamError) {
+          if (!App.alive(token)) return;
+          // Fall through to the full render below — it rebuilds from scratch and is
+          // always correct; the seam is an optimization, never a correctness owner.
+        }
+      }
+
       // Every render is a new route generation. A slow view returns after painting its shell
       // and fills the rest from a detached block guarded by App.alive(token); a later
       // navigation bumps the token so that stale fill bails instead of painting the wrong screen.
-      var token = ++App.navToken;
-      // Route-owned live refresh hooks must never survive into the next screen. The Trade
-      // workflow installs this while mounted so Builder/ticket edits can refresh its context
-      // strip without rerendering the whole route.
+      // Route-owned live refresh hooks must never survive into the next screen.
       App.refreshWorkflowContext = null;
+      App._flowSeam = null;
+      App._researchSeam = null;
+      App._destinationSeam = null;
       // The readiness flag drops SYNCHRONOUSLY on render start — the crossfade below is
       // async, and anything watching data-ready (tests, tooling) must never catch the
       // outgoing screen still claiming to be ready for the new route.
@@ -165,21 +655,27 @@
       // route change lands here, so trades/resets/world switches re-price the label (review P1).
       if (App.refreshRiskBudget) App.refreshRiskBudget();
 
-      var hash = window.location.hash || '#/home';
-      var parts = hash.replace(/^#\//, '').split('/').filter(function (p) { return p.length; });
-      var route = parts[0] || 'home';
-      var params = parts.slice(1);
       // Routes are canonical product nouns. Internal aliases only obscure ownership and make
       // navigation tests prove redirects instead of the real screen contract.
-      var view = window.Views[route];
+      var view = Product.Routes.valid(route, params) && window.Views[route];
       if (!view) {
+        window.history.replaceState(null, '', '#/home');
         route = 'home';
         params = [];
         view = window.Views.home;
       }
+      var renderRouteKey = '#/' + [route].concat(params).join('/');
+      if (App._lastRenderedRoute && App._lastRenderedRoute !== renderRouteKey) {
+        var staleToast = document.getElementById('toast-region');
+        if (staleToast) staleToast.innerHTML = '';
+      }
+      App._lastRenderedRoute = renderRouteKey;
 
+      var navRoute = Product.Routes.navOwner(route, params);
       document.querySelectorAll('#nav a, #bottom-nav a').forEach(function (a) {
-        a.classList.toggle('active', a.getAttribute('data-route') === route);
+        // data-route is a token list: the Workspace item owns research, plans, and plan routes.
+        var owned = (a.getAttribute('data-route') || '').split(/\s+/);
+        a.classList.toggle('active', owned.indexOf(navRoute) >= 0);
       });
       // Route identity is part of the synchronous navigation commit. Progressive views paint
       // before their async fills finish, and their layout CSS must apply to that first frame.
@@ -199,33 +695,49 @@
       // second navigation supersedes the first. Navigation correctness wins over a 160ms
       // crossfade; the skeleton and card-arrival motion retain continuity without owning flow.
       swap();
+      // A generation-isolated mount makes supersession mechanically safe: the next route
+      // detaches this node, and a late async continuation can no longer append into #app.
+      // display:contents keeps the established route layout while giving lifecycle ownership
+      // to one concrete node.
+      var routeMount = UI.el('div', { class: 'route-mount', 'data-route-generation': String(token) });
       // The skeleton leaves the moment the view appends its first real element — views
       // render progressively, so first content usually lands within a frame or two.
       var mo = new MutationObserver(function (muts) {
         for (var i = 0; i < muts.length; i++) {
           for (var j = 0; j < muts[i].addedNodes.length; j++) {
-            if (muts[i].addedNodes[j] !== skeleton) {
-              if (skeleton.parentNode === root) root.removeChild(skeleton);
-              mo.disconnect();
-              return;
-            }
+            if (skeleton.parentNode === root) root.removeChild(skeleton);
+            mo.disconnect();
+            return;
           }
         }
       });
-      mo.observe(root, { childList: true });
+      mo.observe(routeMount, { childList: true });
+      root.appendChild(routeMount);
+      // Every destination, including the non-Flow surfaces, owns a durable route mount.
+      // Local commands and level changes call this component seam instead of App.render(),
+      // so ordinary work never replaces #app or the mounted destination node.
+      App._destinationSeam = {
+        key: renderRouteKey, hash: hash, route: route, params: params.slice(), token: token,
+        mount: routeMount, view: view, refreshing: null, queued: false
+      };
 
       try {
-        await view(root, params);
+        if (UI.beginExpandableRender) UI.beginExpandableRender();
+        var viewSettled = await settle(view(routeMount, params));
+        if (viewSettled.cancelled || !App.alive(token)) return;
+        if (viewSettled.error) throw viewSettled.error;
       } catch (e) {
-        root.innerHTML = '';
-        root.appendChild(renderRouteError(route, e));
+        if (!App.alive(token)) return;
+        routeMount.replaceChildren(renderRouteError(route, e));
         checkServerHealth(); // a failing screen is the moment to look for a stale server
       } finally {
         mo.disconnect();
         if (skeleton.parentNode === root) root.removeChild(skeleton);
       }
+      if (!App.alive(token)) return;
       root.setAttribute('data-ready', 'true');
       root.setAttribute('data-route', route);
+      App._lastRenderedHash = hash;
       // Reset after the destination has replaced the old, potentially much taller DOM.
       // Resetting only before paint lets the browser clamp back to the inherited offset
       // while the new page is assembled (visible as headings hidden behind fixed chrome).
@@ -239,7 +751,7 @@
       var routeKey = '#/' + [route].concat(params).join('/');
       if (App._lastAnnouncedRoute !== routeKey) {
         App._lastAnnouncedRoute = routeKey;
-        var heading = root.querySelector('h1');
+        var heading = root.querySelector('.plan-stage-heading h2') || root.querySelector('h1');
         var focusTarget = heading || root;
         if (heading) heading.setAttribute('tabindex', '-1');
         try { focusTarget.focus({ preventScroll: true }); } catch (focusErr) { focusTarget.focus(); }
@@ -251,12 +763,11 @@
       }
       prefetchForRoute(route, params); // idle-time warm-up of the likely next step (server-governed)
       if (window.Workspace) Workspace.save(); // navigation is a save point (dirty-checked, debounced push)
-      // The ticker is MARKET CONTEXT, not decoration. Research, trading, and portfolio work
-      // all depend on the current universe; hiding the only global sector selector on Trade
-      // inverted the workflow and made sector state appear to vanish between tabs.
+      // The ticker is market context, not decoration. Home, Research, Plans, and Portfolio
+      // all depend on the current universe.
       var tape = document.getElementById('tape');
       if (tape) {
-        var showTape = route === 'home' || route === 'research' || route === 'trade' || route === 'portfolio'
+        var showTape = route === 'home' || route === 'research' || route === 'plan' || route === 'portfolio'
           || (route === 'data' && App.state.world && App.state.world !== 'observed');
         tape.classList.toggle('tape-offroute', !showTape);
         var strip = document.getElementById('tape-strip');
@@ -333,7 +844,7 @@
     var existing = Array.prototype.slice.call(document.querySelectorAll('#scenario-banner'));
     if (cfg && cfg.scenarioMode) {
       var label = 'SCENARIO MODE — “' + (cfg.activeDatasetName || cfg.activeDataset || '')
-        + '” replaces the current market history for ITS symbol; other symbols stay on their existing lane. ';
+        + '” replaces analysis history for its symbol. Symbols outside this saved dataset have no scenario history; execution prices and accounts are unchanged. ';
       if (existing.length) {
         existing.forEach(function (b, i) { if (i === 0) b.childNodes[1].textContent = label; else b.remove(); });
         return;
@@ -344,16 +855,15 @@
       var banner = UI.el('div', { id: 'scenario-banner' },
         UI.icon('warn', 15),
         document.createTextNode(label),
-        UI.el('button', { class: 'btn btn-sm', id: 'scenario-research', onclick: function () {
-          App.navigate('#/research'); } }, 'Research'),
-        UI.el('button', { class: 'btn btn-sm', id: 'scenario-test', onclick: function () {
-          App.navigate('#/trade/outcomes'); } }, 'Test strategies'),
+        UI.el('button', { class: 'btn btn-sm', id: 'scenario-plan', onclick: function () {
+          App.navigate('#/research'); } }, 'Plan this symbol'),
         UI.el('a', { href: '#/data/datasets', onclick: function () { App.navigate('#/data/datasets'); } }, 'Manage'),
         UI.el('button', { class: 'btn btn-sm btn-secondary', id: 'scenario-exit', onclick: async function () {
+          var originHash = window.location.hash || '#/home';
           try {
             await API.put('/api/datasets/active', { id: 'observed' });
-            refreshScenarioBanner();
-            App.render();
+            await refreshScenarioBanner();
+            await App.refreshCurrentDestination(originHash);
           } catch (e) { UI.toast(e.message || 'Could not return to the market baseline', 'error'); }
         } }, 'Back to market baseline'));
       document.body.insertBefore(banner, document.getElementById('tape') || document.body.firstChild);
@@ -364,10 +874,14 @@
           var act = (ds.datasets || []).filter(function (d) { return d.id === ds.active; })[0];
           var sym = act && (act.symbol || (act.symbols && act.symbols[0]));
           if (!sym) return;
-          var rBtn = document.getElementById('scenario-research');
-          var tBtn = document.getElementById('scenario-test');
-          if (rBtn) { rBtn.textContent = 'Research ' + sym; rBtn.onclick = function () { App.navigate('#/research/' + sym); }; }
-          if (tBtn) { tBtn.onclick = function () { App.context.selectSymbol(sym); App.navigate('#/trade/outcomes'); }; }
+          var planBtn = document.getElementById('scenario-plan');
+          var currentPlan = window.PlanStore && PlanStore.active && PlanStore.active();
+          if (planBtn && currentPlan && currentPlan.symbol === sym && /^#\/plan\//.test(location.hash)) {
+            planBtn.remove();
+          } else if (planBtn) {
+            planBtn.textContent = 'Open ' + sym + ' Plan';
+            planBtn.onclick = function () { App.navigate('#/research/' + encodeURIComponent(sym)); };
+          }
         } catch (e) { /* generic buttons stay */ }
       })();
     } else {
@@ -404,7 +918,10 @@
   };
 
   function bandLabelText(sess, cfg) {
-    return App.scenarioLabel(cfg.scenario)
+    var label = sess && sess.rehearsal
+      ? 'Plan rehearsal · ' + sess.rehearsal.symbol + ' · path ' + (Number(sess.rehearsal.pathIndex) + 1)
+      : App.scenarioLabel(cfg.scenario);
+    return label
       + (sess && sess.simTime ? ' \u00b7 ' + sess.simTime.replace('T', ' ') + ' ET' : '');
   }
 
@@ -464,6 +981,18 @@
     var seq = ++worldBandSeq;
     var world = App.state.world;
     var isDemo = world === 'demo';
+    var laneChip = document.getElementById('lane-chip');
+    if (laneChip) {
+      var laneName = !world || world === 'observed' ? 'OBSERVED' : isDemo ? 'DEMO' : 'SIMULATED';
+      laneChip.textContent = laneName;
+      laneChip.className = 'badge ' + (laneName === 'SIMULATED' ? 'badge-sim'
+        : laneName === 'DEMO' ? 'badge-warn' : 'badge-dim');
+      laneChip.setAttribute('aria-label', 'Active market: ' + laneName.toLowerCase());
+      laneChip.title = laneName === 'OBSERVED'
+        ? 'Observed market inputs only. Delayed and unavailable values remain labeled.'
+        : laneName === 'DEMO' ? 'Fabricated teaching market. No prices or history are real.'
+          : 'Generated prices, option books and fills inside the active simulated session.';
+    }
     document.body.classList.toggle('in-sim-world', !!world && world !== 'observed' && !isDemo);
     document.body.classList.toggle('in-demo-world', isDemo);
     if (!world || world === 'observed') {
@@ -499,7 +1028,7 @@
         UI.icon('warn', 15), UI.el('b', { class: 'wb-tag' }, 'DEMO MARKET'),
         UI.el('span', { class: 'wb-label', 'aria-label': demoTruth },
           UI.el('span', { class: 'wb-label-wide', 'aria-hidden': 'true' }, demoTruth),
-          UI.el('span', { class: 'wb-label-short', 'aria-hidden': 'true' }, 'FABRICATED DATA · NOT REAL')),
+          UI.el('span', { class: 'wb-label-short', 'aria-hidden': 'true' }, 'FABRICATED · NOT REAL')),
         UI.el('span', { class: 'spacer' }), demoActions);
       document.body.insertBefore(demoBand, document.getElementById('tape') || document.body.firstChild);
       syncWorldBandTop();
@@ -564,6 +1093,9 @@
       speedSel,
       UI.el('button', { class: 'btn btn-sm', id: 'world-report', onclick: function () { App.navigate('#/data/simulation'); } },
         'Report'),
+      sess && sess.rehearsal ? UI.el('button', { class: 'btn btn-sm', id: 'world-plan-return', onclick: function () {
+        PlanStore.focus(sess.rehearsal.planId, 'EVIDENCE').catch(function (e) { UI.toast(e.message, 'error'); });
+      } }, 'Return to Plan') : null,
       UI.el('button', { class: 'btn btn-sm', id: 'world-exit',
         'aria-label': App.config && App.config.fixturesOnly ? 'Return to demo market' : 'Return to observed market',
         onclick: function () { App.switchWorld(App.baseWorldId(), this); } },
@@ -578,6 +1110,24 @@
   }
   App.refreshWorldBand = refreshWorldBand;
   App.baseWorldId = function () { return App.config && App.config.fixturesOnly ? 'demo' : 'observed'; };
+
+  function showWorldRepair(repair) {
+    if (!repair || !repair.message) return;
+    var repairId = repair.id || [repair.previousWorld, repair.world, repair.reason].join(':');
+    if (App.state.lastWorldRepairId === repairId) return;
+    App.state.lastWorldRepairId = repairId;
+    var old = document.getElementById('world-repair-notice');
+    if (old) old.remove();
+    var notice = UI.el('div', { id: 'world-repair-notice', class: 'alert alert-caution world-repair-notice',
+      role: 'status', 'aria-live': 'polite' },
+      UI.el('div', { class: 'world-repair-copy' }, UI.el('b', {}, 'Saved market unavailable'),
+        UI.el('span', {}, repair.message)),
+      UI.el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Dismiss market repair notice',
+        onclick: function () { notice.remove(); } }, '×'));
+    var appRoot = document.getElementById('app');
+    if (appRoot) document.body.insertBefore(notice, appRoot);
+  }
+  App.showWorldRepair = showWorldRepair;
 
   /**
    * A tick landed: the market MOVED. Flush the world's cached GETs and let the current screen
@@ -602,29 +1152,6 @@
   // same-id early-return let whichever arrived FIRST (usually the SSE hint) do a band-only
   // update, and the real caller then skipped the universe/render reconciliation entirely —
   // the "still says Dom sim (simulated)" defect.
-
-  // Workflow state is OWNED by the market context (review P1 #4): the outgoing lane's
-  // thinking is stashed, the incoming lane's restored — a simulated symbol, thesis, or study
-  // must never leak into observed screens (or vice versa).
-  var LANE_KEYS = ['marketContext', 'marketThesis', 'researchStudy', 'evidencePrefill',
-    'researchTabBySymbol',
-    'ideasPrefill', 'backtestPrefill', 'discoverForm', 'builderForm', 'backtestForm',
-    'verifyForm', 'scenarioForm', 'scenarioTargets', 'scenarioAnalysis', 'scenarioHandoff', 'simulationPrefill',
-    'scoutResults', 'outcomeReceipt',
-    'portfolioOptimizer',
-    // Result objects are market-DERIVED state (review P0 #1): an observed evaluation must
-    // never render inside a simulated market. HTTP-cache flushes don't touch these.
-    'recommendResults', 'decisionCache', 'decisionInflight', 'filterState'];
-  function stashLane(worldId) {
-    App.state._laneStash = App.state._laneStash || {};
-    var box = {};
-    LANE_KEYS.forEach(function (k) { box[k] = App.state[k]; delete App.state[k]; });
-    App.state._laneStash[worldId || 'observed'] = box;
-  }
-  function restoreLane(worldId) {
-    var box = (App.state._laneStash || {})[worldId || 'observed'] || {};
-    LANE_KEYS.forEach(function (k) { if (box[k] !== undefined) App.state[k] = box[k]; });
-  }
 
   App.transitionWorld = function (worldId, bootstrap, revision, epoch) {
     var target = worldId || 'observed';
@@ -692,20 +1219,11 @@
         // COMMIT PHASE — synchronous, no awaits between these mutations:
         // On cold boot the shell has an observed placeholder before /api/world resolves.
         // The hydrated ownership marker must win over that placeholder exactly once.
-        var from = App.state.hydratedWorkspaceWorld || App.state.world || target;
-        var changed = from !== target;
         App.state.world = target;
         delete App.state.hydratedWorkspaceWorld;
         if (rev) App.state.worldRevision = Math.max(Number(App.state.worldRevision || 0), rev);
         if (incomingEpoch) App.state.worldRevisionEpoch = incomingEpoch;
         App.state.worldGen++;         // discard SSE/stale fills from the world we just left
-        if (changed) { stashLane(from); restoreLane(target); }
-        // A working idea priced in the OTHER market cannot survive the switch: its quotes,
-        // expirations and account lane belong to a different world (review P2).
-        if (App.state.ticket && (App.state.ticket.world || 'observed') !== target) {
-          App.state.ticket = null;
-          if (UI.toast) UI.toast('Working idea cleared — it was priced in the other market');
-        }
         API.flushCache();             // every cached GET belonged to the old world
         if (App.Market) { App.Market.quotes = {}; App.Market.seq = 0; App.Market.world = target; App.Market.simTime = null; }
         App.state.universe = u;
@@ -717,6 +1235,10 @@
         syncTapeSector(u);
         refreshWorldBand();
         refreshScenarioBanner();      // dataset exclusivity is server-enforced; the banner must agree
+        // Capture the destination only after the market owners commit. PlanStore may route
+        // an old-market Plan to Home below; a late refresh must never reclaim that new URL.
+        var destinationHash = window.location.hash || '#/home';
+        if (window.PlanStore) await PlanStore.marketChanged();
         var oldBar = document.getElementById('transition-error');
         if (oldBar) oldBar.remove();  // a successful reconciliation clears the failure state
         App.state.transitionStatus = 'committed';
@@ -730,11 +1252,11 @@
         var syms = (u.active && u.active.symbols) || [];
         if (m && syms.length && syms.indexOf(m[1].toUpperCase()) < 0) {
           if (UI.toast) UI.toast(m[1].toUpperCase() + ' is not in this market \u2014 showing ' + syms[0]);
-          App.navigate('#/research/' + syms[0]);
+          App.navigate('#/research/' + encodeURIComponent(syms[0]));
           return;
         }
         try {
-          return await App.render();  // same screen, new market under it — observed never stopped
+          return await App.refreshCurrentDestination(destinationHash);
         } catch (renderError) {
           // The market switch DID commit. Let the route error boundary explain a screen failure;
           // never tell the user they remain in the prior market after state/account/store moved.
@@ -792,6 +1314,7 @@
       // Verify the whole contract, not just the request: server selector, app state, market
       // store and universe must name the same lane before the click can report success.
       var authoritative = await API.getFresh('/api/world');
+      showWorldRepair(authoritative && authoritative.repair);
       if (!authoritative || authoritative.world !== target) {
         throw new Error('The server did not confirm the requested market.');
       }
@@ -828,38 +1351,149 @@
       b.addEventListener('click', function () {
         Learn.setLevel(b.getAttribute('data-level'));
         applyLevelSideEffects();
-        App.render(); // screens adapt structurally, not just visually
+        App.refreshLens().catch(function (error) {
+          if (UI.toast) UI.toast(error.message || 'The learning level could not refresh.', 'error');
+        }); // mounted Workspace/Research updates its lens without a root teardown
       });
     });
 
     var risk = document.getElementById('risk-mode');
+    var riskPicker = document.getElementById('header-risk-picker');
+    var riskPopover = document.getElementById('risk-mode-popover');
+    var riskOptions = [
+      { value: 'conservative', label: 'Cautious', sub: 'Budget loading' },
+      { value: 'balanced', label: 'Standard', sub: 'Budget loading' },
+      { value: 'aggressive', label: 'High', sub: 'Budget loading' }
+    ];
+    var riskBudgetByMode = {};
+    var syncingRiskChoice = false;
+    var riskChoice = UI.chipSet({
+      id: 'header-risk-choice',
+      label: 'Maximum risk for one new idea',
+      info: 'riskbudget',
+      options: riskOptions,
+      value: null,
+      revealDetails: 'expert',
+      consequence: function (value) {
+        if (!value) return 'Choose a posture before it can become a new Plan assumption.';
+        var mode = riskBudgetByMode[value];
+        if (!mode) return 'The server is calculating this posture’s current dollar limit.';
+        return UI.fmtMoneyCompact(mode.effectiveBudgetCents) + ' maximum risk per new idea'
+          + (mode.capped ? ' · capped by your declared risk capital' : '');
+      },
+      onChange: function (value) {
+        if (syncingRiskChoice) return;
+        risk.value = value;
+        risk.dispatchEvent(new Event('change', { bubbles: true }));
+        setRiskPopover(false);
+        risk.focus();
+      }
+    });
+    riskPopover.appendChild(riskChoice);
+
+    function validRisk(value) {
+      return riskOptions.some(function (option) { return option.value === value; });
+    }
+    function modeLabel(value) {
+      var option = riskOptions.find(function (candidate) { return candidate.value === value; });
+      return option ? option.label : 'Choose';
+    }
+    function paintRiskTrigger() {
+      var value = risk.value;
+      var mode = riskBudgetByMode[value];
+      risk.textContent = validRisk(value)
+        ? modeLabel(value) + (mode ? ' · ' + UI.fmtMoneyCompact(mode.effectiveBudgetCents) : '')
+        : 'Choose';
+    }
+    function paintRiskChoiceBudget() {
+      riskOptions.forEach(function (option) {
+        var mode = riskBudgetByMode[option.value];
+        var button = riskChoice.querySelector('.choice-option[data-value="' + option.value + '"]');
+        if (!button) return;
+        var label = button.querySelector('.choice-option-label');
+        var sub = button.querySelector('.choice-option-sub');
+        if (label) label.textContent = option.label;
+        if (sub) sub.textContent = mode ? UI.fmtMoneyCompact(mode.effectiveBudgetCents) + '/idea' : option.sub;
+        button.setAttribute('aria-label', mode
+          ? option.label + ' — ' + (mode.percent * 100) + '% of current buying power'
+            + (mode.capped ? ' — capped by declared risk capital' : '')
+          : option.label + ' — current dollar limit is loading');
+      });
+      var consequence = riskChoice.querySelector('.control-consequence');
+      var selected = riskBudgetByMode[risk.value];
+      if (consequence) consequence.textContent = !validRisk(risk.value)
+        ? 'Choose a posture before it can become a new Plan assumption.'
+        : selected
+          ? UI.fmtMoneyCompact(selected.effectiveBudgetCents) + ' maximum risk per new idea'
+            + (selected.capped ? ' · capped by your declared risk capital' : '')
+          : 'The server is calculating this posture’s current dollar limit.';
+      paintRiskTrigger();
+    }
+    function setRiskPopover(open) {
+      open = !!open;
+      riskPopover.hidden = !open;
+      risk.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        window.requestAnimationFrame(function () {
+          var selected = riskChoice.querySelector('.choice-option.active');
+          var first = riskChoice.querySelector('.choice-option');
+          (selected || first || risk).focus();
+        });
+      }
+    }
+    risk.addEventListener('click', function () {
+      setRiskPopover(risk.getAttribute('aria-expanded') !== 'true');
+    });
+    risk.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setRiskPopover(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        setRiskPopover(false);
+      }
+    });
+    riskPopover.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setRiskPopover(false);
+      risk.focus();
+    });
+    document.addEventListener('pointerdown', function (event) {
+      if (!riskPopover.hidden && !riskPicker.contains(event.target)) setRiskPopover(false);
+    });
+
     var storedRisk = null;
     try { storedRisk = window.localStorage.getItem('strikebench.riskMode'); } catch (e) { /* ignore */ }
-    // RISK IS A BUDGET, not an experience level: 'learning' left the selector (the Beginner
-    // experience level owns guidance); stored legacy values migrate to Cautious.
-    if (storedRisk === 'learning') { storedRisk = 'conservative';
-      try { window.localStorage.setItem('strikebench.riskMode', 'conservative'); } catch (e) { /* ignore */ } }
-    if (storedRisk) risk.value = storedRisk;
+    // RISK IS A BUDGET, not an experience level. Only the current public values are accepted.
+    var storedRiskIsValid = validRisk(storedRisk);
+    // The trigger label is presentation, not a declaration. A new Plan may carry the header
+    // posture only after the person actually chose it (now or in an earlier session).
+    App.state.headerRiskExplicit = storedRiskIsValid;
+    if (storedRiskIsValid) {
+      risk.value = storedRisk;
+      syncingRiskChoice = true;
+      riskChoice.set(storedRisk);
+      syncingRiskChoice = false;
+    }
+    paintRiskTrigger();
     // ONE SOURCE OF TRUTH (review P0): the SERVER computes every mode's dollar budget
     // (percent x buying power, capped by declared risk capital). The header only displays it —
     // no client percentage arithmetic anywhere. Refreshed via the GET cache: every mutation
     // flushes the cache, and every render calls this, so the label follows trades, resets,
     // stock buys and world switches.
     function labelRiskOptions(rb) {
-      var byMode = {};
-      (rb.modes || []).forEach(function (m) { byMode[m.mode] = m; });
-      risk.querySelectorAll('option').forEach(function (o) {
-        var m = byMode[o.value];
-        if (!m) return;
-        // Compact: consequence in the label, mechanics in the tooltip (review: no sentences in a select)
-        o.textContent = m.label + ' \u00b7 ' + UI.fmtMoneyCompact(m.effectiveBudgetCents) + '/idea';
-        o.title = (m.percent * 100) + '% of ' + UI.fmtMoneyCompact(rb.basisCents) + ' buying power'
-          + (m.capped ? ' \u2014 capped by your declared risk capital' : '');
+      riskBudgetByMode = {};
+      (rb.modes || []).forEach(function (mode) {
+        riskBudgetByMode[mode.mode] = mode;
+        var option = riskOptions.find(function (candidate) { return candidate.value === mode.mode; });
+        if (option && mode.label) option.label = mode.label;
       });
-      risk.title = 'Max capital one new idea may put at risk \u2014 '
+      paintRiskChoiceBudget();
+      risk.setAttribute('aria-label', 'Max capital one new idea may put at risk — '
         + 'computed by the server from your current buying power'
         + (rb.explicitCapCents ? ', capped by your declared risk capital of ' + UI.fmtMoneyCompact(rb.explicitCapCents) : '')
-        + '. Never changes the math: the same contract has the same odds in every mode.';
+        + '. Never changes the math: the same contract has the same odds in every posture.');
     }
     App.refreshRiskBudget = function () {
       return API.get('/api/risk-budget').then(function (rb) {
@@ -868,23 +1502,33 @@
         labelRiskOptions(rb);
       }).catch(function () { /* base labels stand; ticket falls back to server preview data */ });
     };
-    App.refreshRiskBudget();
     risk.addEventListener('change', function () {
+      if (!validRisk(risk.value)) return;
+      App.state.headerRiskExplicit = true;
+      if (riskChoice.value() !== risk.value) {
+        syncingRiskChoice = true;
+        riskChoice.set(risk.value);
+        syncingRiskChoice = false;
+      }
+      paintRiskChoiceBudget();
       try { window.localStorage.setItem('strikebench.riskMode', risk.value); } catch (e) { /* ignore */ }
-      // A budget change INVALIDATES budget-derived results (review #6): the header must never
-      // say Standard while the page still shows Cautious sizing. That includes results parked
-      // in OTHER lanes' stashes (review IC-1) — a lane switch must not resurrect old sizing.
-      App.state.recommendResults = null;
-      App.state.decisionCache = null;
-      App.state.decisionInflight = null;
-      App.state.scoutResults = null;
-      var stash = App.state._laneStash || {};
-      Object.keys(stash).forEach(function (lane) {
-        ['recommendResults', 'decisionCache', 'decisionInflight', 'scoutResults'].forEach(function (k) {
-          delete stash[lane][k];
+      // This is the default for NEW Plans. Existing Plans retain their normalized risk mode
+      // until the user edits that Plan's assumptions, which then invalidates dependent stages.
+      if (App._researchSeam && App._researchSeam.reload) {
+        App.refreshMounted().catch(function (error) {
+          if (UI.toast) UI.toast(error.message || 'The Research risk label could not refresh.', 'error');
         });
-      });
-      App.render();
+      } else if (App._flowSeam) {
+        // The picker itself is the complete update on an existing Plan: its stored risk mode
+        // is deliberately immutable here. Do not remount the live Workspace merely to save a
+        // default that applies only to the next Plan.
+        if (window.Workspace) Workspace.save();
+      } else {
+        // This picker is already the complete visible update. Other destinations read the
+        // new default when the user starts the next Plan; tearing down the current Book/Data/
+        // Home component here only destroyed drafts and focus without changing stored facts.
+        if (window.Workspace) Workspace.save();
+      }
     });
   }
 
@@ -897,6 +1541,7 @@
   function renderSignIn(me) {
     var app = document.getElementById('app');
     if (!app) return;
+    document.body.classList.add('auth-required');
     app.innerHTML = '';
     app.appendChild(UI.el('div', { class: 'card signin-card' }, [
       UI.el('h1', {}, 'Sign in'),
@@ -935,16 +1580,13 @@
     var app = document.getElementById('app');
     if (app && !app.firstChild) app.appendChild(UI.skeleton());
 
-    // ONE parallel round-trip for auth, config, workspace and the server-owned strategy catalog.
-    // Route data is never fetched before auth state is known: App.render() runs only AFTER this
-    // resolves, and an enabled-but-unauthenticated session swaps straight to the sign-in screen.
-    var pair = await Promise.all([
+    // Auth state is the first boundary. Never probe owner-scoped workspace, catalog, budget,
+    // market, or Plan routes before the server confirms the viewer is signed in.
+    var publicPair = await Promise.all([
       API.get('/api/auth/me').catch(function () { return null; }),
-      API.get('/api/config').catch(function () { return null; }),
-      API.get('/api/workspace').catch(function () { return null; }),
-      API.get('/api/strategies').catch(function () { return null; })
+      API.get('/api/config').catch(function () { return null; })
     ]);
-    var me = pair[0], cfg = pair[1], wsRemote = pair[2], strategyCatalog = pair[3];
+    var me = publicPair[0], cfg = publicPair[1];
     App._me = me;
     if (cfg && cfg.disclaimer) document.getElementById('disclaimer').textContent = cfg.disclaimer;
     if (cfg && cfg.brand && cfg.brand.name) applyBrand(cfg.brand);
@@ -955,8 +1597,16 @@
     // protected route that would 401 into a route error.
     var authOn = (cfg && cfg.authEnabled) || (me && me.authEnabled);
     if (authOn && !(me && me.authenticated)) { renderSignIn(me); return; }
+    document.body.classList.remove('auth-required');
     App.authUser = (me && me.user) || null;
     addSignOut();
+
+    var privatePair = await Promise.all([
+      API.get('/api/workspace').catch(function () { return null; }),
+      API.get('/api/strategies').catch(function () { return null; })
+    ]);
+    var wsRemote = privatePair[0], strategyCatalog = privatePair[1];
+    if (App.refreshRiskBudget) App.refreshRiskBudget();
 
     // The app has one strategy identity contract. Do not silently resurrect a client-side
     // fallback catalog if the server contract is missing or a deployment mixed asset versions.
@@ -1000,6 +1650,7 @@
     // transition committed/failed). Anything that derives market-context state on first paint
     // (the welcome proof cache, prefetch) awaits this instead of racing /api/world (review P2).
     App.worldReady = API.get('/api/world').then(function (w) {
+      showWorldRepair(w && w.repair);
       var boot = (w && w.world) || App.baseWorldId();
       // BOOT IS ALWAYS A FULL TRANSITION, even when the restored workspace already names
       // the server's lane. A same-lane reload still has a fresh DOM and empty MarketStore;
@@ -1021,32 +1672,58 @@
     // Multi-tab truth: another tab (same user) switched worlds — adopt it here too, band and all.
     App.onEvent('world.selected', function (type, data) {
       if (!data || data.world === undefined) return;
+      showWorldRepair(data.repair);
       App.transitionWorld(data.world, data.universe, data.revision, data.epoch)
         .catch(function () { /* banner shown */ }); // idempotent: same-target calls collapse
     });
-    // Belt-and-braces for tabs whose SSE dropped: re-check the server's world on return.
+    // Hidden tabs release both long-lived streams. Besides saving work, this keeps a few
+    // background tabs from consuming every HTTP/1.1 connection and starving ordinary API
+    // reads in the tab the trader is actually using. On return, reconcile server-owned
+    // world/workspace truth BEFORE reopening either stream.
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible') {
+        releaseRealtimeLeadership();
+        return;
+      }
       API.getFresh('/api/world').then(function (w) {
+        showWorldRepair(w && w.repair);
         var srv = (w && w.world) || 'observed';
         var ownersDisagree = srv !== App.state.world
           || (App.Market && App.Market.world !== srv)
           || !App.state.universe || !App.state.universe.active
           || App.state.transitionStatus === 'failed';
-        if (ownersDisagree) App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
+        if (ownersDisagree) return App.transitionWorld(srv, null, w && w.revision, w && w.epoch)
           .catch(function () { /* banner shown */ });
-      }).catch(function () { /* offline — next visit retries */ });
+      }).then(function () {
+        return window.Workspace && Workspace.reconcile ? Workspace.reconcile() : false;
+      }).then(function (workspaceChanged) {
+        if (workspaceChanged) return App.refreshCurrentDestination();
+      }).catch(function () { /* offline — next visit retries */ })
+        .then(function () {
+          if (document.visibilityState !== 'visible') return;
+          subscribeMarketStream();
+          subscribeEvents();
+        });
     });
     await App.worldReady;             // never paint restored work under an unconfirmed market lane
+    if (window.PlanStore) await PlanStore.init();
     refreshUniverse();
+    initRealtimeCoordination();
     subscribeMarketStream();          // live-ish tape from the engine (SSE); poll is the fallback
     subscribeEvents();                // typed workspace events (jobs, datasets, provider cooldowns)
-    setInterval(refreshTape, 45 * 1000);
+    App.refreshAlerts().catch(function () { /* the Desk fetch will retry; no badge is honest */ });
+    setInterval(function () {
+      if (document.visibilityState === 'visible' && !marketStreamHealthy()) refreshTape();
+    }, 45 * 1000);
+    App._lastRouteHash = window.location.hash || '#/';
     window.addEventListener('hashchange', function () {
-      // Native hash links (ticker cards, tabs and browser Back) do not pass through
-      // App.navigate, so enforce the same destination contract here as well.
-      window.scrollTo(0, 0);
-      App._scrollOnRender = true;
+      var nextHash = window.location.hash || '#/';
+      var preservePosition = App._preserveNextRoutePosition === true
+        || workspaceRoute(App._lastRouteHash) === workspaceRoute(nextHash);
+      App._preserveNextRoutePosition = false;
+      App._lastRouteHash = nextHash;
+      if (!preservePosition) window.scrollTo(0, 0);
+      App._scrollOnRender = !preservePosition;
       App.render();
     });
     // A direct deep link is still a destination transition. Browser scroll restoration can
@@ -1082,11 +1759,12 @@
     if (u.active && u.active.sectorKey) sel.value = u.active.sectorKey;
     sel.onchange = async function () {
       var old = u.active && u.active.sectorKey;
+      var originHash = window.location.hash || '#/home';
       sel.disabled = true;
       try {
         await API.put('/api/universe', { sector: sel.value });
         await refreshUniverse({ strict: true });
-        await App.render();
+        await App.refreshCurrentDestination(originHash);
       } catch (e) {
         if (old) sel.value = old;
         if (UI.toast) UI.toast('Could not change the market sector: ' + (e.message || 'try again'));
@@ -1176,7 +1854,7 @@
           var pct = prev ? (last - prev) / prev * 100 : 0;
           seq.appendChild(UI.el('button', {
             class: 'tape-item', type: 'button', tabindex: interactive ? '0' : '-1', 'data-sym': q.symbol,
-            onclick: function () { App.navigate('#/research/' + q.symbol); }
+            onclick: function () { App.navigate('#/research/' + encodeURIComponent(q.symbol)); }
           },
             UI.el('b', {}, q.symbol),
             UI.el('span', {}, last.toFixed(2)),
@@ -1190,9 +1868,19 @@
       strip.style.animation = 'none';
       strip.appendChild(sequence(true));
       tape.hidden = false;
+      var singleSymbol = quotes.length === 1;
+      strip.classList.toggle('single', singleSymbol);
+      var tapeScroll = tape.querySelector('.tape-scroll');
+      if (tapeScroll) tapeScroll.classList.toggle('single', singleSymbol);
+      if (singleSymbol) {
+        strip.setAttribute('data-symbols', symbolsKey);
+        strip.removeAttribute('data-halfw');
+        wireTapeResize();
+        return;
+      }
       // Measure one sequence, then build two identical halves that each cover the viewport
       var seqW = strip.firstChild.getBoundingClientRect().width || 1;
-      var containerW = tape.querySelector('.tape-scroll').getBoundingClientRect().width || seqW;
+      var containerW = tapeScroll.getBoundingClientRect().width || seqW;
       var perHalf = Math.max(1, Math.ceil(containerW / seqW));
       for (var i = 1; i < perHalf * 2; i++) strip.appendChild(sequence(false));
       var halfW = seqW * perHalf;
@@ -1231,8 +1919,8 @@
 
   /**
    * Subscribe to the backend market engine's SSE stream so the tape is live-ish (a few seconds)
-   * from server memory instead of a 45s poll. Pure enhancement: if EventSource is unavailable or
-   * the stream errors, the poll (below) keeps the tape fresh. Reconnects on universe change.
+   * from server memory instead of a 45s poll. A GET is used only while EventSource is unavailable,
+   * still connecting beyond its grace window, or closed after repeated errors.
    */
   /**
    * The frontend MARKET STORE: one home for streamed quote state. The SSE stream writes frames
@@ -1268,19 +1956,155 @@
     get: function (symbol) { return App.Market.quotes[(symbol || '').toUpperCase()]; }
   };
 
+  // One browser origin owns one pair of SSE connections. The leader relays frames over a
+  // BroadcastChannel; a short localStorage lease provides deterministic failover when a tab
+  // closes. Without this, three ordinary tabs can exhaust an HTTP/1.1 connection pool and
+  // strand normal API requests behind six permanent streams.
+  var REALTIME_LEASE_KEY = 'strikebench.realtime.leader.v1';
+  var REALTIME_CHANNEL = 'strikebench.realtime.v1';
+  var REALTIME_LEASE_MS = 10000;
+  var realtimeTabId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  var realtimeChannel = null;
+  var realtimeLeader = false;
+  var realtimeSolo = false;
+  var realtimeReady = false;
+  var realtimeCoordinatedAt = 0;
+  var realtimeMarketOpened = false;
+  var realtimeLeaderHealthAt = 0;
+  var realtimeLeaderMarketHealthy = false;
+  var realtimeLeaderEventsHealthy = false;
+
+  function readRealtimeLease() {
+    try { return JSON.parse(localStorage.getItem(REALTIME_LEASE_KEY) || 'null'); }
+    catch (e) { return null; }
+  }
+
+  function ensureRealtimeLeadership() {
+    if (realtimeSolo) {
+      realtimeLeader = true;
+      return true;
+    }
+    if (!realtimeReady || document.visibilityState === 'hidden') return false;
+    var now = Date.now();
+    var current = readRealtimeLease();
+    if (current && current.id !== realtimeTabId && Number(current.expires || 0) > now) {
+      if (realtimeLeader) closeRealtimeStreams();
+      realtimeLeader = false;
+      return false;
+    }
+    try {
+      localStorage.setItem(REALTIME_LEASE_KEY, JSON.stringify({ id: realtimeTabId, expires: now + REALTIME_LEASE_MS }));
+      current = readRealtimeLease();
+      realtimeLeader = !!current && current.id === realtimeTabId;
+      return realtimeLeader;
+    } catch (e) {
+      // Storage may be disabled in a private profile. Preserve functionality in that case;
+      // the browser simply falls back to one stream pair per tab.
+      realtimeSolo = true;
+      realtimeLeader = true;
+      return true;
+    }
+  }
+
+  function claimRealtimeStreams() {
+    var isLeader = ensureRealtimeLeadership();
+    if (isLeader) {
+      // A live tab may still own the lease after EventSource exhausted its retry budget.
+      // Heal each transport independently instead of leaving every follower stranded behind
+      // a nominal leader that no longer has a source to relay.
+      if (!App._marketES) subscribeMarketStream();
+      if (!App._eventsES) subscribeEvents();
+    }
+  }
+
+  function relayRealtime(kind, payload, eventType) {
+    if (!realtimeChannel || !realtimeLeader) return;
+    try { realtimeChannel.postMessage({ sender: realtimeTabId, kind: kind, payload: payload, eventType: eventType }); }
+    catch (e) { /* a stream frame remains valid in the leader even if relay fails */ }
+  }
+
+  function releaseRealtimeLeadership() {
+    if (!realtimeSolo && realtimeLeader) {
+      var current = readRealtimeLease();
+      try { if (current && current.id === realtimeTabId) localStorage.removeItem(REALTIME_LEASE_KEY); }
+      catch (e) { /* lease expires naturally */ }
+      try { if (realtimeChannel) realtimeChannel.postMessage({ sender: realtimeTabId, kind: 'released' }); }
+      catch (e2) { /* followers also notice the expired lease */ }
+    }
+    realtimeLeader = false;
+    closeRealtimeStreams();
+  }
+
+  function initRealtimeCoordination() {
+    if (realtimeReady) return;
+    realtimeReady = true;
+    realtimeCoordinatedAt = Date.now();
+    window.addEventListener('pagehide', releaseRealtimeLeadership);
+    setInterval(function () {
+      if (document.visibilityState === 'hidden') releaseRealtimeLeadership();
+      else {
+        claimRealtimeStreams();
+        if (realtimeLeader) relayRealtime('health', {
+          market: !!App._marketES && App._marketES.readyState === 1,
+          events: !!App._eventsES && App._eventsES.readyState === 1
+        });
+      }
+    }, 4000);
+    if (!window.BroadcastChannel) {
+      realtimeSolo = true;
+      realtimeLeader = true;
+      return;
+    }
+    try { realtimeChannel = new BroadcastChannel(REALTIME_CHANNEL); }
+    catch (e) { realtimeSolo = true; realtimeLeader = true; return; }
+    realtimeChannel.onmessage = function (ev) {
+      var msg = ev && ev.data;
+      if (!msg || msg.sender === realtimeTabId) return;
+      if (msg.kind === 'quotes') {
+        realtimeLeaderHealthAt = Date.now();
+        realtimeLeaderMarketHealthy = true;
+        acceptMarketFrame(msg.payload);
+      }
+      else if (msg.kind === 'event') acceptAppEvent(msg.eventType, msg.payload);
+      else if (msg.kind === 'health') {
+        realtimeLeaderHealthAt = Date.now();
+        realtimeLeaderMarketHealthy = !!(msg.payload && msg.payload.market);
+        realtimeLeaderEventsHealthy = !!(msg.payload && msg.payload.events);
+      } else if (msg.kind === 'released' && document.visibilityState !== 'hidden') {
+        realtimeLeaderHealthAt = 0;
+        realtimeLeaderMarketHealthy = false;
+        realtimeLeaderEventsHealthy = false;
+        claimRealtimeStreams();
+      }
+    };
+    window.addEventListener('storage', function (ev) {
+      if (ev.key === REALTIME_LEASE_KEY && document.visibilityState !== 'hidden') claimRealtimeStreams();
+    });
+    ensureRealtimeLeadership();
+  }
+
+  function acceptMarketFrame(data) {
+    if (!data || !data.quotes) return;
+    App.Market.onFrame(data);
+    updateTapePrices(data.quotes);
+  }
+
   function subscribeMarketStream() {
-    if (!window.EventSource) return; // older engines fall back to polling
+    initRealtimeCoordination();
+    if (!window.EventSource || !ensureRealtimeLeadership()) return;
     try { if (App._marketES) { App._marketES.close(); App._marketES = null; } } catch (e) { /* ignore */ }
     var es;
     try { es = new EventSource('/api/market/stream'); } catch (e) { return; }
     App._marketES = es;
+    App._marketESstartedAt = Date.now();
     App._marketESerrors = 0; // fresh error budget per subscription (universe change / reconnect)
+    es.onopen = function () { App._marketESerrors = 0; realtimeMarketOpened = true; };
     es.addEventListener('quotes', function (ev) {
       try {
         var data = JSON.parse(ev.data);
         if (data && data.quotes) {
-          App.Market.onFrame(data);      // the store first — heroes/tiles subscribe there
-          updateTapePrices(data.quotes); // then the tape's in-place update
+          acceptMarketFrame(data);       // the store first — heroes/tiles subscribe there
+          relayRealtime('quotes', data); // then sibling tabs, without another SSE connection
         }
       } catch (e) { /* ignore a malformed frame */ }
     });
@@ -1290,7 +2114,30 @@
       if (App._marketESerrors > 3) { try { es.close(); } catch (e) {} App._marketES = null; }
     };
   }
+
+  function marketStreamHealthy() {
+    if (document.visibilityState === 'hidden') return true; // suppress the polling fallback while parked
+    if (realtimeReady && !realtimeSolo && !realtimeLeader) {
+      var lease = readRealtimeLease();
+      var leaderAlive = lease && Number(lease.expires || 0) > Date.now();
+      var recentHealth = Date.now() - realtimeLeaderHealthAt < 9000;
+      return !!leaderAlive && ((recentHealth && realtimeLeaderMarketHealthy)
+        || (!realtimeLeaderHealthAt && Date.now() - realtimeCoordinatedAt < 15000));
+    }
+    var es = App._marketES;
+    if (!es) return false;
+    if (es.readyState === 1) return true;
+    return !realtimeMarketOpened && Date.now() - realtimeCoordinatedAt < 15000;
+  }
+  App.marketStreamHealthy = marketStreamHealthy;
   App.subscribeMarketStream = subscribeMarketStream;
+  App.eventsStreamHealthy = function () {
+    if (document.visibilityState === 'hidden') return true;
+    if (realtimeSolo || realtimeLeader) return !!App._eventsES && App._eventsES.readyState === 1;
+    var lease = readRealtimeLease();
+    return !!lease && Number(lease.expires || 0) > Date.now()
+      && Date.now() - realtimeLeaderHealthAt < 9000 && realtimeLeaderEventsHealthy;
+  };
 
   /**
    * The typed event stream (/api/events): small server hints — job progress, dataset switches,
@@ -1321,26 +2168,86 @@
   }
   // Local command responses use the same typed path as SSE. The server also publishes the event
   // for other tabs; duplicate delivery is intentionally harmless and collapses in each view.
-  App.emitEvent = dispatchAppEvent;
+  // A local command is semantically the same event as its SSE echo: it must run the
+  // application-level reconciliation (dataset ownership, Plan refresh, alert count) before
+  // notifying mounted views. `acceptAppEvent` ends in dispatchAppEvent, so the later server
+  // echo remains an idempotent second hint instead of a different code path.
+  App.emitEvent = acceptAppEvent;
+
+  function acceptAppEvent(type, data) {
+    if (type === 'dataset.selected') {
+      var selectionSeq = App._datasetSelectionSeq = (App._datasetSelectionSeq || 0) + 1;
+      refreshScenarioBanner().then(function () {
+        if (selectionSeq !== App._datasetSelectionSeq) return;
+        API.invalidate(['/api/research', '/api/evaluate', '/api/plans']);
+        // Config (and therefore the Evidence owner key) is now authoritative. Rebuild only
+        // the mounted Workspace bands so an old-dataset fan/study cannot remain visible
+        // beside actions that would run in the newly selected dataset.
+        if (App._flowSeam || App._researchSeam) return App.refreshMounted();
+      }).catch(function (error) {
+        if (UI.toast) UI.toast(error.message || 'The selected dataset could not be reconciled.', 'error');
+      });
+    }
+    if (type === 'provider.cooldown' && data) showCooldownChip(data);
+    if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
+    if (type === 'plan.updated' && window.PlanStore) {
+      PlanStore.refresh().catch(function () { /* next route retries */ });
+    }
+    if (type === 'alerts.updated') {
+      App.refreshAlerts().catch(function () { /* the badge keeps its last honest count */ });
+    }
+    dispatchAppEvent(type, data);
+  }
+
+  /**
+   * The alert center's nav badge: the count of open attention items on the Desk nav entry
+   * (topbar + bottom nav share the same badge class). The GET is the source of truth; the
+   * alerts.updated SSE hint only tells us to refetch. Screens that render the rail read
+   * App.state.alertData (same fetch) so the Desk and the badge can never disagree.
+   */
+  function paintAlertBadge(counts) {
+    var total = counts && counts.total || 0;
+    var severity = counts && counts.urgent ? 'urgent' : counts && counts.attention ? 'attention' : 'info';
+    document.querySelectorAll('.nav-alert-badge').forEach(function (badge) {
+      if (!total) { badge.hidden = true; badge.textContent = ''; return; }
+      badge.hidden = false;
+      badge.textContent = total > 99 ? '99+' : String(total);
+      badge.setAttribute('data-severity', severity);
+      badge.setAttribute('aria-label', total + (total === 1 ? ' item needs' : ' items need') + ' attention');
+    });
+  }
+  App.refreshAlerts = async function () {
+    var data = await API.getFresh('/api/alerts');
+    App.state.alertData = data;
+    paintAlertBadge(data && data.counts);
+    return data;
+  };
 
   function subscribeEvents() {
-    if (!window.EventSource) return;
+    initRealtimeCoordination();
+    if (!window.EventSource || !ensureRealtimeLeadership()) return;
+    try { if (App._eventsES) { App._eventsES.close(); App._eventsES = null; } } catch (e0) { /* ignore */ }
     var es;
     try { es = new EventSource('/api/events'); } catch (e) { return; }
     App._eventsES = es;
-    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated',
-      'world.tick', 'world.selected', 'world.control']
+    ['job.progress', 'job.complete', 'dataset.selected', 'provider.cooldown', 'workspace.updated', 'plan.updated',
+      'world.tick', 'world.selected', 'world.control', 'alerts.updated']
       .forEach(function (type) {
         es.addEventListener(type, function (ev) {
           var data = null;
           try { data = JSON.parse(ev.data); } catch (e) { /* hint only */ }
-          if (type === 'dataset.selected') refreshScenarioBanner();
-          if (type === 'provider.cooldown' && data) showCooldownChip(data);
-          if (type === 'workspace.updated' && data && window.Workspace) Workspace.onRemoteRev(data.rev);
-          dispatchAppEvent(type, data);
+          acceptAppEvent(type, data);
+          relayRealtime('event', data, type);
         });
       });
     // EventSource reconnects itself; events are hints, so a gap costs nothing but freshness.
+  }
+
+  function closeRealtimeStreams() {
+    try { if (App._marketES) App._marketES.close(); } catch (e1) { /* ignore */ }
+    try { if (App._eventsES) App._eventsES.close(); } catch (e2) { /* ignore */ }
+    App._marketES = null;
+    App._eventsES = null;
   }
 
   /**
@@ -1379,13 +2286,13 @@
   function prefetchForRoute(route, params) {
     if (!window.API || !API.prefetch) return;
     var sym = null;
-    if (route === 'research' && params[0] && /^[A-Z.\-]{1,10}$/.test(params[0])) sym = params[0];
-    else if (route === 'trade') sym = App.context.symbol() || null;
+    if (route === 'research' && params && params[0]) sym = decodeURIComponent(params[0]).toUpperCase();
+    if (route === 'plan') sym = App.context.symbol() || null;
     if (!sym) return;
     var run = function () {
-      // Research → Trade: the ticket/builder need expirations + a quote first thing.
+      // A Plan's next stages need expirations, while Evidence calibrates from recent history.
       API.prefetch('/api/research/' + sym + '/expirations');
-      if (route === 'trade') API.prefetch('/api/research/' + sym + '/history?range=6m');
+      if (route === 'plan' || route === 'research') API.prefetch('/api/research/' + sym + '/history?range=6m');
     };
     if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2500 });
     else setTimeout(run, 700);
@@ -1422,7 +2329,7 @@
     if (!box) return;
     box.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && box.value.trim()) {
-        App.navigate('#/research/' + box.value.trim().toUpperCase());
+        App.navigate('#/research/' + encodeURIComponent(box.value.trim().toUpperCase()));
         box.value = '';
         box.blur();
       }

@@ -72,6 +72,22 @@ class GuardrailsTest {
     }
 
     @Test
+    void staleSameLaneQuoteWarnsForAnalysisButStillBlocksPlacement() {
+        Guardrails.Proposal p = proposal(StrategyFamily.LONG_CALL,
+                List.of(leg(LegAction.BUY, OptionType.CALL, "100")),
+                List.of(quote(OptionType.CALL, "100", "2.40", "2.60", 5000, 300, Freshness.STALE)));
+
+        Verdict analysis = Guardrails.checkForAnalysis(p);
+        Verdict placement = Guardrails.check(p);
+
+        assertThat(analysis.blocked()).isFalse();
+        assertThat(analysis.warnings()).anySatisfy(warning -> assertThat(warning)
+                .contains("STALE").contains("not executable"));
+        assertThat(placement.blocked()).isTrue();
+        assertThat(placement.blockReasons()).anySatisfy(reason -> assertThat(reason).contains("STALE"));
+    }
+
+    @Test
     void missingQuoteBlocksAsChainless() {
         List<OptionQuote> quotes = new ArrayList<>();
         quotes.add(null);
@@ -119,6 +135,37 @@ class GuardrailsTest {
                 SPOT, Freshness.FIXTURE, TODAY, 10_000_000L, false, false, true));
         assertThat(v.blocked()).isFalse();
         assertThat(v.warnings()).anySatisfy(w -> assertThat(w).containsIgnoringCase("early assignment"));
+    }
+
+    @Test
+    void adjustedCallUsesExactDeliverableSharesForCoverage() {
+        Leg shortAdjusted = Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("105"), EXP, 1, new BigDecimal("2.00"), 10);
+
+        assertThat(CoverageCheck.callCoverSharesNeeded(List.of(shortAdjusted))).isEqualTo(10);
+        assertThat(CoverageCheck.uncoveredShortsWithHeldShares(List.of(shortAdjusted), 9)).isNotEmpty();
+        assertThat(CoverageCheck.uncoveredShortsWithHeldShares(List.of(shortAdjusted), 10)).isEmpty();
+        assertThat(CoverageCheck.uncoveredShorts(List.of(
+                Leg.stockShares(LegAction.BUY, 10, SPOT), shortAdjusted))).isEmpty();
+
+        Verdict covered = Guardrails.check(new Guardrails.Proposal(null, List.of(shortAdjusted), 1,
+                List.of(quote(OptionType.CALL, "105", "1.90", "2.10", 5000, 300, Freshness.FIXTURE)),
+                SPOT, Freshness.FIXTURE, TODAY, 10_000_000L, false, false, false, 10));
+        assertThat(covered.blocked()).isFalse();
+        assertThat(covered.warnings()).anySatisfy(warning -> assertThat(warning).contains("10 held shares"));
+    }
+
+    @Test
+    void optionCoverageRequiresTheSameDeliverableMultiplier() {
+        Leg shortAdjusted = Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("105"), EXP, 1, new BigDecimal("2.00"), 10);
+        Leg longAdjusted = Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), EXP, 1, new BigDecimal("3.00"), 10);
+        Leg longStandard = Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), EXP, 1, new BigDecimal("3.00"), 100);
+
+        assertThat(CoverageCheck.uncoveredShorts(List.of(shortAdjusted, longAdjusted))).isEmpty();
+        assertThat(CoverageCheck.uncoveredShorts(List.of(shortAdjusted, longStandard))).isNotEmpty();
     }
 
     @Test

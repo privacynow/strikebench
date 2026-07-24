@@ -6,8 +6,13 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Schema migrations, run by Flyway from versioned SQL under classpath:db/migrations
- * (V1__init.sql, V2__..., ...). Flyway owns its own history table and runs pending
- * migrations in order; never edit a migration that has been applied to a real database.
+ * (V1__baseline.sql, V2__..., ...). Flyway owns its own history table and applies pending
+ * migrations in order; never edit a migration that has already been applied to a real database —
+ * add a forward migration instead.
+ *
+ * <p>Strict by design: an empty database is built from V1 up, and a non-empty database that
+ * predates Flyway (no history table) is rejected rather than silently adopted. Pre-release
+ * databases are disposable — recreate them empty and let Flyway rebuild.
  */
 public final class Migrations {
 
@@ -21,10 +26,11 @@ public final class Migrations {
                 .locations("classpath:db/migrations")
                 .load()
                 .migrate();
-        if (result.targetSchemaVersion == null) {
-            log.info("Local data schema ready (no updates needed)");
+        if (result.migrationsExecuted == 0) {
+            log.info("Data schema ready (no migrations pending)");
         } else {
-            log.info("Local data schema ready ({} update(s) applied)", result.migrationsExecuted);
+            log.info("Data schema ready ({} migration(s) applied, now at {})",
+                    result.migrationsExecuted, result.targetSchemaVersion);
         }
     }
 }

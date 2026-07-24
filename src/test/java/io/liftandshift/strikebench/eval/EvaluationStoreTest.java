@@ -13,7 +13,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Persistence of evaluations: typed rank columns + JSONB sub-profiles round-trip. */
+/** Persistence of evaluations: typed rank columns + one immutable JSONB receipt round-trip. */
 class EvaluationStoreTest {
 
     private Db db;
@@ -22,23 +22,23 @@ class EvaluationStoreTest {
 
     private StrategyEvaluation anEvaluation() {
         List<LegView> legs = List.of(
-                new LegView("BUY", "CALL", "250", "2026-08-21", 1, "4.00"),
-                new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00"));
+                new LegView("BUY", "CALL", "250", "2026-08-21", 1, "4.00", 100, "OPEN"),
+                new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00", 100, "OPEN"));
         Candidate c = new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C",
                 legs, 1, -20_000L, 30_000L, 20_000L, List.of("252.00"),
-                0.45, 2_000L, 0.70, "DELAYED", List.of(), 55.0, 0.6,
+                0.45, 2_000L, 0.70, "DELAYED", List.of(), 0.6,
                 "why", "up", "down", "inval", "plain", "DIRECTIONAL", List.of("DIRECTIONAL"),
                 0.30, null, null, null, false, null, null);
-        EvalContext ctx = new EvalContext("AAPL", 25_200L, 30, 0.30, 0.25,
+        EvalContext ctx = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.2, 0.25, 0.3, 0.35, 0.4, 0.28, 0.31, 0.27, 0.33, 0.29, 0.26, 0.32),
                 10_000_000L, true, 65, 0, 0.04,
-                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD));
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         return new StrategyEvaluator().evaluate(c,
                 new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "decision"),
                 ctx);
     }
 
-    @Test void savesTypedColumnsAndJsonbSubProfiles() {
+    @Test void savesTypedColumnsAndCanonicalJsonbReceipt() {
         db = TestDb.fresh();
         EvaluationStore store = new EvaluationStore(db);
         StrategyEvaluation e = anEvaluation();
@@ -47,7 +47,7 @@ class EvaluationStoreTest {
 
         var row = db.query("""
                 SELECT symbol, strategy, score, ev_cents, max_loss_cents, capital_economic_cents,
-                       evidence_level, risk_json, economics_json, explanation_json
+                       evidence_level, receipt::text receipt
                 FROM strategy_evaluation WHERE id=?""",
                 r -> Map.of(
                         "symbol", r.str("symbol"),
@@ -57,9 +57,7 @@ class EvaluationStoreTest {
                         "maxLoss", r.lng("max_loss_cents"),
                         "economic", r.lng("capital_economic_cents"),
                         "evidence", r.str("evidence_level"),
-                        "riskJson", r.str("risk_json"),
-                        "economicsJson", r.str("economics_json"),
-                        "explJson", r.str("explanation_json")),
+                        "receipt", r.str("receipt")),
                 e.id()).getFirst();
 
         assertThat(row.get("symbol")).isEqualTo("AAPL");
@@ -69,16 +67,21 @@ class EvaluationStoreTest {
         assertThat((long) row.get("economic")).isEqualTo(20_000L);
         assertThat(row.get("evidence")).isEqualTo(e.evidenceLevel().name());
 
-        // JSONB round-trips as real JSON with the producer detail inside.
+        // The one JSONB receipt round-trips with every producer detail under a named section.
         @SuppressWarnings("unchecked")
-        Map<String, Object> risk = Json.read((String) row.get("riskJson"), Map.class);
+        Map<String, Object> receipt = Json.read((String) row.get("receipt"), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> risk = (Map<String, Object>) receipt.get("risk");
         assertThat(risk).containsKey("scenarios");
         assertThat((List<?>) risk.get("scenarios")).hasSize(7);
         @SuppressWarnings("unchecked")
-        Map<String, Object> economics = Json.read((String) row.get("economicsJson"), Map.class);
-        assertThat(economics).containsKeys("verdict", "marketEvAfterCostsCents", "realizedVolEvAfterCostsCents");
+        Map<String, Object> assessment = (Map<String, Object>) receipt.get("assessment");
         @SuppressWarnings("unchecked")
-        Map<String, Object> expl = Json.read((String) row.get("explJson"), Map.class);
+        Map<String, Object> economics = (Map<String, Object>) assessment.get("economics");
+        assertThat(economics).containsKeys("verdict", "marketEvAfterCostsCents", "realizedVolEvAfterCostsCents");
+        assertThat(receipt).doesNotContainKey("economics");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> expl = (Map<String, Object>) receipt.get("explanation");
         assertThat(expl).containsKeys("assumptions", "failureModes");
     }
 

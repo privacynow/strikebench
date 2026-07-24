@@ -63,7 +63,7 @@ class SimLaneGateTest {
                                                         int qty, List<Leg> legs, String thesis,
                                                         String horizon, String riskMode) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, null, null, null, null, null);
+                riskMode, null, null, null, null, null, "PROPOSED");
     }
 
     @BeforeAll
@@ -208,14 +208,15 @@ class SimLaneGateTest {
         sessions.injectMove(id, "durable-user", "ACME", -0.05);
         long ticksAtFinish = w.ticks();
         sessions.finish(id, "durable-user");
-        var rows = db.query("SELECT state::text s, events::text e, status FROM sim_session WHERE id=?",
-                r -> new String[]{r.str("s"), r.str("e"), r.str("status")}, id);
+        var rows = db.query("SELECT state::text s,status FROM sim_session WHERE id=?",
+                r -> new String[]{r.str("s"), r.str("status")}, id);
         assertThat(rows).hasSize(1);
-        assertThat(rows.getFirst()[2]).isEqualTo("FINISHED");
+        assertThat(rows.getFirst()[1]).isEqualTo("FINISHED");
         @SuppressWarnings("unchecked")
         Map<String, Object> state = io.liftandshift.strikebench.util.Json.read(rows.getFirst()[0], Map.class);
         assertThat(((Number) state.get("quantum")).longValue()).isEqualTo(ticksAtFinish);
-        assertThat(rows.getFirst()[1]).as("the injected event is in the durable log").contains("MOVE");
+        assertThat(db.query("SELECT kind FROM sim_session_event WHERE sim_session_id=? ORDER BY event_index",
+                r -> r.str("kind"), id)).as("the injected event is in the durable log").contains("MOVE");
     }
 
     @Test

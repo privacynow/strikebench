@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The simulated market must be a market a real trader cannot arbitrage in five minutes, and a
@@ -46,6 +47,8 @@ class SimulatedMarketTest {
         assertThat(q.freshness()).isEqualTo(Freshness.SIMULATED);
         assertThat(q.source()).isEqualTo("simulated");
         assertThat(q.bid()).isLessThan(q.ask()); // never crossed
+        assertThat(q.dayHigh()).isNotNull().isGreaterThanOrEqualTo(q.last());
+        assertThat(q.dayLow()).isNotNull().isLessThanOrEqualTo(q.last());
 
         LocalDate exp = w.expirations().getFirst();
         OptionChain chain = w.chain("ACME", exp).orElseThrow();
@@ -121,5 +124,32 @@ class SimulatedMarketTest {
             prevA = a; prevB = b;
         }
         assertThat((double) agree / n).isGreaterThan(0.55); // co-move more often than chance
+    }
+
+    @Test
+    void planRehearsalFollowsTheStoredPathAtFixedKnotsAndCannotBeMutated() {
+        var replay = new SimulatedWorld.ReplaySource("plan-1", "ensemble-1", "receipt-1", 7,
+                "SAMPLE", "ACME", "paths-2", new double[]{100, 102, 98},
+                new double[]{0.20, 0.30, 0.25}, 60, 0.041);
+        var cfg = new SimulatedWorld.Config("w-replay", "Exact rehearsal", Map.of("ACME", 1.0),
+                Map.of("ACME", 100.0), "PLAN_REPLAY", 0.25, 8,
+                "2026-07-13T09:30:00", 26, Map.of("ACME", 0.25), Map.of("ACME", 0.20));
+        SimulatedWorld world = new SimulatedWorld(cfg, replay);
+
+        world.stepQuanta(1); // 30 seconds: halfway to the first stored knot
+        assertThat(world.quote("ACME").orElseThrow().last().doubleValue()).isCloseTo(101.0,
+                org.assertj.core.data.Offset.offset(0.0001));
+        world.stepQuanta(1);
+        assertThat(world.quote("ACME").orElseThrow().last().doubleValue()).isCloseTo(102.0,
+                org.assertj.core.data.Offset.offset(0.0001));
+        world.stepQuanta(2);
+        assertThat(world.quote("ACME").orElseThrow().last().doubleValue()).isCloseTo(98.0,
+                org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(world.replayComplete()).isTrue();
+        assertThat(world.rateAnnual()).isEqualTo(0.041);
+        world.stepQuanta(1);
+        assertThat(world.ticks()).isEqualTo(4); // completion is terminal, not a clamped path with a moving clock
+        assertThatThrownBy(() -> world.injectMove("ACME", -0.05)).hasMessageContaining("exact Plan rehearsal");
+        assertThatThrownBy(() -> world.injectVolShift(0.10)).hasMessageContaining("exact Plan rehearsal");
     }
 }

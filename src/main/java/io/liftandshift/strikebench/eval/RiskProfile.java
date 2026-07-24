@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.eval;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -13,9 +14,10 @@ public record RiskProfile(
         Long maxProfitCents,          // null = uncapped/model-dependent
         Double pop,                   // probability of profit (lognormal), null when model-dependent
         Long expectedValueCents,      // present-value RISK-NEUTRAL approximation (market IV, r, q=0)
-        long tailLossCents,           // loss under the stress move (>= 0)
-        double tailMovePct,           // the stress move used for tailLoss, e.g. 0.20 for -20%/+20%
+        long tailLossCents,           // bounded envelope max loss, otherwise modeled stress loss (>= 0)
+        double tailMovePct,           // base stress grid, e.g. 0.20 for -20%/+20%; bounded envelope may lie beyond it
         List<Scenario> scenarios,     // ordered by underlyingMovePct ascending
+        TerminalPayoff terminalPayoff,// exact server-owned curve receipt, explicit when unavailable
         Long evHistVolCents,         // EV at REALIZED vol, zero drift — a HISTORICAL-VOL SCENARIO, not the physical measure; null w/o history
         String evBasisNote            // the two lanes, spelled out — never one falsely precise number
 ) {
@@ -23,13 +25,42 @@ public record RiskProfile(
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
     }
 
-    /** Pre-physical-lane shape. */
+    /** Compatibility constructor for callers that do not produce presentation checkpoints. */
     public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
-                       long tailLossCents, double tailMovePct, List<Scenario> scenarios) {
+                       long tailLossCents, double tailMovePct, List<Scenario> scenarios,
+                       Long evHistVolCents, String evBasisNote) {
         this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, null, null);
+                scenarios, null, evHistVolCents, evBasisNote);
     }
 
-    /** One point on the payoff-vs-underlying grid. */
-    public record Scenario(double underlyingMovePct, long pnlCents) {}
+    /**
+     * One point on the payoff-vs-underlying grid. {@code prob} is the risk-neutral lognormal mass in
+     * the Voronoi bin around this move (same distribution as {@link #pop()}); null when no ATM IV /
+     * multi-expiry, so the client shows the bar without a probability rather than inventing one.
+     */
+    public record Scenario(double underlyingMovePct, long pnlCents, Double prob) {}
+
+    /** A bounded exact payoff polyline; clients may interpolate between these piecewise-linear points. */
+    public record PayoffPoint(BigDecimal price, long profitCents) {}
+
+    /**
+     * Versioned terminal-payoff receipt from the same captured candidate evaluation. Mixed-expiry
+     * packages are explicitly unavailable here because they require supplied-path valuation.
+     */
+    public record TerminalPayoff(
+            String schemaVersion,
+            String modelVersion,
+            boolean available,
+            Long anchorSpotCents,
+            String expiration,
+            String basis,
+            String entryBasis,
+            boolean feesIncluded,
+            List<PayoffPoint> points,
+            String unavailableReason
+    ) {
+        public TerminalPayoff {
+            points = points == null ? List.of() : List.copyOf(points);
+        }
+    }
 }

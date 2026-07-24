@@ -1,4 +1,5 @@
 package io.liftandshift.strikebench.pricing;
+import static io.liftandshift.strikebench.util.Numbers.round4;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -45,8 +46,9 @@ public final class ProbabilityMap {
         if (spot <= 0 || sigma <= 0 || tYears <= 0) {
             return new Result(0, 0, 0, 0, 0, 0, List.of(), "undefined (missing spot/vol/time)");
         }
-        double sd = sigma * Math.sqrt(tYears);
-        double mu = Math.log(spot) + (riskFreeRate - sigma * sigma / 2) * tYears;
+        LognormalTerminal term = LognormalTerminal.of(spot, sigma, tYears, riskFreeRate);
+        double sd = term.sd();
+        double mu = term.mu();
 
         long maxProfit = curve.maxProfitUnbounded() ? Long.MAX_VALUE : curve.maxProfitCents();
         long maxLoss = curve.maxLossUnbounded() ? Long.MAX_VALUE : curve.maxLossCents();
@@ -67,7 +69,7 @@ public final class ProbabilityMap {
             if (b - a < 1e-9) continue;
             double mid = (a + b) / 2;
             long pm = curve.profitAtCents(BigDecimal.valueOf(mid));
-            double mass = cdf(b, mu, sd) - cdf(a, mu, sd);
+            double mass = term.cdf(b) - term.cdf(a);
             if (pm > 0) pAny += mass;
             // Equality with the extreme holds on the whole interval only if BOTH endpoints (and
             // hence the linear segment) sit at the extreme — a single-point peak contributes 0.
@@ -114,7 +116,7 @@ public final class ProbabilityMap {
         for (BigDecimal k : shortStrikes == null ? List.<BigDecimal>of() : shortStrikes) {
             double kk = k.doubleValue();
             if (kk <= 0) continue;
-            double beyond = kk >= spot ? 1 - cdf(kk, mu, sd) : cdf(kk, mu, sd);
+            double beyond = kk >= spot ? 1 - term.cdf(kk) : term.cdf(kk);
             touches.add(new Touch(k, Math.min(1.0, 2 * beyond)));
         }
         String basis = riskFreeRate != 0
@@ -124,25 +126,6 @@ public final class ProbabilityMap {
                 cvar95, Math.min(0, stress), touches, basis);
     }
 
-    /** Lognormal CDF: P(S_T <= s) with ln S_T ~ N(mu, sd^2). */
-    private static double cdf(double s, double mu, double sd) {
-        if (s <= 0) return 0;
-        return normCdf((Math.log(s) - mu) / sd);
-    }
-
     private static double clamp01(double v) { return Math.max(0, Math.min(1, v)); }
 
-    private static double normCdf(double z) {
-        return 0.5 * (1 + erf(z / Math.sqrt(2)));
-    }
-
-    private static double erf(double x) {
-        // Abramowitz–Stegun 7.1.26 (|err| < 1.5e-7) — same kernel family as BlackScholes.normCdf.
-        double t = 1 / (1 + 0.3275911 * Math.abs(x));
-        double y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
-                + 0.254829592) * t * Math.exp(-x * x);
-        return x >= 0 ? y : -y;
-    }
-
-    private static double round4(double v) { return Math.round(v * 10000.0) / 10000.0; }
 }

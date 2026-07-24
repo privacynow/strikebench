@@ -20,10 +20,12 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7093';
 const BASE = `http://localhost:${PORT}`;
+const WORKSPACE = BASE + '/workspace.html';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
 let server, browser, page, pg;
+let planSequence = 0;
 const pageErrors = [];
 const serverErrors = [];
 
@@ -47,6 +49,68 @@ async function go(hash) {
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 60000 });
 }
 
+async function openPlan(symbol, stage = 'understand', intent = 'DIRECTIONAL', thesis = 'bullish') {
+  const response = await fetch(BASE + '/api/plans', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientRequestId: 'live-plan-' + (++planSequence), symbol, intent,
+      thesis, horizonDays: 30, riskMode: 'conservative' })
+  });
+  const body = await response.text();
+  assert.ok(response.ok, 'live Plan creation failed: ' + body);
+  const plan = JSON.parse(body);
+  await page.evaluate(async ({ id, stage }) => {
+    await PlanStore.load(true);
+    App.navigate('#/plan/' + id + '/' + stage);
+  }, { id: plan.id, stage });
+  await page.waitForFunction(({ id, stage }) => location.hash === '#/plan/' + id + '/' + stage
+    && document.getElementById('app').getAttribute('data-ready') === 'true', { id: plan.id, stage },
+    { timeout: 60000 });
+  return plan;
+}
+
+async function runPlanField() {
+  const compare = page.locator('.plan-tool').filter({ hasText: /Proposed trades|Ranked field/ });
+  if (await compare.count()) await compare.click();
+  await page.waitForSelector('#plan-run-strategy:not([disabled])', { timeout: 60000 });
+  const responseP = page.waitForResponse(response => response.request().method() === 'POST'
+    && /\/api\/plans\/[^/]+\/strategy\/run$/.test(new URL(response.url()).pathname), { timeout: 60000 });
+  await page.click('#plan-run-strategy');
+  const response = await responseP;
+  if (!response.ok()) {
+    await page.waitForSelector('#toast-root .toast-error, #plan-strategy-body .alert-danger', { timeout: 10000 });
+    return false;
+  }
+  await page.waitForFunction(() => {
+    const body = document.getElementById('plan-strategy-body');
+    return !!body && (!!body.querySelector('#plan-strategy-results .ranked-idea-hero')
+      || /No structure passed this screen|No candidate passed/.test(body.textContent || ''));
+  }, null, { timeout: 60000 });
+  return true;
+}
+
+async function runAndSelectListedCandidate(plan) {
+  if (!(await runPlanField())) return false;
+  if (!(await page.locator('#plan-strategy-results .ranked-idea-hero').count())) return false;
+  const selected = await page.evaluate(async planId => {
+    const latest = await API.getFresh('/api/plans/' + planId + '/strategy/latest');
+    const candidates = latest && latest.strategy && latest.strategy.result && latest.strategy.result.candidates || [];
+    const candidate = candidates.find(item => {
+      const expirations = new Set((item.legs || []).filter(leg => leg.type !== 'STOCK')
+        .map(leg => leg.expiration));
+      return expirations.size === 1
+        && item.evaluation?.assessment?.mechanics?.eligible !== false;
+    });
+    if (!candidate) return false;
+    const live = await PlanStore.get(planId, true);
+    await PlanStore.selectCandidate(live, candidate.id);
+    await App.render();
+    return true;
+  }, plan.id);
+  if (selected) await page.waitForSelector('#plan-strategy-results button:has-text("Continue to Outcomes")',
+    { timeout: 30000 });
+  return selected;
+}
+
 function assertClean(label) {
   assert.deepEqual(pageErrors, [], `${label}: page JS errors: ${pageErrors.join(' | ')}`);
   assert.deepEqual(serverErrors, [], `${label}: server 5xx: ${serverErrors.join(' | ')}`);
@@ -63,7 +127,7 @@ before(async () => {
   page = await browser.newPage();
   page.on('pageerror', e => pageErrors.push(e.message));
   page.on('response', r => { if (r.status() >= 500) serverErrors.push(r.status() + ' ' + r.url()); });
-  await page.goto(BASE + '/');
+  await page.goto(WORKSPACE);
   await page.waitForSelector('#app[data-ready="true"]', { timeout: 60000 });
 });
 
@@ -87,10 +151,18 @@ test('live: dashboard renders observed cards or an explicit unavailable state', 
       .every(c => c.querySelector('.spark-svg, .spark-empty')), { timeout: 30000 });
     assert.doesNotMatch(await page.textContent('#home-market-watch'), /DEMO DATA/i,
       'Observed Home never substitutes Demo quotes');
-    const missingHistoryLabels = await page.$$eval('#home-market-watch .sym-card:has(.spark-empty) .spark-ev',
-      els => els.map(e => e.textContent.trim()));
-    missingHistoryLabels.forEach(label => assert.equal(label, 'HISTORY UNAVAILABLE',
-      'a usable quote with no candles names the missing dimension, not all data'));
+    const missingCards = page.locator('#home-market-watch .sym-card:has(.spark-empty)');
+    const missingCount = await missingCards.count();
+    if (missingCount) {
+      assert.ok(await page.locator('#home-market-watch .home-history-notice').isVisible(),
+        'one section-level recovery note explains missing history');
+      assert.equal(await page.locator('#home-market-watch .sym-card:has(.spark-empty) .spark-ev').count(), 0,
+        'cards do not repeat the same missing-history badge under the section-level notice');
+      const emptyLabels = await page.$$eval('#home-market-watch .sym-card:has(.spark-empty) .spark-empty',
+        els => els.map(e => e.textContent.trim()));
+      emptyLabels.forEach(label => assert.match(label, /Needs daily history|Chart (?:deferred|temporarily unavailable)|No daily history/,
+        'each affected card names its actual chart state without repeating the section banner'));
+    }
   } else {
     assert.match(await page.textContent('#home-market-watch'), /market data unavailable/i,
       'provider outage is an explicit state');
@@ -154,16 +226,43 @@ test('live: visible market controls return Demo and simulated sessions to Observ
 });
 
 test('live: research a real symbol end to end', async () => {
+  await go('#/research');
+  await page.waitForSelector('#sector-grid .spark-svg, #sector-grid .spark-empty', { timeout: 30000 });
+  if (await page.locator('#sector-grid .spark-empty').count()) {
+    assert.ok(await page.locator('#sector-history-notice').isVisible(),
+      'Research owns one explicit history recovery action');
+    assert.equal(await page.locator('#sector-grid .spark-empty + .spark-ev').count(), 0,
+      'the explorer does not repeat HISTORY UNAVAILABLE on every affected card');
+    assert.equal(await page.locator('#sector-grid .spark-empty').count(),
+      await page.locator('#sector-grid .spark-slot-missing').count(),
+      'missing charts release unused chart height without hiding the unavailable state');
+  }
   await go('#/research/AAPL');
+  await page.waitForSelector('#symbol-proposed-trades', { timeout: 30000 });
   await page.waitForSelector('#research-symbol', { timeout: 30000 });
   const quoteBadge = await page.textContent('.quote-hero .badge');
   assert.match(quoteBadge, /REALTIME|DELAYED|EOD|STALE/i, 'observed quote age is labeled');
   assert.doesNotMatch(quoteBadge, /DEMO|SIMULATED/i, 'Observed quote never comes from another lane');
-  await page.click('#research-workspace-tabs [data-research-tab="options"]');
-  await page.waitForSelector('#expiration-select', { timeout: 30000 });
-  await page.waitForSelector('.tbl tbody tr');
+  await page.waitForSelector('#history-card');
   const hist = await page.textContent('#history-card');
   assert.doesNotMatch(hist, /DEMO DATA/i, 'Observed Research never substitutes Demo candles');
+  assert.doesNotMatch(await page.textContent('#research-hero'), /building history|—\s*[–-]\s*—/i,
+    'missing metrics use honest words instead of fake progress or punctuation placeholders');
+  if (/unavailable/i.test(hist)) {
+    assert.match(await page.textContent('#research-evidence'), /PARTIAL EVIDENCE/i,
+      'working quote and chain inputs are not mislabeled as total data failure when history is missing');
+  }
+  const heroText = await page.textContent('#research-hero');
+  if (/add history/i.test(heroText)) {
+    assert.match(heroText, /\d+\/20 daily closes · add history/i,
+      'HV names the shared twenty-close requirement and recovery action');
+    assert.match(heroText, /\d+\/10 observed snapshot days/i,
+      'IV rank remains visible and names its independent option-snapshot requirement');
+  }
+  await openPlan('AAPL', 'strategy');
+  await page.locator('.plan-tool').filter({ hasText: /Chain|Option prices/ }).click();
+  await page.waitForSelector('#expiration-select', { timeout: 30000 });
+  await page.waitForSelector('.tbl tbody tr');
   assertClean('research');
 });
 
@@ -185,71 +284,105 @@ test('live: research handles unknown and non-optionable symbols gracefully', asy
   assertClean('research-edge');
 });
 
-test('live: manual ideas return candidates for a real chain', async () => {
-  await go('#/trade/context/manual');
-  await page.fill('#rec-symbol', 'AAPL');
-  await page.selectOption('#rec-thesis', 'bullish');
-  await page.click('#rec-go');
-  await page.waitForSelector('.candidate, .empty, .alert-warn', { timeout: 60000 });
-  const text = await page.textContent('#rec-results');
-  assert.ok(/Theoretical worst case|Theor\. max loss/.test(text) || /Nothing passed/.test(text),
+test('live: a single-symbol Plan returns ranked structures for a real chain', async () => {
+  const plan = await openPlan('AAPL', 'strategy');
+  const completed = await runPlanField();
+  const text = await page.textContent('#plan-strategy-body');
+  assert.ok(!completed || /Theoretical max loss/.test(text)
+      || /No structure passed this screen|No candidate passed/.test(text),
     'candidates preserve theoretical risk truth or render a graceful empty state');
-  assertClean('ideas-manual');
+  assert.match(await page.textContent('#plan-header'), new RegExp(plan.symbol));
+  assertClean('plan-strategy');
 });
 
-test('live: scout scans and reports with evidence within budget', async () => {
-  await go('#/trade/context/scout');
-  await page.waitForSelector('#auto-target');
+test('live: universe Scout scans and reports with evidence within budget', async () => {
+  const researchReadiness = await page.evaluate(async () => API.getFresh('/api/research/AAPL'));
+  await go('#/research');
+  await page.waitForSelector('#universe-scout-run');
+  // Live mode follows the same no-silent-default contract as Demo: the Scout cannot invent
+  // its goal, horizon, or risk posture merely because providers are available.
+  await page.click('#universe-scout-intent .choice-option[data-value="DIRECTIONAL"]');
+  await page.click('#universe-scout-horizon .choice-option[data-value="month"]');
+  await page.click('#universe-scout-risk .choice-option[data-value="conservative"]');
+  await page.waitForSelector('#universe-scout-run:not([disabled])');
   const t0 = Date.now();
-  await page.click('#rec-go');
-  await page.waitForSelector('.pick-card, .empty', { timeout: 60000 });
+  await page.click('#universe-scout-run');
+  await page.waitForSelector('#universe-scout-results .universe-scout-pick, #universe-scout-results .empty',
+    { timeout: 60000 });
   const elapsed = Date.now() - t0;
   assert.ok(elapsed < 20000, `scout under 20s, took ${elapsed}ms`);
-  if (await page.locator('.pick-card').count()) {
-    assert.match(await page.textContent('.pick-card'), /Confidence/);
+  if (await page.locator('#universe-scout-results .universe-scout-pick').count()) {
+    assert.match(await page.textContent('#universe-scout-results'), /Confidence|Evidence|Favorable|Mixed/i);
+    if (researchReadiness.hv30 === null || researchReadiness.hv30 === undefined) {
+      assert.match(await page.textContent('#universe-scout-results'),
+        /favorable observed verdict cannot be formed|daily history is insufficient|every candidate failed a mechanical or account check|no executable option chain/i,
+        'Scout distinguishes missing realized history, an unavailable executable chain, or a mechanical block from an unfavorable economic scan');
+    }
   }
   assertClean('scout');
 });
 
-test('live: full ticket flow places and unwinds a paper trade at real marks', async () => {
-  await go('#/trade/context/manual');
-  await page.fill('#rec-symbol', 'AAPL');
-  await page.click('#intent-choices .choice[data-intent="DIRECTIONAL"]');
-  await page.selectOption('#rec-thesis', 'bullish');
-  await page.click('#rec-go');
-  const useBtn = '#rec-results .candidate button:has-text("Review & decide")';
-  await page.waitForSelector(useBtn + ', .alert-warn', { timeout: 60000 });
-  if (!(await page.locator(useBtn).count())) {
+test('live: Plan Decide places and Manage unwinds a paper trade at real marks', async () => {
+  const plan = await openPlan('AAPL', 'strategy');
+  if (!(await runAndSelectListedCandidate(plan))) {
     assert.ok(true, 'no candidates passed screens right now — graceful, not a failure');
     assertClean('ticket-nocandidates');
     return;
   }
-  await page.locator(useBtn).first().click();
-  await page.waitForSelector('#to-review', { timeout: 30000 });
-  await page.click('#to-review');
-  await page.waitForSelector('#to-confirm', { timeout: 60000 });
-  assert.match(await page.textContent('#ticket-body'), /Buying power after/);
-  await page.$$eval('.ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); })); // acknowledge material risks (CP-5 gate)
-  await page.click('#to-confirm');
-  await page.waitForSelector('#place-trade');
-  await page.click('#place-trade');
+  await go('#/plan/' + plan.id + '/decide');
+  await page.waitForSelector('#plan-review-order');
+  await page.click('#plan-review-order');
+  await page.waitForSelector('#plan-decision-review .plan-decision-math', { timeout: 60000 });
+  assert.match(await page.textContent('#plan-decision-review'), /Buying power after/);
+  await page.$$eval('#plan-decision-review .ack-gate input', els => els.forEach(e => { if (!e.checked) e.click(); }));
+  if (!(await page.locator('#plan-place-trade').isEnabled())) {
+    const review = await page.textContent('#plan-decision-review');
+    assert.match(review, /This package cannot be opened/i,
+      'a non-executable observed package is refused explicitly instead of timing out or switching lanes');
+    assert.match(review, /OBSERVED|executable|STALE|market is closed/i,
+      'the refusal names the observed execution-data condition');
+    assert.doesNotMatch(review, /DEMO DATA|fabricated/i,
+      'an observed execution gap never substitutes teaching-market prices');
+    assert.ok(await page.locator('#plan-stay-cash').isEnabled(),
+      'staying in cash remains an actionable decision when execution is unavailable');
+    assertClean('ticket-non-executable');
+    return;
+  }
+  await page.click('#plan-place-trade');
   await page.waitForSelector('#refresh-btn', { timeout: 60000 }); // detail landmark
-  assert.match(await page.textContent('#app'), /ACTIVE/);
+  const openPosition = await page.evaluate(async id => {
+    const data = await API.getFresh('/api/plans/' + id + '/manage');
+    return { status: data.trade && data.trade.trade && data.trade.trade.status,
+      visible: document.querySelector('.quote-hero')?.textContent || '' };
+  }, plan.id);
+  assert.equal(openPosition.status, 'ACTIVE', 'the canonical trade record is active');
+  assert.match(openPosition.visible, /Open/i,
+    'the visible status uses readable product language instead of leaking the backend enum');
 
   await page.click('#refresh-btn');
   await page.waitForSelector('text=Marks history', { timeout: 30000 });
   await page.click('#unwind-btn');
-  await page.waitForSelector('#modal-confirm');
-  await page.click('#modal-confirm');
-  await page.waitForSelector('#app[data-ready="true"]:has-text("CLOSED")', { timeout: 60000 });
+  await page.waitForSelector('#close-transformation-preview');
+  assert.match(await page.textContent('#close-transformation-preview'),
+    /Cash \/ no position.*Closing cash flow.*Final position P\/L/s,
+    'the observed close uses the same reviewed before/after transformation contract');
+  await page.getByRole('button', { name: 'Close position' }).click();
+  await page.waitForSelector('#plan-stage-manage-review .plan-review-results', { timeout: 60000 });
   assertClean('ticket-lifecycle');
 });
 
 test('live: observed backtest never substitutes demo history', async () => {
-  await go('#/trade/outcomes');
-  await page.click('#bt-run');
-  await page.waitForSelector('#bt-results .stat, #bt-results .alert-danger', { timeout: 120000 });
-  const text = await page.textContent('#bt-results');
+  const plan = await openPlan('AAPL', 'strategy');
+  if (!(await runAndSelectListedCandidate(plan))) {
+    assertClean('backtest-no-position');
+    return;
+  }
+  await go('#/plan/' + plan.id + '/outcomes');
+  await page.waitForSelector('#plan-outcomes');
+  await page.click('#plan-outcomes-basis-backtest');
+  await page.getByRole('button', { name: 'Run historical replay' }).click();
+  await page.waitForSelector('#plan-backtest-result .grid, #plan-backtest-result .alert-danger', { timeout: 120000 });
+  const text = await page.textContent('#plan-backtest-result');
   assert.doesNotMatch(text, /Demo price data|DEMO DATA/i,
     'Observed backtest must require observed/modeled-from-observed history instead of substituting fixtures');
   assertClean('backtest');

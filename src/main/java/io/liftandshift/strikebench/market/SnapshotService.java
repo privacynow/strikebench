@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
@@ -35,12 +36,19 @@ public final class SnapshotService {
     private final UniverseService universe;
     private final Db db;
     private final Clock clock;
+    private final MarketDataMaintenanceGate maintenance;
 
     public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock) {
+        this(market, universe, db, clock, new MarketDataMaintenanceGate());
+    }
+
+    public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock,
+                           MarketDataMaintenanceGate maintenance) {
         this.market = market;
         this.universe = universe;
         this.db = db;
         this.clock = clock;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
     }
 
     /** Outcome of one snapshot run — surfaced by the admin endpoint and logged by the scheduler. */
@@ -101,7 +109,7 @@ public final class SnapshotService {
         // date merely because Quote.mark() can display it as a fallback.
         final Quote observedQuote = quote != null && quote.last() != null
                 && snapshotEligible(quote.evidence()) ? quote : null;
-        return db.tx(c -> {
+        return maintenance.write(() -> db.tx(c -> {
             int u = 0, o = 0;
             if (observedQuote != null) {
                 BigDecimal close = observedQuote.last() != null ? observedQuote.last() : observedQuote.mark();
@@ -129,27 +137,19 @@ public final class SnapshotService {
                     String ivSource = q.iv() != null ? (observed ? "vendor" : "model") : null;
                     boolean anyGreek = q.delta() != null || q.gamma() != null || q.theta() != null || q.vega() != null;
                     String greeksSource = anyGreek ? (observed ? "vendor" : "model") : null;
-                    Db.execOn(c,
-                            "INSERT INTO option_bar (symbol, asof, expiration, strike, opt_type, bid, ask, last, mark, "
-                          + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
-                          + "bid_ask_observed, iv_source, greeks_source) "
-                          + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
-                          + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, "
-                          + "iv=excluded.iv, delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, "
-                          + "vega=excluded.vega, open_interest=excluded.open_interest, volume=excluded.volume, "
-                          + "underlying=excluded.underlying, bid_ask_observed=excluded.bid_ask_observed, "
-                          + "iv_source=excluded.iv_source, greeks_source=excluded.greeks_source",
-                            sym, asof, q.expiration(), q.strike(), q.type().name(),
-                            q.bid(), q.ask(), q.last(), q.mid(),
-                            q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
-                            q.openInterest(), q.volume(), underlying, SOURCE,
-                            baObserved, ivSource, greeksSource);
+                    // THE one option_bar upsert; the snapshot's mark policy is the quote midpoint.
+                    io.liftandshift.strikebench.db.OptionBarWriter.upsertOn(c,
+                            new io.liftandshift.strikebench.db.OptionBarWriter.Row(
+                                    sym, asof, q.expiration(), q.strike(), q.type().name(),
+                                    q.bid(), q.ask(), q.last(), q.mid(),
+                                    q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
+                                    q.openInterest(), q.volume(), underlying, SOURCE,
+                                    baObserved, ivSource, greeksSource));
                     o++;
                 }
             }
             return new int[]{u, o};
-        });
+        }));
     }
 
     /** Only attributable, current-enough observed inputs may enter the canonical observed tables. */

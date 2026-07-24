@@ -9,7 +9,7 @@ import java.util.Random;
 /**
  * The shared resampling foundation (adversarial-review consolidation): the event study's bootstrap
  * confidence interval and the conditional-bootstrap path producer live HERE, not as private loops
- * inside individual engines. The CI method keeps the exact legacy algorithm and seeding so
+ * inside individual engines. The CI method keeps the validated deterministic algorithm and seeding so
  * validated study outputs do not drift under the refactor; the path resampler is new machinery on
  * the counter-based {@link RandomStreams} (order-independent, reproducible per draw).
  */
@@ -18,13 +18,6 @@ public final class BootstrapSampler {
     private BootstrapSampler() {}
 
     private static final long S_PATHS = 0x5851F42D4C957F2DL; // stream id for path resampling
-
-    /**
-     * Compatibility overload for the original deterministic moving-block 90% interval.
-     */
-    public static double[] meanCi(List<Double> rs, long seed, int block, int iterations) {
-        return meanCi(rs, seed, block, iterations, 90);
-    }
 
     /** Deterministic moving-block bootstrap interval at the requested two-sided confidence. */
     public static double[] meanCi(List<Double> rs, long seed, int block, int iterations, int confidencePct) {

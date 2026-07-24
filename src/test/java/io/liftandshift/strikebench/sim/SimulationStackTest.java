@@ -12,7 +12,10 @@ import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionChain;
+import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.support.TestDb;
@@ -23,6 +26,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +39,7 @@ class SimulationStackTest {
 
     private Db db;
     private final Clock clock = Clock.fixed(Instant.parse("2026-07-06T14:00:00Z"), ZoneOffset.UTC);
+    private static final LocalDate PATH_DATE = LocalDate.parse("2026-07-06");
 
     @AfterEach void closeDb() { if (db != null) db.close(); }
 
@@ -44,12 +49,22 @@ class SimulationStackTest {
     }
 
     private ScenarioSimulator.SimResult run(ScenarioSimulator simulator, double spot,
-                                              List<ScenarioSimulator.SimLeg> legs, int qty,
+                                              PathPosition position, int qty,
                                               ScenarioSpec raw, IvSpec iv, double rate,
                                               double[] historicalReturns) {
         ScenarioSpec spec = raw.sane();
         double[][] paths = new PathGenerator().generate(spec, spot, historicalReturns);
-        return simulator.runOnPaths(paths, spot, legs, qty, spec, iv, rate, null, null, 0);
+        return simulator.runOnPaths(paths, position, qty, spec, iv, rate, null, null, 0);
+    }
+
+    private static PathPosition position(Leg... legs) {
+        return new PathPosition(PATH_DATE, List.of(legs));
+    }
+
+    private static Leg option(LegAction action, OptionType type, double strike, int expiryDay) {
+        return Leg.option(action, type, BigDecimal.valueOf(strike),
+                io.liftandshift.strikebench.market.MarketHours.tradingDateAfter(PATH_DATE, expiryDay),
+                1, BigDecimal.ZERO);
     }
 
     @Test
@@ -65,7 +80,7 @@ class SimulationStackTest {
     @Test
     void longCallWinsMoreInAGrindUpThanASelloff() {
         var sim = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
         var up = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.GRIND_UP, 0.6, 7), IvSpec.flat(0.25), 0.04, null);
         var down = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.SELLOFF_REBOUND, -0.6, 7), IvSpec.flat(0.25), 0.04, null);
         assertThat(up.winRatePct()).isGreaterThan(down.winRatePct());
@@ -84,8 +99,8 @@ class SimulationStackTest {
         var sim = new ScenarioSimulator();
         // Legs expire AFTER the 20-day horizon (day 45), so the exit is a BSM value at the then-current
         // IV — which is exactly where a crush bites. (At expiry, value is intrinsic and IV is moot.)
-        var straddle = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 45, 1),
-                new ScenarioSimulator.SimLeg("BUY", "PUT", 100, 45, 1));
+        var straddle = position(option(LegAction.BUY, OptionType.CALL, 100, 45),
+                option(LegAction.BUY, OptionType.PUT, 100, 45));
         var flatIv = run(sim, 100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9), IvSpec.flat(0.40), 0.04, null);
         var crushed = run(sim, 100, straddle, 1, spec(ScenarioSpec.Shape.CHOP, 0, 9),
                 new IvSpec(0.40, 0, 0, 0.40, 2, -0.5, 0.03, 4.0), 0.04, null);
@@ -99,7 +114,7 @@ class SimulationStackTest {
         // cash amount — the P&L fan must be FLAT after expiry (it used to keep re-valuing the
         // dead option against the post-expiration stock price).
         var sim = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 5, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 5));
         var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP, 20, 1, 0, 0.4,
                 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.4), 77, 1); // ONE path -> bands ARE that path
         var r = run(sim, 100, legs, 1, spec, IvSpec.flat(0.4), 0.04, null);
@@ -112,7 +127,8 @@ class SimulationStackTest {
     @Test
     void zeroDteOptionKeepsTimeValueUntilTheFirstSimulatedClose() {
         var sim = new ScenarioSimulator();
-        var sameDay = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 0, 1));
+        var sameDay = position(option(LegAction.BUY, OptionType.CALL, 100, 0));
+        assertThat(sameDay.expiryDay(sameDay.legs().getFirst())).isZero();
         var oneSession = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
                 1, 4, 0, 0.25, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(0.25), 88, 80);
 
@@ -126,7 +142,7 @@ class SimulationStackTest {
     @Test
     void seedReproducesTheExactDistribution() {
         var sim = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
         var a = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
         var b = run(sim, 100, legs, 1, spec(ScenarioSpec.Shape.CHOP, 0, 42), IvSpec.flat(0.3), 0.04, null);
         assertThat(a.p50Cents()).isEqualTo(b.p50Cents());
@@ -136,13 +152,13 @@ class SimulationStackTest {
     @Test
     void configuredRoundTripFeesShiftTheWholeOutcomeDistribution() {
         var simulator = new ScenarioSimulator();
-        var legs = List.of(new ScenarioSimulator.SimLeg("BUY", "CALL", 100, 20, 1));
+        var legs = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
         ScenarioSpec sane = spec(ScenarioSpec.Shape.CHOP, 0, 55).sane();
         double[][] paths = new PathGenerator().generate(sane, 100, null);
 
-        var gross = simulator.runOnPaths(paths, 100, legs, 1, sane, IvSpec.flat(0.3), 0.04,
+        var gross = simulator.runOnPaths(paths, legs, 1, sane, IvSpec.flat(0.3), 0.04,
                 null, null, 0);
-        var net = simulator.runOnPaths(paths, 100, legs, 1, sane, IvSpec.flat(0.3), 0.04,
+        var net = simulator.runOnPaths(paths, legs, 1, sane, IvSpec.flat(0.3), 0.04,
                 null, null, 500);
 
         assertThat(net.expectedPnlCents()).isEqualTo(gross.expectedPnlCents() - 500);
@@ -152,6 +168,36 @@ class SimulationStackTest {
         assertThat(net.bands().getLast().p50Cents()).isEqualTo(gross.bands().getLast().p50Cents() - 500);
         assertThat(net.winRatePct()).isLessThanOrEqualTo(gross.winRatePct());
         assertThat(net.notes()).anyMatch(n -> n.contains("$5.00") && n.contains("round-trip"));
+    }
+
+    @Test
+    void exactEnsembleComparisonReusesTheStoredMatrixAndEachProposalQuantity() {
+        var simulator = new ScenarioSimulator();
+        ScenarioSpec sane = spec(ScenarioSpec.Shape.GRIND_UP, 0.15, 909).sane();
+        double[][] paths = new PathGenerator().generate(sane, 100, null);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "demo",
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED),
+                100, sane, paths, null, PathGenerator.MODEL_VERSION);
+        var call = position(option(LegAction.BUY, OptionType.CALL, 100, 20));
+
+        var compared = simulator.compare(ensemble, List.of(
+                new ScenarioSimulator.CompareItem("one", call, null, "stored entry", 0, 1),
+                new ScenarioSimulator.CompareItem("three", call, null, "stored entry", 0, 3)),
+                9, IvSpec.flat(0.25), 0.04);
+
+        assertThat(compared.ensemble()).isSameAs(ensemble);
+        assertThat(compared.report().refused()).isEmpty();
+        assertThat(compared.report().results()).extracting(ScenarioSimulator.CompareOutcome::key)
+                .containsExactly("one", "three");
+        var one = compared.report().results().get(0).result();
+        var three = compared.report().results().get(1).result();
+        assertThat(three.entryCostCents()).isCloseTo(one.entryCostCents() * 3,
+                org.assertj.core.data.Offset.offset(1L));
+        assertThat(three.expectedPnlCents()).isCloseTo(one.expectedPnlCents() * 3,
+                org.assertj.core.data.Offset.offset(1L));
+        assertThat(three.p5Cents()).isCloseTo(one.p5Cents() * 3,
+                org.assertj.core.data.Offset.offset(1L));
     }
 
     @Test
@@ -168,11 +214,11 @@ class SimulationStackTest {
         var run = engine.runAndPersist("AAPL", spec(ScenarioSpec.Shape.SELLOFF_REBOUND, 0, 3), null,
                 "observed", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         assertThat(run.bars()).isGreaterThan(10);
-        assertThat(run.pathModelVersion()).isEqualTo("paths-3");
+        assertThat(run.pathModelVersion()).isEqualTo(PathGenerator.MODEL_VERSION);
         DatasetService.DatasetRow saved = datasets.list(null).stream()
                 .filter(d -> d.id().equals(run.datasetId())).findFirst().orElseThrow();
         assertThat(io.liftandshift.strikebench.util.Json.parse(saved.spec()).get("pathModelVersion").asText())
-                .isEqualTo("paths-3");
+                .isEqualTo(PathGenerator.MODEL_VERSION);
         // Observed rows are untouched: the synthetic bars live ONLY under the new dataset_id.
         long observedRows = db.query("SELECT count(*) c FROM underlying_bar WHERE dataset_id='observed'",
                 r -> r.lng("c")).getFirst();
@@ -246,7 +292,15 @@ class SimulationStackTest {
                         new SimulationEngine.DecisionLevel("floor", 240)),
                 new SimulationEngine.MarketVolInput(0.30, LocalDate.parse("2026-08-07"), 32), 0.04);
         assertThat(p.bands()).hasSize(21); // day 0..20
-        assertThat(p.samples()).isNotEmpty();
+        assertThat(p.stepBands()).hasSize(21); // every stored step, not a terminal triangle
+        assertThat(p.samples()).hasSize(48);
+        assertThat(p.samples()).allSatisfy(path -> assertThat(path).hasSize(21));
+        assertThat(p.stepBands()).allSatisfy(band -> {
+            assertThat(band.p10()).isLessThanOrEqualTo(band.p25());
+            assertThat(band.p25()).isLessThanOrEqualTo(band.p50());
+            assertThat(band.p50()).isLessThanOrEqualTo(band.p75());
+            assertThat(band.p75()).isLessThanOrEqualTo(band.p90());
+        });
         assertThat(p.endP10()).isLessThanOrEqualTo(p.endP50());
         assertThat(p.endP50()).isLessThanOrEqualTo(p.endP90());
         assertThat(p.decisionMap().terminal().p5()).isLessThanOrEqualTo(p.decisionMap().terminal().p50());
@@ -261,11 +315,53 @@ class SimulationStackTest {
         assertThat(p.receipt().fingerprint()).hasSize(24);
         assertThat(p.receipt().anchorSpot()).isEqualTo(p.spot());
         assertThat(p.receipt().worldId()).isEqualTo("observed");
+        assertThat(p.receipt().anchorExecutable()).isFalse();
+        assertThat(p.receipt().anchorLimitation()).contains("analysis only").contains("executable quote");
         assertThat(p.marketImplied().p16()).isLessThan(p.marketImplied().p50());
         assertThat(p.marketImplied().p50()).isLessThan(p.marketImplied().p84());
         assertThat(p.marketImplied().basis()).contains("Risk-neutral").contains("not a forecast");
         assertThat(p.marketImplied().expiration()).isEqualTo("2026-08-07");
         assertThat(p.marketImplied().horizonSessions()).isEqualTo(20);
+    }
+
+    @Test
+    void maximumResolutionStoredPreviewKeepsFullStatisticsButBoundsSerializedSeries() {
+        var max = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                756, 96, 0, .25, 0, 0, 0, 6,
+                ScenarioSpec.Heston.fromVol(.25), 501L, 5_000).sane();
+        int steps = max.totalSteps();
+        double[][] paths = new double[max.paths()][steps + 1];
+        for (int step = 0; step <= steps; step++) {
+            for (int path = 0; path < paths.length; path++) {
+                paths[path][step] = 100 + (path - paths.length / 2.0) * step / 1_000_000.0;
+            }
+        }
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AAPL", "observed",
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED),
+                100, max, paths, null, PathGenerator.MODEL_VERSION, PATH_DATE);
+        var stored = new io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble(
+                "pen_max", "fingerprint", "PARAMETRIC", 1, null, "CURRENT", ensemble,
+                IvSpec.flat(.25), null, .04, 23_400.0 / 96, "test", "MODELED",
+                clock.instant().toString());
+
+        var preview = new SimulationEngine(null, null, null, clock, null)
+                .previewFromStored(stored, List.of(), null, .04);
+
+        assertThat((long) max.paths() * (steps + 1)).isLessThanOrEqualTo(ScenarioSpec.MAX_TOTAL_POINTS);
+        assertThat(preview.paths()).isEqualTo(max.paths());
+        assertThat(preview.bands()).hasSize(757); // full daily statistical surface
+        assertThat(preview.stepBands()).hasSize(PathEnsembleService.MAX_DISPLAY_POINTS_PER_SERIES);
+        assertThat(preview.stepBands().getFirst().step()).isZero();
+        assertThat(preview.stepBands().getLast().step()).isEqualTo(steps);
+        assertThat(preview.samples()).hasSize(max.paths()).allSatisfy(path ->
+                assertThat(path).hasSize(PathEnsembleService.MAX_DISPLAY_POINTS_PER_SERIES));
+        assertThat(preview.samples()).allSatisfy(path -> assertThat(path.getFirst()).isEqualTo(100));
+        assertThat(io.liftandshift.strikebench.util.Json.canonical(
+                io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(preview)).length())
+                .isLessThan(2_000_000);
+        assertThat(preview.notes()).anyMatch(note -> note.contains("deterministic checkpoints")
+                && note.contains("Full stored paths"));
     }
 
     @Test

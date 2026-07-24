@@ -70,21 +70,44 @@ public final class PositionsService {
                                     long totalCents, List<String> warnings,
                                     io.liftandshift.strikebench.model.DataEvidence evidence) {}
 
+    private record PositionRead(Position position, long lockedShares, String worldId) {}
+
     // ---- Reads ----
 
-    public List<PositionView> list(String accountId) {
-        List<Position> rows = db.query("SELECT * FROM positions WHERE account_id=? ORDER BY symbol",
+    /**
+     * Exact persisted share inventory without a market-data read. Book scenario composition uses
+     * this owner-level view so automatically opening the desk cannot trigger quote acquisition;
+     * mark-to-market callers should continue to use {@link #list}.
+     */
+    public List<Position> records(String accountId) {
+        return db.query("SELECT * FROM positions WHERE account_id=? ORDER BY symbol",
                 PositionsService::map, accountId);
+    }
+
+    public List<PositionView> list(String accountId) {
+        List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked,a.type,a.world_id " +
+                        "FROM positions p JOIN accounts a ON a.id=p.account_id LEFT JOIN (" +
+                        "SELECT account_id,symbol,SUM(shares_locked) locked FROM trades " +
+                        "WHERE status='ACTIVE' GROUP BY account_id,symbol) l " +
+                        "ON l.account_id=p.account_id AND l.symbol=p.symbol " +
+                        "WHERE p.account_id=? ORDER BY p.symbol",
+                row -> new PositionRead(map(row), row.lng("locked"),
+                        "DEMO".equals(row.str("type")) ? "demo" : row.str("world_id")), accountId);
+        if (rows.isEmpty()) return List.of();
+        String world = rows.getFirst().worldId();
+        Map<String, BigDecimal> marksBySymbol = marks.underlyingMarks(
+                rows.stream().map(row -> row.position().symbol()).toList(), world);
         List<PositionView> out = new ArrayList<>(rows.size());
-        for (Position p : rows) {
-            out.add(view(p));
+        for (PositionRead row : rows) {
+            BigDecimal mark = marksBySymbol.get(row.position().symbol());
+            out.add(view(row.position(), row.lockedShares(), mark == null ? null : Money.toCents(mark)));
         }
         return out;
     }
 
     public PositionView get(String accountId, String symbol) {
         Position p = db.with(c -> find(c, accountId, norm(symbol)));
-        if (p == null) throw new java.util.NoSuchElementException("no position in " + norm(symbol));
+        if (p == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no position in " + norm(symbol));
         return view(p);
     }
 
@@ -98,15 +121,20 @@ public final class PositionsService {
 
     /** The account's market lane: a SIMULATION account's shares price against ITS world. */
     private String worldOf(String accountId) {
-        var rows = db.query("SELECT world_id,type FROM accounts WHERE id=?",
+        var rows = db.query(AccountService.LANE_SQL,
                 r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
-        return rows.isEmpty() ? null : rows.getFirst();
+        if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
+        return rows.getFirst();
     }
 
     private PositionView view(Position p) {
         long locked = db.with(c -> lockedShares(c, p.accountId(), p.symbol()));
         Long last = marks.underlyingMark(p.symbol(), worldOf(p.accountId()))
                 .map(Money::toCents).orElse(null); // per-share cents
+        return view(p, locked, last);
+    }
+
+    private static PositionView view(Position p, long locked, Long last) {
         Long mv = last == null ? null : last * p.shares();
         Long unreal = last == null ? null : (last - p.avgCostCents()) * p.shares();
         Double gainPct = last == null || p.avgCostCents() <= 0 ? null
@@ -176,7 +204,7 @@ public final class PositionsService {
                         + " costs " + Money.fmt(cost) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
             }
             String now = now();
-            ledgerRow(c, accountId, now, "STOCK_BUY", -cost, cash, acct.reservedCents(),
+            Ledger.append(c, accountId, null, now, "STOCK_BUY", -cost, cash, acct.reservedCents(),
                     "BUY " + shares + " sh " + sym + " @ " + ask.toPlainString());
             Position p = find(c, accountId, sym);
             if (p == null) {
@@ -197,7 +225,7 @@ public final class PositionsService {
                         newShares, newBasis, now, p.id());
                 p = new Position(p.id(), accountId, sym, newShares, newBasis, p.createdAt(), now);
             }
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?, has_traded=1, updated_at=? WHERE id=?", cash, now, accountId);
+            AccountService.applyCashTraded(c, accountId, cash, now);
             return p;
         });
         auditSafe(accountId, "POSITION_BUY", Map.of("symbol", sym, "shares", shares, "costCents", cost));
@@ -227,7 +255,7 @@ public final class PositionsService {
             String now = now();
             long cash = acct.cashCents() + proceeds;
             realized[0] = proceeds - p.avgCostCents() * shares;
-            ledgerRow(c, accountId, now, "STOCK_SELL", proceeds, cash, acct.reservedCents(),
+            Ledger.append(c, accountId, null, now, "STOCK_SELL", proceeds, cash, acct.reservedCents(),
                     "SELL " + shares + " sh " + sym + " @ " + bid.toPlainString()
                             + " (basis " + Money.fmt(p.avgCostCents()) + "/sh, realized " + Money.fmt(realized[0]) + ")");
             long newShares = p.shares() - shares;
@@ -236,7 +264,7 @@ public final class PositionsService {
             } else {
                 Db.execOn(c, "UPDATE positions SET shares=?, updated_at=? WHERE id=?", newShares, now, p.id());
             }
-            Db.execOn(c, "UPDATE accounts SET cash_cents=?, has_traded=1, updated_at=? WHERE id=?", cash, now, accountId);
+            AccountService.applyCashTraded(c, accountId, cash, now);
             return new Position(p.id(), accountId, sym, newShares, p.avgCostCents(), p.createdAt(), now);
         });
         auditSafe(accountId, "POSITION_SELL", Map.of("symbol", sym, "shares", shares,
@@ -267,7 +295,7 @@ public final class PositionsService {
         List<String> warnings = new ArrayList<>();
         // ONE CLOCK PER LANE: a running sim session is its own open market — the observed
         // market being closed is irrelevant (and saying otherwise was a false claim).
-        java.time.Instant now = marks.simNow(world).orElseGet(clock::instant);
+        java.time.Instant now = marks.simNow(world, clock);
         if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
@@ -341,11 +369,6 @@ public final class PositionsService {
                 r.lng("avg_cost_cents"), r.str("created_at"), r.str("updated_at"));
     }
 
-    private static void ledgerRow(Connection c, String accountId, String ts, String type,
-                                  long amount, long cashAfter, long reservedAfter, String memo) throws SQLException {
-        Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,NULL,?,?,?,?,?,?)",
-                accountId, ts, type, amount, cashAfter, reservedAfter, memo);
-    }
 
     private void auditSafe(String accountId, String action, Map<String, Object> detail) {
         try {

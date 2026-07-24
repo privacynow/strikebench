@@ -1,0 +1,222 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The three verification surfaces are independent: the JUnit matrix, the deterministic
+# contract/journey browser lanes, and the grown-state browser matrix. Running them as
+# parallel jobs cuts the wall clock roughly in half; the release matrix merges their
+# evidence at the end so the summary still covers everything in one table.
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Start isolated PostgreSQL
+        run: |
+          docker compose up -d db
+          for attempt in {1..30}; do
+            docker compose exec -T db pg_isready -U strikebench -d strikebench_dev && exit 0
+            sleep 2
+          done
+          docker compose logs db
+          exit 1
+
+      - name: Backend matrix and release jar
+        run: mvn -q clean package
+
+      - name: Share backend evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-backend
+          path: target/surefire-reports
+          retention-days: 3
+
+      - name: Preserve failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strikebench-backend-failure-evidence
+          path: target/surefire-reports
+          retention-days: 14
+
+  browser-journeys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dom-tests/package-lock.json
+
+      - name: Start isolated PostgreSQL
+        run: |
+          docker compose up -d db
+          for attempt in {1..30}; do
+            docker compose exec -T db pg_isready -U strikebench -d strikebench_dev && exit 0
+            sleep 2
+          done
+          docker compose logs db
+          exit 1
+
+      - name: Release jar for browser evidence
+        run: mvn -q clean package -DskipTests
+
+      - name: Install browser runtime
+        working-directory: dom-tests
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Deterministic browser contracts
+        working-directory: dom-tests
+        run: |
+          set -o pipefail
+          npm run test:defaults | tee ../target/dom-defaults.tap
+          npm run test:scenario | tee ../target/dom-scenario.tap
+          npm run test:spa | tee ../target/dom-spa.tap
+
+      - name: Isolated browser journeys
+        working-directory: dom-tests
+        run: |
+          set -o pipefail
+          npm run test:journeys | tee ../target/dom-fixture.tap
+
+      - name: Share journey evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-journeys
+          path: target/dom-*.tap
+          retention-days: 3
+
+      - name: Preserve failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strikebench-journeys-failure-evidence
+          path: |
+            target/dom-*.tap
+            target/dom-journey-shards
+            dom-tests/shots
+          retention-days: 14
+
+  browser-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dom-tests/package-lock.json
+
+      - name: Start isolated PostgreSQL
+        run: |
+          docker compose up -d db
+          for attempt in {1..30}; do
+            docker compose exec -T db pg_isready -U strikebench -d strikebench_dev && exit 0
+            sleep 2
+          done
+          docker compose logs db
+          exit 1
+
+      - name: Release jar for browser evidence
+        run: mvn -q clean package -DskipTests
+
+      - name: Install browser runtime
+        working-directory: dom-tests
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Grown-state, responsive, auth-on, Book Risk, adoption, Desk, and Learn browser matrix
+        working-directory: dom-tests
+        run: |
+          set -o pipefail
+          npm run test:seeded | tee ../target/dom-seeded.tap
+          npm run test:audit | tee ../target/dom-audit.tap
+          npm run test:auth | tee ../target/dom-auth.tap
+          npm run test:bookrisk | tee ../target/dom-bookrisk.tap
+          npm run test:adoption | tee ../target/dom-adoption.tap
+          npm run test:desk | tee ../target/dom-desk.tap
+          npm run test:learn:coverage | tee ../target/dom-learn-coverage.tap
+          node --test dom-learn.test.js | tee ../target/dom-learn.tap
+
+      - name: Share matrix evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-matrix
+          path: target/dom-*.tap
+          retention-days: 3
+
+      - name: Preserve failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strikebench-matrix-failure-evidence
+          path: |
+            target/dom-*.tap
+            dom-tests/shots
+          retention-days: 14
+
+  release-matrix:
+    needs: [backend, browser-journeys, browser-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Collect evidence from every lane
+        uses: actions/download-artifact@v4
+        with:
+          pattern: evidence-*
+          merge-multiple: true
+          path: target
+
+      - name: Restore surefire layout
+        run: |
+          mkdir -p target/surefire-reports
+          find target -maxdepth 1 -name 'TEST-*.xml' -exec mv {} target/surefire-reports/ \; || true
+          find target -maxdepth 1 -name '*.txt' -exec mv {} target/surefire-reports/ \; || true
+
+      - name: Publish generated release matrix
+        run: |
+          node scripts/release-matrix.mjs
+          cat target/release-matrix.md >> "$GITHUB_STEP_SUMMARY"

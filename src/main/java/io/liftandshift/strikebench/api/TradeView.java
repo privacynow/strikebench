@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.util.Json;
@@ -35,7 +36,13 @@ public record TradeView(
         String closedAt,
         String updatedAt,
         String intent,
-        long sharesLocked
+        long sharesLocked,
+        Long proposedNetCents,
+        String dataProvenance,
+        String dataAge,
+        String dataSource,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long unrealizedPnlCents,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long decisionUnrealizedPnlCents
 ) {
     @SuppressWarnings("unchecked")
     public static TradeView of(TradeRecord t) {
@@ -48,6 +55,16 @@ public record TradeView(
                 t.breakevens(), t.popEntry(), t.feesOpenCents(), t.feesCloseCents(), t.realizedPnlCents(),
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
-                t.intent(), t.sharesLocked());
+                t.intent(), t.sharesLocked(), t.proposedNetCents(), t.dataProvenance(),
+                t.dataAge(), t.dataSource(), null, null);
+    }
+
+    public TradeView withUnrealized(Long unrealized, Long decisionUnrealized) {
+        return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
+                entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents,
+                breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
+                decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
+                updatedAt, intent, sharesLocked, proposedNetCents, dataProvenance, dataAge,
+                dataSource, unrealized, decisionUnrealized);
     }
 }

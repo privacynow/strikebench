@@ -6,7 +6,6 @@ import io.liftandshift.strikebench.config.AppConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -14,6 +13,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -30,8 +31,19 @@ public final class Db implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(Db.class);
     private final HikariDataSource ds;
+    private final Runnable afterClose;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public Db(String jdbcUrl, String user, String password) {
+        this(jdbcUrl, user, password, () -> {});
+    }
+
+    /**
+     * Builds a database handle with an idempotent resource cleanup callback. Production callers
+     * use the ordinary constructor; isolated test databases use this overload to drop their
+     * physical database as soon as the pool closes instead of retaining hundreds until JVM exit.
+     */
+    public Db(String jdbcUrl, String user, String password, Runnable afterClose) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(jdbcUrl);
         cfg.setUsername(user);
@@ -41,6 +53,7 @@ public final class Db implements AutoCloseable {
         cfg.setPoolName("strikebench");
         cfg.setConnectionTimeout(10_000);
         this.ds = new HikariDataSource(cfg);
+        this.afterClose = Objects.requireNonNull(afterClose);
         log.info("Local data store ready");
     }
 
@@ -49,10 +62,16 @@ public final class Db implements AutoCloseable {
         return new Db(cfg.dbUrl(), cfg.dbUser(), cfg.dbPassword());
     }
 
-    /** The underlying pool — used by {@link Migrations} (Flyway) and nothing else. */
-    public DataSource dataSource() { return ds; }
+    /** The pooled data source, exposed so Flyway ({@link Migrations}) can run migrations on it. */
+    public javax.sql.DataSource dataSource() {
+        return ds;
+    }
 
-    @Override public void close() { ds.close(); }
+    @Override public void close() {
+        if (!closed.compareAndSet(false, true)) return;
+        try { ds.close(); }
+        finally { afterClose.run(); }
+    }
 
     public interface SqlFn<T> { T apply(Connection c) throws SQLException; }
     public interface SqlConsumer { void accept(Connection c) throws SQLException; }
@@ -138,6 +157,9 @@ public final class Db implements AutoCloseable {
             // Boolean flags live in integer 0/1 columns (kept from the SQLite schema for
             // zero call-site churn); bind them as ints.
             if (p instanceof Boolean b) ps.setInt(i + 1, b ? 1 : 0);
+            // Let PostgreSQL resolve application strings against the target column. This keeps
+            // ISO-8601 values type-safe for TIMESTAMPTZ while preserving ordinary TEXT/JSON use.
+            else if (p instanceof String s) ps.setObject(i + 1, s, java.sql.Types.OTHER);
             else ps.setObject(i + 1, p);
         }
         return ps;
@@ -146,7 +168,12 @@ public final class Db implements AutoCloseable {
     /** Wraps a ResultSet with null-safe accessors. */
     public record Row(ResultSet rs) {
         public String str(String col) {
-            try { return rs.getString(col); } catch (SQLException e) { throw new DbException(e); }
+            try {
+                Object value = rs.getObject(col);
+                if (value instanceof java.time.OffsetDateTime time) return time.toInstant().toString();
+                if (value instanceof java.sql.Timestamp time) return time.toInstant().toString();
+                return rs.getString(col);
+            } catch (SQLException e) { throw new DbException(e); }
         }
         public long lng(String col) {
             try { return rs.getLong(col); } catch (SQLException e) { throw new DbException(e); }
@@ -168,6 +195,28 @@ public final class Db implements AutoCloseable {
         }
         public java.math.BigDecimal bd(String col) {
             try { return rs.getBigDecimal(col); } catch (SQLException e) { throw new DbException(e); }
+        }
+        public java.time.OffsetDateTime odt(String col) {
+            try { return rs.getObject(col, java.time.OffsetDateTime.class); }
+            catch (SQLException e) { throw new DbException(e); }
+        }
+        public java.time.LocalDate date(String col) {
+            try { return rs.getObject(col, java.time.LocalDate.class); }
+            catch (SQLException e) { throw new DbException(e); }
+        }
+        public java.util.List<String> strings(String col) {
+            try {
+                java.sql.Array array = rs.getArray(col);
+                if (array == null) return java.util.List.of();
+                Object raw = array.getArray();
+                if (!(raw instanceof Object[] values)) return java.util.List.of();
+                java.util.List<String> out = new java.util.ArrayList<>(values.length);
+                for (Object value : values) if (value != null) out.add(value.toString());
+                return java.util.List.copyOf(out);
+            } catch (SQLException e) { throw new DbException(e); }
+        }
+        public byte[] bytes(String col) {
+            try { return rs.getBytes(col); } catch (SQLException e) { throw new DbException(e); }
         }
     }
 

@@ -1,0 +1,264 @@
+package io.liftandshift.strikebench.position;
+
+import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.eval.EvidenceLevel;
+import io.liftandshift.strikebench.paper.AccountObjectiveService;
+import io.liftandshift.strikebench.paper.PortfolioAccountingService;
+import io.liftandshift.strikebench.support.TestDb;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class PositionArtifactStoreTest {
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-15T12:00:00Z"), ZoneOffset.UTC);
+    private Db db;
+    private PortfolioAccountingService books;
+
+    @BeforeEach void setUp() {
+        db = TestDb.fresh();
+        books = new PortfolioAccountingService(db, CLOCK);
+    }
+
+    @AfterEach void tearDown() { db.close(); }
+
+    @Test
+    void onePlanManagedActionCommitsTheFourArtifactsAtomicallyAndEnforcesLotAllocation() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Tracked", "TAXABLE", "Broker", "FIFO", null, null, null, null, 10_000_000L));
+        var opening = books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-01-02T15:00:00Z", "TRADE", null, 0L, null, "BROKER", "shares-500", null,
+                List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "NVDA", null,
+                        null, null, 500L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
+        String lotId = books.lots("local", account.id(), false).getFirst().id();
+        createPlan("plan-one", "NVDA");
+        PositionArtifactStore store = new PositionArtifactStore(db);
+
+        var first = store.recordNewStructureAction(action("plan-one", account.id(), opening.id(), lotId, 300));
+        var second = store.recordNewStructureAction(action("plan-one", account.id(), opening.id(), lotId, 200));
+
+        assertThat(first.structureId()).isNotEqualTo(second.structureId());
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_structure", r -> r.lng("n")).getFirst()).isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_structure_revision", r -> r.lng("n")).getFirst()).isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM position_receipt", r -> r.lng("n")).getFirst()).isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_portfolio_action", r -> r.lng("n")).getFirst()).isEqualTo(2);
+
+        assertThatThrownBy(() -> store.recordNewStructureAction(
+                action("plan-one", account.id(), opening.id(), lotId, 1)))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("current structure allocations exceed");
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_structure", r -> r.lng("n")).getFirst()).isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM position_receipt", r -> r.lng("n")).getFirst()).isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM plan_portfolio_action", r -> r.lng("n")).getFirst()).isEqualTo(2);
+    }
+
+    @Test
+    void decisionAndAdoptionReceiptsFreezeTheObjectiveRevisionInForceProspectively() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Objective history", "TAXABLE", "Broker", "FIFO", null, null, null, null, 10_000_000L));
+        var opening = books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-01-02T15:00:00Z", "TRADE", null, 0L, null, "BROKER", "shares-objective", null,
+                List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "NVDA", null,
+                        null, null, 500L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
+        String lotId = books.lots("local", account.id(), false).getFirst().id();
+        createPlan("plan-objective", "NVDA");
+        var objectives = new AccountObjectiveService(db, CLOCK);
+        var accumulate = objectives.declare("local", account.id(), "ACCUMULATE", "BULLISH",
+                5_000_000L, "SEEK");
+        PositionArtifactStore store = new PositionArtifactStore(db);
+
+        var beforeChange = store.recordNewStructureAction(
+                action("plan-objective", account.id(), opening.id(), lotId, 200));
+        var income = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
+                null, "ACCEPT");
+        var afterChange = store.recordNewStructureAction(
+                action("plan-objective", account.id(), opening.id(), lotId, 200));
+
+        assertThat(db.query("SELECT account_objective_revision_id FROM position_receipt WHERE id=?",
+                r -> r.str("account_objective_revision_id"), beforeChange.receiptId()))
+                .containsExactly(accumulate.id());
+        assertThat(db.query("SELECT account_objective_revision_id FROM position_receipt WHERE id=?",
+                r -> r.str("account_objective_revision_id"), afterChange.receiptId()))
+                .containsExactly(income.id());
+        assertThat(objectives.history("local", account.id()))
+                .extracting(AccountObjectiveService.Revision::id)
+                .containsExactly(accumulate.id(), income.id());
+    }
+
+    @Test
+    void pendingImportIdentityIncludesTheNonReversibleAccountFingerprintAndStaysOutOfLedger() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Import destination", "ROTH_IRA", null, "FIFO", null, null, null, null, null));
+        long before = db.query("SELECT COUNT(*) n FROM portfolio_transaction", r -> r.lng("n")).getFirst();
+        insertPending(account.id(), "pending-a", "fingerprint-a", "order-17");
+        insertPending(account.id(), "pending-b", "fingerprint-b", "order-17");
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_import_pending", r -> r.lng("n")).getFirst())
+                .isEqualTo(2);
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_transaction", r -> r.lng("n")).getFirst())
+                .isEqualTo(before);
+
+        assertThatThrownBy(() -> insertPending(account.id(), "pending-c", "fingerprint-a", "order-17"))
+                .isInstanceOf(RuntimeException.class);
+
+        db.exec("INSERT INTO campaign(id,user_id,symbol,title,status) VALUES(?,?,?,?,?)",
+                "campaign-one", "local", "MU", "MU income campaign", "ACTIVE");
+        db.exec("INSERT INTO campaign_pending_member(campaign_id,pending_id) VALUES(?,?)",
+                "campaign-one", "pending-a");
+        assertThat(db.query("SELECT p.package_net_cents FROM campaign_pending_member m "
+                        + "JOIN portfolio_import_pending p ON p.id=m.pending_id WHERE m.campaign_id=?",
+                r -> r.lng("package_net_cents"), "campaign-one")).containsExactly(221_200L);
+    }
+
+    @Test
+    void trackedWriterRejectsAnOmittedMarketFillInsteadOfPersistingZero() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Tracked", "ROTH_IRA", null, "FIFO", null, null, null, null, null));
+        assertThatThrownBy(() -> books.record("local", account.id(),
+                new PortfolioAccountingService.TransactionInput("2026-01-02T15:00:00Z", "TRADE", null,
+                        0L, null, "MANUAL", null, null,
+                        List.of(new PortfolioAccountingService.LegInput("OPTION", "BUY", "OPEN", "AAPL",
+                                "CALL", new BigDecimal("250"), LocalDate.parse("2026-08-21"),
+                                1L, 100, null, null)), "EXECUTED")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exact price");
+        assertThat(db.query("SELECT COUNT(*) n FROM portfolio_transaction", r -> r.lng("n")).getFirst()).isZero();
+    }
+
+    @Test
+    void pendingResolutionMustMatchThePendingCashTransactionAndFrozenReceipt() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Resolution", "ROTH_IRA", null, "FIFO", null, null, null, null, null));
+        var transaction = books.record("local", account.id(), new PortfolioAccountingService.TransactionInput(
+                "2026-07-01T15:00:00Z", "TRADE", null, 0L, null, "BROKER", "resolved-order", null,
+                List.of(new PortfolioAccountingService.LegInput("STOCK", "BUY", "OPEN", "MU", null,
+                        null, null, 1L, 1, new BigDecimal("100.00"), null)), "EXECUTED"));
+        db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
+                        + "external_ref,occurred_at,package_net_cents,fees_cents,destination_portfolio_account_id,"
+                        + "payload_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "pending-resolution", "local", "BROKER_CSV", "fingerprint-resolution", "resolved-order",
+                OffsetDateTime.parse("2026-07-01T15:00:00Z"), -10_000L, 0L, account.id(),
+                "payload-resolution");
+        db.exec("INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
+                        + "portfolio_account_id,transaction_id,marks_as_of,evidence_level,model_version) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?)", "resolution-receipt", "local", "RESOLUTION",
+                "BROKER_REPORTED", "REAL", "OPEN", account.id(), transaction.id(),
+                OffsetDateTime.parse("2026-07-01T15:00:00Z"), "OBSERVED_DELAYED", "trader-own-1");
+
+        assertThatThrownBy(() -> db.tx(c -> {
+            Db.execOn(c, "UPDATE portfolio_import_pending SET status='RESOLVED',resolved_at=now() WHERE id=?",
+                    "pending-resolution");
+            Db.execOn(c, "INSERT INTO portfolio_import_resolution(id,pending_id,portfolio_account_id,transaction_id,"
+                            + "receipt_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?)", "resolution-event", "pending-resolution", account.id(), transaction.id(),
+                    "resolution-receipt", "BROKER_REPORTED", "AUTHORITATIVE", -9_999L, -9_999L, "local");
+            return null;
+        })).isInstanceOf(RuntimeException.class).hasMessageContaining("does not reconcile");
+        assertThat(db.query("SELECT status FROM portfolio_import_pending WHERE id=?", r -> r.str("status"),
+                "pending-resolution")).containsExactly("PENDING");
+
+        db.tx(c -> {
+            Db.execOn(c, "UPDATE portfolio_import_pending SET status='RESOLVED',resolved_at=now() WHERE id=?",
+                    "pending-resolution");
+            Db.execOn(c, "INSERT INTO portfolio_import_resolution(id,pending_id,portfolio_account_id,transaction_id,"
+                            + "receipt_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?)", "resolution-event", "pending-resolution", account.id(), transaction.id(),
+                    "resolution-receipt", "BROKER_REPORTED", "AUTHORITATIVE", -10_000L, -10_000L, "local");
+            return null;
+        });
+        assertThat(db.query("SELECT tax_basis_status FROM portfolio_import_resolution WHERE pending_id=?",
+                r -> r.str("tax_basis_status"), "pending-resolution")).containsExactly("AUTHORITATIVE");
+    }
+
+    @Test
+    void practiceMutationFreezesBothSidesAndItsComparatorMetricsInsideTheOwningTransaction() {
+        db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,"
+                        + "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "practice-one", "local", "Practice", "PAPER", 10_000_000L, 10_000_000L, 100_000L, 1,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), OffsetDateTime.parse("2026-07-15T12:00:00Z"));
+        db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,entry_underlying_cents,"
+                        + "entry_net_premium_cents,max_loss_cents,breakevens_json,entry_snapshot_json,created_at,updated_at) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "practice-trade", "practice-one", "MU", "CREDIT_PUT_SPREAD", "CLOSED", 1, "[]",
+                98_000L, 20_000L, 80_000L, "[]", "{}",
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), OffsetDateTime.parse("2026-07-15T12:00:00Z"));
+        createPlan("plan-practice", "MU");
+        PositionPackage before = practicePackage();
+        PositionTransformation.Preview preview = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.CLOSE, before, null,
+                new PositionTransformation.RiskSnapshot(80_000L, 100_000L, 20_000L, true, List.of(), "observed"),
+                null, 12_300L));
+        PositionArtifactStore store = new PositionArtifactStore(db);
+
+        db.tx(c -> {
+            store.recordPracticeTransformation(c, new PositionArtifactStore.PracticeTransformationAction(
+                    "local", "practice-receipt", "plan-practice", 1, "practice-trade",
+                    PositionDomain.PositionState.CLOSED, OffsetDateTime.parse("2026-07-15T12:00:00Z"),
+                    EvidenceLevel.OBSERVED_DELAYED, "position-transform-1", before, null, preview, 12_300L));
+            return null;
+        });
+
+        assertThat(db.query("SELECT transformation_action || ':' || preview_fingerprint v FROM position_receipt "
+                        + "WHERE id=?", r -> r.str("v"), "practice-receipt"))
+                .containsExactly("CLOSE:" + preview.fingerprint());
+        assertThat(db.query("SELECT position_phase || ':' || count(*) v FROM position_receipt_leg WHERE receipt_id=? "
+                        + "GROUP BY position_phase", r -> r.str("v"), "practice-receipt"))
+                .containsExactly("BEFORE:2");
+        assertThat(db.query("SELECT value_cents FROM position_receipt_metric WHERE receipt_id=? AND metric_key=?",
+                r -> r.lng("value_cents"), "practice-receipt", "realized_closing")).containsExactly(12_300L);
+    }
+
+    private PositionArtifactStore.NewStructureAction action(String planId, String accountId,
+                                                             String transactionId, String lotId, long quantity) {
+        return new PositionArtifactStore.NewStructureAction("local", planId, 1, accountId, transactionId,
+                null, "NVDA", "Covered stock", PositionDomain.PositionState.OPEN,
+                PositionDomain.PlanActionRole.ENTRY, PositionDomain.ReceiptKind.ADOPTION,
+                PositionDomain.ReceiptAuthority.BROKER_REPORTED,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), EvidenceLevel.OBSERVED_DELAYED,
+                "trader-own-1", List.of(new PositionArtifactStore.Allocation(lotId, quantity, "UNDERLYING")),
+                List.of());
+    }
+
+    private void createPlan(String id, String symbol) {
+        db.exec("INSERT INTO plans(id,user_id,symbol,intent,market_kind,status,furthest_stage,version,is_open) "
+                        + "VALUES(?,?,?,?,?,'ACTIVE','UNDERSTAND',1,1)",
+                id, "local", symbol, "INCOME", "OBSERVED");
+        db.exec("INSERT INTO plan_context_revision(id,plan_id,rev,horizon_days,input_hash,engine_version) "
+                        + "VALUES(?,?,1,30,?,?)", id + "-ctx", id, "hash", "trader-own-1");
+        db.exec("UPDATE plans SET active_context_rev=1 WHERE id=?", id);
+    }
+
+    private void insertPending(String accountId, String id, String fingerprint, String ref) {
+        db.exec("INSERT INTO portfolio_import_pending(id,user_id,source_system,source_account_fingerprint,"
+                        + "external_ref,occurred_at,package_net_cents,fees_cents,destination_portfolio_account_id,"
+                        + "payload_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                id, "local", "VANGUARD_CSV", fingerprint, ref,
+                OffsetDateTime.parse("2026-07-01T15:00:00Z"), 221_200L, 0L, accountId,
+                "payload-" + id);
+        db.exec("INSERT INTO portfolio_import_pending_leg(pending_id,leg_no,instrument_type,action,position_effect,"
+                        + "symbol,option_type,strike,expiration,quantity,multiplier) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                id, 0, "OPTION", "SELL", "OPEN", "MU", "PUT", new BigDecimal("980"),
+                LocalDate.parse("2026-07-17"), 1L, 100);
+    }
+
+    private static PositionPackage practicePackage() {
+        return new PositionPackage("practice-trade", PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, "MU", 1, null,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), List.of(
+                new PositionPackage.Leg(0, "SELL", "OPTION", "MU", "PUT", new BigDecimal("980"),
+                        LocalDate.parse("2026-08-21"), 1, 100, new BigDecimal("10.00"),
+                        PositionDomain.PriceAuthority.OBSERVED),
+                new PositionPackage.Leg(1, "BUY", "OPTION", "MU", "PUT", new BigDecimal("970"),
+                        LocalDate.parse("2026-08-21"), 1, 100, new BigDecimal("8.00"),
+                        PositionDomain.PriceAuthority.OBSERVED)));
+    }
+}

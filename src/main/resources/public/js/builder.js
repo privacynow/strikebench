@@ -7,7 +7,8 @@
  *   EXPERT: a naked terminal — structure quick-pick, editable leg grid with inline market
  *   data, per-leg include/exclude toggles for instant impact analysis, net greeks, and a
  *   sticky analytics panel.
- * Lives in Trade → Structure. Hands off to the standard review-and-decide stage.
+ * Mounted by a Plan's Strategy stage. The owner contract keeps in-progress state
+ * inside that Plan; pricing and fit requests are supplied by the Plan workspace.
  */
 (function () {
   'use strict';
@@ -17,7 +18,7 @@
   var TRADE_GOALS = ['DIRECTIONAL', 'INCOME', 'HEDGE', 'ACQUIRE', 'EXIT'];
   function tradeGoal(value, fallback) {
     var goal = String(value || '').toUpperCase();
-    return TRADE_GOALS.indexOf(goal) >= 0 ? goal : (fallback || 'DIRECTIONAL');
+    return TRADE_GOALS.indexOf(goal) >= 0 ? goal : (fallback || null);
   }
 
   function leg(action, type, strike, expiration, ratio) {
@@ -35,6 +36,9 @@
     CREDIT_PUT_SPREAD: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near), leg('BUY', 'PUT', c.pick(c.near, -4), c.near)]; },
     CASH_SECURED_PUT: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
     BUY_WRITE: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near)]; },
+    COVERED_STRANGLE: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
+    COVERED_CALL_PUT_SPREAD: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 2), c.near), leg('BUY', 'PUT', c.pick(c.near, -1), c.near), leg('SELL', 'PUT', c.pick(c.near, -3), c.near)]; },
+    COVERED_CALL_CALL_OVERLAY: function (c) { return [stockLeg('BUY', 1), leg('SELL', 'CALL', c.pick(c.near, 1), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; },
     RISK_REVERSAL: function (c) { return [leg('SELL', 'PUT', c.pick(c.near, -3), c.near), leg('BUY', 'CALL', c.pick(c.near, 3), c.near)]; },
     LONG_PUT: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near)]; },
     DEBIT_PUT_SPREAD: function (c) { return [leg('BUY', 'PUT', c.pick(c.near, 0), c.near), leg('SELL', 'PUT', c.pick(c.near, -2), c.near)]; },
@@ -68,44 +72,55 @@
       .filter(function (l) { return l.type === 'STOCK' || (l.strike && l.expiration); })
       .map(function (l) {
         return { action: l.action, type: l.type, strike: l.type === 'STOCK' ? null : String(l.strike),
-                 expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
+                 expiration: l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1,
+                 entryPrice: l.entryPrice || null, multiplier: Number(l.multiplier || 100),
+                 positionEffect: 'OPEN' };
       });
   }
 
   /** Normalize the live Builder state into the one position contract consumed by Outcomes/Decide. */
-  function prepareTicket() {
-    var st = App.state.builderForm;
+  function prepareTicket(owner, context) {
+    if (!owner) throw new Error('Builder state must be owned by a Plan.');
+    context = context || {};
+    var st = owner.builderForm;
     if (!st || !st.symbol || !st.legs || !st.legs.length) return null;
     var active = st.legs.filter(function (_, i) { return !(st.excluded || {})[i]; });
     var legs = wireLegs(active);
     if (!legs.length) return null;
     var tpl = st.templateKey ? TEMPLATES.find(function (t) { return t.key === st.templateKey; }) : null;
-    var contextGoal = tradeGoal(st.goal,
-      tradeGoal(tpl && tpl.primaryIntent, tradeGoal(App.context.goal(), 'DIRECTIONAL')));
-    App.context.update({ symbol: st.symbol, goal: contextGoal });
-    App.state.ticket = {
+    var contextGoal = tradeGoal(context.goal || st.goal || App.context.goal());
+    if (!contextGoal) {
+      throw new Error('Choose the Plan goal before preparing this Builder package.');
+    }
+    var ownsContext = function (key) { return Object.prototype.hasOwnProperty.call(context, key); };
+    owner.ticket = {
       world: App.state.world || 'observed', symbol: st.symbol, custom: true, customFor: st.symbol,
       customFamily: tpl && tpl.family ? tpl.family : null,
       legs: legs, qty: st.qty || 1, step: 6, intent: contextGoal,
-      thesis: App.context.thesis('neutral'), horizon: App.context.horizon('month'),
+      // A Builder package may be staged while the Plan's declaration is incomplete. Preserve
+      // that absence; Strategy's declared-view gate owns the one path for choosing these facts.
+      thesis: ownsContext('thesis') ? (context.thesis || null) : App.context.thesis(null),
+      horizon: ownsContext('horizon') ? (context.horizon || null) : App.context.horizon(null),
       outcomeBasisHint: tpl ? 'history' : 'scenario'
     };
-    return App.state.ticket;
+    return owner.ticket;
   }
 
   /** Bring a screened/reviewed package back into Structure without changing its contracts. */
-  function adoptTicket(ticket) {
+  function adoptTicket(ticket, owner, context) {
     if (!ticket || !ticket.symbol) return null;
+    if (!owner) throw new Error('Builder state must be owned by a Plan.');
+    context = context || {};
     var family = ticket.candidate && ticket.candidate.strategy || ticket.customFamily || null;
     var tpl = family && TEMPLATES.find(function (t) { return t.family === family; });
     var sourceLegs = ticket.legs && ticket.legs.length ? ticket.legs
       : ticket.candidate && ticket.candidate.legs || [];
-    var adoptedGoal = tradeGoal(ticket.candidate && ticket.candidate.intent || ticket.intent,
-      tradeGoal(App.context.goal(), 'DIRECTIONAL'));
-    App.context.update({ symbol: ticket.symbol, goal: adoptedGoal,
-      horizon: ticket.horizon || App.context.horizon('month'),
-      thesis: ticket.thesis || App.context.thesis('neutral') });
-    App.state.builderForm = {
+    var adoptedGoal = tradeGoal(context.goal || ticket.candidate && ticket.candidate.intent
+      || ticket.intent || App.context.goal());
+    if (!adoptedGoal) {
+      throw new Error('Choose the Plan goal before opening this package in Builder.');
+    }
+    owner.builderForm = {
       symbol: ticket.symbol, qty: ticket.qty || ticket.candidate && ticket.candidate.qty || 1,
       goal: adoptedGoal, templateKey: tpl ? tpl.key : null, step: 4, legIdx: 0, excluded: {},
       legs: sourceLegs.map(function (l) {
@@ -114,7 +129,7 @@
           expiration: l.stock || l.type === 'STOCK' ? null : l.expiration, ratio: l.ratio || 1 };
       }), limits: {}, exposureResult: null
     };
-    return App.state.builderForm;
+    return owner.builderForm;
   }
 
   function applyCatalog(doc) {
@@ -165,7 +180,7 @@
             { label: 'It will rise a lot', blurb: 'Uncapped upside, pay a premium', tpl: 'LONG_CALL' },
             { label: 'It will rise somewhat', blurb: 'Cheaper, capped bullish bet', tpl: 'DEBIT_CALL_SPREAD' },
             { label: 'Paid unless it falls', blurb: 'Collect a credit, keep it above your strike', tpl: 'CREDIT_PUT_SPREAD' },
-            { label: 'Boldly — a put pays for the call', blurb: 'Risk reversal: big reserve if wrong', tpl: 'RISK_REVERSAL' },
+            { label: 'Boldly — a put pays for the call', blurb: 'Risk reversal: substantial broker reserve if wrong', tpl: 'RISK_REVERSAL' },
             { label: 'Paid, with nothing backing it', blurb: 'The naked put — walk through WHY it is refused', tpl: 'NAKED_PUT' }
           ] } },
         { label: 'Fall', blurb: 'Profit from a drop, three shapes', next: {
@@ -270,17 +285,22 @@
 
   // ==================================================================================
 
-  async function render(root) {
+  async function render(root, options) {
+    options = options || {};
+    if (!options.state) throw new Error('Builder must be mounted by a Plan.');
+    var owner = options.state;
+    var lockedSymbol = options.lockedSymbol ? String(options.lockedSymbol).toUpperCase() : null;
+    var lockedGoal = options.lockedGoal ? tradeGoal(options.lockedGoal) : null;
     var level = Learn.currentLevel();
-    var saved = App.state.builderForm || {};
+    var saved = owner.builderForm || {};
     var st = {
       // An in-progress build owns its symbol; an EMPTY builder follows the working
       // symbol from Ideas/Research ("I chose another stock" must not reload the old one)
-      symbol: ((saved.legs && saved.legs.length ? saved.symbol : null)
+      symbol: (lockedSymbol || (saved.legs && saved.legs.length ? saved.symbol : null)
         || App.context.symbol() || saved.symbol || 'AAPL').toUpperCase(),
       qty: saved.qty || 1,
-      goal: saved.goal === 'BROWSE' ? 'BROWSE'
-        : ((saved.legs && saved.legs.length ? saved.goal : App.context.goal()) || saved.goal || null),
+      goal: lockedGoal || (saved.goal === 'BROWSE' ? 'BROWSE'
+        : ((saved.legs && saved.legs.length ? saved.goal : App.context.goal()) || saved.goal || null)),
       templateKey: saved.templateKey || null,
       step: saved.step || 1,
       legIdx: saved.legIdx || 0,
@@ -296,15 +316,15 @@
     // goal a second time. A direct Builder visit with no goal still starts at step 1,
     // and the Back control remains the explicit way to revise a carried goal.
     if (!saved.step && !st.legs.length && TRADE_GOALS.indexOf(st.goal) >= 0) st.step = 2;
+    // A Plan's Beginner Strategy entry can open the visual catalog directly. The locked Plan goal
+    // still owns the finished package; BROWSE changes only how the user finds a structure.
+    if (options.startInCatalog && !st.legs.length) { st.goal = 'BROWSE'; st.step = 2; }
     // Cross-level coherence: a position built in the Expert terminal (or handed off) must not vanish
     // into Beginner's step-1 goal chooser and get overwritten — land it on Beginner's recap instead.
     if (level === 'beginner' && st.legs.length && st.step < 3) { st.step = 4; }
     function remember() {
-      App.state.builderForm = st;
-      var goal = TRADE_GOALS.indexOf(st.goal) >= 0 ? st.goal : null;
-      var patch = { symbol: st.symbol, goal: goal };
-      App.context.update(patch);
-      if (typeof App.refreshWorkflowContext === 'function') App.refreshWorkflowContext();
+      owner.builderForm = st;
+      if (typeof options.onStateChange === 'function') options.onStateChange(st);
     }
 
     var research = null, chainCache = {}, expirations = [], spot = null;
@@ -398,7 +418,8 @@
       var wired = wireLegs(legs);
       if (!wired.length) return null;
       return API.post('/api/trades/preview', {
-        symbol: st.symbol, strategy: familyLabel(), qty: st.qty, legs: wired
+        symbol: st.symbol, strategy: familyLabel(), qty: st.qty, legs: wired,
+        source: 'BUILDER', fillNature: 'PROPOSED'
       });
     }
     function activeLegs() {
@@ -484,7 +505,7 @@
         remember();
         schedulePreviewIfAny();
       });
-      return el('div', { class: 'field' }, el('label', {}, label), input);
+      return UI.field(label, input);
     }
     var schedulePreviewHook = null; // set by whichever surface renders (repaint or debounce)
     function schedulePreviewIfAny() { if (schedulePreviewHook) schedulePreviewHook(); }
@@ -517,7 +538,7 @@
       if (v.maxLoss) {
         var cap = Math.round(parseFloat(v.maxLoss) * 100);
         var unbounded = !p.ok && (p.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); });
-        judge('Theoretical max loss ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
+        judge(UI.vocabularyText('theoreticalMaxLoss') + ' ≤ ' + fmtMoney(cap), !unbounded && p.maxLossCents > 0 && p.maxLossCents <= cap,
           unbounded ? 'UNLIMITED' : fmtMoney(p.maxLossCents));
       }
       if (expertLimits && v.target) {
@@ -560,22 +581,23 @@
       statusHost.innerHTML = '';
       statusHost.appendChild(UI.spinner('Asking the engine to fit your limits…'));
       try {
-        var body = {
-          symbol: st.symbol, riskMode: document.getElementById('risk-mode').value,
-          horizon: 'month', allowedStrategies: [t.family]
-        };
+        if (typeof options.fitToLimits !== 'function') {
+          throw new Error('This Builder is not attached to a Plan.');
+        }
+        var body = { strategy: t.family, allow0dte: false };
         if (st.limits.maxLoss) body.maxLossCents = Math.round(parseFloat(st.limits.maxLoss) * 100);
         var f = {};
         if (st.limits.minPop) f.minPop = parseFloat(st.limits.minPop) / 100;
         if (st.limits.maxAssign) f.maxAssignmentProb = parseFloat(st.limits.maxAssign) / 100;
         if (Object.keys(f).length) body.filters = f;
         var fitSeq = ++buildSeq;                 // the fitted legs replace the structure — same supersede rule
-        var r = await API.post('/api/recommend', body);
+        var r = await options.fitToLimits(body);
         if (fitSeq !== buildSeq) return;         // a newer pick/fit superseded this
         statusHost.innerHTML = '';
-        var c = (r.candidates || [])[0];
+        var c = r && r.candidate;
         if (!c) {
-          var reasons = (r.rejected || []).slice(0, 3).map(function (x) { return x.reason || x.blockReasons && x.blockReasons[0]; }).filter(Boolean);
+          var reasons = (r && r.result && r.result.rejected || []).slice(0, 3)
+            .map(function (x) { return x.reason || x.blockReasons && x.blockReasons[0]; }).filter(Boolean);
           statusHost.appendChild(alertBox('warn', 'No ' + t.name + ' fits those limits right now',
             reasons.length ? reasons : ['Loosen a limit or pick a different structure.']));
           return;
@@ -597,21 +619,47 @@
     var onLegsReplaced = null; // each surface wires its own re-render
 
     function handoff() {
-      prepareTicket();
-      App.navigate('#/trade/decide');
+      var ticket = prepareTicket(owner, {
+        goal: lockedGoal || st.goal,
+        thesis: options.thesis,
+        horizon: options.horizon
+      });
+      if (typeof options.onComplete === 'function') options.onComplete(ticket, st);
+      else {
+        var active = window.PlanStore && PlanStore.active();
+        if (active) PlanStore.focus(active, 'STRATEGY');
+        else App.navigate('#/research');
+      }
     }
 
     try {
       await loadSymbol();
     } catch (e) {
+      async function retryMountedBuilder() {
+        // Replace only this Builder surface. The Plan Flow, URL, open band, and owner-backed
+        // draft stay mounted; a provider retry is not application navigation.
+        var busy = UI.spinner('Retrying the option book\u2026');
+        root.replaceChildren(busy);
+        try { await render(root, options); }
+        finally { if (busy.isConnected) busy.remove(); }
+      }
       // Never a dead end: say what failed, offer the universe one tap away, and retry
+      if (lockedSymbol) {
+        root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
+          alertBox('danger', 'Could not load ' + st.symbol, [e.message,
+            'This Plan keeps its symbol fixed. Restore its quote and option-chain data, then retry.']),
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'btn', type: 'button', onclick: retryMountedBuilder }, 'Retry'),
+            el('a', { class: 'btn btn-secondary', href: '#/data/overview' }, 'Check Data'))));
+        return;
+      }
       var failInput = el('input', { type: 'text', id: 'builder-symbol', list: 'universe-symbols', value: st.symbol });
       var retryWith = function (sym) {
         st.symbol = (sym || failInput.value.trim() || st.symbol).toUpperCase();
         App.context.selectSymbol(st.symbol);
         st.legs = []; st.legIdx = 0; if (st.step > 2) st.step = st.goal ? 2 : 1;
         remember();
-        App.render();
+        return retryMountedBuilder();
       };
       var uniSyms = (App.state.universe && App.state.universe.active.symbols) || [];
       root.appendChild(el('div', { class: 'card', id: 'builder-load-error' },
@@ -650,13 +698,13 @@
       function stepHeader() {
         // Every step you have EARNED is a live link — go back to change your mind, jump
         // forward to where you were. Unreached steps say what unlocks them.
-        var names = ['Goal', 'Structure', 'Build it', 'Where you stand'];
+        var names = [lockedGoal ? 'Plan goal' : 'Goal', 'Structure', 'Build it', 'Where you stand'];
         var reachable = [true, !!st.goal, st.legs.length > 0, st.legs.length > 0];
         var why = [null, 'Pick a goal first', 'Choose a structure first', 'Choose a structure first'];
         return el('div', { class: 'wizard-steps builder-wizard-steps' }, names.map(function (n, i) {
           var here = i + 1 === st.step;
           var cls = here ? ' active' : (i + 1 < st.step ? ' done' : '');
-          var can = reachable[i] && !here;
+          var can = reachable[i] && !here && !(lockedGoal && i === 0);
           return el('button', {
             class: 'step' + cls + (can ? ' step-link' : ''), type: 'button', 'data-step': i + 1,
             disabled: reachable[i] ? null : '',
@@ -721,12 +769,14 @@
       }
 
       function paint() {
-        var contextInput = symbolInput();
-        host.appendChild(UI.symbolContext({
-          mode: 'editable', id: 'builder-symbol-context', input: contextInput,
-          label: 'Which stock are you building around?', commitLabel: 'Load',
-          onCommit: function () { contextInput.dispatchEvent(new Event('change')); }
-        }));
+        if (!lockedSymbol) {
+          var contextInput = symbolInput();
+          host.appendChild(UI.symbolContext({
+            mode: 'editable', id: 'builder-symbol-context', input: contextInput,
+            label: 'Which stock are you building around?', commitLabel: 'Load',
+            onCommit: function () { contextInput.dispatchEvent(new Event('change')); }
+          }));
+        }
         host.appendChild(stepHeader());
 
         if (st.step === 1) {
@@ -751,10 +801,10 @@
         if (st.step === 2) {
           if (st.goal === 'BROWSE') {
             host.appendChild(el('div', { class: 'card' },
-              el('h3', { class: 'mt0' }, 'Every structure, with its payoff shape'),
+              el('h3', { class: 'mt0' }, 'Every strategy, shown by payoff shape'),
               explain('The little chart on each card is the SHAPE of profit (up) vs the stock price (right) at expiration. Red-badged structures carry unlimited risk — you can walk through one to see exactly why it gets refused.'),
               catalogGrid(function (t) { pickTemplate(t); }),
-              el('div', { class: 'btn-row' },
+              lockedGoal ? null : el('div', { class: 'btn-row' },
                 el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; repaint(); } }, '← Back'))));
             return;
           }
@@ -778,9 +828,10 @@
             })),
             el('div', { class: 'btn-row' },
               el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
-                if (st.wizNode) { st.wizNode = null; } else { st.step = 1; }
+                if (st.wizNode) { st.wizNode = null; }
+                else if (!lockedGoal) { st.step = 1; }
                 repaint();
-              } }, '← Back'),
+              }, disabled: lockedGoal && !st.wizNode ? '' : null }, '← Back'),
               el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.wizNode = null; st.goal = 'BROWSE'; repaint(); } }, 'Browse all structures'))));
           return;
         }
@@ -791,7 +842,7 @@
           var i = Math.min(st.legIdx, n - 1);
           var soFar = st.legs.slice(0, i + 1);
           var tSel = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
-          var g = tSel && Learn.STRATEGY_GUIDE[tSel.family];
+          var g = tSel && (Learn.STRATEGY_GUIDE[tSel.key] || Learn.STRATEGY_GUIDE[tSel.family]);
           host.appendChild(el('div', { class: 'card', id: 'bw-walk' },
             el('div', { class: 'field-label' }, (tSel ? tSel.name + ' — ' : '') + 'leg ' + (i + 1) + ' of ' + n),
             el('h3', { class: 'mt0', id: 'bw-leg-story' }, legStory(st.legs[i])),
@@ -835,7 +886,7 @@
               }
               impact.appendChild(el('div', { class: 'chip-row' },
                 chip(p.entryNetPremiumCents >= 0 ? 'Collected so far' : 'Paid so far', fmtMoney(Math.abs(p.entryNetPremiumCents))),
-                impactChip('Theoretical worst case', b, p, function (x) {
+                impactChip(UI.vocabularyText('theoreticalMaxLoss'), b, p, function (x) {
                   if (!x.ok && (x.blockReasons || []).some(function (r) { return /undefined|unlimited/i.test(r); })) return 'UNLIMITED';
                   return fmtMoney(x.maxLossCents);
                 }, true),
@@ -895,10 +946,10 @@
                   el('span', { class: 'muted' }, 'stock legs have no strike or expiry')));
                 return;
               }
-              var expSel = el('select', { class: 'tune-exp' }, expirations.map(function (d) {
+              var expSel = el('select', { class: 'tune-exp', id: 'builder-tune-exp-' + idx }, expirations.map(function (d) {
                 return el('option', { value: d, selected: d === l.expiration ? '' : null }, d);
               }));
-              var strikeSel = el('select', { class: 'tune-strike' });
+              var strikeSel = el('select', { class: 'tune-strike', id: 'builder-tune-strike-' + idx });
               async function fillStrikes(keep) {
                 var chain = await ensureChain(st.legs[idx].expiration);
                 var ks = ((st.legs[idx].type === 'CALL' ? chain.calls : chain.puts) || [])
@@ -928,13 +979,13 @@
               box.appendChild(el('div', { class: 'tune-row' },
                 el('span', { class: 'badge ' + (l.action === 'SELL' ? 'badge-warn' : 'badge-ok') }, l.action),
                 el('b', {}, l.type),
-                el('label', { class: 'muted' }, 'strike'), strikeSel,
-                el('label', { class: 'muted' }, 'expires'), expSel));
+                el('label', { class: 'muted', for: strikeSel.id }, 'strike'), strikeSel,
+                el('label', { class: 'muted', for: expSel.id }, 'expires'), expSel));
             });
             return box;
           }),
           el('div', { class: 'form-grid', style: 'margin-top:8px' },
-            [el('div', { class: 'field' }, el('label', {}, 'Contracts (qty)'), qtyInput())].concat(limitsFields(true))),
+            [UI.field('Contracts (qty)', qtyInput())].concat(limitsFields(true))),
           exposureSizer(function () { repaint(); }),
           el('div', { class: 'btn-row', style: 'margin-top:2px' },
             el('button', { class: 'btn btn-sm btn-secondary', id: 'builder-fit', onclick: function () { fitToLimits(fitStatus); } },
@@ -944,8 +995,12 @@
           el('div', { id: 'bw-panel' }, UI.spinner('Pricing the whole position…')),
           el('div', { class: 'btn-row' },
             el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.legIdx = 0; st.step = 3; repaint(); } }, '← Walk the legs again'),
-            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () { st.step = 1; st.legs = []; st.templateKey = null; st.goal = null; repaint(); } }, 'Start over'),
-            el('button', { class: 'btn', id: 'builder-review', onclick: handoff }, 'Review & place (paper) →'))));
+            el('button', { class: 'btn btn-secondary btn-sm', onclick: function () {
+              st.step = lockedGoal ? 2 : 1; st.legs = []; st.templateKey = null;
+              st.goal = lockedGoal || null; repaint();
+            } }, 'Start over'),
+            el('button', { class: 'btn', id: 'builder-review', onclick: handoff },
+              options.completeLabel || 'Review & place (' + UI.vocabularyText('practice').toLowerCase() + ') →'))));
         (async function price() {
           var seq = ++walkSeq;
           var panel = document.getElementById('bw-panel');
@@ -1014,15 +1069,17 @@
       var exposureHost = el('div', { id: 'builder-exposure-host' });
 
       var fitStatus = el('div', { id: 'builder-fit-status' });
-      root.appendChild(UI.symbolContext({
-        mode: 'editable', id: 'builder-symbol-context', input: symInput,
-        label: 'Builder symbol', commitLabel: 'Load',
-        onCommit: function () { symInput.dispatchEvent(new Event('change')); }
-      }));
+      if (!lockedSymbol) {
+        root.appendChild(UI.symbolContext({
+          mode: 'editable', id: 'builder-symbol-context', input: symInput,
+          label: 'Builder symbol', commitLabel: 'Load',
+          onCommit: function () { symInput.dispatchEvent(new Event('change')); }
+        }));
+      }
       root.appendChild(el('div', { class: 'card' },
         el('div', { class: 'builder-bar' },
-          el('div', { class: 'field' }, el('label', {}, 'Qty'), qtyIn),
-          el('div', { class: 'field builder-bar-grow' }, el('label', {}, 'Structure'), tplSel),
+          UI.field('Qty', qtyIn),
+          UI.field('Structure', tplSel, { className: 'builder-bar-grow' }),
           el('div', { class: 'field builder-bar-end' }, el('div', { class: 'btn-row', style: 'margin:0' }, addBtn, clearBtn))),
         el('div', { class: 'builder-bar', style: 'margin-top:8px' },
           limitsFields(false),
@@ -1045,7 +1102,7 @@
       function renderEducation() {
         eduHost.innerHTML = '';
         var t = TEMPLATES.find(function (x) { return x.key === st.templateKey; });
-        var g = t && Learn.STRATEGY_GUIDE[t.family];
+        var g = t && (Learn.STRATEGY_GUIDE[t.key] || Learn.STRATEGY_GUIDE[t.family]);
         if (g) {
           eduHost.appendChild(UI.expandable('About this structure — how it wins, loses, and surprises', function () {
             return el('div', {},
@@ -1095,7 +1152,7 @@
 
       async function legRow(l, idx) {
         var row = el('div', { class: 'leg-row' + (st.excluded[idx] ? ' leg-off' : ''), 'data-leg': String(idx) });
-        var onToggle = el('input', { type: 'checkbox', class: 'leg-on',
+        var onToggle = el('input', { type: 'checkbox', class: 'leg-on', 'aria-label': 'Include leg ' + (idx + 1),
           title: 'Include this leg — untick to see the position without it',
           checked: st.excluded[idx] ? null : '' });
         onToggle.addEventListener('change', function () {
@@ -1103,17 +1160,18 @@
           row.classList.toggle('leg-off', !onToggle.checked);
           remember(); schedulePreview();
         });
-        var action = el('select', { class: 'leg-action' },
+        var action = el('select', { class: 'leg-action', 'aria-label': 'Leg ' + (idx + 1) + ' action' },
           el('option', { value: 'BUY', selected: l.action === 'BUY' ? '' : null }, 'Buy'),
           el('option', { value: 'SELL', selected: l.action === 'SELL' ? '' : null }, 'Sell'));
-        var type = el('select', { class: 'leg-type' },
+        var type = el('select', { class: 'leg-type', 'aria-label': 'Leg ' + (idx + 1) + ' instrument type' },
           ['CALL', 'PUT', 'STOCK'].map(function (t) {
             return el('option', { value: t, selected: l.type === t ? '' : null }, t === 'STOCK' ? '100 sh' : t.toLowerCase());
           }));
-        var exp = el('select', { class: 'leg-exp' },
+        var exp = el('select', { class: 'leg-exp', 'aria-label': 'Leg ' + (idx + 1) + ' expiration' },
           expirations.map(function (d) { return el('option', { value: d, selected: l.expiration === d ? '' : null }, d); }));
-        var strike = el('select', { class: 'leg-strike' });
-        var ratio = el('input', { class: 'leg-ratio', type: 'number', min: '1', max: '10', value: String(l.ratio || 1) });
+        var strike = el('select', { class: 'leg-strike', 'aria-label': 'Leg ' + (idx + 1) + ' strike' });
+        var ratio = el('input', { class: 'leg-ratio', type: 'number', min: '1', max: '10',
+          'aria-label': 'Leg ' + (idx + 1) + ' ratio', value: String(l.ratio || 1) });
         var mkt = el('span', { class: 'leg-mkt muted mono' }, '…');
 
         async function refreshMkt() {
@@ -1167,6 +1225,7 @@
         });
         var remove = el('button', {
           class: 'btn btn-sm btn-secondary leg-remove', type: 'button', title: 'Remove this leg',
+          'aria-label': 'Remove this leg',
           onclick: function () {
             hideLegPop();
             st.legs.splice(idx, 1);
@@ -1180,7 +1239,7 @@
             st.exposureResult = null;
             remember(); renderLegs(); renderExposureSizer(); schedulePreview();
           }
-        }, '✕');
+        }, icon('x', 14));
         row.appendChild(el('div', { class: 'leg-controls' }, onToggle, action, type, exp, strike, ratio, mkt, remove));
         var hoverT = null;
         row.addEventListener('mouseenter', function () { hoverT = setTimeout(function () { showLegPop(row, l); }, 150); });
@@ -1253,7 +1312,7 @@
             class: 'btn', id: 'builder-review', disabled: p.ok ? null : '',
             title: p.ok ? null : 'Blocked — see reasons above',
             onclick: handoff
-          }, 'Review & place →')));
+          }, options.completeLabel || 'Review & place →')));
       }
       function netGreeks(p) {
         if (!p.legs || !p.legs.length) return null;
@@ -1347,12 +1406,12 @@
       hostEl.appendChild(el('div', { class: 'grid grid-2 panel-stats' },
         stat(credit >= 0 ? 'You collect' : 'You pay', fmtMoney(Math.abs(credit)),
           beginnerWording ? (credit >= 0 ? 'Premium received now — yours to keep only if the position works out.' : 'Cash leaving your account now, before fees.') : null),
-        stat(beginnerWording ? 'Theoretical worst case' : 'Theoretical max loss',
+        stat(UI.vocabulary('theoreticalMaxLoss'),
           unlimited ? el('span', { class: 'loss' }, 'UNLIMITED')
             : p.ok || p.maxLossCents > 0 ? el('span', { class: 'loss' }, fmtMoney(p.maxLossCents))
             : el('span', { class: 'muted' }, '—'),
           beginnerWording ? 'The worst case at expiration, including every leg.' : null),
-        stat(beginnerWording ? 'Theoretical ceiling' : 'Theoretical max profit', el('span', {
+        stat(UI.vocabulary('theoreticalMaxProfit', beginnerWording ? 'Best possible profit' : null), el('span', {
           class: UI.profitCeilingKind(familyLabel(), null, p.maxProfitCents, p.legs) === 'model-dependent' ? 'muted' : 'gain'
         }, UI.maxProfitLabel(familyLabel(), null, p.maxProfitCents, beginnerWording, p.legs)),
           beginnerWording ? 'The best case at expiration.' : null),
@@ -1369,17 +1428,17 @@
           chip(UI.term('breakeven', 'Breakevens'), p.breakevens.map(function (b) { return '$' + parseFloat(b).toFixed(2); }).join(' / '))));
       }
       hostEl.appendChild(el('div', { class: 'chip-row' },
-        chip('Buying power after', fmtMoney(p.buyingPowerAfterCents)),
-        p.reserveCents ? chip(UI.term('reserve', 'Set aside'), fmtMoney(p.reserveCents)) : null));
+        chip(UI.vocabulary('buyingPower', 'Buying power after'), fmtMoney(p.buyingPowerAfterCents)),
+        p.reserveCents ? chip(UI.vocabulary('brokerReserve'), fmtMoney(p.reserveCents)) : null));
       // One line kills the "three different risk numbers" confusion: everything here is a TOTAL.
       hostEl.appendChild(el('div', { class: 'muted small' },
-        'All figures are totals for this exact position and quantity. "Set aside" and "most you can lose" differ on credit trades because the set-aside is the gross width — the worst case lives inside it.'));
+        'All figures are totals for this exact position and quantity. Broker reserve and theoretical max loss differ on credit trades because the reserve is the gross width — the loss boundary lives inside it.'));
       var prob = an.probabilityMap;
       if (prob && prob.pAnyProfit !== undefined && p.ok) {
         hostEl.appendChild(el('div', { class: 'chip-row', id: 'builder-prob-chips' },
           chip(beginnerWording ? 'Any profit' : 'P(profit)', Math.round(prob.pAnyProfit * 100) + '%'),
           chip(beginnerWording ? 'Full win' : 'P(max profit)', Math.round(prob.pMaxProfit * 100) + '%'),
-          chip(beginnerWording ? 'Chance of theoretical worst case' : 'P(theoretical max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
+          chip(beginnerWording ? 'Chance of theoretical max loss' : 'P(theoretical max loss)', Math.round(prob.pMaxLoss * 100) + '%'),
           prob.cvar95Cents !== undefined && prob.cvar95Cents !== null
             ? chip('CVaR95', UI.fmtMoneyCompact(prob.cvar95Cents)) : null));
       }
@@ -1395,7 +1454,7 @@
           handles: handles || null
         }));
       } else if (p.legs && p.legs.length) {
-        hostEl.appendChild(explain('Mixed expirations have no single at-expiry payoff line: the position\u2019s value depends on volatility after the near leg expires. Use the shared scenario distributions below to inspect that model-dependent range.'));
+        hostEl.appendChild(explain('Mixed expirations have no single at-expiry payoff line: a surviving option still has time value after the near leg expires. Use Possible futures to inspect how stock price and volatility shape that range.'));
       }
       // One lazy scenario component for every structure. It sits BESIDE the structural payoff
       // truth and uses this preview's exact package price; no parallel pricing implementation.
@@ -1403,7 +1462,7 @@
         hostEl.appendChild(Scenario.realisticOutcomes(st.symbol, {
           strategy: familyLabel(), legs: p.legs, qty: st.qty || 1,
           entryNetPremiumCents: p.entryNetPremiumCents
-        }));
+        }, { autoRun: true }));
       }
       if (p.ok && p.warnings && p.warnings.length) {
         hostEl.appendChild(alertBox('warn', 'Heads up', p.warnings));

@@ -38,7 +38,9 @@ class AuthServiceTest {
         return new AuthService(new AppConfig(new HashMap<>(conf)), db, CLOCK, stub);
     }
 
-    private long userCount() { return db.query("SELECT count(*) AS c FROM users", r -> r.lng("c")).getFirst(); }
+    private long userCount() {
+        return db.query("SELECT count(*) AS c FROM users WHERE id NOT IN ('local','system')", r -> r.lng("c")).getFirst();
+    }
 
     @Test void provisionsUsersIdempotently() {
         AuthService a = auth(Map.of());
@@ -65,6 +67,17 @@ class AuthServiceTest {
                 .isInstanceOf(UnauthorizedException.class);
         assertThat(a.authorizeAndProvision(new VerifiedIdentity("s2", "Owner@X.com", true, "O")))
                 .isEqualTo("google:s2");
+    }
+
+    @Test void resolvesExplicitAdminIdentityInsideTheAuthBoundary() {
+        AuthService a = auth(Map.of("AUTH_ENABLED", "true", "AUTH_ADMIN_EMAILS", "owner@x.com",
+                "OIDC_CLIENT_ID", "client", "OIDC_CLIENT_SECRET", "secret"));
+        String owner = a.provisionUser(new VerifiedIdentity("owner", "Owner@X.com", true, "Owner"));
+        String member = a.provisionUser(new VerifiedIdentity("member", "member@x.com", true, "Member"));
+
+        assertThat(a.userIsAdmin(owner)).isTrue();
+        assertThat(a.userIsAdmin(member)).isFalse();
+        assertThat(a.userIsAdmin(null)).isFalse();
     }
 
     @Test void behavesAsLocalUserWhenDisabled() {
@@ -99,7 +112,8 @@ class AuthServiceTest {
         // Two users, two accounts (the first claims the legacy one, the second gets a fresh one).
         accounts.getOrCreateDefault();
         db.exec("INSERT INTO users(id,email,provider,subject,name,created_at,updated_at) VALUES "
-                + "('google:a','a@x.com','google','a','A','t','t'),('google:b','b@x.com','google','b','B','t','t')");
+                + "('google:a','a@x.com','google','a','A','2026-07-08T15:30:00Z','2026-07-08T15:30:00Z'),"
+                + "('google:b','b@x.com','google','b','B','2026-07-08T15:30:00Z','2026-07-08T15:30:00Z')");
         Account a = accounts.getOrCreateDefaultForUser("google:a");
         Account b = accounts.getOrCreateDefaultForUser("google:b");
 

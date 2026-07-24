@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.auth;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.util.OwnerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +35,7 @@ public final class AuthService {
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     /** The implicit user when auth is disabled; owns the single legacy paper account. */
-    public static final String LOCAL_USER = "local";
+    public static final String LOCAL_USER = OwnerScope.LOCAL;
 
     private static final String SESSION_UID = "uid";
     private static final String SESSION_STATE = "oidc_state";
@@ -61,6 +62,15 @@ public final class AuthService {
     public String currentUserId(Context ctx) {
         if (!enabled()) return LOCAL_USER;
         return ctx.sessionAttribute(SESSION_UID);
+    }
+
+    /** Destructive-operation authorization stays with the identity store, not HTTP routing. */
+    public boolean userIsAdmin(String uid) {
+        if (!enabled()) return false;
+        if (uid == null || LOCAL_USER.equals(uid)) return false;
+        String email = db.query("SELECT email FROM users WHERE id=?", row -> row.str("email"), uid)
+                .stream().findFirst().orElse(null);
+        return email != null && cfg.authAdminEmails().contains(email.toLowerCase(Locale.ROOT));
     }
 
     /** Gate for protected routes: throws (-> 401) when auth is on and no user is signed in. */

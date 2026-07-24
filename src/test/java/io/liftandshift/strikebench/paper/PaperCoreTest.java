@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,7 +49,7 @@ class PaperCoreTest {
                                                         int qty, List<Leg> legs, String thesis,
                                                         String horizon, String riskMode) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, null, null, null, null, null);
+                riskMode, null, null, null, null, null, "PROPOSED");
     }
 
     private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
@@ -56,7 +57,7 @@ class PaperCoreTest {
                                                         String horizon, String riskMode, String intent,
                                                         Boolean useHeldShares) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, intent, useHeldShares, null, null, null);
+                riskMode, intent, useHeldShares, null, null, null, "PROPOSED");
     }
 
     private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
@@ -65,7 +66,8 @@ class PaperCoreTest {
                                                         Boolean useHeldShares, Long proposedNetCents,
                                                         Long feesOverrideCents, String source) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, intent, useHeldShares, proposedNetCents, feesOverrideCents, source);
+                riskMode, intent, useHeldShares, proposedNetCents, feesOverrideCents, source,
+                "IMPORT".equals(source) || "BROKER".equals(source) ? "EXECUTED" : "PROPOSED");
     }
 
     /**
@@ -75,6 +77,8 @@ class PaperCoreTest {
      */
     static final class StubMarks implements MarksSource {
         BigDecimal underlying = new BigDecimal("100.00");
+        AtomicInteger scalarUnderlyingCalls = new AtomicInteger();
+        AtomicInteger batchUnderlyingCalls = new AtomicInteger();
         BigDecimal closeOnValue = null; // when set, the close used for settlement (any date)
         Map<LocalDate, BigDecimal> closesByDate = new java.util.HashMap<>();
         Freshness freshness = Freshness.FIXTURE;
@@ -85,7 +89,20 @@ class PaperCoreTest {
                 "CALL100", new BigDecimal("2.50"),
                 "CALL105", new BigDecimal("1.10")));
         Map<String, LegMark> exact = new java.util.HashMap<>();
-        @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.of(underlying); }
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) {
+            scalarUnderlyingCalls.incrementAndGet();
+            return Optional.of(underlying);
+        }
+        @Override public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(
+                String symbol, String worldId) {
+            return Optional.ofNullable(evidenceOverride);
+        }
+        @Override public Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
+            batchUnderlyingCalls.incrementAndGet();
+            Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+            if (symbols != null) symbols.forEach(symbol -> out.put(symbol, underlying));
+            return out;
+        }
         @Override public Optional<BigDecimal> closeOn(String symbol, LocalDate date) {
             if (closesByDate.containsKey(date)) return Optional.of(closesByDate.get(date));
             return Optional.ofNullable(closeOnValue);
@@ -138,6 +155,13 @@ class PaperCoreTest {
 
     private static Leg call(LegAction a, String strike, String prem) {
         return Leg.option(a, OptionType.CALL, new BigDecimal(strike), EXP, 1, new BigDecimal(prem));
+    }
+
+    @Test
+    void accountLaneResolutionFailsClosedWhenTheBindingCannotBeRead() {
+        assertThatThrownBy(() -> trades.worldOf("acct_missing"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no such account");
     }
 
     @Test
@@ -226,6 +250,373 @@ class PaperCoreTest {
     }
 
     @Test
+    void typedMarketAndLimitInstructionsUseSignedPackageEconomics() {
+        Account acct = accounts.getOrCreateDefault();
+        List<Leg> enteredLegs = List.of(
+                put(LegAction.SELL, "100", "4.25"), put(LegAction.BUY, "95", "1.20"));
+
+        TradeService.OpenRequest market = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
+                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.market());
+        TradePreview marketPreview = trades.preview(market);
+        assertThat(marketPreview.entryNetPremiumCents())
+                .as("MARKET ignores entered proposal prices and fills the natural package")
+                .isEqualTo(180_00L);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> marketExecution =
+                (Map<String, Object>) marketPreview.analytics().get("executionQuality");
+        assertThat(marketExecution).containsEntry("orderType", "MARKET")
+                .containsEntry("executability", "IMMEDIATE")
+                .containsEntry("presentlyExecutable", true)
+                .containsEntry("economicSide", "CREDIT")
+                .containsEntry("fillNetCents", 180_00L);
+
+        TradeService.OpenRequest marketableLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
+                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(160_00L));
+        TradePreview improved = trades.preview(marketableLimit);
+        assertThat(improved.ok()).isTrue();
+        assertThat(improved.entryNetPremiumCents())
+                .as("a marketable limit receives the better natural executable price")
+                .isEqualTo(180_00L);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> improvedExecution =
+                (Map<String, Object>) improved.analytics().get("executionQuality");
+        assertThat(improvedExecution).containsEntry("orderType", "LIMIT")
+                .containsEntry("limitNetCents", 160_00L)
+                .containsEntry("executability", "IMMEDIATE")
+                .containsEntry("fillNetCents", 180_00L);
+
+        TradeService.OpenRequest restingLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
+                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(200_00L));
+        TradePreview resting = trades.preview(restingLimit);
+        assertThat(resting.ok()).isFalse();
+        assertThat(resting.entryNetPremiumCents()).isEqualTo(200_00L);
+        assertThat(resting.blockReasons()).anySatisfy(reason ->
+                assertThat(reason).contains("RESTING").contains("not presently executable"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> restingExecution =
+                (Map<String, Object>) resting.analytics().get("executionQuality");
+        assertThat(restingExecution).containsEntry("executability", "RESTING")
+                .containsEntry("presentlyExecutable", false)
+                .containsEntry("economicSide", "CREDIT");
+        assertThatThrownBy(() -> trades.create(restingLimit))
+                .isInstanceOf(TradeRejectedException.class);
+
+        assertThat(OrderInstruction.limit(-300_00L).executability(-250_00L, true))
+                .as("a debit limit willing to pay more is marketable")
+                .isEqualTo(OrderInstruction.Executability.IMMEDIATE);
+        assertThat(OrderInstruction.limit(-200_00L).executability(-250_00L, true))
+                .as("a more favorable debit limit rests")
+                .isEqualTo(OrderInstruction.Executability.RESTING);
+        assertThatThrownBy(() -> new OrderInstruction(OrderInstruction.Type.MARKET, 1L, null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot carry");
+    }
+
+    @Test
+    void analysisPreservesEnteredLegPricesAndLabelsBlankLegEvidenceIndependently() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest mixed = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "4.25"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, null, null,
+                "ANALYZE", "PROPOSED");
+
+        TradePreview preview = trades.analyze(mixed);
+        assertThat(preview.ok()).isTrue();
+        assertThat(preview.entryNetPremiumCents()).isEqualTo(305_00L);
+        assertThat(preview.legs()).extracting(row -> row.get("fillBasis"))
+                .containsExactly("USER_PROPOSED", "EXECUTABLE_BOOK");
+        assertThat(preview.warnings()).anySatisfy(message ->
+                assertThat(message).contains("entered leg price").contains("blank legs"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> execution = (Map<String, Object>) preview.analytics().get("executionQuality");
+        assertThat(execution.get("executableNetCents")).isEqualTo(180_00L);
+
+        TradePreview tracked = trades.previewTracked(mixed, 1_000_00L);
+        assertThat(tracked.cashBeforeCents()).isEqualTo(1_000_00L);
+        assertThat(tracked.evidence().source()).contains("tracked-account");
+        assertThat(tracked.warnings()).anySatisfy(message ->
+                assertThat(message).contains("ANALYZE").contains("not a fill claim"));
+
+        marks.freshness = Freshness.STALE;
+        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("cboe", Freshness.STALE);
+        assertThat(trades.analyze(mixed).ok()).isTrue();
+        TradePreview executablePreview = trades.preview(mixed);
+        assertThat(executablePreview.ok()).isFalse();
+        assertThat(executablePreview.blockReasons()).anySatisfy(reason -> assertThat(reason).contains("STALE"));
+    }
+
+    @Test
+    void owningWorkflowHookRollsBackTheEntirePaperTrade() {
+        Account before = accounts.getOrCreateDefault();
+        long tradesBefore = db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst();
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.create(creditPutSpread(before.id(), 1), (connection, trade) -> {
+            throw new java.sql.SQLException("owner snapshot failed");
+        })).hasMessageContaining("owner snapshot failed");
+
+        Account after = accounts.getOrCreateDefault();
+        assertThat(after.cashCents()).isEqualTo(before.cashCents());
+        assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst()).isEqualTo(tradesBefore);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst()).isEqualTo(ledgerBefore);
+    }
+
+    @Test
+    void owningLifecycleHookRollsBackTheEntirePaperClose() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.unwind(opened.id(), true,
+                (connection, trade, actionRealized, realizedToDate) -> {
+            throw new java.sql.SQLException("owner lifecycle snapshot failed");
+        })).hasMessageContaining("owner lifecycle snapshot failed");
+
+        TradeRecord afterTrade = trades.get(opened.id());
+        Account after = accounts.get(account.id());
+        assertThat(afterTrade.status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(after.cashCents()).isEqualTo(before.cashCents());
+        assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst()).isEqualTo(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void owningLifecycleHookRollsBackTheEntirePartialClose() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 5));
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+        TradeService.PartialCloseAssessment preview = trades.previewPartialClose(opened.id(), 2);
+
+        assertThatThrownBy(() -> trades.partialClose(opened.id(), 2, true,
+                (connection, survivor, actionRealized, realizedToDate) -> {
+                    throw new java.sql.SQLException("partial-close receipt failed");
+                }, preview.closingCashCents(), preview.closingFeesCents(),
+                new TradeService.ExpectedPositionState(opened.qty(), opened.entryNetPremiumCents(),
+                        opened.feesOpenCents(), opened.maxLossCents(), opened.maxProfitCents(),
+                        opened.sharesLocked(), 0, preview.current().risk().reserveCents())))
+                .hasMessageContaining("partial-close receipt failed");
+
+        TradeRecord afterTrade = trades.get(opened.id());
+        Account after = accounts.get(account.id());
+        assertThat(afterTrade.status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(afterTrade.qty()).isEqualTo(5);
+        assertThat(afterTrade.entryNetPremiumCents()).isEqualTo(opened.entryNetPremiumCents());
+        assertThat(afterTrade.realizedPnlCents()).isNull();
+        assertThat(after.cashCents()).isEqualTo(before.cashCents());
+        assertThat(after.reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst())
+                .isEqualTo(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void owningLifecycleHookRollsBackTheEntireLegAdjustment() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        TradeService.OpenRequest desired = openRequest(account.id(), "AAPL", "CUSTOM", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "bullish", "month", "balanced");
+        TradeService.AdjustmentAssessment preview = trades.previewAdjustment(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.REMOVE_LEG, desired);
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.adjustPosition(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.REMOVE_LEG,
+                preview.exactAfterRequest(), true,
+                (connection, survivor, actionRealized, realizedToDate) -> {
+                    throw new java.sql.SQLException("adjustment receipt failed");
+                }, expectedPosition(opened, preview.current()), expectedAdjustment(preview)))
+                .hasMessageContaining("adjustment receipt failed");
+
+        TradeRecord after = trades.get(opened.id());
+        assertThat(after.legs()).hasSize(2);
+        assertThat(after.entryNetPremiumCents()).isEqualTo(opened.entryNetPremiumCents());
+        assertThat(after.realizedPnlCents()).isNull();
+        assertThat(accounts.get(account.id()).cashCents()).isEqualTo(before.cashCents());
+        assertThat(accounts.get(account.id()).reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n"))).containsExactly(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void sameContractScaleInKeepsBothFillsAndFinalCloseReconcilesLifetimeRealizedPnl() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        assertThat(opened.legs().get(1).entryPrice()).isEqualByComparingTo("1.20");
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.30"),
+                new BigDecimal("1.40"), new BigDecimal("1.35"), 0.25, Freshness.FIXTURE));
+        TradeService.OpenRequest desired = openRequest(account.id(), "AAPL", "CUSTOM", 1,
+                List.of(put(LegAction.SELL, "100", "0"),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), EXP, 2, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradeService.AdjustmentAssessment preview = trades.previewAdjustment(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG, desired);
+
+        TradeService.AdjustmentResult adjusted = trades.adjustPosition(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG,
+                preview.exactAfterRequest(), true, null,
+                expectedPosition(opened, preview.current()), expectedAdjustment(preview));
+
+        assertThat(adjusted.trade().id()).isEqualTo(opened.id());
+        assertThat(adjusted.trade().legs()).extracting(Leg::entryPrice)
+                .contains(new BigDecimal("1.20"), new BigDecimal("1.40"));
+        assertThat(adjusted.trade().legs().stream()
+                .filter(leg -> leg.type() == OptionType.PUT && leg.strike().compareTo(new BigDecimal("95")) == 0)
+                .mapToInt(Leg::ratio).sum()).isEqualTo(2);
+
+        TradeService.UnwindAssessment closePreview = trades.previewUnwind(opened.id());
+        TradeService.CloseResult closed = trades.unwind(opened.id(), true, null,
+                closePreview.closingCashCents(), closePreview.closingFeesCents());
+        assertThat(closed.actionRealizedPnlCents()).isEqualTo(closePreview.actionRealizedPnlCents());
+        assertThat(closed.realizedPnlCents()).isEqualTo(
+                adjusted.actionRealizedPnlCents() + closePreview.actionRealizedPnlCents());
+        assertThat(closed.trade().realizedPnlCents()).isEqualTo(closed.realizedPnlCents());
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void addedQuantityIsRepricedAtApplyAndAChangedBookRejectsTheWholeAdjustment() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        TradeService.OpenRequest desired = openRequest(account.id(), "AAPL", "CUSTOM", 1,
+                List.of(put(LegAction.SELL, "100", "0"),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), EXP, 2, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradeService.AdjustmentAssessment preview = trades.previewAdjustment(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG, desired);
+        Account before = accounts.get(account.id());
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.30"),
+                new BigDecimal("1.55"), new BigDecimal("1.425"), 0.25, Freshness.FIXTURE));
+
+        assertThatThrownBy(() -> trades.adjustPosition(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ADD_LEG,
+                preview.exactAfterRequest(), true, null,
+                expectedPosition(opened, preview.current()), expectedAdjustment(preview)))
+                .hasMessageContaining("changed after preview");
+
+        TradeRecord unchanged = trades.get(opened.id());
+        assertThat(unchanged.legs()).hasSize(2);
+        assertThat(unchanged.entryNetPremiumCents()).isEqualTo(opened.entryNetPremiumCents());
+        assertThat(accounts.get(account.id()).cashCents()).isEqualTo(before.cashCents());
+        assertThat(accounts.get(account.id()).reservedCents()).isEqualTo(before.reservedCents());
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n"))).containsExactly(ledgerBefore);
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
+    void packageAllocationPreservesEverySignedCentAcrossRepeatedPartialCloses() {
+        long positiveFirst = TradeService.allocatedPrefix(10, 3, 1);
+        long positiveSecond = TradeService.allocatedPrefix(
+                TradeService.remainingAllocation(10, 3, 1), 2, 1);
+        long positiveLast = TradeService.remainingAllocation(
+                TradeService.remainingAllocation(10, 3, 1), 2, 1);
+        assertThat(positiveFirst + positiveSecond + positiveLast).isEqualTo(10);
+        assertThat(List.of(positiveFirst, positiveSecond, positiveLast)).containsExactly(4L, 3L, 3L);
+
+        long negativeFirst = TradeService.allocatedPrefix(-10, 3, 1);
+        long negativeSecond = TradeService.allocatedPrefix(
+                TradeService.remainingAllocation(-10, 3, 1), 2, 1);
+        long negativeLast = TradeService.remainingAllocation(
+                TradeService.remainingAllocation(-10, 3, 1), 2, 1);
+        assertThat(negativeFirst + negativeSecond + negativeLast).isEqualTo(-10);
+        assertThat(List.of(negativeFirst, negativeSecond, negativeLast)).containsExactly(-4L, -3L, -3L);
+    }
+
+    @Test
+    void partialCloseRechecksTheSignedPositionBasisUnderTheTradeLock() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 3));
+        TradeService.PartialCloseAssessment preview = trades.previewPartialClose(opened.id(), 1);
+        TradeService.ExpectedPositionState expected = new TradeService.ExpectedPositionState(
+                opened.qty(), opened.entryNetPremiumCents(), opened.feesOpenCents(), opened.maxLossCents(),
+                opened.maxProfitCents(), opened.sharesLocked(), 0, preview.current().risk().reserveCents());
+        db.exec("UPDATE trades SET entry_net_premium_cents=entry_net_premium_cents+1 WHERE id=?", opened.id());
+
+        assertThatThrownBy(() -> trades.partialClose(opened.id(), 1, true, null,
+                preview.closingCashCents(), preview.closingFeesCents(), expected))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("position changed");
+        assertThat(trades.get(opened.id()).qty()).isEqualTo(3);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=? AND type='PREMIUM_CLOSE'",
+                row -> row.lng("n"), opened.id())).containsExactly(0L);
+    }
+
+    @Test
+    void laterRollKeepsTheEarlierPartialRealizationAndReportsTheCurrentActionSeparately() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 3));
+        TradeService.PartialCloseAssessment partialPreview = trades.previewPartialClose(opened.id(), 1);
+        TradeService.PartialCloseResult partial = trades.partialClose(opened.id(), 1, true, null,
+                partialPreview.closingCashCents(), partialPreview.closingFeesCents(),
+                new TradeService.ExpectedPositionState(opened.qty(), opened.entryNetPremiumCents(),
+                        opened.feesOpenCents(), opened.maxLossCents(), opened.maxProfitCents(),
+                        opened.sharesLocked(), 0, partialPreview.current().risk().reserveCents()));
+        TradeService.UnwindAssessment close = trades.previewUnwind(opened.id());
+        TradeService.OpenRequest replacement = openRequest(account.id(), "AAPL", "CREDIT_PUT_SPREAD", 2,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradePreview replacementPreview = trades.preview(replacement);
+
+        TradeService.RollResult rolled = trades.roll(opened.id(), replacement, true, null,
+                close.closingCashCents(), close.closingFeesCents(),
+                new TradeService.ExpectedOpen(replacementPreview.entryNetPremiumCents(),
+                        replacementPreview.feesOpenCents(), replacementPreview.reserveCents(),
+                        replacementPreview.maxLossCents(), replacementPreview.maxProfitCents()));
+
+        assertThat(rolled.actionRealizedClosingCents()).isEqualTo(close.actionRealizedPnlCents());
+        assertThat(rolled.realizedClosingCents())
+                .isEqualTo(partial.actionRealizedPnlCents() + close.actionRealizedPnlCents());
+        assertThat(rolled.closedTrade().realizedPnlCents()).isEqualTo(rolled.realizedClosingCents());
+        assertThat(rolled.replacementTrade().status()).isEqualTo(TradeRecord.ACTIVE);
+    }
+
+    @Test
+    void owningRollHookRollsBackBothCloseAndReplacementOpen() {
+        Account account = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(account.id(), 1));
+        TradeService.OpenRequest replacement = openRequest(account.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"),
+                                EXP.plusMonths(1), 1, BigDecimal.ZERO)),
+                "bullish", "month", "balanced");
+        TradeService.UnwindAssessment close = trades.previewUnwind(opened.id());
+        TradePreview afterPreview = trades.preview(replacement);
+        Account before = accounts.get(account.id());
+        long tradesBefore = db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst();
+        long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
+
+        assertThatThrownBy(() -> trades.roll(opened.id(), replacement, true,
+                (connection, closed, after, actionRealized, realizedToDate) -> {
+                    throw new java.sql.SQLException("roll receipt failed");
+                }, close.closingCashCents(), close.closingFeesCents(),
+                new TradeService.ExpectedOpen(afterPreview.entryNetPremiumCents(),
+                        afterPreview.feesOpenCents(), afterPreview.reserveCents(),
+                        afterPreview.maxLossCents(), afterPreview.maxProfitCents())))
+                .hasMessageContaining("roll receipt failed");
+
+        assertThat(trades.get(opened.id()).status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst())
+                .isEqualTo(tradesBefore);
+        assertThat(db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst())
+                .isEqualTo(ledgerBefore);
+        assertThat(accounts.get(account.id()).cashCents()).isEqualTo(before.cashCents());
+        assertThat(accounts.get(account.id()).reservedCents()).isEqualTo(before.reservedCents());
+        assertLedgerInvariants(account.id());
+    }
+
+    @Test
     void heldSharePopNowKeepsTheEntrySpotAsItsShareBasis() {
         Account acct = accounts.getOrCreateDefault();
         positions.buy(acct.id(), "AAPL", 100);
@@ -256,7 +647,7 @@ class PaperCoreTest {
     }
 
     @Test
-    void paperOrderCannotClaimAFavorableUnfilledLimitButRealFillCanBeRecorded() {
+    void paperOrderCannotClaimAFavorableUnfilledLimit() {
         Account acct = accounts.getOrCreateDefault();
         // Natural executable credit is $180. Asking for $200 is a valid what-if, but it is not
         // an immediate fill: a paper ledger must not mint the extra $20 as if the market paid it.
@@ -278,14 +669,6 @@ class PaperCoreTest {
                 .isInstanceOf(TradeRejectedException.class)
                 .hasMessageContaining("cannot claim this paper order filled");
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
-
-        TradeRecord actual = trades.createExternal(resting,
-                new TradeService.ExternalMeta("2026-07-08T15:30:00Z", "manual broker record", "order-1", false));
-        assertThat(actual.entryNetPremiumCents()).isEqualTo(200_00L);
-        assertThat(actual.external()).isTrue();
-        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
-        assertThat(db.query("SELECT COUNT(*) AS n FROM ledger WHERE trade_id=?", r -> r.lng("n"), actual.id()).getFirst())
-                .isZero();
     }
 
     @org.junit.jupiter.api.Test
@@ -308,62 +691,6 @@ class PaperCoreTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
         assertThat((String) prob.get("timeBasis")).contains("trading sessions");
-    }
-
-    @org.junit.jupiter.api.Test
-    void historicalExternalTradesRecordFromUserFillsEvenWhenContractsAreDead() {
-        Account acct = accounts.getOrCreateDefault();
-        // Legs that expired LAST WEEK (dead vs the fixed 2026-07-08 clock) with the user's fills.
-        LocalDate dead = LocalDate.of(2026, 7, 2);
-        TradeService.OpenRequest past = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
-                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), dead, 1, new BigDecimal("3.10")),
-                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), dead, 1, new BigDecimal("1.35"))),
-                "bullish", "week", "balanced", null, null, null, 200L, "IMPORT");
-        TradeRecord t = trades.createExternal(past,
-                new TradeService.ExternalMeta("2026-07-01", "ETRADE", "ORD-123", true));
-        assertThat(t.external()).isTrue();
-        assertThat(t.entryNetPremiumCents()).isEqualTo(175_00); // 3.10 - 1.35 per share
-        assertThat(t.broker()).isEqualTo("ETRADE");
-        assertThat(t.orderRef()).isEqualTo("ORD-123");
-        assertThat(t.executedAt()).isNotNull();
-        // Legs carry the REAL user fills — nothing fabricated, nothing validated against a dead book.
-        assertThat(t.legs().getFirst().entryPrice()).isEqualByComparingTo("3.10");
-        // Still zero paper-money mutation.
-        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
-    }
-
-    @org.junit.jupiter.api.Test
-    void externalTradesNeverTouchPaperMoney() {
-        Account acct = accounts.getOrCreateDefault();
-        long cashBefore = acct.cashCents(), reservedBefore = acct.reservedCents();
-
-        // Record a REAL fill: the exact spread at MY price, with MY fees.
-        TradeService.OpenRequest real = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
-                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
-                "bullish", "month", "balanced", null, null, 173L * 100, 200L, "IMPORT");
-        TradeRecord t = trades.createExternal(real);
-        assertThat(t.external()).isTrue();
-        assertThat(t.entryNetPremiumCents()).isEqualTo(173_00);
-
-        // ZERO paper-money mutation: cash, reserve and the ledger are untouched.
-        Account after = accounts.get(acct.id());
-        assertThat(after.cashCents()).isEqualTo(cashBefore);
-        assertThat(after.reservedCents()).isEqualTo(reservedBefore);
-        long ledgerRows = db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst();
-        assertThat(ledgerRows).isZero();
-
-        // Excluded from the paper-money aggregate (identity: totalValue = cash + shares + closes)...
-        Map<String, Object> open = trades.openPositionsValue(acct.id());
-        assertThat((Integer) open.get("openTradesCount")).isZero();
-
-        // ...but closing records the real outcome on the trade row — still zero ledger rows.
-        TradeService.CloseResult closed = trades.unwind(t.id(), true);
-        assertThat(closed.trade().status()).isEqualTo(TradeRecord.CLOSED);
-        assertThat(closed.trade().realizedPnlCents()).isNotNull();
-        assertThat(closed.trade().feesOpenCents()).isEqualTo(200L); // recorded entry fact
-        assertThat(closed.trade().feesCloseCents()).isEqualTo(130L); // current default, not an invented copy
-        assertThat(db.query("SELECT COUNT(*) n FROM ledger WHERE trade_id=?", r -> r.lng("n"), t.id()).getFirst()).isZero();
-        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
     }
 
     // ==================== GOLDEN REGRESSION PORTFOLIO (the release gate) ====================
@@ -458,10 +785,41 @@ class PaperCoreTest {
                 "bullish", "month", "balanced");
     }
 
+    private static TradeService.ExpectedPositionState expectedPosition(
+            TradeRecord trade, TradeService.PositionAssessment current) {
+        return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
+                trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
+                trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(), current.risk().reserveCents());
+    }
+
+    private static TradeService.ExpectedPositionState expectedState(TradeRecord trade, long reserveCents) {
+        return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
+                trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
+                trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(), reserveCents);
+    }
+
+    private static TradeService.ExpectedLifecycle expectedLifecycle(TradeService.LifecycleAssessment preview) {
+        return new TradeService.ExpectedLifecycle(preview.settlementUnderlyingCents(),
+                preview.optionSettlementCashCents(), preview.stockCashCents(), preview.sharesDelta(),
+                preview.allocatedEntryBasisCents(), preview.allocatedOpenFeesCents(),
+                preview.reserveAfterCents(), preview.heldShareContextAfter(),
+                preview.sharesLockedAfter(), preview.exactStateFingerprint());
+    }
+
+    private static TradeService.ExpectedAdjustment expectedAdjustment(TradeService.AdjustmentAssessment preview) {
+        return new TradeService.ExpectedAdjustment(preview.closingCashCents(), preview.openingCashCents(),
+                preview.closingFeesCents(), preview.openingFeesCents(),
+                preview.survivor().preview().entryNetPremiumCents(),
+                preview.survivor().preview().feesOpenCents(), preview.reserveAfterCents(),
+                preview.survivor().preview().maxLossCents(),
+                preview.survivor().preview().maxProfitCents(), preview.sharesLockedAfter(),
+                TradeService.exactPositionFingerprint(preview.exactAfterRequest()));
+    }
+
     /** Replays the full ledger and asserts running balances match every row and the account. */
     private void assertLedgerInvariants(String accountId) {
         Account acct = accounts.get(accountId);
-        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE account_id=? ORDER BY id", AccountService::mapLedger, accountId);
+        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE account_id=? ORDER BY id", Ledger::map, accountId);
         long cash = 0, reserved = 0;
         for (LedgerEntry row : rows) {
             if (LedgerEntry.movesCash(row.type())) cash += row.amountCents();
@@ -499,7 +857,7 @@ class PaperCoreTest {
         assertThat(after.buyingPowerCents()).isEqualTo(START - 32000 - 130); // net BP impact = maxLoss + fees
         assertThat(after.hasTraded()).isTrue();
 
-        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE trade_id=? ORDER BY id", AccountService::mapLedger, t.id());
+        List<LedgerEntry> rows = db.query("SELECT * FROM ledger WHERE trade_id=? ORDER BY id", Ledger::map, t.id());
         assertThat(rows).extracting(LedgerEntry::type).containsExactly("PREMIUM_OPEN", "FEE", "RESERVE_HOLD");
         assertLedgerInvariants(acct.id());
     }
@@ -542,12 +900,28 @@ class PaperCoreTest {
 
         TradeRecord opened = trades.create(req);
         assertThat(opened.feesOpenCents()).isEqualTo(200L);
-        assertThat(opened.entrySnapshotJson()).contains("\"feeOverridePerSideCents\":200");
+        assertThat(io.liftandshift.strikebench.util.Json.parse(opened.entrySnapshotJson())
+                .path("feeOverridePerSideCents").asLong()).isEqualTo(200L);
 
         TradeService.CloseResult result = trades.unwind(opened.id(), true);
         assertThat(result.trade().feesCloseCents()).isEqualTo(200L);
         assertThat(result.realizedPnlCents()).isEqualTo(-400L);
         assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void analysisLabelsLargePositionWithoutApplyingThePracticePlacementCap() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeService.OpenRequest request = openRequest(acct.id(), "AAPL", "LONG_CALL", 101,
+                List.of(Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), EXP,
+                        1, BigDecimal.ZERO)), "bullish", "month", "balanced");
+
+        assertThat(trades.preview(request).blockReasons())
+                .anyMatch(reason -> reason.contains("100-contract practice cap"));
+        var analysis = trades.analyze(request);
+        assertThat(analysis.blockReasons())
+                .noneMatch(reason -> reason.contains("100-contract practice cap"));
+        assertThat(analysis.payoff()).isNotEmpty();
     }
 
     @Test
@@ -573,6 +947,29 @@ class PaperCoreTest {
     }
 
     @Test
+    void settlementUsesEachContractsExactDeliverableMultiplier() {
+        Account acct = accounts.getOrCreateDefault();
+        List<Leg> adjustedSpread = List.of(
+                Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), EXP,
+                        1, BigDecimal.ZERO, 10),
+                Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), EXP,
+                        1, BigDecimal.ZERO, 10));
+        TradeRecord opened = trades.create(openRequest(acct.id(), "AAPL", "CUSTOM", 1,
+                adjustedSpread, "bullish", "month", "balanced"));
+
+        marks.underlying = new BigDecimal("92.00");
+        Clock later = Clock.fixed(Instant.parse("2026-08-24T15:30:00Z"), ZoneId.of("America/New_York"));
+        TradeService.CloseResult result = new TradeService(db, cfg, marks, audit, later)
+                .settle(opened.id(), true);
+
+        assertThat(result.trade().status()).isEqualTo("EXPIRED");
+        assertThat(db.query("SELECT amount_cents FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                r -> r.lng("amount_cents"), opened.id())).containsExactly(-5_000L);
+        assertThat(result.realizedPnlCents()).isEqualTo(-3_330L);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
     void deleteVoidsTradeAndRestoresCashExactly() {
         Account acct = accounts.getOrCreateDefault();
         TradeRecord t = trades.create(creditPutSpread(acct.id(), 1));
@@ -581,7 +978,7 @@ class PaperCoreTest {
         Account after = accounts.get(acct.id());
         assertThat(after.cashCents()).isEqualTo(START);          // full reversal via ADJUSTMENT rows
         assertThat(after.reservedCents()).isZero();
-        List<LedgerEntry> adj = db.query("SELECT * FROM ledger WHERE trade_id=? AND type='ADJUSTMENT' ORDER BY id", AccountService::mapLedger, t.id());
+        List<LedgerEntry> adj = db.query("SELECT * FROM ledger WHERE trade_id=? AND type='ADJUSTMENT' ORDER BY id", Ledger::map, t.id());
         assertThat(adj).hasSize(2);                              // reverses PREMIUM_OPEN and FEE
         assertLedgerInvariants(acct.id());
         // Voided trades cannot be double-deleted or closed
@@ -973,6 +1370,31 @@ class PaperCoreTest {
     }
 
     @Test
+    void accountWideAggregatesNeverStopAtTheTradeListPageSize() {
+        Account acct = accounts.getOrCreateDefault();
+        marks.exact.put("PUT100", new MarksSource.LegMark(new BigDecimal("3.00"), new BigDecimal("3.00"),
+                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+
+        for (int i = 0; i < 201; i++) {
+            trades.create(creditPutSpread(acct.id(), 1));
+        }
+
+        assertThat(trades.accountMarkSnapshot(acct.id())).hasSize(201);
+        assertThat(trades.openPositionsValue(acct.id()).openTradesCount()).isEqualTo(201);
+        assertThat(trades.portfolioHeat(acct.id()).get("activeTrades")).isEqualTo(201);
+        assertThat(trades.portfolioGreeks(acct.id()).get("positions"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).hasSize(201);
+        TradeService.DollarDeltaExposure exposure = trades.portfolioDollarDelta(acct.id(), "AAPL");
+        assertThat(exposure.complete()).isTrue();
+        assertThat(exposure.grossCents()).isPositive();
+        assertThat(exposure.focusSymbolGrossCents()).isEqualTo(exposure.grossCents());
+    }
+
+    @Test
     void resetBlockedAfterTradingUnlessForced() {
         Account acct = accounts.getOrCreateDefault();
         trades.create(creditPutSpread(acct.id(), 1));
@@ -1013,6 +1435,20 @@ class PaperCoreTest {
         assertThat(accounts.get(acct.id()).cashCents())
                 .isEqualTo(START - 1_000_000 + 432_000 - 648_000);
         assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void holdingsListUsesOneBatchMarkReadForTheWholeAccount() {
+        Account acct = accounts.getOrCreateDefault();
+        positions.buy(acct.id(), "AAPL", 10);
+        positions.buy(acct.id(), "SPY", 5);
+        marks.scalarUnderlyingCalls.set(0);
+        marks.batchUnderlyingCalls.set(0);
+
+        assertThat(positions.list(acct.id())).extracting(PositionsService.PositionView::symbol)
+                .containsExactly("AAPL", "SPY");
+        assertThat(marks.batchUnderlyingCalls).hasValue(1);
+        assertThat(marks.scalarUnderlyingCalls).hasValue(0);
     }
 
     @Test
@@ -1060,6 +1496,30 @@ class PaperCoreTest {
         trades.unwind(t.id(), true);
         assertThat(positions.freeShares(acct.id(), "AAPL")).isEqualTo(100);
         assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void rollPreviewReusesCashReserveAndSharesReleasedByTheClosingPackage() {
+        Account account = accounts.getOrCreateDefault();
+        positions.buy(account.id(), "AAPL", 100);
+        TradeService.OpenRequest replacement = coveredCallOnHeldShares(account.id());
+        TradeRecord current = trades.create(replacement);
+
+        TradePreview ordinarySecondOrder = trades.preview(replacement);
+        assertThat(ordinarySecondOrder.ok()).isFalse();
+        assertThat(ordinarySecondOrder.blockReasons()).anyMatch(reason -> reason.contains("free shares"));
+
+        TradeService.UnwindAssessment close = trades.previewUnwind(current.id());
+        Account before = accounts.get(account.id());
+        long projectedCash = before.cashCents() + close.closingCashCents() - close.closingFeesCents();
+        long projectedReserve = before.reservedCents() - close.current().risk().reserveCents();
+        TradePreview projectedReplacement = trades.preview(replacement, projectedCash, projectedReserve,
+                current.sharesLocked());
+
+        assertThat(projectedReplacement.ok()).as(String.join("; ", projectedReplacement.blockReasons())).isTrue();
+        assertThat(projectedReplacement.cashBeforeCents()).isEqualTo(projectedCash);
+        assertThat(projectedReplacement.reservedBeforeCents()).isEqualTo(projectedReserve);
+        assertThat(projectedReplacement.buyingPowerBeforeCents()).isEqualTo(projectedCash - projectedReserve);
     }
 
     @Test
@@ -1133,7 +1593,7 @@ class PaperCoreTest {
                 .isEqualTo(START - 1_000_000 + 11_000 - 65 + stockSale);
         assertThat(accounts.get(acct.id()).reservedCents()).isZero();
         List<LedgerEntry> stockRows = db.query(
-                "SELECT * FROM ledger WHERE trade_id=? AND type='STOCK_SELL'", AccountService::mapLedger, t.id());
+                "SELECT * FROM ledger WHERE trade_id=? AND type='STOCK_SELL'", Ledger::map, t.id());
         assertThat(stockRows).hasSize(1);
         assertThat(stockRows.getFirst().memo()).contains("called away").contains("105");
         assertLedgerInvariants(acct.id());
@@ -1186,6 +1646,266 @@ class PaperCoreTest {
         assertThat(view.unrealizedCents()).isEqualTo(-100_000); // marked at today's $90
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START + credit - fees - 1_000_000);
         assertThat(accounts.get(acct.id()).reservedCents()).isZero();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void earlyPutAssignmentKeepsTheLiveHedgeAndSameTradeIdentity() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(acct.id(), 1));
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        marks.underlying = new BigDecimal("90.00");
+
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0);
+
+        assertThat(preview.contract()).contains("100").containsIgnoringCase("put");
+        assertThat(preview.settlementPriceBasis()).contains("early assignment");
+        assertThat(preview.sharesDelta()).isEqualTo(100);
+        assertThat(preview.stockCashCents()).isEqualTo(-1_000_000);
+        assertThat(preview.survivor()).isNotNull();
+        assertThat(io.liftandshift.strikebench.strategy.StrategyCatalog
+                .identify(preview.survivor().position()).family()).isEqualTo("PROTECTIVE_PUT");
+        assertThat(preview.survivor().position().legs()).anySatisfy(leg -> {
+            assertThat(leg.instrumentType()).isEqualTo("STOCK");
+            assertThat(leg.quantity()).isEqualTo(100);
+        });
+        assertThat(preview.reserveAfterCents()).isZero();
+
+        TradeService.LifecycleResult applied = trades.applyLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0, true,
+                null, expectedState(opened, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(applied.trade().id()).isEqualTo(opened.id());
+        assertThat(applied.trade().status()).isEqualTo(TradeRecord.ACTIVE);
+        assertThat(applied.trade().strategy()).isEqualTo("PROTECTIVE_PUT");
+        assertThat(applied.trade().intent()).isEqualTo("HEDGE");
+        assertThat(applied.trade().legs()).singleElement().satisfies(leg -> {
+            assertThat(leg.action()).isEqualTo(LegAction.BUY);
+            assertThat(leg.type()).isEqualTo(OptionType.PUT);
+            assertThat(leg.strike()).isEqualByComparingTo("95");
+            assertThat(leg.entryPrice()).isEqualByComparingTo(opened.legs().get(1).entryPrice());
+        });
+        assertThat(positions.get(acct.id(), "AAPL").shares()).isEqualTo(100);
+        assertThat(positions.get(acct.id(), "AAPL").avgCostCents()).isEqualTo(10_000);
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore - 1_000_000);
+        assertThat(accounts.get(acct.id()).reservedCents()).isZero();
+        long reserveAfter = db.with(c -> Ledger.outstandingReserve(c, opened.id()));
+        assertThat(reserveAfter).isZero();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void lifecyclePreviewCountsThisPositionsShareLockButStillNamesTheNakedCallTransition() {
+        Account acct = accounts.getOrCreateDefault();
+        positions.buy(acct.id(), "AAPL", 100);
+        TradeRecord collar = trades.create(openRequest(acct.id(), "AAPL", "PROTECTIVE_COLLAR", 1,
+                List.of(put(LegAction.BUY, "95", "0"), call(LegAction.SELL, "105", "0")),
+                "bullish", "month", "balanced", "HEDGE", true));
+        assertThat(collar.sharesLocked()).isEqualTo(100);
+        marks.underlying = new BigDecimal("90.00");
+
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(collar.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0);
+
+        assertThat(preview.sharesDelta()).isEqualTo(-100);
+        assertThat(preview.survivor()).isNotNull();
+        assertThat(preview.survivor().risk().mechanicallyEligible()).isFalse();
+        assertThat(preview.survivor().risk().blockReasons())
+                .anySatisfy(reason -> assertThat(reason.toLowerCase()).containsAnyOf("uncovered", "undefined"));
+        assertThat(positions.get(acct.id(), "AAPL").shares()).isEqualTo(100);
+        assertThat(trades.get(collar.id()).legs()).hasSize(2);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void earlyLifecycleConversionRefusesUnderlyingEvidenceFromTheWrongLane() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord put = trades.create(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced",
+                "ACQUIRE", null));
+        marks.underlying = new BigDecimal("90.00");
+        marks.evidenceOverride = new io.liftandshift.strikebench.model.DataEvidence(
+                io.liftandshift.strikebench.model.DataProvenance.OBSERVED,
+                io.liftandshift.strikebench.model.DataAge.STALE, "test-stale-observed");
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(put.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("Cannot apply an early assignment")
+                .hasMessageContaining("DEMO market");
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void longCallExerciseCreatesSharesAtStrikeAndKeepsOptionPnlSeparate() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord call = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "100", "0")), "bullish", "month", "balanced"));
+        long cashBeforeExercise = accounts.get(acct.id()).cashCents();
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        marks.underlying = new BigDecimal("110.00");
+
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(call.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0);
+        assertThat(preview.sharesDelta()).isEqualTo(100);
+        assertThat(preview.stockCashCents()).isEqualTo(-1_000_000);
+        assertThat(preview.survivor()).isNotNull();
+        assertThat(preview.survivor().position().legs()).singleElement().satisfies(leg ->
+                assertThat(leg.instrumentType()).isEqualTo("STOCK"));
+        assertThat(preview.actionRealizedPnlCents())
+                .isEqualTo(call.entryNetPremiumCents() - call.feesOpenCents());
+        assertThat(preview.decisionPnlDeltaCents())
+                .isEqualTo(preview.actionRealizedPnlCents() + 100_000);
+
+        TradeService.LifecycleResult result = trades.applyLifecycleConversion(call.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0, true,
+                null, expectedState(call, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(result.trade().status()).isEqualTo(TradeRecord.EXPIRED);
+        assertThat(result.trade().closeReason()).contains("EXERCISE");
+        assertThat(result.actionRealizedPnlCents()).isEqualTo(preview.actionRealizedPnlCents());
+        assertThat(positions.get(acct.id(), "AAPL").shares()).isEqualTo(100);
+        assertThat(positions.get(acct.id(), "AAPL").avgCostCents()).isEqualTo(10_000);
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBeforeExercise - 1_000_000);
+        assertThat(db.query("SELECT amount_cents FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                row -> row.lng("amount_cents"), call.id())).containsExactly(0L);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void assignedCallSpreadCannotFabricateAShortStockSettlement() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord spread = trades.create(openRequest(acct.id(), "AAPL", "CREDIT_CALL_SPREAD", 1,
+                List.of(call(LegAction.SELL, "100", "0"), call(LegAction.BUY, "105", "0")),
+                "bearish", "month", "balanced"));
+        marks.underlying = new BigDecimal("110.00");
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("not backed by 100 shares")
+                .hasMessageContaining("not disguise a short-stock assignment");
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertThat(trades.get(spread.id()).status()).isEqualTo(TradeRecord.ACTIVE);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void lifecycleApplyRejectsAChangedLaneMarkWithoutAnyMutation() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord spread = trades.create(creditPutSpread(acct.id(), 1));
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        marks.underlying = new BigDecimal("90.00");
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0);
+        marks.underlying = new BigDecimal("91.00");
+
+        assertThatThrownBy(() -> trades.applyLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0, true,
+                null, expectedState(spread, reserveBefore), expectedLifecycle(preview)))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("changed after preview");
+        assertThat(trades.get(spread.id()).legs()).hasSize(2);
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
+        assertThat(accounts.get(acct.id()).reservedCents()).isEqualTo(reserveBefore);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void expirationCannotRunBeforeTheLaneClosingBell() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord call = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "105", "0")), "bullish", "month", "balanced"));
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(call.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("still alive")
+                .hasMessageContaining("4:00pm ET");
+        assertThat(trades.get(call.id()).status()).isEqualTo(TradeRecord.ACTIVE);
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void weekendExpiryUsesTheFridayCloseAndFreezesTheOptionResult() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "105", "0")), "bullish", "month", "balanced"));
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        marks.closesByDate.put(EXP, new BigDecimal("99.00"));
+        marks.underlying = new BigDecimal("130.00");
+        Clock weekend = Clock.fixed(Instant.parse("2026-08-22T16:00:00Z"),
+                ZoneId.of("America/New_York"));
+        TradeService weekendTrades = new TradeService(db, cfg, marks, audit, weekend);
+
+        TradeService.LifecycleAssessment preview = weekendTrades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0);
+
+        assertThat(preview.settlementUnderlyingCents()).isEqualTo(9_900);
+        assertThat(preview.settlementPriceBasis()).contains("2026-08-21 expiration-day close");
+        assertThat(preview.survivor()).isNull();
+        assertThat(preview.sharesDelta()).isZero();
+        assertThat(preview.actionRealizedPnlCents())
+                .isEqualTo(opened.entryNetPremiumCents() - opened.feesOpenCents());
+
+        TradeService.LifecycleResult applied = weekendTrades.applyLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0, true,
+                null, expectedState(opened, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(applied.trade().status()).isEqualTo(TradeRecord.EXPIRED);
+        assertThat(applied.trade().closeReason()).contains("EXPIRATION");
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
+        assertThat(accounts.get(acct.id()).reservedCents()).isZero();
+        assertThat(db.query("SELECT memo FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                row -> row.str("memo"), opened.id())).singleElement()
+                .asString().contains("2026-08-21 expiration-day close");
+        assertLedgerInvariants(acct.id());
+    }
+
+    @Test
+    void broadBasedIndexExpiryCashSettlesIntrinsicWithoutFabricatingShares() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(openRequest(acct.id(), "SPXW", "LONG_CALL", 1,
+                List.of(call(LegAction.BUY, "100", "0")), "bullish", "month", "balanced"));
+        long cashBefore = accounts.get(acct.id()).cashCents();
+        long reserveBefore = accounts.get(acct.id()).reservedCents();
+
+        assertThatThrownBy(() -> trades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXERCISE, 0))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("cash-settled broad-based index option")
+                .hasMessageContaining("cannot deliver shares");
+
+        marks.closesByDate.put(EXP, new BigDecimal("110.00"));
+        Clock weekend = Clock.fixed(Instant.parse("2026-08-22T16:00:00Z"),
+                ZoneId.of("America/New_York"));
+        TradeService weekendTrades = new TradeService(db, cfg, marks, audit, weekend);
+        TradeService.LifecycleAssessment preview = weekendTrades.previewLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0);
+
+        assertThat(preview.optionSettlementCashCents()).isEqualTo(100_000);
+        assertThat(preview.stockCashCents()).isZero();
+        assertThat(preview.sharesDelta()).isZero();
+        assertThat(preview.actionRealizedPnlCents())
+                .isEqualTo(opened.entryNetPremiumCents() - opened.feesOpenCents() + 100_000);
+        assertThat(preview.basisNotes())
+                .anySatisfy(note -> assertThat(note).contains("settles intrinsic value in cash"));
+
+        TradeService.LifecycleResult applied = weekendTrades.applyLifecycleConversion(opened.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.EXPIRATION, 0, true,
+                null, expectedState(opened, reserveBefore), expectedLifecycle(preview));
+
+        assertThat(applied.trade().status()).isEqualTo(TradeRecord.EXPIRED);
+        assertThat(positions.list(acct.id())).isEmpty();
+        assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore + 100_000);
+        assertThat(db.query("SELECT amount_cents FROM ledger WHERE trade_id=? AND type='SETTLEMENT'",
+                row -> row.lng("amount_cents"), opened.id())).containsExactly(100_000L);
         assertLedgerInvariants(acct.id());
     }
 
@@ -1264,10 +1984,10 @@ class PaperCoreTest {
         // Physical: 100 sh called away at 105 (+$10,500). Cash: the SECOND short 105C unit
         // settles -(110-105)x100 = -$500; the long 100C settles +(110-100)x100 = +$1,000.
         assertThat(res.trade().closeReason()).contains("100 sh called away");
-        List<LedgerEntry> stockSells = db.query("SELECT * FROM ledger WHERE type='STOCK_SELL'", AccountService::mapLedger);
+        List<LedgerEntry> stockSells = db.query("SELECT * FROM ledger WHERE type='STOCK_SELL'", Ledger::map);
         assertThat(stockSells).hasSize(1);
         assertThat(stockSells.getFirst().amountCents()).isEqualTo(1_050_000);
-        List<LedgerEntry> settleRows = db.query("SELECT * FROM ledger WHERE type='SETTLEMENT'", AccountService::mapLedger);
+        List<LedgerEntry> settleRows = db.query("SELECT * FROM ledger WHERE type='SETTLEMENT'", Ledger::map);
         assertThat(settleRows.getFirst().amountCents()).isEqualTo(-50_000 + 100_000);
         assertThat(db.query("SELECT COUNT(*) AS n FROM positions", r -> r.lng("n")).getFirst()).isZero();
         assertLedgerInvariants(acct.id());
@@ -1288,6 +2008,16 @@ class PaperCoreTest {
         assertThat(new BigDecimal(preview.breakevens().getFirst())).isGreaterThan(new BigDecimal("100"));
         TradeRecord t = trades.create(pp);
         assertThat(t.sharesLocked()).isZero(); // long options never lock shares
+
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.50, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        TradeService.MarkView combined = trades.currentMark(t.id());
+        assertThat(combined.greeks().deltaShares()).isEqualTo(50.0); // 100 held shares - 50 put delta
+        assertThat(combined.legGreeks()).anySatisfy(row -> {
+            assertThat(row.get("leg")).isEqualTo("100 held shares");
+            assertThat(row.get("delta")).isEqualTo(1.0);
+        });
 
         // Without the shares, the same request is refused — the combined framing needs them
         TradeService.OpenRequest noShares = openRequest(acct.id(), "SPY", "PROTECTIVE_PUT", 1,

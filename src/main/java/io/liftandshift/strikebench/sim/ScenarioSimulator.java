@@ -1,7 +1,10 @@
 package io.liftandshift.strikebench.sim;
+import static io.liftandshift.strikebench.util.Numbers.round2;
 
-import io.liftandshift.strikebench.pricing.BlackScholes;
+import io.liftandshift.strikebench.util.Money;
+import io.liftandshift.strikebench.util.Quantiles;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,9 +17,6 @@ import java.util.List;
  * this is never presented as observed market data.
  */
 public final class ScenarioSimulator {
-
-    /** action BUY/SELL; type CALL/PUT/STOCK; expiryDay=0 means the first simulated session close. */
-    public record SimLeg(String action, String type, double strike, int expiryDay, int ratio) {}
 
     public record Band(int day, long p10Cents, long p50Cents, long p90Cents) {}
 
@@ -36,9 +36,16 @@ public final class ScenarioSimulator {
      * are conditional on the selected past, never a parametric model's odds).
      * Paths must be absolute prices with spec.totalSteps()+1 points each.
      */
-    public SimResult runOnPaths(double[][] paths, double spot, List<SimLeg> legs, int qty, ScenarioSpec spec,
+    public SimResult runOnPaths(double[][] paths, PathPosition position, int qty, ScenarioSpec spec,
                                 IvSpec ivSpec, double riskFreeRate, Long entryOverrideCents, String entryNote,
                                 long roundTripFeesCents) {
+        return runOnPaths(paths, position, qty, spec, ivSpec, null, riskFreeRate,
+                entryOverrideCents, entryNote, roundTripFeesCents);
+    }
+
+    public SimResult runOnPaths(double[][] paths, PathPosition position, int qty, ScenarioSpec spec,
+                                IvSpec ivSpec, ScenarioCanvasSpec canvas, double riskFreeRate,
+                                Long entryOverrideCents, String entryNote, long roundTripFeesCents) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             ScenarioSpec s = spec.sane();
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
@@ -48,9 +55,9 @@ public final class ScenarioSimulator {
                             + " points (got " + pth.length + ") — the horizon and the study forward window must match");
                 }
             }
-            requireWorkBudget((long) paths.length * (s.totalSteps() + 1) * Math.max(1, legs.size()));
-            return runInner(paths, spot, legs, qty, s, ivSpec, riskFreeRate, entryOverrideCents,
-                    entryNote, roundTripFeesCents);
+            requireWorkBudget((long) paths.length * (s.totalSteps() + 1) * position.legs().size());
+            return runInner(paths, position, qty, s, ivSpec, canvas, position.asOf(), riskFreeRate,
+                    entryOverrideCents, entryNote, roundTripFeesCents);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -64,7 +71,7 @@ public final class ScenarioSimulator {
     public EnsembleRun run(PathEnsembleService source, PathEnsembleService.Scope scope,
                            PathEnsembleService.Basis basis, ScenarioSpec spec,
                            io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest study,
-                           double spot, List<SimLeg> legs, int qty, IvSpec ivSpec,
+                           double spot, PathPosition position, int qty, IvSpec ivSpec,
                            double riskFreeRate, Long entryOverrideCents, String entryNote,
                            long roundTripFeesCents) {
         try (AutoCloseable permit = SimBudget.acquire()) {
@@ -72,9 +79,10 @@ public final class ScenarioSimulator {
             ScenarioSpec sane = ensemble.spec().sane();
             validatePaths(ensemble.paths(), sane);
             requireWorkBudget((long) ensemble.paths().length * (sane.totalSteps() + 1)
-                    * Math.max(1, legs.size()));
-            return new EnsembleRun(ensemble, runInner(ensemble.paths(), ensemble.spot(), legs, qty,
-                    sane, ivSpec, riskFreeRate, entryOverrideCents, entryNote, roundTripFeesCents));
+                    * position.legs().size());
+            return new EnsembleRun(ensemble, runInner(ensemble.paths(), position, qty,
+                    sane, ivSpec, null, ensemble.anchorDate(), riskFreeRate,
+                    entryOverrideCents, entryNote, roundTripFeesCents));
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -83,8 +91,13 @@ public final class ScenarioSimulator {
     }
 
     /** One structure to compare: resolved legs + an optional market-priced entry. */
-    public record CompareItem(String key, List<SimLeg> legs, Long entryOverrideCents, String entryNote,
-                              long roundTripFeesCents) {}
+    public record CompareItem(String key, PathPosition position, Long entryOverrideCents, String entryNote,
+                              long roundTripFeesCents, Integer qty) {
+        public CompareItem(String key, PathPosition position, Long entryOverrideCents, String entryNote,
+                           long roundTripFeesCents) {
+            this(key, position, entryOverrideCents, entryNote, roundTripFeesCents, null);
+        }
+    }
 
     public record CompareOutcome(String key, SimResult result) {}
 
@@ -102,27 +115,56 @@ public final class ScenarioSimulator {
                                       IvSpec ivSpec, double riskFreeRate) {
         try (AutoCloseable permit = SimBudget.acquire()) {
             PathEnsembleService.Ensemble ensemble = source.build(scope, basis, spec, study, spot);
-            ScenarioSpec s = ensemble.spec().sane();
-            validatePaths(ensemble.paths(), s);
-            long totalLegs = items.stream().mapToLong(it -> Math.max(1, it.legs().size())).sum();
-            requireWorkBudget((long) ensemble.paths().length * (s.totalSteps() + 1) * Math.max(1, totalLegs));
-            List<CompareOutcome> out = new ArrayList<>();
-            List<CompareRefusal> refused = new ArrayList<>();
-            for (CompareItem item : items) {
-                try {
-                    out.add(new CompareOutcome(item.key(), runInner(ensemble.paths(), ensemble.spot(),
-                            item.legs(), qty, s, ivSpec, riskFreeRate,
-                            item.entryOverrideCents(), item.entryNote(), item.roundTripFeesCents())));
-                } catch (RuntimeException e) {
-                    refused.add(new CompareRefusal(item.key(), publicReason(e)));
-                }
-            }
-            return new EnsembleComparison(ensemble, new CompareReport(out, refused));
+            return compareInner(ensemble, items, qty, ivSpec, null, riskFreeRate);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Judge several exact packages on an already-persisted ensemble. Plan Outcomes uses this so
+     * its comparison cannot regenerate paths that merely resemble the Evidence receipt. */
+    public EnsembleComparison compare(PathEnsembleService.Ensemble ensemble, List<CompareItem> items,
+                                      int fallbackQty, IvSpec ivSpec, double riskFreeRate) {
+        return compare(ensemble, items, fallbackQty, ivSpec, null, riskFreeRate);
+    }
+
+    /** Same stored ensemble plus the Canvas's exact surface/settlement assumptions. */
+    public EnsembleComparison compare(PathEnsembleService.Ensemble ensemble, List<CompareItem> items,
+                                      int fallbackQty, IvSpec ivSpec, ScenarioCanvasSpec canvas,
+                                      double riskFreeRate) {
+        try (AutoCloseable permit = SimBudget.acquire()) {
+            return compareInner(ensemble, items, fallbackQty, ivSpec, canvas, riskFreeRate);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private EnsembleComparison compareInner(PathEnsembleService.Ensemble ensemble, List<CompareItem> items,
+                                             int fallbackQty, IvSpec ivSpec, ScenarioCanvasSpec canvas,
+                                             double riskFreeRate) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        if (items == null || items.isEmpty()) throw new IllegalArgumentException("comparison items are required");
+        ScenarioSpec s = ensemble.spec().sane();
+        validatePaths(ensemble.paths(), s);
+        long totalLegs = items.stream().mapToLong(it -> it.position().legs().size()).sum();
+        requireWorkBudget((long) ensemble.paths().length * (s.totalSteps() + 1) * Math.max(1, totalLegs));
+        List<CompareOutcome> out = new ArrayList<>();
+        List<CompareRefusal> refused = new ArrayList<>();
+        for (CompareItem item : items) {
+            try {
+                int qty = item.qty() == null ? fallbackQty : Math.clamp(item.qty(), 1, 100);
+                out.add(new CompareOutcome(item.key(), runInner(ensemble.paths(), item.position(), qty,
+                        s, ivSpec, canvas, ensemble.anchorDate(), riskFreeRate,
+                        item.entryOverrideCents(), item.entryNote(), item.roundTripFeesCents())));
+            } catch (RuntimeException e) {
+                refused.add(new CompareRefusal(item.key(), publicReason(e)));
+            }
+        }
+        return new EnsembleComparison(ensemble, new CompareReport(out, refused));
     }
 
     /**
@@ -156,27 +198,48 @@ public final class ScenarioSimulator {
         }
     }
 
-    private SimResult runInner(double[][] paths, double spot, List<SimLeg> legs, int qty, ScenarioSpec s,
-                               IvSpec ivSpec, double riskFreeRate,
+    private SimResult runInner(double[][] paths, PathPosition position, int qty, ScenarioSpec s,
+                               IvSpec ivSpec, ScenarioCanvasSpec rawCanvas, LocalDate ensembleAnchor,
+                               double riskFreeRate,
                                Long entryOverrideCents, String entryNote, long roundTripFeesCents) {
         IvSpec iv = (ivSpec == null ? IvSpec.flat(s.volAnnual()) : ivSpec).sane();
+        ScenarioCanvasSpec canvas = rawCanvas == null ? null : rawCanvas.sane(s.horizonDays());
         int steps = s.totalSteps();
         int spd = Math.max(1, s.stepsPerDay());
-        double dt = s.dt();
+        LocalDate anchor = ensembleAnchor == null ? position.asOf() : ensembleAnchor;
+        double[] stepYears = canvas == null ? null : s.calendarStepYears(anchor);
+        double[] elapsed = canvas == null ? null : PathValuationKernel.elapsed(stepYears);
+        double dt = canvas == null ? s.dt() : elapsed[elapsed.length - 1] / steps;
         double[] ivPath = iv.path(steps, dt, spd);
+        int n = paths.length;
+        int[][] transformations = null;
+        if (canvas != null) {
+            transformations = new int[n][];
+            for (int p = 0; p < n; p++) {
+                transformations[p] = PathValuationKernel.transformationSteps(position, paths[p],
+                        steps, spd, elapsed, ivPath, canvas, riskFreeRate);
+            }
+        }
 
         int q = Math.max(1, qty);
         double fees = Math.max(0, roundTripFeesCents) / 100.0;
         double entry = entryOverrideCents != null
                 ? entryOverrideCents / 100.0
-                : portfolioValue(legs, paths[0], 0, steps, spd, dt, ivPath[0], riskFreeRate) * q;
+                : (canvas == null
+                    ? PathValuationKernel.value(position, paths[0], 0, steps, spd, dt,
+                        ivPath[0], riskFreeRate)
+                    : PathValuationKernel.valueCanvas(position, paths[0], 0, steps, spd, elapsed,
+                        ivPath, canvas, riskFreeRate, transformations[0])) * q;
 
         // Per-path P&L at every step (for the fan) and at the horizon (for the distribution).
-        int n = paths.length;
         double[][] pnl = new double[n][steps + 1];
         for (int p = 0; p < n; p++) {
             for (int i = 0; i <= steps; i++) {
-                double v = portfolioValue(legs, paths[p], i, steps, spd, dt, ivPath[i], riskFreeRate) * q;
+                double v = (canvas == null
+                        ? PathValuationKernel.value(position, paths[p], i, steps, spd, dt,
+                            ivPath[i], riskFreeRate)
+                        : PathValuationKernel.valueCanvas(position, paths[p], i, steps, spd, elapsed,
+                            ivPath, canvas, riskFreeRate, transformations[p])) * q;
                 pnl[p][i] = v - entry - fees;
             }
         }
@@ -189,7 +252,7 @@ public final class ScenarioSimulator {
             for (int p = 0; p < n; p++) tmp[p] = pnl[p][i];
             double[] sorted = tmp.clone();
             java.util.Arrays.sort(sorted);
-            bands.add(new Band(day, cents(pct(sorted, 0.10)), cents(pct(sorted, 0.50)), cents(pct(sorted, 0.90))));
+            bands.add(new Band(day, Money.toCents(Quantiles.of(sorted, 0.10)), Money.toCents(Quantiles.of(sorted, 0.50)), Money.toCents(Quantiles.of(sorted, 0.90))));
         }
 
         double[] terminal = new double[n];
@@ -213,7 +276,7 @@ public final class ScenarioSimulator {
             int idx = (int) Math.floor((t - lo) / w);
             counts[Math.max(0, Math.min(bins - 1, idx))]++;
         }
-        for (int b = 0; b < bins; b++) dist.add(new Bucket(cents(lo + b * w), cents(lo + (b + 1) * w), counts[b]));
+        for (int b = 0; b < bins; b++) dist.add(new Bucket(Money.toCents(lo + b * w), Money.toCents(lo + (b + 1) * w), counts[b]));
 
         // The median path's underlying (an "example future") for the preview chart.
         int medianIdx = medianTerminalIndex(paths, steps);
@@ -236,48 +299,22 @@ public final class ScenarioSimulator {
         }
         if (iv.eventDay() >= 0) notes.add("IV " + (iv.eventShockPct() < 0 ? "crush" : "expansion") + " of "
                 + Math.round(Math.abs(iv.eventShockPct()) * 100) + "% applied at day " + iv.eventDay() + "'s close.");
-
-        return new SimResult(cents(entry), n, steps / spd,
-                cents(pct(sorted, 0.05)), cents(pct(sorted, 0.25)), cents(pct(sorted, 0.50)),
-                cents(pct(sorted, 0.75)), cents(pct(sorted, 0.95)),
-                cents(sum / n), Math.round(wins * 1000.0 / n) / 10.0,
-                cents(sorted[n - 1]), cents(sorted[0]),
-                0, bands, dist, example, notes);
-    }
-
-    /**
-     * Signed portfolio value in DOLLARS for one unit (qty applied by the caller), valued along
-     * ONE path at {@code step}. An expired leg settles ONCE — intrinsic at the underlying price
-     * ON ITS EXPIRATION STEP — and stays that cash amount forever after; it must never re-value
-     * against the post-expiration stock price (that minted impossible P&L for calendars and any
-     * horizon longer than a leg's DTE).
-     */
-    private static double portfolioValue(List<SimLeg> legs, double[] path, int step, int steps,
-                                         int spd, double dt, double iv, double r) {
-        double underlying = path[Math.min(step, steps)];
-        double v = 0;
-        for (SimLeg leg : legs) {
-            int ratio = Math.max(1, leg.ratio());
-            double sign = "SELL".equalsIgnoreCase(leg.action()) ? -1 : 1;
-            if ("STOCK".equalsIgnoreCase(leg.type())) {
-                v += sign * ratio * 100 * underlying;
-                continue;
-            }
-            boolean call = "CALL".equalsIgnoreCase(leg.type());
-            // 0DTE is alive at t0 and expires at this session's close. Treating expiryDay=0 as
-            // step zero erased all entry time value and made every same-day option intrinsic-only.
-            int expiryStep = leg.expiryDay() <= 0 ? Math.min(spd, steps) : leg.expiryDay() * spd;
-            double px;
-            if (step >= expiryStep) {
-                double settle = path[Math.min(expiryStep, steps)]; // the price WHEN it expired
-                px = Math.max(0, call ? settle - leg.strike() : leg.strike() - settle);
-            } else {
-                double t = (expiryStep - step) * dt;
-                px = BlackScholes.price(call, underlying, leg.strike(), t, r, 0, Math.max(0.01, iv));
-            }
-            v += sign * ratio * 100 * px;
+        if (canvas != null) {
+            notes.add("Scenario Canvas " + ScenarioCanvasSpec.MODEL_VERSION + ": NYSE session clock; "
+                    + canvas.surfaceDynamics().name().toLowerCase(java.util.Locale.ROOT).replace('_', ' ')
+                    + " IV surface with strike skew " + canvas.skewVolPerLogMoneyness()
+                    + " and term slope " + canvas.termVolPerSqrtYear() + "; "
+                    + canvas.settlementPolicy().name().toLowerCase(java.util.Locale.ROOT).replace('_', ' ')
+                    + " / " + canvas.exercisePolicy().name().toLowerCase(java.util.Locale.ROOT).replace('_', ' ') + ".");
+            notes.add(canvas.dividendBasis());
         }
-        return v;
+
+        return new SimResult(Money.toCents(entry), n, steps / spd,
+                Money.toCents(Quantiles.of(sorted, 0.05)), Money.toCents(Quantiles.of(sorted, 0.25)), Money.toCents(Quantiles.of(sorted, 0.50)),
+                Money.toCents(Quantiles.of(sorted, 0.75)), Money.toCents(Quantiles.of(sorted, 0.95)),
+                Money.toCents(sum / n), Math.round(wins * 1000.0 / n) / 10.0,
+                Money.toCents(sorted[n - 1]), Money.toCents(sorted[0]),
+                0, bands, dist, example, notes);
     }
 
     private static int medianTerminalIndex(double[][] paths, int steps) {
@@ -287,11 +324,4 @@ public final class ScenarioSimulator {
         return idx[idx.length / 2];
     }
 
-    private static double pct(double[] sorted, double p) {
-        int i = (int) Math.floor(p * (sorted.length - 1));
-        return sorted[Math.max(0, Math.min(sorted.length - 1, i))];
-    }
-
-    private static long cents(double dollars) { return Math.round(dollars * 100); }
-    private static double round2(double v) { return Math.round(v * 100) / 100.0; }
 }
