@@ -252,6 +252,32 @@ class MarketDataServiceTest {
     }
 
     @Test
+    void aSuccessfulReadClearsTheBudgetResumeHint() {
+        // Exhausted for AAPL, but the allowance is available for MSFT (a different cache key, so it
+        // really fetches): the successful read must drop the stale resume hint, not keep reporting it.
+        MarketDataProvider provider = new MarketDataProvider() {
+            @Override public String name() { return "yahoo"; }
+            @Override public Set<Domain> domains() { return Set.of(Domain.CANDLES); }
+            @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+            @Override public Optional<Quote> quote(String s) { return Optional.empty(); }
+            @Override public List<LocalDate> expirations(String s) { return List.of(); }
+            @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+            @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) {
+                if ("AAPL".equals(s)) throw new io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted(
+                        "yahoo", 160, java.time.Instant.parse("2026-07-09T00:00:00Z"));
+                return List.of(new Candle(f, java.math.BigDecimal.TEN, new java.math.BigDecimal("11"),
+                        new java.math.BigDecimal("9"), java.math.BigDecimal.TEN, 1000L, false));
+            }
+        };
+        MarketDataService svc = new MarketDataService(List.of(provider), List.of(), List.of());
+        LocalDate from = LocalDate.parse("2026-06-01"), to = LocalDate.parse("2026-06-30");
+        svc.candleSeriesFromProviders("AAPL", from, to);
+        assertThat(svc.budgetResumeAt("yahoo")).isPresent();
+        svc.candleSeriesFromProviders("MSFT", from, to); // succeeds -> allowance available -> hint cleared
+        assertThat(svc.budgetResumeAt("yahoo")).isEmpty();
+    }
+
+    @Test
     void rangeAbsenceRecordsPreHistoryNotErrorAndLearnsTheCoverageBoundary() {
         MarketDataService svc = new MarketDataService(List.of(new PreHistoryCandleProvider()), List.of(), List.of());
         assertThat(svc.candleSeriesFromProviders("AAPL", LocalDate.parse("2000-01-01"), LocalDate.parse("2000-06-01"))

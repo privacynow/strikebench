@@ -863,6 +863,9 @@ public final class MarketDataService {
     private void recordOk(String provider, Domain d) { recordOk(provider, d, ReadCondition.forDomain(d)); }
 
     private void recordOk(String provider, Domain d, ReadCondition condition) {
+        // A successful read means the provider's request allowance is available again — drop any stale
+        // BUDGET_EXHAUSTED resume hint so budgetResumeAt() never keeps reporting a reset that has passed.
+        budgetResumeByProvider.remove(provider);
         String c = ReadCondition.nameOrNull(condition);
         statusByKey.merge(key(provider, d, condition),
                 new ProviderStatusInfo(provider, d.name(), c, "OK", null, System.currentTimeMillis(), null),
