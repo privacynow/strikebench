@@ -462,6 +462,7 @@ public final class PlanStrategyService {
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
         values.put("assignment_probability", doubleOrNull(n, "assignmentProb"));
         values.put("entry_net_cents", longOrNull(n, "entryNetPremiumCents"));
+        values.put("option_net_cents", longOrNull(n, "optionNetPremiumCents"));
         values.put("max_loss_cents", longOrNull(n, "maxLossCents")); values.put("max_profit_cents", longOrNull(n, "maxProfitCents"));
         values.put("input_hash", sha256(n));
         values.put("state", state); values.put("selected", 0); values.put("run_id", runId); values.put("source_kind", sourceKind);
@@ -529,7 +530,7 @@ public final class PlanStrategyService {
         put(n, "sentimentScorerVersion", r.sentimentScorerVersion());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
-        put(n, "entryNetPremiumCents", r.entryNet()); put(n, "maxProfitCents", r.maxProfit());
+        put(n, "entryNetPremiumCents", r.entryNet()); put(n, "optionNetPremiumCents", r.optionNet()); put(n, "maxProfitCents", r.maxProfit());
         put(n, "maxLossCents", r.maxLoss());
         put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness());
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
@@ -556,7 +557,7 @@ public final class PlanStrategyService {
 
     private static String candidateSelect() {
         return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.recommendation_id,pc.source_kind,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
-                "pc.entry_net_cents,pc.max_profit_cents,pc.max_loss_cents," +
+                "pc.entry_net_cents,pc.option_net_cents,pc.max_profit_cents,pc.max_loss_cents," +
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
                 "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
                 "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
@@ -570,6 +571,7 @@ public final class PlanStrategyService {
                 r.str("recommendation_id"), r.str("source_kind"),
                 r.str("family"), r.str("display_name"), r.str("structure_group"),
                 r.str("position_label"), integerOrNull(r, "qty"), r.lngOrNull("entry_net_cents"),
+                r.lngOrNull("option_net_cents"),
                 r.lngOrNull("max_profit_cents"), r.lngOrNull("max_loss_cents"),
                 r.dblOrNull("liquidity_score"), r.str("freshness"),
                 r.dblOrNull("confidence"), r.str("why_considered"),
@@ -852,7 +854,7 @@ public final class PlanStrategyService {
     private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
                                 String sourceKind,
                                 String family, String displayName, String structureGroup, String label,
-                                Integer qty, Long entryNet, Long maxProfit, Long maxLoss,
+                                Integer qty, Long entryNet, Long optionNet, Long maxProfit, Long maxLoss,
                                 Double liquidity, String freshness, Double confidence,
                                 String why, String upside, String risk, String invalidate,
                                 String beginner, String intent, Double assignment, Double annualized,
