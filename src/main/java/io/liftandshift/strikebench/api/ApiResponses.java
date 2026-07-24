@@ -232,8 +232,12 @@ public final class ApiResponses {
      * value per candle (oldest-first, {@code null} until enough trailing history). Serving them
      * keeps realized-vol and moving-average overlays honest to one backend source instead of a
      * second client estimator. {@code rv20} is annualized realized volatility (a ratio).
+     * {@code bandUp}/{@code bandDn} are the realized one-month ±1σ envelope
+     * ({@code sma20 · exp(±rv20 · √(21/252))}), now server-computed so the client plots values
+     * instead of estimating; {@code null} at any bar where {@code sma20} or {@code rv20} is null.
      */
-    public record HistoryOverlays(List<Double> rv20, List<Double> sma20, List<Double> sma50) {}
+    public record HistoryOverlays(List<Double> rv20, List<Double> sma20, List<Double> sma50,
+                                  List<Double> bandUp, List<Double> bandDn) {}
     public record Sparklines<T>(String range, T sparklines, int totalRequested, String world) {}
     /** Existing Research news route, enriched by the one versioned deterministic scorer. */
     public record ResearchNews<T, U>(String symbol, String scorerVersion, T items, U aggregate,

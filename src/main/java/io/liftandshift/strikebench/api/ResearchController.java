@@ -405,18 +405,38 @@ final class ResearchController {
                 historyOverlays(series.candles())));
     }
 
+    /** One trading month over a trading year — the horizon of the realized ±1σ price envelope. */
+    private static final double ONE_MONTH_OF_YEAR = 21.0 / 252.0;
+
     /** RV(20) + SMA(20/50) over the SAME candles, one value per bar — the chart draws these instead
      *  of a second client-side estimator, so realized-vol and moving-average overlays trace to one
-     *  backend source. */
+     *  backend source. The band is the realized one-month ±1σ envelope
+     *  ({@code sma20 · exp(±rv20 · √(21/252))}), now server-computed off that SAME rv20/sma20 so the
+     *  client plots the values instead of estimating them; null wherever either input is null. */
     private static ApiResponses.HistoryOverlays historyOverlays(
             List<io.liftandshift.strikebench.model.Candle> candles) {
         if (candles == null || candles.isEmpty()) {
-            return new ApiResponses.HistoryOverlays(List.of(), List.of(), List.of());
+            return new ApiResponses.HistoryOverlays(List.of(), List.of(), List.of(), List.of(), List.of());
         }
         double[] rv = HistoricalVol.rollingAnnualized(candles, 20);
         List<Double> rv20 = new ArrayList<>(candles.size());
         for (double v : rv) rv20.add(Double.isFinite(v) ? v : null);
-        return new ApiResponses.HistoryOverlays(rv20, sma(candles, 20), sma(candles, 50));
+        List<Double> sma20 = sma(candles, 20);
+        double sigmaMonth = Math.sqrt(ONE_MONTH_OF_YEAR);
+        List<Double> bandUp = new ArrayList<>(candles.size());
+        List<Double> bandDn = new ArrayList<>(candles.size());
+        for (int i = 0; i < candles.size(); i++) {
+            Double m = sma20.get(i);
+            Double v = rv20.get(i);
+            if (m == null || v == null) {
+                bandUp.add(null);
+                bandDn.add(null);
+            } else {
+                bandUp.add(m * Math.exp(v * sigmaMonth));
+                bandDn.add(m * Math.exp(-v * sigmaMonth));
+            }
+        }
+        return new ApiResponses.HistoryOverlays(rv20, sma20, sma(candles, 50), bandUp, bandDn);
     }
 
     private static List<Double> sma(List<io.liftandshift.strikebench.model.Candle> candles, int p) {

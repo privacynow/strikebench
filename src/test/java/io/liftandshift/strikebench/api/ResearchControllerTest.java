@@ -36,6 +36,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * #10-backend (G1): {@code GET /api/research/{symbol}} decouples the quote slot from the rest of the
@@ -130,5 +131,51 @@ class ResearchControllerTest {
         // The plan-build affordance honestly reports it cannot proceed without a quote.
         assertThat(body.get("planEligible").asBoolean()).isFalse();
         assertThat(body.get("freshness").asText()).isEqualTo("UNAVAILABLE");
+    }
+
+    /**
+     * The realized one-month ±1σ envelope is now a backend receipt: {@code bandUp}/{@code bandDn}
+     * per bar equal {@code sma20 · exp(±rv20 · √(21/252))} off the SAME rv20/sma20 the response
+     * carries (no second client estimator), and are null wherever either input is null.
+     */
+    @Test
+    void historyBandIsBackendComputedFromTheSameRv20AndSma20() throws Exception {
+        JsonNode overlays = get("/api/research/AAPL/history?range=1y").get("overlays");
+
+        JsonNode rv20 = overlays.get("rv20");
+        JsonNode sma20 = overlays.get("sma20");
+        JsonNode bandUp = overlays.get("bandUp");
+        JsonNode bandDn = overlays.get("bandDn");
+
+        // One value per candle, same length across every overlay series.
+        int n = rv20.size();
+        assertThat(n).isGreaterThan(20);
+        assertThat(sma20.size()).isEqualTo(n);
+        assertThat(bandUp.size()).isEqualTo(n);
+        assertThat(bandDn.size()).isEqualTo(n);
+
+        double sigmaMonth = Math.sqrt(21.0 / 252.0);
+        int checkedMath = 0;
+        int checkedNull = 0;
+        for (int i = 0; i < n; i++) {
+            boolean inputsPresent = !sma20.get(i).isNull() && !rv20.get(i).isNull();
+            if (inputsPresent) {
+                double m = sma20.get(i).asDouble();
+                double v = rv20.get(i).asDouble();
+                assertThat(bandUp.get(i).asDouble()).as("bandUp[%d]", i)
+                        .isCloseTo(m * Math.exp(v * sigmaMonth), within(1e-9));
+                assertThat(bandDn.get(i).asDouble()).as("bandDn[%d]", i)
+                        .isCloseTo(m * Math.exp(-v * sigmaMonth), within(1e-9));
+                checkedMath++;
+            } else {
+                // Null wherever either input is null (the early bars lack trailing history).
+                assertThat(bandUp.get(i).isNull()).as("bandUp[%d] null-guard", i).isTrue();
+                assertThat(bandDn.get(i).isNull()).as("bandDn[%d] null-guard", i).isTrue();
+                checkedNull++;
+            }
+        }
+        // Both branches were actually exercised: real math on some bars, null-guarding on the leading ones.
+        assertThat(checkedMath).isGreaterThan(0);
+        assertThat(checkedNull).isGreaterThan(0);
     }
 }
