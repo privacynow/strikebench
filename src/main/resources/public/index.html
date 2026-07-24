@@ -7536,6 +7536,31 @@ function authoritativeGreekInspector(c){
   return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Greeks</span><span class="hint">same market path</span></div>'+body+trace+'<div class="legreceipt"><span class="lbl" style="flex-basis:100%">Package legs</span>'+legs+'</div>'+
     (days.length?'<div class="panefoot">'+days.length+' valuation checkpoints across the path.</div>':'')+'</div>';
 }
+/* C: ONE classifier so the tab label and the panel header can never disagree about what the
+   comparison actually holds. Buckets each row into held / proposed / benchmark. */
+function comparisonPopulations(source){
+  var rows=source&&Array.isArray(source.comparison)?source.comparison:[],held=0,proposed=0,benchmark=0;
+  rows.forEach(function(row){
+    var key=String(row.key||''),label=String(row.label||''),lane=String(row.lane||'').toUpperCase();
+    var isBenchmark=lane==='BASELINE'||/^STOCK[:_]/i.test(key)||/buy and hold/i.test(label);
+    if(row.proposed===true)proposed++;else if(isBenchmark)benchmark++;else held++;
+  });
+  return {held:held,proposed:proposed,benchmark:benchmark,total:rows.length};
+}
+function comparisonPopulationSummary(source){
+  var p=comparisonPopulations(source),parts=[];
+  if(p.held)parts.push(p.held+' held position'+(p.held===1?'':'s'));
+  if(p.proposed)parts.push(p.proposed+' proposal'+(p.proposed===1?'':'s'));
+  if(p.benchmark)parts.push(p.benchmark+' benchmark'+(p.benchmark===1?'':'s'));
+  return parts.join(' · ')||(p.total?p.total+' compared':'');
+}
+function comparisonTabLabel(source){
+  var p=comparisonPopulations(source);
+  if(p.held)return p.held+' held';
+  if(p.proposed)return p.proposed+' idea'+(p.proposed===1?'':'s');
+  if(p.benchmark)return p.benchmark+' benchmark'+(p.benchmark===1?'':'s');
+  return p.total?p.total+' compared':'—';
+}
 function authoritativeComparisonPanel(c){
   var source=authoritativeCanvas(c),rows=source&&Array.isArray(source.comparison)?source.comparison:[],positions=source&&Array.isArray(source.positions)?source.positions:[];
   if(!rows.length)return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">same possible futures</span></div><div class="backendnotice">'+(source?'No comparison rows were supplied for this evaluation.':'The comparison appears once this idea is valued on the shared futures.')+'</div></div>';
@@ -7557,7 +7582,7 @@ function authoritativeComparisonPanel(c){
     var medianTitle=row.versusStockP50Cents==null?'':' title="'+deskEsc((Number(row.versusStockP50Cents)>=0?'+':'')+money(Number(row.versusStockP50Cents)/100)+' vs just holding stock (median)')+'"';
     return '<div class="acrow'+(row.proposed?' proposed':'')+'" data-scroll-row><b>'+label+'</b><span>'+cents(row.horizonP5Cents)+'</span><span'+medianTitle+'>'+cents(row.horizonP50Cents)+'</span><span>'+cents(row.horizonP95Cents)+'</span><span>'+(row.chanceOfGainPct==null?'—':Number(row.chanceOfGainPct).toFixed(1)+'%')+'</span></div>';}).join('')+'</div>'
     +'<div class="overflowmeta bookcmpmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>';
-  return '<div class="upanel bookcmp"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">'+positions.length+' held position'+(positions.length===1?'':'s')+' · one shared fan</span></div>'+intro+head+body+'</div>';
+  return '<div class="upanel bookcmp"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">'+deskEsc(comparisonPopulationSummary(source))+' · one shared fan</span></div>'+intro+head+body+'</div>';
 }
 function evidencePanel(c){
   var stage;
@@ -7680,7 +7705,7 @@ function drawDecMarketHist(){
 function decUnderstand(c){
   var co=coherence(c),source=c.authoritative?authoritativeCanvas(c):null,af=c.authoritative?authoritativeFrame(c,0):null,sr=c.authoritative?null:candidateSectorRead(c),
     greekLabel=af&&af.greeks&&af.greeks.theta!=null?'Θ '+signed(af.greeks.theta):c.authoritative?'checkpoint':'Θ '+signed(c.theta||0),
-    bookLabel=c.authoritative?(source&&source.comparison?source.comparison.length+' compared':'loading'):(sr.diversifies?'diversifies':'adds '+sr.sector),
+    bookLabel=c.authoritative?(source&&source.comparison?comparisonTabLabel(source):'loading'):(sr.diversifies?'diversifies':'adds '+sr.sector),
     tabs=[['paths','path','Paths',(c.pop==null?'—':c.pop+'%')+' profit'],['fit','check','Fit',co.word],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
   if(decide.inspect==='market')decide.inspect='paths';  /* market is a standing band now, not a lens */
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
