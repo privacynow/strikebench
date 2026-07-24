@@ -4406,12 +4406,12 @@ function authBookSummary(){var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.s
   summaryEl.classList.add('authbooksummaryhost');
   if(!BOOK_AUTH.data){summaryEl.innerHTML='<div class="bookline authsummary"><div class="sblock"><div class="lbl">Practice book</div><div class="sv">Loading account…</div></div></div>';return;}
   /* ONE compact line in the established sblock grammar — no oversized card band */
-  function sb(label,value,cls){return '<div class="sblock"><div class="lbl">'+deskEsc(label)+'</div><div class="sv'+(cls?' '+cls:'')+'">'+value+'</div></div>';}
+  function sb(label,value,cls,tip){return '<div class="sblock"><div class="lbl"'+(tip?' title="'+deskEsc(tip)+'"':'')+'>'+deskEsc(label)+'</div><div class="sv'+(cls?' '+cls:'')+'">'+value+'</div></div>';}
   summaryEl.innerHTML='<div class="bookline authsummary" title="'+deskEsc(liq.reconciliationReason||s.note||'Practice liquidity receipt')+'">'+
     '<div class="sblock lead"><div class="lbl">Practice equity</div><div class="sv big '+(pnl==null?'':pnl>=0?'pos':'neg')+'">'+authMoney(authDollarsFromCents(s.totalValueCents))+'<small class="'+(pnl==null?'':pnl>=0?'pos':'neg')+'"> '+authSigned(pnl)+' since funding</small></div></div>'+
     authLiquidityFigure(liq,s)+
-    sb('Packages',Number(s.openTradesCount||0)+(Number(s.sharesPositions||0)?' · '+Number(s.sharesPositions)+' shares':''))+
-    sb('Reconciliation',liq.reconciliationStatus?authHuman(liq.reconciliationStatus):(complete?'priced':'partial'),String(liq.reconciliationStatus||'').toUpperCase()==='RECONCILED'?'pos':'neg')+
+    sb('Packages',Number(s.openTradesCount||0)+(Number(s.sharesPositions||0)?' · '+Number(s.sharesPositions)+' shares':''),null,'Your open option strategies — each multi-leg trade counts as one package; share lots are counted separately')+
+    sb('Reconciliation',liq.reconciliationStatus?authHuman(liq.reconciliationStatus):(complete?'priced':'partial'),String(liq.reconciliationStatus||'').toUpperCase()==='RECONCILED'?'pos':'neg','Whether your practice book ties out with your tracked positions and cash — Reconciled means everything matches')+
     '<div class="posture">'+authExceptionChip(s.freshness)+'</div><div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div></div>';
   wireLanding();}
 function authBookLoading(){stageEl.setAttribute('data-book-authority','loading');authSetBookPanels(true);var host=document.getElementById('bookAuthState');host.hidden=false;authBookSummary();host.innerHTML='<div class="authpending" role="status" aria-live="polite"><section class="authpane"><span class="eyebrow">Practice positions</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section><section class="authpane hero"><span class="eyebrow">Your book</span><div class="authline chart"></div><div class="authmessage"><b>Loading the Practice book.</b>Positions, shares, prices, risk, and linked ideas will appear as each part is ready.</div></section><section class="authpane"><span class="eyebrow">Market &amp; risk</span><div class="authline"></div><div class="authline"></div><div class="authline"></div></section></div>';}
@@ -5534,7 +5534,7 @@ function mktStripHTML(){
     var d=BOOK_AUTH.data||{},s=d.portfolio&&d.portfolio.summary||{},a=authAccount(d),phase=BOOK_AUTH.phase;
     if(!BOOK_AUTH.data)return '<span class="mktsrc">● PRACTICE</span><span class="idx"><b>Loading your book…</b></span>';
     var status=authExceptionStatus(s.freshness||phase);return '<span class="mktsrc" title="Practice account">● '+deskEsc(String(a.type||'PRACTICE').toUpperCase())+'</span>'+
-      '<span class="idx">Equity <b>'+authMoney(authDollarsFromCents(s.totalValueCents))+'</b></span><span class="idx">BP <b>'+authMoney(authDollarsFromCents(s.buyingPowerCents))+'</b></span><span class="pdiv"></span>'+
+      '<span class="idx">Equity <b>'+authMoney(authDollarsFromCents(s.totalValueCents))+'</b></span><span class="idx" title="Buying power — cash available to open new positions">BP <b>'+authMoney(authDollarsFromCents(s.buyingPowerCents))+'</b></span><span class="pdiv"></span>'+
       '<span class="mktsec">'+Number(s.openTradesCount||0)+' packages · '+Number(s.sharesPositions||0)+' share positions</span>'+(status?'<span class="badge warn">'+deskEsc(status)+'</span>':'');
   }
 }
