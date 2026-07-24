@@ -51,8 +51,7 @@ public final class DatasetService {
         String k = ACTIVE_KEY_PREFIX + owner(userId);
         String cached = activeCache.get(k);
         if (cached != null) return cached;
-        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), k);
-        String a = rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank() ? null : rows.getFirst();
+        String a = SettingsStore.read(db, k).filter(s -> !s.isBlank()).orElse(null);
         if (a == null) a = OBSERVED;
         // A dangling id (dataset pruned/deleted) silently means observed, never a ghost world.
         if (!OBSERVED.equals(a) && !exists(a)) a = OBSERVED;
@@ -69,8 +68,7 @@ public final class DatasetService {
             throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such dataset: " + id); // absent OR someone else's — same answer
         }
         String k = ACTIVE_KEY_PREFIX + owner(userId);
-        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                k, id, clock.instant().toString());
+        SettingsStore.upsert(db, k, id, clock.instant()); // injected clock preserved
         activeCache.put(k, id);
         if (events != null) {
             java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
