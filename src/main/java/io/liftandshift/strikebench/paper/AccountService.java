@@ -39,7 +39,7 @@ public final class AccountService {
             String now = now();
             Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
                     id, OwnerScope.LOCAL, "Paper Account", "PAPER", cash, cash, 0, now, now);
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
             return get(c, id);
         });
@@ -83,7 +83,7 @@ public final class AccountService {
             long cash = cfg.defaultStartingCashCents();
             Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
                     id, userId, "Paper Account", "PAPER", cash, cash, 0, now, now);
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
             return get(c, id);
         });
@@ -104,8 +104,7 @@ public final class AccountService {
             Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,"
                             + "has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
                     id, owner, "Demo Account", "DEMO", cash, cash, 0, now, now);
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,"
-                            + "reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial demo funding");
             return get(c, id);
         });
@@ -165,10 +164,10 @@ public final class AccountService {
             // Void open trades and release their reserve
             List<String> openTrades = Db.queryOn(c, "SELECT id FROM trades WHERE account_id=? AND status='ACTIVE'", r -> r.str("id"), acct.id());
             for (String tradeId : openTrades) {
-                long tradeReserve = TradeService.outstandingReserve(c, tradeId);
+                long tradeReserve = Ledger.outstandingReserve(c, tradeId);
                 if (tradeReserve != 0) {
                     reserved -= tradeReserve;
-                    Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+                    Ledger.append(c,
                             acct.id(), tradeId, now, "RESERVE_RELEASE", -tradeReserve, cash, reserved, "released by account reset");
                 }
                 Db.execOn(c, "UPDATE trades SET status='DELETED', close_reason='RESET', closed_at=?, updated_at=? WHERE id=?", now, now, tradeId);
@@ -179,7 +178,7 @@ public final class AccountService {
 
             long diff = startingCashCents - cash;
             cash = startingCashCents;
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     acct.id(), null, now, "RESET", diff, cash, reserved, "account reset");
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, starting_cash_cents=?, has_traded=0, updated_at=? WHERE id=?",
                     cash, reserved, startingCashCents, now, acct.id());
@@ -192,7 +191,7 @@ public final class AccountService {
     public List<LedgerEntry> ledger(String accountId, int page, int size) {
         int offset = Math.max(0, page) * size;
         return db.query("SELECT * FROM ledger WHERE account_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
-                AccountService::mapLedger, accountId, size, offset);
+                Ledger::map, accountId, size, offset);
     }
 
     /** The SIMULATION account for a world — the ONLY lane allowed to trade against it. */
@@ -228,10 +227,6 @@ public final class AccountService {
                 r.bool("has_traded"), r.str("created_at"), r.str("updated_at"), r.str("world_id"));
     }
 
-    static LedgerEntry mapLedger(Db.Row r) {
-        return new LedgerEntry(r.lng("id"), r.str("account_id"), r.str("trade_id"), r.str("ts"),
-                r.str("type"), r.lng("amount_cents"), r.lng("cash_after_cents"), r.lng("reserved_after_cents"), r.str("memo"));
-    }
 
     private String now() {
         return Instant.now(clock).toString();

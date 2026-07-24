@@ -362,7 +362,7 @@ public final class TradeService {
         OpenRequest request = activePositionRequest(trade, trade.qty(), trade.sharesLocked());
         PositionAssessment assessed = analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
                 PositionDomain.ExecutionLane.PRACTICE, request);
-        long outstandingReserve = db.with(c -> outstandingReserve(c, trade.id()));
+        long outstandingReserve = db.with(c -> Ledger.outstandingReserve(c, trade.id()));
         PositionTransformation.RiskSnapshot bookRisk = new PositionTransformation.RiskSnapshot(
                 trade.maxLossCents(), outstandingReserve, trade.maxProfitCents(), true, List.of(),
                 assessed.risk().evidenceBasis());
@@ -460,7 +460,7 @@ public final class TradeService {
         long actionRealized = Math.subtractExact(Math.addExact(
                 Math.subtractExact(actionEntry, actionOpenFees), close.cashCents()), close.feesCents());
         int survivingQuantity = trade.qty() - closeQuantity;
-        long outstanding = db.with(c -> outstandingReserve(c, trade.id()));
+        long outstanding = db.with(c -> Ledger.outstandingReserve(c, trade.id()));
         long reserveRelease = allocatedPrefix(outstanding, trade.qty(), closeQuantity);
         long survivingReserve = Math.subtractExact(outstanding, reserveRelease);
         long survivingShares = Math.subtractExact(trade.sharesLocked(),
@@ -549,7 +549,7 @@ public final class TradeService {
         String world = worldOf(trade.accountId());
         Plan exactPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
         Account account = db.with(c -> AccountService.get(c, trade.accountId()));
-        long reserveBefore = db.with(c -> outstandingReserve(c, trade.id()));
+        long reserveBefore = db.with(c -> Ledger.outstandingReserve(c, trade.id()));
         long projectedCash = Math.subtractExact(Math.addExact(
                 Math.addExact(account.cashCents(), closingCash), openingCash),
                 Math.addExact(closingFees, openingFees));
@@ -691,7 +691,7 @@ public final class TradeService {
         long remainingOpenFees = Math.subtractExact(trade.feesOpenCents(), allocatedOpenFees);
 
         Account account = AccountService.get(c, trade.accountId());
-        long reserveBefore = outstandingReserve(c, trade.id());
+        long reserveBefore = Ledger.outstandingReserve(c, trade.id());
         long projectedCash = Math.addExact(Math.addExact(account.cashCents(), optionSettlementCash), stockCash);
         long reservedWithoutCurrent = Math.subtractExact(account.reservedCents(), reserveBefore);
         OpenRequest exactAfter = null;
@@ -894,15 +894,15 @@ public final class TradeService {
         String now = now();
         long cash = acct.cashCents(), reserved = acct.reservedCents();
         cash += p.entryNet;
-        ledgerRow(c, acct.id(), tradeId, now, "PREMIUM_OPEN", p.entryNet, cash, reserved,
+        Ledger.append(c, acct.id(), tradeId, now, "PREMIUM_OPEN", p.entryNet, cash, reserved,
                 req.strategy() + " x" + req.qty() + " open");
         if (p.fees != 0) {
             cash -= p.fees;
-            ledgerRow(c, acct.id(), tradeId, now, "FEE", -p.fees, cash, reserved, "open commissions");
+            Ledger.append(c, acct.id(), tradeId, now, "FEE", -p.fees, cash, reserved, "open commissions");
         }
         if (p.reserve != 0) {
             reserved += p.reserve;
-            ledgerRow(c, acct.id(), tradeId, now, "RESERVE_HOLD", p.reserve, cash, reserved, "max-loss reserve");
+            Ledger.append(c, acct.id(), tradeId, now, "RESERVE_HOLD", p.reserve, cash, reserved, "max-loss reserve");
         }
         var evidence = entryEvidence(acct.id(), p.freshness());
         Db.execOn(c, """
@@ -990,7 +990,7 @@ public final class TradeService {
             TradeRecord trade = locked.trade();
             requirePracticeTransformation(trade);
             requirePartialQuantity(trade, closeQuantity);
-            long outstanding = outstandingReserve(c, trade.id());
+            long outstanding = Ledger.outstandingReserve(c, trade.id());
             requireExpectedPosition(trade, outstanding, expectedPosition);
             ExecutableClose close = executableClose(trade, closeQuantity);
             requireExpectedClose(close, expectedCloseValueCents, expectedCloseFeesCents);
@@ -1009,17 +1009,17 @@ public final class TradeService {
             Account account = locked.account();
             String at = now();
             long cash = Math.addExact(account.cashCents(), close.cashCents());
-            ledgerRow(c, account.id(), trade.id(), at, "PREMIUM_CLOSE", close.cashCents(), cash,
+            Ledger.append(c, account.id(), trade.id(), at, "PREMIUM_CLOSE", close.cashCents(), cash,
                     account.reservedCents(), trade.strategy() + " x" + closeQuantity + " partial close");
             if (close.feesCents() != 0) {
                 cash = Math.subtractExact(cash, close.feesCents());
-                ledgerRow(c, account.id(), trade.id(), at, "FEE", -close.feesCents(), cash,
+                Ledger.append(c, account.id(), trade.id(), at, "FEE", -close.feesCents(), cash,
                         account.reservedCents(), "partial-close commissions");
             }
             long reserved = account.reservedCents();
             if (reserveRelease != 0) {
                 reserved = Math.subtractExact(reserved, reserveRelease);
-                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_RELEASE", -reserveRelease, cash,
+                Ledger.append(c, account.id(), trade.id(), at, "RESERVE_RELEASE", -reserveRelease, cash,
                         reserved, "reserve released for " + closeQuantity + " closed package"
                                 + (closeQuantity == 1 ? "" : "s"));
             }
@@ -1053,7 +1053,7 @@ public final class TradeService {
             Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
                     cash, reserved, at, account.id());
             TradeRecord survivor = getOn(c, trade.id());
-            if (outstandingReserve(c, trade.id()) != survivingReserve) {
+            if (Ledger.outstandingReserve(c, trade.id()) != survivingReserve) {
                 throw new IllegalStateException("Partial-close reserve allocation did not reconcile.");
             }
             if (hook != null) hook.afterMutation(c, survivor, actionRealized, totalRealized);
@@ -1081,7 +1081,7 @@ public final class TradeService {
             LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
             TradeRecord trade = locked.trade();
             requirePracticeTransformation(trade);
-            long reserveBefore = outstandingReserve(c, trade.id());
+            long reserveBefore = Ledger.outstandingReserve(c, trade.id());
             requireExpectedPosition(trade, reserveBefore, expectedPosition);
             if (!trade.accountId().equals(exactAfter.accountId())
                     || !trade.symbol().equalsIgnoreCase(exactAfter.symbol())) {
@@ -1145,32 +1145,32 @@ public final class TradeService {
             String at = now();
             if (!reconciled.removed().isEmpty()) {
                 cash = Math.addExact(cash, closingCash);
-                ledgerRow(c, account.id(), trade.id(), at, adjustmentCloseRowType(action, reconciled.removed()),
+                Ledger.append(c, account.id(), trade.id(), at, adjustmentCloseRowType(action, reconciled.removed()),
                         closingCash, cash, reserved, action + " executable close");
             }
             if (closingFees != 0) {
                 cash = Math.subtractExact(cash, closingFees);
-                ledgerRow(c, account.id(), trade.id(), at, "FEE", -closingFees, cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "FEE", -closingFees, cash, reserved,
                         action + " close commissions");
             }
             if (!added.isEmpty()) {
                 cash = Math.addExact(cash, openingCash);
-                ledgerRow(c, account.id(), trade.id(), at, adjustmentOpenRowType(action, added),
+                Ledger.append(c, account.id(), trade.id(), at, adjustmentOpenRowType(action, added),
                         openingCash, cash, reserved, action + " executable open");
             }
             if (openingFees != 0) {
                 cash = Math.subtractExact(cash, openingFees);
-                ledgerRow(c, account.id(), trade.id(), at, "FEE", -openingFees, cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "FEE", -openingFees, cash, reserved,
                         action + " open commissions");
             }
             long reserveDelta = Math.subtractExact(exactPlan.reserve(), reserveBefore);
             if (reserveDelta < 0) {
                 reserved = Math.addExact(reserved, reserveDelta);
-                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
                         action + " reserve reduction");
             } else if (reserveDelta > 0) {
                 reserved = Math.addExact(reserved, reserveDelta);
-                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_HOLD", reserveDelta, cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "RESERVE_HOLD", reserveDelta, cash, reserved,
                         action + " reserve increase");
             }
             if (cash - reserved < 0) {
@@ -1196,7 +1196,7 @@ public final class TradeService {
             Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
                     cash, reserved, at, account.id());
             TradeRecord survivor = getOn(c, trade.id());
-            if (outstandingReserve(c, trade.id()) != exactPlan.reserve()) {
+            if (Ledger.outstandingReserve(c, trade.id()) != exactPlan.reserve()) {
                 throw new IllegalStateException("Adjusted-position reserve did not reconcile.");
             }
             if (hook != null) hook.afterMutation(c, survivor, actionRealized, totalRealized);
@@ -1225,7 +1225,7 @@ public final class TradeService {
             LockedTrade locked = lockTradeAndAccount(c, tradeId, TradeRecord.ACTIVE);
             TradeRecord trade = locked.trade();
             requirePracticeTransformation(trade);
-            long reserveBefore = outstandingReserve(c, trade.id());
+            long reserveBefore = Ledger.outstandingReserve(c, trade.id());
             requireExpectedPosition(trade, reserveBefore, expectedPosition);
             LifecycleAssessment projected = projectLifecycleConversion(c, trade, action, legIndex);
             requireExpectedLifecycle(projected, expectedLifecycle);
@@ -1237,13 +1237,13 @@ public final class TradeService {
             long cash = Math.addExact(account.cashCents(), projected.optionSettlementCashCents());
             long reserved = account.reservedCents();
             String at = now();
-            ledgerRow(c, account.id(), trade.id(), at, "SETTLEMENT", projected.optionSettlementCashCents(), cash, reserved,
+            Ledger.append(c, account.id(), trade.id(), at, "SETTLEMENT", projected.optionSettlementCashCents(), cash, reserved,
                     action + " of " + projected.contract() + " at " + projected.settlementPriceBasis());
             if (projected.sharesDelta() > 0) {
                 PositionsService.addAssigned(c, account.id(), trade.symbol(), projected.sharesDelta(),
                         strikePerShareCents(trade, legIndex), at);
                 cash = Math.addExact(cash, projected.stockCashCents());
-                ledgerRow(c, account.id(), trade.id(), at, "STOCK_BUY", projected.stockCashCents(), cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "STOCK_BUY", projected.stockCashCents(), cash, reserved,
                         action + ": acquired " + projected.sharesDelta() + " sh " + trade.symbol()
                                 + " at the contract strike; option premium remains separate");
             } else if (projected.sharesDelta() < 0) {
@@ -1251,7 +1251,7 @@ public final class TradeService {
                 long stockRealized = PositionsService.removeAssigned(c, account.id(), trade.symbol(), shares,
                         strikePerShareCents(trade, legIndex), at);
                 cash = Math.addExact(cash, projected.stockCashCents());
-                ledgerRow(c, account.id(), trade.id(), at, "STOCK_SELL", projected.stockCashCents(), cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "STOCK_SELL", projected.stockCashCents(), cash, reserved,
                         action + ": delivered " + shares + " sh " + trade.symbol()
                                 + " at the contract strike (stock P/L vs basis " + Money.fmt(stockRealized) + ")");
             }
@@ -1259,11 +1259,11 @@ public final class TradeService {
             long reserveDelta = Math.subtractExact(projected.reserveAfterCents(), reserveBefore);
             if (reserveDelta < 0) {
                 reserved = Math.addExact(reserved, reserveDelta);
-                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
                         action + " reserve reduction");
             } else if (reserveDelta > 0) {
                 reserved = Math.addExact(reserved, reserveDelta);
-                ledgerRow(c, account.id(), trade.id(), at, "RESERVE_HOLD", reserveDelta, cash, reserved,
+                Ledger.append(c, account.id(), trade.id(), at, "RESERVE_HOLD", reserveDelta, cash, reserved,
                         action + " reserve increase");
             }
             if (action == PositionTransformation.Action.EXERCISE && cash - reserved < 0) {
@@ -1302,7 +1302,7 @@ public final class TradeService {
             Db.execOn(c, "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?",
                     cash, reserved, at, account.id());
             TradeRecord changed = getOn(c, trade.id());
-            if (outstandingReserve(c, trade.id()) != projected.reserveAfterCents()) {
+            if (Ledger.outstandingReserve(c, trade.id()) != projected.reserveAfterCents()) {
                 throw new IllegalStateException("Lifecycle conversion reserve did not reconcile.");
             }
             if (hook != null) hook.afterMutation(c, changed, projected.actionRealizedPnlCents(), totalRealized);
@@ -1432,7 +1432,7 @@ public final class TradeService {
             // the full strike cash) — the strategy label is user-supplied, and a relabeled
             // spread must never spend strike money the reserve never backed. Everything else
             // cash-settles at intrinsic; total equity is identical either way.
-            long tradeReserve = outstandingReserve(c, t.id());
+            long tradeReserve = Ledger.outstandingReserve(c, t.id());
             boolean cspPhysical = cashSecuredPutAssignsPhysically(t, tradeReserve);
             long settleValue = 0;
             long lockRemaining = t.sharesLocked();
@@ -1468,7 +1468,7 @@ public final class TradeService {
             String nowTs = now();
             long cash = acct.cashCents(), reserved = acct.reservedCents();
             cash += settleValue;
-            ledgerRow(c, acct.id(), t.id(), nowTs, "SETTLEMENT", settleValue, cash, reserved,
+            Ledger.append(c, acct.id(), t.id(), nowTs, "SETTLEMENT", settleValue, cash, reserved,
                     t.strategy() + " x" + t.qty() + " settled" + memoSuffix);
             StringBuilder assignNote = new StringBuilder();
             for (int pi = 0; pi < physical.size(); pi++) {
@@ -1479,7 +1479,7 @@ public final class TradeService {
                 if (leg.type() == io.liftandshift.strikebench.model.OptionType.CALL) {
                     long stockRealized = PositionsService.removeAssigned(c, acct.id(), t.symbol(), shares, strikePerShare, nowTs);
                     cash += strikeTotal;
-                    ledgerRow(c, acct.id(), t.id(), nowTs, "STOCK_SELL", strikeTotal, cash, reserved,
+                    Ledger.append(c, acct.id(), t.id(), nowTs, "STOCK_SELL", strikeTotal, cash, reserved,
                             "assignment: " + shares + " sh " + t.symbol() + " called away @ " + leg.strike().toPlainString()
                                     + " (stock P/L vs basis " + Money.fmt(stockRealized) + ")");
                     assignNote.append(" (assigned: ").append(shares).append(" sh called away at ")
@@ -1487,17 +1487,17 @@ public final class TradeService {
                 } else {
                     PositionsService.addAssigned(c, acct.id(), t.symbol(), shares, strikePerShare, nowTs);
                     cash -= strikeTotal;
-                    ledgerRow(c, acct.id(), t.id(), nowTs, "STOCK_BUY", -strikeTotal, cash, reserved,
+                    Ledger.append(c, acct.id(), t.id(), nowTs, "STOCK_BUY", -strikeTotal, cash, reserved,
                             "assignment: bought " + shares + " sh " + t.symbol() + " @ " + leg.strike().toPlainString()
                                     + " via short put (basis = strike; premium was option income)");
                     assignNote.append(" (assigned: bought ").append(shares).append(" sh at ")
                             .append(leg.strike().toPlainString()).append(")");
                 }
             }
-            long reserve = outstandingReserve(c, t.id());
+            long reserve = Ledger.outstandingReserve(c, t.id());
             if (reserve != 0) {
                 reserved -= reserve;
-                ledgerRow(c, acct.id(), t.id(), nowTs, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on settle");
+                Ledger.append(c, acct.id(), t.id(), nowTs, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on settle");
             }
             long actionRealized = Math.addExact(
                     Math.subtractExact(t.entryNetPremiumCents(), t.feesOpenCents()), settleValue);
@@ -1543,17 +1543,17 @@ public final class TradeService {
             String now = now();
             long cash = acct.cashCents(), reserved = acct.reservedCents();
 
-            long reserve = outstandingReserve(c, tradeId);
+            long reserve = Ledger.outstandingReserve(c, tradeId);
             if (reserve != 0) {
                 reserved -= reserve;
-                ledgerRow(c, acct.id(), tradeId, now, "RESERVE_RELEASE", -reserve, cash, reserved, "released by delete");
+                Ledger.append(c, acct.id(), tradeId, now, "RESERVE_RELEASE", -reserve, cash, reserved, "released by delete");
             }
             List<LedgerEntry> cashRows = Db.queryOn(c,
                     "SELECT * FROM ledger WHERE trade_id=? AND type IN ('PREMIUM_OPEN','PREMIUM_CLOSE','SETTLEMENT','FEE') ORDER BY id",
-                    AccountService::mapLedger, tradeId);
+                    Ledger::map, tradeId);
             for (LedgerEntry row : cashRows) {
                 cash -= row.amountCents();
-                ledgerRow(c, acct.id(), tradeId, now, "ADJUSTMENT", -row.amountCents(), cash, reserved,
+                Ledger.append(c, acct.id(), tradeId, now, "ADJUSTMENT", -row.amountCents(), cash, reserved,
                         "reversal of ledger #" + row.id() + " (" + row.type() + ")");
             }
             Db.execOn(c, "UPDATE trades SET status=?, close_reason='DELETED_BY_USER', closed_at=?, updated_at=? WHERE id=?",
@@ -1688,7 +1688,7 @@ public final class TradeService {
         for (Map.Entry<String, Long> e : db.query(
                 "SELECT trade_id, COALESCE(SUM(amount_cents),0) AS amount FROM ledger "
                         + "WHERE account_id=? AND trade_id IS NOT NULL "
-                        + "AND type IN ('RESERVE_HOLD','RESERVE_RELEASE') GROUP BY trade_id",
+                        + "AND type IN " + Ledger.RESERVE_TYPES + " GROUP BY trade_id",
                 r -> Map.entry(r.str("trade_id"), r.lng("amount")), accountId)) {
             reserveByTrade.put(e.getKey(), e.getValue());
         }
@@ -2770,16 +2770,16 @@ public final class TradeService {
         long cash = acct.cashCents(), reserved = acct.reservedCents();
 
         cash += closeValue;
-        ledgerRow(c, acct.id(), t.id(), now, cashRowType, closeValue, cash, reserved,
+        Ledger.append(c, acct.id(), t.id(), now, cashRowType, closeValue, cash, reserved,
                 t.strategy() + " x" + t.qty() + " " + closeReason.toLowerCase(java.util.Locale.ROOT));
         if (feesClose != 0) {
             cash -= feesClose;
-            ledgerRow(c, acct.id(), t.id(), now, "FEE", -feesClose, cash, reserved, "close commissions");
+            Ledger.append(c, acct.id(), t.id(), now, "FEE", -feesClose, cash, reserved, "close commissions");
         }
-        long reserve = outstandingReserve(c, t.id());
+        long reserve = Ledger.outstandingReserve(c, t.id());
         if (reserve != 0) {
             reserved -= reserve;
-            ledgerRow(c, acct.id(), t.id(), now, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on close");
+            Ledger.append(c, acct.id(), t.id(), now, "RESERVE_RELEASE", -reserve, cash, reserved, "reserve released on close");
         }
         Db.execOn(c, "UPDATE trades SET status=?, close_reason=?, fees_close_cents=?, realized_pnl_cents=?, decision_pnl_cents=?, closed_at=?, updated_at=? WHERE id=?",
                 newStatus, closeReason, closeFeesToDate, realizedToDate, decisionPnlToDate, now, now, t.id());
@@ -3390,10 +3390,6 @@ public final class TradeService {
         return leg.action() == LegAction.BUY ? 1 : -1;
     }
 
-    static long outstandingReserve(Connection c, String tradeId) throws SQLException {
-        return Db.queryOn(c, "SELECT COALESCE(SUM(amount_cents),0) AS n FROM ledger WHERE trade_id=? AND type IN ('RESERVE_HOLD','RESERVE_RELEASE')",
-                r -> r.lng("n"), tradeId).getFirst();
-    }
 
     /** The lane's effective clock: inside a simulated world, the WORLD's sim instant — every
      *  gate, warning, DTE and analytic for a world trade must run on the clock that priced it. */
@@ -3454,11 +3450,6 @@ public final class TradeService {
         if (!confirm) throw new IllegalArgumentException(action + " requires confirm=true");
     }
 
-    private static void ledgerRow(Connection c, String accountId, String tradeId, String ts, String type,
-                                  long amount, long cashAfter, long reservedAfter, String memo) throws SQLException {
-        Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
-                accountId, tradeId, ts, type, amount, cashAfter, reservedAfter, memo);
-    }
 
     static TradeRecord getOn(Connection c, String tradeId) throws SQLException {
         List<TradeRecord> rows = Db.queryOn(c, "SELECT * FROM trades WHERE id=?", TradeService::mapTrade, tradeId);
