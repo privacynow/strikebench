@@ -51,6 +51,17 @@ public final class UnderlyingBackfill {
 
         String sourceRequest = requestedSource == null || requestedSource.isBlank()
                 ? "auto" : requestedSource.trim().toLowerCase(Locale.ROOT);
+        // M2-(b) scheduling: honor a live BUDGET_EXHAUSTED deferral. If a prior tick recorded
+        // next_allowed_at (the allowance reset) and it has not passed, make NO provider request — the
+        // allowance is still exhausted, so re-attempting only re-defers and wastes the gate. Resume
+        // automatically once the reset instant passes.
+        java.util.Optional<java.time.Instant> deferredUntil = syncState.deferredUntil(ownerId, sourceRequest, sym)
+                .filter(reset -> reset.isAfter(clock.instant()));
+        if (deferredUntil.isPresent()) {
+            String note = "The " + ("auto".equals(sourceRequest) ? "provider" : sourceRequest)
+                    + " daily request allowance is still exhausted; resuming after " + deferredUntil.get() + ".";
+            return new BackfillResult(sym, sourceRequest, false, 0, from, to, note, 0, 0, false, 0);
+        }
         MissingRangePlanner.Plan plan = planner.plan(sym, from, to, sourceRequest);
         if (plan.complete()) {
             String note = "Observed daily history already covers this range; no provider request was needed.";

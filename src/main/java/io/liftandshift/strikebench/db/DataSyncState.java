@@ -163,6 +163,26 @@ public final class DataSyncState {
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
+    /**
+     * If a BUDGET_EXHAUSTED deferral for (owner, source, symbol) is still in effect — status DEFERRED
+     * with next_allowed_at in the future — returns that reset instant so the caller SKIPS re-attempting
+     * the exhausted allowance now instead of re-spending it every tick. Empty once the reset has passed.
+     */
+    public java.util.Optional<java.time.Instant> deferredUntil(String ownerId, String source, String symbol) {
+        String owner = OwnerScope.id(ownerId);
+        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String src = source == null || source.isBlank() ? "auto" : source.trim().toLowerCase(Locale.ROOT);
+        // Return the raw reset instant; the caller compares it against the injected app clock (not the
+        // DB clock), so behavior is deterministic under a fixed test clock and honest in production.
+        List<Long> rows = db.query(
+                "SELECT (extract(epoch from next_allowed_at)*1000)::bigint ms FROM data_sync_cursor "
+                        + "WHERE user_id=? AND lower(source_key)=? AND symbol=? AND status='DEFERRED' "
+                        + "AND next_allowed_at IS NOT NULL ORDER BY next_allowed_at DESC LIMIT 1",
+                r -> r.lng("ms"), owner, src, sym);
+        return rows.isEmpty() ? java.util.Optional.empty()
+                : java.util.Optional.of(java.time.Instant.ofEpochMilli(rows.getFirst()));
+    }
+
     public void quarantine(String ownerId, String jobId, String source, String symbol, String rowRef,
                            String reason, String payloadExcerpt) {
         String owner = ensureOwner(ownerId);

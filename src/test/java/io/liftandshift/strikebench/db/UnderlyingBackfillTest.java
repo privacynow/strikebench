@@ -117,6 +117,33 @@ class UnderlyingBackfillTest {
     }
 
     @Test
+    void aLiveBudgetDeferralIsHonoredSoTheNextTickSkipsTheExhaustedAllowance() {
+        db = TestDb.fresh();
+        MarketDataService market = new MarketDataService(
+                List.of(new BudgetExhaustedProvider()),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        UnderlyingBackfill bf = new UnderlyingBackfill(market, db, clock);
+        LocalDate from = LocalDate.parse("2026-04-01"), to = LocalDate.parse("2026-06-30");
+
+        // First tick: allowance exhausted -> DEFERRED cursor with next_allowed_at at the reset.
+        assertThat(bf.backfill("AAPL", from, to, "yahoo", null, null).note()).contains("allowance is exhausted");
+
+        // Next tick BEFORE the reset: the deferral is honored -> NO new provider request; the gate
+        // short-circuits with the resume note instead of re-spending the exhausted allowance.
+        var second = bf.backfill("AAPL", from, to, "yahoo", null, null);
+        assertThat(second.rows()).isZero();
+        assertThat(second.note()).contains("still exhausted").contains("resuming after");
+
+        // After the reset instant passes, the same backfill is allowed to try the provider again.
+        Clock afterReset = Clock.fixed(Instant.parse("2026-07-07T00:01:00Z"), ZoneOffset.UTC);
+        var resumed = new UnderlyingBackfill(new MarketDataService(
+                List.of(new BudgetExhaustedProvider()), List.<NewsFilingsProvider>of(), List.<RatesProvider>of()),
+                db, afterReset);
+        assertThat(resumed.backfill("AAPL", from, to, "yahoo", null, null).note())
+                .contains("allowance is exhausted"); // re-attempted (not skipped), and re-defers
+    }
+
+    @Test
     void preHistoryBackfillPersistsTheBoundaryAndClampsFuturePlansInsteadOfFailing() {
         db = TestDb.fresh();
         MarketDataService market = new MarketDataService(
