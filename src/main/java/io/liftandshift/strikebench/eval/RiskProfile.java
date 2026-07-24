@@ -33,8 +33,12 @@ public record RiskProfile(
                 scenarios, null, evHistVolCents, evBasisNote);
     }
 
-    /** One point on the payoff-vs-underlying grid. */
-    public record Scenario(double underlyingMovePct, long pnlCents) {}
+    /**
+     * One point on the payoff-vs-underlying grid. {@code prob} is the risk-neutral lognormal mass in
+     * the Voronoi bin around this move (same distribution as {@link #pop()}); null when no ATM IV /
+     * multi-expiry, so the client shows the bar without a probability rather than inventing one.
+     */
+    public record Scenario(double underlyingMovePct, long pnlCents, Double prob) {}
 
     /** A bounded exact payoff polyline; clients may interpolate between these piecewise-linear points. */
     public record PayoffPoint(BigDecimal price, long profitCents) {}
