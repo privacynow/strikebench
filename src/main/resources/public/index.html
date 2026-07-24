@@ -2582,6 +2582,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .ideacomposer .objchip-goal .oseg{grid-template-columns:repeat(6,minmax(0,1fr))}
   .ideacomposer .objchip-goal .oseg button{grid-column:span 2}
   .ideacomposer .objchip-goal .oseg button:nth-child(n+4){grid-column:span 3}
+  /* Home opportunity-lens controls: the 5-goal segmented row (Income…Exit) overruns a 390px
+     viewport and clips Exit unreachably. Let the segments wrap so every goal stays selectable. */
+  .opportunitycontrols .objchip{align-items:flex-start}
+  .opportunitycontrols .objchip .oseg{flex-wrap:wrap;row-gap:2px}
   .fanr .fcol-stress,.fanr .fcol-cap,.fanhead .fcol-stress,.fanhead .fcol-cap,.fanr .fnum,.fanhead .fnum{display:none}
   .fan .fanr,.fan .fanhead{grid-template-columns:30px minmax(0,1fr) 18px 66px}
   .dcleft .leftsupport,.dcleft .pickmap{min-width:0;max-width:100%;overflow:clip}
