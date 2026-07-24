@@ -129,6 +129,26 @@ public final class DataSyncState {
                 owner, src, sym, earliest);
     }
 
+    /**
+     * Records a local BUDGET_EXHAUSTED deferral: sets next_allowed_at so a scheduler resumes at the
+     * allowance reset rather than retrying now. A DEFERRED status is not a failure — failure_count is
+     * left untouched so it never counts toward a breaker.
+     */
+    public void deferredUntilBudgetReset(String ownerId, String source, String symbol,
+                                         LocalDate from, LocalDate to,
+                                         java.time.Instant nextAllowedAt, String note) {
+        if (nextAllowedAt == null) return;
+        String owner = ensureOwner(ownerId);
+        db.exec("INSERT INTO data_sync_cursor(user_id,source_key,symbol,status,requested_from,requested_to,"
+                        + "last_attempt_at,next_allowed_at,note) VALUES (?,?,?,'DEFERRED',?,?,now(),?,?) "
+                        + "ON CONFLICT(user_id,source_key,symbol,domain,interval_key) DO UPDATE SET "
+                        + "status='DEFERRED',last_attempt_at=now(),next_allowed_at=excluded.next_allowed_at,"
+                        + "note=excluded.note,updated_at=now()",
+                owner, source == null || source.isBlank() ? "auto" : source.trim().toLowerCase(Locale.ROOT),
+                symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT),
+                from, to, java.sql.Timestamp.from(nextAllowedAt), cap(note, 500));
+    }
+
     /** The durable earliest-available boundary for a (source, symbol), market-wide; null if unknown. */
     public LocalDate earliestAvailable(String source, String symbol) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);

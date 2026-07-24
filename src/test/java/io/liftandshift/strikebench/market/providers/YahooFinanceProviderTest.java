@@ -1,8 +1,11 @@
 package io.liftandshift.strikebench.market.providers;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.ProviderRequestBudget;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.support.TestDb;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
@@ -10,6 +13,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.Clock;
+import java.util.HashMap;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -168,6 +173,36 @@ class YahooFinanceProviderTest {
         assertThat(provider.candles("AAPL",
                 LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).hasSize(2);
         assertThat(server.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void exhaustedBudgetIsATypedLocalDenialThatSendsNoRequestAndNeverTripsTheBreaker() throws IOException {
+        Db db = TestDb.fresh();
+        try {
+            Map<String, String> conf = new HashMap<>();
+            conf.put("YAHOO_BASE_URL", server.url("/").toString());
+            conf.put("YAHOO_DAILY_REQUEST_LIMIT", "1"); // one request allowed, then exhausted
+            ProviderRequestBudget budget = new ProviderRequestBudget(db, Clock.systemUTC());
+            YahooFinanceProvider budgeted = new YahooFinanceProvider(new AppConfig(conf), budget);
+
+            // First call consumes the single-request allowance.
+            server.enqueue(new MockResponse().setBody(JSON).addHeader("Content-Type", "application/json"));
+            assertThat(budgeted.candles("AAPL",
+                    LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).hasSize(2);
+            assertThat(server.getRequestCount()).isEqualTo(1);
+
+            // Three more attempts each hit the exhausted allowance: a typed BUDGET denial, NO request
+            // sent, and — crucially — the shared breaker is never tripped.
+            for (int i = 0; i < 3; i++) {
+                assertThatThrownBy(() -> budgeted.candles("MSFT",
+                        LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31")))
+                        .isInstanceOf(ProviderRequestBudget.Exhausted.class);
+                assertThat(budgeted.coolingDown()).isFalse();
+            }
+            assertThat(server.getRequestCount()).isEqualTo(1); // still only the one funded request
+        } finally {
+            db.close();
+        }
     }
 
     @Test

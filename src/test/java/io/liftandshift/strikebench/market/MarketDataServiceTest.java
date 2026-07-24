@@ -221,6 +221,36 @@ class MarketDataServiceTest {
         }
     }
 
+    /** A candle read denied by the LOCAL request budget — no network call was made. */
+    static final class BudgetExhaustedProvider implements MarketDataProvider {
+        @Override public String name() { return "yahoo"; }
+        @Override public Set<Domain> domains() { return Set.of(Domain.CANDLES); }
+        @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public Optional<Quote> quote(String s) { return Optional.empty(); }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public Optional<OptionChain> chain(String s, LocalDate e) { return Optional.empty(); }
+        @Override public List<Candle> candles(String s, LocalDate f, LocalDate t) {
+            throw new io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted(
+                    "yahoo", 160, java.time.Instant.parse("2026-07-09T00:00:00Z"));
+        }
+    }
+
+    @Test
+    void budgetExhaustionRecordsATypedBudgetConditionNotAProviderError() {
+        MarketDataService svc = new MarketDataService(List.of(new BudgetExhaustedProvider()), List.of(), List.of());
+        assertThat(svc.candleSeriesFromProviders("AAPL", LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30"))
+                .candles()).isEmpty();
+
+        ProviderStatusInfo budget = svc.status().get("CANDLES").stream()
+                .filter(s -> "BUDGET".equals(s.condition())).findFirst().orElseThrow();
+        assertThat(budget.state()).isEqualTo("BUDGET_EXHAUSTED"); // NOT ERROR
+        assertThat(budget.detail()).contains("160/160").contains("no external request sent");
+        assertThat(svc.budgetResumeAt("yahoo")).contains(java.time.Instant.parse("2026-07-09T00:00:00Z"));
+
+        // The historical-range condition is NOT poisoned into an error by the budget denial.
+        assertThat(svc.status().get("CANDLES")).noneSatisfy(s -> assertThat(s.state()).isEqualTo("ERROR"));
+    }
+
     @Test
     void rangeAbsenceRecordsPreHistoryNotErrorAndLearnsTheCoverageBoundary() {
         MarketDataService svc = new MarketDataService(List.of(new PreHistoryCandleProvider()), List.of(), List.of());

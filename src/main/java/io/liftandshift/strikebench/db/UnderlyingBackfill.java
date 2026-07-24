@@ -103,6 +103,20 @@ public final class UnderlyingBackfill {
                     rows += written.written();
                 }
             }
+            // M2-(b): a local BUDGET_EXHAUSTED denial is not a failure. If the allowance ran out and
+            // nothing was written, record a DEFERRED cursor with next_allowed_at at the reset so the
+            // scheduler resumes then instead of hammering the exhausted allowance now.
+            java.time.Instant budgetResume = market.candleSourceNames().stream()
+                    .map(market::budgetResumeAt).filter(java.util.Optional::isPresent)
+                    .map(java.util.Optional::get)
+                    .min(java.util.Comparator.naturalOrder()).orElse(null);
+            if (budgetResume != null && rows == 0) {
+                String note = "The " + ("auto".equals(sourceRequest) ? "provider" : sourceRequest)
+                        + " daily request allowance is exhausted; deferring until it resets.";
+                syncState.deferredUntilBudgetReset(ownerId, sourceRequest, sym, from, to, budgetResume, note);
+                return new BackfillResult(sym, actualSource, false, 0, from, to, note,
+                        plan.missingSessions(), plan.ranges().size(), false, quarantined);
+            }
             // M2-(a): a provider range-absence teaches us where coverage begins. Persist it durably so
             // the planner clamps future requests and never re-spends the allowance on the impossible
             // pre-history interval. Recorded under the same source key the planner reads by.

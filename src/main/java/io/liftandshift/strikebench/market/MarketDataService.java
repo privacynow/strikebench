@@ -112,6 +112,9 @@ public final class MarketDataService {
     // Per-symbol earliest-available boundary learned from provider range-absence (PRE_HISTORY). A
     // backfill orchestrator reads this to persist a durable clamp; not a substitute for it.
     private final Map<String, java.time.LocalDate> preHistoryBoundaries = new ConcurrentHashMap<>();
+    // Per-provider budget reset time, learned from a local BUDGET_EXHAUSTED denial. A backfill
+    // orchestrator reads this to schedule the next attempt at reset instead of retrying now.
+    private final Map<String, java.time.Instant> budgetResumeByProvider = new ConcurrentHashMap<>();
 
     public MarketDataService(List<MarketDataProvider> providers,
                              List<NewsFilingsProvider> newsProviders,
@@ -613,6 +616,8 @@ public final class MarketDataService {
                 recordEmpty(p.name(), Domain.CANDLES);
             } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
                 recordPreHistory(p.name(), norm(symbol), rue);
+            } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
+                recordBudgetExhausted(p.name(), budget);
             } catch (Exception e) {
                 recordError(p.name(), Domain.CANDLES, e,
                         "symbol " + norm(symbol) + " · " + from + " to " + to);
@@ -653,6 +658,11 @@ public final class MarketDataService {
             // Range-absence is not a failure — record it as PRE_HISTORY and return empty so the
             // backfill treats it as "nothing older to fetch", not an outage to retry.
             recordPreHistory(provider.name(), norm(symbol), rue);
+            return CandleSeries.EMPTY;
+        } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
+            // Local allowance denial: no request was sent. Record BUDGET_EXHAUSTED and return empty so
+            // the backfill defers to the reset time instead of failing the job.
+            recordBudgetExhausted(provider.name(), budget);
             return CandleSeries.EMPTY;
         } catch (RuntimeException e) {
             recordError(provider.name(), Domain.CANDLES, e,
@@ -918,6 +928,24 @@ public final class MarketDataService {
     /** The earliest date any provider has said it can serve for this symbol, learned from range-absence. */
     public java.util.Optional<java.time.LocalDate> preHistoryBoundary(String symbol) {
         return java.util.Optional.ofNullable(preHistoryBoundaries.get(norm(symbol)));
+    }
+
+    /**
+     * Records a local BUDGET_EXHAUSTED denial as a typed, NON-failure condition: no external request
+     * was sent, so it must not read as a provider outage. Captures the reset time so a scheduler can
+     * resume at the budget reset rather than retry immediately.
+     */
+    private void recordBudgetExhausted(String provider,
+                                       io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted e) {
+        if (e.resetsAt() != null) budgetResumeByProvider.put(provider, e.resetsAt());
+        String detail = e.limit() + "/" + e.limit() + "; no external request sent"
+                + (e.resetsAt() == null ? "" : " · resumes " + e.resetsAt());
+        recordCondition(provider, Domain.CANDLES, ReadCondition.BUDGET, "BUDGET_EXHAUSTED", detail);
+    }
+
+    /** When this provider's durable request allowance resets, learned from a BUDGET_EXHAUSTED denial. */
+    public java.util.Optional<java.time.Instant> budgetResumeAt(String provider) {
+        return java.util.Optional.ofNullable(budgetResumeByProvider.get(provider));
     }
 
     private void recordCondition(String provider, Domain d, ReadCondition condition, String state, String detail) {

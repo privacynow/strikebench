@@ -11,15 +11,23 @@ public final class ProviderRequestBudget {
     public static final class Exhausted extends IllegalStateException {
         private final String source;
         private final int limit;
+        private final java.time.Instant resetsAt;
 
         public Exhausted(String source, int limit) {
+            this(source, limit, null);
+        }
+
+        public Exhausted(String source, int limit, java.time.Instant resetsAt) {
             super("The " + source + " request allowance is exhausted for today (" + limit + "). It resets tomorrow.");
             this.source = source;
             this.limit = limit;
+            this.resetsAt = resetsAt;
         }
 
         public String source() { return source; }
         public int limit() { return limit; }
+        /** When the durable allowance resets (next UTC midnight); null if not computed by the caller. */
+        public java.time.Instant resetsAt() { return resetsAt; }
     }
 
     public record Usage(String source, LocalDate period, int used, int limit, int remaining) {}
@@ -49,7 +57,7 @@ public final class ProviderRequestBudget {
                             + "WHERE source_key=? AND period_key=? FOR UPDATE",
                     r -> new int[]{r.intv("used_count"), r.intv("limit_count")}, key, day);
             int used = rows.getFirst()[0], limit = rows.getFirst()[1];
-            if (used >= limit) throw new Exhausted(key, limit);
+            if (used >= limit) throw new Exhausted(key, limit, day.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant());
             Db.execOn(c, "UPDATE provider_request_budget SET used_count=used_count+1,updated_at=now() "
                     + "WHERE source_key=? AND period_key=?", key, day);
             return new Usage(key, day, used + 1, limit, Math.max(0, limit - used - 1));

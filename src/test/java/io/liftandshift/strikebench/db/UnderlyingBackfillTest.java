@@ -74,6 +74,48 @@ class UnderlyingBackfillTest {
         }
     }
 
+    /** A provider whose candle read is denied by the local request budget (no network call). */
+    private static final class BudgetExhaustedProvider implements MarketDataProvider {
+        @Override public String name() { return "yahoo"; }
+        @Override public java.util.Set<io.liftandshift.strikebench.market.Domain> domains() {
+            return java.util.Set.of(io.liftandshift.strikebench.market.Domain.CANDLES);
+        }
+        @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) { return List.of(); }
+        @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String s) {
+            return java.util.Optional.empty();
+        }
+        @Override public List<LocalDate> expirations(String s) { return List.of(); }
+        @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(String s, LocalDate e) {
+            return java.util.Optional.empty();
+        }
+        @Override public List<io.liftandshift.strikebench.model.Candle> candles(String s, LocalDate f, LocalDate t) {
+            throw new ProviderRequestBudget.Exhausted("yahoo", 160,
+                    java.time.Instant.parse("2026-07-07T00:00:00Z"));
+        }
+    }
+
+    @Test
+    void budgetExhaustedBackfillDefersToResetInsteadOfFailing() {
+        db = TestDb.fresh();
+        MarketDataService market = new MarketDataService(
+                List.of(new BudgetExhaustedProvider()),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        UnderlyingBackfill bf = new UnderlyingBackfill(market, db, clock);
+
+        var res = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"),
+                "yahoo", null, null);
+        assertThat(res.rows()).isZero();
+        assertThat(res.note()).contains("allowance is exhausted");
+
+        // The cursor is DEFERRED with next_allowed_at at the reset — not FAILED (failure_count stays 0).
+        var row = db.query("SELECT status,failure_count,"
+                        + "to_char(next_allowed_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI') na "
+                        + "FROM data_sync_cursor WHERE symbol='AAPL'",
+                r -> r.str("status") + "|" + r.intv("failure_count") + "|" + r.str("na"));
+        assertThat(row).isNotEmpty();
+        assertThat(row.getFirst()).isEqualTo("DEFERRED|0|2026-07-07T00:00");
+    }
+
     @Test
     void preHistoryBackfillPersistsTheBoundaryAndClampsFuturePlansInsteadOfFailing() {
         db = TestDb.fresh();

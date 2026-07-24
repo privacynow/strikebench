@@ -162,6 +162,9 @@ public final class YahooFinanceProvider implements MarketDataProvider {
     }
 
     private static boolean countsAsProviderFailure(Exception failure) {
+        // A LOCAL budget denial is not an upstream outage: no request was sent, so it must neither
+        // advance nor reset the shared consecutive-failure count that trips the provider cooldown.
+        if (failure instanceof io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted) return false;
         return !(failure instanceof Http.ProviderHttpException http && http.statusCode() == 400);
     }
 
