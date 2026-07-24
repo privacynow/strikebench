@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.BookActionProjectionService;
 import io.liftandshift.strikebench.paper.BookRiskService;
+import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -182,7 +183,7 @@ public final class PositionLifecycleDecisionService {
         OffsetDateTime surfacedAt = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         return db.tx(c -> {
             String owner = OwnerScope.ensure(c, userId);
-            requireOwnedAccount(c, owner, accountId);
+            PortfolioAccountingService.requireOwned(c, owner, accountId);
             Db.execOn(c, "INSERT INTO position_lifecycle_decision_receipt(" +
                             "id,user_id,portfolio_account_id,position_fingerprint,receipt_fingerprint," +
                             "policy_id,policy_fingerprint,market_snapshot_fingerprint,model_fingerprint," +
@@ -231,7 +232,7 @@ public final class PositionLifecycleDecisionService {
         OffsetDateTime at = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         return db.tx(c -> {
             String owner = OwnerScope.ensure(c, userId);
-            requireOwnedAccount(c, owner, accountId);
+            PortfolioAccountingService.requireOwned(c, owner, accountId);
             List<String> frozenActions = Db.queryOn(c,
                     "SELECT book_actions_json::text actions FROM position_lifecycle_decision_receipt " +
                             "WHERE id=? AND user_id=? AND portfolio_account_id=?",
@@ -274,7 +275,7 @@ public final class PositionLifecycleDecisionService {
         }
         return db.with(c -> {
             String owner = OwnerScope.ensure(c, userId);
-            requireOwnedAccount(c, owner, accountId);
+            PortfolioAccountingService.requireOwned(c, owner, accountId);
             List<FrozenReceipt> rows = Db.queryOn(c,
                     "SELECT lifecycle_json::text lifecycle,book_actions_json::text actions "
                             + "FROM position_lifecycle_decision_receipt "
@@ -655,14 +656,6 @@ public final class PositionLifecycleDecisionService {
         return value.trim().toUpperCase(Locale.ROOT);
     }
 
-    private static void requireOwnedAccount(Connection c, String owner, String accountId)
-            throws java.sql.SQLException {
-        if (Db.queryOn(c, "SELECT 1 ok FROM portfolio_account WHERE id=? AND user_id=?",
-                r -> r.intv("ok"), accountId, owner).isEmpty()) {
-            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
-                    "No tracked portfolio account " + accountId);
-        }
-    }
 
     private static UserDecision latestForPosition(Connection c, String owner, String accountId,
                                                   String positionFingerprint) throws java.sql.SQLException {

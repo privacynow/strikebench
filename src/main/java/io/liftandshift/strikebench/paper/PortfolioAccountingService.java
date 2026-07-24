@@ -2191,6 +2191,18 @@ public final class PortfolioAccountingService {
         return rows.getFirst();
     }
 
+    /**
+     * Existence-only ownership guard: the tracked-account SELECT + the exact not-found message, once.
+     * Callers keep their own upstream validation (e.g. a blank-id pre-check) local.
+     */
+    public static void requireOwned(java.sql.Connection c, String owner, String accountId) throws java.sql.SQLException {
+        if (Db.queryOn(c, "SELECT 1 ok FROM portfolio_account WHERE id=? AND user_id=?",
+                r -> 1, accountId, owner).isEmpty()) {
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                    "No tracked portfolio account " + accountId);
+        }
+    }
+
     private static AccountProfile mapAccount(Db.Row r) {
         return new AccountProfile(r.str("id"), r.str("user_id"), r.str("name"), r.str("account_type"),
                 r.str("broker"), r.str("lot_method"), nullableInt(r, "short_term_tax_rate_bps"),

@@ -430,11 +430,7 @@ public final class AccountObjectiveService {
         if (accountId == null || accountId.isBlank()) {
             throw new IllegalArgumentException("portfolio account id is required");
         }
-        if (Db.queryOn(c, "SELECT 1 ok FROM portfolio_account WHERE id=? AND user_id=?",
-                r -> r.intv("ok"), accountId, owner).isEmpty()) {
-            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
-                    "No tracked portfolio account " + accountId);
-        }
+        PortfolioAccountingService.requireOwned(c, owner, accountId);
     }
 
     private static String requireOneOf(String raw, Set<String> allowed, String label) {
