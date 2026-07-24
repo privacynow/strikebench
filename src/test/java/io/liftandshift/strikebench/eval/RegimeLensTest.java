@@ -58,7 +58,7 @@ class RegimeLensTest {
     private Candidate cashSecuredPut() {
         List<LegView> legs = List.of(new LegView("SELL", "PUT", "240", "2026-08-21", 1, "3.50", 100, "OPEN"));
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income", "SELL 240P",
-                legs, 1, 35_000L, 35_000L, 2_365_000L, List.of(), 0.60, 1_800L, 0.70, "DELAYED", List.of(), 0.6,
+                legs, 1, 35_000L, 35_000L, 35_000L, 2_365_000L, List.of(), 0.60, 1_800L, 0.70, "DELAYED", List.of(), 0.6,
                 "Paid to bid below the market", "Keep the premium", "Assigned in a selloff",
                 "A crash through the strike", "You collect premium",
                 "ACQUIRE", List.of("INCOME", "ACQUIRE"), 0.35, 5.1, null, null, false, null, null);

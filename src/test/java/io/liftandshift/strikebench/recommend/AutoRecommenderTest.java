@@ -343,7 +343,7 @@ class AutoRecommenderTest {
     private static AutoRecommender.ScoredCandidate scored(
             io.liftandshift.strikebench.eval.EconomicAssessment economics) {
         Candidate candidate = new Candidate("TEST", "Test", "test", "test", List.of(), 1,
-                0, null, 1, List.of(), null, null, 1.0, "DELAYED", List.of(), 1.0,
+                0, 0, null, 1, List.of(), null, null, 1.0, "DELAYED", List.of(), 1.0,
                 "test", "test", "test", "test", "test", "DIRECTIONAL", List.of("DIRECTIONAL"),
                 null, null, null, null, false, null, null);
         var score = new io.liftandshift.strikebench.eval.ScoreBreakdown(true, List.of(), 50, 50, List.of());

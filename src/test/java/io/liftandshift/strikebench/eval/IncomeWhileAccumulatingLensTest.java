@@ -23,7 +23,7 @@ class IncomeWhileAccumulatingLensTest {
         List<LegView> legs = List.of(
                 new LegView("SELL", "PUT", strike, "2026-08-21", 1, "3.50", 100, "OPEN"));
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income",
-                "SELL " + strike + "P Aug21", legs, 1, 35_000L, 35_000L,
+                "SELL " + strike + "P Aug21", legs, 1, 35_000L, 35_000L, 35_000L,
                 Math.round(Double.parseDouble(strike) * 100) * 100L - 35_000L, List.of(),
                 0.60, 1_800L, 0.70, "DELAYED", List.of(), 0.6,
                 "Get paid to bid below the market", "Keep the premium", "Assigned in a selloff",
@@ -37,7 +37,7 @@ class IncomeWhileAccumulatingLensTest {
                 new LegView("BUY", "STOCK", null, null, 1, "252.00", 100, "OPEN"),
                 new LegView("SELL", "CALL", "260", "2026-08-21", 1, "3.00", 100, "OPEN"));
         return new Candidate("COVERED_CALL", "Covered call", "covered_income", "BUY 100sh / SELL 260C",
-                legs, 1, 30_000L, 33_000L, 2_490_000L, List.of(),
+                legs, 1, 30_000L, 30_000L, 33_000L, 2_490_000L, List.of(),
                 0.55, 1_500L, 0.70, "DELAYED", List.of(), 0.6,
                 "Income against shares", "Premium plus gains to 260", "Shares keep downside",
                 "Runs far above 260", "You collect premium",

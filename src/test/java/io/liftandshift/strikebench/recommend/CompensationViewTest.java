@@ -102,7 +102,7 @@ class CompensationViewTest {
         Candidate candidate = new Candidate("CASH_SECURED_PUT", "Cash-secured put",
                 "acquisition_income", "SELL 240P", List.of(
                         new LegView("SELL", "PUT", "240", expiration, 1, "3.50", 100, "OPEN")),
-                1, 35_000L, 35_000L, 2_365_000L, List.of(), 0.60, 1_800L,
+                1, 35_000L, 35_000L, 35_000L, 2_365_000L, List.of(), 0.60, 1_800L,
                 0.70, "DELAYED", List.of(), 0.6, "Paid to bid", "Keep premium",
                 "Assigned in a selloff", "Crash through strike", "You collect premium",
                 "INCOME", List.of("INCOME", "ACQUIRE"), 0.35, 12.0,

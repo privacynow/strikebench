@@ -16,7 +16,7 @@ class EconomicAssessmentTest {
         return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 100C / SELL 105C",
                 List.of(new LegView("BUY", "CALL", "100", "2026-08-21", 1, "4.00", 100, "OPEN"),
                         new LegView("SELL", "CALL", "105", "2026-08-21", 1, "2.00", 100, "OPEN")),
-                1, -20_000, 30_000L, 20_000, List.of("102"), pop, 0L, 0.8,
+                1, -20_000, -20_000, 30_000L, 20_000, List.of("102"), pop, 0L, 0.8,
                 "DELAYED", List.of(), 0.7, "test", "test", "test", "test", "test",
                 "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null, false, null, null);
     }
@@ -143,7 +143,7 @@ class EconomicAssessmentTest {
                 "acquisition_income", "SELL 95P 2026-09-04",
                 List.of(new LegView("SELL", "PUT", "95", "2026-09-04", 1,
                         "3.00", 100, "OPEN")),
-                1, 30_000L, 30_000L, 920_000L, List.of("92"), 0.72,
+                1, 30_000L, 30_000L, 30_000L, 920_000L, List.of("92"), 0.72,
                 -5_070L, 0.9, "DELAYED", List.of(), 0.8,
                 "income", "premium", "assignment", "volatility expansion", "test",
                 "INCOME", List.of("INCOME", "ACQUIRE"), 0.28, 25.0, "92",
@@ -256,7 +256,7 @@ class EconomicAssessmentTest {
                 "SELL " + strike + type + " 2026-09-04",
                 List.of(new LegView("SELL", type, strike, "2026-09-04", 1,
                         "10.00", 100, "OPEN")),
-                1, 100_000L, maxProfit, heldShares ? 0 : maxLoss, List.of(), 0.70,
+                1, 100_000L, 100_000L, maxProfit, heldShares ? 0 : maxLoss, List.of(), 0.70,
                 -5_000L, 0.9, "DELAYED", List.of(), 0.8,
                 "income", "premium", "tail", "volatility", "test",
                 "INCOME", List.of("INCOME"), 0.25, 15.0, null,
@@ -378,7 +378,7 @@ class EconomicAssessmentTest {
         Candidate calendar = new Candidate("CALENDAR_CALL", "Call calendar", "time", "calendar",
                 List.of(new LegView("SELL", "CALL", "100", "2026-08-21", 1, "2.00", 100, "OPEN"),
                         new LegView("BUY", "CALL", "100", "2026-09-18", 1, "4.00", 100, "OPEN")),
-                1, -20_000, null, 20_000, List.of(), null, null, 0.8, "DELAYED", List.of(),
+                1, -20_000, -20_000, null, 20_000, List.of(), null, null, 0.8, "DELAYED", List.of(),
                 base.confidence(), base.whyConsidered(), base.bestUpside(), base.biggestRisk(),
                 base.wouldInvalidate(), base.beginnerExplanation(), base.intent(), base.intents(), null, null,
                 null, null, false, null, null);
@@ -420,7 +420,7 @@ class EconomicAssessmentTest {
     @Test void realizedVolLaneUsesTheExactPackagePrice() {
         Candidate base = candidate(0.50);
         Candidate repriced = new Candidate(base.strategy(), base.displayName(), base.structureGroup(), base.label(),
-                base.legs(), base.qty(), -15_000, base.maxProfitCents(), 15_000, base.breakevens(), base.pop(),
+                base.legs(), base.qty(), -15_000, -15_000, base.maxProfitCents(), 15_000, base.breakevens(), base.pop(),
                 base.expectedValueCents(), base.liquidityScore(), base.freshness(), base.warnings(),
                 base.confidence(), base.whyConsidered(), base.bestUpside(), base.biggestRisk(), base.wouldInvalidate(),
                 base.beginnerExplanation(), base.intent(), base.intents(), base.assignmentProb(),
@@ -457,7 +457,7 @@ class EconomicAssessmentTest {
     private Candidate heldCoveredCall(int qty) {
         return new Candidate("COVERED_CALL", "Covered call", "shares_income", "SELL 105C",
                 List.of(new LegView("SELL", "CALL", "105", "2026-08-21", 1, "2.00", 100, "OPEN")),
-                qty, 20_000L * qty, 70_000L * qty, 0, List.of("98", "105"), 0.60, 0L, 0.8,
+                qty, 20_000L * qty, 20_000L * qty, 70_000L * qty, 0, List.of("98", "105"), 0.60, 0L, 0.8,
                 "DELAYED", List.of(), 0.7, "test", "test", "test", "test", "test",
                 "INCOME", List.of("INCOME", "EXIT"), 0.30, null, null, null,
                 true, 100 * qty, 980_000L * qty);

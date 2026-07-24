@@ -24,7 +24,7 @@ class AssignmentPreferenceLensTest {
                 new LegView("BUY", "STOCK", null, null, 1, "252.00", 100, "OPEN"),
                 new LegView("SELL", "CALL", "260", "2026-08-21", 1, "3.00", 100, "OPEN"));
         return new Candidate("COVERED_CALL", "Covered call", "covered_income", "BUY 100sh / SELL 260C Aug21",
-                legs, 1, 30_000L, 33_000L, 2_490_000L, List.of("249.00"),
+                legs, 1, 30_000L, 30_000L, 33_000L, 2_490_000L, List.of("249.00"),
                 0.55, 1_500L, 0.70, "DELAYED", List.of(),
                 0.6, "Income against held shares",
                 "Keep the premium plus gains to $260", "Shares keep their downside",
@@ -38,7 +38,7 @@ class AssignmentPreferenceLensTest {
         List<LegView> legs = List.of(
                 new LegView("SELL", "PUT", "245", "2026-08-21", 1, "3.50", 100, "OPEN"));
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income", "SELL 245P Aug21",
-                legs, 1, 35_000L, 35_000L, 2_415_000L, List.of("241.50"),
+                legs, 1, 35_000L, 35_000L, 35_000L, 2_415_000L, List.of("241.50"),
                 0.60, 1_800L, 0.70, "DELAYED", List.of(),
                 0.6, "Get paid to bid below the market",
                 "Keep the premium if AAPL holds above $245", "You must buy at $245 in a selloff",

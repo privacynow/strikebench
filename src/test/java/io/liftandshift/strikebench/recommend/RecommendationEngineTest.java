@@ -217,7 +217,7 @@ class RecommendationEngineTest {
                         new LegView("SELL", "PUT", shortPut, "2026-08-21", 1, "0.40", 100, "OPEN"),
                         new LegView("SELL", "CALL", shortCall, "2026-08-21", 1, "0.40", 100, "OPEN"),
                         new LegView("BUY", "CALL", longCall, "2026-08-21", 1, "0.10", 100, "OPEN")),
-                1, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
+                1, creditCents, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
                 0.50, "DELAYED", List.of(), 0.50, "range income", "credit", "wing risk",
                 "breakout", "four defined-risk legs", "INCOME", List.of("INCOME"),
                 0.20, null, null, null, false, null, null);
@@ -285,6 +285,15 @@ class RecommendationEngineTest {
 
         assertThat(coveredCall.entryNetPremiumCents()).isNegative();
         assertThat(optionCredit).isPositive();
+        // #12-backend: the option-only net premium is the positive premium the option legs collect,
+        // NOT the stock-inclusive package net. It must match the credit computed from the legs and
+        // stay distinct from (and opposite-signed to) the stock-inclusive entry net.
+        assertThat(coveredCall.optionNetPremiumCents())
+                .as("option-only net premium is the option-leg credit, reused from the engine")
+                .isEqualTo(optionCredit)
+                .isPositive();
+        assertThat(coveredCall.optionNetPremiumCents())
+                .isNotEqualTo(coveredCall.entryNetPremiumCents());
         assertThat(coveredCall.beginnerExplanation())
                 .contains("complete stock-plus-options package costs "
                         + Money.fmt(-coveredCall.entryNetPremiumCents()))

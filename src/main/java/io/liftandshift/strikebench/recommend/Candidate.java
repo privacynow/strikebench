@@ -21,7 +21,8 @@ public record Candidate(
         String label,                 // short human summary, e.g. "SELL 555P / BUY 550P Aug 21"
         List<LegView> legs,
         int qty,
-        long entryNetPremiumCents,    // credit > 0, debit < 0
+        long entryNetPremiumCents,    // credit > 0, debit < 0 — INCLUDES any stock leg (a buy-write is net-negative)
+        long optionNetPremiumCents,   // option legs ONLY, credit > 0 / debit < 0; equals entryNetPremiumCents when there is no stock leg
         Long maxProfitCents,          // null = uncapped or model-dependent
         long maxLossCents,
         List<String> breakevens,

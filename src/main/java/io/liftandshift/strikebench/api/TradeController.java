@@ -764,8 +764,16 @@ final class TradeController {
                     .shareContextUnitsNeeded(request.legs());
             sharesNeeded = Math.toIntExact(Math.multiplyExact(units, request.qty()));
         }
+        // Option-only net premium: for a buy-write / covered exact ticket the package net is
+        // stock-inclusive (negative), so the option premium is computed from the option legs alone
+        // via the same canonical PayoffCurve. With no stock leg it equals the package net.
+        boolean hasStockLeg = request.legs().stream().anyMatch(io.liftandshift.strikebench.model.Leg::isStock);
+        long optionNetPremiumCents = hasStockLeg
+                ? PayoffCurve.of(request.legs().stream()
+                        .filter(leg -> !leg.isStock()).toList(), request.qty()).entryNetPremiumCents()
+                : preview.entryNetPremiumCents();
         return new Candidate(request.strategy(), display, group, display, legs, request.qty(),
-                preview.entryNetPremiumCents(), preview.maxProfitCents(), preview.maxLossCents(),
+                preview.entryNetPremiumCents(), optionNetPremiumCents, preview.maxProfitCents(), preview.maxLossCents(),
                 preview.breakevens(), preview.popEntry(), preview.expectedValueCents(),
                 liquid ? 1.0 : 0.0, preview.freshness(), preview.warnings(), 1,
                 "Exact ticket", "", "", "", "", intent, intents, preview.assignmentProb(),

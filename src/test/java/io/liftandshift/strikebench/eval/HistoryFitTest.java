@@ -30,7 +30,7 @@ class HistoryFitTest {
                 new LegView("SELL", "CALL", "260", "2026-08-21", 1, "2.10", 100, "OPEN"),
                 new LegView("BUY", "CALL", "265", "2026-08-21", 1, "1.30", 100, "OPEN"));
         return new Candidate("IRON_CONDOR", "Iron condor", "range_credit", "245/240/260/265",
-                legs, 1, 16_000L, 16_000L, 34_000L, List.of("243.40", "261.60"),
+                legs, 1, 16_000L, 16_000L, 16_000L, 34_000L, List.of("243.40", "261.60"),
                 0.55, 900L, 0.70, "DELAYED", List.of(), 0.6,
                 "Range income", "Keep the credit inside the range", "A breakout through either wing",
                 "A close beyond a wing", "You collect the credit",
@@ -40,7 +40,7 @@ class HistoryFitTest {
     private Candidate longCall() {
         List<LegView> legs = List.of(new LegView("BUY", "CALL", "260", "2026-08-21", 1, "4.00", 100, "OPEN"));
         return new Candidate("LONG_CALL", "Long call", "single_long", "BUY 260C",
-                legs, 1, -40_000L, null, 40_000L, List.of("264.00"),
+                legs, 1, -40_000L, -40_000L, null, 40_000L, List.of("264.00"),
                 0.35, -500L, 0.70, "DELAYED", List.of(), 0.6,
                 "Upside bet", "Uncapped above the strike", "Theta if it stalls",
                 "No move by expiry", "You pay the debit",

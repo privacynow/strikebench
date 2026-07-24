@@ -113,7 +113,7 @@ class EvaluationServiceDataIsolationTest {
         List<LegView> legs = List.of(new LegView(
                 "SELL", "PUT", "240", expiration.toString(), 1, "10.00", 100, "OPEN"));
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income",
-                "SELL 240P", legs, 1, 100_000L, 100_000L, 2_300_000L,
+                "SELL 240P", legs, 1, 100_000L, 100_000L, 100_000L, 2_300_000L,
                 List.of("230.00"), 0.75, 90_000L, 0.90, "DELAYED", List.of(), 0.8,
                 "Income below spot", "Keep the premium", "Assignment below breakeven",
                 "A sharp selloff", "Collect premium or acquire shares", "INCOME",

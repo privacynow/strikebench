@@ -893,7 +893,7 @@ public final class RecommendationEngine {
         }
         return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
                 List.copyOf(legViews), qty,
-                entryNet, maxProfit, maxLoss, breakevens, pop, ev,
+                entryNet, optionNetCents, maxProfit, maxLoss, breakevens, pop, ev,
                 round2(liquidity), freshness.name(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
