@@ -4551,8 +4551,9 @@ function histWidgetHTML(hostKey,sym){
 function histWidgetInnerHTML(hostKey,sym){
   var slot=HIST_STORE[sym]||{phase:'loading',bars:[]},n=slot.bars.length;
   var pills=HIST_PRESETS.map(function(pr){var key=pr[0];
-    var disabled=key==='5y'&&n<1100;
-    var reason=key==='5y'?(n?n+' sessions stored · older sessions are not collected yet':'stored history loading'):'';
+    var disabled=(key==='5y'&&n<1100)||key==='1d';
+    var reason=key==='5y'?(n?n+' sessions stored · older sessions are not collected yet':'stored history loading')
+      :key==='1d'?'Stored history is daily bars — a single-day view needs intraday data, which isn’t collected':'';
     var on=!MKT_CHART.win&&MKT_CHART.preset===key;
     return '<button type="button" class="histpill'+(on?' on':'')+(disabled?' off':'')+'" data-hist-pill="'+key+'" '+(disabled?'disabled title="'+deskEsc(reason)+'"':'')+'>'+pr[1]+'</button>';}).join('');
   var view=histResolvedView(n?slot.bars:[],histWindow(n?slot.bars:[{c:1}]));
