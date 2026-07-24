@@ -7884,7 +7884,7 @@ function decLegWorkbench(c){
     '<div class="decleghead"><span class="eyebrow">Leg workbench</span><span class="hint">'+
       (build?'your proposed exact package · every number below follows it':'engine package · touch any control to fork it')+'</span>'+
       '<span class="declegstate">'+(build?'Your draft':'Engine')+'</span><span class="badge">exp '+c.exp+'</span></div>'+
-    '<div class="declegs">'+c.legs.map(function(l,i){return legChip(l,i,'leg','li',decide.spot);}).join('')+
+    '<div class="declegs">'+c.legs.map(function(l,i){return backendDecisionLegChip(l,i,true,decide.sym);}).join('')+
       '<button class="addleg sm" data-addleg="1" aria-label="Add another leg">＋ <span class="addlong">Add leg</span></button></div>'+
     (build?renderTemplates():'')+
   '</div>';
@@ -8085,7 +8085,7 @@ function setUnderlying(sym){
 }
 function refreshIdeaComposerAction(){var composer=decideEl.querySelector('.ideacomposer'),d=decide&&decide.ideaDraft;if(!composer||!d)return;var needs=ideaDraftNeeds(d),button=composer.querySelector('[data-dec="analyzeidea"]'),status=composer.querySelector('[data-idea-status]');if(button)button.disabled=!!d.sym&&needs.length>0;if(status){status.classList.toggle('needs',needs.length>0);status.textContent=needs.length?(needs.length===1?'Still needed: '+needs[0]+'.':'Still needed: '+needs.slice(0,-1).join(', ')+' and '+needs[needs.length-1]+'.'):'Ready to create one canonical Plan and rank exact packages.';}}
 function commitIdeaDraft(d,fresh){var previousContext=decide.resumePlanContext||{};decide.sym=d.sym;decide.u=d.u;decide.spot=d.u&&d.u.spot;decide.em=d.u&&d.u.em;decide.goal=d.goal;decide.view=d.view;decide.horizon=d.horizon;decide.riskMode=d.riskMode;decide.resumePlanContext={goal:d.goal==='Undeclared'?null:d.goal,view:d.view==='Undeclared'?null:d.view,horizon:d.horizon==='Undeclared'?null:d.horizon,riskMode:d.riskMode==='Undeclared'?null:String(d.riskMode).toLowerCase(),originPlanId:fresh?null:(previousContext.originPlanId||null),targetCents:d.targetCents==null?null:Math.round(Number(d.targetCents)),holdingsShares:d.holdingsShares==null?null:Math.round(Number(d.holdingsShares)),costBasisCents:d.costBasisCents==null?null:Math.round(Number(d.costBasisCents)),priceAssumptionCents:d.priceAssumptionCents==null?null:Math.round(Number(d.priceAssumptionCents)),assignmentPreference:d.assignmentPreference==null?null:String(d.assignmentPreference)};if(fresh){decide.resumePlanId=null;decide.newPlanRequested=true;}decide.provenance=null;decide.buildLegs=null;decide.mode='engine';decide.pickOpen=false;decide.intentOpen=false;decide.composerKeepOpen=false;decide.pickq='';decide.ideaDraft=null;DEC_HOT=-1;}
-function analyzeIdeaDraft(){var d=ensureIdeaDraft(),needs=ideaDraftNeeds(d);if(!d.sym){decide.pickOpen=true;renderDecide();var q=document.getElementById('univq');if(q)q.focus();return;}if(needs.length){refreshIdeaComposerAction();var first=decideEl.querySelector('[data-idea-field]');if(first)first.focus();return;}var bridge=deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.state(),current=bridge&&bridge.plan,fresh=!!decide.newPlanRequested||!current||String(current.symbol||'').toUpperCase()!==String(d.sym||'').toUpperCase();commitIdeaDraft(d,fresh);updateThread();if(!deskBackendEnabled()){decide.cands=candsFor(decide.kind,decide.u);decide.candId=decide.cands.length?decide.cands[0].id:null;decide.deskPickId=decide.candId;renderAfterDecisionChange();return;}if(fresh){loadAuthoritativeIdea();return;}prepareAuthoritativeIdeaLoad();window.DeskBackend.updatePlanDeclaration(authoritativeIdeaContext()).catch(function(){/* the bridge publishes the typed declaration failure */});}
+function analyzeIdeaDraft(){var d=ensureIdeaDraft(),needs=ideaDraftNeeds(d);if(!d.sym){decide.pickOpen=true;renderDecide();var q=document.getElementById('univq');if(q)q.focus();return;}if(needs.length){refreshIdeaComposerAction();var first=decideEl.querySelector('[data-idea-field]');if(first)first.focus();return;}var bridge=deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.state(),current=bridge&&bridge.plan,fresh=!!decide.newPlanRequested||!current||String(current.symbol||'').toUpperCase()!==String(d.sym||'').toUpperCase();commitIdeaDraft(d,fresh);updateThread();if(fresh){loadAuthoritativeIdea();return;}prepareAuthoritativeIdeaLoad();window.DeskBackend.updatePlanDeclaration(authoritativeIdeaContext()).catch(function(){/* the bridge publishes the typed declaration failure */});}
 function riskCharShort(c){ var rc=riskChar(c); return rc==='undef'?'undef':rc==='collat'?'secured':rc==='unknown'?'unknown':'defined'; }
 /* One overflow grammar for every primary roster. It measures the list's own content box after
    layout, snaps whole rows, names what remains, and never invents viewport breakpoints. */
@@ -8563,12 +8563,16 @@ function drawDecMap(){
   }
   if(!drawable.length){svg.innerHTML='<text x="50%" y="50%" fill="var(--dim)" font-size="11" text-anchor="middle">Backend comparison metrics unavailable</text>';return;}
   var pops=drawable.map(function(c){return Number(c.pop);}), cr=[];drawable.forEach(function(c){var point=authoritative?Number(c.edge):Math.max(300,Number(c.credit));cr.push(point);if(authoritative&&c.edgeLow!=null&&Number.isFinite(Number(c.edgeLow)))cr.push(Number(c.edgeLow));if(authoritative&&c.edgeHigh!=null&&Number.isFinite(Number(c.edgeHigh)))cr.push(Number(c.edgeHigh));});
-  var popLo=Math.max(40,Math.floor((Math.min.apply(0,pops)-4)/5)*5), popHi=Math.min(90,Math.ceil((Math.max.apply(0,pops)+4)/5)*5);
+  var popPad=Math.max(3,(Math.max.apply(0,pops)-Math.min.apply(0,pops))*.18);
+  var popLo=Math.max(0,Math.min.apply(0,pops)-popPad), popHi=Math.min(100,Math.max.apply(0,pops)+popPad);
   var cPad=Math.max(100,(Math.max.apply(0,cr)-Math.min.apply(0,cr))*.18),cLo=authoritative?Math.min.apply(0,cr)-cPad:Math.max(0,Math.min.apply(0,cr)-800), cHi=authoritative?Math.max.apply(0,cr)+cPad:Math.max.apply(0,cr)+800;
   var X=function(p){return padL+(W-padL-padR)*(p-popLo)/((popHi-popLo)||1);};
   var Y=function(v){return H-padB-(H-padB-padT)*(v-cLo)/((cHi-cLo)||1);};
   var g='';
-  var ix=X(popLo+(popHi-popLo)*0.5), iy=Y(cLo+(cHi-cLo)*0.5);
+  /* Ideal-region corner anchored to REAL references, not geometric midpoints:
+     x at 50% chance-of-profit (better-than-coinflip), y at EV=0 when the EV axis
+     straddles zero (else fall back to the axis midpoint). */
+  var ix=Math.max(padL,Math.min(W-padR,X(50))), iy=authoritative&&cLo<0&&cHi>0?Y(0):Y(cLo+(cHi-cLo)*0.5);
   var compactMap=W<480,idealLabel=compactMap
     ? 'ideal ↗ likely + '+(authoritative?'positive EV':'rich')
     : 'ideal ↗ likely & '+(authoritative?'positive realistic EV':'rich'),
