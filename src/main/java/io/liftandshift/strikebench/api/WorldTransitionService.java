@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.SettingsStore;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.util.EventBus;
@@ -187,23 +188,17 @@ public final class WorldTransitionService {
      * @return true when the selector was committed
      */
     private boolean persist(String owner, String world, boolean datasetReset, String expectedWorld) {
-        String now = clock.instant().toString();
+        java.time.Instant now = clock.instant(); // one instant reused across all writes below
         return db.tx(connection -> {
             int changed;
             if (expectedWorld == null) {
-                Db.execOn(connection, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                                + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                        worldKey(owner), world, now);
+                SettingsStore.upsertOn(connection, worldKey(owner), world, now);
                 changed = 1;
             } else {
-                changed = Db.execOn(connection,
-                        "UPDATE settings SET v=?,updated_at=? WHERE k=? AND v=?",
-                        world, now, worldKey(owner), expectedWorld);
+                changed = SettingsStore.casOn(connection, worldKey(owner), expectedWorld, world, now);
             }
             if (changed > 0 && datasetReset) {
-                Db.execOn(connection, "INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                                + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                        datasetKey(owner), DatasetService.OBSERVED, now);
+                SettingsStore.upsertOn(connection, datasetKey(owner), DatasetService.OBSERVED, now);
             }
             return changed > 0;
         });
@@ -237,8 +232,7 @@ public final class WorldTransitionService {
     }
 
     private String read(String owner) {
-        var rows = db.query("SELECT v FROM settings WHERE k=?", row -> row.str("v"), worldKey(owner));
-        return rows.isEmpty() ? null : rows.getFirst();
+        return SettingsStore.read(db, worldKey(owner)).orElse(null);
     }
 
     private static String worldKey(String owner) {
