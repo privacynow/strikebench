@@ -5296,7 +5296,7 @@ test('realistic-measure EV drives favorable candidate presentation while market 
       mapRangeCount: 1
     });
     assert.match(presented.mapText, /realized-vol EV · after costs/i);
-    assert.match(presented.briefText, /realistic EV[\s\S]*\+\$15/i);
+    assert.match(presented.briefText, /realized-volatility EV[\s\S]*\+\$15/i);
     assert.match(presented.briefText, /cost benchmark[\s\S]*(?:−|-)\$52/i);
     assert.deepEqual(pageErrors, [], `realistic-EV presentation emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -5593,7 +5593,7 @@ test('an adverse-only competition requires an explicit comparison selection befo
     assert.match(comparison.qualityLabel, /^Unfavorable/i,
       'a coherent intent fit with adverse economics is never presented as merely coherent');
     assert.match(comparison.qualityReason,
-      /Realistic after-cost EV.*comparison, not a recommendation/i,
+      /Realized-volatility EV.*comparison, not a recommendation/i,
       'the ranked row itself explains why this is not a recommendation');
     assert.deepEqual(comparison.metrics, ['−$123', '−$123', '63%', '−$123', '$123', '−$370']);
     assert.equal(comparison.metrics[2], '63%');
@@ -7712,8 +7712,9 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     assert.ok(['XOM', 'JPM', 'PFE', 'KO'].some(symbol => idle.watch.includes(symbol)),
       'at least one non-megacap cross-sector representative is visible at rest');
     assert.ok(idle.watchActions.every(row => row.action === 'Shape →'
-      && row.focus && row.contextWhiteSpace === 'nowrap'),
-    'every market row exposes separate focus and Shape actions without wrapping its receipt');
+      && row.focus && row.contextWhiteSpace === 'normal'),
+    'every market row exposes separate focus and Shape actions; its receipt cell wraps (stacks the '
+    + 'sector badge over the change/freshness) rather than clipping in the narrow watch column');
     assert.match(idle.heading, /Watchlist/i);
     const scanAction = await page.locator('.scoutbar [data-auth-opportunity-scan]').textContent();
     assert.match(scanAction, /Scan/i,

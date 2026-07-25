@@ -1508,7 +1508,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .inspecttab:hover,.inspecttab.on{border-color:var(--accent-2);color:var(--text);background:var(--accent-wash)}
 .inspecttab svg{grid-area:ico;width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .inspecttab span{grid-area:name;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.inspecttab b{grid-area:value;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);font-weight:700;line-height:1.2;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.inspecttab b{grid-area:value;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inspecttab.on b{color:var(--accent)}
 @container understand (max-width:420px){
   .understand .inspectrail{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
@@ -4551,9 +4551,8 @@ function histWidgetHTML(hostKey,sym){
 function histWidgetInnerHTML(hostKey,sym){
   var slot=HIST_STORE[sym]||{phase:'loading',bars:[]},n=slot.bars.length;
   var pills=HIST_PRESETS.map(function(pr){var key=pr[0];
-    var disabled=(key==='5y'&&n<1100)||key==='1d';
-    var reason=key==='5y'?(n?n+' sessions stored · older sessions are not collected yet':'stored history loading')
-      :key==='1d'?'Stored history is daily bars — a single-day view needs intraday data, which isn’t collected':'';
+    var disabled=key==='5y'&&n<1100;
+    var reason=key==='5y'?(n?n+' sessions stored · older sessions are not collected yet':'stored history loading'):'';
     var on=!MKT_CHART.win&&MKT_CHART.preset===key;
     return '<button type="button" class="histpill'+(on?' on':'')+(disabled?' off':'')+'" data-hist-pill="'+key+'" '+(disabled?'disabled title="'+deskEsc(reason)+'"':'')+'>'+pr[1]+'</button>';}).join('');
   var view=histResolvedView(n?slot.bars:[],histWindow(n?slot.bars:[{c:1}]));
@@ -5137,7 +5136,7 @@ function authBookFanLegendHTML(){
   return book+rows;
 }
 function bookFanPrompt(){var joint=authJointBookFan();if(joint.phase==='ready'&&joint.frames.length){var terminal=joint.frames[joint.frames.length-1],parts=['Whole book · median '+signed(terminal.p50)];if(terminal.p5!=null&&terminal.p95!=null)parts.push('worst 5% '+signed(terminal.p5)+' → best 5% '+signed(terminal.p95));parts.push('hover a colored path for that position');return parts.join(' · ');}return (joint.error||'Measured joint Book unavailable')+' · colored paths are single-position projections';}
-function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'BOOK line = all together · colors = each position':'single-position projections · never summed';}
+function bookFanHeaderHint(){return authJointBookFan().phase==='ready'?'BOOK line = everything together · colors = single positions':'single-position projections · never summed';}
 function bookFanReadoutText(id){
   var p=byId[id],slot=BOOK_FAN.rows[id];
   if(!p||!slot||slot.phase!=='ready'||!slot.frames.length)return bookFanPrompt();
@@ -5807,7 +5806,18 @@ function deskBackendChanged(payload){
   if(payload&&String(payload.phase||'').indexOf('book-')===0){authBookEvent(payload);return;}
   if(payload&&String(payload.phase||'').indexOf('position-scenario-')===0){authPositionScenarioEvent(payload);return;}
   if(payload&&String(payload.phase||'').indexOf('position-')===0){authPositionEvent(payload);return;}
-  if(payload&&payload.phase==='world-transition'){EM_STORE={};Object.keys(byId||{}).forEach(function(id){var p=byId[id],st=scenPlay[id];if(st&&st.raf)cancelAnimationFrame(st.raf);if(p)window.clearTimeout(p._positionScenarioTimer);});authClearPositionCards();POS=[];byId={};state.level='book';state.focus=null;BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};layoutAuthoritativeBook();window.DeskBackend.loadBook().catch(function(){});}
+  if(payload&&payload.phase==='world-transition'){
+    // A world change (Observed⇄Simulated) invalidates ALL market-owned DATA state, not just positions.
+    // History is cached by symbol only, so without this the new world's label would pair with the old
+    // world's bars. Clear the expected-move store, the per-symbol history cache, any active chart
+    // drag/zoom, and the data-bound selected window + its reset snapshot. View PREFERENCES (preset,
+    // scale, overlays) survive and re-apply cleanly to the freshly fetched bars.
+    EM_STORE={};HIST_STORE={};HIST_DRAG=null;MKT_CHART.win=null;MKT_CHART.prev=null;
+    Object.keys(byId||{}).forEach(function(id){var p=byId[id],st=scenPlay[id];if(st&&st.raf)cancelAnimationFrame(st.raf);if(p)window.clearTimeout(p._positionScenarioTimer);});
+    authClearPositionCards();POS=[];byId={};state.level='book';state.focus=null;
+    BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};
+    layoutAuthoritativeBook();window.DeskBackend.loadBook().catch(function(){});
+  }
   if(payload&&payload.phase==='strategy-catalog'&&!decide){
     /* the late additive catalog also feeds Home's one-line strategy field */
     if(state.level==='book'&&typeof authRenderOpportunityOnly==='function')authRenderOpportunityOnly();
@@ -7208,9 +7218,14 @@ function decisionBrief(c){
       tone=raw==='INCOHERENT'||String(econ.verdict||'').toUpperCase()==='UNFAVORABLE'?'bad':raw==='MIXED'?'warn':'',
       lead=econ.label||({COHERENT:'Fits the declared objective',MIXED:'Mixed fit on the declared objective',INCOHERENT:'Conflicts with the declared objective'}[raw]||'Assessment incomplete'),
       tail=risk.tailLossCents==null?'—':money(-Number(risk.tailLossCents)/100),read=coherence(c).prose;
+    /* The BRIEF is a summary: lead verdict + one-line EV prose + compact facts (market-EV cost
+       benchmark, tail, evidence). The FULL structured EV receipt (sensitivity range + role note)
+       lives once in the Fit inspect tab — it was duplicated here, bloating the always-visible brief
+       ~90px and squeezing the inspect well so the interactive path fan overflowed. The market-EV
+       cost-benchmark framing stays visible here (never presented as an independent edge). */
+    var mkTxt=econ.marketEvAfterCostsCents==null?'—':signed(Number(econ.marketEvAfterCostsCents)/100);
     return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(raw.toLowerCase())+'</span></div><div class="dbread">'+deskEsc(read)+'</div>'+
-      evReceiptHTML(econ)+
-      '<div class="dbfacts"><span class="dbfact">tail <b class="neg">'+tail+'</b></span><span class="dbfact">evidence <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
+      '<div class="dbfacts"><span class="dbfact">market EV cost benchmark <b>'+mkTxt+'</b></span><span class="dbfact">tail <b class="neg">'+tail+'</b></span><span class="dbfact">evidence <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
   }
   return ''; /* display-only: every served candidate is authoritative; no fixture brief */
 }
@@ -7413,7 +7428,7 @@ function decUnderstand(c){
   var co=coherence(c),source=c.authoritative?authoritativeCanvas(c):null,af=c.authoritative?authoritativeFrame(c,0):null,sr=c.authoritative?null:candidateSectorRead(c),
     greekLabel=af&&af.greeks&&af.greeks.theta!=null?'Θ '+signed(af.greeks.theta):c.authoritative?'checkpoint':'Θ '+signed(c.theta||0),
     bookLabel=c.authoritative?(source&&source.comparison?comparisonTabLabel(source):'loading'):(sr.diversifies?'diversifies':'adds '+sr.sector),
-    tabs=[['paths','path','Paths',(c.pop==null?'—':c.pop+'%')+' profit'],['fit','check','Fit',co.word],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
+    tabs=[['paths','path','Paths',(c.pop==null?'—':c.pop+'%')+' profit'],['fit','check','Fit',(co.word.indexOf(' · ')>=0?co.word.split(' · ').pop():co.word)],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
   if(decide.inspect==='market')decide.inspect='paths';  /* market is a standing band now, not a lens */
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
