@@ -182,6 +182,7 @@ public final class RedeploymentFrontier {
 
     public record Entry(
             String evaluationId,
+            ResultIdentity identity,
             String symbol,
             String strategy,
             double decisionScore,
@@ -240,9 +241,15 @@ public final class RedeploymentFrontier {
                                  Context context) {
         if (context == null) throw new IllegalArgumentException("frontier context is required");
         List<Entry> entries = new ArrayList<>();
+        // One row per RESULT, not per symbol: an income covered call and a directional put spread
+        // on the same ticker are two answers and both belong on the frontier. Only the identical
+        // package under identical declarations collapses.
+        Set<String> seen = new LinkedHashSet<>();
         for (StrategyEvaluation evaluation : evaluations == null
                 ? List.<StrategyEvaluation>of() : evaluations) {
             if (evaluation == null || evaluation.candidate() == null) continue;
+            ResultIdentity identity = ResultIdentity.of(evaluation);
+            if (!seen.add(identity.key())) continue;
             DataCompleteness completeness = completeness(evaluation);
             List<LaneImpact> impacts = context.lanes().stream()
                     .map(lane -> impact(evaluation, lane, context.source())).toList();
@@ -263,7 +270,7 @@ public final class RedeploymentFrontier {
             if (replacement != null && !"QUALIFIES".equals(replacement.status())) {
                 reasons.add("This package does not qualify as a close-to-reopen replacement under the full frontier receipt.");
             }
-            entries.add(new Entry(evaluation.id(), evaluation.symbol(), evaluation.family(),
+            entries.add(new Entry(evaluation.id(), identity, evaluation.symbol(), evaluation.family(),
                     evaluation.decisionScore(), economics == null ? "UNAVAILABLE" : economics.verdict().name(),
                     qualification, completeness, impacts, replacement, reasons));
         }

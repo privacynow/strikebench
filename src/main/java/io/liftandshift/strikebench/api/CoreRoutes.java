@@ -21,6 +21,7 @@ public final class CoreRoutes {
             Consumer<SseClient> marketStream,
             Consumer<SseClient> eventStream,
             Handler workspace,
+            Handler replaceWorkspace,
             Handler updateWorkspace,
             Handler account,
             Handler resetAccount
@@ -40,8 +41,11 @@ public final class CoreRoutes {
         config.routes.get("/api/market/engine", h.marketEngine());
         config.routes.sse("/api/market/stream", h.marketStream());
         config.routes.sse("/api/events", h.eventStream());
+        // ONE workspace context (audit §6): GET reconciles it to the caller's market, PUT replaces
+        // the whole declaration, PATCH changes only what it names and preserves everything else.
         config.routes.get("/api/workspace", h.workspace());
-        config.routes.put("/api/workspace", h.updateWorkspace());
+        config.routes.put("/api/workspace", h.replaceWorkspace());
+        config.routes.patch("/api/workspace", h.updateWorkspace());
         config.routes.get("/api/account", h.account());
         config.routes.post("/api/account/reset", h.resetAccount());
     }

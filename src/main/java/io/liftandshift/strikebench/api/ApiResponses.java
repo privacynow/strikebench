@@ -131,12 +131,23 @@ public final class ApiResponses {
                     null, null, null, null, optionable, freshness, source, evidence, asOf, refreshing);
         }
     }
-    public record Revision(long rev) {}
-    public record Workspace<T>(long rev, String updatedAt, T state) {}
-    public record SavedRevision(boolean ok, long rev) {}
+    /**
+     * THE workspace receipt (audit §6, backend gap 8). Mode and context are ONE payload: the world,
+     * lane and account that own the context sit beside the context itself, so a header cannot say
+     * Observed while the body says Demo. {@code rev} is 0 when nothing is stored — that is an
+     * undeclared workspace, not an empty default. {@code transition} states what a world change
+     * cleared; {@code unreadable} states why a stored context was refused instead of half-read.
+     */
+    public record Workspace(long rev, String updatedAt, int supportedVersion, String world,
+                            String marketLane, String accountId,
+                            io.liftandshift.strikebench.db.WorkspaceContext context,
+                            io.liftandshift.strikebench.db.WorkspaceContext.Transition transition,
+                            io.liftandshift.strikebench.db.WorkspaceContext.Unreadable unreadable) {}
     public record Plans<T>(T plans, String market, String world) {}
     public record PlanSymbolError(String error, String detail, String market) {}
     public record PlanStrategy<T, U>(T plan, U strategy) {}
+    /** The exact scanned package a Plan adopted, with the row identity it was shown under (§8.2). */
+    public record PlanStrategyAdoption<T, U, V>(T plan, U strategy, V identity, String evaluationId) {}
     public record PlanStrategyPreview<T, U, V>(T plan, U strategy, V preview,
                                                 io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
     public record StrategyState<T, U>(T strategy, U selected) {}

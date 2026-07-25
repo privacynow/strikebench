@@ -99,8 +99,16 @@ public final class AutoRecommender {
     ) {}
 
     /** Compact best-candidate projection for an opportunity lens; the full evaluation remains below. */
+    /**
+     * The row a Scout result shows. {@code evaluationId} and {@code resultKey} name the EXACT
+     * evaluation behind it, so clicking the row adopts that package rather than opening a freshly
+     * recomputed field in its place (audit §8.2). Without them the row is a picture of a package
+     * with no way back to the package itself.
+     */
     public record BestIdea(
             boolean available,
+            String evaluationId,
+            String resultKey,
             String horizon,
             String family,
             String displayName,
@@ -126,11 +134,13 @@ public final class AutoRecommender {
                              long riskBudgetCents, String disclaimer,
                              List<CompensationView.CompensationEntry> compensation,
                              String compensationBasis,
-                             RedeploymentFrontier.Result frontier) {
+                             RedeploymentFrontier.Result frontier,
+                             ScanCounts counts) {
         /** Pre-compensation-view constructor keeps existing callers' shape. */
         public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
                           long riskBudgetCents, String disclaimer) {
-            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null, null);
+            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null, null,
+                    ScanCounts.NONE);
         }
 
         /** Compatibility shape for callers that predate the Book-aware frontier. */
@@ -139,16 +149,46 @@ public final class AutoRecommender {
                           List<CompensationView.CompensationEntry> compensation,
                           String compensationBasis) {
             this(picks, skipped, notes, riskBudgetCents, disclaimer,
-                    compensation, compensationBasis, null);
+                    compensation, compensationBasis, null, ScanCounts.NONE);
+        }
+    }
+
+    /**
+     * The four things a scan actually finishes, each with its OWN denominator (audit §8.2).
+     *
+     * <p>One {@code completed/total} pair cannot describe this work: the denominator used to change
+     * meaning between phases — 5/105 symbols became 3/6 ideas — so a reader could never tell what
+     * had finished. These four counts only ever rise, never share a denominator, and never restate
+     * each other:</p>
+     *
+     * <ul>
+     *   <li>{@code universeConsidered} — symbols whose evidence read completed;</li>
+     *   <li>{@code evidenceEligible} — of those, the ones with enough evidence to price;</li>
+     *   <li>{@code packagesEvaluated} — exact packages the evaluator priced and scored;</li>
+     *   <li>{@code rowsRetained} — distinct result rows kept, by {@link ResultIdentity}.</li>
+     * </ul>
+     */
+    public record ScanCounts(int universeConsidered, int evidenceEligible,
+                             int packagesEvaluated, int rowsRetained) {
+        public static final ScanCounts NONE = new ScanCounts(0, 0, 0, 0);
+
+        public ScanCounts {
+            if (universeConsidered < 0 || evidenceEligible < 0
+                    || packagesEvaluated < 0 || rowsRetained < 0) {
+                throw new IllegalArgumentException("scan counts cannot be negative");
+            }
         }
     }
 
     /**
      * Small progressive projection for the existing Scout request. A progress listener observes
      * canonical work as it completes; it never ranks, prices, or mutates anything itself.
+     *
+     * <p>{@code phaseCompleted}/{@code phaseTotal} describe ONLY the named phase in flight. The
+     * durable, comparable quantities live in {@link ScanCounts}, which every frame carries.</p>
      */
-    public record Progress(String phase, int completed, int total, String symbol,
-                           Pick pick, String message) {}
+    public record Progress(String phase, int phaseCompleted, int phaseTotal, ScanCounts counts,
+                           String symbol, Pick pick, String message) {}
 
     @FunctionalInterface
     public interface ProgressListener {
@@ -228,7 +268,8 @@ public final class AutoRecommender {
         int maxPicks = req.maxPicks() == null ? DEFAULT_MAX_PICKS : Math.clamp(req.maxPicks(), 1, 10);
         double minConfidence = req.minConfidence() == null ? MIN_SIGNAL_CONFIDENCE : Math.clamp(req.minConfidence(), 0, 1);
         List<StrategyIntent> intents = normalizeIntents(req.intents());
-        emit(progressListener, new Progress("STARTING", 0, universe.size(), null, null,
+        ScanTally tally = new ScanTally();
+        emit(progressListener, new Progress("STARTING", 0, universe.size(), tally.counts(), null, null,
                 "Preparing the governed universe and declared goal."));
 
         List<String> skipped = new ArrayList<>();
@@ -268,8 +309,12 @@ public final class AutoRecommender {
                                     opportunity.score(), List.of(), primaryIntent.name(),
                                     opportunity, null);
                         }
+                        // The two counts advance on the SAME predicate the eligibility screen below
+                        // applies, so "considered" and "eligible" can never disagree with it.
+                        tally.considered(completed);
+                        if (preview != null) tally.evidenceEligible();
                         emit(progressListener, new Progress("SIGNALS", completed, universe.size(),
-                                symbol, preview, preview == null
+                                tally.counts(), symbol, preview, preview == null
                                 ? "Reading price, volatility, event, and liquidity evidence."
                                 : "Evidence is ready; exact package pricing follows after the field is ranked."));
                     }
@@ -324,13 +369,14 @@ public final class AutoRecommender {
                     RecommendationEngine.Holdings ctx = new RecommendationEngine.Holdings(
                             h.freeShares(), h.avgCostCents(), null);
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
-                            buyingPowerCents, riskBudget, worldId);
+                            buyingPowerCents, riskBudget, worldId, tally);
                     OpportunityContext opportunity = opportunityContext(s, intent);
                     Pick pick = new Pick(sym, s, opportunity.score(), perHorizon, intent.name(),
                             opportunity, bestIdea(perHorizon));
                     picks.add(pick);
+                    tally.rowsRetained(surfaced(picks).size());
                     emit(progressListener, new Progress("IDEAS", ideasCompleted.incrementAndGet(),
-                            ideasTotal, sym, pick,
+                            ideasTotal, tally.counts(), sym, pick,
                             "A canonical candidate field is ready; destination-Book gates are still composing."));
                 }
                 continue;
@@ -345,12 +391,13 @@ public final class AutoRecommender {
                         ? new RecommendationEngine.Holdings(held.freeShares(), held.avgCostCents(), null)
                         : null;
                 List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
-                        buyingPowerCents, riskBudget, worldId);
+                        buyingPowerCents, riskBudget, worldId, tally);
                 Pick pick = new Pick(s.symbol(), s, top.opportunity().score(), perHorizon, intent.name(),
                         top.opportunity(), bestIdea(perHorizon));
                 picks.add(pick);
+                tally.rowsRetained(surfaced(picks).size());
                 emit(progressListener, new Progress("IDEAS", ideasCompleted.incrementAndGet(),
-                        ideasTotal, s.symbol(), pick,
+                        ideasTotal, tally.counts(), s.symbol(), pick,
                         "A canonical candidate field is ready; destination-Book gates are still composing."));
             }
         }
@@ -363,17 +410,63 @@ public final class AutoRecommender {
         }
         // The compensation view ranks every premium-collecting idea the Scout surfaced,
         // across picks and horizons, BESIDE the per-pick decision ordering (Phase 10.3).
-        List<StrategyEvaluation> surfaced = picks.stream()
-                .flatMap(pick -> pick.horizons().stream())
-                .flatMap(h -> h.candidates().stream())
-                .map(ScoredCandidate::evaluation)
-                .toList();
-        emit(progressListener, new Progress("BOOK", ideasCompleted.get(), ideasTotal, null, null,
+        List<StrategyEvaluation> surfaced = surfaced(picks);
+        tally.rowsRetained(surfaced.size());
+        emit(progressListener, new Progress("BOOK", ideasCompleted.get(), ideasTotal, tally.counts(),
+                null, null,
                 "Applying destination-Book capacity, concentration, and expiry checks."));
         RedeploymentFrontier.BookLayer book =
                 RedeploymentFrontier.composeBookLayer(surfaced, evaluations, worldId, contextFactory);
         return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER,
-                book.compensation(), book.compensationBasis(), book.frontier());
+                book.compensation(), book.compensationBasis(), book.frontier(), tally.counts());
+    }
+
+    /**
+     * THE retained result rows of a scan: every exact package the Scout surfaced, in rank order,
+     * deduplicated by {@link ResultIdentity} rather than by symbol.
+     *
+     * <p>Symbol-keyed deduplication silently threw away real answers — an income covered call and
+     * a directional put spread on one ticker are different results, and only one of them survived.
+     * Keyed on the full result identity, both survive, while the same package reached twice (two
+     * declared goals converging on one structure) still collapses to one row.</p>
+     */
+    public static List<StrategyEvaluation> surfaced(List<Pick> picks) {
+        java.util.Map<String, StrategyEvaluation> retained = new java.util.LinkedHashMap<>();
+        for (Pick pick : picks == null ? List.<Pick>of() : picks) {
+            for (HorizonIdeas horizon : pick.horizons()) {
+                for (ScoredCandidate scored : horizon.candidates()) {
+                    StrategyEvaluation evaluation = scored.evaluation();
+                    retained.putIfAbsent(ResultIdentity.of(evaluation).key(), evaluation);
+                }
+            }
+        }
+        return List.copyOf(retained.values());
+    }
+
+    /** The exact rows a completed scan retained — the same list its Book layer was composed over. */
+    public static List<StrategyEvaluation> surfaced(AutoResult result) {
+        return result == null ? List.of() : surfaced(result.picks());
+    }
+
+    /** Monotonic scan counters. Each rises independently; none is ever restated downward. */
+    private static final class ScanTally {
+        private final java.util.concurrent.atomic.AtomicInteger considered =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger eligible =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger evaluated =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger retained =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        void considered(int completed) { considered.accumulateAndGet(completed, Math::max); }
+        void evidenceEligible() { eligible.incrementAndGet(); }
+        void packagesEvaluated(int count) { if (count > 0) evaluated.addAndGet(count); }
+        void rowsRetained(int total) { retained.accumulateAndGet(total, Math::max); }
+
+        ScanCounts counts() {
+            return new ScanCounts(considered.get(), eligible.get(), evaluated.get(), retained.get());
+        }
     }
 
     private static void emit(ProgressListener listener, Progress progress) {
@@ -388,7 +481,8 @@ public final class AutoRecommender {
     private List<HorizonIdeas> horizonIdeas(SignalEngine.Signals s, List<String> horizons, boolean allow0dte,
                                             AutoRequest req, StrategyIntent intent,
                                             RecommendationEngine.Holdings holdingsCtx,
-                                            long buyingPowerCents, long[] riskBudget, String worldId) {
+                                            long buyingPowerCents, long[] riskBudget, String worldId,
+                                            ScanTally tally) {
         List<HorizonIdeas> perHorizon = new ArrayList<>();
         for (String horizon : horizons) {
             if ("0DTE".equals(horizon) && !allow0dte) continue;
@@ -426,6 +520,7 @@ public final class AutoRecommender {
                 List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(s.symbol(), intent.name(),
                         thesis, horizon, req.riskMode(), pool, buyingPowerCents,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null);
+                tally.packagesEvaluated(evals.size());
                 assessed = evals.stream().map(e -> new ScoredCandidate(
                                 targetFit(e.candidate(), req.targetProfitCents()), e))
                         .sorted(Comparator.comparingDouble(
@@ -561,7 +656,7 @@ public final class AutoRecommender {
                 .max(Comparator.comparingDouble(row -> row.scored().evaluation().decisionScore()))
                 .orElse(null);
         if (best == null) {
-            return new BestIdea(false, null, null, null, null, null, null, null,
+            return new BestIdea(false, null, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, false,
                     "No package passed the current market, evidence, and account screens.");
         }
@@ -572,7 +667,8 @@ public final class AutoRecommender {
         Long difference = economics == null || economics.marketEvAfterCostsCents() == null
                 || economics.realizedVolEvAfterCostsCents() == null ? null
                 : economics.realizedVolEvAfterCostsCents() - economics.marketEvAfterCostsCents();
-        return new BestIdea(true, best.horizon(), candidate.strategy(), candidate.displayName(),
+        return new BestIdea(true, evaluation.id(), ResultIdentity.of(evaluation).key(),
+                best.horizon(), candidate.strategy(), candidate.displayName(),
                 economics == null ? "UNAVAILABLE" : economics.verdict().name(),
                 economics == null ? null : economics.placement(),
                 evaluation.pop(), evaluation.maxLossCents(),

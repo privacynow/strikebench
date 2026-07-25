@@ -399,8 +399,46 @@ public final class PlanStrategyService {
         if (!child.symbol().equalsIgnoreCase(text(candidate, "symbol"))) {
             throw new IllegalArgumentException("scouted candidate symbol does not match the sibling Plan");
         }
-        return saveLinkedSelection(userId, child, candidate);
+        return saveLinkedSelection(userId, child, candidate, new LinkedRun("SCOUT_SELECTION",
+                "Linked from " + text(candidate, "symbol"),
+                "Exact package selected from a linked Scout run", linkedRequestSnapshot(candidate)));
     }
+
+    /**
+     * Audit §8.2: adopt the EXACT package an opportunity scan showed into this Plan, as its
+     * selected structure.
+     *
+     * <p>This is the same copy-an-exact-package mechanism the Plan-scoped Scout already uses for a
+     * sibling Plan — the only difference is where the immutable package came from (a persisted
+     * {@code strategy_evaluation} receipt rather than a persisted {@code plan_candidate} row). No
+     * second analysis path exists: the caller hands over the stored evaluation's own candidate and
+     * receipt, and nothing here re-prices, re-ranks, or re-derives any of it.</p>
+     */
+    public SavedRun adoptScoutedEvaluation(String userId, Plan.View plan, ObjectNode candidate,
+                                           String evaluationId, String resultIdentityKey) {
+        if (candidate == null) throw new IllegalArgumentException("an adopted candidate is required");
+        if (evaluationId == null || evaluationId.isBlank()) {
+            throw new IllegalArgumentException("an adopted package requires its evaluation id");
+        }
+        if (!plan.symbol().equalsIgnoreCase(text(candidate, "symbol"))) {
+            throw new IllegalArgumentException("the scanned package's symbol does not match this Plan");
+        }
+        candidate.put("sourceEvaluationId", evaluationId);
+        ObjectNode receipt = Json.MAPPER.createObjectNode();
+        receipt.put("kind", "SCOUT_EVALUATION_ADOPTION");
+        receipt.put("sourceEvaluationId", evaluationId);
+        put(receipt, "sourceSymbol", text(candidate, "symbol"));
+        put(receipt, "sourceIdentityKey", resultIdentityKey);
+        return saveLinkedSelection(userId, plan, candidate, new LinkedRun("SCOUT_ADOPTION",
+                "Adopted the exact scanned package " + evaluationId,
+                "The opportunity scan's own evaluation, adopted unchanged: same strikes, same "
+                        + "expiration, same quantity, same package price receipt. Nothing was re-priced.",
+                Json.write(receipt)));
+    }
+
+    /** How one linked/adopted run labels its own provenance. It changes no financial fact. */
+    private record LinkedRun(String rankingPolicy, String economicMessage, String disclaimer,
+                             String requestSnapshot) {}
 
     public ObjectNode scoutedCandidate(String userId, String originPlanId, String candidateId) {
         return (ObjectNode) db.with(c -> {
@@ -414,7 +452,13 @@ public final class PlanStrategyService {
         });
     }
 
-    private SavedRun saveLinkedSelection(String userId, Plan.View plan, ObjectNode candidate) {
+    /**
+     * THE one path that writes an exact, already-evaluated package into a Plan as its selected
+     * structure. Both linked-Scout copy and scanned-evaluation adoption use it; only the run's
+     * provenance labels differ, so the two can never drift into two persistence rules.
+     */
+    private SavedRun saveLinkedSelection(String userId, Plan.View plan, ObjectNode candidate,
+                                         LinkedRun run) {
         String runId = Ids.newId("psr");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(candidate);
@@ -429,8 +473,8 @@ public final class PlanStrategyService {
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?)",
                     runId, plan.id(), plan.context().rev(), "SCOUT", "PLAN", plan.context().thesis(),
                     horizonName(plan.context().horizonDays()), plan.context().riskMode(), plan.intent(), null,
-                    "SCOUT_SELECTION", "Linked from " + text(candidate, "symbol"), 0, 0, 0, 0,
-                    "Exact package selected from a linked Scout run", linkedRequestSnapshot(candidate), inputHash,
+                    run.rankingPolicy(), run.economicMessage(), 0, 0, 0, 0,
+                    run.disclaimer(), run.requestSnapshot(), inputHash,
                     ENGINE_VERSION, requiredText(candidate, "sentimentScorerVersion"), "CURRENT", now);
             String id = persistCandidate(c, runId, plan, candidate, 1, "CURRENT", now, "SCOUT");
             Db.execOn(c, "UPDATE plan_candidate SET selected=1 WHERE id=?", id);
@@ -460,6 +504,10 @@ public final class PlanStrategyService {
         values.put("underlying_symbol", text(n, "symbol") == null ? plan.symbol() : text(n, "symbol"));
         values.put("scout_thesis", text(n, "scoutThesis"));
         values.put("recommendation_id", text(n, "recommendationId"));
+        // The immutable scanned evaluation this exact package came from, when it was adopted rather
+        // than ranked here. A restored Plan can then still name its source instead of presenting a
+        // package with no stated provenance.
+        values.put("source_evaluation_id", text(n, "sourceEvaluationId"));
         values.put("family", family);
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
         values.put("assignment_probability", doubleOrNull(n, "assignmentProb"));
@@ -548,6 +596,7 @@ public final class PlanStrategyService {
         put(n, "id", r.id()); put(n, "symbol", r.symbol()); put(n, "scoutThesis", r.scoutThesis());
         put(n, "recommendationId", r.recommendationId());
         put(n, "sourceKind", r.sourceKind());
+        put(n, "sourceEvaluationId", r.sourceEvaluationId());
         put(n, "sentimentScorerVersion", r.sentimentScorerVersion());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
@@ -578,7 +627,8 @@ public final class PlanStrategyService {
     }
 
     private static String candidateSelect() {
-        return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.recommendation_id,pc.source_kind,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
+        return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.recommendation_id,pc.source_kind," +
+                "pc.source_evaluation_id,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
                 "pc.entry_net_cents,pc.option_net_cents,pc.stock_cash_flow_cents,pc.opening_fees_cents," +
                 "pc.after_fee_net_cents,pc.executable_net_cents,pc.resting_limit_net_cents," +
                 "pc.valuation_basis,pc.price_executability,pc.price_fee_side,pc.price_source," +
@@ -594,7 +644,7 @@ public final class PlanStrategyService {
 
     private static CandidateRow candidateRow(Db.Row r) {
         return new CandidateRow(r.str("id"), r.str("underlying_symbol"), r.str("scout_thesis"),
-                r.str("recommendation_id"), r.str("source_kind"),
+                r.str("recommendation_id"), r.str("source_kind"), r.str("source_evaluation_id"),
                 r.str("family"), r.str("display_name"), r.str("structure_group"),
                 r.str("position_label"), integerOrNull(r, "qty"),
                 new CandidatePriceRow(r.lngOrNull("entry_net_cents"), r.lngOrNull("option_net_cents"),
@@ -884,7 +934,7 @@ public final class PlanStrategyService {
                           BigDecimal quoteAsk, Long quoteAsOfEpochMs, String quoteSource,
                           String quoteFreshness) {}
     private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
-                                String sourceKind,
+                                String sourceKind, String sourceEvaluationId,
                                 String family, String displayName, String structureGroup, String label,
                                 Integer qty, CandidatePriceRow price, Long maxProfit, Long maxLoss,
                                 Double liquidity, String freshness, Double confidence,

@@ -385,6 +385,122 @@ class AutoRecommenderTest {
         assertThat(yields).isSortedAccordingTo(java.util.Comparator.reverseOrder());
     }
 
+    /**
+     * A scanned symbol that produced no row must SAY why. It used to disappear in silence whenever
+     * its packages priced and then lost every one of them to the viability screen — a different
+     * fact from "nothing was built here", and the notes could not tell them apart (program §3.2).
+     */
+    @Test
+    void everyScannedSymbolEitherSurfacesARowOrIsNamedInTheNotes() {
+        List<String> universe = List.of("AAPL", "SPY", "QQQ", "IWM");
+        OpportunityScanner.ScanResult result = opportunityScanner.scanWithFrontier(
+                universe, "INCOME", "neutral", "month", "balanced", BP, "local", 10, null, null,
+                evaluations -> practiceContext(universe));
+
+        java.util.Set<String> surfaced = new java.util.LinkedHashSet<>();
+        result.ranked().forEach(evaluation -> surfaced.add(evaluation.symbol()));
+        if (result.frontier() != null) {
+            result.frontier().decisionRanking().forEach(entry -> surfaced.add(entry.symbol()));
+        }
+
+        assertThat(universe).allSatisfy(symbol -> {
+            if (surfaced.contains(symbol)) return;
+            assertThat(result.notes())
+                    .as("%s produced no row, so the scan must say why rather than drop it", symbol)
+                    .anySatisfy(note -> assertThat(note).startsWith(symbol + ":"));
+        });
+        assertThat(result.notes()).allSatisfy(note -> assertThat(note)
+                .as("a note names its symbol and its reason, never a bare symbol")
+                .matches("[A-Z.]+: .+"));
+    }
+
+    /**
+     * Audit §8.2: one {@code completed/total} pair cannot describe a scan, because its denominator
+     * changes meaning between phases. Four independent counts do, and each of them only ever rises.
+     */
+    @Test
+    void scanProgressReportsFourIndependentMonotonicCountsWithNoSharedDenominator() {
+        List<String> universe = List.of("AAPL", "SPY", "QQQ");
+        List<AutoRecommender.Progress> frames = new java.util.ArrayList<>();
+        AutoRecommender.AutoResult result = auto.runWithFrontier(
+                new AutoRecommender.AutoRequest(universe, List.of("month"), 1, null, null, null, null,
+                        "balanced", false, List.of("INCOME"), null, null),
+                BP, List.of(), null, evaluations -> practiceContext(universe), frames::add);
+
+        assertThat(frames).extracting(AutoRecommender.Progress::phase)
+                .contains("STARTING", "SIGNALS", "IDEAS", "BOOK");
+
+        int universeConsidered = 0, evidenceEligible = 0, packagesEvaluated = 0, rowsRetained = 0;
+        for (AutoRecommender.Progress frame : frames) {
+            AutoRecommender.ScanCounts counts = frame.counts();
+            assertThat(counts.universeConsidered()).as("universe considered is monotonic")
+                    .isGreaterThanOrEqualTo(universeConsidered);
+            assertThat(counts.evidenceEligible()).as("evidence-eligible is monotonic")
+                    .isGreaterThanOrEqualTo(evidenceEligible);
+            assertThat(counts.packagesEvaluated()).as("packages evaluated is monotonic")
+                    .isGreaterThanOrEqualTo(packagesEvaluated);
+            assertThat(counts.rowsRetained()).as("rows retained is monotonic")
+                    .isGreaterThanOrEqualTo(rowsRetained);
+            universeConsidered = counts.universeConsidered();
+            evidenceEligible = counts.evidenceEligible();
+            packagesEvaluated = counts.packagesEvaluated();
+            rowsRetained = counts.rowsRetained();
+        }
+
+        int signalsTotal = frames.stream().filter(frame -> "SIGNALS".equals(frame.phase()))
+                .mapToInt(AutoRecommender.Progress::phaseTotal).max().orElseThrow();
+        int ideasTotal = frames.stream().filter(frame -> "IDEAS".equals(frame.phase()))
+                .mapToInt(AutoRecommender.Progress::phaseTotal).max().orElseThrow();
+        assertThat(signalsTotal).isEqualTo(universe.size());
+        assertThat(ideasTotal).as("the phase denominator is phase-local, never one scan-wide total")
+                .isEqualTo(1).isNotEqualTo(signalsTotal);
+
+        AutoRecommender.ScanCounts finalCounts = frames.getLast().counts();
+        assertThat(finalCounts.universeConsidered()).isEqualTo(universe.size());
+        assertThat(finalCounts.evidenceEligible()).isPositive()
+                .isLessThanOrEqualTo(finalCounts.universeConsidered());
+        assertThat(finalCounts.packagesEvaluated()).isGreaterThanOrEqualTo(finalCounts.rowsRetained());
+        assertThat(finalCounts.rowsRetained()).isPositive()
+                .isEqualTo(AutoRecommender.surfaced(result).size())
+                .isEqualTo(result.frontier().decisionRanking().size());
+        assertThat(result.counts()).isEqualTo(finalCounts);
+    }
+
+    /**
+     * Audit §8.2: two genuinely different structures on one symbol are two results. Keeping only
+     * the symbol's single best silently discarded the alternative the user never got to see.
+     */
+    @Test
+    void opportunityScanRetainsAlternativeStructuresOnTheSameSymbol() {
+        OpportunityScanner.ScanResult result = opportunityScanner.scanWithFrontier(
+                List.of("AAPL"), "INCOME", "neutral", "month", "balanced", BP, "local", 5, null, null,
+                evaluations -> practiceContext(List.of("AAPL")));
+
+        assertThat(result.frontier().decisionRanking()).hasSizeGreaterThan(1);
+        assertThat(result.frontier().decisionRanking())
+                .extracting(RedeploymentFrontier.Entry::symbol).containsOnly("AAPL");
+        assertThat(result.frontier().decisionRanking())
+                .extracting(RedeploymentFrontier.Entry::strategy).doesNotHaveDuplicates();
+        assertThat(result.frontier().decisionRanking())
+                .extracting(entry -> entry.identity().key()).doesNotHaveDuplicates();
+        assertThat(result.ranked())
+                .as("portfolio construction still proposes one structure per symbol").hasSize(1);
+        assertThat(db.query("SELECT COUNT(*) n FROM strategy_evaluation WHERE symbol='AAPL' "
+                        + "AND world_id IS NULL", r -> r.lng("n")).getFirst())
+                .as("every retained row stays adoptable, not only the allocated one")
+                .isGreaterThanOrEqualTo(result.frontier().decisionRanking().size());
+    }
+
+    private static RedeploymentFrontier.Context practiceContext(List<String> universe) {
+        return new RedeploymentFrontier.Context(
+                new RedeploymentFrontier.UniverseScope("WATCHLIST", "Selected watchlist", universe),
+                "practice",
+                List.of(new RedeploymentFrontier.BookLane("PRACTICE", "practice", "Practice",
+                        (io.liftandshift.strikebench.eval.PortfolioExposureContext) null,
+                        null, null, 0L, "SYSTEM_CALCULATED")),
+                null);
+    }
+
     @Test
     void redeploymentFrontierKeepsEconomicsCompensationAndBookPolicySeparate() {
         AutoRecommender.AutoResult raw = auto.run(new AutoRecommender.AutoRequest(

@@ -556,9 +556,14 @@ public final class ApiServer {
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->
                     ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
                             "Malformed request body (expected JSON matching this endpoint's schema)")));
-            c.routes.exception(io.liftandshift.strikebench.util.ResourceNotFoundException.class, (e, ctx) ->
-                    ctx.status(404).json(new ApiResponses.ErrorBody(
-                            "not_found", String.valueOf(e.getMessage()))));
+            // A handled 404 already carries its own reason. Without this marker Javalin's 404 error
+            // mapper below replaced that reason with the request path, so every not-found answer
+            // said "/api/plans/abc" instead of what was actually missing and why (program §3.2).
+            c.routes.exception(io.liftandshift.strikebench.util.ResourceNotFoundException.class, (e, ctx) -> {
+                ctx.attribute("apiErrorWritten", true);
+                ctx.status(404).json(new ApiResponses.ErrorBody(
+                        "not_found", String.valueOf(e.getMessage())));
+            });
             c.routes.exception(io.liftandshift.strikebench.util.DataUnavailableException.class, (e, ctx) ->
                     ctx.status(422).json(new ApiResponses.ErrorBody(
                             "data_unavailable", String.valueOf(e.getMessage()))));

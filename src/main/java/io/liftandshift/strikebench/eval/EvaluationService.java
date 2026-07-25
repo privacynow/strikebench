@@ -182,9 +182,47 @@ public final class EvaluationService {
                 roundTripFeesCents);
     }
 
-    /** Persists an already-ranked competition; empty/generated scans are harmless no-ops. */
+    /** Persists an already-ranked observed competition; empty/ownerless scans are harmless no-ops. */
     public void persist(List<StrategyEvaluation> ranked, String userId) {
-        if (ranked != null && !ranked.isEmpty() && userId != null) store.saveAll(ranked, userId);
+        persist(ranked, userId, null);
+    }
+
+    /**
+     * Persists an already-ranked competition against the market lane that priced it
+     * ({@code worldId} null = observed). The lane travels with the row so a later reader can
+     * require it to match instead of guessing which market produced these numbers.
+     */
+    public void persist(List<StrategyEvaluation> ranked, String userId, String worldId) {
+        if (ranked != null && !ranked.isEmpty() && userId != null) {
+            store.saveAll(ranked, userId, worldId);
+        }
+    }
+
+    /**
+     * The exact, immutable evaluation a scan surfaced — reloaded from its own persisted receipt so
+     * a Scout row opens the package it showed instead of a freshly recomputed field. The owner and
+     * the market lane must both match; nothing is re-priced, re-ranked, or re-derived here.
+     */
+    public java.util.Optional<StrategyEvaluation> persisted(String evaluationId, String userId,
+                                                            String worldId) {
+        return store.receipt(evaluationId, userId, worldId).map(receipt -> {
+            StrategyEvaluation evaluation;
+            try {
+                evaluation = io.liftandshift.strikebench.util.Json.read(receipt, StrategyEvaluation.class);
+            } catch (RuntimeException unreadable) {
+                // A receipt that cannot be rebuilt is missing evidence, never a licence to
+                // substitute a freshly computed package under the same row's name (§3.2).
+                throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                        "The stored evaluation " + evaluationId + " could not be rebuilt from its own"
+                                + " receipt, so its exact package is unavailable.", unreadable);
+            }
+            if (evaluation == null || evaluation.candidate() == null || evaluation.spec() == null) {
+                throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                        "The stored evaluation " + evaluationId
+                                + " no longer carries its exact package and the brief it was evaluated under.");
+            }
+            return evaluation;
+        });
     }
 
     private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,

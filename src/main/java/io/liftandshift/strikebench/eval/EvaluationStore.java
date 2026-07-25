@@ -20,8 +20,8 @@ public final class EvaluationStore {
             INSERT INTO strategy_evaluation
               (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
                assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
-               tail_loss_cents, evidence_level, receipt)
-            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?, ?::jsonb)
+               tail_loss_cents, evidence_level, world_id, receipt)
+            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?, ?::jsonb)
             """;
 
     private final Db db;
@@ -29,20 +29,25 @@ public final class EvaluationStore {
     public EvaluationStore(Db db) { this.db = db; }
 
     /** The bind values for one row, in INSERT_SQL column order. */
-    private static Object[] params(StrategyEvaluation e, String userId) {
+    private static Object[] params(StrategyEvaluation e, String userId, String worldId) {
         return new Object[] {
                 e.id(), OwnerScope.id(userId), e.symbol(), e.family(),
                 e.spec() == null ? null : e.spec().objective(),
                 e.decisionScore(), e.evCents(), e.roc(), e.annRoc(), e.pop(),
                 e.assignmentProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
-                e.tailLossCents(), e.evidenceLevel().name(), Json.write(e) };
+                e.tailLossCents(), e.evidenceLevel().name(), worldId, Json.write(e) };
     }
 
-    /** Saves one evaluation for a canonical user; null callers resolve to the explicit local owner. */
+    /** Saves one observed-lane evaluation for a canonical user. */
     public void save(StrategyEvaluation e, String userId) {
+        save(e, userId, null);
+    }
+
+    /** Saves one evaluation for a canonical user; {@code worldId} null = the observed market. */
+    public void save(StrategyEvaluation e, String userId, String worldId) {
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
-            Db.execOn(c, INSERT_SQL, params(e, userId));
+            Db.execOn(c, INSERT_SQL, params(e, userId, worldId));
             return null;
         });
     }
@@ -53,13 +58,18 @@ public final class EvaluationStore {
      * checkouts (the old per-row save() in a loop).
      */
     public void saveAll(List<StrategyEvaluation> evals, String userId) {
+        saveAll(evals, userId, null);
+    }
+
+    /** World-aware batch save; {@code worldId} null = the observed market. */
+    public void saveAll(List<StrategyEvaluation> evals, String userId, String worldId) {
         if (evals == null || evals.isEmpty()) return;
-        if (evals.size() == 1) { save(evals.getFirst(), userId); return; }
+        if (evals.size() == 1) { save(evals.getFirst(), userId, worldId); return; }
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
             try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
                 for (StrategyEvaluation e : evals) {
-                    Object[] p = params(e, userId);
+                    Object[] p = params(e, userId, worldId);
                     for (int i = 0; i < p.length; i++) ps.setObject(i + 1, p[i]);
                     ps.addBatch();
                 }
@@ -69,12 +79,33 @@ public final class EvaluationStore {
         });
     }
 
-    /** Recent evaluations for a user (summary rows for a history list). Newest first. */
+    /**
+     * The immutable producer receipt for one evaluation, scoped to its owner AND its market lane.
+     * A row priced inside a generated world can never be read back as an observed one — that is
+     * what makes adopting a scanned package into a Plan safe rather than a cross-lane fabrication.
+     */
+    public java.util.Optional<String> receipt(String id, String userId, String worldId) {
+        if (id == null || id.isBlank()) return java.util.Optional.empty();
+        return db.query("""
+                SELECT receipt::text receipt
+                FROM strategy_evaluation
+                WHERE id=? AND user_id=?::text AND world_id IS NOT DISTINCT FROM ?::text
+                """, r -> r.str("receipt"), id, OwnerScope.id(userId), worldId)
+                .stream().findFirst();
+    }
+
+    /**
+     * Recent evaluations for a user (summary rows for a history list). Newest first.
+     *
+     * <p>Observed rows only: a generated market's evaluations are persisted so their exact packages
+     * stay adoptable inside that world, but they are not the user's research history and must never
+     * be listed beside observed work as if they were.</p>
+     */
     public List<Map<String, Object>> recent(String userId, int limit) {
         return db.query("""
                 SELECT id, symbol, strategy, objective, score, evidence_level, max_loss_cents, asof
                 FROM strategy_evaluation
-                WHERE user_id=?::text
+                WHERE user_id=?::text AND world_id IS NULL
                 ORDER BY asof DESC LIMIT ?
                 """, EvaluationStore::summaryRow, OwnerScope.id(userId), limit);
     }

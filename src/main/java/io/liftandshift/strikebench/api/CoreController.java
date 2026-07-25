@@ -6,6 +6,7 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.auth.AuthService;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.DatasetService;
+import io.liftandshift.strikebench.db.WorkspaceContext;
 import io.liftandshift.strikebench.db.WorkspaceService;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -18,7 +19,6 @@ import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
-import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -94,7 +94,8 @@ final class CoreController implements AutoCloseable {
                 ctx -> ctx.json(universeView.describe(worldParam(activeWorld.apply(ctx)), ownerId.apply(ctx))),
                 this::universeSelect, this::quotesBatch, sparklines::sparklines,
                 ctx -> ctx.json(engine.status()), streams::marketStream, streams::eventStream,
-                this::workspaceGet, this::workspacePut, this::account, this::accountReset));
+                this::workspaceGet, this::workspacePut, this::workspacePatch,
+                this::account, this::accountReset));
     }
 
     boolean prefetchBudget() {
@@ -113,12 +114,24 @@ final class CoreController implements AutoCloseable {
         }
     }
 
+    private String activeDataset(String owner) {
+        return datasets == null ? DatasetService.OBSERVED : datasets.activeId(owner);
+    }
+
+    /**
+     * THE lane the caller is in. One definition, shared by /api/config and the workspace context,
+     * so the header's mode and the workspace's mode cannot drift into two dialects.
+     */
+    private String laneFor(String activeDataset, String world) {
+        return !DatasetService.OBSERVED.equals(activeDataset) && "observed".equals(world)
+                ? "SCENARIO" : MarketLane.of(world, cfg.fixturesOnly()).name();
+    }
+
     private void config(Context ctx) {
         String owner = ownerId.apply(ctx);
-        String active = datasets == null ? DatasetService.OBSERVED : datasets.activeId(owner);
+        String active = activeDataset(owner);
         String world = activeWorld.apply(ctx);
-        String lane = !DatasetService.OBSERVED.equals(active) && "observed".equals(world)
-                ? "SCENARIO" : MarketLane.of(world, cfg.fixturesOnly()).name();
+        String lane = laneFor(active, world);
         ctx.json(new ApiResponses.Config<>(cfg.port(), cfg.fixturesOnly(),
                 MarketHours.isRegularSession(clock.instant()), auth.enabled(),
                 cfg.feePerContractCents(), cfg.feePerOrderCents(), cfg.defaultStartingCashCents(),
@@ -213,36 +226,67 @@ final class CoreController implements AutoCloseable {
                 + " — its symbol set was fixed when the world was created";
     }
 
-    private void workspaceGet(Context ctx) {
-        if (workspace == null) {
-            ctx.json(new ApiResponses.Revision(0));
-            return;
-        }
-        var saved = workspace.get(ownerId.apply(ctx));
-        if (saved.isEmpty()) {
-            ctx.json(new ApiResponses.Revision(0));
-            return;
-        }
-        ctx.json(new ApiResponses.Workspace<>(saved.get().rev(), saved.get().updatedAt(),
-                Json.parse(saved.get().stateJson())));
+    /**
+     * The caller's authoritative market for workspace purposes. World, lane and the account that
+     * owns the book are ALL derived here — never read from a request body — so the browser cannot
+     * declare which market it is in, and the mode it renders is the mode the context was committed
+     * against.
+     */
+    private WorkspaceContext.ActiveMarket activeMarket(Context ctx) {
+        String world = activeWorld.apply(ctx);
+        return new WorkspaceContext.ActiveMarket(world,
+                laneFor(activeDataset(ownerId.apply(ctx)), world),
+                currentAccount.apply(ctx).id());
     }
 
-    private void workspacePut(Context ctx) {
+    private void workspaceGet(Context ctx) {
         if (workspace == null) {
-            ctx.status(503).json(new ApiResponses.ErrorOnly("workspace store unavailable"));
+            ctx.json(new ApiResponses.Workspace(0, null, WorkspaceContext.CURRENT_VERSION,
+                    null, null, null, null, null,
+                    new WorkspaceContext.Unreadable(null, WorkspaceContext.CURRENT_VERSION,
+                            "the workspace store is unavailable in this build; nothing was restored")));
             return;
         }
-        String body = ctx.body();
-        if (body == null || body.isBlank()) throw new IllegalArgumentException("state body required");
-        com.fasterxml.jackson.databind.JsonNode state;
-        try {
-            state = Json.parse(body);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("state must be JSON");
-        }
-        if (!state.isObject()) throw new IllegalArgumentException("state must be a JSON object");
-        long revision = workspace.put(ownerId.apply(ctx), body);
-        ctx.json(new ApiResponses.SavedRevision(true, revision));
+        WorkspaceContext.ActiveMarket market = activeMarket(ctx);
+        workspaceReceipt(ctx, workspace.context(ownerId.apply(ctx), market), market);
+    }
+
+    /** Full replace. Every client-owned field the body omits becomes undeclared. */
+    private void workspacePut(Context ctx) {
+        if (requireWorkspaceStore(ctx)) return;
+        WorkspaceContext requested = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, WorkspaceContext.class));
+        WorkspaceContext.ActiveMarket market = activeMarket(ctx);
+        workspaceReceipt(ctx, workspace.replace(ownerId.apply(ctx), requested, market), market);
+    }
+
+    /**
+     * Partial write. Omitted fields keep their stored value; only {@code clear} un-declares. This
+     * is what Import Trade must use so it cannot destroy goal, view, horizon, risk or the world.
+     */
+    private void workspacePatch(Context ctx) {
+        if (requireWorkspaceStore(ctx)) return;
+        WorkspaceContext.Patch patch = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, WorkspaceContext.Patch.class));
+        WorkspaceContext.ActiveMarket market = activeMarket(ctx);
+        workspaceReceipt(ctx, workspace.patch(ownerId.apply(ctx), patch, market), market);
+    }
+
+    private boolean requireWorkspaceStore(Context ctx) {
+        if (workspace != null) return false;
+        ctx.status(503).json(new ApiResponses.ErrorOnly("workspace store unavailable"));
+        return true;
+    }
+
+    private static void workspaceReceipt(Context ctx, WorkspaceService.ContextState state,
+                                         WorkspaceContext.ActiveMarket market) {
+        WorkspaceContext context = state.context();
+        ctx.json(new ApiResponses.Workspace(state.rev(), state.updatedAt(),
+                WorkspaceContext.CURRENT_VERSION,
+                context == null ? market.world() : context.world(),
+                context == null ? market.lane() : context.marketLane(),
+                context == null ? market.accountId() : context.accountId(),
+                context, state.transition(), state.unreadable()));
     }
 
     private void account(Context ctx) {

@@ -65,6 +65,7 @@ final class PlanStrategyController {
     public record PlanStrategyFitRequest(Long expectedVersion, String strategy, Boolean allow0dte,
                                          Long maxLossCents, RecommendationEngine.Filters filters) {}
     public record PlanStrategySelectRequest(String candidateId, Long expectedVersion) {}
+    public record PlanStrategyAdoptRequest(Long expectedVersion, String evaluationId) {}
     public record PlanStrategyCustomRequest(Long expectedVersion, TradeOpenRequest position) {}
     public record PlanScoutRequest(String scope, Integer maxPicks, Boolean allow0dte) {}
     public record PlanScoutSpawnRequest(String clientRequestId, String candidateId, String role) {}
@@ -159,6 +160,84 @@ final class PlanStrategyController {
                 request.expectedVersion());
         ctx.json(new ApiResponses.PlanSelection<>(selected,
                 planSvc.get(root.ownerId(ctx), ctx.pathParam("id"))));
+    }
+
+    /**
+     * Audit §8.2: adopt the EXACT package an opportunity-scan row showed as this Plan's structure.
+     *
+     * <p>The row's own immutable evaluation is reloaded from its persisted receipt — same strikes,
+     * same expiration, same quantity, same evaluation identity — and copied in through the Plan's
+     * existing exact-package adoption path. Nothing is re-scanned and nothing is re-priced here, so
+     * the package the user clicked cannot quietly become a different one. The scan's declarations
+     * must match the Plan's: a package evaluated for another goal, view, horizon, or risk posture
+     * is refused by name rather than re-labelled under this Plan's brief.</p>
+     */
+    void planStrategyAdopt(Context ctx) {
+        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanStrategyAdoptRequest.class));
+        if (body.expectedVersion() == null || body.evaluationId() == null || body.evaluationId().isBlank()) {
+            throw new IllegalArgumentException("expectedVersion and evaluationId are required");
+        }
+        var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
+        root.requireActivePlanMarket(ctx, plan);
+        PlanController.requirePlanVersion(plan, body.expectedVersion());
+        requireDeclaredView(plan);
+        String evaluationId = body.evaluationId().trim();
+        String world = MarketLane.worldParam(root.activeWorld(ctx));
+        // A scanned row that can no longer be produced is missing EVIDENCE, not a missing page: the
+        // 422 lane keeps the reason on screen, where a bare 404 would hand the desk a shrug and
+        // invite it to open a freshly recomputed field in the clicked package's place (§3.2).
+        var evaluation = evaluations.persisted(evaluationId, root.ownerId(ctx), world)
+                .orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
+                        "That scanned package (" + evaluationId + ") is no longer available in this market. "
+                                + "Scan again to price it; no substitute package was selected."));
+        requireSameDeclaredBrief(plan, evaluation);
+        var identity = io.liftandshift.strikebench.recommend.ResultIdentity.of(evaluation);
+        ObjectNode candidate = Json.MAPPER.valueToTree(evaluation.candidate());
+        candidate.put("symbol", evaluation.symbol());
+        if (identity.view() != null) candidate.put("scoutThesis", identity.view());
+        // The scan that surfaced this row ranked its universe with the shared signal scorer; the
+        // adopted structure carries that provenance rather than claiming an unattributed origin.
+        candidate.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
+        ApiResponses.EvaluationReceipt.attachTo(candidate, evaluation);
+        var saved = planStrategy.adoptScoutedEvaluation(root.ownerId(ctx), plan, candidate,
+                evaluationId, identity.key());
+        ctx.json(new ApiResponses.PlanStrategyAdoption<>(planSvc.get(root.ownerId(ctx), plan.id()),
+                saved, identity, evaluationId));
+    }
+
+    /**
+     * A scanned package answers the exact question it was scanned for. Adopting it into a Plan that
+     * declares a different goal, view, horizon, or risk posture would present it as an answer to a
+     * question nobody asked it — so the mismatch is named and refused (program §3.5).
+     */
+    private static void requireSameDeclaredBrief(io.liftandshift.strikebench.plan.Plan.View plan,
+            io.liftandshift.strikebench.eval.StrategyEvaluation evaluation) {
+        var spec = evaluation.spec();
+        var context = plan.context();
+        List<String> mismatched = new ArrayList<>();
+        if (!plan.symbol().equalsIgnoreCase(String.valueOf(evaluation.symbol()))) mismatched.add("underlying");
+        if (differs(spec == null ? null : spec.intent(), plan.intent())) mismatched.add("goal");
+        if (differs(spec == null ? null : spec.thesis(), context.thesis())) mismatched.add("direction");
+        if (differs(spec == null ? null : spec.riskMode(), context.riskMode())) mismatched.add("risk posture");
+        Integer sessions = spec == null ? null : horizonSessions(spec.horizon());
+        if (sessions != null && !sessions.equals(context.horizonDays())) mismatched.add("horizon");
+        if (!mismatched.isEmpty()) {
+            throw new IllegalArgumentException("That scanned package was evaluated under a different "
+                    + String.join(", ", mismatched)
+                    + ". Adopt it into a Plan that declares the same view, or scan again under this one.");
+        }
+    }
+
+    /** A declaration the evaluation never made cannot conflict; one it made must match exactly. */
+    private static boolean differs(String declaredByScan, String declaredByPlan) {
+        return declaredByScan != null && !declaredByScan.isBlank()
+                && !declaredByScan.equalsIgnoreCase(declaredByPlan == null ? "" : declaredByPlan.trim());
+    }
+
+    private static Integer horizonSessions(String horizon) {
+        if (horizon == null || horizon.isBlank()) return null;
+        try { return io.liftandshift.strikebench.model.Horizon.tradingSessions(horizon); }
+        catch (RuntimeException unparseable) { return null; }
     }
 
     void planStrategySelectionDelete(Context ctx) {

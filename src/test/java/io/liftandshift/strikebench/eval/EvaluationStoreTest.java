@@ -86,6 +86,30 @@ class EvaluationStoreTest {
         assertThat(expl).containsKeys("assumptions", "failureModes");
     }
 
+    /**
+     * Audit §8.2: a scanned row stays adoptable as the exact package it showed, and the market lane
+     * that priced it travels with it — an observed Plan can never reload a generated-market package.
+     */
+    @Test void retainsTheExactReceiptPerMarketLane() {
+        db = TestDb.fresh();
+        EvaluationStore store = new EvaluationStore(db);
+        StrategyEvaluation observed = anEvaluation();
+        StrategyEvaluation generated = anEvaluation();
+
+        store.saveAll(List.of(observed), null, null);
+        store.saveAll(List.of(generated), null, "world_demo");
+
+        assertThat(store.receipt(observed.id(), null, null)).isPresent();
+        assertThat(store.receipt(observed.id(), null, "world_demo"))
+                .as("an observed package is not readable as a generated-market one").isEmpty();
+        assertThat(store.receipt(generated.id(), null, "world_demo")).isPresent();
+        assertThat(store.receipt(generated.id(), null, null))
+                .as("a generated-market package is never readable as observed evidence").isEmpty();
+        assertThat(store.receipt("seval_missing", null, null)).isEmpty();
+
+        assertThat(store.recent(null, 10)).as("only observed work is research history").hasSize(1);
+    }
+
     @Test void listsRecentForTheUser() {
         db = TestDb.fresh();
         EvaluationStore store = new EvaluationStore(db);

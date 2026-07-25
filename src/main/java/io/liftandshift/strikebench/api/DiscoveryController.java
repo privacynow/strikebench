@@ -394,8 +394,11 @@ final class DiscoveryController {
         String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
         RedeploymentFrontier.UniverseScope scope = universeScope(req.universe(), activeWorld, ownerId);
+        // The owner travels in BOTH lanes now: the store records which market priced each row, so a
+        // generated-market scan can persist its exact packages without them ever reading as
+        // observed evidence — and without them being unadoptable inside their own world.
         var scan = opportunityScanner.scanWithFrontier(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
-                acct.buyingPowerCents(), optWorld != null ? null : ownerId, Math.max(1, symbols.size()),
+                acct.buyingPowerCents(), ownerId, Math.max(1, symbols.size()),
                 optWorld, rcOpt.riskCapitalCents(), evaluations -> frontierContext(ownerId, acct,
                         acct.id(), scope, null, evaluations, optWorld == null));
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
@@ -542,6 +545,7 @@ final class DiscoveryController {
                         destinationBuyingPower, held, worldParam(world), contextFactory,
                         progress -> stream.write(new ScoutStreamFrame(
                                 "progress", progress, null, null)));
+                retainScoutedPackages(result, owner, worldParam(world));
                 stream.write(new ScoutStreamFrame("complete", null, result, null));
             } catch (RuntimeException failure) {
                 log.warn("Progressive Universe Scout failed after its response began");
@@ -553,8 +557,25 @@ final class DiscoveryController {
             }
             return;
         }
-        ctx.json(auto.runWithFrontier(finalReq, destinationBuyingPower, held,
-                worldParam(world), contextFactory));
+        AutoRecommender.AutoResult result = auto.runWithFrontier(finalReq, destinationBuyingPower,
+                held, worldParam(world), contextFactory);
+        retainScoutedPackages(result, owner, worldParam(world));
+        ctx.json(result);
+    }
+
+    /**
+     * Audit §8.2: every row the Scout surfaced is retained as its own immutable evaluation, in the
+     * market lane that priced it, so clicking that row later opens THAT package. Retention is
+     * observational — a storage failure must not turn a completed scan into a failed one, and no
+     * row is ever re-priced or re-ranked on the way in.
+     */
+    private void retainScoutedPackages(AutoRecommender.AutoResult result, String owner, String world) {
+        try {
+            evaluations.persist(AutoRecommender.surfaced(result), owner, world);
+        } catch (RuntimeException e) {
+            log.warn("Scanned packages could not be retained for exact adoption");
+            log.debug("Scout retention failure", e);
+        }
     }
 
     private static boolean acceptsScoutStream(Context ctx) {

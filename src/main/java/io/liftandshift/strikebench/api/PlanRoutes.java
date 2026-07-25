@@ -24,6 +24,7 @@ public final class PlanRoutes {
             Handler runStrategy,
             Handler fitStrategy,
             Handler customStrategy,
+            Handler adoptScannedStrategy,
             Handler selectStrategy,
             Handler clearStrategySelection,
             Handler latestScout,
@@ -73,6 +74,7 @@ public final class PlanRoutes {
         config.routes.post("/api/plans/{id}/strategy/run", h.runStrategy());
         config.routes.post("/api/plans/{id}/strategy/fit", h.fitStrategy());
         config.routes.post("/api/plans/{id}/strategy/custom", h.customStrategy());
+        config.routes.post("/api/plans/{id}/strategy/adopt", h.adoptScannedStrategy());
         config.routes.put("/api/plans/{id}/strategy/select", h.selectStrategy());
         config.routes.delete("/api/plans/{id}/strategy/selection", h.clearStrategySelection());
         config.routes.get("/api/plans/{id}/scout/latest", h.latestScout());

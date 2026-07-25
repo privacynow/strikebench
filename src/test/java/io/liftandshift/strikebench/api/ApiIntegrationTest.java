@@ -99,6 +99,13 @@ class ApiIntegrationTest {
                 .PUT(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> patch(String path, String body) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(base + path))
+                .header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
     private static HttpResponse<String> delete(String path) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(base + path)).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
@@ -684,6 +691,26 @@ class ApiIntegrationTest {
         HttpResponse<String> res = get("/api/nonexistent");
         assertThat(res.statusCode()).isEqualTo(404);
         assertThat(Json.parse(res.body()).get("error").asText()).isEqualTo("not_found");
+        assertThat(Json.parse(res.body()).get("detail").asText())
+                .as("an unrouted path has no reason beyond itself, so the path IS the answer")
+                .isEqualTo("/api/nonexistent");
+    }
+
+    /**
+     * A handled not-found says what was missing. The 404 error mapper used to overwrite every
+     * such message with the request path, turning a stated reason into a shrug (program §3.2).
+     */
+    @Test
+    @Order(12)
+    void aHandledNotFoundKeepsItsOwnReasonInsteadOfEchoingThePath() throws Exception {
+        HttpResponse<String> res = get("/api/plans/plan-that-does-not-exist");
+        assertThat(res.statusCode()).isEqualTo(404);
+        assertThat(Json.parse(res.body()).get("error").asText()).isEqualTo("not_found");
+        String detail = Json.parse(res.body()).get("detail").asText();
+        assertThat(detail)
+                .as("the handler's reason survives the error mapper")
+                .isNotEqualTo("/api/plans/plan-that-does-not-exist");
+        assertThat(detail).contains("plan-that-does-not-exist");
     }
     @Test
     @Order(17)
@@ -1212,26 +1239,55 @@ class ApiIntegrationTest {
     @Test
     @Order(26)
     void workspacePersistsVersionsAndStreamsEvents() throws Exception {
-        // Fresh workspace: rev 0, no state.
+        // An undeclared workspace: nothing stored, nothing defaulted in — but the market that owns
+        // the context is always stated, so the header and the body cannot disagree (audit §6).
         JsonNode empty = Json.parse(get("/api/workspace").body());
         assertThat(empty.get("rev").asLong()).isZero();
+        assertThat(empty.has("context")).isFalse();
+        assertThat(empty.get("supportedVersion").asInt()).isEqualTo(1);
+        assertThat(empty.get("world").asText()).isEqualTo("demo");
+        assertThat(empty.get("marketLane").asText()).isEqualTo("DEMO");
 
-        // PUT stores the client-owned blob verbatim; revisions increment per write.
-        HttpResponse<String> put1 = put("/api/workspace",
-                "{\"route\":\"#/research/AAPL\",\"symbol\":\"AAPL\",\"forms\":{\"discover\":{\"goal\":\"INCOME\"}}}");
+        // PUT declares the whole context. Server facts are stamped, never taken from the body.
+        HttpResponse<String> put1 = put("/api/workspace", """
+                {"version":1,"goal":"INCOME","view":"NEUTRAL","horizonDays":45,"riskPosture":"BALANCED",
+                 "scopeType":"SYMBOL","focusedSymbol":"AAPL","routeState":"#/idea/AAPL"}""");
         assertThat(put1.statusCode()).isEqualTo(200);
-        long rev1 = Json.parse(put1.body()).get("rev").asLong();
-        long rev2 = Json.parse(put("/api/workspace",
-                "{\"route\":\"#/trade/context\",\"symbol\":\"QQQ\"}").body()).get("rev").asLong();
+        JsonNode saved = Json.parse(put1.body());
+        long rev1 = saved.get("rev").asLong();
+        assertThat(saved.get("context").get("world").asText()).isEqualTo("demo");
+        assertThat(saved.get("context").get("marketLane").asText()).isEqualTo("DEMO");
+        assertThat(saved.get("context").get("accountId").asText()).isNotBlank();
+
+        // PATCH changes ONLY what it names. This is the Import Trade path: it must not destroy
+        // goal, view, horizon, risk or the world (audit §6).
+        HttpResponse<String> patched = patch("/api/workspace",
+                "{\"version\":1,\"routeState\":\"#/import\"}");
+        assertThat(patched.statusCode()).isEqualTo(200);
+        JsonNode context = Json.parse(patched.body()).get("context");
+        long rev2 = Json.parse(patched.body()).get("rev").asLong();
         assertThat(rev2).isEqualTo(rev1 + 1);
+        assertThat(context.get("routeState").asText()).isEqualTo("#/import");
+        assertThat(context.get("goal").asText()).isEqualTo("INCOME");
+        assertThat(context.get("view").asText()).isEqualTo("NEUTRAL");
+        assertThat(context.get("horizonDays").asInt()).isEqualTo(45);
+        assertThat(context.get("riskPosture").asText()).isEqualTo("BALANCED");
+        assertThat(context.get("focusedSymbol").asText()).isEqualTo("AAPL");
+
         JsonNode got = Json.parse(get("/api/workspace").body());
         assertThat(got.get("rev").asLong()).isEqualTo(rev2);
-        assertThat(got.get("state").get("symbol").asText()).isEqualTo("QQQ");
+        assertThat(got.get("context").get("focusedSymbol").asText()).isEqualTo("AAPL");
 
-        // Garbage and non-object bodies are rejected, arrays included.
+        // Garbage, non-object bodies and unsupported versions are rejected with a stated reason.
         assertThat(put("/api/workspace", "not json").statusCode()).isEqualTo(400);
         assertThat(put("/api/workspace", "[1,2]").statusCode()).isEqualTo(400);
-        // Oversized blobs are rejected — the workspace is forms and ids, not payload storage.
+        assertThat(put("/api/workspace", "{\"goal\":\"INCOME\"}").statusCode()).isEqualTo(400);
+        assertThat(Json.parse(put("/api/workspace", "{\"version\":2}").body()).get("detail").asText())
+                .contains("this build reads workspace context version 1");
+        // A stale publication from another market is refused rather than half-applied.
+        assertThat(patch("/api/workspace", "{\"version\":1,\"world\":\"observed\"}").statusCode())
+                .isEqualTo(409);
+        // Payload storage is still refused — the workspace is declarations and ids.
         assertThat(put("/api/workspace", "{\"big\":\"" + "x".repeat(140 * 1024) + "\"}").statusCode()).isEqualTo(400);
 
         // The event bus announced both writes; /api/events replays from Last-Event-ID.
@@ -2139,5 +2195,50 @@ class ApiIntegrationTest {
         assertThat(rejectedLesson.statusCode()).isEqualTo(400);
         assertThat(Json.parse(get("/api/campaigns/" + campaignId).body()).get("lessonNote").asText())
                 .isEqualTo("Price the whole package before changing one leg.");
+    }
+
+    @Test
+    @Order(47)
+    void oneWorkspaceContextSurvivesAWorldChangeWithoutHeaderBodyDisagreement() throws Exception {
+        // A declared desk in the baseline market.
+        assertThat(put("/api/world", "{\"world\":\"demo\"}").statusCode()).isEqualTo(200);
+        assertThat(put("/api/workspace", """
+                {"version":1,"goal":"INCOME","view":"NEUTRAL","horizonDays":45,"riskPosture":"BALANCED",
+                 "scopeType":"SYMBOL","focusedSymbol":"AAPL","focusedSubject":"PACKAGE",
+                 "focusedEvaluationId":"eval_demo_row","routeState":"#/idea/AAPL"}""")
+                .statusCode()).isEqualTo(200);
+
+        var created = Json.parse(post("/api/sim/market", """
+                {"name":"Workspace transition","symbols":{"AAPL":1.0},"scenario":"CHOP","speed":26}
+                """).body());
+        String world = created.get("worldId").asText();
+        assertThat(post("/api/sim/market/" + world + "/start", "{}").statusCode()).isEqualTo(200);
+        assertThat(put("/api/world", "{\"world\":\"" + world + "\"}").statusCode()).isEqualTo(200);
+
+        // The first touch of the workspace in the new market commits the whole transition.
+        JsonNode moved = Json.parse(get("/api/workspace").body());
+        JsonNode context = moved.get("context");
+        assertThat(context.get("world").asText()).isEqualTo(world);
+        assertThat(context.get("marketLane").asText()).isEqualTo("SIMULATED");
+        // Header and body are ONE payload and cannot disagree.
+        assertThat(moved.get("world").asText()).isEqualTo(context.get("world").asText());
+        assertThat(moved.get("marketLane").asText()).isEqualTo(context.get("marketLane").asText());
+        assertThat(moved.get("accountId").asText()).isEqualTo(context.get("accountId").asText());
+        // Market-owned focus is gone, declarations survived, and the receipt says so.
+        assertThat(context.has("focusedSymbol")).isFalse();
+        assertThat(context.has("focusedEvaluationId")).isFalse();
+        assertThat(context.has("routeState")).isFalse();
+        assertThat(context.get("goal").asText()).isEqualTo("INCOME");
+        assertThat(context.get("horizonDays").asInt()).isEqualTo(45);
+        assertThat(moved.get("transition").get("fromWorld").asText()).isEqualTo("demo");
+        assertThat(moved.get("transition").get("toWorld").asText()).isEqualTo(world);
+        assertThat(moved.get("transition").get("cleared").toString()).contains("focusedSymbol");
+
+        // Re-reading is idempotent: one transition, one revision, no second clear.
+        JsonNode again = Json.parse(get("/api/workspace").body());
+        assertThat(again.has("transition")).isFalse();
+        assertThat(again.get("rev").asLong()).isEqualTo(moved.get("rev").asLong());
+
+        assertThat(put("/api/world", "{\"world\":\"demo\"}").statusCode()).isEqualTo(200);
     }
 }

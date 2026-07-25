@@ -19,7 +19,7 @@ class MigrationsTest {
             assertThat(db.query(
                     "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank",
                     r -> r.str("version"))).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-                    "11", "12");
+                    "11", "12", "13");
 
             // The baseline carries its seed rows and the current column shape.
             assertThat(db.query("SELECT id FROM users ORDER BY id", r -> r.str("id")))
@@ -92,6 +92,17 @@ class MigrationsTest {
                             "quote_bid",
                             "quote_freshness",
                             "quote_source");
+            // V13: a scanned row stays adoptable as the exact package it showed. The evaluation
+            // records the market lane that priced it, and an adopted Plan structure records which
+            // immutable evaluation it came from.
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='strategy_evaluation' "
+                            + "AND column_name='world_id'",
+                    r -> r.str("column_name"))).containsExactly("world_id");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_candidate' "
+                            + "AND column_name='source_evaluation_id'",
+                    r -> r.str("column_name"))).containsExactly("source_evaluation_id");
         }
     }
 

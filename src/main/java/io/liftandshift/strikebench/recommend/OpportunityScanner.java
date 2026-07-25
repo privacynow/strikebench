@@ -77,7 +77,7 @@ public final class OpportunityScanner {
         List<String> normalized = Symbols.normalize(symbols);
         if (normalized.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
 
-        record PerSymbol(StrategyEvaluation best, String note) {}
+        record PerSymbol(List<StrategyEvaluation> viable, String note) {}
         List<PerSymbol> results = BoundedFanout.map(normalized, CONCURRENCY,
                 symbol -> {
                     var request = new RecommendationEngine.Request(symbol, thesis, horizon, riskMode,
@@ -86,31 +86,54 @@ public final class OpportunityScanner {
                     // "no candidates" is a NORMAL outcome, not a failure — it must stay a returned
                     // value and NOT route through onFailure (which would relabel it).
                     if (field.candidates().isEmpty()) {
-                        return new PerSymbol(null, symbol + ": no candidates");
+                        return new PerSymbol(List.of(), symbol + ": no candidates");
                     }
                     // ONE ranking primitive (shared with Scout and Decision): best package per
-                    // family in decision-score order, then this scan's own pick — the top viable.
-                    StrategyEvaluation best = evaluations.evaluateBestPerFamily(symbol, field.intent(),
-                                    field.thesis(), field.horizon(), field.riskMode(), field.candidates(),
-                                    buyingPowerCents, AnalysisContext.OBSERVED, worldId, null).stream()
-                            .filter(StrategyEvaluation::viable)
-                            .findFirst().orElse(null);
-                    return new PerSymbol(best, null);
+                    // family in decision-score order. EVERY viable family is kept: two genuinely
+                    // different structures on one symbol are two results, and collapsing them to
+                    // the symbol's single best silently discarded the alternative.
+                    List<StrategyEvaluation> evaluated = evaluations.evaluateBestPerFamily(
+                            symbol, field.intent(), field.thesis(), field.horizon(), field.riskMode(),
+                            field.candidates(), buyingPowerCents, AnalysisContext.OBSERVED, worldId, null);
+                    List<StrategyEvaluation> viable = evaluated.stream()
+                            .filter(StrategyEvaluation::viable).toList();
+                    // A symbol that produced packages and then lost every one of them to the
+                    // viability screen used to return in silence, so the scan's own notes could not
+                    // distinguish "nothing was built here" from "everything built here was
+                    // screened out" (program §3.2). Both are answers; only one was being reported.
+                    if (viable.isEmpty()) {
+                        return new PerSymbol(List.of(), symbol + ": " + evaluated.size()
+                                + " package" + (evaluated.size() == 1 ? "" : "s")
+                                + " priced, none passed the viability screen");
+                    }
+                    return new PerSymbol(viable, null);
                 },
-                (symbol, failure) -> new PerSymbol(null, symbol + ": analysis unavailable right now"));
+                (symbol, failure) -> new PerSymbol(List.of(), symbol + ": analysis unavailable right now"));
 
-        List<StrategyEvaluation> best = new ArrayList<>();
+        // Deduplicated on the full result identity (symbol + family + exact package + expiration +
+        // declarations), never on symbol alone.
+        java.util.LinkedHashMap<String, StrategyEvaluation> retained = new java.util.LinkedHashMap<>();
         List<String> notes = new ArrayList<>();
         for (PerSymbol result : results) {
             if (result == null) continue;
-            if (result.best() != null) best.add(result.best());
+            for (StrategyEvaluation evaluation : result.viable()) {
+                retained.putIfAbsent(ResultIdentity.of(evaluation).key(), evaluation);
+            }
             if (result.note() != null) notes.add(result.note());
         }
-        best.sort(io.liftandshift.strikebench.eval.StrategyEvaluator.RANKING);
-        List<StrategyEvaluation> ranked = best.stream().limit(Math.max(1, topN)).toList();
-        evaluations.persist(ranked, userId);
+        List<StrategyEvaluation> surfaced = new ArrayList<>(retained.values());
+        surfaced.sort(io.liftandshift.strikebench.eval.StrategyEvaluator.RANKING);
+        // Portfolio construction still proposes at most ONE structure per symbol — that is an
+        // allocation rule, not a display rule — while the frontier below keeps every retained row.
+        java.util.Set<String> allocated = new java.util.LinkedHashSet<>();
+        List<StrategyEvaluation> ranked = surfaced.stream()
+                .filter(evaluation -> allocated.add(evaluation.symbol()))
+                .limit(Math.max(1, topN)).toList();
+        // The whole retained field is persisted, not only the allocated slice: every row the scan
+        // surfaced must stay adoptable as the exact package it showed (audit §8.2).
+        evaluations.persist(surfaced, userId, worldId);
         RedeploymentFrontier.BookLayer book =
-                RedeploymentFrontier.composeBookLayer(best, evaluations, worldId, contextFactory);
+                RedeploymentFrontier.composeBookLayer(surfaced, evaluations, worldId, contextFactory);
         return new ScanResult(ranked, notes, normalized.size(), book.compensation(),
                 book.compensationBasis(), book.frontier());
     }
