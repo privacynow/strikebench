@@ -2953,9 +2953,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decwrap:not(.closewrap) .dectop .dctx{display:none}
   .decwrap:not(.closewrap) .dectop .decintent{font-size:var(--f-xs);gap:5px;padding-left:7px;padding-right:7px}
   .ideacomposer .objchip{grid-template-columns:86px minmax(0,1fr);column-gap:6px}.ideacomposer .goaldeclarations{grid-template-columns:1fr}
-  .ideacomposer .objchip-goal .oseg{grid-template-columns:repeat(6,minmax(0,1fr))}
-  .ideacomposer .objchip-goal .oseg button{grid-column:span 2}
-  .ideacomposer .objchip-goal .oseg button:nth-child(n+4){grid-column:span 3}
   /* Home opportunity-lens controls: the 5-goal segmented row (Income…Exit) overruns a 390px
      viewport and clips Exit unreachably. Let the segments wrap so every goal stays selectable. */
   .opportunitycontrols .objchip{align-items:flex-start}
