@@ -3808,17 +3808,27 @@ function decScenSpectrum(c){
 }
 function renderClose(){
   var p=byId[decide.posId]; if(!p){ exitDecide(); return; }
-  var o=decide.order, closeCost=Math.round(Math.abs(p.net||1000)*0.32), realized=p.pnl;
+  /* The cost to close is a BACKEND fact — the executable close cash net of closing fees, from the
+     lifecycle receipt (CloseQuote.signedNetCloseCashCents). It used to be fabricated in the browser
+     as |entry premium| x 0.32 with a 1000 fallback, i.e. an invented dollar figure shown on the
+     order-confirmation screen. When the receipt is absent the cost stays UNAVAILABLE with its named
+     reason; the browser never reconstructs it. */
+  var o=decide.order, lifeRead=authLifecycleRead(p.lifecycle), realized=p.pnl;
+  var closeCost=lifeRead.closeCost;
+  var closeCostText=closeCost==null?null:money(-Math.abs(closeCost));
+  var closeCostReason=lifeRead.unavailableReason||'no executable close quote in the current book';
   var hasSh=p.legs.some(function(l){return l.t==='s';});
   var box='<div class="placebox" style="max-width:540px">'+
     '<div class="field-lbl"><span class="lbl">Close order</span><span class="hint">buy to close</span></div>'+
     '<div class="booktext" style="margin:3px 0 11px">Close your <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — buy back the options'+(hasSh?' and keep the shares':'')+', locking in today’s result.</div>'+
     '<div class="kv"><span>Realized P/L</span><span class="num '+(realized>=0?'pos':'neg')+'">'+money(realized)+'</span></div>'+
-    '<div class="kv"><span>Est. cost to close</span><span class="num neg">−$'+closeCost.toLocaleString()+'</span></div>'+
+    '<div class="kv"><span>Cost to close</span>'+(closeCostText==null
+      ? '<span class="num">unavailable · '+deskEsc(closeCostReason)+'</span>'
+      : '<span class="num neg">'+closeCostText+'</span>')+'</div>'+
     '<div class="psec" style="margin-top:10px"><div class="field-lbl"><span class="lbl">Lane</span><span class="hint">paper vs real</span></div>'+
       seg3(o.lane,[['paper','Paper'],['real','Real']],'data-lane')+'</div>'+
     (o.review?
-      '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext" style="margin-top:6px">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · est. −$'+closeCost.toLocaleString()+' · realizes <b>'+money(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
+      '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext" style="margin-top:6px">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · '+(closeCostText==null?'cost to close unavailable ('+deskEsc(closeCostReason)+')':'cost to close '+closeCostText)+' · realizes <b>'+money(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
       :'<div class="placefoot"><button class="btn pri place" data-dec="review">Review &amp; close →</button><span class="placenote">Nothing is sent until you confirm.</span></div>')+
   '</div>';
   var intent='<div class="intent"><div class="dctx" style="color:var(--dim)">Closing your held <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — a simple exit, no new structure.</div></div>';
