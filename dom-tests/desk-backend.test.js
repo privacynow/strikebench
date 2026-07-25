@@ -8021,7 +8021,23 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 14
             + (hit.closest('#mcFan') ? ' [in-fan]' : '')) : null,
           // There must be exactly ONE market owner on this surface.
           marketPanels: document.querySelectorAll('.decgrid .marketlens').length,
-          marketPanelsInRightColumn: document.querySelectorAll('.dcright .marketlens').length
+          marketPanelsInRightColumn: document.querySelectorAll('.dcright .marketlens').length,
+          // Only a DESIGNATED row list may own a scroller; a chart, fan, or analysis panel
+          // that scrolls is an accident. Page-level scroll is never acceptable at these sizes.
+          undesignatedScrollOwners: Array.from(document.querySelectorAll('.decwrap *'))
+            .filter(el => {
+              const cs = getComputedStyle(el);
+              const v = (cs.overflowY === 'auto' || cs.overflowY === 'scroll')
+                && el.scrollHeight - el.clientHeight > 2;
+              const h = (cs.overflowX === 'auto' || cs.overflowX === 'scroll')
+                && el.scrollWidth - el.clientWidth > 2;
+              if (!v && !h) return false;
+              // designated row lists: nearby-chain rows, candidate rail, news, overflow lists
+              return !el.closest('.packagebooknear, .authnews, .elegantscroll, .authlist, .cands, .pickmap');
+            })
+            .map(el => (el.getAttribute('class') || el.tagName).slice(0, 44)),
+          pageScrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          pageScrollY: document.documentElement.scrollHeight - document.documentElement.clientHeight
         };
       });
 
@@ -8033,6 +8049,10 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 14
       assert.equal(geo.withinRightColumn, true, 'the fan renders inside its own column bounds');
       assert.equal(geo.centreHitsFan, true,
         `the plot centre hit-tests to the fan — nothing overlays the interactive paths (hit=${geo.centreHit})`);
+      assert.deepEqual(geo.undesignatedScrollOwners, [],
+        `only a designated row list may scroll on the Idea surface: ${JSON.stringify(geo.undesignatedScrollOwners)}`);
+      assert.equal(geo.pageScrollY, 0, 'the Idea surface does not scroll the page at desktop sizes');
+      assert.equal(geo.pageScrollX, 0, 'no horizontal page overflow');
       assert.equal(geo.marketPanelsInRightColumn, 0,
         'the right column hosts the decision lens only — no second standing market band');
       assert.equal(geo.marketPanels, 1, 'exactly one market owner on the Idea surface');
@@ -8042,3 +8062,5 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 14
     }
   });
 }
+
+
