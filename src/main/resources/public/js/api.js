@@ -176,6 +176,7 @@
     getFresh: function (path) { cacheGeneration++; cache.delete(path); return cachedGet(path); },
     post: mutate('POST'),
     put: mutate('PUT'),
+    patch: mutate('PATCH'),
     del: del,
     invalidate: invalidate,
     flushCache: flushCache,

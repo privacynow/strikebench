@@ -1300,15 +1300,174 @@ function hlScenMark(svg,si,on){ if(!svg)return; var c=svg.querySelector('.pfscen
    these paths instead of the staged holdings, local shocks, or local news.
    ====================================================================== */
 var AUTH_BOOK_PANEL_IDS=['book','riskMain','bookrisk','chainBand','univBand','sectorBand','newsBand'];
-var HOME_AUTH_SYMBOL=null;
+/* The market lens' focused symbol IS the workspace's focused symbol. Two owners for one fact meant
+   Home's chart could point at one ticker while the workbench staged another. */
+Object.defineProperty(window,'HOME_AUTH_SYMBOL',{
+  get:function(){return WORKSPACE.marketSymbol;},
+  set:function(v){WORKSPACE.marketSymbol=v;}
+});
 var HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
 /* NO SILENT PRODUCT DEFAULTS (program §3.5). The desk used to ship goal=INCOME, view=Neutral,
    horizon=45 days and risk=Balanced pre-selected, then send them to the engine as though the user
    had declared them — so a scan answered a question nobody asked. Every declaration starts null;
    the workbench names what is still unchosen and withholds Scan/Analyze until it is. */
-var HOME_SCOUT={scope:'broad',goal:null,sector:null};
-var homeIdea={symbol:null,query:'',view:null,horizon:null,riskMode:null,
-  targetCents:null,holdingsShares:null};
+/* ================= ONE WORKSPACE CONTEXT (audit §6, program §8.1) =================
+   Home declarations, market focus, sector scope, Decide state, Book state and route state used to
+   be six independent globals. That is why Import Trade wiped goal/view/horizon/risk and the world
+   indicator, why Analyze-in-New-Idea opened a blank declaration, and why a Scout row reached New
+   Idea as a bare symbol. One store owns them now.
+
+   HOME_SCOUT and homeIdea below are ACCESSORS onto this store, not second copies — a deliberate
+   migration scaffold so surfaces move one at a time (audit M3) instead of in one risky rewrite.
+   Each alias is deleted as its surface migrates; the store never forks. */
+var WORKSPACE={
+  version:1, rev:0,                     /* server-stamped; the guard on every write */
+  marketLane:null, world:null, accountId:null,   /* which market these facts belong to */
+  scopeType:'BROAD_MARKET', sectorKey:null,      /* BROAD_MARKET | ACTIVE_UNIVERSE | SECTOR | SYMBOL */
+  focusedSymbol:null, query:'',
+  focusedSubject:'BOOK',                /* BOOK | POSITION | PACKAGE | MARKET */
+  marketSymbol:null,                    /* what the market lens points at */
+  marketMode:'observed',                /* observed | sim — derived from the lane, never set alone */
+  focusedPositionId:null, focusedIdeaId:null, focusedEvaluationId:null,
+  goal:null, view:null, horizonDays:null, riskPosture:null,
+  targetCents:null, shareQuantity:null, assignmentPreference:null,
+  routeState:null,
+  returnFocus:null                      /* where Back goes — not a default Home */
+};
+/* The desk speaks the SERVER's vocabulary for these, so no translation layer can drift. The two
+   places the user's words differ from the stored form — a scope button and a horizon button — map
+   here and nowhere else. */
+var WORKSPACE_SCOPES={broad:'BROAD_MARKET',active:'ACTIVE_UNIVERSE',sector:'SECTOR',symbol:'SYMBOL'};
+function workspaceScopeKey(scopeType){
+  for(var key in WORKSPACE_SCOPES)if(WORKSPACE_SCOPES[key]===scopeType)return key;
+  return 'broad';
+}
+/* "45 trading days" is how the desk says it; 45 is what is stored. A label with no number in it
+   declares nothing rather than declaring zero. */
+function workspaceHorizonDays(label){
+  var match=String(label==null?'':label).match(/-?\d+/);
+  return match?Math.round(Number(match[0])):null;
+}
+function workspaceHorizonLabel(days){
+  return days==null?null:days+' trading day'+(Math.abs(days)===1?'':'s');
+}
+/* Where Back returns to. Capturing the focus BEFORE a transition is what makes Back mean "the
+   place I came from" rather than "Home". */
+/* What the user has actually DECLARED, or null if they have declared nothing. Never a default:
+   §3.5 means an undeclared field stays undeclared all the way into the idea.
+
+   `symbol` scopes the position-specific half. Goal, view, horizon and posture are the user's stated
+   intent and travel with them to any ticker; a target price and a share count belong to ONE ticker,
+   so carrying them onto a different symbol would invent holdings the user never claimed. */
+function workspaceDeclaration(symbol){
+  var declared=WORKSPACE.goal!=null||WORKSPACE.view!=null||WORKSPACE.horizonDays!=null
+    ||WORKSPACE.riskPosture!=null;
+  var sameSubject=symbol!=null&&WORKSPACE.focusedSymbol!=null
+    &&String(symbol).toUpperCase()===String(WORKSPACE.focusedSymbol).toUpperCase();
+  var carries=sameSubject&&(WORKSPACE.targetCents!=null||WORKSPACE.shareQuantity!=null);
+  if(!declared&&!carries)return null;
+  return {goal:WORKSPACE.goal,view:WORKSPACE.view,
+    horizon:workspaceHorizonLabel(WORKSPACE.horizonDays),
+    riskMode:WORKSPACE.riskPosture,
+    targetCents:sameSubject?WORKSPACE.targetCents:null,
+    holdingsShares:sameSubject?WORKSPACE.shareQuantity:null};
+}
+/* ---- PERSISTENCE: one record, read at boot and patched as it changes ----------------------
+   A patch names only what moved. Omitted fields keep their stored value, so no surface can
+   destroy a declaration it never touched. `expectedRev` is the guard: if another tab moved the
+   context first, the server refuses instead of silently overwriting state this desk never saw. */
+var WORKSPACE_PATCH_TIMER=null,WORKSPACE_PENDING={},WORKSPACE_NOTICE=null;
+var WORKSPACE_CLIENT_FIELDS=['scopeType','sectorKey','focusedSubject','focusedSymbol',
+  'focusedPositionId','focusedIdeaId','focusedEvaluationId','goal','view','horizonDays',
+  'riskPosture','targetCents','shareQuantity','assignmentPreference','routeState'];
+function workspaceHydrate(payload){
+  if(!payload)return;
+  WORKSPACE.rev=authNumber(payload.rev)||0;
+  var context=payload.context;
+  if(context){
+    WORKSPACE_CLIENT_FIELDS.forEach(function(field){WORKSPACE[field]=context[field];});
+    WORKSPACE.returnFocus=context.returnFocus||null;
+    workspaceSetMarket(context.marketLane||payload.marketLane,context.world||payload.world);
+    WORKSPACE.accountId=context.accountId||payload.accountId||null;
+  } else {
+    workspaceSetMarket(payload.marketLane,payload.world);
+    WORKSPACE.accountId=payload.accountId||null;
+  }
+  /* Both receipts are SAID OUT LOUD. A context the server could not read, or one it moved into a
+     different market, is a fact about the user's work — reporting it is the whole point of
+     versioning it (§3.2). */
+  if(payload.unreadable){
+    WORKSPACE_NOTICE='Your saved workspace was not restored: '+
+      (payload.unreadable.reason||'the stored version could not be read')+'.';
+  } else if(payload.transition&&(payload.transition.cleared||[]).length){
+    WORKSPACE_NOTICE='Your workspace moved from the '+
+      (payload.transition.fromWorld||'previous')+' market to '+(payload.transition.toWorld||'this one')+
+      ', so '+payload.transition.cleared.join(', ')+' no longer applied and '+
+      (payload.transition.cleared.length===1?'was':'were')+' cleared.';
+  } else WORKSPACE_NOTICE=null;
+  if(WORKSPACE_NOTICE)toast(WORKSPACE_NOTICE);
+}
+/* Coalesced: a user clicking through Goal → View → Horizon is one intent, not three writes. */
+function workspaceSave(fields){
+  if(!deskBackendEnabled()||!window.DeskBackend.patchWorkspace)return;
+  (fields||WORKSPACE_CLIENT_FIELDS).forEach(function(field){
+    WORKSPACE_PENDING[field]=WORKSPACE[field];
+  });
+  window.clearTimeout(WORKSPACE_PATCH_TIMER);
+  WORKSPACE_PATCH_TIMER=window.setTimeout(workspaceFlush,400);
+}
+function workspaceFlush(){
+  var patch=WORKSPACE_PENDING;WORKSPACE_PENDING={};
+  if(!Object.keys(patch).length)return;
+  patch.version=WORKSPACE.version;patch.expectedRev=WORKSPACE.rev;patch.world=WORKSPACE.world;
+  patch.returnFocus=WORKSPACE.returnFocus;
+  window.DeskBackend.patchWorkspace(patch).then(function(saved){
+    if(saved)WORKSPACE.rev=authNumber(saved.rev)||WORKSPACE.rev;
+  }).catch(function(error){
+    /* A refused write means someone else moved the context. Re-read rather than fight it. */
+    if(window.DeskBackend.loadWorkspace)window.DeskBackend.loadWorkspace()
+      .then(workspaceHydrate).catch(function(){});
+  });
+}
+function workspaceMark(){
+  WORKSPACE.returnFocus={subject:WORKSPACE.focusedSubject,symbol:WORKSPACE.focusedSymbol,
+    positionId:WORKSPACE.focusedPositionId,ideaId:WORKSPACE.focusedIdeaId,
+    evaluationId:WORKSPACE.focusedEvaluationId,scopeType:WORKSPACE.scopeType,
+    sectorKey:WORKSPACE.sectorKey,routeState:WORKSPACE.routeState};
+}
+/* Which market the facts belong to, in one write. The MODE is DERIVED from the lane and never set
+   independently, which is what stops a header reading Observed above a simulated body. */
+function workspaceSetMarket(lane,world){
+  var l=String(lane||'').toUpperCase(),w=String(world||'').toLowerCase();
+  WORKSPACE.marketLane=l||null;WORKSPACE.world=w||null;
+  WORKSPACE.marketMode=(l==='OBSERVED'||(!l&&w==='observed'))?'observed':'sim';
+}
+/* A world change is ATOMIC: every market-owned artifact is dropped, then the new identity and the
+   visible mode commit together. History is cached by symbol alone, so without the clear the new
+   world's label would pair with the previous world's bars (audit §5.7). View PREFERENCES (preset,
+   scale, overlays) survive and re-apply cleanly to freshly fetched bars. */
+function workspaceEnterWorld(lane,world){
+  EM_STORE={};HIST_STORE={};HIST_DRAG=null;MKT_CHART.win=null;MKT_CHART.prev=null;
+  workspaceSetMarket(lane,world);
+  if(typeof paintMarketMode==='function')paintMarketMode();
+}
+var HOME_SCOUT={
+  get scope(){return workspaceScopeKey(WORKSPACE.scopeType);},
+  set scope(v){WORKSPACE.scopeType=WORKSPACE_SCOPES[v]||'BROAD_MARKET';},
+  get goal(){return WORKSPACE.goal;},        set goal(v){WORKSPACE.goal=v;},
+  get sector(){return WORKSPACE.sectorKey;}, set sector(v){WORKSPACE.sectorKey=v;}
+};
+var homeIdea={
+  get symbol(){return WORKSPACE.focusedSymbol;},   set symbol(v){WORKSPACE.focusedSymbol=v;},
+  get query(){return WORKSPACE.query;},            set query(v){WORKSPACE.query=v;},
+  get view(){return WORKSPACE.view;},              set view(v){WORKSPACE.view=v;},
+  get horizon(){return workspaceHorizonLabel(WORKSPACE.horizonDays);},
+  set horizon(v){WORKSPACE.horizonDays=workspaceHorizonDays(v);},
+  get riskMode(){return WORKSPACE.riskPosture;},   set riskMode(v){WORKSPACE.riskPosture=v;},
+  get targetCents(){return WORKSPACE.targetCents;},set targetCents(v){WORKSPACE.targetCents=v;},
+  get holdingsShares(){return WORKSPACE.shareQuantity;},
+  set holdingsShares(v){WORKSPACE.shareQuantity=v;}
+};
 var HOME_SCOUT_SEQ=0,HOME_SCOUT_RAF=0;
 /* The bridge rejects stale data publication; this UI generation separately rejects stale promise
    callbacks so an older focus cannot retarget the visible symbol or emit a misleading toast. */
@@ -1763,12 +1922,17 @@ function authScoutIdleFieldHTML(){
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?authScoutIdleFieldHTML()+'<div class="scoutresults">'+body+'</div>':body)+'</div>';
 }
-function authOpportunityRowHTML(symbol,name,detail,value,ev){
+/* A row carries the identity of the package it is SHOWING. Clicking it must open that exact
+   evaluation, not a symbol that gets re-scanned into some other package (audit §8.2). A row whose
+   evaluation the scan has not yet persisted carries no id and opens as a plain symbol — which is
+   honest, because there is no exact package behind it yet. */
+function authOpportunityRowHTML(symbol,name,detail,value,ev,idea){
   symbol=String(symbol||'').toUpperCase();
-  return '<button type="button" class="opportunityrow" data-scroll-row data-auth-analyze-symbol="'+deskEsc(symbol)+'" aria-label="Analyze '+deskEsc(symbol)+' in New idea"><strong>'+deskEsc(symbol||'—')+'</strong><span><b>'+deskEsc(name||'No package cleared this scan')+'</b><small>'+deskEsc(detail||'Complete receipts unavailable')+'</small></span><em class="'+(ev==null?'':ev>=0?'pos':'neg')+'">'+deskEsc(value||'—')+'</em><span class="opportunitygo">Analyze →</span></button>';
+  var evaluationId=idea&&idea.evaluationId?' data-auth-evaluation="'+deskEsc(idea.evaluationId)+'"':'';
+  return '<button type="button" class="opportunityrow" data-scroll-row data-auth-analyze-symbol="'+deskEsc(symbol)+'"'+evaluationId+' aria-label="Analyze '+deskEsc(symbol)+' in New idea"><strong>'+deskEsc(symbol||'—')+'</strong><span><b>'+deskEsc(name||'No package cleared this scan')+'</b><small>'+deskEsc(detail||'Complete receipts unavailable')+'</small></span><em class="'+(ev==null?'':ev>=0?'pos':'neg')+'">'+deskEsc(value||'—')+'</em><span class="opportunitygo">Analyze →</span></button>';
 }
 function authPartialOpportunityRowsHTML(picks){
-  return (Array.isArray(picks)?picks.slice():[]).sort(function(a,b){return Number(b&&b.opportunity&&b.opportunity.score||0)-Number(a&&a.opportunity&&a.opportunity.score||0);}).slice(0,5).map(function(pick){var idea=pick.bestIdea||{},opportunity=pick.opportunity||{},priced=idea.available===true||!!idea.family||!!idea.displayName,ev=authNumber(idea.realizedVolEvAfterCostsCents),score=authNumber(opportunity.score),value=ev==null?(score==null?'receipts pending':Math.round(score)+' signal'):(ev>=0?'+':'')+authMoney(ev/100)+' after costs',detail=priced?[idea.economicVerdict&&authHuman(idea.economicVerdict),idea.horizon&&authHuman(idea.horizon),'Book checks pending'].filter(Boolean).join(' · '):'Evidence ranked · exact package pricing pending';return authOpportunityRowHTML(pick.symbol,priced?idea.displayName:'Evidence ready',detail,value,ev);}).join('');
+  return (Array.isArray(picks)?picks.slice():[]).sort(function(a,b){return Number(b&&b.opportunity&&b.opportunity.score||0)-Number(a&&a.opportunity&&a.opportunity.score||0);}).slice(0,5).map(function(pick){var idea=pick.bestIdea||{},opportunity=pick.opportunity||{},priced=idea.available===true||!!idea.family||!!idea.displayName,ev=authNumber(idea.realizedVolEvAfterCostsCents),score=authNumber(opportunity.score),value=ev==null?(score==null?'receipts pending':Math.round(score)+' signal'):(ev>=0?'+':'')+authMoney(ev/100)+' after costs',detail=priced?[idea.economicVerdict&&authHuman(idea.economicVerdict),idea.horizon&&authHuman(idea.horizon),'Book checks pending'].filter(Boolean).join(' · '):'Evidence ranked · exact package pricing pending';return authOpportunityRowHTML(pick.symbol,priced?idea.displayName:'Evidence ready',detail,value,ev,idea);}).join('');
 }
 function authHomeStrategyFieldHTML(){
   /* One honest sentence, not an inert list — the catalog itself lives in New idea. */
@@ -1782,12 +1946,43 @@ function authHomeStrategyFieldHTML(){
   var names=applicable.slice(0,3).map(function(entry){return String(entry.display||authHuman(entry.name)).toLowerCase();});
   return '<div class="homecatalogline" title="'+deskEsc(names.join(', '))+(applicable.length>names.length?', and more':'')+'">'+applicable.length+' structures compete for '+deskEsc(authHuman(intent).toLowerCase())+'. Live prices, evidence, risk, and your Book decide the ranking.</div>';
 }
+/* THE scan readout. One meter used to carry the whole scan, and its denominator changed meaning
+   between phases — 5/105 symbols became 3/6 ideas — so the same bar meant two different things and
+   a reader could not tell what had actually finished (audit §8.2). The backend now reports four
+   counts that only ever rise and never share a denominator, plus a pair scoped to the named phase.
+   The meter tracks the phase in flight and says which phase it is; the four counts stand beside it
+   as the durable, comparable answer to "what has this scan done so far?". */
+var SCOUT_COUNT_FIELDS=[
+  {key:'universeConsidered',label:'considered',title:'symbols whose evidence read has completed'},
+  {key:'evidenceEligible',label:'have evidence',title:'of those, the ones with enough evidence to price'},
+  {key:'packagesEvaluated',label:'packages priced',title:'exact packages the evaluator priced and scored'},
+  {key:'rowsRetained',label:'rows kept',title:'distinct result rows retained, by symbol + structure + package'}
+];
+function authScoutProgressHTML(progress){
+  var counts=progress.counts||{},phase=authHuman(progress.phase||'starting');
+  var done=authNumber(progress.phaseCompleted),of=authNumber(progress.phaseTotal);
+  var meter=of==null||of<=0
+    ? '<span class="scoutphase">'+deskEsc(phase)+'</span>'
+    : '<meter min="0" max="'+of+'" value="'+Math.min(of,Math.max(0,done==null?0:done))+'"></meter>'+
+      '<b>'+(done==null?'—':done)+' / '+of+'</b><span class="scoutphase">'+deskEsc(phase)+'</span>';
+  var ledger=SCOUT_COUNT_FIELDS.map(function(field){
+    var value=authNumber(counts[field.key]);
+    return '<span class="scoutcount" title="'+deskEsc(field.title)+'"><b>'+(value==null?'—':value)+'</b> '+field.label+'</span>';
+  }).join('');
+  /* Two rows, as before: the phase meter, then the four counts with the live message beside them.
+     The readout says more without taking more room, so the first streamed row still lands inside
+     the hero rather than below the fold. */
+  return '<div class="scoutprogress" role="status">'+meter+
+    '<div class="scoutcounts">'+ledger+
+      '<span class="scoutmsg">'+deskEsc((progress.symbol?progress.symbol+' · ':'')+(progress.message||''))+'</span>'+
+    '</div></div>';
+}
 function authScoutResultHTML(expanded){
   var state=HOME_OPPORTUNITY;
   var goal=authHuman(HOME_SCOUT.goal).toLowerCase(),scope=HOME_SCOUT.scope==='broad'?'broad market':'active names',sector=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector)+' within the ':'';
   if(state.phase==='loading'){
-    var progress=state.progress||{},completed=Math.max(0,Number(progress.completed||0)),total=Math.max(1,Number(progress.total||1)),phase=authHuman(progress.phase||'starting'),partial=authPartialOpportunityRowsHTML(state.partial);
-    var progressBlock='<div class="scoutprogress" role="status"><meter min="0" max="'+total+'" value="'+Math.min(total,completed)+'"></meter><b>'+completed+' / '+total+'</b><span>'+deskEsc((progress.symbol?progress.symbol+' · ':'')+(progress.message||phase))+'</span></div>';
+    var progress=state.progress||{},partial=authPartialOpportunityRowsHTML(state.partial);
+    var progressBlock=authScoutProgressHTML(progress);
     var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'<div class="scoutwaiting">Rows appear as soon as the first symbol completes; exact pricing follows in the same stream.</div>';
     var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Rows appear as each symbol completes; the final order waits for the Book-fit checks.</span><button class="btn pri scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
     return loading;
@@ -1796,19 +1991,54 @@ function authScoutResultHTML(expanded){
   var picks=state.data&&Array.isArray(state.data.picks)?state.data.picks:[];
   if(state.phase==='ready'){
     var frontier=state.data&&state.data.frontier||null,ranked=frontier&&Array.isArray(frontier.decisionRanking)?frontier.decisionRanking:[];
-    if(!ranked.length)ranked=picks.map(function(pick){var idea=pick.bestIdea||{};return {symbol:pick.symbol,strategy:idea.family||idea.strategy,economicVerdict:idea.economicVerdict,qualification:idea.economicVerdict};});
+    /* A scan with no Book-aware frontier still has rows: the picks themselves. They carry the same
+       identity the frontier would have, so the two paths dedupe against each other instead of
+       showing one result twice. */
+    if(!ranked.length)ranked=picks.map(function(pick){var idea=pick.bestIdea||{};
+      return {symbol:pick.symbol,strategy:idea.family||idea.strategy,
+        economicVerdict:idea.economicVerdict,qualification:idea.economicVerdict,
+        evaluationId:idea.evaluationId||null,identity:idea.resultKey?{key:idea.resultKey}:null};});
     function pickFor(entry){for(var i=0;i<picks.length;i++){var idea=picks[i].bestIdea||{};if(String(picks[i].symbol||'')===String(entry.symbol||'')&&(!entry.strategy||!idea.family||String(idea.family)===String(entry.strategy)))return picks[i];}return null;}
     var favorable=ranked.some(function(entry){return String(entry&&entry.economicVerdict||'').toUpperCase()==='FAVORABLE'&&String(entry&&entry.qualification||'').toUpperCase()!=='ACCOUNT_BLOCKED';});
-    var displayed=[],seenSymbols={};
-    ranked.forEach(function(entry){var symbol=String(entry&&entry.symbol||'').toUpperCase();if(symbol&&!seenSymbols[symbol]&&displayed.length<5){seenSymbols[symbol]=1;displayed.push(entry);}});
-    picks.forEach(function(pick){var symbol=String(pick&&pick.symbol||'').toUpperCase(),idea=pick&&pick.bestIdea||{};if(symbol&&!seenSymbols[symbol]&&displayed.length<5){seenSymbols[symbol]=1;displayed.push({symbol:symbol,strategy:idea.family||idea.strategy,economicVerdict:idea.economicVerdict,qualification:idea.economicVerdict});}});
+    /* Rows are keyed on the RESULT, not the ticker. Keying on symbol silently threw away real
+       answers: an IWM bull put spread and an IWM covered call are two different results to two
+       different questions, and only the first survived, so the row a user clicked need not be the
+       row they were shown (audit §8.2). The backend already deduplicates by ResultIdentity; this
+       list preserves that rather than collapsing it again. */
+    var displayed=[],seenRows={};
+    function rowKey(entry,idea){
+      var identity=entry&&entry.identity||{};
+      if(identity.key)return identity.key;
+      /* No identity yet (a partial frame, or a pick that never reached the frontier): fall back to
+         the parts that make a result distinct, never to the symbol alone. */
+      return [String(entry&&entry.symbol||'').toUpperCase(),
+        String(entry&&entry.strategy||idea&&idea.family||idea&&idea.strategy||''),
+        String(idea&&idea.horizon||entry&&entry.horizon||'')].join('|');
+    }
+    ranked.forEach(function(entry){
+      var key=rowKey(entry,pickFor(entry)&&pickFor(entry).bestIdea);
+      if(entry&&entry.symbol&&!seenRows[key]&&displayed.length<5){seenRows[key]=1;displayed.push(entry);}
+    });
+    picks.forEach(function(pick){var symbol=String(pick&&pick.symbol||'').toUpperCase(),idea=pick&&pick.bestIdea||{};
+      var entry={symbol:symbol,strategy:idea.family||idea.strategy,economicVerdict:idea.economicVerdict,
+        qualification:idea.economicVerdict,evaluationId:idea.evaluationId||null,
+        identity:idea.resultKey?{key:idea.resultKey}:null};
+      var key=rowKey(entry,idea);
+      if(symbol&&!seenRows[key]&&displayed.length<5){seenRows[key]=1;displayed.push(entry);}
+    });
     var rows=displayed.map(function(entry){
       var pick=pickFor(entry)||{},idea=pick.bestIdea||{},signals=pick.signals||{},score=authNumber(entry.decisionScore);if(score==null)score=authNumber(pick.opportunity&&pick.opportunity.score);
       var ev=authNumber(idea.realizedVolEvAfterCostsCents),qualification=String(entry.qualification||entry.economicVerdict||'ECONOMICS_UNAVAILABLE'),impact=null,impacts=Array.isArray(entry.bookImpacts)?entry.bookImpacts:[];
       for(var j=0;j<impacts.length;j++){if(!frontier||String(impacts[j].accountId)===String(frontier.destinationAccountId)){impact=impacts[j];break;}}
       var dataStatus=entry.dataCompleteness&&entry.dataCompleteness.status,detail=[entry.economicVerdict&&authHuman(entry.economicVerdict),authHuman(qualification),impact&&('Book '+authHuman(impact.status)),dataStatus&&authHuman(dataStatus)].filter(Boolean).join(' · ');
       var value=ev==null?(score==null?'—':Math.round(score)+' decision'):(ev>=0?'+':'')+authMoney(ev/100)+' after costs';
-      return authOpportunityRowHTML(entry.symbol||pick.symbol,idea.displayName||authHuman(entry.strategy),detail,value,ev);
+      /* The frontier entry is the authority on which evaluation this row IS; bestIdea is only the
+         pick's headline and can name a different package on a multi-structure symbol. */
+      var identity=entry.identity||{},rowIdentity={
+        evaluationId:entry.evaluationId||identity.evaluationId||idea.evaluationId||null};
+      if(identity.expiration)detail=[detail,'expires '+authHuman(identity.expiration)].filter(Boolean).join(' · ');
+      return authOpportunityRowHTML(entry.symbol||pick.symbol,
+        idea.displayName||authHuman(entry.strategy),detail,value,ev,rowIdentity);
     }).join('');
     var compensation=frontier&&Array.isArray(frontier.compensationRanking)?frontier.compensationRanking:(Array.isArray(state.data.compensation)?state.data.compensation:[]),comp=compensation.slice(0,2).map(function(row){var components=Array.isArray(row.components)?row.components:[],premium=components.find(function(component){return /annualized premium yield/i.test(String(component.name||''));}),note=premium&&premium.note||'Compensation score remains separate from decision economics.';return '<b title="'+deskEsc(note)+'">'+deskEsc(row.symbol||'—')+' '+Math.round(authNumber(row.score)||0)+(premium&&premium.note?'<small>'+deskEsc(premium.note)+'</small>':'')+'</b>';}).join('<em>·</em>');
     var scope=frontier&&frontier.universe||{},scopeSymbols=Array.isArray(scope.symbols)?scope.symbols.length:authNumber(state.data.searched),scopeHint=scopeSymbols==null?'scanned field':scopeSymbols+' symbols scanned';
@@ -1889,12 +2119,16 @@ async function authOpenPlan(plan,origin){if(!plan||AUTH_PLAN_OPEN_PENDING)return
 function authOpenSymbol(symbol,origin){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase());}
 function authStageHomeSymbol(symbol){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
-  homeIdea.symbol=symbol;homeIdea.query=symbol;focusSymbol(symbol);authRenderOpportunityOnly();
+  homeIdea.symbol=symbol;homeIdea.query=symbol;workspaceSave(['focusedSymbol']);
+  focusSymbol(symbol);authRenderOpportunityOnly();
   window.requestAnimationFrame(function(){var input=document.querySelector('[data-auth-workbench-query]');if(input)input.focus({preventScroll:true});});
 }
-function authAnalyzeHomeSymbol(symbol,origin){
+function authAnalyzeHomeSymbol(symbol,origin,evaluationId){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
-  homeIdea.symbol=symbol;homeIdea.query=symbol;authOpenHomeIdea(origin);
+  homeIdea.symbol=symbol;homeIdea.query=symbol;
+  WORKSPACE.focusedEvaluationId=evaluationId||null;
+  workspaceSave(['focusedSymbol','focusedEvaluationId']);
+  authOpenHomeIdea(origin);
 }
 function authOpenHomeIdea(origin){
   if(!homeIdea.symbol)return;
@@ -1903,10 +2137,7 @@ function authOpenHomeIdea(origin){
      stops holding the market provider and can't starve this ticker's chain load */
   HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();
   if(HOME_OPPORTUNITY.phase==='loading')HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
-  enterDecide('idea',null,'New idea',origin,String(homeIdea.symbol).toUpperCase(),null,{
-    goal:HOME_SCOUT.goal,view:homeIdea.view,horizon:homeIdea.horizon,riskMode:homeIdea.riskMode,
-    targetCents:homeIdea.targetCents,holdingsShares:homeIdea.holdingsShares
-  });
+  enterDecide('idea',null,'New idea',origin,String(homeIdea.symbol).toUpperCase());
 }
 function authRefreshHomeIdeaAction(){
   var button=document.querySelector('[data-auth-workbench-analyze]'),ready=!!homeIdea.symbol&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(homeIdea.targetCents)>0&&Number(homeIdea.holdingsShares)>0);
@@ -1917,24 +2148,24 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(fanPos){ev.preventDefault();go('position',fanPos.getAttribute('data-fan-pos'));return;}
     var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(riskPoint){ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));return;}
     var planButton=ev.target.closest&&ev.target.closest('[data-auth-plan-id]');if(planButton){ev.preventDefault();authOpenPlan(authPlanById(BOOK_AUTH.data,planButton.getAttribute('data-auth-plan-id')),planButton.getBoundingClientRect());return;}
-    var analyzeButton=ev.target.closest&&ev.target.closest('[data-auth-analyze-symbol]');if(analyzeButton){authAnalyzeHomeSymbol(analyzeButton.getAttribute('data-auth-analyze-symbol'),analyzeButton.getBoundingClientRect());return;}
+    var analyzeButton=ev.target.closest&&ev.target.closest('[data-auth-analyze-symbol]');if(analyzeButton){authAnalyzeHomeSymbol(analyzeButton.getAttribute('data-auth-analyze-symbol'),analyzeButton.getBoundingClientRect(),analyzeButton.getAttribute('data-auth-evaluation'));return;}
     var ideaButton=ev.target.closest&&ev.target.closest('[data-auth-newidea-symbol]');if(ideaButton){authStageHomeSymbol(ideaButton.getAttribute('data-auth-newidea-symbol'));return;}
     var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){focusSymbol(marketButton.getAttribute('data-auth-market-symbol'));return;}
     var workbenchSymbol=ev.target.closest&&ev.target.closest('[data-auth-workbench-symbol]');if(workbenchSymbol){authStageHomeSymbol(workbenchSymbol.getAttribute('data-auth-workbench-symbol'));return;}
-    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){homeIdea.symbol=null;homeIdea.query='';authRenderOpportunityOnly();return;}
-    var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){homeIdea.view=workbenchView.getAttribute('data-auth-workbench-view');authRenderOpportunityOnly();return;}
-    var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){homeIdea.horizon=workbenchHorizon.getAttribute('data-auth-workbench-horizon');authResetOpportunity();return;}
-    var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){homeIdea.riskMode=workbenchRisk.getAttribute('data-auth-workbench-risk');authResetOpportunity();return;}
+    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){homeIdea.symbol=null;homeIdea.query='';workspaceSave(['focusedSymbol']);authRenderOpportunityOnly();return;}
+    var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){homeIdea.view=workbenchView.getAttribute('data-auth-workbench-view');workspaceSave(['view']);authRenderOpportunityOnly();return;}
+    var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){homeIdea.horizon=workbenchHorizon.getAttribute('data-auth-workbench-horizon');workspaceSave(['horizonDays']);authResetOpportunity();return;}
+    var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){homeIdea.riskMode=workbenchRisk.getAttribute('data-auth-workbench-risk');workspaceSave(['riskPosture']);authResetOpportunity();return;}
     var workbenchAnalyze=ev.target.closest&&ev.target.closest('[data-auth-workbench-analyze]');if(workbenchAnalyze&&!workbenchAnalyze.disabled){authOpenHomeIdea(workbenchAnalyze.getBoundingClientRect());return;}
-    var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){HOME_SCOUT.scope=nextScope;HOME_SCOUT.sector=null;authBookSummary();authResetOpportunity();}return;}
-    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null;if(scoutSector.hasAttribute('data-auth-sector-match')){homeIdea.symbol=null;homeIdea.query='';}if(nextSector!==HOME_SCOUT.sector){HOME_SCOUT.sector=nextSector;authBookSummary();authResetOpportunity();focusSector(nextSector);}else authRenderOpportunityOnly();return;}
-    var scoutGoal=ev.target.closest&&ev.target.closest('[data-auth-scout-goal]');if(scoutGoal){var nextGoal=scoutGoal.getAttribute('data-auth-scout-goal');if(nextGoal!==HOME_SCOUT.goal){HOME_SCOUT.goal=nextGoal;authResetOpportunity();}return;}
+    var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){HOME_SCOUT.scope=nextScope;HOME_SCOUT.sector=null;workspaceSave(['scopeType','sectorKey']);authBookSummary();authResetOpportunity();}return;}
+    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null;if(scoutSector.hasAttribute('data-auth-sector-match')){homeIdea.symbol=null;homeIdea.query='';}if(nextSector!==HOME_SCOUT.sector){HOME_SCOUT.sector=nextSector;workspaceSave(['scopeType','sectorKey']);authBookSummary();authResetOpportunity();focusSector(nextSector);}else authRenderOpportunityOnly();return;}
+    var scoutGoal=ev.target.closest&&ev.target.closest('[data-auth-scout-goal]');if(scoutGoal){var nextGoal=scoutGoal.getAttribute('data-auth-scout-goal');if(nextGoal!==HOME_SCOUT.goal){HOME_SCOUT.goal=nextGoal;workspaceSave(['goal']);authResetOpportunity();}return;}
     var opportunityScan=ev.target.closest&&ev.target.closest('[data-auth-opportunity-scan]');if(opportunityScan){authRunOpportunityScan();return;}
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
   });boardEl.addEventListener('input',function(ev){if(state.level!=='book')return;
     if(ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){homeIdea.query=ev.target.value;var host=document.querySelector('.homeideamatchhost');if(host)host.innerHTML=authHomeUnderlyingMatchesHTML();return;}
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);homeIdea.targetCents=dollars>0?Math.round(dollars*100):null;authRefreshHomeIdeaAction();return;}
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);homeIdea.holdingsShares=shares>0?Math.round(shares):null;authRefreshHomeIdeaAction();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);homeIdea.targetCents=dollars>0?Math.round(dollars*100):null;workspaceSave(['targetCents']);authRefreshHomeIdeaAction();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);homeIdea.holdingsShares=shares>0?Math.round(shares):null;workspaceSave(['shareQuantity']);authRefreshHomeIdeaAction();return;}
   });boardEl.addEventListener('keydown',function(ev){
     if(ev.key==='Enter'&&ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){var first=document.querySelector('.homeideamatch');if(first){ev.preventDefault();first.click();}return;}
     if(ev.key!=='Enter'&&ev.key!==' ')return;var riskPoint=ev.target.closest&&ev.target.closest('[data-auth-risk-position]');if(!riskPoint)return;ev.preventDefault();go('position',riskPoint.getAttribute('data-auth-risk-position'));});
@@ -2316,6 +2547,17 @@ function layoutForLevel(level,focus){
 /* ======================================================================
    GO — the zoom transition. book<->position = FLIP; else = zoom crossfade
    ====================================================================== */
+/* THE one route write. `state` is the desk's live view; WORKSPACE is the context that outlives it.
+   Both used to be set independently, so Back could land somewhere the user had never been and the
+   focused subject could disagree with what was on screen. */
+function setRoute(level,focus){
+  workspaceMark();
+  state = {level:level, focus:focus};
+  WORKSPACE.focusedSubject = level==='position'?'POSITION':'BOOK';
+  WORKSPACE.focusedPositionId = level==='position'?focus:null;
+  WORKSPACE.routeState = level==='position'?'position:'+focus:'book';
+  workspaceSave(['focusedSubject','focusedPositionId','routeState']);
+}
 function go(level,focus){
   if(LEVELS.indexOf(level)<0)return;
   if(level==='position'){ focus=focus||state.focus||(POS.length?POS[0].id:null);if(!focus||!byId[focus])return; }
@@ -2329,7 +2571,7 @@ function go(level,focus){
 
   if(reduce||!cardPair){
     layoutForLevel(level,focus);
-    state={level:level,focus:focus};
+    setRoute(level,focus);
     updateThread();
     if(!reduce) enterAnim(level);
     if(level==='position') addReveal(focus);
@@ -2343,7 +2585,7 @@ function go(level,focus){
 
   /* --- switch to the Last layout --- */
   layoutForLevel(level,focus);
-  state={level:level,focus:focus};
+  setRoute(level,focus);
   updateThread();
 
   /* --- measure Last; the HERO card (focus) does a full FLIP — grows from where you clicked /
@@ -2585,7 +2827,6 @@ function toast(msg){
 var rzTimer;
 function redraw(){
   if(decide){ redrawDecide(); }
-  if(importOpen && imp.p){ var ip=document.getElementById('impPay'); if(ip) drawPayoff(ip, imp.p, true); }
   if(deskBackendEnabled()){
     if(state.level==='book'){drawAuthoritativeBookRisk();drawAuthoritativeBookFan();drawAuthoritativeHomeHistory();}
     else if(state.level==='position'&&byId[state.focus]){var ap=byId[state.focus],pay=document.getElementById('authPay-'+ap.id);if(pay)drawPayoff(pay,ap,true,null,{hideScenarios:true,labelRails:true});drawAuthoritativeHistory(ap);drawAuthoritativePositionScenario(ap);}
@@ -2606,7 +2847,15 @@ function redraw(){
    DECIDE — merged Plan + Compose + Trades, reusing the bloom template.
    Overlay stage; the zoom/FLIP state machine below is left untouched.
    ====================================================================== */
-var DEC_SPOT=493, DEC_BOOKCAP=272688, DEC_HOT=-1;
+var DEC_HOT=-1;
+/* §3.5: the underlying price has ONE source — the backend's idea payload. A hard-coded DEC_SPOT=493
+   used to stand in wherever it was missing, so a symbol whose spot had not arrived was still
+   dragged, stepped and seeded against a number no market ever printed. Absent now reads as absent
+   and the interaction declines instead of inventing its reference. */
+function decisionSpot(){
+  var v=decide&&decide.spot;
+  return v==null||!Number.isFinite(Number(v))?null:Number(v);
+}
 var decideEl, decide=null;
 
 function deskBackendEnabled(){ return !!(window.DeskBackend&&window.DeskBackend.enabled()); }
@@ -2781,7 +3030,9 @@ function deskBackendChanged(payload){
     // world's bars. Clear the expected-move store, the per-symbol history cache, any active chart
     // drag/zoom, and the data-bound selected window + its reset snapshot. View PREFERENCES (preset,
     // scale, overlays) survive and re-apply cleanly to the freshly fetched bars.
-    EM_STORE={};HIST_STORE={};HIST_DRAG=null;MKT_CHART.win=null;MKT_CHART.prev=null;
+    var confirmed=payload.config||{},confirmedWorld=payload.world||{};
+    workspaceEnterWorld(String(confirmed.marketLane||'').toUpperCase()||null,
+      String(confirmedWorld.world||confirmed.world||payload.target||'').toLowerCase()||null);
     Object.keys(byId||{}).forEach(function(id){var p=byId[id],st=scenPlay[id];if(st&&st.raf)cancelAnimationFrame(st.raf);if(p)window.clearTimeout(p._positionScenarioTimer);});
     authClearPositionCards();POS=[];byId={};state.level='book';state.focus=null;
     BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};
@@ -2862,6 +3113,11 @@ function deskBackendChanged(payload){
   } else if(phase==='declaration'&&payload.plan){
     applyAuthoritativePlanContext(payload.plan);
     decide.missingDeclarations=[];
+  } else if(phase==='adoption-unavailable'){
+    /* The scanned row could not be adopted. Say so where the user is looking; a swallowed refusal
+       would let a freshly recomputed field stand in for the package they clicked (§3.2). */
+    decide.adoptionError=payload.error||'That scanned package could not be adopted.';
+    if(payload.plan)applyAuthoritativePlanContext(payload.plan);
   } else if(phase==='declaration-required'){
     AUTH_PENDING_FORK=null;
     decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.mode='engine';
@@ -3040,6 +3296,8 @@ window.StrikeBenchDesk={backendChanged:deskBackendChanged};
 
 function authoritativeIdeaContext(){return Object.assign({symbol:decide.sym,goal:decide.goal,view:decide.view,horizon:decide.horizon,
     riskMode:decide.riskMode,planId:decide.resumePlanId,
+    /* the exact scanned row this idea was opened FROM, when it was opened from one */
+    evaluationId:decide.evaluationId||null,
     governorExplicit:Object.assign({},decide.govExplicit||{})},decide.resumePlanContext||{});}
 function prepareAuthoritativeIdeaLoad(){
   /* Assumption changes invalidate the whole previous financial artifact. Keep only the declared
@@ -3077,10 +3335,6 @@ function updateAuthoritativeDeclaration(key,value){
 }
 
 
-function candLegStr(c){return c.legs.map(function(l){
-  if(l.t==='s')return (l.q>=0?'LONG ':'SHORT ')+Math.abs(l.q)+' sh';
-  return (l.q<0?'SHORT ':'LONG ')+Math.abs(l.q)+'×'+l.k+(l.t==='c'?'C':'P');}).join(' · ');}
-
 /* Front B S2: the curated AMD ROLLCANDS / IDEACANDS fixture fans (incl. the invented 300-share
    covered-call holdings) are removed. Ranked candidates come from the backend strategy engine. */
 
@@ -3090,13 +3344,24 @@ function dateOrd(str){ var m=(''+str).match(/([0-9]{1,2})-([A-Za-z]{3})/); retur
 var univBy={};
 
 /* market mode: 'observed' = live Cboe data · 'sim' = synthetic/deterministic demo (seed + scenario world) */
-var MKT_MODE='observed', SIM={seed:7, world:'Base case', speed:1}, BACKEND_MARKET_LANE=null, BACKEND_MARKET_WORLD=null;
+var SIM={seed:7, world:'Base case', speed:1};
+/* Which market the facts on screen belong to lives in ONE place. These three names used to be
+   independent globals set at three different moments, which is how the header could read Observed
+   while the body still held the previous world's bars (audit §5.7). */
+Object.defineProperty(window,'MKT_MODE',{get:function(){return WORKSPACE.marketMode;},
+  set:function(v){WORKSPACE.marketMode=v;}});
+Object.defineProperty(window,'BACKEND_MARKET_LANE',{get:function(){return WORKSPACE.marketLane;},
+  set:function(v){WORKSPACE.marketLane=v;}});
+Object.defineProperty(window,'BACKEND_MARKET_WORLD',{get:function(){return WORKSPACE.world;},
+  set:function(v){WORKSPACE.world=v;}});
 var SIM_WORLDS=['Base case','Risk-off','Melt-up','Vol spike','Grind higher','Chop'];
 function syncMarketModeFromBackend(market){
   var identity=market&&market.identity||{}, lane=String(identity.marketLane||'').toUpperCase(), world=String(identity.world||'').toLowerCase();
-  BACKEND_MARKET_LANE=lane||null;BACKEND_MARKET_WORLD=world||null;
-  var mode=(lane==='OBSERVED'||(!lane&&world==='observed'))?'observed':'sim';
-  MKT_MODE=mode;
+  workspaceSetMarket(lane,world);paintMarketMode();
+}
+/* The mode control is a READOUT of the store, never a second source of truth. */
+function paintMarketMode(){
+  var mode=WORKSPACE.marketMode,lane=WORKSPACE.marketLane;
   var buttons=document.querySelectorAll('#mktMode .mmseg button');
   for(var i=0;i<buttons.length;i++)buttons[i].classList.toggle('on',buttons[i].getAttribute('data-mkt')===mode);
   if(buttons[0]){buttons[0].textContent=mode==='observed'?'● '+(lane||'OBSERVED'):'● Observed';buttons[0].title='Backend market transitions own this state';}
@@ -3143,52 +3408,10 @@ function simRibbon(){ if(MKT_MODE!=='sim')return '';
 
 /* round a spot·pct level to a sensible strike increment for the price band */
 function rk(spot,pct){ var raw=spot*pct, inc=spot>800?10:spot>300?5:spot>80?2.5:1; return Math.round(raw/inc)*inc; }
-/* ======================================================================
-   IMPORTED POSITIONS — a trade brought in from an external brokerage.
-   Flagged REAL → it is a position you ALREADY hold, so it is ADDED TO THE
-   BOOK and tracked (real lane). Flagged PAPER → practice lane. Either way
-   it is analysed as-is by the same engine and NEVER rejected.
-   ====================================================================== */
-var IMPN=0;
-function importedPosition(trade,real){
-  var u=univBy[trade.sym]||{sym:trade.sym,spot:trade.spot||100,em:trade.em||6,iv:36,ivRank:55,sector:'—'};
-  var c={sym:u.sym,spot:u.spot,em:u.em,legs:trade.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};}),undef:null};
-  finishCand(c);
-  var id='imp-'+(++IMPN);
-  var undef=c.undef, tone=undef?'warn':'ok', flagKind=undef?'importedu':'imported';
-  var brk=trade.broker||'your brokerage';
-  var pnl=trade.pnl!=null?trade.pnl:-Math.round(Math.abs(c.credit)*0.12);
-  var riskPct=Math.max(3,Math.min(42,Math.round(c.cap/DEC_BOOKCAP*100)));
-  var read='Brought in from '+(real?'<b>'+brk+'</b> as a <b>real</b> position held with real money'
-      :'a <b>paper</b> idea')+'. '+
-    (undef?'It carries <b>undefined risk</b> (an uncovered short) — tracked and analysed as-is; the engine won’t hide that, and you can add a wing to define it. '
-          :'Defined-risk structure. ')+
-    'Now tracked in your book — analyse it, stress-test it, or adjust it from here.';
-  var p={id:id,sym:u.sym,struct:trade.struct,spot:u.spot,em:u.em,
-    pnl:pnl,riskPct:riskPct,cap:c.cap,net:c.credit,delta:c.delta,theta:c.theta,vega:c.vega,gamma:c.gamma,
-    pop:c.pop,maxLoss:c.maxLoss,maxProfit:c.maxProfit,legs:c.legs,
-    legStr:candLegStr(c)+' · exp '+(trade.exp||'—'),
-    attn:'Imported · '+(real?'real':'paper'),need:false,tone:tone,flagKind:flagKind,
-    day:-Math.round(Math.abs(c.credit)*0.02),held:trade.held||3,
-    iv:u.iv,ivRank:u.ivRank,event:'Imported'+(trade.exp?' · exp '+trade.exp:''),
-    edge:c.edge,yieldPct:0,assign:c.assign,mark:'imported at fill',
-    flagNote:real?'real trade · '+brk:'paper · hypothetical',
-    primary:undef?'Add a wing / stress-test →':'Analyse / adjust →',
-    why:'Imported '+(real?'real ':'paper ')+trade.struct.toLowerCase()+' on '+u.sym+'. Tracked here so you can analyse, stress-test and get the engine’s read on a position you already hold.',
-    news:undef?'Engine note: undefined risk on the short side — tracked and analysed as-is; defining the risk with a wing would cap the tail.'
-             :'Engine note: defined-risk structure, tracked alongside the rest of your book.',
-    plain:'You brought in a '+trade.struct.toLowerCase()+' on '+u.sym+' from '+(real?brk:'a paper idea')+'. It’s now tracked in your book so you can watch it, stress-test it, and act on it.',
-    conc:'Imported '+(real?'real':'paper')+' line — about <b>'+riskPct+'%</b> of book risk. '+(u.sector!=='—'?'Sits in '+u.sector+' with the rest of your book.':'A fresh name for the book.'),
-    read:read,
-    mechGloss:'Imported position — the engine reads it live: '+(c.theta>=0?'time decay pays ~$'+Math.abs(c.theta)+'/day':'time costs ~$'+Math.abs(c.theta)+'/day')+', Δ '+(c.delta>=0?'+':'')+c.delta.toFixed(2)+', assignment ~'+c.assign+'%.',
-    settle:undef?'if '+u.sym+' stays inside the short strikes — the tail is uncapped, so watch it.':'if '+u.sym+' holds inside the structure — the credit isn’t booked yet.',
-    lane:real?'real':'paper',isImported:true,real:!!real,isHeld:true};
-  return p;
-}
-/* the one primitive that puts a position INTO the book — used by imports (and reusable
-   for anything else that adds a tracked line). A real imported trade flows through here. */
-function pushToBook(p){ POS.push(p); EXTRA[p.id]=p; byId[p.id]=p;
-  cardEl[p.id]=makeCard(p); }
+/* Front B: the browser-side import engine is deleted. importedPosition() priced a pasted trade
+   locally — it invented an unrealized P/L, a share-of-book-risk percentage and a day move, and it
+   called a finishCand() that no longer exists, so the one path that reached it threw. Importing is
+   a BACKEND journey now (BrokerImportService: preview → verify → confirm); see openImport below. */
 
 var GAP_STANCE='base';                       /* the user's standing gap-risk assumption (outlook dial) */
 /* The served Desk reads the backend risk grid; only the file:// fixture uses the local tail sketch. */
@@ -3450,7 +3673,11 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
   var sym=String(symOverride||(pos&&pos.sym)||'').trim().toUpperCase()||null;
   if(AUTH_PENDING_FORK&&AUTH_PENDING_FORK.symbol!==sym)AUTH_PENDING_FORK=null;
   var u=sym?(univBy[sym]||{sym:sym,name:sym,spot:null,em:null,iv:null,ivRank:null,sector:'Other',chg:null}):null;
-  var planContext=planOverride&&planOverride.context||{},declaration=declarationOverride||null;
+  var planContext=planOverride&&planOverride.context||{};
+  /* A Scout row, a vol-scan row and Home's Analyze button all open the SAME idea. They used to
+     differ: only Home passed the declaration, so every other route arrived as a bare ticker and
+     re-asked what the user had already answered (audit §5.2). The context answers once. */
+  var declaration=declarationOverride||(kind==='idea'&&!planOverride?workspaceDeclaration(sym):null);
   var authoritativeIdea=deskBackendEnabled()&&kind==='idea';
   var symbolRequired=kind==='idea'&&!u;
   var fan=[];
@@ -3460,11 +3687,21 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
        ambient posture — Income · Neutral · 45 days · a named risk preset — and then show those
        back as though the user had chosen them, which is how a scan answers a question nobody
        asked. The plan-resume branch already spoke this dialect; the fresh branch now does too. */
-    goal:planOverride?(planOverride.intent?authHuman(planOverride.intent):'Undeclared'):declaration?authHuman(declaration.goal):'Undeclared',
-    view:planOverride?(planContext.thesis==null?'Undeclared':String(planContext.thesis)):declaration?String(declaration.view):'Undeclared',
-    horizon:planOverride?(planContext.horizonDays==null?'Undeclared':String(planContext.horizonDays)+' trading days'):
-      declaration?String(declaration.horizon):'Undeclared',
-    riskMode:planOverride?(planContext.riskMode?authHuman(planContext.riskMode):'Undeclared'):declaration?String(declaration.riskMode):'Undeclared',
+    /* Each field stands alone. A declaration that names a goal but no view leaves the view
+       UNDECLARED — it must never print the string "null", and must never be filled in. */
+    goal:planOverride?(planOverride.intent?authHuman(planOverride.intent):'Undeclared')
+      :(declaration&&declaration.goal?authHuman(declaration.goal):'Undeclared'),
+    view:planOverride?(planContext.thesis==null?'Undeclared':String(planContext.thesis))
+      :(declaration&&declaration.view!=null&&String(declaration.view)!==''?String(declaration.view):'Undeclared'),
+    horizon:planOverride?(planContext.horizonDays==null?'Undeclared':String(planContext.horizonDays)+' trading days')
+      :(declaration&&declaration.horizon!=null&&String(declaration.horizon)!==''?String(declaration.horizon):'Undeclared'),
+    riskMode:planOverride?(planContext.riskMode?authHuman(planContext.riskMode):'Undeclared')
+      :(declaration&&declaration.riskMode!=null&&String(declaration.riskMode)!==''?String(declaration.riskMode):'Undeclared'),
+    /* Opening a scanned row carries that row's identity; a fresh idea has none, and says so by
+       carrying null rather than by silently adopting whatever was clicked last. */
+    evaluationId:(kind==='idea'&&!planOverride&&WORKSPACE.focusedEvaluationId
+      &&sym&&String(sym).toUpperCase()===String(WORKSPACE.focusedSymbol||'').toUpperCase())
+      ?WORKSPACE.focusedEvaluationId:null,
     resumePlanId:planOverride&&planOverride.id||null,
     resumePlanContext:planOverride?{goal:planOverride.intent==null?null:String(planOverride.intent),
       view:planContext.thesis==null?null:planContext.thesis,
@@ -3474,8 +3711,12 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
       targetCents:planContext.targetCents,holdingsShares:planContext.holdingsShares,
       costBasisCents:planContext.costBasisCents,priceAssumptionCents:planContext.priceAssumptionCents,
       assignmentPreference:planContext.assignmentPreference}:declaration?{
-        goal:String(declaration.goal||'').toUpperCase(),view:String(declaration.view||''),
-        horizon:String(declaration.horizon||''),riskMode:String(declaration.riskMode||'').toLowerCase(),
+        /* An absent field is null, not "" — an empty string reads as "the user declared nothing"
+           to a human but as "declared, and it is blank" to every downstream check. */
+        goal:declaration.goal?String(declaration.goal).toUpperCase():null,
+        view:declaration.view==null||String(declaration.view)===''?null:String(declaration.view),
+        horizon:declaration.horizon==null||String(declaration.horizon)===''?null:String(declaration.horizon),
+        riskMode:declaration.riskMode?String(declaration.riskMode).toLowerCase():null,
         originPlanId:null,targetCents:declaration.targetCents==null?null:Math.round(Number(declaration.targetCents)),
         holdingsShares:declaration.holdingsShares==null?null:Math.round(Number(declaration.holdingsShares)),
         costBasisCents:null,priceAssumptionCents:null,assignmentPreference:null}:null,
@@ -3491,7 +3732,7 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
     govs:{risk:null,bp:null,minPop:null,maxAsn:null,gapLoss:null},govExplicit:{},
     order:{type:'market',price:null,qty:1,lane:null,review:false,placed:false,acknowledged:{}},
     backendPhase:kind==='idea'?(symbolRequired?'underlying-required':deskBackendEnabled()?'loading':null):null,backendError:null,backendState:null,
-    backendNotes:[],backendRejections:[],missingDeclarations:[],strategyCatalog:null,pendingCandidateId:null,
+    backendNotes:[],backendRejections:[],missingDeclarations:[],strategyCatalog:null,pendingCandidateId:null,adoptionError:null,
     _origin:kind==='idea'?null:(origin||null), _payoffOrigin:null};
   /* SHARED-ELEMENT capture: if we came from a held position, grab its on-screen payoff rect so
      the candidate payoff can morph FROM the position's chart (not just grow from the button). */
@@ -3602,7 +3843,8 @@ function stopDecScen(){ (decide&&decide.cands||[]).forEach(function(o){ var st=s
 /* DRAG a strike handle on the Decide payoff → forks to your build + live-edits the strike */
 function startDecStrikeDrag(legIdx, ev){
   if(deskBackendEnabled()&&authoritativeCandidate())return;
-  beginStrikeDrag(ev, { spot:decide.spot||DEC_SPOT, legIdx:legIdx,
+  var spot=decisionSpot(); if(spot==null)return;   /* no reference price, no strike drag */
+  beginStrikeDrag(ev, { spot:spot, legIdx:legIdx,
     getSvg:function(){ return decideEl.querySelector('#decPay'); },
     getLegs:function(){ return decide.buildLegs||[]; },
     onStart:function(){ if(decide.mode!=='build'){ decide.buildLegs=activeCand().legs.map(cloneDecisionLeg); decide.mode='build'; markDecisionValuationStale(); renderDecide(); } },
@@ -3800,12 +4042,19 @@ function leftCol(c){
     '<div class="fanleg"><span><i style="background:var(--profit)"></i>defined</span><span><i style="background:var(--violet)"></i>secured</span><span><i style="background:var(--loss)"></i>undefined</span></div></div>';
   var drawer=decide.leftTool==='caps'?'<div class="raildrawer capsdrawer">'+governorsPanel()+'</div>':decide.leftTool==='catalog'?'<div class="raildrawer catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
   var notice='';
+  /* A refused adoption stands ABOVE the competition, because it changes what the field on screen
+     means: these rows are a fresh comparison, not the row that was clicked. */
+  if(decide.adoptionError){
+    notice='<div class="backendnotice err"><b>The scanned package could not be opened.</b>'+
+      '<span>'+deskEsc(decide.adoptionError)+' The rows below are a fresh comparison for this '+
+      'declaration, not the package you clicked.</span></div>';
+  }
   if(decide.pendingCandidateId){var pendingCandidate=decide.cands.find(function(row){return String(row.id)===String(decide.pendingCandidateId);});
-    notice='<div class="backendnotice"><b>Analyzing '+deskEsc(pendingCandidate&&pendingCandidate.short||'the requested comparison')+'.</b><span>The currently acknowledged package remains visible until the exact selection, outcome, and preview receipts agree.</span></div>';
+    notice+='<div class="backendnotice"><b>Analyzing '+deskEsc(pendingCandidate&&pendingCandidate.short||'the requested comparison')+'.</b><span>The currently acknowledged package remains visible until the exact selection, outcome, and preview receipts agree.</span></div>';
   } else if(deskBackendEnabled()&&decide.kind==='idea'&&((decide.backendPhase==='loading'&&(!decide.backendOperation||decide.backendOperation==='idea'||decide.backendOperation==='candidate'))||decide.backendError)){
-    notice='<div class="backendnotice'+(decide.backendError?' err':'')+'">'+deskEsc(decide.backendError||'Loading quote, expirations, option chain, Plan, and ranked strategies…')+'</div>';
+    notice+='<div class="backendnotice'+(decide.backendError?' err':'')+'">'+deskEsc(decide.backendError||'Loading quote, expirations, option chain, Plan, and ranked strategies…')+'</div>';
   } else if(deskBackendEnabled()&&decide.backendPhase==='comparison-required'){
-    notice=favorableEconomics
+    notice+=favorableEconomics
       ? '<div class="backendnotice"><b>'+favorableEconomics+' favorable after-cost economics · no exact-fit pick — choose a row to analyze it.</b></div>'
       : '<div class="backendnotice"><b>No endorsement at these prices — choose any row to analyze it.</b></div>';
   }
@@ -4892,8 +5141,9 @@ function decisionDraftPackageQty(legs){
   return Math.max(1,(legs||[]).reduce(function(common,leg){return gcd(common,Math.abs(Number(leg.q)||0));},0));
 }
 function newBackendDecisionLeg(legs){
-  var catalog=backendDraftCatalog(), type='p', target=(decide.spot||DEC_SPOT)*.90, strike=nearestBackendStrike(type,target);
-  if(strike==null){type='c';strike=nearestBackendStrike(type,decide.spot||DEC_SPOT);}
+  var spot=decisionSpot(); if(spot==null)return null;
+  var catalog=backendDraftCatalog(), type='p', target=spot*.90, strike=nearestBackendStrike(type,target);
+  if(strike==null){type='c';strike=nearestBackendStrike(type,spot);}
   if(strike==null)return null;
   return {t:type,k:strike,q:decisionDraftPackageQty(legs),expiration:catalog&&catalog.expiration||null,
     multiplier:100,ratio:1,type:type==='c'?'CALL':'PUT',strike:strike,action:'BUY',positionEffect:'OPEN',entryPrice:null};
@@ -4942,12 +5192,12 @@ function legAction(act,i,d){
     }
     renderAfterDecisionChange();return;
   }
-  var inc=strikeInc(decide.spot||DEC_SPOT);
+  var incSpot=decisionSpot(),inc=incSpot==null?null:strikeInc(incSpot);
   if(act==='rm'){ if(L[i]&&L[i].t!=='s')L.splice(i,1); }
   else { var l=L[i]; if(!l)return;
     if(act==='side') l.q=-l.q;
     else if(act==='type') l.t=(l.t==='c'?'p':(l.t==='p'?'c':'s'));
-    else if(act==='strike') l.k=Math.max(inc,l.k+d*inc);
+    else if(act==='strike'){ if(inc==null)return; l.k=Math.max(inc,l.k+d*inc); }
     else if(act==='qty'){ var s=l.q<0?-1:1; if(l.t==='s') l.q=s*Math.max(100,Math.abs(l.q)+d*100); else l.q=s*Math.max(1,Math.abs(l.q)+d); }
   }
   renderAfterDecisionChange();
@@ -5087,9 +5337,11 @@ function wireDecide(){
       if(decide.mode!=='build'||!decide.buildLegs){var addSource=activeCand();decide.buildLegs=addSource.legs.map(cloneDecisionLeg);decide.buildSourceId=addSource.id;decide.mode='build';}
       if(deskBackendEnabled()&&authoritativeCandidate()){
         var backendLeg=newBackendDecisionLeg(decide.buildLegs);
-        if(!backendLeg){decide.draftError='No addable strike is available in the loaded backend chain.';renderDecide();return;}
+        if(!backendLeg){decide.draftError=decisionSpot()==null
+          ?'The underlying price has not arrived yet, so a new leg has no strike to sit against.'
+          :'No addable strike is available in the loaded backend chain.';renderDecide();return;}
         decide.buildLegs.push(backendLeg);
-      } else pushNewLeg(decide.buildLegs, decide.spot||DEC_SPOT);
+      } else { var seedSpot=decisionSpot(); if(seedSpot==null)return; pushNewLeg(decide.buildLegs, seedSpot); }
       renderAfterDecisionChange(); return; }
     /* Front B S2: the [data-tmpl] one-click fixture template row was removed with STRAT_TEMPLATES. */
   });
@@ -5145,98 +5397,276 @@ function overlayHide(el, origin, after){
   window.setTimeout(function(){ el.style.display='none'; if(after)after(); }, DUR);
 }
 
-/* ---- IMPORT: bring in a trade, flag it real vs paper, add it to the book ---- */
-var IMPORTS=[
- {broker:'E*TRADE', sym:'TSLA', struct:'Put credit spread', exp:'19-Sep', pnl:420,  legs:[{t:'p',k:380,q:-2},{t:'p',k:360,q:2}],   raw:'TSLA Sep19 380/360 put spread ×2', defined:true},
- {broker:'E*TRADE', sym:'AAPL', struct:'Covered call',      exp:'15-Aug', pnl:-140, legs:[{t:'s',k:227.5,q:200},{t:'c',k:240,q:-2}], raw:'AAPL 200 sh + Aug15 240C ×2', defined:true},
- {broker:'Schwab',  sym:'NVDA', struct:'Naked put',         exp:'07-Aug', pnl:-310, legs:[{t:'p',k:170,q:-3}],                       raw:'NVDA Aug07 170P ×3  (uncovered)', defined:true},
- {broker:'Schwab',  sym:'MSFT', struct:'Short strangle',    exp:'19-Sep', pnl:180,  legs:[{t:'p',k:440,q:-1},{t:'c',k:500,q:-1}],   raw:'MSFT Sep19 440P / 500C strangle ×1  (undefined)', defined:false}
+/* ======================================================================
+   IMPORT — bring an outside position into a tracked account.
+
+   The desk used to hold four invented brokerage rows and price them in the browser; the served
+   build could not use them at all, so the button did a full page navigation to a hash left over
+   from the deleted SPA. That reload was what wiped the declaration and the world indicator
+   (audit §5.6): the whole workspace lived in memory, and the page was thrown away.
+
+   Now it is one overlay over ONE backend journey — paste → preview → confirm. The server parses
+   the statement, marks each package EXACT FILLS or PACKAGE NET, and writes only the groups the
+   user selected; groups that report a package net without per-leg prices go to the pending
+   quarantine rather than the accounting ledger. Nothing here parses, prices or infers.
+   ====================================================================== */
+var IMPORT_BROKERS=[
+  {id:'ETRADE',label:'E*TRADE'},{id:'SCHWAB',label:'Schwab'},{id:'FIDELITY',label:'Fidelity'},
+  {id:'THINKORSWIM',label:'ThinkOrSwim'},{id:'VANGUARD',label:'Vanguard'},{id:'ROBINHOOD',label:'Robinhood'}
 ];
-var imp={trade:null, real:true, p:null, _origin:null};
+var imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
+  selected:{},destination:{},accounts:[],result:null,busy:false,_origin:null};
 function openImport(origin){
-  /* The served Desk has a real tracked-account ledger and import owner. Never let the visual
-     prototype's sample brokerage rows create a browser-local position beside that source of truth. */
-  if(deskBackendEnabled()){
-    window.location.href='/index.html#/portfolio/book/activity';
-    return;
-  }
-  imp={trade:null, real:true, p:null, _origin:origin||null};
+  imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
+    selected:{},destination:{},accounts:[],result:null,busy:false,_origin:origin||null};
+  workspaceMark();                       /* Back returns where the user actually was */
   importEl.innerHTML=renderImport(); importOpen=true;
   wireImport();
   overlayShow(importEl, origin);
+  if(deskBackendEnabled()&&window.DeskBackend.importAccounts){
+    window.DeskBackend.importAccounts().then(function(accounts){
+      imp.accounts=accounts||[];refreshImport();
+    }).catch(function(error){
+      imp.error=error&&error.message||'The tracked accounts could not be read.';refreshImport();
+    });
+  }
 }
 function closeImport(){ if(!importOpen)return; importOpen=false; var o=imp._origin; overlayHide(importEl, o); }
+
+/* ---- the journey, as three states of one surface ---- */
+function importReadable(){return !!(imp.broker&&String(imp.text||'').trim().length>0);}
+function runImportPreview(){
+  if(!importReadable()||imp.busy)return;
+  imp.busy=true;imp.error=null;imp.phase='reading';imp.result=null;refreshImport();
+  window.DeskBackend.previewBrokerImport({sourceSystem:imp.broker,sourceAccount:imp.account||null,text:imp.text})
+    .then(function(preview){
+      imp.busy=false;imp.preview=preview;imp.phase='previewed';
+      /* Exact-fill groups start selected because they are complete; a package-net group is an
+         explicit choice to quarantine, so the user opts in to it. */
+      imp.selected={};
+      (preview&&preview.parsed&&preview.parsed.groups||[]).forEach(function(g){
+        imp.selected[g.groupKey]=g.kind==='EXACT_FILLS';
+      });
+      refreshImport();
+    }).catch(function(error){
+      imp.busy=false;imp.phase='idle';
+      imp.error=error&&error.message||'The statement could not be read.';refreshImport();
+    });
+}
+function runImportConfirm(){
+  var groups=importSelectedGroups(); if(!groups.length||imp.busy)return;
+  var parsed=imp.preview&&imp.preview.parsed||{};
+  imp.busy=true;imp.error=null;refreshImport();
+  window.DeskBackend.confirmBrokerImport({
+    previewFingerprint:parsed.previewFingerprint,sourceSystem:imp.broker,
+    sourceAccount:imp.account||null,text:imp.text,
+    destinationAccountByFingerprint:imp.destination,
+    groups:groups.map(function(g){return {groupKey:g.groupKey,legs:g.legs.map(importVerifiedLeg)};})
+  }).then(function(result){
+    imp.busy=false;imp.result=result;imp.phase='confirmed';refreshImport();
+    if(window.DeskBackend.loadBook)window.DeskBackend.loadBook().catch(function(){});
+  }).catch(function(error){
+    imp.busy=false;imp.error=error&&error.message||'The import could not be confirmed.';refreshImport();
+  });
+}
+/* The user's verification is an acknowledgement of what the server parsed — never a re-statement
+   of it. Every field is echoed back exactly as parsed; only `acknowledgeInferred` is ours. */
+function importVerifiedLeg(leg){
+  return {legNo:leg.legNo,instrumentType:leg.instrumentType,action:leg.action,
+    positionEffect:leg.positionEffect,symbol:leg.symbol,optionType:leg.optionType,
+    strike:leg.strike,expiration:leg.expiration,quantity:leg.quantity,multiplier:leg.multiplier,
+    acknowledgeInferred:importLegInferred(leg)};
+}
+function importLegInferred(leg){
+  return (leg.checks||[]).some(function(check){return check&&check.verify;});
+}
+/* A count the server did not report is reported as absent, not as zero (§3.2). */
+function importCount(v){var n=authNumber(v);return n==null?'—':Math.round(n).toLocaleString();}
+function importGroups(){return imp.preview&&imp.preview.parsed&&imp.preview.parsed.groups||[];}
+function importSelectedGroups(){return importGroups().filter(function(g){return imp.selected[g.groupKey];});}
+function importMarksFor(groupKey){
+  var all=imp.preview&&imp.preview.marks||[];
+  for(var i=0;i<all.length;i++)if(all[i].groupKey===groupKey)return all[i];
+  return null;
+}
+
+/* ---- render ---- */
 function renderImport(){
-  var rows=IMPORTS.map(function(t,i){
-    return '<button class="improw'+(imp.trade===t?' on':'')+'" data-imp="'+i+'">'+
-      '<span class="ibrk">'+t.broker+'</span>'+
-      '<span class="iraw"><b>'+t.sym+'</b> '+t.raw+'</span>'+
-      '<span class="ipnl '+(t.pnl>=0?'pos':'neg')+'">'+signed(t.pnl)+'</span>'+
-      (t.defined?'':'<span class="badge warn" style="padding:1px 6px">undefined risk</span>')+'</button>';
-  }).join('');
-  var left='<div class="impsrc">'+
-    '<div class="lenshd" style="margin-bottom:10px"><span class="eyebrow">Import from your brokerage</span><span class="hint">connected · demo fills</span></div>'+
-    '<div class="improws">'+rows+'</div>'+
-    '<div class="paste"><div class="field-lbl"><span class="lbl">…or paste a fill</span></div>'+
-      '<input class="pasteinp" placeholder="e.g. AMD Aug21 470/460 put spread ×3" autocomplete="off" spellcheck="false" disabled>'+
-      '<div class="hint" style="margin-top:5px">Paste parsing is stubbed in this prototype — pick a fill above to preview.</div></div>'+
-  '</div>';
-  var right=imp.trade?renderImportPreview():'<div class="imppreview empty"><div class="hint" style="text-align:center;padding:40px 20px">Pick a fill on the left to preview it, flag it real or paper, and add it to your book.</div></div>';
   return '<div class="ovwrap"><div class="dectop">'+
       '<button class="dback" data-imp-act="back">← Back</button>'+
-      '<div class="decttl">Import a trade<span class="dctx"> · bring an outside position into your book</span></div></div>'+
-    '<div class="impgrid">'+left+'<div id="impPreviewCol">'+right+'</div></div></div>';
+      '<div class="decttl">Import a trade<span class="dctx"> · bring an outside position into a tracked account</span></div></div>'+
+    '<div class="impgrid">'+importSourceHTML()+'<div id="impPreviewCol">'+importPreviewHTML()+'</div></div></div>';
 }
-function renderImportPreview(){
-  var t=imp.trade, p=imp.p;
-  var laneNote=imp.real
-    ? 'A <b>real</b> trade you already hold — importing it <b>adds it to your book on the real lane</b> and tracks it. Nothing is sent to your broker; it’s already filled there.'
-    : 'A <b>paper</b> idea — tracked on the practice lane so you can watch and stress-test it without real money.';
-  return '<div class="imppreview">'+
-    '<div class="lenshd"><span class="eyebrow">'+t.sym+' · '+t.struct+'</span><span class="hint">'+p.legStr+'</span></div>'+
-    '<svg class="decpay" id="impPay" style="height:150px;margin:8px 0"></svg>'+
-    '<div class="kgrid boxed" style="grid-template-columns:repeat(4,1fr)">'+
-      kcell('Net',signed(p.net),p.net>=0?'pos':'neg')+
-      kcell('Max loss','−$'+Math.round(p.maxLoss).toLocaleString(),'neg')+
-      kcell('Chance',percentAmount(p.pop),'')+
-      kcell('Capital',money(p.cap),'')+
-    '</div>'+
-    /* engine read — honest, never a rejection */
-    '<div class="'+(imp.real&&p.tone==='warn'?'decband tone-warn':'decband tone-ok')+'" style="margin:12px 0 0"><div class="decmain">'+
-      '<div class="deceyebrow"><span class="badge '+(p.tone||'ok')+'">Engine read</span><span class="hint">'+(t.defined?'defined risk':'undefined risk — analysed, not rejected')+'</span></div>'+
-      '<div class="decread">'+p.read+'</div></div></div>'+
-    '<div class="mechrow" style="margin-top:12px">'+mechGraphic(p)+'</div>'+
-    /* real vs paper flag */
-    '<div class="impflag"><div class="field-lbl"><span class="lbl">Is this a real trade?</span><span class="hint">made outside with real money?</span></div>'+
-      seg3(imp.real?'1':'0',[['1','Real — held at '+t.broker],['0','Paper — hypothetical']],'data-imp-real')+
-      '<div class="hint" style="margin-top:8px;line-height:1.5">'+laneNote+'</div></div>'+
-    '<div class="placefoot"><button class="btn pri wide" data-imp-act="add">↧ Add to book &amp; track — '+(imp.real?'real':'paper')+' lane</button>'+
-      '<div class="placenote">'+(imp.real?'It’s a position you already hold; this just brings it in to track and analyse.':'Tracked on the practice lane.')+'</div></div>'+
+function importSourceHTML(){
+  var brokers=IMPORT_BROKERS.map(function(b){
+    return '<button class="ibrkopt'+(imp.broker===b.id?' on':'')+'" data-imp-broker="'+b.id+'">'+deskEsc(b.label)+'</button>';
+  }).join('');
+  return '<div class="impsrc">'+
+    '<div class="lenshd" style="margin-bottom:10px"><span class="eyebrow">Paste a statement or trade confirmation</span>'+
+      '<span class="hint">read here, written only after you confirm</span></div>'+
+    '<div class="field-lbl"><span class="lbl">Which broker exported it?</span></div>'+
+    '<div class="ibrkopts">'+brokers+'</div>'+
+    '<div class="field-lbl" style="margin-top:12px"><span class="lbl">Account label</span><span class="hint">optional · groups the packages</span></div>'+
+    '<input class="pasteinp" data-imp-account value="'+deskEsc(imp.account||'')+'" placeholder="e.g. Individual ••••4417" autocomplete="off" spellcheck="false">'+
+    '<div class="field-lbl" style="margin-top:12px"><span class="lbl">The rows</span>'+
+      '<span class="hint">paste the export exactly — the parser reads its columns</span></div>'+
+    '<textarea class="pastearea" data-imp-text spellcheck="false" placeholder="Paste the exported rows here.">'+deskEsc(imp.text||'')+'</textarea>'+
+    '<button class="btn pri wide" data-imp-act="read"'+(importReadable()&&!imp.busy?'':' disabled')+' style="margin-top:10px">'+
+      (imp.phase==='reading'?'Reading…':'Read this statement →')+'</button>'+
+    (imp.error?'<div class="backendnotice" style="margin-top:10px">'+deskEsc(imp.error)+'</div>':'')+
   '</div>';
 }
-function selectImport(i){ imp.trade=IMPORTS[i]; imp.p=importedPosition(imp.trade, imp.real); refreshImportPreview(); }
-function setImpReal(v){ imp.real=!!v; if(imp.trade){ imp.p=importedPosition(imp.trade, imp.real); } refreshImportPreview(); }
-function refreshImportPreview(){
-  var col=document.getElementById('impPreviewCol'); if(!col)return;
-  col.innerHTML=imp.trade?renderImportPreview():col.innerHTML;
-  var rows=importEl.querySelectorAll('.improw'); for(var i=0;i<rows.length;i++) rows[i].classList.toggle('on', IMPORTS[+rows[i].getAttribute('data-imp')]===imp.trade);
-  if(imp.p){ var svg=document.getElementById('impPay'); if(svg) drawPayoff(svg, imp.p, true); }
+function importPreviewHTML(){
+  if(imp.result)return importResultHTML();
+  if(imp.phase==='reading')return '<div class="imppreview empty"><div class="hint" style="text-align:center;padding:40px 20px">Reading the statement…</div></div>';
+  if(!imp.preview)return '<div class="imppreview empty"><div class="hint" style="text-align:center;padding:40px 20px">'+
+    'Pick the broker and paste the rows. Everything you see next is what the server read — no package is written until you confirm it.</div></div>';
+  var parsed=imp.preview.parsed||{},groups=importGroups(),quarantine=parsed.quarantine||[];
+  var selected=importSelectedGroups().length;
+  var head='<div class="lenshd"><span class="eyebrow">'+deskEsc(parsed.sourceLabel||imp.broker||'Statement')+'</span>'+
+    '<span class="hint">'+importCount(parsed.rowsRead)+' rows read · '+groups.length+' package'+(groups.length===1?'':'s')+'</span></div>';
+  var body=groups.length?groups.map(importGroupHTML).join('')
+    :'<div class="backendnotice">No package could be read from these rows. Check that the export is the broker format selected on the left.</div>';
+  var quar=quarantine.length?'<div class="impquar"><div class="field-lbl"><span class="lbl">Rows the parser set aside</span>'+
+      '<span class="hint">each with the reason it could not be read</span></div>'+
+      quarantine.map(function(row){
+        return '<div class="iqrow"><span class="iqline">line '+row.line+'</span>'+
+          '<span class="iqref">'+deskEsc(row.externalRef||'—')+'</span>'+
+          '<span class="iqwhy">'+deskEsc(row.reason||'no reason given')+'</span></div>';
+      }).join('')+'</div>':'';
+  var foot=importDestinationsHTML()+'<div class="placefoot"><button class="btn pri wide" data-imp-act="confirm"'+(selected&&!imp.busy?'':' disabled')+'>'+
+      (imp.busy?'Writing…':'↧ Import '+selected+' selected package'+(selected===1?'':'s'))+'</button>'+
+      '<div class="placenote">'+(imp.preview.note?deskEsc(imp.preview.note):'Nothing is written until you press this.')+'</div></div>';
+  return '<div class="imppreview">'+head+body+quar+foot+'</div>';
 }
-function confirmImport(){
-  if(!imp.p)return;
-  var p=imp.p, real=imp.real;
-  pushToBook(p);
-  closeImport();
-  go('book');
-  window.setTimeout(function(){ toast('Tracked in your book — '+(real?'<b style="color:var(--profit)">real</b>':'<span style="color:var(--violet)">paper</span>')+' lane · '+p.sym+' '+p.struct.toLowerCase()); }, 300);
+function importGroupHTML(group){
+  var on=!!imp.selected[group.groupKey],exact=group.kind==='EXACT_FILLS';
+  var marks=importMarksFor(group.groupKey),markByLeg={};
+  (marks&&marks.legs||[]).forEach(function(m){markByLeg[m.legNo]=m;});
+  var head='<div class="ileg ilhead"><span></span><span class="ilqty">qty</span><span></span>'+
+    '<span>contract</span><span class="ilpx">as filled</span><span class="ilmark">mark now</span><span></span></div>';
+  var legs=(group.legs||[]).map(function(leg){
+    var mark=markByLeg[leg.legNo]||{};
+    return '<div class="ileg">'+
+      '<span class="ilact '+(String(leg.action||'').toUpperCase()==='SELL'?'neg':'pos')+'">'+deskEsc(leg.action||'—')+'</span>'+
+      '<span class="ilqty">'+importCount(leg.quantity)+'</span>'+
+      '<span class="ilsym">'+deskEsc(leg.symbol||'—')+'</span>'+
+      '<span class="ilcon">'+importContractHTML(leg)+'</span>'+
+      '<span class="ilpx" title="the price the broker reported on this row">'+importPriceHTML(leg.reportedPrice)+'</span>'+
+      '<span class="ilmark" title="'+deskEsc(importMarkTitle(mark))+'">'+importMarkHTML(mark)+'</span>'+
+      (importLegInferred(leg)?'<span class="badge warn" title="the parser inferred this from the row and needs your acknowledgement">inferred</span>':'')+
+    '</div>';
+  }).join('');
+  var warn=(group.warnings||[]).map(function(w){
+    return '<div class="iwarn">'+deskEsc(w)+'</div>';
+  }).join('');
+  return '<div class="impgroup'+(on?' on':'')+'">'+
+    '<button class="igsel" data-imp-group="'+deskEsc(group.groupKey)+'" aria-pressed="'+(on?'true':'false')+'">'+
+      '<span class="igmark">'+(on?'✓':'')+'</span>'+
+      '<span class="igttl">'+deskEsc(group.externalRef||group.groupKey)+'</span>'+
+      '<span class="badge '+(exact?'ok':'warn')+'">'+(exact?'exact fills':'package net only')+'</span>'+
+      '<span class="ignet">'+importNetHTML(group)+'</span>'+
+    '</button>'+
+    '<div class="iglegs">'+head+legs+'</div>'+warn+
+    (exact?'':'<div class="ighint">This package reports only its total. It is held as a pending import until you supply the per-leg prices — it never enters the accounting ledger on a guess.</div>')+
+  '</div>';
+}
+function importContractHTML(leg){
+  if(String(leg.instrumentType||'').toUpperCase()==='STOCK')return 'shares';
+  var strike=leg.strike==null?'—':Number(leg.strike).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  return deskEsc((leg.expiration||'—')+' · '+strike+' '+String(leg.optionType||'').toUpperCase().slice(0,1));
+}
+function importPriceHTML(price){
+  return price==null?'<span class="dim" title="the row carried no per-leg price">—</span>'
+    :'$'+Number(price).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function importMarkHTML(mark){
+  if(mark.currentMid==null)return '<span class="dim">—</span>';
+  return '<span class="'+(mark.observedEligible?'':'dim')+'">$'+
+    Number(mark.currentMid).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span>';
+}
+function importMarkTitle(mark){
+  if(mark.currentMid==null)return mark.note||'no separately sourced mark is available for this leg';
+  return 'current mark · '+(mark.source||'unattributed source')+(mark.age?' · '+mark.age:'')+
+    (mark.observedEligible?'':' · not observed-eligible');
+}
+/* Cents-exact: the statement reported a package net to the cent, and rounding $2.14 to "+$2"
+   would discard a fact the source stated. */
+function importNetHTML(group){
+  var cents=authNumber(group.packageNetCents);
+  if(cents==null)return '<span class="dim" title="the statement did not report a package net">—</span>';
+  return '<span class="'+(cents>=0?'pos':'neg')+'" title="the package net this statement reported">'+
+    (cents>=0?'+':'−')+'$'+(Math.abs(cents)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</span>';
+}
+/* One destination per source ACCOUNT, chosen once. Packages exported from the same brokerage
+   account land in the same tracked account, so a picker under every package was two controls
+   owning one value — change one and the other still showed the old answer. */
+function importDestinationsHTML(){
+  var groups=importGroups();
+  if(!imp.accounts.length||!groups.length)return '';
+  var seen=[],rows=groups.reduce(function(out,group){
+    var key=group.accountFingerprint||'';
+    if(seen.indexOf(key)>=0)return out;
+    seen.push(key);
+    var chosen=imp.destination[key]||imp.accounts[0]&&imp.accounts[0].id;
+    var count=groups.filter(function(g){return (g.accountFingerprint||'')===key;}).length;
+    var options=imp.accounts.map(function(account){
+      return '<option value="'+deskEsc(account.id)+'"'+(chosen===account.id?' selected':'')+'>'+
+        deskEsc(account.name||account.id)+'</option>';
+    }).join('');
+    return out+'<div class="igdest"><span class="lbl">'+count+' package'+(count===1?'':'s')+
+      ' from '+deskEsc(group.broker||imp.broker||'this statement')+
+      (imp.account?' · '+deskEsc(imp.account):'')+'</span>'+
+      '<select data-imp-dest="'+deskEsc(key)+'">'+options+'</select></div>';
+  },'');
+  return '<div class="impdests"><div class="field-lbl"><span class="lbl">Track them in</span>'+
+    '<span class="hint">the tracked account each package is written to</span></div>'+rows+'</div>';
+}
+function importResultHTML(){
+  var r=imp.result;
+  return '<div class="imppreview">'+
+    '<div class="lenshd"><span class="eyebrow">Imported</span><span class="hint">'+importCount(r.selected)+' package'+(r.selected===1?'':'s')+' selected</span></div>'+
+    '<div class="kgrid boxed" style="grid-template-columns:repeat(3,1fr)">'+
+      kcell('Written to the ledger',importCount(r.exactTransactions),'')+
+      kcell('Held pending prices',importCount(r.pendingImports),'')+
+      kcell('Already imported',importCount(r.duplicates),'')+
+    '</div>'+
+    (r.note?'<div class="decband tone-ok" style="margin-top:12px"><div class="decmain"><div class="decread">'+deskEsc(r.note)+'</div></div></div>':'')+
+    '<div class="placefoot"><button class="btn pri wide" data-imp-act="book">See it in your book →</button></div>'+
+  '</div>';
+}
+/* Re-render the preview column only: the paste box holds focus and a caret, and rebuilding the
+   whole overlay under the user's cursor is what made the old surface feel like it fought back. */
+function refreshImport(){
+  var col=document.getElementById('impPreviewCol');
+  if(col)col.innerHTML=importPreviewHTML();
+  var read=importEl.querySelector('[data-imp-act="read"]');
+  if(read){read.disabled=!importReadable()||imp.busy;read.textContent=imp.phase==='reading'?'Reading…':'Read this statement →';}
+  var opts=importEl.querySelectorAll('[data-imp-broker]');
+  for(var i=0;i<opts.length;i++)opts[i].classList.toggle('on',opts[i].getAttribute('data-imp-broker')===imp.broker);
 }
 function wireImport(){
   if(importEl._wired)return; importEl._wired=1;
   importEl.addEventListener('click',function(e){ var t=e.target;
-    var r=t.closest('[data-imp]'); if(r){ selectImport(+r.getAttribute('data-imp')); return; }
-    var rl=t.closest('[data-imp-real]'); if(rl){ setImpReal(+rl.getAttribute('data-imp-real')); return; }
-    var a=t.closest('[data-imp-act]'); if(a){ var k=a.getAttribute('data-imp-act');
-      if(k==='back') closeImport(); else if(k==='add') confirmImport(); return; }
+    var broker=t.closest('[data-imp-broker]');
+    if(broker){ imp.broker=broker.getAttribute('data-imp-broker'); imp.preview=null; imp.result=null; refreshImport(); return; }
+    var group=t.closest('[data-imp-group]');
+    if(group){ var key=group.getAttribute('data-imp-group'); imp.selected[key]=!imp.selected[key]; refreshImport(); return; }
+    var a=t.closest('[data-imp-act]');
+    if(a){ var k=a.getAttribute('data-imp-act');
+      if(k==='back')closeImport();
+      else if(k==='read')runImportPreview();
+      else if(k==='confirm')runImportConfirm();
+      else if(k==='book'){closeImport();go('book');}
+      return; }
+  });
+  importEl.addEventListener('input',function(e){ var t=e.target;
+    if(t.matches('[data-imp-account]')){imp.account=t.value;return;}
+    if(t.matches('[data-imp-text]')){imp.text=t.value;imp.preview=null;imp.result=null;refreshImport();}
+  });
+  importEl.addEventListener('change',function(e){ var t=e.target;
+    var dest=t.closest('[data-imp-dest]');
+    if(dest)imp.destination[dest.getAttribute('data-imp-dest')]=dest.value;
   });
 }
 
@@ -5588,7 +6018,20 @@ function boot(){
 
   layoutForLevel('book',state.focus);
   updateThread();
-  if(served)window.DeskBackend.loadBook().catch(function(){ /* typed book-error renders through the bridge */ });
+  if(served){
+    /* The context is restored BEFORE the book, so Home paints with the declaration the user
+       already made instead of painting undeclared and then correcting itself. A failed read
+       leaves the desk undeclared and says so — it never fabricates a context. */
+    window.DeskBackend.loadWorkspace().then(function(saved){
+      workspaceHydrate(saved);paintMarketMode();
+      if(state.level==='book'&&BOOK_AUTH.data&&typeof authRenderOpportunityOnly==='function')
+        authRenderOpportunityOnly();
+    }).catch(function(error){
+      toast('Your saved workspace could not be read: '+
+        (error&&error.message||'the request failed')+'. Nothing was restored.');
+    });
+    window.DeskBackend.loadBook().catch(function(){ /* typed book-error renders through the bridge */ });
+  }
 
   cmdEl.addEventListener('keydown',function(e){ if(e.key==='Enter'){ handleCmd(cmdEl.value); } });
   cmdEl.addEventListener('focus',function(){ cmdEl.placeholder='symbol · sector · or learn — XOM · financials · iron condor · theta'; });

@@ -2173,7 +2173,37 @@
         });
         return copyState();
       }
-      var candidates = await loadOrRunStrategy(plan, market, state.context, seq);
+      // A Scout row names the exact evaluation it displayed. Adopt THAT package as the Plan's
+      // structure before any competition is run, so the row the user clicked is the row that
+      // opens (audit §8.2). The server reloads it from its own persisted receipt and refuses if
+      // the declared brief differs; the reason is reported, never papered over with a substitute.
+      var adoptedRun = null;
+      if (context && context.evaluationId) {
+        try {
+          var adopted = await requireApi().post(
+            '/api/plans/' + encodeURIComponent(plan.id) + '/strategy/adopt',
+            { expectedVersion: plan.version, evaluationId: String(context.evaluationId) });
+          if (seq !== state.requestSeq) return null;
+          if (adopted && adopted.plan) { plan = adopted.plan; acceptPlan(plan); }
+          adoptedRun = adopted && adopted.strategy;
+          state.adoptedEvaluationId = String(context.evaluationId);
+          state.adoptionError = null;
+        } catch (adoptionFailure) {
+          state.adoptedEvaluationId = null;
+          state.adoptionError = adoptionFailure && adoptionFailure.message
+            || 'That scanned package could not be adopted.';
+          notify('adoption-unavailable', { error: state.adoptionError, plan: plan });
+        }
+      }
+      // Running a competition on a Plan that just adopted a package is what LOSES the package —
+      // the ranked field would replace the exact row the user clicked. So an adopted run is
+      // published as-is, and the competition is only run when nothing was adopted.
+      var candidates = adoptedRun
+        ? await publishStrategy(adoptedRun,
+            adoptedRun.result && (adoptedRun.result.candidate
+              || (adoptedRun.result.candidates || [])[0]),
+            market, seq, { adopted: true })
+        : await loadOrRunStrategy(plan, market, state.context, seq);
       if (!candidates || seq !== state.requestSeq) return null;
       // A current, fingerprinted competition with no candidates is a valid backend result. The
       // Desk keeps the declaration, evidence, and screening receipts visible and waits for an
@@ -4029,8 +4059,67 @@
     governorTimer = window.setTimeout(flushGovernorRefresh, 180);
   });
 
+  /* ---------------------------------------------------------------------------------------
+     BROKER IMPORT — the desk's only path for bringing an outside position in.
+
+     Every number the surface shows comes from these three reads. The browser parses nothing,
+     prices nothing and decides nothing: the server parses the pasted statement, reports which
+     groups carry exact fills and which carry only a package net, and writes only what the user
+     verified (program §3.1).
+     --------------------------------------------------------------------------------------- */
+  var BROKER_IMPORT_PARSER = 'broker-import-1';
+
+  /* ---------------------------------------------------------------------------------------
+     THE workspace context (program §8.1). One persisted, versioned record; the desk reads it at
+     boot and writes back only the fields that changed. A PATCH is used deliberately: omitted
+     fields RETAIN their stored value, so a surface that touches one thing cannot destroy the
+     declaration — the failure that made Import Trade wipe goal, view, horizon and risk.
+     --------------------------------------------------------------------------------------- */
+  function loadWorkspace() {
+    return requireApi().getFresh('/api/workspace');
+  }
+  /* `expectedRev` makes the write optimistic: if another tab moved the context first, the server
+     refuses rather than silently overwriting a state this desk never saw. */
+  function patchWorkspace(patch) {
+    return requireApi().patch('/api/workspace', patch);
+  }
+
+  function importAccounts() {
+    return requireApi().getFresh('/api/portfolio/accounts').then(function (accounts) {
+      return Array.isArray(accounts) ? accounts : (accounts && accounts.accounts) || [];
+    });
+  }
+
+  function previewBrokerImport(request) {
+    return requireApi().post('/api/portfolio/broker-imports/preview', {
+      parserVersion: BROKER_IMPORT_PARSER,
+      sourceSystem: request && request.sourceSystem,
+      sourceAccount: request && request.sourceAccount,
+      text: request && request.text
+    });
+  }
+
+  function confirmBrokerImport(request) {
+    return requireApi().post('/api/portfolio/broker-imports/confirm', {
+      parserVersion: BROKER_IMPORT_PARSER,
+      previewFingerprint: request && request.previewFingerprint,
+      sourceSystem: request && request.sourceSystem,
+      sourceAccount: request && request.sourceAccount,
+      text: request && request.text,
+      destinationAccountByFingerprint: (request && request.destinationAccountByFingerprint) || {},
+      groups: (request && request.groups) || [],
+      planId: (request && request.planId) || null
+    });
+  }
+
   window.DeskBackend = {
     enabled: function () { return state.enabled; },
+    importParserVersion: function () { return BROKER_IMPORT_PARSER; },
+    loadWorkspace: loadWorkspace,
+    patchWorkspace: patchWorkspace,
+    importAccounts: importAccounts,
+    previewBrokerImport: previewBrokerImport,
+    confirmBrokerImport: confirmBrokerImport,
     state: copyState,
     openIdea: openIdea,
     updatePlanDeclaration: updatePlanDeclaration,

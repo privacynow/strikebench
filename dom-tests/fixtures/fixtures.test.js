@@ -242,6 +242,10 @@ test('Scout fixtures match the scan wire contract in every state', () => {
       assert.ok(['progress', 'complete', 'error'].includes(frame.type));
       if (frame.type === 'progress') {
         assertShape(frame.progress, 'recommend/AutoRecommender.java', 'Progress');
+        assertShape(frame.progress.counts, 'recommend/AutoRecommender.java', 'ScanCounts');
+        // Each count is its own monotonic quantity; none is a fraction of another.
+        Object.values(frame.progress.counts).forEach(value =>
+          assert.ok(Number.isInteger(value) && value >= 0, 'every scan count is a whole number'));
         if (frame.progress.pick) {
           assertShape(frame.progress.pick, 'recommend/AutoRecommender.java', 'Pick');
         }

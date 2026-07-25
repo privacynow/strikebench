@@ -1644,6 +1644,99 @@ async function installBackend(page, options = {}) {
     };
   }
 
+  // Broker import: one preview carrying an exact-fill package, a package-net-only package that
+  // must be quarantined rather than posted, and a row the parser refused with its reason.
+  const brokerImportAccounts = options.brokerImportAccounts || [
+    { id: 'acct-taxable', name: 'Individual ••••4417' },
+    { id: 'acct-ira', name: 'Roth IRA ••••9002' }
+  ];
+  const brokerImportPreviews = [];
+  const brokerImportConfirms = [];
+  const brokerImportPreview = options.brokerImportPreview || {
+    parsed: {
+      parserVersion: 'broker-import-1', sourceSystem: 'ETRADE', sourceLabel: 'E*TRADE / Power E*TRADE',
+      previewFingerprint: 'preview-fp-1', rowsRead: 7,
+      groups: [
+        {
+          groupKey: 'grp-exact', externalRef: 'ETR-88120', accountFingerprint: 'fp-taxable',
+          broker: 'E*TRADE', occurredAt: '2026-07-21T14:31:00Z', packageNetCents: 214,
+          feesCents: 130, kind: 'EXACT_FILLS', warnings: [], payloadFingerprint: 'pay-1',
+          legs: [
+            { line: 3, legNo: 1, instrumentType: 'OPTION', action: 'SELL', positionEffect: 'OPEN',
+              symbol: 'AMD', optionType: 'PUT', strike: '160.00', expiration: '2026-08-21',
+              quantity: 2, multiplier: 100, reportedPrice: '3.15', pastedMark: null,
+              pastedMarkAsOf: null, checks: [] },
+            { line: 4, legNo: 2, instrumentType: 'OPTION', action: 'BUY', positionEffect: 'OPEN',
+              symbol: 'AMD', optionType: 'PUT', strike: '150.00', expiration: '2026-08-21',
+              quantity: 2, multiplier: 100, reportedPrice: '1.01', pastedMark: null,
+              pastedMarkAsOf: null,
+              checks: [{ field: 'positionEffect', value: 'OPEN', sourceColumn: null,
+                verify: true, note: 'the export did not state an opening or closing effect' }] }
+          ]
+        },
+        {
+          groupKey: 'grp-net', externalRef: 'ETR-88121', accountFingerprint: 'fp-taxable',
+          broker: 'E*TRADE', occurredAt: '2026-07-21T15:02:00Z', packageNetCents: -450,
+          feesCents: 65, kind: 'PACKAGE_NET_PENDING',
+          warnings: ['This export reported only the package total for these legs.'],
+          payloadFingerprint: 'pay-2',
+          legs: [
+            { line: 5, legNo: 1, instrumentType: 'OPTION', action: 'BUY', positionEffect: 'OPEN',
+              symbol: 'NVDA', optionType: 'CALL', strike: '190.00', expiration: '2026-09-18',
+              quantity: 1, multiplier: 100, reportedPrice: null, pastedMark: null,
+              pastedMarkAsOf: null, checks: [] }
+          ]
+        }
+      ],
+      quarantine: [
+        { line: 6, externalRef: 'ETR-88122', reason: 'the expiration column was empty' }
+      ]
+    },
+    marks: [
+      { groupKey: 'grp-exact', externalRef: 'ETR-88120', legs: [
+        { legNo: 1, pastedMark: null, pastedMarkAsOf: null, pastedMarkIsCurrent: false,
+          currentBid: '3.05', currentAsk: '3.25', currentMid: '3.15', provenance: 'OBSERVED',
+          age: '2m', source: 'Cboe', observedEligible: true, currentEvidence: 'QUOTE', note: null },
+        { legNo: 2, pastedMark: null, pastedMarkAsOf: null, pastedMarkIsCurrent: false,
+          currentBid: null, currentAsk: null, currentMid: null, provenance: null,
+          age: null, source: null, observedEligible: false, currentEvidence: null,
+          note: 'no separately sourced mark is available for this leg' }
+      ] }
+    ],
+    note: 'Preview only. No tracked account, lot, pending import, Plan, or order was changed.'
+  };
+  const brokerImportConfirm = options.brokerImportConfirm || {
+    selected: 1, exactTransactions: 1, pendingImports: 0, duplicates: 0,
+    items: [{ groupKey: 'grp-exact', externalRef: 'ETR-88120', kind: 'TRANSACTION',
+      id: 'txn-1', duplicate: false, portfolioAccountId: 'acct-taxable', symbol: 'AMD', lots: [] }],
+    note: 'One package was written to the ledger.'
+  };
+
+  // The persisted workspace context. `options.workspaceContext` seeds a restored session;
+  // `options.workspaceUnreadable` / `options.workspaceTransition` seed the two receipts the desk
+  // must say out loud instead of silently starting blank.
+  let workspaceRev = options.workspaceRev == null ? 3 : options.workspaceRev;
+  const workspacePatches = [];
+  const adoptionRequests = [];
+  const workspaceContext = Object.assign({
+    version: 1, generation: 1, world: 'observed', marketLane: 'OBSERVED', accountId: 'acct-1',
+    scopeType: 'BROAD_MARKET', sectorKey: null, focusedSubject: 'BOOK', focusedSymbol: null,
+    focusedPositionId: null, focusedIdeaId: null, focusedEvaluationId: null,
+    goal: null, view: null, horizonDays: null, riskPosture: null,
+    targetCents: null, shareQuantity: null, assignmentPreference: null,
+    routeState: 'book', returnFocus: null
+  }, options.workspaceContext || {});
+  function workspaceState() {
+    return {
+      rev: workspaceRev, updatedAt: '2026-07-25T12:00:00Z', supportedVersion: 1,
+      world: workspaceContext.world, marketLane: workspaceContext.marketLane,
+      accountId: workspaceContext.accountId,
+      context: options.workspaceUnreadable ? null : workspaceContext,
+      transition: options.workspaceTransition || null,
+      unreadable: options.workspaceUnreadable || null
+    };
+  }
+
   await page.route('**/api/**', async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -2024,6 +2117,22 @@ async function installBackend(page, options = {}) {
         strategy: strategyState(),
         ...(selectedCandidate ? { selected: selectedCandidate } : {})
       } : {};
+    } else if (method === 'POST' && url.pathname === `${activePlanPath}/strategy/adopt`) {
+      adoptionRequests.push(body);
+      if (options.adoptionRefusal) {
+        await route.fulfill({ status: 422, contentType: 'application/json',
+          body: JSON.stringify({ error: options.adoptionRefusal }) });
+        return;
+      }
+      planVersion += 1;
+      // Adoption replaces the competition with the ONE package the scanned row showed.
+      const adoptedCandidate = Object.assign({}, strategyCandidates[0], {
+        id: 'cand-adopted', sourceEvaluationId: body.evaluationId
+      });
+      strategyCandidates.splice(0, strategyCandidates.length, adoptedCandidate);
+      selectedCandidate = adoptedCandidate;
+      hasCompetition = true;
+      response = { plan: currentPlan(), run: strategyState(), evaluationId: body.evaluationId };
     } else if (method === 'POST' && url.pathname === `${activePlanPath}/strategy/run`) {
       if (options.strategyRunDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.strategyRunDelayMs));
@@ -2252,6 +2361,33 @@ async function installBackend(page, options = {}) {
         });
       }
       response = { plan: currentPlan(), decision: { state: 'COMMITTED' }, trade: { id: 'trade-desk-test' } };
+    } else if (method === 'GET' && url.pathname === '/api/workspace') {
+      response = workspaceState();
+    } else if (method === 'PATCH' && url.pathname === '/api/workspace') {
+      workspacePatches.push(body);
+      if (body.expectedRev != null && Number(body.expectedRev) !== workspaceRev) {
+        await route.fulfill({ status: 409, contentType: 'application/json',
+          body: JSON.stringify({ error: 'The workspace moved since this desk read it.' }) });
+        return;
+      }
+      // The server merges: fields the patch omits keep their stored value. Reproducing that here
+      // is the point — a harness that replaced the whole record could not catch a surface that
+      // destroys a declaration by omission.
+      Object.keys(body).forEach(field => {
+        if (['version', 'expectedRev', 'world', 'clear'].includes(field)) return;
+        if (body[field] !== undefined) workspaceContext[field] = body[field];
+      });
+      (body.clear || []).forEach(field => { workspaceContext[field] = null; });
+      workspaceRev += 1;
+      response = workspaceState();
+    } else if (method === 'GET' && url.pathname === '/api/portfolio/accounts') {
+      response = brokerImportAccounts;
+    } else if (method === 'POST' && url.pathname === '/api/portfolio/broker-imports/preview') {
+      brokerImportPreviews.push(body);
+      response = brokerImportPreview;
+    } else if (method === 'POST' && url.pathname === '/api/portfolio/broker-imports/confirm') {
+      brokerImportConfirms.push(body);
+      response = brokerImportConfirm;
     } else {
       await route.fulfill({
         status: 404,
@@ -2269,6 +2405,11 @@ async function installBackend(page, options = {}) {
 
   return {
     requests,
+    workspacePatches: () => workspacePatches,
+    adoptionRequests: () => adoptionRequests,
+    workspaceRev: () => workspaceRev,
+    brokerImportPreviews: () => brokerImportPreviews,
+    brokerImportConfirms: () => brokerImportConfirms,
     scenarioCalls: () => scenarioCalls,
     planVersion: () => planVersion,
     setQuote(next) {
@@ -8150,23 +8291,30 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
     assert.equal(await page.locator('#riskMain #authHomeOpportunity').count(), 1,
       'the workbench remains part of Home after a completed scan');
     assert.equal(await page.locator('#sectorBand .authmarketrow').count(), restingMarketRows);
-    await page.evaluate(() => {
-      window.__homeAnalyzeCall = null;
-      window.__homeAnalyzeOriginal = window.enterDecide;
-      window.enterDecide = function (kind, positionId, label, origin, symbol, plan, declarations) {
-        window.__homeAnalyzeCall = { kind, positionId, label, symbol, plan, declarations };
-      };
-    });
+    // Assert the OUTCOME, not the call signature: the idea that opens must already hold what the
+    // user declared on Home. Spying on enterDecide's arguments only proved one caller happened to
+    // pass them along, which is exactly the per-route duplication the one context replaced.
     await page.locator('#authHomeOpportunity .opportunityrow').first().click();
-    await page.waitForFunction(() => window.__homeAnalyzeCall != null);
-    assert.deepEqual(await page.evaluate(() => window.__homeAnalyzeCall), {
-      kind: 'idea', positionId: null, label: 'New idea', symbol: 'MU', plan: null,
-      declarations: {
-        goal: 'INCOME', view: 'Neutral', horizon: '45 trading days', riskMode: 'Balanced',
-        targetCents: null, holdingsShares: null
-      }
+    await page.waitForFunction(() => window.decide != null);
+    assert.deepEqual(await page.evaluate(() => ({
+      kind: window.decide.kind, positionId: window.decide.posId, label: window.decide.act,
+      symbol: window.decide.sym, resumePlanId: window.decide.resumePlanId,
+      goal: window.decide.goal, view: window.decide.view,
+      horizon: window.decide.horizon, riskMode: window.decide.riskMode
+    })), {
+      kind: 'idea', positionId: null, label: 'New idea', symbol: 'MU', resumePlanId: null,
+      goal: 'Income', view: 'Neutral', horizon: '45 trading days', riskMode: 'Balanced'
     }, 'the entire Scout result zooms directly into the canonical New Idea workspace');
-    await page.evaluate(() => { window.enterDecide = window.__homeAnalyzeOriginal; });
+    assert.deepEqual(await page.evaluate(() => ({
+      goal: window.WORKSPACE.goal, view: window.WORKSPACE.view,
+      horizon: workspaceHorizonLabel(window.WORKSPACE.horizonDays),
+      riskPosture: window.WORKSPACE.riskPosture,
+      focusedSymbol: window.WORKSPACE.focusedSymbol
+    })), {
+      goal: 'INCOME', view: 'Neutral', horizon: '45 trading days', riskPosture: 'Balanced',
+      focusedSymbol: 'MU'
+    }, 'one workspace context holds the declaration the idea was opened with');
+    await page.evaluate(() => { if (typeof exitDecide === 'function') exitDecide(); });
     assert.deepEqual(pageErrors, [], `focused Home Scout emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -8980,6 +9128,362 @@ test('Home, New Idea, and Position render one golden receipt identically', async
       + `${divergences.join('\n  - ')}\nCaptured surfaces: ${surfaces}`);
 
     assert.deepEqual(pageErrors, [], `golden-receipt walk emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Import walks the backend broker journey without leaving the desk or pricing anything itself', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, { bookDocuments: populatedBookDocuments() });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+
+    // The declaration the user already made. Import used to reload the page, which is precisely
+    // what threw this away (audit §5.6).
+    await page.evaluate(() => {
+      window.WORKSPACE.goal = 'INCOME';
+      window.WORKSPACE.view = 'Neutral';
+      window.WORKSPACE.horizonDays = 45;
+      window.WORKSPACE.riskPosture = 'Balanced';
+    });
+    const navigations = [];
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+
+    await page.locator('#importBtn').click();
+    await page.waitForSelector('#importStage .impgrid');
+    assert.deepEqual(navigations, [], 'opening Import never navigates the page');
+
+    await page.locator('[data-imp-broker="ETRADE"]').click();
+    await page.locator('[data-imp-text]').fill('Symbol,Action,Qty\nAMD,SELL,2\n');
+    await page.locator('[data-imp-act="read"]').click();
+    await page.waitForSelector('.impgroup');
+
+    const sent = backend.brokerImportPreviews();
+    assert.equal(sent.length, 1, 'one preview request carries the pasted text verbatim');
+    assert.equal(sent[0].parserVersion, 'broker-import-1');
+    assert.equal(sent[0].sourceSystem, 'ETRADE');
+    assert.ok(sent[0].text.includes('AMD,SELL,2'), 'the browser sends the rows unparsed');
+
+    assert.deepEqual(await page.evaluate(() => Array.from(document.querySelectorAll('.ilhead'))
+      .map(head => Array.from(head.children).map(cell => cell.textContent.trim()).filter(Boolean))),
+      [['qty', 'contract', 'as filled', 'mark now'], ['qty', 'contract', 'as filled', 'mark now']],
+      'the two price columns are named, so a filled price is never read as a current mark');
+
+    const groups = await page.evaluate(() => Array.from(document.querySelectorAll('.impgroup'))
+      .map(group => ({
+        selected: group.classList.contains('on'),
+        badge: group.querySelector('.badge').textContent.trim(),
+        net: group.querySelector('.ignet').textContent.trim(),
+        legs: Array.from(group.querySelectorAll('.ileg:not(.ilhead)')).map(leg => ({
+          action: leg.querySelector('.ilact').textContent.trim(),
+          symbol: leg.querySelector('.ilsym').textContent.trim(),
+          contract: leg.querySelector('.ilcon').textContent.trim(),
+          price: leg.querySelector('.ilpx').textContent.trim(),
+          mark: leg.querySelector('.ilmark').textContent.trim(),
+          inferred: !!leg.querySelector('.badge')
+        })),
+        hint: (group.querySelector('.ighint') || {}).textContent || null
+      })));
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0].selected, true, 'an exact-fill package starts selected — it is complete');
+    assert.equal(groups[0].badge, 'exact fills');
+    assert.equal(groups[0].net, '+$2.14',
+      'the package net keeps the cents the statement reported — rounding it to +$2 would discard a stated fact');
+    assert.deepEqual(groups[0].legs, [
+      { action: 'SELL', symbol: 'AMD', contract: '2026-08-21 · 160.00 P', price: '$3.15',
+        mark: '$3.15', inferred: false },
+      { action: 'BUY', symbol: 'AMD', contract: '2026-08-21 · 150.00 P', price: '$1.01',
+        mark: '—', inferred: true }
+    ], 'every leg field is the parser\'s; a leg with no separately sourced mark shows an em dash, not a price');
+    assert.equal(groups[1].selected, false,
+      'a package-net-only group is opt-in, because confirming it quarantines rather than posts it');
+    assert.equal(groups[1].badge, 'package net only');
+    assert.equal(groups[1].legs[0].price, '—', 'no per-leg price is invented for a package-net row');
+    assert.ok(groups[1].hint.includes('pending import'), 'and the surface says what will happen to it');
+
+    const quarantined = await page.evaluate(() => Array.from(document.querySelectorAll('.iqrow'))
+      .map(row => row.querySelector('.iqwhy').textContent.trim()));
+    assert.deepEqual(quarantined, ['the expiration column was empty'],
+      'a refused row is shown with the reason it was refused (§3.2), never dropped');
+
+    // One destination per source account, chosen once — not one picker per package.
+    assert.deepEqual(await page.evaluate(() => Array.from(document.querySelectorAll('.igdest'))
+      .map(row => ({ label: row.querySelector('.lbl').textContent.trim(),
+        fingerprint: row.querySelector('select').getAttribute('data-imp-dest'),
+        chosen: row.querySelector('select').value }))),
+      [{ label: '2 packages from E*TRADE', fingerprint: 'fp-taxable', chosen: 'acct-taxable' }],
+      'both packages came from one brokerage account, so one control owns where they land');
+    assert.equal(await page.locator('#decideStage .impdests').count(), 0,
+      'the import destination block belongs to Import, not to the order ticket');
+    if (process.env.DESK_SHOTS) await page.screenshot({ path: 'shots/import-preview.png' });
+
+    await page.locator('[data-imp-act="confirm"]').click();
+    await page.waitForSelector('[data-imp-act="book"]');
+    if (process.env.DESK_SHOTS) await page.screenshot({ path: 'shots/import-result.png' });
+    const confirms = backend.brokerImportConfirms();
+    assert.equal(confirms.length, 1);
+    assert.equal(confirms[0].previewFingerprint, 'preview-fp-1',
+      'confirmation names the exact preview it was reviewing');
+    assert.deepEqual(confirms[0].groups.map(group => group.groupKey), ['grp-exact'],
+      'only the selected package is confirmed');
+    assert.deepEqual(confirms[0].groups[0].legs.map(leg => leg.acknowledgeInferred), [false, true],
+      'the leg the parser inferred is acknowledged; the fully-stated leg is not');
+    assert.equal(confirms[0].groups[0].legs[0].strike, '160.00',
+      'the confirmed leg echoes the parsed strike exactly, with no browser re-derivation');
+
+    const result = await page.evaluate(() => Array.from(document.querySelectorAll('.kgrid .k'))
+      .map(cell => cell.querySelector('.lbl').textContent.trim() + ': ' + cell.querySelector('.v').textContent.trim()));
+    assert.deepEqual(result, ['Written to the ledger: 1', 'Held pending prices: 0', 'Already imported: 0']);
+
+    assert.deepEqual(navigations, [], 'the whole journey stays on one page');
+    assert.deepEqual(await page.evaluate(() => ({
+      goal: window.WORKSPACE.goal, view: window.WORKSPACE.view,
+      horizon: workspaceHorizonLabel(window.WORKSPACE.horizonDays),
+      riskPosture: window.WORKSPACE.riskPosture
+    })), { goal: 'INCOME', view: 'Neutral', horizon: '45 trading days', riskPosture: 'Balanced' },
+      'and the declaration the user made before importing survives it');
+
+    assert.deepEqual(pageErrors, [], `Import journey emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('the workspace context is restored at boot and patched — never replaced — as it changes', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceRev: 7,
+    workspaceContext: {
+      scopeType: 'SECTOR', sectorKey: 'semiconductors', goal: 'INCOME', view: 'Neutral',
+      horizonDays: 45, riskPosture: 'Balanced', focusedSymbol: 'MU'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.WORKSPACE.rev === 7);
+
+    assert.deepEqual(await page.evaluate(() => ({
+      scope: window.HOME_SCOUT.scope, sector: window.HOME_SCOUT.sector,
+      goal: window.HOME_SCOUT.goal, view: window.homeIdea.view,
+      horizon: window.homeIdea.horizon, risk: window.homeIdea.riskMode,
+      symbol: window.homeIdea.symbol
+    })), {
+      scope: 'sector', sector: 'semiconductors', goal: 'INCOME', view: 'Neutral',
+      horizon: '45 trading days', risk: 'Balanced', symbol: 'MU'
+    }, 'the desk opens holding what the user declared last time, in the words the desk uses');
+
+    // Change ONE declaration. The patch must name only what moved.
+    await page.evaluate(() => { window.homeIdea.view = 'Bullish'; window.workspaceSave(['view']); });
+    await page.waitForFunction(() => window.WORKSPACE.rev === 8);
+    const patches = backend.workspacePatches();
+    assert.equal(patches.length, 1);
+    assert.deepEqual(Object.keys(patches[0]).sort(),
+      ['expectedRev', 'returnFocus', 'version', 'view', 'world'],
+      'a declaration change sends that declaration and its guards — nothing else');
+    assert.equal(patches[0].view, 'Bullish');
+    assert.equal(patches[0].expectedRev, 7, 'the write is guarded by the revision this desk read');
+
+    assert.deepEqual(await page.evaluate(() => ({
+      goal: window.WORKSPACE.goal, horizonDays: window.WORKSPACE.horizonDays,
+      riskPosture: window.WORKSPACE.riskPosture, sectorKey: window.WORKSPACE.sectorKey
+    })), { goal: 'INCOME', horizonDays: 45, riskPosture: 'Balanced', sectorKey: 'semiconductors' },
+      'and every declaration the patch did not name is still there — omission never un-declares');
+
+    assert.deepEqual(pageErrors, [], `workspace restore emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('an unreadable stored workspace is reported with its reason instead of silently starting blank', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceUnreadable: { storedVersion: 99, supportedVersion: 1,
+      reason: 'it was written by a newer build (version 99); this build reads version 1' }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.WORKSPACE_NOTICE != null);
+
+    const notice = await page.evaluate(() => window.WORKSPACE_NOTICE);
+    assert.match(notice, /not restored/, 'the desk says the workspace was not restored');
+    assert.match(notice, /version 99/, 'and quotes the server\'s reason verbatim rather than paraphrasing it');
+    assert.deepEqual(await page.evaluate(() => ({
+      goal: window.WORKSPACE.goal, view: window.WORKSPACE.view,
+      horizonDays: window.WORKSPACE.horizonDays, riskPosture: window.WORKSPACE.riskPosture
+    })), { goal: null, view: null, horizonDays: null, riskPosture: null },
+      'an unreadable context leaves every declaration undeclared — it never invents one (§3.5)');
+
+    assert.deepEqual(pageErrors, [], `unreadable workspace emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a clicked Scout row opens the exact package it displayed, and a refusal says so', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: { goal: 'INCOME', view: 'Neutral', horizonDays: 45, riskPosture: 'Balanced' }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+
+    // A completed scan whose row names the evaluation behind it.
+    await page.evaluate(() => {
+      window.HOME_OPPORTUNITY = { phase: 'ready', error: null, progress: null, partial: [], data: {
+        picks: [{ symbol: 'AMD', opportunity: { score: 81 }, bestIdea: {
+          available: true, evaluationId: 'eval-scout-77', resultKey: 'key-77',
+          family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
+          economicVerdict: 'FAVORABLE', horizon: '45D', realizedVolEvAfterCostsCents: 4200
+        } }], frontier: null, skipped: [], notes: []
+      } };
+      window.authRenderOpportunityOnly();
+    });
+    await page.waitForSelector('.opportunityrow[data-auth-evaluation]');
+    assert.equal(await page.getAttribute('.opportunityrow[data-auth-evaluation]', 'data-auth-evaluation'),
+      'eval-scout-77', 'the row on screen names the evaluation it is showing');
+
+    await page.locator('.opportunityrow[data-auth-evaluation]').click();
+    await page.waitForFunction(() => window.decide != null);
+    assert.equal(await page.evaluate(() => window.decide.evaluationId), 'eval-scout-77',
+      'the opened idea carries the clicked row\'s identity, not just its ticker');
+    await page.waitForFunction(() => window.decide && window.decide.cands.length > 0);
+    const adoptions = backend.adoptionRequests();
+    assert.equal(adoptions.length, 1, 'exactly one adoption is requested for the clicked row');
+    assert.equal(adoptions[0].evaluationId, 'eval-scout-77');
+    assert.ok(adoptions[0].expectedVersion != null,
+      'the adoption is guarded by the Plan version the desk was looking at');
+
+    assert.deepEqual(pageErrors, [], `Scout adoption emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a scanned package that can no longer be produced is named and refused, never substituted', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: { goal: 'INCOME', view: 'Neutral', horizonDays: 45, riskPosture: 'Balanced' },
+    adoptionRefusal: 'That scanned package (eval-scout-77) is no longer available in this market. '
+      + 'Scan again to price it; no substitute package was selected.'
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.evaluate(() => {
+      window.HOME_OPPORTUNITY = { phase: 'ready', error: null, progress: null, partial: [], data: {
+        picks: [{ symbol: 'AMD', opportunity: { score: 81 }, bestIdea: {
+          available: true, evaluationId: 'eval-scout-77', resultKey: 'key-77',
+          family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
+          economicVerdict: 'FAVORABLE', horizon: '45D', realizedVolEvAfterCostsCents: 4200
+        } }], frontier: null, skipped: [], notes: []
+      } };
+      window.authRenderOpportunityOnly();
+    });
+    await page.locator('.opportunityrow[data-auth-evaluation]').click();
+    await page.waitForFunction(() => window.decide && window.decide.adoptionError != null);
+
+    const notice = await page.textContent('#decideStage .backendnotice.err');
+    assert.match(notice, /no longer available in this market/,
+      'the server\'s reason is shown verbatim');
+    assert.match(notice, /no substitute package was selected/,
+      'and it states plainly that nothing was substituted');
+    assert.match(notice, /fresh comparison for this declaration, not the package you clicked/,
+      'so the rows that DO appear cannot be mistaken for the row that was clicked');
+
+    assert.deepEqual(pageErrors, [], `refused adoption emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('two structures on one symbol are two Scout rows, and each opens its own package', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: { goal: 'INCOME', view: 'Neutral', horizonDays: 45, riskPosture: 'Balanced' }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+
+    // The frontier answers two different questions about ONE ticker. Both are real answers.
+    await page.evaluate(() => {
+      window.HOME_OPPORTUNITY = { phase: 'ready', error: null, progress: null, partial: [], data: {
+        picks: [{ symbol: 'IWM', opportunity: { score: 74 }, signals: {}, bestIdea: {
+          available: true, evaluationId: 'eval-spread', resultKey: 'key-spread',
+          family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
+          economicVerdict: 'FAVORABLE', horizon: '45D', realizedVolEvAfterCostsCents: 3100
+        } }],
+        frontier: { destinationAccountId: 'acct-1', decisionRanking: [
+          { symbol: 'IWM', strategy: 'CREDIT_PUT_SPREAD', economicVerdict: 'FAVORABLE',
+            qualification: 'FAVORABLE', decisionScore: 74, evaluationId: 'eval-spread',
+            identity: { key: 'key-spread', symbol: 'IWM', family: 'CREDIT_PUT_SPREAD',
+              expiration: '2026-09-18' } },
+          { symbol: 'IWM', strategy: 'COVERED_CALL', economicVerdict: 'FAVORABLE',
+            qualification: 'FAVORABLE', decisionScore: 68, evaluationId: 'eval-covered',
+            identity: { key: 'key-covered', symbol: 'IWM', family: 'COVERED_CALL',
+              expiration: '2026-08-21' } }
+        ] },
+        skipped: [], notes: []
+      } };
+      window.authRenderOpportunityOnly();
+    });
+    await page.waitForSelector('.opportunityrow');
+
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('.opportunityrow'))
+      .map(row => ({
+        symbol: row.querySelector('strong').textContent.trim(),
+        evaluation: row.getAttribute('data-auth-evaluation'),
+        detail: row.querySelector('small').textContent.trim()
+      })));
+    assert.equal(rows.length, 2,
+      'a bull put spread and a covered call on IWM are two answers, not one row that hides the other');
+    assert.deepEqual(rows.map(row => row.evaluation), ['eval-spread', 'eval-covered'],
+      'each row names its own evaluation, so clicking one cannot open the other');
+    assert.deepEqual(rows.map(row => row.symbol), ['IWM', 'IWM']);
+    assert.match(rows[0].detail, /expires 2026-09-18/,
+      'the row states the exact expiration the identity carries, rather than deriving one');
+    assert.match(rows[1].detail, /expires 2026-08-21/);
+
+    assert.deepEqual(pageErrors, [], `multi-structure Scout emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }

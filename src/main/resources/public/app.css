@@ -1411,7 +1411,15 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .opportunitycontrols{display:flex;align-items:center;gap:7px 12px;margin-bottom:7px;min-width:0;flex-wrap:wrap}.opportunitycontrol{display:inline-flex;align-items:center;min-width:0;border:1px solid var(--line-soft);border-radius:6px;overflow:hidden;background:var(--panel-2)}.opportunitycontrol>b{padding:3px 6px;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.opportunitycontrol button{min-height:24px;padding:3px 7px;border:0;border-left:1px solid var(--line-soft);background:transparent;color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}.opportunitycontrol button:hover{background:var(--row-hover);color:var(--text)}.opportunitycontrol button.on{background:var(--accent-wash);color:var(--accent)}.opportunitycontrol button small{color:var(--faint);font-family:var(--mono)}
 .scoutactivegrid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.12fr) minmax(380px,.88fr);gap:9px}.scoutactivegrid>.scoutidlefield{margin-top:0}.scoutresultcard{min-width:0;min-height:0;padding:9px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);display:flex;flex-direction:column}.scoutresultcard .opportunityprompt{margin:auto 0}.scoutresultcard .opportunityrows{flex:1}
 .scoutstart{height:100%;display:flex;flex-direction:column;gap:7px}.scoutstartgrid{min-height:0;display:flex;flex-direction:column;gap:6px}.scoutlaunch{margin-top:auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--accent-wash)}.scoutlaunch>span{min-width:0;color:var(--dim);font-size:var(--f-2xs);line-height:1.35}.scoutlaunch .scoutprimary{min-width:180px;min-height:36px}
-.scoutprogress{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center;margin-top:6px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs)}.scoutprogress span{grid-column:1/-1}.scoutprogress b{color:var(--text)}.scoutprogress meter{width:100%;height:5px;accent-color:var(--accent)}.opportunityrows.provisional .opportunityrow{border-style:dashed}.opportunityrows.provisional .opportunityrow small:after{content:" · provisional";color:var(--accent)}
+.scoutprogress{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px 8px;align-items:center;margin-top:6px;padding:7px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs)}
+.scoutprogress b{color:var(--text)}
+.scoutprogress meter{width:100%;height:5px;accent-color:var(--accent)}
+.scoutphase{letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:700;white-space:nowrap}
+.scoutmsg{color:var(--dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 120px}
+/* the four counts: each its own quantity, none sharing a denominator with another */
+.scoutcounts{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 13px;min-width:0}
+.scoutcount{color:var(--faint);white-space:nowrap}
+.scoutcount b{font-family:var(--mono)}.opportunityrows.provisional .opportunityrow{border-style:dashed}.opportunityrows.provisional .opportunityrow small:after{content:" · provisional";color:var(--accent)}
 .scoutwaiting{flex:1;min-height:52px;margin-top:5px;padding:9px;border:1px dashed var(--line-soft);border-radius:7px;display:grid;place-items:center;color:var(--faint);font-size:var(--f-2xs);line-height:1.4;text-align:center}
 .emptyopportunitypanel #authEmptyOpportunity,.emptyopportunitypanel #authHomeOpportunity{flex:1;min-height:0}.emptyopportunitypanel .opportunitylens{height:100%;display:flex;flex-direction:column}.scoutidlefield{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,.85fr);gap:10px;margin-top:9px}.scoutidlecard{min-width:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--raise);display:flex;flex-direction:column;gap:8px}.scoutidlecard .lenshd{margin:0}.scoutgoalread{margin-top:auto;padding:8px;border-left:2px solid var(--accent);background:var(--accent-wash);color:var(--dim);font-size:var(--f-xs);line-height:1.45}.scoutgoalread b{color:var(--text)}
 .opportunitycomp{display:flex;align-items:center;gap:6px;margin-top:5px;padding:5px 7px;border:1px dashed var(--line-soft);border-radius:6px;color:var(--faint);font-size:var(--f-2xs);overflow:hidden;white-space:nowrap}.opportunitycomp>span:first-child{color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.05em}.opportunitycomp b{min-width:0;color:var(--text);font-family:var(--mono);font-weight:600}.opportunitycomp b small{display:none}.opportunitycomp em{font-style:normal;color:var(--faint)}.opportunitycomp>em:last-child{margin-left:auto;overflow:hidden;text-overflow:ellipsis}
@@ -2464,7 +2472,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .placebox{border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:13px 15px}
 .psec{margin-bottom:12px}
 .psec:last-child{margin-bottom:0}
-.psec .field-lbl{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+/* ONE label row wherever a control needs a name and an aside. It was scoped to .psec, so every
+   other use rendered as a bare block and the label ran straight into its hint with no gap. */
+.field-lbl{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px}
+.field-lbl .hint{text-align:right}
 .pricehint{font-size:var(--f-xs);color:var(--faint);margin-top:5px}.pricehint b{color:var(--dim);font-family:var(--mono)}
 .placefoot{border-top:1px solid var(--line);margin-top:13px;padding-top:12px}
 .placefoot .btn.wide{width:100%;justify-content:center;display:flex}
@@ -2508,26 +2519,65 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .ovwrap .dectop{margin-bottom:14px}
 
 /* IMPORT */
-.impgrid{display:grid;grid-template-columns:minmax(360px,.9fr) minmax(520px,1.35fr);gap:20px;align-items:start;width:100%;max-width:2100px;margin:0 auto}
-.impsrc{border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:14px 15px}
-.improws{display:flex;flex-direction:column;gap:6px}
-.improw{display:grid;grid-template-columns:64px 1fr auto auto;align-items:center;gap:11px;border:1px solid var(--line);
-  background:var(--panel);border-radius:8px;padding:9px 11px;cursor:pointer;text-align:left;
-  transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
-.improw:hover{border-color:var(--accent-2);background:#0f1c22}
-.improw.on{border-color:var(--accent);background:var(--sel-wash)}
-.improw .ibrk{font-size:var(--f-xs);letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:700}
-.improw .iraw{font-size:var(--f-xs);color:var(--dim);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.improw .iraw b{color:var(--text)}
-.improw .ipnl{font-family:var(--mono);font-weight:700;font-size:var(--f-sm)}
-.improw .ipnl.pos{color:var(--profit)} .improw .ipnl.neg{color:var(--loss)}
-.paste{margin-top:14px;padding-top:13px;border-top:1px solid var(--line-soft)}
-.pasteinp{width:100%;background:#0d131c;border:1px solid var(--line);border-radius:7px;color:var(--dim);
+.impgrid{display:grid;grid-template-columns:minmax(360px,.8fr) minmax(560px,1.45fr);gap:20px;align-items:stretch;width:100%;max-width:2100px;margin:0 auto}
+/* the paste box takes the height the preview column needs, so the two sides read as one surface
+   rather than a short form beside a tall result */
+.impsrc{display:flex;flex-direction:column;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:14px 15px}
+.impsrc .pastearea{flex:1 1 auto}
+.pasteinp{width:100%;background:#0d131c;border:1px solid var(--line);border-radius:7px;color:var(--text);
   font-family:var(--mono);font-size:var(--f-xs);padding:9px 11px}
+.pastearea{width:100%;min-height:200px;resize:vertical;background:#0d131c;border:1px solid var(--line);
+  border-radius:7px;color:var(--text);font-family:var(--mono);font-size:var(--f-xs);line-height:1.6;padding:10px 11px}
+.pasteinp:focus,.pastearea:focus{outline:none;border-color:var(--accent)}
+.ibrkopts{display:flex;flex-wrap:wrap;gap:6px}
+.ibrkopt{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 12px;
+  color:var(--dim);font-size:var(--f-xs);font-weight:600;cursor:pointer;
+  transition:border-color var(--mo-quick) var(--mo-ease),color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
+.ibrkopt:hover{border-color:var(--accent-2);color:var(--text)}
+.ibrkopt.on{border-color:var(--accent);background:var(--sel-wash);color:var(--text)}
 .imppreview{border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:14px 16px}
 .imppreview.empty{display:flex;align-items:center;justify-content:center;min-height:280px}
-.impflag{margin-top:13px;padding-top:12px;border-top:1px solid var(--line-soft)}
-.impflag .seg{margin-top:2px}
+
+/* one parsed package: its identity + selection, then its legs as a table the eye can scan down */
+.impgroup{border:1px solid var(--line);border-radius:9px;background:var(--panel);margin-top:10px;overflow:hidden;
+  transition:border-color var(--mo-quick) var(--mo-ease)}
+.impgroup.on{border-color:var(--accent)}
+.igsel{display:grid;grid-template-columns:20px 1fr auto auto;align-items:center;gap:10px;width:100%;
+  padding:9px 12px;background:none;border:0;border-bottom:1px solid var(--line-soft);cursor:pointer;text-align:left}
+.impgroup.on .igsel{background:var(--sel-wash)}
+.igmark{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;
+  border:1px solid var(--line);color:var(--bg);background:transparent;font-size:11px;font-weight:800;line-height:1}
+.impgroup.on .igmark{background:var(--accent);border-color:var(--accent)}
+.igttl{font-family:var(--mono);font-size:var(--f-xs);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ignet{font-family:var(--mono);font-weight:700;font-size:var(--f-sm)}
+.ignet .pos{color:var(--profit)} .ignet .neg{color:var(--loss)}
+.iglegs{display:flex;flex-direction:column}
+.ileg{display:grid;grid-template-columns:52px 46px 62px 1fr 84px 84px 78px;align-items:center;gap:10px;
+  padding:6px 12px;font-family:var(--mono);font-size:var(--f-xs);color:var(--dim);border-top:1px solid var(--line-soft)}
+.ileg:first-child{border-top:0}
+/* the two price columns carry different facts — what the broker filled, and what it marks now */
+.ilhead{color:var(--faint);font-family:var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  font-size:var(--f-2xs);font-weight:700;padding-top:7px;padding-bottom:3px}
+.ilact{font-weight:700;letter-spacing:.04em}
+.ilact.pos{color:var(--profit)} .ilact.neg{color:var(--loss)}
+.ilqty,.ilpx,.ilmark{text-align:right}
+.ilsym{color:var(--text);font-weight:700}
+.ilpx{color:var(--text)}
+.iwarn{padding:6px 12px;font-size:var(--f-xs);color:var(--caution);border-top:1px solid var(--line-soft)}
+.ighint{padding:8px 12px;font-size:var(--f-xs);color:var(--faint);line-height:1.55;border-top:1px solid var(--line-soft)}
+.impdests{margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)}
+.igdest{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 0}
+.igdest .lbl{font-size:var(--f-xs);color:var(--dim)}
+.igdest select{background:#0d131c;border:1px solid var(--line);border-radius:6px;color:var(--text);
+  font-size:var(--f-xs);padding:5px 8px}
+
+/* rows the parser refused, each with its reason — absence is shown, never dropped */
+.impquar{margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)}
+.iqrow{display:grid;grid-template-columns:64px 120px 1fr;align-items:baseline;gap:10px;padding:4px 0;
+  font-size:var(--f-xs);color:var(--faint)}
+.iqline{font-family:var(--mono)}
+.iqref{font-family:var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.iqwhy{line-height:1.5}
 
 /* BOOK-RISK */
 .rkhero{display:flex;align-items:center;gap:22px;margin-left:auto;padding-left:18px;border-left:1px solid var(--line-soft)}

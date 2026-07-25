@@ -182,16 +182,31 @@ function pick(index, overrides) {
   });
 }
 
-/** `AutoRecommender.Progress` — one streamed frame's payload. */
+/**
+ * `AutoRecommender.Progress` — one streamed frame's payload.
+ *
+ * `phaseCompleted`/`phaseTotal` describe ONLY the phase named in the same frame; they are not a
+ * scan-wide fraction and their denominator changes when the phase does. The durable quantities are
+ * the four `ScanCounts`, which only rise and never share a denominator.
+ */
 function progress(phase, completed, total, overrides) {
+  const settings = Object.assign({}, overrides || {});
+  const counts = Object.assign({
+    universeConsidered: completed,
+    evidenceEligible: completed,
+    packagesEvaluated: completed * 3,
+    rowsRetained: settings.pick ? 1 : 0
+  }, settings.counts || {});
+  delete settings.counts;
   return wire.nonNull(Object.assign({
     phase: phase,
-    completed: completed,
-    total: total,
+    phaseCompleted: completed,
+    phaseTotal: total,
+    counts: counts,
     symbol: DEFAULT_UNIVERSE[Math.min(completed, DEFAULT_UNIVERSE.length - 1)],
     pick: null,
     message: null
-  }, overrides || {}));
+  }, settings));
 }
 
 /**

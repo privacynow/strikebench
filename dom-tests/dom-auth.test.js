@@ -253,7 +253,7 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
     });
     await request('/api/workspace', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ route: 'plans', privateMarker: 'owner-a-only' })
+      body: JSON.stringify({ version: 1, routeState: '#/plans/owner-a-only' })
     });
     const account = await request('/api/portfolio/accounts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -292,7 +292,8 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
   assert.equal(isolation.planById.status, 404);
   assert.equal(isolation.workspace.status, 200);
   assert.equal(isolation.workspace.body.rev, 0);
-  assert.equal(isolation.workspace.body.state, undefined);
+  // A second identity gets an undeclared workspace context, never the first identity's.
+  assert.equal(isolation.workspace.body.context, undefined);
   assert.equal(isolation.accounts.status, 200);
   assert.deepEqual(isolation.accounts.body.accounts, []);
   assert.equal(isolation.accountById.status, 404);
