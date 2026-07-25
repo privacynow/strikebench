@@ -2011,7 +2011,7 @@ function authScoutResultHTML(expanded){
   if(state.phase==='loading'){
     var progress=state.progress||{},partial=authPartialOpportunityRowsHTML(state.partial);
     var progressBlock=authScoutProgressHTML(progress);
-    var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'<div class="scoutwaiting">Rows appear as soon as the first symbol completes; exact pricing follows in the same stream.</div>';
+    var partialBlock=partial?'<div class="opportunityrows provisional">'+partial+'</div>':waitingHTML('Rows appear as soon as the first symbol completes; exact pricing follows in the same stream.');
     var loading=(expanded?'<div class="opportunityprompt"><span><b>Scanning '+sector+scope+' for '+goal+'.</b> Rows appear as each symbol completes; the final order waits for the Book-fit checks.</span><button class="btn pri scoutprimary" disabled>Scanning…</button></div>':'')+progressBlock+partialBlock;
     return loading;
   }
@@ -2242,7 +2242,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   }
   document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market</span>'+authHomeSectorChipsHTML()+'</div>'+marketBody+'</div>';
   var planRows=plans.map(function(row){var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode;return '<button type="button" class="authlistrow authlistbutton" data-scroll-row data-auth-plan-id="'+deskEsc(p.id||'')+'"><span class="authrowmain"><b>'+deskEsc((p.symbol||'—')+' · '+(p.title&&!/^\s*desk\b/i.test(p.title)?p.title:'Desk '+authHuman(p.intent)))+'</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+(ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+(declared?'Resume →':'Declare →')+'</span></button>';});
-  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+(planRows.length?'<div class="authlist elegantscroll" id="homePlansList">'+planRows.join('')+'</div><div class="overflowmeta planoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>':'<div class="authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
+  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+(planRows.length?'<div class="authlist elegantscroll" id="homePlansList">'+planRows.join('')+'</div><div class="overflowmeta planoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>':'<div class="deskabsent authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
   var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(authHomePrice(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Shape →</button></div>';});
   document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Watchlist</span><span class="hint">'+watchSource.length+' markets'+(sectorLens&&sectorLens.available?' · '+deskEsc(sectorLens.label):'')+'</span></div>'+sectorNotice+'<div class="authmarketwatch elegantscroll" id="homeWatchList">'+(watchRows.join('')||'<div class="backendnotice">No prices are available for the active market watch.</div>')+'</div><div class="overflowmeta watchoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div></div>';
   /* a news panel is HEADLINES — every one reachable through the elegant list, none amputated */
@@ -2887,6 +2887,29 @@ function decisionSpot(){
 var decideEl, decide=null;
 
 function deskBackendEnabled(){ return !!(window.DeskBackend&&window.DeskBackend.enabled()); }
+/* ================= THREE STATES THAT ARE NOT A RESULT (audit M3, program §3.2) =================
+   The desk had ten ways to say "not this". They were not ten designs of one thing; they were three
+   different facts wearing ten costumes, and the difference between them is what a reader needs:
+
+     WAITING      — work is in flight or has not been asked for. Nothing is missing yet.
+     ABSENT       — there is genuinely nothing here, and there is a next step.
+     UNAVAILABLE  — something WAS expected and could not be produced. It must state why.
+
+   Each builder below is the one grammar for its fact. `evidenceGapHTML` takes the reason as a
+   required argument on purpose: an unavailable thing that cannot say why is the exact failure §3.2
+   names, and this makes it impossible to render one by accident. */
+function waitingHTML(message){
+  return '<div class="deskwaiting" role="status">'+deskEsc(message)+'</div>';
+}
+function absentHTML(headline,explanation,action){
+  return '<div class="deskabsent"><b>'+deskEsc(headline)+'</b><p>'+deskEsc(explanation)+'</p>'+
+    (action?'<div class="emptyactions">'+action+'</div>':'')+'</div>';
+}
+function evidenceGapHTML(headline,reason,action){
+  if(!reason)reason='No reason was reported for this gap.';
+  return '<div class="backendnotice err" role="status"><b>'+deskEsc(headline)+'</b>'+
+    '<span>'+deskEsc(reason)+'</span>'+(action||'')+'</div>';
+}
 function deskEsc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
 function authoritativeCandidate(){ var c=decide&&activeCand(); return c&&c.authoritative?c:null; }
 function authoritativeAssessment(c){return c&&c.authoritative&&c.evaluation&&c.evaluation.assessment||{};}
@@ -5546,9 +5569,10 @@ function importSourceHTML(){
 }
 function importPreviewHTML(){
   if(imp.result)return importResultHTML();
-  if(imp.phase==='reading')return '<div class="imppreview empty"><div class="hint">Reading the statement…</div></div>';
-  if(!imp.preview)return '<div class="imppreview empty"><div class="hint">'+
-    'Pick the broker and paste the rows. Everything you see next is what the server read — no package is written until you confirm it.</div></div>';
+  if(imp.phase==='reading')return '<div class="imppreview empty">'+waitingHTML('Reading the statement…')+'</div>';
+  if(!imp.preview)return '<div class="imppreview empty">'+waitingHTML(
+    'Pick the broker and paste the rows. Everything you see next is what the server read — '+
+    'no package is written until you confirm it.')+'</div>';
   var parsed=imp.preview.parsed||{},groups=importGroups(),quarantine=parsed.quarantine||[];
   var selected=importSelectedGroups().length;
   var head='<div class="lenshd"><span class="eyebrow">'+deskEsc(parsed.sourceLabel||imp.broker||'Statement')+'</span>'+
