@@ -8064,3 +8064,172 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 14
 }
 
 
+
+/* ---------------------------------------------------------------------------------------------
+   STYLE SNAPSHOT INSTRUMENT (program §10 geometry lane).
+   Captures computed styles + boxes for EVERY rendered element across the real surfaces and
+   viewports, reusing this file's mocked backend so no fixture is duplicated. Skipped unless
+   STYLE_SNAPSHOT_OUT is set, so it never slows the normal lane:
+
+     STYLE_SNAPSHOT_OUT=/tmp/before.json node --test --test-name-pattern="style snapshot" desk-backend.test.js
+
+   Existing verification only ever saw the 59-element boot DOM, which is why three separate CSS
+   deletions passed review and still broke Idea/Position/mobile.
+   --------------------------------------------------------------------------------------------- */
+const SNAPSHOT_PROPS = ['display','position','overflowX','overflowY','width','height','marginTop',
+  'marginBottom','marginLeft','marginRight','paddingTop','paddingBottom','paddingLeft','paddingRight',
+  'fontSize','fontWeight','lineHeight','color','backgroundColor','borderTopWidth','borderTopColor',
+  'borderRadius','flexGrow','flexShrink','flexBasis','flexDirection','flexWrap','gridTemplateColumns',
+  'gridTemplateRows','gridArea','whiteSpace','textOverflow','clipPath','zIndex','opacity','minHeight',
+  'maxHeight','minWidth','maxWidth','gap','alignItems','justifyContent','textAlign','transform'];
+
+/* Wait for the DOM to STOP changing. Async receipts (news, quotes, opportunity rows) land at
+   different moments per run; capturing mid-settle made the element count vary between identical
+   runs, which an index-keyed diff then reported as hundreds of phantom changes. */
+async function settleDom(page) {
+  await page.waitForFunction(() => {
+    const n = document.querySelectorAll('body *').length;
+    const prev = window.__settleCount, stable = window.__settleStable || 0;
+    window.__settleCount = n;
+    window.__settleStable = (prev === n) ? stable + 1 : 0;
+    const animating = (document.getAnimations ? document.getAnimations() : [])
+      .some(a => a.playState === 'running' || a.playState === 'pending');
+    return window.__settleStable >= 4 && !animating;
+  }, null, { timeout: 20000, polling: 250 }).catch(() => {});
+}
+
+async function captureStyles(page) {
+  await settleDom(page);
+  /* Key every element by a STABLE structural path, never by index: an element appearing or
+     disappearing must show up as exactly that, not shift every later row. */
+  return page.evaluate(props => {
+    const out = {};
+    const path = el => {
+      const parts = [];
+      for (let n = el; n && n.tagName && n.tagName !== 'BODY'; n = n.parentElement) {
+        let i = 1;
+        for (let s = n.previousElementSibling; s; s = s.previousElementSibling) {
+          if (s.tagName === n.tagName) i++;
+        }
+        parts.unshift(`${n.tagName}[${i}]`);
+      }
+      return parts.join('/');
+    };
+    document.querySelectorAll('body *').forEach(el => {
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      const cls = el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className;
+      out[path(el)] = `.${cls}#${Math.round(r.width)}x${Math.round(r.height)}`
+        + `@${Math.round(r.left)},${Math.round(r.top)}|${props.map(p => cs[p]).join('|')}`;
+    });
+    return out;
+  }, SNAPSHOT_PROPS);
+}
+
+const SNAPSHOT_VIEWPORTS = [
+  { width: 2560, height: 1440 }, { width: 1920, height: 1080 },
+  { width: 1440, height: 900 }, { width: 390, height: 844 }
+];
+
+test('style snapshot across surfaces and viewports', { skip: !process.env.STYLE_SNAPSHOT_OUT }, async () => {
+  const fsp = await import('node:fs/promises');
+  const out = {};
+  for (const viewport of SNAPSHOT_VIEWPORTS) {
+    const tag = `${viewport.width}x${viewport.height}`;
+
+    // --- Book / Home, and Position (same context: Position is reached from the Book) ---
+    {
+      const context = await browser.newContext({ viewport });
+      const page = await context.newPage();
+      page.setDefaultTimeout(15000);
+      await installBackend(page, { bookDocuments: populatedBookDocuments() });
+      await page.goto(deskUrl);
+      await waitForDeskBoot(page);
+      await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 15000 });
+      await page.waitForSelector(`#stage[data-book-authority="ready"] #book .card[data-id="${BOOK_TRADE_ID}"]`, { timeout: 15000 });
+      await page.waitForFunction(() => {
+        const running = document.getAnimations ? document.getAnimations() : [];
+        return !running.some(a => a.playState === 'running' || a.playState === 'pending');
+      }, null, { timeout: 15000 }).catch(() => {});
+      out[`book@${tag}`] = await captureStyles(page);
+
+      await page.evaluate(id => window.go('position', id), BOOK_TRADE_ID);
+      await page.waitForSelector('#stage.lv-position', { timeout: 15000 }).catch(() => {});
+      await page.waitForFunction(() => {
+        const running = document.getAnimations ? document.getAnimations() : [];
+        return !running.some(a => a.playState === 'running' || a.playState === 'pending');
+      }, null, { timeout: 15000 }).catch(() => {});
+      out[`position@${tag}`] = await captureStyles(page);
+      await context.close();
+    }
+
+    // --- Idea / Decide ---
+    {
+      const { context, page } = await openAuthoritativeDesk({ viewport });
+      await page.waitForSelector('#mcFan .mcinteraction', { timeout: 15000 }).catch(() => {});
+      await page.waitForFunction(() => {
+        const running = document.getAnimations ? document.getAnimations() : [];
+        return !running.some(a => a.playState === 'running' || a.playState === 'pending');
+      }, null, { timeout: 15000 }).catch(() => {});
+      out[`idea@${tag}`] = await captureStyles(page);
+      await context.close();
+    }
+  }
+  await fsp.writeFile(process.env.STYLE_SNAPSHOT_OUT, JSON.stringify(out));
+  const summary = Object.keys(out).map(k => `${k}=${Object.keys(out[k]).length}`).join(' ');
+  console.log('STYLE_SNAPSHOT ' + summary);
+});
+
+/* Runtime selector census: which stylesheet selectors actually MATCH a live DOM, across every
+   surface and viewport. Static class analysis cannot answer this (a selector can be reachable
+   through markup no grep can see), so liveness is measured, not inferred.
+     SELECTOR_CENSUS_IN=/tmp/selectors.json SELECTOR_CENSUS_OUT=/tmp/hits.json \
+       node --test --test-name-pattern="selector census" desk-backend.test.js            */
+test('selector census across surfaces', { skip: !process.env.SELECTOR_CENSUS_IN }, async () => {
+  const fsp = await import('node:fs/promises');
+  const selectors = JSON.parse(await fsp.readFile(process.env.SELECTOR_CENSUS_IN, 'utf8'));
+  const hits = new Set();
+  async function probe(page) {
+    const matched = await page.evaluate(list => {
+      const found = [];
+      for (const sel of list) {
+        // probe structure only: pseudo-classes/elements describe state, not reachability
+        const probeSel = sel.replace(/::?[-\w]+(\([^)]*\))?/g, '').trim();
+        if (!probeSel) { found.push(sel); continue; }
+        try { if (document.querySelector(probeSel)) found.push(sel); } catch { found.push(sel); }
+      }
+      return found;
+    }, selectors);
+    matched.forEach(s => hits.add(s));
+  }
+  for (const viewport of [{ width: 2560, height: 1440 }, { width: 1920, height: 1080 },
+                          { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    {
+      const context = await browser.newContext({ viewport });
+      const page = await context.newPage();
+      page.setDefaultTimeout(15000);
+      await installBackend(page, { bookDocuments: populatedBookDocuments() });
+      await page.goto(deskUrl);
+      await waitForDeskBoot(page);
+      await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 15000 });
+      await probe(page);
+      await page.evaluate(id => window.go('position', id), BOOK_TRADE_ID);
+      await page.waitForSelector('#stage.lv-position', { timeout: 15000 }).catch(() => {});
+      await probe(page);
+      await context.close();
+    }
+    {
+      const { context, page } = await openAuthoritativeDesk({ viewport });
+      await page.waitForSelector('#mcFan .mcinteraction', { timeout: 15000 }).catch(() => {});
+      await probe(page);
+      // exercise each inspect lens so lens-scoped rules are reachable
+      for (const lens of ['fit', 'mechanics', 'book', 'paths']) {
+        await page.locator(`[data-dec="inspect"][data-inspect="${lens}"]`).click({ timeout: 4000 }).catch(() => {});
+        await probe(page);
+      }
+      await context.close();
+    }
+  }
+  await fsp.writeFile(process.env.SELECTOR_CENSUS_OUT, JSON.stringify([...hits]));
+  console.log(`SELECTOR_CENSUS matched=${hits.size} of ${selectors.length}`);
+});
