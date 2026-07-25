@@ -1576,13 +1576,17 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .ensembleresult .mchd{display:flex;align-items:center;justify-content:space-between;gap:7px}
 .mcviewseg{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line-soft);border-radius:6px;background:var(--ground)}
 .mcviewseg button{border:0;border-radius:4px;background:transparent;color:var(--faint);font:700 var(--f-2xs)/1 var(--sans);padding:4px 7px;cursor:pointer}.mcviewseg button.on{background:var(--accent-wash);color:var(--accent)}.mcviewseg button:disabled{opacity:.4;cursor:default}
-.ensembleresult .mcfan{height:auto;min-height:120px;align-self:stretch;clip-path:inset(0 100% 0 0);animation:mcreveal .9s var(--mo-ease) forwards}
+/* The fan is VISIBLE by default and the sweep is a progressive enhancement. It used to sit at
+   clip-path:inset(0 100% 0 0) and depend on the reveal animation to become visible — so under
+   prefers-reduced-motion (which kills every animation) the path fan stayed permanently clipped:
+   invisible AND unclickable. Never hide content behind an animation. */
+.ensembleresult .mcfan{height:auto;min-height:120px;align-self:stretch;clip-path:inset(0 0 0 0);animation:mcreveal .9s var(--mo-ease)}
 .mcfan .mcpath{transition:stroke-opacity var(--mo-quick) var(--mo-ease),stroke-width var(--mo-quick) var(--mo-ease)}.mcfan .mcpath.hot{stroke:var(--accent)!important;stroke-opacity:1!important;stroke-width:2.3!important}.mcfan .mcpathhit{fill:none;stroke:transparent;stroke-width:11;pointer-events:none}.mcfan .mcinteraction{fill:transparent;pointer-events:all;cursor:crosshair}
 .mcpathread{min-width:0;white-space:normal;line-height:1.3;color:var(--faint);font-size:var(--f-2xs)}
 .ensembleresult .mcstats{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:0}
 .ensembleresult .mcs:nth-child(n+5){display:none}
 .ensembleresult .mcv{font-size:var(--f-xs)}
-@keyframes mcreveal{to{clip-path:inset(0 0 0 0)}}
+@keyframes mcreveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
 /* coherence panel — one verdict + four honest checks + plain-English why */
 .cohpanel .cohverdict{margin-left:auto;font-size:var(--f-sm);font-weight:800;padding:2px 9px;border-radius:5px;border:1px solid var(--line);letter-spacing:.01em}
 .cohverdict.on{color:var(--profit);border-color:var(--profit);background:var(--profit-wash)}
@@ -6943,15 +6947,18 @@ function centerCol(c){
       '</div>'+
       '<div class="upanel scenpanel" data-scen-key="'+scenSurfaceKey(c)+'">'+decScenInner(c)+'</div>'+
     '</div>'+
-    /* the column's leftover becomes a real market-data instrument (the ONE history widget),
-       not void — full context strip lives here; the right-column band keeps chain + news */
-    (c.authoritative?'<div class="upanel decmarketwide"><div class="lenshd"><span class="eyebrow">Market data — '+deskEsc(decide.sym)+'</span><span class="hint">stored daily bars · drag to zoom · click ranges</span></div>'+histWidgetHTML('decide',decide.sym)+'</div>':'')+
+    /* ONE market owner for this surface: quote, history, package book, and research live together
+       in the centre column. There is no second standing market band in the right column — that
+       duplicate was a second owner of the same facts AND it stole the decision lens's height,
+       crushing the Evidence & Paths fan into an invisible strip. */
+    decMarketPanel(c)+
   '</div>';
 }
-/* --- RIGHT column: UNDERSTAND only (coherence · mechanics · evidence · gap · book) — the tall
-   scenario spectrum moved to the center, so this column breathes single-column, no scroll. --- */
+/* --- RIGHT column: UNDERSTAND only (coherence · mechanics · evidence · gap · book). With the
+   market band moved to the centre, the active lens owns ALL remaining right-column height, so the
+   path fan gets a usable plot instead of a sliver inside a scroller. --- */
 function rightCol(c){
-  return '<div class="deccol dcright">'+decUnderstand(c)+decMarketBand(c)+'</div>';
+  return '<div class="deccol dcright">'+decUnderstand(c)+'</div>';
 }
 /* the Decide "how it reacts" panel body — bars + shared playback foot (drives the hero) */
 function decScenInner(c){
@@ -7403,7 +7410,7 @@ function candidateQuoteReceiptHTML(c,market){
       '<div class="mcreceipt"><span>Nearby '+deskEsc(ambientExpiration||'ambient')+' chain withheld here because this package expires '+deskEsc(expirations.join(' + ')||'on another date')+'.</span></div>';
   return '<div class="packagebook"><div class="packagebookhead"><span>Side / contract</span><span>Strike</span><span>Expiry</span><span>Bid / ask</span><span>Entry side</span><span>Receipt</span></div>'+body+'</div>'+ambient;
 }
-function decMarketBand(c){
+function decMarketPanel(c){
   if(!c||!c.authoritative)return '';
   var bs=decide.backendState||{},market=bs.market||{},research=market.research||{},quote=market.quote||{},chain=market.chain||{};
   var ctx=decMarketCtx(),row=ctx.row||{},history=row.history||{},news=row.news||{};
@@ -7419,7 +7426,15 @@ function decMarketBand(c){
     (items.length?'<div class="authnews compactnews">'+items.map(function(n){var href=/^https?:\/\//.test(String(n.url||''))?String(n.url):'#';return '<a href="'+deskEsc(href)+'" target="_blank" rel="noopener"><b>'+deskEsc(n.headline||'Untitled headline')+'</b><small>'+deskEsc([n.source,n.classification?authHuman(n.classification):null].filter(Boolean).join(' · '))+'</small></a>';}).join('')+'</div>':
      ctx.phase==='loading'?'<div class="backendnotice">Headlines are loading…</div>':'<div class="backendnotice">No current headlines for '+deskEsc(decide.sym)+'.</div>')+
     (research.regime&&research.regime.headline?'<div class="mcreceipt"><span>'+deskEsc(research.regime.headline)+'</span></div>':'')+'</div>';
-  return '<div class="upanel marketlens decmarketband"><div class="lenshd"><span class="eyebrow">Market &amp; research</span><span class="hint">always in view · same owners as Home</span></div>'+head+'<div class="marketctx">'+chainBlock+newsBlock+'</div></div>';
+  /* ONE market panel for this surface — quote hero, stored history, the exact package book, and
+     research together in the centre column. It keeps both class names so the existing centre
+     (.decmarketwide) sizing and band (.decmarketband) internals apply with no new CSS. */
+  return '<div class="upanel marketlens decmarketwide decmarketband">'
+    + '<div class="lenshd"><span class="eyebrow">Market &amp; research — '+deskEsc(decide.sym)+'</span>'
+    + '<span class="hint">stored daily bars · drag to zoom · click ranges</span></div>'
+    + head
+    + histWidgetHTML('decide',decide.sym)
+    + '<div class="marketctx">'+chainBlock+newsBlock+'</div></div>';
 }
 function drawDecMarketHist(){
   var wrap=document.querySelector('[data-hist-host="decide"]');if(wrap)drawHistChart(wrap);

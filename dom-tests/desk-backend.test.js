@@ -2120,7 +2120,9 @@ async function startNewIdea(page, symbol = 'AMD') {
 }
 
 async function openAuthoritativeDesk(options = {}) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await browser.newContext({
+    viewport: options.viewport || { width: 1440, height: 900 }
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   const pageErrors = [];
@@ -7961,3 +7963,82 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
     await context.close();
   }
 });
+
+/* ---------------------------------------------------------------------------------------------
+   GEOMETRY LANE — Evidence & Paths (program §6.3, §10).
+   A test that merely clicks the fan and passes is insufficient: the fan can be a one-pixel strip
+   inside a scroller and still receive a synthetic click. These assertions describe the PRODUCT
+   requirement — the active lens owns the remaining right-column height, the fan itself never
+   scrolls, its plot is actually useful, and its stats stay visible.
+   --------------------------------------------------------------------------------------------- */
+for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
+  test(`Evidence & Paths fan owns a usable plot at ${viewport.width}x${viewport.height}`, async () => {
+    const { context, page, pageErrors } = await openAuthoritativeDesk({ viewport });
+    try {
+      // Readiness is the DRAWN fan (its interaction surface) with its reveal animation settled —
+      // a state signal, not a sleep. While the sweep runs the plot is intentionally clipped.
+      await page.waitForSelector('#mcFan .mcinteraction');
+      await page.waitForFunction(() => {
+        const fan = document.querySelector('#mcFan');
+        if (!fan || !fan.querySelector('.mcinteraction')) return false;
+        const running = (fan.getAnimations ? fan.getAnimations() : [])
+          .some(a => a.playState === 'running' || a.playState === 'pending');
+        return !running;
+      });
+      const geo = await page.evaluate(() => {
+        const fan = document.querySelector('#mcFan');
+        const rect = fan.getBoundingClientRect();
+        // Walk ancestors: none between the fan and the decide grid may be a scroll owner.
+        const scrollingAncestors = [];
+        for (let el = fan.parentElement; el && !el.classList.contains('decgrid'); el = el.parentElement) {
+          const cs = getComputedStyle(el);
+          const scrolls = (cs.overflowY === 'auto' || cs.overflowY === 'scroll')
+            && el.scrollHeight - el.clientHeight > 2;
+          if (scrolls) {
+            scrollingAncestors.push({
+              cls: (el.getAttribute('class') || el.tagName),
+              overflow: el.scrollHeight - el.clientHeight
+            });
+          }
+        }
+        const stats = document.querySelector('.ensembleresult .mcstats');
+        const statsRect = stats && stats.getBoundingClientRect();
+        const right = document.querySelector('.deccol.dcright');
+        const rightRect = right && right.getBoundingClientRect();
+        // Hit-test the plot centre: the click target must actually be the fan, not an overlay.
+        const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+        const hit = document.elementFromPoint(cx, cy);
+        return {
+          plotHeight: Math.round(rect.height),
+          plotWidth: Math.round(rect.width),
+          scrollingAncestors,
+          statsVisible: !!(statsRect && statsRect.height > 0 && statsRect.width > 0),
+          withinRightColumn: !!(rightRect && rect.top >= rightRect.top - 1
+            && rect.bottom <= rightRect.bottom + 1),
+          centreHitsFan: !!(hit && (hit === fan || fan.contains(hit))),
+          centreHit: hit ? (hit.tagName + '.' + (hit.getAttribute('class') || '')
+            + (hit.closest('[data-mc-surface]') ? ' [in-mc-surface]' : '')
+            + (hit.closest('#mcFan') ? ' [in-fan]' : '')) : null,
+          // There must be exactly ONE market owner on this surface.
+          marketPanels: document.querySelectorAll('.decgrid .marketlens').length,
+          marketPanelsInRightColumn: document.querySelectorAll('.dcright .marketlens').length
+        };
+      });
+
+      assert.ok(geo.plotHeight >= 260,
+        `the active path fan needs a usable plot, got ${geo.plotHeight}px (want >=260)`);
+      assert.deepEqual(geo.scrollingAncestors, [],
+        `no ancestor of the fan may scroll: ${JSON.stringify(geo.scrollingAncestors)}`);
+      assert.equal(geo.statsVisible, true, 'ensemble stats stay visible beside the fan');
+      assert.equal(geo.withinRightColumn, true, 'the fan renders inside its own column bounds');
+      assert.equal(geo.centreHitsFan, true,
+        `the plot centre hit-tests to the fan — nothing overlays the interactive paths (hit=${geo.centreHit})`);
+      assert.equal(geo.marketPanelsInRightColumn, 0,
+        'the right column hosts the decision lens only — no second standing market band');
+      assert.equal(geo.marketPanels, 1, 'exactly one market owner on the Idea surface');
+      assert.deepEqual(pageErrors, [], `fan geometry emitted page errors: ${pageErrors.join('\n')}`);
+    } finally {
+      await context.close();
+    }
+  });
+}
