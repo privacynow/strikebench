@@ -32,6 +32,9 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input id="cmd" placeholder="symbol · sector · or learn — XOM · financials · iron condor · theta" autocomplete="off" spellcheck="false">
       </div>
+      <!-- Who this book belongs to. Present only on a private instance: an open instance has no
+           identity to show, and showing an empty one would imply a session that does not exist. -->
+      <div class="whoami" id="whoami" hidden></div>
     </div>
   </div>
 
@@ -5197,6 +5200,63 @@ function wireGloss(){ var pop=document.getElementById('glossPop'); if(!pop||pop.
     pop.style.left=left+'px'; pop.style.top=top+'px'; void pop.offsetWidth; pop.classList.add('on'); });
   document.addEventListener('mouseout',function(e){ var g=e.target.closest&&e.target.closest('.gloss[data-term]'); if(g){ pop.classList.remove('on'); pop.style.display='none'; } }); }
 
+/* ---- Identity gate -------------------------------------------------------------------
+   A private instance answers every protected read with 401. Without a gate the desk boots
+   into a wall of failed panels and offers no way in, so identity is resolved BEFORE any
+   Book, market, or plan request leaves the browser. Signed out, exactly two public reads
+   have happened: who am I, and how is this instance configured. ---------------------- */
+var IDENTITY={authEnabled:false,authenticated:true,user:null,loginUrl:'/auth/login',logoutUrl:null};
+function signInName(){var u=IDENTITY.user;return u&&(u.name||u.email||u.id)||null;}
+function renderSignIn(loginUrl){
+  var app=document.getElementById('app'); if(!app)return;
+  app.setAttribute('data-auth','signed-out');
+  app.innerHTML='<div class="signin"><div class="signin-card">'
+    +'<div class="signin-mark"></div>'
+    +'<h1>Sign in</h1>'
+    +'<p>StrikeBench is a private instance. Your book, plans, and practice history stay with '
+    +'your identity — nothing here is shared or public.</p>'
+    +'<a class="btn pri" href="'+deskEsc(loginUrl||IDENTITY.loginUrl||'/auth/login')+'">Continue to sign in</a>'
+    +'<p class="signin-foot">You will come back to this desk once your identity is verified.</p>'
+    +'</div></div>';
+}
+/* One owner for a revoked session: any 401 from any read, mid-session or at boot. */
+window.addEventListener('strikebench:auth-required',function(e){
+  if(document.getElementById('app').getAttribute('data-auth')==='signed-out')return;
+  renderSignIn(e&&e.detail&&e.detail.loginUrl);
+});
+
+function bootDesk(){
+  var app=document.getElementById('app');
+  if(app)app.setAttribute('data-auth',IDENTITY.authEnabled?'signed-in':'open');
+  renderWhoami();
+  boot();
+}
+function renderWhoami(){
+  var el=document.getElementById('whoami'); if(!el)return;
+  if(!IDENTITY.authEnabled||!IDENTITY.authenticated){el.hidden=true;el.innerHTML='';return;}
+  var name=signInName();
+  el.hidden=false;
+  el.innerHTML='<span class="whoname" title="'+deskEsc(name||'signed in')+'">'+deskEsc(name||'Signed in')+'</span>'
+    +'<a class="wholink" href="'+deskEsc(IDENTITY.logoutUrl||'/auth/logout')+'">Sign out</a>';
+}
+
+function bootIdentity(){
+  if(!deskBackendEnabled()||!window.API){bootDesk();return;}
+  window.API.get('/api/auth/me').then(function(me){
+    IDENTITY.authEnabled=!!(me&&me.authEnabled);
+    IDENTITY.authenticated=!(me&&me.authEnabled)||!!(me&&me.authenticated);
+    IDENTITY.user=me&&me.user||null;
+    IDENTITY.loginUrl=me&&me.loginUrl||'/auth/login';
+    IDENTITY.logoutUrl=me&&me.logoutUrl||null;
+    if(!IDENTITY.authenticated){renderSignIn(IDENTITY.loginUrl);return;}
+    bootDesk();
+  }).catch(function(){
+    /* Identity itself is unreachable. The desk boots and every panel reports its own typed
+       failure — inventing a signed-in session here would be the worse lie. */
+    bootDesk();
+  });
+}
+
 function boot(){
   var served=deskBackendEnabled();
   if(served){POS=[];byId={};state.focus=null;BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};}
@@ -5266,8 +5326,8 @@ function boot(){
   window.addEventListener('resize',function(){ window.cancelAnimationFrame(rzTimer); rzTimer=window.requestAnimationFrame(redraw); });
 }
 
-if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);
-else boot();
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bootIdentity);
+else bootIdentity();
 /* read-only layout probe for cross-browser audits (?probe=1): fixed overlay reporting the
    real computed geometry, so a screenshot of ANY browser yields numbers, not guesses. */
 (function(){if(!/[?&]probe=1/.test(location.search))return;

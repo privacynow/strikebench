@@ -3564,3 +3564,22 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 @media(max-width:900px){
   .compactbookfutures .bookfanlegend{height:auto;max-height:none;overflow:visible}
 }
+
+/* ---- Identity ------------------------------------------------------------------------
+   The signed-out surface is the whole page: a private instance has exactly one thing a
+   visitor can do, so nothing else competes with it. body{overflow:hidden} owns the desk's
+   scrolling, so the card centres inside the viewport and stays inside 320px. */
+.signin{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+.signin-card{width:min(420px,100%);min-width:280px;background:var(--raise);border:1px solid var(--line);
+  border-radius:14px;box-shadow:var(--pop-shadow),var(--raise-sheen);padding:26px 24px;text-align:left}
+.signin-mark{width:30px;height:30px;border-radius:9px;margin-bottom:16px;
+  background:conic-gradient(from 210deg,var(--accent),var(--violet),var(--accent));opacity:.9}
+.signin-card h1{margin:0 0 8px;font-size:var(--f-xl);font-weight:650;letter-spacing:-.01em}
+.signin-card p{margin:0 0 18px;color:var(--dim);font-size:var(--f-base);line-height:1.5}
+.signin-card .btn.pri{display:block;width:100%;text-align:center;text-decoration:none;padding:10px 14px;font-size:var(--f-md)}
+.signin-card .signin-foot{margin:14px 0 0;font-size:var(--f-sm);color:var(--faint)}
+.whoami{display:flex;align-items:center;gap:8px;min-width:0;padding-left:10px;margin-left:2px;border-left:1px solid var(--line-soft)}
+.whoname{font-size:var(--f-sm);color:var(--dim);max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wholink{font-size:var(--f-sm);color:var(--accent);text-decoration:none;white-space:nowrap}
+.wholink:hover{text-decoration:underline}
+@media(max-width:900px){.whoami{display:none}}

@@ -3924,6 +3924,11 @@
       if (!response.ok) {
         var failureText = await response.text(), failurePayload = null;
         try { failurePayload = failureText ? JSON.parse(failureText) : null; } catch (ignored) {}
+        // The scan is the one read that bypasses the API client (it streams NDJSON), so it must
+        // report a revoked session to the same owner rather than surfacing as a scan failure.
+        if (response.status === 401 && window.API && window.API.signalAuthRequired) {
+          window.API.signalAuthRequired(failurePayload && failurePayload.loginUrl);
+        }
         var failure = new Error(failurePayload && (failurePayload.detail || failurePayload.error)
           || ('HTTP ' + response.status));
         failure.status = response.status;

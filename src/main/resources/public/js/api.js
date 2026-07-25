@@ -2,14 +2,20 @@
 (function () {
   'use strict';
 
-  function assertMutableRuntime() {
-    var appStale = window.App && window.App.state && window.App.state.serverStale;
-    var blockingBanner = document.getElementById('stale-banner');
-    if (appStale || (blockingBanner && blockingBanner.dataset.blocking === 'true')) {
-      var error = new Error('StrikeBench was updated while this session was running. Restart the app and reload before making changes.');
-      error.code = 'STALE_RUNTIME';
-      throw error;
-    }
+  // A private instance can revoke this browser's session at any moment (idle expiry, sign-out in
+  // another tab, an allowlist change). Every caller would otherwise invent its own reading of a
+  // 401 — an empty Book, a "market unavailable" panel, a silent nothing. One notifier owns it:
+  // the desk listens once and shows the sign-in surface, and the answer that provoked it is
+  // dropped from the cache so nothing signed-out is ever replayed to a later session.
+  var authRequired = false;
+  function signalAuthRequired(loginUrl) {
+    if (authRequired) return;
+    authRequired = true;
+    flushCache();
+    try {
+      window.dispatchEvent(new CustomEvent('strikebench:auth-required',
+        { detail: { loginUrl: loginUrl || '/auth/login' } }));
+    } catch (e) { /* the desk still shows the failure through its own typed error path */ }
   }
 
   // Reads that belong to a route render are cancellable as a group. A hash navigation starts
@@ -23,7 +29,6 @@
   }
 
   async function request(method, path, body) {
-    if (method !== 'GET') assertMutableRuntime();
     var opts = { method: method, headers: { 'Accept': 'application/json' } };
     if (method === 'GET' && navigationAbort) opts.signal = navigationAbort.signal;
     if (body !== undefined) {
@@ -35,6 +40,7 @@
     var json = null;
     try { json = text ? JSON.parse(text) : null; } catch (e) { /* non-JSON */ }
     if (!res.ok) {
+      if (res.status === 401) signalAuthRequired(json && json.loginUrl);
       var err = new Error((json && (json.detail || json.error)) || ('HTTP ' + res.status));
       err.status = res.status;
       err.payload = json;
@@ -50,7 +56,9 @@
   // and fresh visits still hit the server because the TTL has lapsed by then.
   var CACHE_TTL_MS = 20 * 1000;
   var CACHE_MAX = 40;
-  var NEVER_CACHE = /^\/api\/(health|status)\b/; // staleness/diagnostics must never be stale
+  // staleness/diagnostics must never be stale, and neither may identity: a cached "signed in"
+  // would outlive the session it described.
+  var NEVER_CACHE = /^\/api\/(health|status|auth\/me)\b/;
   var cache = new Map(); // path -> {at, promise}
   var cacheGeneration = 0;
 
@@ -119,11 +127,13 @@
   /** Multipart upload for user-owned local files. The browser sends the file to StrikeBench;
    *  it never calls a market-data provider directly or exposes a server filesystem path. */
   async function upload(path, formData) {
-    assertMutableRuntime();
     var res = await fetch(path, { method: 'POST', headers: { 'Accept': 'application/json' }, body: formData });
     var text = await res.text(), json = null;
     try { json = text ? JSON.parse(text) : null; } catch (e) { /* non-JSON */ }
-    if (!res.ok) throw new Error((json && (json.detail || json.error)) || ('HTTP ' + res.status));
+    if (!res.ok) {
+      if (res.status === 401) signalAuthRequired(json && json.loginUrl);
+      throw new Error((json && (json.detail || json.error)) || ('HTTP ' + res.status));
+    }
     flushCache();
     return json;
   }
@@ -171,6 +181,7 @@
     flushCache: flushCache,
     upload: upload,
     prefetch: prefetch,
-    beginNavigation: beginNavigation
+    beginNavigation: beginNavigation,
+    signalAuthRequired: signalAuthRequired
   };
 })();

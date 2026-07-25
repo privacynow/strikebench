@@ -15,7 +15,7 @@ const { freshDb } = require('./pgtest');
 
 const PORT = process.env.PORT || '7191';
 const BASE = `http://localhost:${PORT}`;
-const WORKSPACE = BASE + '/workspace.html';
+const DESK = BASE + '/';
 const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
 const JAVA = process.env.JAVA_BIN || 'java';
 
@@ -141,8 +141,8 @@ async function loginAs(context, identityKey) {
   const candidate = await context.newPage();
   trackPage(candidate);
   await candidate.goto(`${BASE}/auth/login`);
-  await candidate.waitForURL(WORKSPACE + '#/home', { timeout: 15_000 });
-  await candidate.waitForSelector('#app[data-route="home"][data-ready="true"]');
+  await candidate.waitForURL(DESK, { timeout: 15_000 });
+  await candidate.waitForSelector('#app[data-auth="signed-in"] #thread');
   return candidate;
 }
 
@@ -154,7 +154,7 @@ before(async () => {
       ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true', AUTH_ENABLED: 'true',
       OIDC_CLIENT_ID: 'browser-test-client', OIDC_CLIENT_SECRET: 'browser-test-secret',
       OIDC_ISSUER: oidcIssuer, OIDC_CALLBACK_URL: `${BASE}/auth/callback`,
-      AUTH_POST_LOGIN_URL: '/workspace.html#/home',
+      AUTH_POST_LOGIN_URL: '/',
       AUTH_ALLOWED_EMAILS: 'learner@example.com,reviewer@example.com',
       AUTH_ADMIN_EMAILS: 'learner@example.com', AUTH_SESSION_IDLE_SECONDS: '5'
     },
@@ -165,8 +165,8 @@ before(async () => {
   adminContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await adminContext.newPage();
   trackPage(page);
-  await page.goto(WORKSPACE + '#/home');
-  await page.waitForSelector('#app[data-ready="true"] .signin-card');
+  await page.goto(DESK);
+  await page.waitForSelector('#app[data-auth="signed-out"] .signin-card');
 });
 
 after(async () => {
@@ -180,17 +180,17 @@ test('signed-out private instance renders one focused login surface', async () =
   assert.equal(await page.locator('.signin-card h1').textContent(), 'Sign in');
   assert.match(await page.locator('.signin-card').textContent(), /private/i);
   assert.equal(await page.locator('.signin-card a').getAttribute('href'), '/auth/login');
-  assert.equal(await page.locator('#nav:visible, #bottom-nav:visible, .topbar-controls:visible').count(), 0);
+  assert.equal(await page.locator('#thread:visible, #stage:visible, #board:visible').count(), 0,
+    'no part of the desk renders before identity is established');
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(serverErrors, []);
 });
 
 test('signed-out boot touches only public authentication and configuration APIs', () => {
-  const allowed = new Set(['/api/auth/me', '/api/config']);
+  const allowed = new Set(['/api/auth/me']);
   const protectedRequests = apiRequests.filter(request => !allowed.has(request));
   assert.deepEqual(protectedRequests, [], `protected APIs were called before sign-in: ${protectedRequests.join(', ')}`);
   assert.ok(apiRequests.includes('/api/auth/me'));
-  assert.ok(apiRequests.includes('/api/config'));
 });
 
 test('login surface remains usable without overflow on a narrow phone', async () => {
@@ -209,8 +209,8 @@ test('verified OIDC sign-in reaches the owner-scoped application', async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
   nextIdentityKey = 'learner';
   await page.locator('.signin-card a').click();
-  await page.waitForURL(WORKSPACE + '#/home', { timeout: 15_000 });
-  await page.waitForSelector('#app[data-route="home"][data-ready="true"]');
+  await page.waitForURL(DESK, { timeout: 15_000 });
+  await page.waitForSelector('#app[data-auth="signed-in"] #thread');
 
   const session = await page.evaluate(async () => {
     const meResponse = await fetch('/api/auth/me');
@@ -232,7 +232,8 @@ test('verified OIDC sign-in reaches the owner-scoped application', async () => {
   assert.equal(session.accountStatus, 200);
   assert.equal(session.plansStatus, 200);
   assert.equal(session.planCount, 0);
-  assert.equal(await page.locator('#nav a[data-route~="home"].active').count(), 1);
+  assert.equal(await page.locator('#whoami .whoname').textContent(), 'Browser Learner');
+  assert.equal(await page.locator('#whoami .wholink').getAttribute('href'), '/auth/logout');
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(serverErrors, []);
 });
@@ -299,8 +300,8 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
   assert.equal(isolation.admin.body.error, 'forbidden');
 
   await memberPage.goto(`${BASE}/auth/logout`);
-  await memberPage.waitForURL(WORKSPACE + '#/home');
-  await memberPage.waitForSelector('#app[data-ready="true"] .signin-card');
+  await memberPage.waitForURL(DESK);
+  await memberPage.waitForSelector('#app[data-auth="signed-out"] .signin-card');
   const afterLogout = await memberPage.evaluate(async () => ({
     me: await (await fetch('/api/auth/me')).json(),
     protectedStatus: (await fetch('/api/account')).status
