@@ -196,6 +196,10 @@ public final class ApiResponses {
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
     public record ResearchDetail<T, U, V, W>(String symbol, T quote, BigDecimal displayPrice,
+                                              /* Change of displayPrice against the previous close, in
+                                                 percent — the backend owns this arithmetic so no
+                                                 surface recomputes it. Null when unknowable. */
+                                              Double displayChangePct,
                                               String quoteUnavailableReason,
                                               boolean priceIsPreviousClose, String marketLane,
                                               boolean optionable, Double ivAtm,

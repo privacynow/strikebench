@@ -272,7 +272,8 @@ final class ResearchController {
                             : world != null && !"observed".equals(world) ? "this simulated world's sessions"
                             : "observed sessions"));
             ctx.json(new ApiResponses.ResearchDetail<>(symbol, current,
-                    current != null ? current.mark() : null, quoteUnavailableReason,
+                    current != null ? current.mark() : null,
+                    current != null ? current.markChangePct() : null, quoteUnavailableReason,
                     current != null && current.usesPreviousCloseFallback(), lane.name(),
                     current != null && current.optionable(), option.atmIv(),
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),

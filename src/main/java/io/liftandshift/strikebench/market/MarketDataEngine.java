@@ -528,6 +528,17 @@ public final class MarketDataEngine {
     }
 
     /** JSON-friendly rows for the tape / quotes batch (keeps the existing /api/quotes shape + extras). */
+    /** The price a row actually shows: mid of a sane two-sided book, else last, else previous close. */
+    private static java.math.BigDecimal rowMark(MarketSnapshot s) {
+        if (s.bid() != null && s.ask() != null && s.bid().signum() > 0 && s.ask().signum() > 0
+                && s.ask().compareTo(s.bid()) >= 0) {
+            return s.bid().add(s.ask()).divide(java.math.BigDecimal.valueOf(2),
+                    io.liftandshift.strikebench.util.Money.PRICE_SCALE, java.math.RoundingMode.HALF_UP);
+        }
+        if (s.last() != null && s.last().signum() > 0) return s.last();
+        return s.prevClose();
+    }
+
     public static Map<String, Object> toRow(MarketSnapshot s) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("symbol", s.symbol());
@@ -536,6 +547,9 @@ public final class MarketDataEngine {
         row.put("bid", s.bid() == null ? null : s.bid().toPlainString());
         row.put("ask", s.ask() == null ? null : s.ask().toPlainString());
         row.put("prevClose", s.prevClose() == null ? null : s.prevClose().toPlainString());
+        // The day change is a BACKEND fact. Serving it here stops each surface deriving its own
+        // (price/prevClose-1)*100 from whichever price it happens to hold.
+        row.put("changePct", io.liftandshift.strikebench.model.Quote.changePct(rowMark(s), s.prevClose()));
         row.put("optionable", s.optionable());
         row.put("freshness", s.freshness().name());
         row.put("source", s.source());

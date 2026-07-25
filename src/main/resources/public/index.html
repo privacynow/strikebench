@@ -1270,7 +1270,11 @@ function authHomeContextRow(data,symbol){var rows=authHomeContextRows(data);for(
    the row's per-slot `missing` list, so one demoted slot never speaks for the others. */
 function authHomeSlotReason(row,kind){var miss=row&&Array.isArray(row.missing)?row.missing:[];for(var i=0;i<miss.length;i++){var key=String(miss[i]&&miss[i].key||'');if(key===kind||key.indexOf(kind+':')===0)return miss[i].error&&miss[i].error.message||null;}return null;}
 function authHomePrice(value){var n=authNumber(value);return n==null?'—':'$'+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
-function authHomeQuote(row){var r=row&&row.research||{},q=r.quote||{},price=authNumber(r.displayPrice),prev=authNumber(q.prevClose),pct=price!=null&&prev>0?(price/prev-1)*100:null;return {price:price,prev:prev,pct:pct,basis:r.priceIsPreviousClose===true?'previous close':r.markBasis||'market price',source:q.source||r.evidence&&r.evidence.summary&&r.evidence.summary.source||'source unavailable',freshness:q.freshness||r.freshness||'unavailable',iv:authNumber(r.ivAtm),regime:r.regime&&r.regime.headline||null};}
+/* The day change is a BACKEND fact (ResearchDetail.displayChangePct for the focused symbol,
+   /api/quotes row.changePct for watch rows — both from Quote.changePct, one owner). The desk
+   used to derive (price/prevClose-1)*100 itself from whichever price it held. An absent change
+   stays absent; it is never shown as 0%. */
+function authHomeQuote(row){var r=row&&row.research||{},q=r.quote||{},price=authNumber(r.displayPrice),prev=authNumber(q.prevClose),pct=authNumber(r.displayChangePct==null?q.changePct:r.displayChangePct);return {price:price,prev:prev,pct:pct,basis:r.priceIsPreviousClose===true?'previous close':r.markBasis||'market price',source:q.source||r.evidence&&r.evidence.summary&&r.evidence.summary.source||'source unavailable',freshness:q.freshness||r.freshness||'unavailable',iv:authNumber(r.ivAtm),regime:r.regime&&r.regime.headline||null};}
 function authHomeNewsItems(row){var n=row&&row.news||{},items=n.items;return Array.isArray(items)?items:[];}
 function authHomeCandles(row){var history=row&&row.history||{},candles=history.candles;return Array.isArray(candles)?candles.filter(function(c){return authNumber(c.close==null?c.c:c.close)!=null;}):[];}
 /* The trailing return is a BACKEND fact: /api/research/{symbol} serves regime.trendReturnPct over
@@ -1496,8 +1500,10 @@ function histHover(wrap,e){
   var x=map.x0+(map.x1-map.x0)*((i+0.5)/Math.max(.0001,map.U));
   var Yv=function(v){return histYv(map,v);};
   if(cross)cross.innerHTML='<line x1="'+x.toFixed(1)+'" y1="'+map.padT+'" x2="'+x.toFixed(1)+'" y2="'+map.plotB+'" stroke="var(--accent)" stroke-opacity=".4"/><circle cx="'+x.toFixed(1)+'" cy="'+Yv(b.c).toFixed(1)+'" r="2.8" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.3"/>';
-  if(read){var prev=i>0?map.rows[i-1].c:b.o,chg=prev>0?(b.c/prev-1)*100:null;read._hot=true;
-    read.textContent=String(b.date)+' · O '+b.o.toFixed(2)+' H '+b.h.toFixed(2)+' L '+b.l.toFixed(2)+' C '+b.c.toFixed(2)+(chg==null?'':' · '+(chg>=0?'+':'')+chg.toFixed(1)+'%')+(b.v>0?' · vol '+histVolFmt(b.v):'');}}
+  /* The bar-to-bar change was derived here from two supplied closes; the history receipt states
+     no such field, so the readout reports the bar's own O/H/L/C and leaves change unstated. */
+  if(read){read._hot=true;
+    read.textContent=String(b.date)+' · O '+b.o.toFixed(2)+' H '+b.h.toFixed(2)+' L '+b.l.toFixed(2)+' C '+b.c.toFixed(2)+(b.v>0?' · vol '+histVolFmt(b.v):'');}}
 function histHoverEnd(wrap){var svg=wrap.querySelector('[data-hist-svg]'),read=wrap.querySelector('[data-hist-read]');if(svg){var cross=svg.querySelector('[data-hist-cross]');if(cross)cross.innerHTML='';}
   if(read){read._hot=false;var map=wrap._hmap,sym=wrap.getAttribute('data-hist-sym'),slot=HIST_STORE[sym];if(map&&slot&&slot.phase==='ready'){var win=histWindow(slot.bars);read.textContent=histReceiptText(wrap,slot,win,map.rows,map.weekly,null);}}}
 function histCommitWindow(startDaily,endDaily){
@@ -4278,7 +4284,8 @@ function decMarketPanel(c){
   if(!c||!c.authoritative)return '';
   var bs=decide.backendState||{},market=bs.market||{},research=market.research||{},quote=market.quote||{},chain=market.chain||{};
   var ctx=decMarketCtx(),row=ctx.row||{},history=row.history||{},news=row.news||{};
-  var last=authNumber(quote.last),prev=authNumber(quote.prevClose),pct=last!=null&&prev>0?(last/prev-1)*100:null;
+  /* Served change, not a derived one — same receipt Home reads. */
+  var last=authNumber(quote.last),prev=authNumber(quote.prevClose),pct=authNumber(research.displayChangePct==null?quote.changePct:research.displayChangePct);
   var candles=Array.isArray(history.candles)?history.candles:[],historyStatus=authExceptionStatus(history.freshness);
   var head='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(decide.sym)+'</span><span class="amh-change '+(pct==null?'':pct>=0?'pos':'neg')+'">'+(pct==null?'—':(pct>=0?'+':'')+pct.toFixed(2)+'% vs close')+'</span>'+
     '<span class="amh-facts"><span>IV <b>'+(authNumber(research.ivAtm)==null?'—':(Number(research.ivAtm)*100).toFixed(1)+'%')+'</b></span><span>'+deskEsc((quote.source||'quote')+(quote.freshness?' · '+quote.freshness:''))+'</span></span>'+

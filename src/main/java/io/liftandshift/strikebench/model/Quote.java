@@ -49,6 +49,23 @@ public record Quote(
         return prevClose;
     }
 
+    /**
+     * Change of {@code mark()} against the previous close, in percent. ONE owner for this
+     * arithmetic: every surface reads this receipt instead of recomputing (price/prevClose-1)*100
+     * from whichever price it happened to have. Null when either side is unknown — an unknown
+     * change is reported as unavailable, never as 0%.
+     */
+    public Double markChangePct() { return changePct(mark(), prevClose); }
+
+    /** The same rule for callers holding a mark and a previous close without a full Quote. */
+    public static Double changePct(BigDecimal mark, BigDecimal previousClose) {
+        if (mark == null || previousClose == null || previousClose.signum() <= 0) return null;
+        return mark.subtract(previousClose)
+                .divide(previousClose, 8, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100))
+                .doubleValue();
+    }
+
     private boolean hasSaneTwoSidedBook() {
         return bid != null && ask != null && bid.signum() > 0 && ask.signum() > 0 && ask.compareTo(bid) >= 0;
     }
