@@ -87,6 +87,10 @@ public final class UnderlyingBackfill {
                         ? market.candleSeriesFromProviders(sym, range.from(), range.to())
                         : market.candleSeriesFromProvider(sourceRequest, sym, range.from(), range.to());
                 List<Candle> candles = series.candles();
+                // An empty result can still name the provider that produced it (range-absence /
+                // allowance denial). Capture that identity BEFORE skipping, so a learned coverage
+                // boundary is persisted under the reporting provider and never under "auto".
+                if (series.source() != null && !series.source().isBlank()) actualSource = series.source();
                 if (candles.isEmpty()) continue;
                 boolean observed = series.evidence().provenance()
                         == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;

@@ -167,6 +167,34 @@ class UnderlyingBackfillTest {
     }
 
     @Test
+    void anAutomaticPreHistoryBackfillPersistsTheBoundaryUnderTheReportingProviderNotAuto() {
+        // Range-absence returns NO candles, so the reporting provider used to be lost and the learned
+        // boundary was persisted under the generic "auto" request. That mislabels one provider's
+        // coverage as every provider's, and the planner then clamps by a key no provider owns.
+        db = TestDb.fresh();
+        MarketDataService market = new MarketDataService(
+                List.of(new PreHistoryProvider(LocalDate.parse("2026-06-15"))),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of());
+        UnderlyingBackfill bf = new UnderlyingBackfill(market, db, clock);
+
+        // Automatic acquisition (no explicit source) — the provider chain resolves it.
+        var res = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"));
+        assertThat(res.rows()).isZero();
+
+        var persisted = db.query("SELECT source_key, earliest_available::text ea FROM data_sync_cursor "
+                        + "WHERE symbol='AAPL' AND earliest_available IS NOT NULL",
+                r -> r.str("source_key") + "|" + r.str("ea"));
+        assertThat(persisted)
+                .as("the learned boundary must name the provider that reported the absence")
+                .containsExactly("yahoo|2026-06-15");
+        assertThat(persisted).noneMatch(row -> row.startsWith("auto|"));
+
+        // Provider-scoped in memory too: only the reporting provider carries the boundary.
+        assertThat(market.preHistoryBoundary("yahoo", "AAPL")).contains(LocalDate.parse("2026-06-15"));
+        assertThat(market.preHistoryBoundary("auto", "AAPL")).isEmpty();
+    }
+
+    @Test
     void backfillIsIdempotent() {
         UnderlyingBackfill bf = backfiller(true);
         var a = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"));

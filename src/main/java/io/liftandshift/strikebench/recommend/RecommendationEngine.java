@@ -466,21 +466,23 @@ public final class RecommendationEngine {
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
 
-        SymbolReady ready = preflightSymbol(symbol, worldId, notes);
-        if (ready == null) {
-            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
-        }
         // HEDGE and EXIT act on shares you already own. With fewer than 100 free shares a covered-call
         // / protective-put ladder could only be built by fabricating a 100-share stock purchase
-        // (StrategyBuilder inserts Leg.stock(BUY) whenever sharesHeld is false). Reject before any rung
-        // is constructed so no stock leg is ever manufactured. This is a semantic rejection and holds
-        // regardless of buying power — ACQUIRE (a cash-secured put) legitimately needs no held shares.
+        // (StrategyBuilder inserts Leg.stock(BUY) whenever sharesHeld is false). This is a SEMANTIC
+        // rejection — it holds regardless of buying power, quote, or chain — so it runs BEFORE
+        // preflightSymbol(): an impossible request must spend zero provider calls (no quote, no chain,
+        // no history) and no external allowance. ACQUIRE (a cash-secured put) needs no held shares.
         boolean holdBasedIntent = intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE;
         if (holdBasedIntent && freeShares < 100) {
             notes.add("This " + intent.name().toLowerCase() + " ladder starts from shares you own. With no "
                     + "eligible held shares of " + symbol + ", a strike ladder here would have to manufacture a "
                     + "100-share purchase, so it is withheld — buy practice shares first (Acquire), or build the "
                     + "full package in Structure.");
+            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
+        }
+
+        SymbolReady ready = preflightSymbol(symbol, worldId, notes);
+        if (ready == null) {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         var lane = ready.lane();

@@ -503,6 +503,61 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void anImpossibleNoSharesHedgeOrExitLadderSpendsZeroProviderCalls() {
+        // The holdings rejection is SEMANTIC — it cannot become true by fetching data — so it must run
+        // before any market acquisition. An impossible request must not spend a quote, chain, expiration,
+        // or candle call (and therefore no external provider allowance). Program §7.7 acceptance.
+        CountingProvider counter = new CountingProvider(CLOCK);
+        RecommendationEngine counted = new RecommendationEngine(
+                new MarketDataService(List.of(counter), List.of(), List.of()), CLOCK);
+
+        for (String intent : new String[]{"hedge", "exit"}) {
+            var ladder = counted.ladder(intentReq(intent, null, null), BP);
+            assertThat(ladder.rungs()).isEmpty();
+            assertThat(counter.calls())
+                    .as("intent=%s must be rejected before any provider acquisition (calls=%s)",
+                            intent, counter.describe())
+                    .isZero();
+        }
+
+        // Control: a request that is NOT semantically impossible does reach the provider chain, proving
+        // the zero above is the gate short-circuiting rather than a provider that is never consulted.
+        counted.ladder(intentReq("acquire", null, null), BP);
+        assertThat(counter.calls())
+                .as("an acquire ladder legitimately consults the market (calls=%s)", counter.describe())
+                .isPositive();
+    }
+
+    /** Counts every provider read so a test can prove a request spent zero market acquisition. */
+    private static final class CountingProvider implements io.liftandshift.strikebench.market.ports.MarketDataProvider {
+        private final FixtureProvider delegate;
+        private int quotes, expirations, chains, candles, lookups;
+        CountingProvider(java.time.Clock clock) { this.delegate = new FixtureProvider(clock); }
+        int calls() { return quotes + expirations + chains + candles + lookups; }
+        String describe() {
+            return "quote=" + quotes + " expirations=" + expirations + " chain=" + chains
+                    + " candles=" + candles + " lookup=" + lookups;
+        }
+        @Override public String name() { return delegate.name(); }
+        @Override public java.util.Set<io.liftandshift.strikebench.market.Domain> domains() { return delegate.domains(); }
+        @Override public List<io.liftandshift.strikebench.model.SymbolMatch> lookup(String q) {
+            lookups++; return delegate.lookup(q);
+        }
+        @Override public java.util.Optional<io.liftandshift.strikebench.model.Quote> quote(String s) {
+            quotes++; return delegate.quote(s);
+        }
+        @Override public List<LocalDate> expirations(String s) {
+            expirations++; return delegate.expirations(s);
+        }
+        @Override public java.util.Optional<io.liftandshift.strikebench.model.OptionChain> chain(String s, LocalDate e) {
+            chains++; return delegate.chain(s, e);
+        }
+        @Override public List<io.liftandshift.strikebench.model.Candle> candles(String s, LocalDate f, LocalDate t) {
+            candles++; return delegate.candles(s, f, t);
+        }
+    }
+
+    @Test
     void filtersRejectCandidatesWithHumanReadableReasons() {
         RecommendationEngine.Filters strictPop = new RecommendationEngine.Filters(0.99, null, null, null);
         RecommendationEngine.Result r1 = engine.recommend(intentReq("income", null, strictPop), BP);

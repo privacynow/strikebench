@@ -22,6 +22,18 @@ public record CandleSeries(List<Candle> candles, String source, Freshness freshn
 
     public static final CandleSeries EMPTY = new CandleSeries(List.of(), null, Freshness.MISSING, "NONE", "NONE");
 
+    /**
+     * An empty result that still NAMES the provider which produced it. Range-absence and local
+     * allowance denials return no candles, but the reporting provider is itself evidence: a backfill
+     * must persist the learned coverage boundary under the provider that reported it, never under the
+     * generic "auto" request. Returning bare EMPTY here loses that identity.
+     */
+    public static CandleSeries emptyFrom(String provider) {
+        return provider == null || provider.isBlank()
+                ? EMPTY
+                : new CandleSeries(List.of(), provider, Freshness.MISSING, "NONE", "NONE");
+    }
+
     public boolean isEmpty() { return candles.isEmpty(); }
 
     /** Fabricated teaching history, eligible only in the explicit Demo lane. */
