@@ -299,7 +299,7 @@ class CampaignServiceTest {
                         + "\"expiration\":\"2026-07-17\",\"ratio\":1,\"entryPrice\":\"1\",\"multiplier\":100}]");
         db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,qty,proposed_net_cents," +
                         "quote_as_of,economic_verdict,evidence_provenance,model_version," +
-                        "review_horizon_days,decision_seq) VALUES('pdec-review',?,1,'TRADE',1,10000," +
+                        "review_horizon_sessions,decision_seq) VALUES('pdec-review',?,1,'TRADE',1,10000," +
                         "'2026-06-01T14:00:00Z','FAVORABLE','OBSERVED','review-test',30,1)", plan.id());
         db.exec("INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type,strike_price," +
                         "expiration,ratio,multiplier,fill_price) VALUES('pdec-review',0,'SELL','PUT',95," +

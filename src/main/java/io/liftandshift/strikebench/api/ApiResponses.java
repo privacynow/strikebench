@@ -193,6 +193,8 @@ public final class ApiResponses {
     public record Account<T>(T account) {}
     public record AccountLedger<T, U>(T account, U ledger) {}
     public record Expirations<T>(String symbol, String asOfDate, T expirations) {}
+    /** One expiration with its distance in both units, so no consumer has to count days itself. */
+    public record ExpirationDistance(String date, int tradingSessions, int calendarDays) {}
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
     public record ResearchDetail<T, U, V, W>(String symbol, T quote, BigDecimal displayPrice,

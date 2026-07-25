@@ -1093,7 +1093,7 @@ class PlanApiIntegrationTest {
                 """));
         String planId = plan.path("id").asText();
         String expiration = json(get("/api/research/AAPL/expirations"))
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
 
         var custom = Json.MAPPER.createObjectNode();
         custom.put("expectedVersion", plan.path("version").asLong());
@@ -1254,7 +1254,7 @@ class PlanApiIntegrationTest {
                     """));
             planId = plan.path("id").asText();
             String expiration = json(get("/api/research/AAPL/expirations"))
-                    .at("/expirations/0").asText();
+                    .at("/expirations/0/date").asText();
             JsonNode chain = json(get("/api/research/AAPL/chain?expiration=" + expiration));
             JsonNode call = chain.at("/calls/12");
             assertThat(call.path("strike").asText()).isNotBlank();
@@ -1777,8 +1777,11 @@ class PlanApiIntegrationTest {
         assertThat(marked.at("/management/actions/0/kind").asText()).isEqualTo("MARK");
         JsonNode listedExpirations = json(get("/api/research/AAPL/expirations")).get("expirations");
         String currentExpiration = candidate.at("/legs/0/expiration").asText();
+        // Each expiration row now carries its own distance in trading sessions and calendar days,
+        // so no consumer counts weekdays to choose one.
         String laterExpiration = java.util.stream.StreamSupport.stream(listedExpirations.spliterator(), false)
-                .map(JsonNode::asText).filter(value -> value.compareTo(currentExpiration) > 0)
+                .peek(row -> assertThat(row.get("tradingSessions").isInt()).isTrue())
+                .map(row -> row.get("date").asText()).filter(value -> value.compareTo(currentExpiration) > 0)
                 .findFirst().orElseThrow();
         ObjectNode replacement = replacementPackage(candidate, laterExpiration, "bullish");
         JsonNode closed = applyTransformation(opened.at("/trade/id").asText(), tradePlanId,
@@ -2132,7 +2135,7 @@ class PlanApiIntegrationTest {
                  "riskMode":"conservative"}
                 """));
         String planId = plan.get("id").asText();
-        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2").asText();
+        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2/date").asText();
         var custom = Json.MAPPER.createObjectNode();
         custom.put("expectedVersion", plan.get("version").asLong());
         custom.set("position", Json.parse("""
@@ -2208,7 +2211,7 @@ class PlanApiIntegrationTest {
                  "riskMode":"conservative"}
                 """));
         String planId = plan.get("id").asText();
-        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2").asText();
+        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2/date").asText();
         var custom = Json.MAPPER.createObjectNode();
         custom.put("expectedVersion", plan.get("version").asLong());
         custom.set("position", Json.parse("""
@@ -2283,7 +2286,7 @@ class PlanApiIntegrationTest {
                  "riskMode":"conservative"}
                 """));
         String planId = plan.get("id").asText();
-        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2").asText();
+        String expiration = json(get("/api/research/AAPL/expirations")).at("/expirations/2/date").asText();
         var custom = Json.MAPPER.createObjectNode();
         custom.put("expectedVersion", plan.get("version").asLong());
         custom.set("position", Json.parse("""

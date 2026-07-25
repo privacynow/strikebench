@@ -104,7 +104,7 @@ class PlanServiceTest {
         Plan.View decided = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-decided", "AAPL", "INCOME", 30));
         db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,quote_as_of,economic_verdict,"
-                + "evidence_provenance,model_version,review_horizon_days,created_at,decision_seq) "
+                + "evidence_provenance,model_version,review_horizon_sessions,created_at,decision_seq) "
                 + "VALUES('dec-regression',?,1,'CASH',now(),'FAVORABLE','OBSERVED','test',30,now(),1)",
                 decided.id());
         assertThat(plans.get(null, decided.id()).assumptionsEditable()).isFalse();

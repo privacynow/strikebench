@@ -21,7 +21,7 @@ import java.util.Set;
 public final class PlanManagementService {
     public record CashReview(long underlyingStartCents, long underlyingEndCents, long stockPnlCents,
                              long rejectedEntryCents, long rejectedEndCents, long rejectedPnlCents,
-                             int horizonDays, Double predictedPop, String note) {}
+                             int horizonSessions, Double predictedPop, String note) {}
     private final Db db;
     private final Clock clock;
 
@@ -137,12 +137,12 @@ public final class PlanManagementService {
                             "AND category='CASH_DECISION' LIMIT 1", r -> r.intv("ok"), planId, decisionId).isEmpty();
             if (exists) return null;
             OffsetDateTime now = now();
-            insertReview(c, planId, decisionId, review.horizonDays(), "CASH", 0L, 0L, 0L,
+            insertReview(c, planId, decisionId, review.horizonSessions(), "CASH", 0L, 0L, 0L,
                     null, false, "Cash benchmark: no market exposure and no interest assumption", now);
-            insertReview(c, planId, decisionId, review.horizonDays(), "STOCK", review.underlyingStartCents(),
+            insertReview(c, planId, decisionId, review.horizonSessions(), "STOCK", review.underlyingStartCents(),
                     review.underlyingEndCents(), review.stockPnlCents(), null, review.stockPnlCents() > 0,
                     "Risk-matched whole-share benchmark", now);
-            insertReview(c, planId, decisionId, review.horizonDays(), "REJECTED_STRATEGY", review.rejectedEntryCents(),
+            insertReview(c, planId, decisionId, review.horizonSessions(), "REJECTED_STRATEGY", review.rejectedEntryCents(),
                     review.rejectedEndCents(), review.rejectedPnlCents(), review.predictedPop(), review.rejectedPnlCents() > 0,
                     review.note(), now);
             Db.execOn(c, "UPDATE plans SET version=version+1,updated_at=? WHERE id=?", now, planId);
@@ -340,13 +340,13 @@ public final class PlanManagementService {
                 Ids.newId("plink"), planId, decisionId, linkRole, trade.id(), now);
         if (!"VOID".equals(kind) && realizedToDate != null && decisionId != null) {
             List<DecisionReview> frozen = Db.queryOn(c,
-                    "SELECT review_horizon_days,pop FROM plan_decision WHERE id=?",
-                    r -> new DecisionReview(r.intv("review_horizon_days"), r.dblOrNull("pop")), decisionId);
+                    "SELECT review_horizon_sessions,pop FROM plan_decision WHERE id=?",
+                    r -> new DecisionReview(r.intv("review_horizon_sessions"), r.dblOrNull("pop")), decisionId);
             if (!frozen.isEmpty()) {
                 DecisionReview decision = frozen.getFirst();
                 Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
                                 "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
+                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonSessions(),
                         "PLAN_POSITION", realizedToDate, decision.pop(), realizedToDate > 0 ? 1 : 0, now,
                         prepareRoll ? "Realized result for this completed roll cycle; the Plan continues"
                                 : "Realized result for the Plan position; market provenance remains on the Plan and trade",
@@ -380,13 +380,13 @@ public final class PlanManagementService {
                 Ids.newId("plink"), planId, decisionId, replacement.id(), at);
         if (decisionId != null) {
             List<DecisionReview> frozen = Db.queryOn(c,
-                    "SELECT review_horizon_days,pop FROM plan_decision WHERE id=?",
-                    r -> new DecisionReview(r.intv("review_horizon_days"), r.dblOrNull("pop")), decisionId);
+                    "SELECT review_horizon_sessions,pop FROM plan_decision WHERE id=?",
+                    r -> new DecisionReview(r.intv("review_horizon_sessions"), r.dblOrNull("pop")), decisionId);
             if (!frozen.isEmpty()) {
                 DecisionReview decision = frozen.getFirst();
                 Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
                                 "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
+                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonSessions(),
                         "PLAN_POSITION", realizedToDate, decision.pop(), realizedToDate > 0 ? 1 : 0, at,
                         "Realized result of the closed roll leg; the reviewed replacement remains open", at);
             }
@@ -482,13 +482,13 @@ public final class PlanManagementService {
                 Ids.newId("plink"), planId, decisionId, action, changed.id(), at);
         if (!positionSurvives && decisionId != null) {
             List<DecisionReview> frozen = Db.queryOn(c,
-                    "SELECT review_horizon_days,pop FROM plan_decision WHERE id=?",
-                    r -> new DecisionReview(r.intv("review_horizon_days"), r.dblOrNull("pop")), decisionId);
+                    "SELECT review_horizon_sessions,pop FROM plan_decision WHERE id=?",
+                    r -> new DecisionReview(r.intv("review_horizon_sessions"), r.dblOrNull("pop")), decisionId);
             if (!frozen.isEmpty()) {
                 DecisionReview decision = frozen.getFirst();
                 Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
                                 "realized_cents,predicted_pop,won,reviewed_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonDays(),
+                        Ids.newId("prev"), planId, decisionId, "TRADE_DECISION", decision.horizonSessions(),
                         "PLAN_POSITION", realizedToDate, decision.pop(), realizedToDate > 0 ? 1 : 0, at,
                         "Realized option result after " + action.toLowerCase(java.util.Locale.ROOT)
                                 + "; any physical share cash remains a separate accounting fact",
@@ -519,13 +519,14 @@ public final class PlanManagementService {
         return Db.queryOn(c, "SELECT id FROM plan_decision WHERE plan_id=? ORDER BY decision_seq DESC LIMIT 1",
                 r -> r.str("id"), planId).stream().findFirst().orElse(null);
     }
-    private static void insertReview(Connection c, String planId, String decisionId, int horizonDays,
+    /** plan_review.horizon_days carries the same TRADING-SESSION count the rehearsal lane writes. */
+    private static void insertReview(Connection c, String planId, String decisionId, int horizonSessions,
                                      String benchmark, long start, long end, long realized, Double predictedPop,
                                      boolean won, String note, OffsetDateTime now) throws SQLException {
         Db.execOn(c, "INSERT INTO plan_review(id,plan_id,decision_id,category,horizon_days,benchmark_kind," +
                         "benchmark_start_cents,benchmark_end_cents,realized_cents,predicted_pop,won,reviewed_at,note,created_at) " +
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", Ids.newId("prev"), planId, decisionId,
-                "CASH_DECISION", horizonDays, benchmark, start, end, realized, predictedPop, won ? 1 : 0, now, note, now);
+                "CASH_DECISION", horizonSessions, benchmark, start, end, realized, predictedPop, won ? 1 : 0, now, note, now);
     }
     private OffsetDateTime now() { return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC); }
     static OffsetDateTime requireMarkTime(String raw) {
@@ -544,5 +545,5 @@ public final class PlanManagementService {
         else if (value instanceof Boolean b) node.put(key, b); else node.set(key, Json.MAPPER.valueToTree(value));
     }
     private record PlanRow(String userId, long version, String status) {}
-    private record DecisionReview(int horizonDays, Double pop) {}
+    private record DecisionReview(int horizonSessions, Double pop) {}
 }

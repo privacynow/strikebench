@@ -205,41 +205,29 @@
     return parts ? Math.floor(Date.UTC(parts.year, parts.month - 1, parts.day) / 86400000) : null;
   }
 
-  function sessionDistance(asOfDate, expiration) {
-    var start = dateOrdinal(asOfDate), end = dateOrdinal(expiration);
-    if (start == null || end == null || end < start) return Number.MAX_VALUE;
-    var sessions = 0;
-    for (var day = start + 1; day <= end; day++) {
-      var weekday = new Date(day * 86400000).getUTCDay();
-      if (weekday !== 0 && weekday !== 6) sessions++;
-    }
-    return sessions;
-  }
 
-  function quoteAsOfDate(quote) {
-    var raw = quote && quote.asOf;
-    if (typeof raw === 'number' && Number.isFinite(raw)) return new Date(raw).toISOString().slice(0, 10);
-    if (typeof raw === 'string' && raw) {
-      var direct = dateParts(raw);
-      if (direct) return String(raw).slice(0, 10);
-      var parsed = Date.parse(raw);
-      if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
-    }
-    return null;
+  /* Each row of the expirations receipt states its own distance in trading sessions, computed by
+     the market calendar that also owns holidays. The browser picks the nearest to the declared
+     horizon; it does not count days. */
+  function expirationDate(row) { return row && typeof row === 'object' ? row.date : row; }
+  function expirationSessions(row) {
+    var n = row && typeof row === 'object' ? Number(row.tradingSessions) : NaN;
+    return Number.isFinite(n) ? n : null;
   }
-
-  function chooseExpiration(expirations, targetDays, asOfDate) {
-    var rows = Array.isArray(expirations) ? expirations.slice() : [];
+  function chooseExpiration(expirations, targetSessions) {
+    var rows = (Array.isArray(expirations) ? expirations : []).filter(function (row) {
+      return expirationSessions(row) != null && expirationDate(row);
+    });
     if (!rows.length) return null;
-    if (asOfDate) rows = rows.filter(function (row) {
-      var distance = sessionDistance(asOfDate, row);
-      return Number.isFinite(distance) && distance !== Number.MAX_VALUE;
-    });
-    rows.sort(function (a, b) {
-      return Math.abs(sessionDistance(asOfDate, a) - targetDays)
-        - Math.abs(sessionDistance(asOfDate, b) - targetDays);
-    });
-    return rows[0];
+    // No declared horizon means no target to be near: the nearest listed expiration is the only
+    // honest choice, and the caller labels it as such.
+    rows.sort(targetSessions == null
+      ? function (a, b) { return expirationSessions(a) - expirationSessions(b); }
+      : function (a, b) {
+        return Math.abs(expirationSessions(a) - targetSessions)
+          - Math.abs(expirationSessions(b) - targetSessions);
+      });
+    return expirationDate(rows[0]);
   }
 
   var FRESHNESS_RANK = {
@@ -494,8 +482,7 @@
     assertEvidenceLane(quote.evidence, identity.marketLane, 'Quote');
     var mark = researchMark(research), spot = mark.value;
     if (!(spot > 0)) throw new Error(symbol + ' has no canonical market-owned display price.');
-    var expirationAsOf = base[4] && base[4].asOfDate || quoteAsOfDate(quote);
-    var expiration = chooseExpiration(base[4] && base[4].expirations, targetDays, expirationAsOf);
+    var expiration = chooseExpiration(base[4] && base[4].expirations, targetDays);
     if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
     notify('loading', { operation: 'option-chain', symbol: symbol, expiration: expiration });
     var chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
@@ -517,7 +504,8 @@
     assertSameMarket(identity, marketIdentity(stable[0], stable[1], base[3], base[5]));
     var market = {
       config: base[0], status: base[1], world: base[2], research: research, quote: quote,
-      expirations: base[4].expirations, expiration: expiration, chain: chain,
+      expirations: (base[4].expirations || []).map(expirationDate), expiration: expiration, chain: chain,
+      expirationBasis: targetDays == null ? 'NEAREST_LISTED' : 'DECLARED_HORIZON',
       account: base[5] && base[5].account || null,
       identity: identity,
       spot: spot, provenance: marketEvidence(identity, quote, chain, base[4], mark)
@@ -911,6 +899,14 @@
         || String(sourceCandidate.id) !== String(state.selected.id)) {
       throw new Error('The draft source is no longer the selected backend strategy. Start the edit again.');
     }
+    // The Plan declares trading sessions and the backend Horizon grammar owns the named buckets.
+    // Re-deriving "week"/"month" here published a second, divergent set of thresholds (8-10
+    // sessions bucketed differently in the browser than on the server), and the `|| 30` fallback
+    // turned an undeclared horizon into a month-long package the user never asked for.
+    var declaredSessions = Number(state.plan.context && state.plan.context.horizonDays);
+    if (!Number.isInteger(declaredSessions) || declaredSessions < 1 || declaredSessions > 756) {
+      throw new Error('Declare the Plan horizon in trading sessions before previewing an exact package.');
+    }
     var entered = (Array.isArray(legs) ? legs : []).filter(function (leg) {
       return leg && Number(leg.q) !== 0;
     });
@@ -961,9 +957,7 @@
       qty: packageQty,
       legs: canonicalLegs,
       thesis: state.plan.context && state.plan.context.thesis,
-      horizon: Number(state.plan.context && state.plan.context.horizonDays || 30) <= 1 ? '0dte'
-        : Number(state.plan.context && state.plan.context.horizonDays || 30) <= 7 ? 'week'
-          : Number(state.plan.context && state.plan.context.horizonDays || 30) <= 45 ? 'month' : 'quarter',
+      horizon: declaredSessions + 'd',
       riskMode: state.plan.context && state.plan.context.riskMode,
       intent: state.plan.intent,
       useHeldShares: sourceCandidate.usesHeldShares === true,
@@ -2144,7 +2138,16 @@
           operation: 'strategy-catalog', strategyCatalog: state.strategyCatalog
         });
       });
-      var market = await loadMarket(symbol, declaredHorizon == null ? 45 : declaredHorizon, seq);
+      // The traded expiration is chosen against the DECLARED horizon. Substituting 45 sessions
+      // for an undeclared one silently anchored the whole Desk — chain, greeks, payoff, every
+      // candidate — to an expiration nobody asked for. Without a declaration there is nothing
+      // to choose against, and the ranking below already withholds on the same grounds.
+      // The traded expiration is chosen against the DECLARED horizon. Substituting 45 sessions for
+      // an undeclared one anchored the whole surface — chain, greeks, payoff, every candidate — to
+      // an expiration nobody asked for, and said nothing about it. Undeclared now means the
+      // NEAREST listed expiration, and the market receipt states which basis was used, so the
+      // chain on screen is never mistaken for one the user's horizon selected.
+      var market = await loadMarket(symbol, declaredHorizon, seq);
       if (!market || seq !== state.requestSeq) return null;
       var plan = await ensurePlan(context, market, seq);
       if (!plan || seq !== state.requestSeq) return null;
@@ -2720,7 +2723,7 @@
       var expirationSlot = objectSlot(base[3], symbol + ' option expirations');
       var envelope = expirationSlot && expirationSlot.available ? expirationSlot.value : {};
       var expiration = seeded ? marketSeed.expiration
-        : chooseExpiration(envelope.expirations, 30, envelope.asOfDate);
+        : chooseExpiration(envelope.expirations, 30);
       var chainSlot = seeded && String(marketSeed.expiration || '') === String(expiration)
         ? await present('chain:' + symbol, '/api/research/' + encoded + '/chain', marketSeed.chain)
         : expiration
@@ -3888,15 +3891,34 @@
         return String(symbol || '').trim().toUpperCase();
       }).filter(Boolean);
     }
+    var horizons = (Array.isArray(options.horizons) ? options.horizons : []).map(function (horizon) {
+      return String(horizon == null ? '' : horizon).trim();
+    }).filter(Boolean);
+    var intents = (Array.isArray(options.intents) ? options.intents : []).map(function (intent) {
+      return String(intent == null ? '' : intent).trim();
+    }).filter(Boolean);
+    var riskMode = String(options.riskMode == null ? '' : options.riskMode).trim().toLowerCase();
+    // Scan is withheld until the user declares goal, horizon and risk posture, so a blank here is
+    // caller state loss. Substituting Income/45d/Balanced would spend a whole universe of provider
+    // reads on a brief nobody chose and then present the result as the user's own idea.
+    var missingDeclarations = [];
+    if (!intents.length) missingDeclarations.push('goal');
+    if (!horizons.length) missingDeclarations.push('horizon');
+    if (!riskMode) missingDeclarations.push('risk posture');
+    if (missingDeclarations.length) {
+      var undeclared = new Error('The opportunity scan requires an explicit '
+        + missingDeclarations.join(', ') + '; no decision default was substituted.');
+      undeclared.code = 'DESK_DECLARATION_REQUIRED';
+      undeclared.missingDeclarations = missingDeclarations;
+      throw undeclared;
+    }
     var body = {
-      horizons: Array.isArray(options.horizons) && options.horizons.length
-        ? options.horizons : ['45d'],
+      horizons: horizons,
       maxPicks: Math.max(1, Math.min(universe.length || 12,
         Number(options.maxPicks || Math.min(universe.length || 5, 5)))),
-      riskMode: String(options.riskMode || 'balanced').toLowerCase(),
+      riskMode: riskMode,
       allow0dte: false,
-      intents: Array.isArray(options.intents) && options.intents.length
-        ? options.intents : ['INCOME']
+      intents: intents
     };
     if (universe.length) body.universe = universe;
     if (options.maxLossCents != null) body.maxLossCents = Number(options.maxLossCents);

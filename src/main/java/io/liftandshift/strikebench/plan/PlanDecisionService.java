@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.OrderInstruction;
@@ -19,6 +20,8 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
@@ -56,6 +59,18 @@ public final class PlanDecisionService {
         this.clock = clock;
     }
 
+    /**
+     * The one place the frozen review horizon becomes a date. The receipt stores TRADING SESSIONS,
+     * and a session count is not a calendar-day count: reading 21 sessions as 21 days scheduled a
+     * monthly review more than a week early and benchmarked the cash decision against the wrong close.
+     */
+    public static LocalDate reviewDueDate(Instant decidedAt, int horizonSessions) {
+        if (horizonSessions < 1) {
+            throw new IllegalStateException("The frozen decision has no review horizon in trading sessions.");
+        }
+        return MarketHours.tradingDateAfter(LocalDate.ofInstant(decidedAt, MarketHours.EASTERN), horizonSessions);
+    }
+
     public PreparedTradeDecision prepareTrade(Input input) {
         String id = Ids.newId("pdec");
         return new PreparedTradeDecision(id, (connection, trade) -> saveOn(connection, id, input, "TRADE", trade));
@@ -87,8 +102,11 @@ public final class PlanDecisionService {
                             "d.qty,d.proposed_net_cents,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
                             "d.buying_power_cents,d.risk_capital_cents,d.max_loss_cents,d.max_profit_cents,d.pop," +
                             "d.p_max_profit,d.p_max_loss,d.ev_market_cents,d.ev_histvol_cents,d.cvar_cents," +
-                            "d.economic_verdict,d.evidence_provenance,d.model_version,d.study_key,d.review_horizon_days," +
-                            "d.created_at::text created_at,(SELECT l.trade_id FROM plan_link l WHERE l.decision_id=d.id " +
+                            "d.economic_verdict,d.evidence_provenance,d.model_version,d.study_key,d.review_horizon_sessions," +
+                            // NOT ::text: PostgreSQL renders timestamptz in the session's zone
+                            // ("2026-07-13 07:30:00-07"), which is neither ISO-8601 nor stable across
+                            // machines. The freeze instant is a receipt; Row.str emits it as UTC ISO.
+                            "d.created_at,(SELECT l.trade_id FROM plan_link l WHERE l.decision_id=d.id " +
                             "AND l.trade_id IS NOT NULL AND l.role IN ('ENTRY','ROLL','ADJUST') " +
                             "ORDER BY l.created_at LIMIT 1) trade_id FROM plan_decision d " +
                             "WHERE d.plan_id=? ORDER BY d.decision_seq DESC LIMIT 1",
@@ -109,7 +127,7 @@ public final class PlanDecisionService {
                         put(node, "evHistvolCents", row.lngOrNull("ev_histvol_cents")); put(node, "cvarCents", row.lngOrNull("cvar_cents"));
                         put(node, "economicVerdict", row.str("economic_verdict")); put(node, "evidenceProvenance", row.str("evidence_provenance"));
                         put(node, "modelVersion", row.str("model_version")); put(node, "studyKey", row.str("study_key"));
-                        put(node, "reviewHorizonDays", row.intv("review_horizon_days")); put(node, "createdAt", row.str("created_at"));
+                        put(node, "reviewHorizonSessions", row.intv("review_horizon_sessions")); put(node, "createdAt", row.str("created_at"));
                         put(node, "tradeId", row.str("trade_id"));
                         return node;
                     }, planId);
@@ -168,7 +186,7 @@ public final class PlanDecisionService {
         return db.with(connection -> {
             Map<String, PortfolioDecision> out = new LinkedHashMap<>();
             Db.queryOn(connection, "SELECT DISTINCT ON (d.plan_id) d.plan_id,d.id,d.context_rev," +
-                            "d.action,d.economic_verdict,d.pop,d.created_at::text created_at," +
+                            "d.action,d.economic_verdict,d.pop,d.created_at," +
                             "(SELECT l.trade_id FROM plan_link l JOIN trades t ON t.id=l.trade_id " +
                             "WHERE l.plan_id=d.plan_id AND l.trade_id IS NOT NULL AND t.status='ACTIVE' " +
                             "ORDER BY l.created_at DESC LIMIT 1) active_trade_id " +
@@ -220,11 +238,16 @@ public final class PlanDecisionService {
         if ("BROKER".equals(action) && (qty == null || qty < 1)) {
             throw new IllegalArgumentException("a broker placement requires the executed quantity");
         }
+        // The Plan context's horizon is a TRADING-SESSION count (Horizon.exactTradingSessions), so the
+        // receipt freezes sessions. Only reviewDueDate() may turn them into a calendar date.
+        int reviewHorizonSessions = input.plan().context().horizonDays() == null
+                ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
+                : input.plan().context().horizonDays();
         Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
                         "ensemble_id,account_id,action,qty," +
                         "proposed_net_cents,quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
                         "max_loss_cents,max_profit_cents,pop,p_max_profit,p_max_loss,ev_market_cents,ev_histvol_cents," +
-                        "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_days,created_at) " +
+                        "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_sessions,created_at) " +
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(),
                 references.recommendationId(), references.ensembleId(), account.id(), action, qty,
@@ -235,9 +258,7 @@ public final class PlanDecisionService {
                 trade == null ? preview.popEntry() : trade.popEntry(), pMaxProfit, pMaxLoss,
                 economics.marketEvAfterCostsCents(), economics.realizedVolEvAfterCostsCents(), cvar,
                 economics.verdict().name(), preview.evidence().provenance().name(), MODEL_VERSION, references.studyKey(),
-                input.plan().context().horizonDays() == null
-                        ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
-                        : input.plan().context().horizonDays(), now);
+                reviewHorizonSessions, now);
         if (references.ensembleId() != null) {
             Db.execOn(connection, "UPDATE ensemble_artifact ea SET pinned=1 FROM plan_ensemble pe " +
                             "WHERE pe.id=? AND pe.fingerprint=ea.fingerprint",

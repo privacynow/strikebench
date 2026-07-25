@@ -388,17 +388,19 @@ final class PlanDecisionController {
             throw new IllegalStateException("This Plan does not have a cash decision to review.");
         }
         ObjectNode metrics = decision.with("metrics");
-        int horizon = decision.path("reviewHorizonDays").asInt(30);
+        if (!decision.hasNonNull("reviewHorizonSessions")) {
+            throw new IllegalStateException("The frozen decision has no review horizon, so no review date can be stated.");
+        }
+        int horizonSessions = decision.path("reviewHorizonSessions").asInt();
         java.time.Instant decidedAt = java.time.OffsetDateTime.parse(decision.path("createdAt").asText()).toInstant();
-        java.time.Instant dueAt = decidedAt.plus(java.time.Duration.ofDays(horizon));
+        LocalDate dueDate = PlanDecisionService.reviewDueDate(decidedAt, horizonSessions);
         String world = plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? plan.worldId() : plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO ? "demo" : "observed";
         java.time.Instant laneNow = market.laneNow(world, clock);
-        if (laneNow.isBefore(dueAt)) {
-            throw new IllegalStateException("This opportunity review is scheduled for "
-                    + LocalDate.ofInstant(dueAt, io.liftandshift.strikebench.market.MarketHours.EASTERN) + ".");
+        // The benchmark reads the due session's CLOSE, so the gate is that session's final bell.
+        if (!io.liftandshift.strikebench.market.MarketHours.contractDead(dueDate, laneNow)) {
+            throw new IllegalStateException("This opportunity review is scheduled for " + dueDate + ".");
         }
-        LocalDate dueDate = LocalDate.ofInstant(dueAt, io.liftandshift.strikebench.market.MarketHours.EASTERN);
         var series = market.candleSeries(plan.symbol(), dueDate.minusDays(14), dueDate, world,
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         var dueBar = series.candles().stream().filter(c -> !c.date().isAfter(dueDate))
@@ -419,7 +421,7 @@ final class PlanDecisionController {
         long rejectedPnl = entry + packageEnd - Math.multiplyExact(fees, 2L);
         ObjectNode management = planManagement.recordCashReview(root.ownerId(ctx), plan.id(), body.expectedVersion(),
                 new PlanManagementService.CashReview(startUnderlying, endUnderlying, stockPnl, entry, packageEnd,
-                        rejectedPnl, horizon, decision.hasNonNull("pop") ? decision.get("pop").asDouble() : null,
+                        rejectedPnl, horizonSessions, decision.hasNonNull("pop") ? decision.get("pop").asDouble() : null,
                         "Frozen-IV modeled value at the lane-owned horizon close; kept outside trade calibration"));
         ctx.json(new ApiResponses.PlanManagement<>(planSvc.get(root.ownerId(ctx), plan.id()), management));
     }

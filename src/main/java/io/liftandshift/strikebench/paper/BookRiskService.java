@@ -106,6 +106,7 @@ public final class BookRiskService {
      * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks#vegaCentsPerPoint()};
      * {@code gammaPer1PctCents} is the book's cents-per-1%-move presentation. Per-position and
      * per-candidate strips use the canonical share/cent Greeks (see TradeService.PositionGreeks#canonical).
+     * The Practice lane obeys the same rule through {@link TradeService.BookGreeks}.
      */
     public record GreekBlock(Long betaWeightedDollarDeltaCents, Long netDollarDeltaCents,
                              Long vegaPerPointCents, Long gammaPer1PctCents,
@@ -173,8 +174,10 @@ public final class BookRiskService {
                                double annualRate, DataEvidence rateEvidence,
                                String basis) {}
 
-    public record PracticeLane(Double deltaShares, Long dollarDeltaNetCents, Long dollarDeltaGrossCents,
-                               Double gammaShares, Double thetaPerDay, Double vegaPerPoint,
+    /** Practice book greeks in the same additive-only grammar as {@link GreekBlock}. */
+    public record PracticeLane(Long dollarDeltaNetCents, Long dollarDeltaGrossCents,
+                               Double thetaCentsPerDay, Double vegaCentsPerPoint,
+                               boolean perShareAvailable, String perShareUnavailableReason,
                                boolean complete, String basis, MeasuredBook measuredBook) {}
 
     public record Lane(List<AccountRisk> accounts, CrossAccount crossAccount,
@@ -906,17 +909,16 @@ public final class BookRiskService {
     // ---- Practice lane (side-by-side, never netted) ----
 
     private PracticeLane practiceLane(String practiceAccountId) {
-        Map<String, Object> greeks = trades.portfolioGreeks(practiceAccountId);
-        var dollarDelta = trades.portfolioDollarDelta(practiceAccountId, null);
-        return new PracticeLane((Double) greeks.get("deltaShares"),
-                dollarDelta.netCents(), dollarDelta.grossCents(),
-                (Double) greeks.get("gammaShares"), (Double) greeks.get("thetaPerDay"),
-                (Double) greeks.get("vegaPerPoint"),
-                Boolean.TRUE.equals(greeks.get("complete")) && dollarDelta.complete(),
+        TradeService.BookGreeks greeks = trades.portfolioGreeks(practiceAccountId);
+        return new PracticeLane(greeks.netDollarDeltaCents(), greeks.grossDollarDeltaCents(),
+                greeks.thetaCentsPerDay(), greeks.vegaCentsPerPoint(),
+                greeks.perShareAvailable(), greeks.perShareUnavailableReason(),
+                greeks.complete() && greeks.dollarDeltaComplete(),
                 "Practice account, in its own market lane — shown side-by-side and never "
-                        + "numerically netted with tracked accounts (§3.13). Share-equivalent "
-                        + "delta/gamma, $/day theta, and $/vol-point vega from current Practice "
-                        + "marks; dollar delta uses the disclosed option model.",
+                        + "numerically netted with tracked accounts (§3.13). Delta is dollar-denominated "
+                        + "because share delta does not add across underlyings; theta is cents per day "
+                        + "and vega cents per vol point, from current Practice marks; dollar delta uses "
+                        + "the disclosed option model.",
                 measuredPracticeBook(practiceAccountId));
     }
 

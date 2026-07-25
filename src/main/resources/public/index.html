@@ -377,20 +377,6 @@ function drawPayoff(svg,p,full,ghost,opts){
   svg.innerHTML=g;
 }
 
-/* underlying price sparkline (the lens' little chart) — deterministic wiggle per symbol */
-function priceSpark(svg,p){
-  if(!svg)return;
-  var W=Math.max(40,Math.round(svg.clientWidth||120)), H=Math.max(18,Math.round(svg.clientHeight||30));
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  var seed=0; for(var i=0;i<p.sym.length;i++) seed+=p.sym.charCodeAt(i)*(i+7);
-  var n=30, a=[], v=0;
-  for(var i=0;i<n;i++){ seed=(seed*9301+49297)%233280; v+=((seed/233280)-0.47)*2; a.push(v); }
-  var lo=Math.min.apply(null,a), hi=Math.max.apply(null,a), pad=(hi-lo)*0.12||1; lo-=pad; hi+=pad;
-  var d=''; for(var i=0;i<n;i++){ var x=(W-2)*i/(n-1)+1, y=H-2-(a[i]-lo)/(hi-lo)*(H-4); d+=(i?' L ':'M ')+(Math.round(x*10)/10)+' '+(Math.round(y*10)/10); }
-  var up=a[n-1]>=a[0];
-  svg.innerHTML='<path d="'+d+'" fill="none" stroke="'+(up?'var(--profit)':'var(--loss)')+'" stroke-width="1.3" stroke-linejoin="round"/>';
-}
-
 /* ======================================================================
    FORMAT + CARD BUILD
    ====================================================================== */
@@ -425,6 +411,17 @@ function authLegs(trade){return (trade.legs||[]).map(function(l){var sign=String
   t:type==='STOCK'?'s':type==='CALL'?'c':'p',k:type==='STOCK'?Number(trade.entryUnderlyingCents||0)/100:Number(l.strike),
   q:sign*Math.max(1,Number(l.ratio||1))*Math.max(1,Number(trade.qty||1))*(type==='STOCK'?Math.max(1,Number(l.multiplier||1)):1),action:String(l.action||''),type:type,
   ratio:Number(l.ratio||1),multiplier:Number(l.multiplier||1),expiration:l.expiration||null,entryPrice:authNumber(l.entryPrice),positionEffect:l.positionEffect||'OPEN'};});}
+/* The book greeks receipt carries each position's delta in the ADDITIVE unit (dollars of
+   exposure per $1 of underlying move). Share delta means something within one underlying and
+   nothing across several, so anything that pools or plots positions together reads this. */
+function authPositionDollarDelta(data,tradeId){
+  var rows=data&&data.portfolio&&data.portfolio.greeks&&data.portfolio.greeks.positions||[];
+  for(var i=0;i<rows.length;i++){
+    if(String(rows[i]&&rows[i].id||'')!==String(tradeId))continue;
+    return authDollarsFromCents(rows[i].netDollarDeltaCents);
+  }
+  return null;
+}
 function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portfolio.heat||{},total=Math.max(0,Number(heat.totalMaxLossCents||0)),loss=Math.max(0,Number(trade.maxLossCents||0));
   var planRow=authPlanForTrade(data,trade),plan=planRow&&planRow.plan||null,pnl=authDollarsFromCents(trade.unrealizedPnlCents),spot=authDollarsFromCents(trade.entryUnderlyingCents),lifecycle=authLifecycleAnalysis(data,String(trade.id));
   /* B2: the held bloom/spectrum interpolates a SERVER terminal-payoff curve (never a leg engine).
@@ -433,9 +430,11 @@ function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portf
   /* B6: held greeks in the ONE canonical unit (deltaShares/gammaSharesPerDollar/thetaCentsPerDay/vegaCentsPerPoint). */
   var g=trade.greeks||null;
   return {id:String(trade.id),sym:String(trade.symbol||'').toUpperCase(),struct:authHuman(trade.strategy),spot:spot||0,em:0,pnl:pnl,
-    riskPct:total>0?Math.max(0,Math.min(100,loss/total*100)):0,cap:authDollarsFromCents(trade.maxLossCents),net:authDollarsFromCents(trade.entryNetPremiumCents),
+    /* share of the book's defined risk. With no book total there is no share — null, not 0%,
+       which would read as "this line carries no risk". */
+    riskPct:total>0?Math.max(0,Math.min(100,loss/total*100)):null,cap:authDollarsFromCents(trade.maxLossCents),net:authDollarsFromCents(trade.entryNetPremiumCents),
     pop:authNumber(trade.popEntry)==null?null:Number(trade.popEntry)*100,maxLoss:authDollarsFromCents(trade.maxLossCents),maxProfit:authDollarsFromCents(trade.maxProfitCents),
-    payoffPoints:payoffPoints,terminalPayoff:tp||null,greeks:g,delta:g?authNumber(g.deltaShares):null,gamma:g?authNumber(g.gammaSharesPerDollar):null,theta:g?authNumber(g.thetaCentsPerDay):null,vega:g?authNumber(g.vegaCentsPerPoint):null,
+    payoffPoints:payoffPoints,terminalPayoff:tp||null,greeks:g,delta:g?authNumber(g.deltaShares):null,dollarDelta:authPositionDollarDelta(data,trade.id),gamma:g?authNumber(g.gammaSharesPerDollar):null,theta:g?authNumber(g.thetaCentsPerDay):null,vega:g?authNumber(g.vegaCentsPerPoint):null,
     breakevens:(trade.breakevens||[]).map(Number).filter(Number.isFinite),need:false,tone:'ok',attn:String(trade.dataAge||trade.dataProvenance||'backend'),
     legs:authLegs(trade),legStr:'',authoritative:true,isHeld:true,lane:trade.isLive?'real':'paper',_trade:trade,_plan:plan,_planRow:planRow,
     provenance:{lane:trade.dataProvenance||null,freshness:trade.dataAge||null,source:trade.dataSource||null},lifecycle:lifecycle,_positionPhase:'idle'};}
@@ -601,7 +600,7 @@ function authRegimeSummary(research){var regime=research&&research.regime||{};if
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
   if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The position is temporarily unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to your book</button></div></div>';return;}
   if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div>';return;}
-  var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},greeks=cur.greeks||{};
+  var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},greeks=p.greeks||{};
   var payoffReady=Array.isArray(p.payoffPoints)&&p.payoffPoints.length>1;
   var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authExceptionStatus(cur.freshness||p.provenance.freshness||ev.quote&&ev.quote.age)||'current';
   host.innerHTML='<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
@@ -609,7 +608,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
       '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div><div class="authmetric"><span>Close cost</span><b>'+authMoney(authDollarsFromCents(cur.closeCostCents))+'</b></div>'+
       '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span title="Probability of profit — the estimated chance this position is profitable at expiry">POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
-      '<div class="authmetric"><span title="'+deskEsc(greekDesc('delta'))+'">Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span title="'+deskEsc(greekDesc('theta'))+'">Theta / day</span><b>'+(authNumber(greeks.thetaPerDay)==null?'—':money(Number(greeks.thetaPerDay)))+'</b></div></div>'+
+      '<div class="authmetric"><span title="'+deskEsc(greekDesc('delta'))+'">Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span title="'+deskEsc(greekDesc('theta'))+'">Theta / day</span><b>'+gfmt(GSPEC[1],greeks.thetaCentsPerDay)+'</b></div></div>'+
       '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+'</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
     '<div class="authresearchgrid"><section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
@@ -817,7 +816,6 @@ function ordinal(n){ var s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10
 /* ---- D · the manage area. TIER 1 (inline adjust) lives here: Roll/Adjust/Add open a
    compact tray IN THE BLOOM — minor tweaks never unroll the full Decide carpet. The full
    workbench is one click away when you actually need it (fan / governors / from-scratch). ---- */
-var adjust=null;   // {posId, kind, legs:[...], exp}
 function posExp(p){ var m=p.legStr.match(/exp ([0-9]{2}-[A-Za-z]{3})/)||p.legStr.match(/([0-9]{2}-[A-Za-z]{3})/); return m?m[1]:'21-Aug'; }
 function strikeInc(spot){ return spot>800?10:spot>300?5:spot>80?2.5:1; }
 /* ONE add-leg primitive (bloom + Decide both call this — no duplicate add logic) */
@@ -835,16 +833,6 @@ function closePosition(p){
   go('book');
   window.setTimeout(function(){ toast('Closed '+p.sym+' '+p.struct.toLowerCase()+' — realized '+money(p.pnl)); },120);
 }
-function adjustCand(){
-  var p=byId[adjust.posId];
-  var c={id:'adj',short:'Adjusted',name:'Adjusted '+p.struct,sym:p.sym,spot:p.spot,em:p.em,exp:adjust.exp,lean:'neutral',undef:null,
-    legs:adjust.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};})};
-  finishCand(c); return c;
-}
-function baseCand(p){   /* the CURRENT structure run through the same engine, so tray deltas compare like-for-like */
-  var b={id:'base',sym:p.sym,spot:p.spot,em:p.em,exp:posExp(p),legs:p.legs.map(function(l){return {t:l.t,k:l.k,q:l.q};}),undef:null};
-  return finishCand(b);
-}
 /* Front B S2: legChip + adjChip (fixture leg chips from the retired client engine) removed.
    The one editable leg component is backendDecisionLegChip, fed the backend chain receipt; the
    held surface is display-only. */
@@ -856,8 +844,7 @@ var FAN_STORY=-9;
 function redrawBloomPayoff(p, animate){
   var svg=cardEl[p.id]&&cardEl[p.id].querySelector('.cbig'); if(!svg)return;
   var opts={interactive:true, pinM:scrubMag(p), animate:!!animate};
-  if(adjust&&adjust.posId===p.id) drawPayoff(svg, adjustCand(), true, adjust.base||baseCand(p), opts);   // ghost = current on the SAME computed basis
-  else drawPayoff(svg, p, true, null, opts);
+  drawPayoff(svg, p, true, null, opts);
 }
 /* DRAG a strike handle on the payoff → live-edit that leg's strike (enters an adjustment) */
 /* ONE strike-drag used by BOTH the bloom and Decide (no more duplicate functions). It's
@@ -1193,7 +1180,7 @@ function payoffHover(p, ev){
   var svgR=svg.getBoundingClientRect(), wrapR=wrap.getBoundingClientRect(), m=svg._map;
   var x=ev.clientX-svgR.left, price=m.lo+(x-m.x0)/m.pw*(m.hi-m.lo);
   if(price<m.lo||price>m.hi||x<m.x0-2){ hidePayoffTip(p); return; }
-  var cur=(adjust&&adjust.posId===p.id)?adjustCand():p;
+  var cur=p;
   /* Off the served curve there is no value to report — say so rather than showing the curve's
      endpoint as though it were this price. */
   var pl=payFor(cur, price), pct=(price/p.spot-1)*100;
@@ -1207,7 +1194,7 @@ function payoffHover(p, ev){
 function hidePayoffTip(p){ var card=cardEl[p.id]; if(!card)return; var tip=card.querySelector('.paytip'),cross=card.querySelector('.paycross'); if(tip)tip.style.opacity='0'; if(cross)cross.style.opacity='0'; }
 
 /* the roster IS the concentration list: each card's share bar = riskPct / the book's max line. */
-function bookMaxRisk(){ var m=1; for(var i=0;i<POS.length;i++) if(POS[i].riskPct>m) m=POS[i].riskPct; return m; }
+function bookMaxRisk(){ var m=1; for(var i=0;i<POS.length;i++) if(Number(POS[i].riskPct)>m) m=Number(POS[i].riskPct); return m; }
 /* draw a card's peek mini-payoff once, the first time it's revealed (hover or map-hot) */
 function peekDraw(el,p){ if(!el||el._peekDrawn)return; el._peekDrawn=1; var sv=el.querySelector('.cspark'); if(sv) drawPayoff(sv,p,false); }
 function makeCard(p){
@@ -1647,7 +1634,7 @@ function authOpportunityControlsHTML(){
   return '<div class="opportunitycontrols" aria-label="Scan and idea controls">'+control('Market',scopeButton('broad','Broad market',Array.isArray(broad.symbols)?broad.symbols.length:0)+scopeButton('active','Active names',Array.isArray(active.symbols)?active.symbols.length:0))+
     control('Goal',goals.map(function(row){return '<button type="button" class="'+(HOME_SCOUT.goal===row[0]?'on':'')+'" data-auth-scout-goal="'+row[0]+'" aria-pressed="'+(HOME_SCOUT.goal===row[0])+'">'+row[1]+'</button>';}).join(''),'goals')+
     ideaButtons('View','view',['Bearish','Neutral','Bullish'],homeIdea.view)+
-    ideaButtons('Horizon','horizon',['7 days','30 days','45 days'],homeIdea.horizon)+
+    ideaButtons('Horizon','horizon',['7 trading days','30 trading days','45 trading days'],homeIdea.horizon)+
     ideaButtons('Risk','risk',['Conservative','Balanced','Aggressive'],homeIdea.riskMode)+'</div>';
 }
 function authScoutIdleFieldHTML(){
@@ -1760,14 +1747,23 @@ function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=
 function authResetOpportunity(){HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};authRenderOpportunityFrame();}
 function authRunOpportunityScan(){
   if(HOME_OPPORTUNITY.phase==='loading'||!window.DeskBackend||!window.DeskBackend.scoutOpportunities)return;
-  var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=/^7\b/.test(homeIdea.horizon)?'week':'month';
+  var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=authDeclaredHorizonSessions(homeIdea.horizon);
   HOME_OPPORTUNITY={phase:'loading',data:null,error:null,progress:{phase:'STARTING',completed:0,total:(explicit||described.scout&&described.scout.symbols||[]).length||1,message:'Preparing the governed universe.'},partial:[]};authRenderOpportunityFrame();
-  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:[horizon],maxPicks:5,riskMode:String(homeIdea.riskMode||'').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:String(homeIdea.view||'Neutral').toLowerCase()},function(progress){
+  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:horizon?[horizon]:[],maxPicks:5,riskMode:String(homeIdea.riskMode||'').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:homeIdea.view?String(homeIdea.view).toLowerCase():null},function(progress){
     if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY.progress=progress||HOME_OPPORTUNITY.progress;
     if(progress&&progress.pick){var pick=progress.pick,key=String(pick.symbol||'')+'|'+String(pick.intent||''),found=-1;for(var i=0;i<HOME_OPPORTUNITY.partial.length;i++){var row=HOME_OPPORTUNITY.partial[i];if(String(row.symbol||'')+'|'+String(row.intent||'')===key){found=i;break;}}if(found>=0)HOME_OPPORTUNITY.partial[found]=pick;else HOME_OPPORTUNITY.partial.push(pick);}
     authScheduleOpportunityPaint();
-  }).then(function(data){if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY={phase:'ready',data:data||{picks:[]},error:null,progress:null,partial:[]};authRenderOpportunityFrame();}).catch(function(error){if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY={phase:'error',data:null,error:error&&error.message||'The opportunity scan could not finish.',progress:null,partial:[]};authRenderOpportunityFrame();});
+  }).then(function(data){if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY={phase:'ready',data:data||{picks:[]},error:null,progress:null,partial:[]};authRenderOpportunityFrame();}).catch(function(error){if(seq!==HOME_SCOUT_SEQ)return;
+    var missing=error&&Array.isArray(error.missingDeclarations)?error.missingDeclarations:null;
+    HOME_OPPORTUNITY={phase:'error',data:null,
+      error:missing&&missing.length?'This scan still needs '+authJoinList(missing)+'.':(error&&error.message||'The opportunity scan could not finish.'),
+      progress:null,partial:[]};authRenderOpportunityFrame();});
 }
+/* '45 trading days' is a declaration of 45 TRADING SESSIONS — the unit Horizon.parse reads from
+   the Nd grammar. The browser states the number and never names the bucket; naming it here was
+   how 30 and 45 collapsed into one 'month' scan. */
+function authDeclaredHorizonSessions(label){var m=String(label==null?'':label).match(/(\d+)/);return m?m[1]+'d':null;}
+function authJoinList(rows){rows=(rows||[]).map(String);return rows.length<2?rows.join(''):rows.slice(0,-1).join(', ')+' and '+rows[rows.length-1];}
 function authPlanById(data,id){var rows=authPlanRows(data);for(var i=0;i<rows.length;i++){var p=rows[i]&&rows[i].plan||rows[i];if(String(p&&p.id||'')===String(id))return p;}return null;}
 function authHomeWatchGroup(symbol){
   symbol=String(symbol||'').toUpperCase();
@@ -2155,7 +2151,13 @@ function authBookReady(){
     if(POS.length===1){
       var oneGreeks=d.portfolio&&d.portfolio.greeks||{},oneSummary=document.createElement('div');
       oneSummary.className='homeonesummary';
-      oneSummary.innerHTML=authLifecycleReceiptHTML(POS[0].lifecycle,true)+'<div class="homeonegreeks"><span title="'+deskEsc(greekDesc('delta'))+'"><b>'+deskEsc(authNumber(oneGreeks.deltaShares)==null?'—':Number(oneGreeks.deltaShares).toFixed(2))+'</b>delta sh</span><span title="'+deskEsc(greekDesc('theta'))+'"><b>'+deskEsc(authNumber(oneGreeks.thetaPerDay)==null?'—':money(Number(oneGreeks.thetaPerDay)))+'</b>theta / day</span><span title="'+deskEsc(greekDesc('vega'))+'"><b>'+deskEsc(authNumber(oneGreeks.vegaPerPoint)==null?'—':money(Number(oneGreeks.vegaPerPoint)))+'</b>vega / pt</span></div>'+authShareInventoryHTML(shares);
+      var oneRow=(oneGreeks.positions||[])[0]||null,oneShare=oneRow&&oneRow.greeks?authNumber(oneRow.greeks.deltaShares):null;
+      var shareCell=oneShare==null
+        ? '<span title="'+deskEsc(oneGreeks.perShareUnavailableReason||greekDesc('delta'))+'"><b>—</b>delta sh</span>'
+        : '<span title="'+deskEsc(greekDesc('delta'))+'"><b>'+deskEsc(Number(oneShare).toFixed(2))+'</b>delta sh</span>';
+      oneSummary.innerHTML=authLifecycleReceiptHTML(POS[0].lifecycle,true)+'<div class="homeonegreeks">'+shareCell+
+        '<span title="'+deskEsc(greekDesc('theta'))+'"><b>'+gfmt(GSPEC[1],oneGreeks.thetaCentsPerDay)+'</b>theta / day</span>'+
+        '<span title="'+deskEsc(greekDesc('vega'))+'"><b>'+gfmt(GSPEC[2],oneGreeks.vegaCentsPerPoint)+'</b>vega / pt</span></div>'+authShareInventoryHTML(shares);
       bookEl.appendChild(oneSummary);
     }else if(shares.length){
       var shareSummary=document.createElement('div');shareSummary.className='homeonesummary sharesonly';shareSummary.innerHTML=authShareInventoryHTML(shares);bookEl.appendChild(shareSummary);
@@ -2201,7 +2203,6 @@ function layoutForLevel(level,focus){
     }
     var fp=byId[focus];
     redrawBloomPayoff(fp);
-    priceSpark(cardEl[focus].querySelector('.plspark'),fp);
   }
 }
 
@@ -2212,8 +2213,6 @@ function go(level,focus){
   if(LEVELS.indexOf(level)<0)return;
   if(level==='position'){ focus=focus||state.focus||(POS.length?POS[0].id:null);if(!focus||!byId[focus])return; }
   else { focus=state.focus; }
-  /* an inline adjust tray only lives on its own focused position — leaving resets it */
-  if(adjust && (level!=='position' || focus!==adjust.posId)) adjust=null;
   var prev=state.level, prevFocus=state.focus;
   var cardPair=(prev==='book'||prev==='position')&&(level==='book'||level==='position');
   /* which cards do a full FLIP (grow/shrink) vs cross-fade: the INCOMING focus always blooms,
@@ -2340,7 +2339,7 @@ function threadStateHTML(lv,fp){
   if(decide){
     z.push(_tz('On', decide.sym||'—'));
     z.push(_tz('Move', decide.kind==='idea'?'New idea':(decide.act||'Roll')));
-    z.push(_tz('Lane', (decide.order&&decide.order.lane)||POSTURE.lane));
+    z.push(_tz('Lane', (decide.order&&decide.order.lane)||'not chosen'));
   } else if(lv==='position' && fp){
     if(fp.authoritative){z.push(_tz('P/L',authSigned(fp.pnl),fp.pnl==null?'':fp.pnl>=0?'pos':'neg'));z.push(_tz('Max loss',authMoney(fp.cap)));z.push(_tz('POP',fp.pop==null?'—':Number(fp.pop).toFixed(0)+'%'));}
     else{z.push(_tz('P/L', signed(fp.pnl), fp.pnl>=0?'pos':'neg'));z.push(_tz('Risk', fp.riskPct+'% of book'));z.push(_tz('POP', fp.pop+'%'));}
@@ -2421,7 +2420,6 @@ function handleCmd(raw){
    ====================================================================== */
 /* pre-baked posture presets (Risk chip cycles through them; inherited into Decide's caps) */
 var RISK_PRESETS=[{k:'Conservative',risk:2500,bp:25000},{k:'Balanced',risk:5000,bp:50000},{k:'Aggressive',risk:10000,bp:80000}];
-function postureName(){ for(var i=0;i<RISK_PRESETS.length;i++) if(RISK_PRESETS[i].risk===POSTURE.risk) return RISK_PRESETS[i].k; return 'Custom'; }
 function drawPlSpark(p){ var svg=document.getElementById('plsp-'+p.id); if(!svg)return;
   if(p&&p.authoritative){var vals=(p.marksHistory||[]).map(function(m){return authDollarsFromCents(m.unrealizedCents);}).filter(function(v){return v!=null;});var aw=Math.max(38,Math.round(svg.clientWidth||48)),ah=Math.max(12,Math.round(svg.clientHeight||16));svg.setAttribute('viewBox','0 0 '+aw+' '+ah);if(vals.length<2){svg.innerHTML='<line x1="1" y1="'+(ah/2)+'" x2="'+(aw-1)+'" y2="'+(ah/2)+'" stroke="var(--line)" stroke-dasharray="2 3"/>';return;}var alo=Math.min.apply(0,vals),ahi=Math.max.apply(0,vals),apad=(ahi-alo)*.2||1;alo-=apad;ahi+=apad;var ad='';vals.forEach(function(v,i){var x=1+(aw-2)*i/(vals.length-1),y=1.5+(ah-3)*(1-(v-alo)/(ahi-alo));ad+=(i?' L ':'M ')+x.toFixed(1)+' '+y.toFixed(1);});var acol=vals[vals.length-1]>=0?'var(--profit)':'var(--loss)';svg.innerHTML='<path d="'+ad+'" fill="none" stroke="'+acol+'" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>';return;}
 }
@@ -2452,15 +2450,6 @@ function wireLanding(){
   for(var i=0;i<sp.length;i++){ (function(b){ b.onclick=function(){ SIM.speed=+b.getAttribute('data-simspd'); setMktMode('sim',false); }; })(sp[i]); }
   var op=summaryEl.querySelectorAll('[data-open]');
   for(var i=0;i<op.length;i++){ (function(b){ b.onclick=function(){ if(b.getAttribute('data-open')==='risk') scrollToBand('bookrisk'); }; })(op[i]); }
-  var pc=summaryEl.querySelectorAll('[data-posture]');
-  for(var i=0;i<pc.length;i++){ (function(b){ b.onclick=function(){ cyclePosture(b.getAttribute('data-posture')); }; })(pc[i]); }
-}
-function cyclePosture(kind){
-  if(kind==='goal'){ var gs=['Income','Hedge','Directional']; POSTURE.goal=gs[(gs.indexOf(POSTURE.goal)+1)%gs.length]; }
-  else if(kind==='lane'){ POSTURE.lane=POSTURE.lane==='real'?'paper':'real'; }
-  else if(kind==='risk'){ var idx=0; for(var i=0;i<RISK_PRESETS.length;i++) if(RISK_PRESETS[i].risk===POSTURE.risk) idx=i;
-    var np=RISK_PRESETS[(idx+1)%RISK_PRESETS.length]; POSTURE.risk=np.risk; POSTURE.bp=np.bp; }
-  toast('Posture · '+POSTURE.goal+' · '+postureName()+' · '+(POSTURE.lane==='real'?'Real-first':'Paper-first')+' — inherited by new ideas');
 }
 
 /* ---- data-lens primitives (shared by the sector + market zoom-out research) ---- */
@@ -2503,7 +2492,6 @@ function redraw(){
   } else if(state.level==='position'){
     var fp=byId[state.focus];
     redrawBloomPayoff(fp);
-    priceSpark(cardEl[state.focus].querySelector('.plspark'),fp);
   }
 }
 
@@ -2633,12 +2621,12 @@ function applyAuthoritativePlanContext(plan){
   decide.planContext=context;
   decide.goal=plan.intent?authHuman(plan.intent):'Undeclared';
   decide.view=context.thesis==null?'Undeclared':authHuman(context.thesis);
-  decide.horizon=context.horizonDays==null?'Undeclared':String(context.horizonDays)+' days';
+  decide.horizon=context.horizonDays==null?'Undeclared':String(context.horizonDays)+' trading days';
   decide.riskMode=context.riskMode?authHuman(context.riskMode):'Undeclared';
   if(decide.resumePlanContext){
     decide.resumePlanContext.goal=plan.intent==null?null:String(plan.intent);
     decide.resumePlanContext.view=context.thesis==null?null:context.thesis;
-    decide.resumePlanContext.horizon=context.horizonDays==null?null:String(context.horizonDays)+' days';
+    decide.resumePlanContext.horizon=context.horizonDays==null?null:String(context.horizonDays)+' trading days';
     decide.resumePlanContext.riskMode=context.riskMode==null?null:String(context.riskMode);
     decide.resumePlanContext.originPlanId=plan.originPlanId==null?null:plan.originPlanId;
     decide.resumePlanContext.targetCents=context.targetCents==null?null:context.targetCents;
@@ -2988,9 +2976,6 @@ var TODAY_ORD=719;   /* 19-Jul, the desk's "now" (matches the rest of the mock c
 function dateOrd(str){ var m=(''+str).match(/([0-9]{1,2})-([A-Za-z]{3})/); return m?((MONTHS[m[2]]||13)*100+ +m[1]):9999; }
 var univBy={};
 
-/* AMBIENT POSTURE — your standing defaults, shown on the landing and INHERITED into Decide
-   (goal lean, risk/collateral caps, and which lane a new order defaults to). */
-var POSTURE={goal:'Income', view:'Neutral', risk:5000, bp:50000, lane:'paper'};
 /* market mode: 'observed' = live Cboe data · 'sim' = synthetic/deterministic demo (seed + scenario world) */
 var MKT_MODE='observed', SIM={seed:7, world:'Base case', speed:1}, BACKEND_MARKET_LANE=null, BACKEND_MARKET_WORLD=null;
 var SIM_WORLDS=['Base case','Risk-off','Melt-up','Vol spike','Grind higher','Chop'];
@@ -3011,7 +2996,7 @@ function setMktMode(m,pathChanged){
     if(current&&current.mutationPending){toast('Wait for the current Plan change to finish.');return;}
     var ctx=decide?{symbol:decide.sym,goal:decide.goal,view:decide.view,horizon:decide.horizon,
       governorExplicit:Object.assign({},decide.govExplicit||{})}:
-      {symbol:null,goal:POSTURE.goal,view:POSTURE.view,horizon:'1 day',reopen:false};
+      {symbol:null,goal:null,view:null,horizon:null,reopen:false};
     if(m==='sim'&&!ctx.symbol){
       enterDecide('idea',null,'New idea',document.getElementById('mktMode').getBoundingClientRect(),null);
       toast('Choose an underlying before creating its simulated market.');
@@ -3103,14 +3088,6 @@ function candidateSectorRead(c){
   var exposure=held.reduce(function(n,p){return n+(p.riskPct||0);},0);
   return {sector:sector,held:held,exposure:exposure,diversifies:held.length===0};
 }
-function buildCandidate(legs){
-  var u=decideU();
-  var c={id:'build',short:'Your build',name:'Your build',sym:u.sym,spot:u.spot,em:u.em,exp:'21-Aug',build:true,lean:'neutral',undef:null,
-    legs:legs.filter(function(l){return l.q!==0;}).map(function(l){return {t:l.t,k:l.k,q:l.q};})};
-  finishCand(c);
-  c.analog='Live build · not back-tested'; c.ivnote='IV modeled from your strikes';
-  return c;
-}
 /* The underlying is a declaration, never a product default. Financial helpers are reached only
    after an explicit symbol has produced a candidate, so a missing value stays missing here. */
 function decideU(){ return decide&&decide.u||null; }
@@ -3121,8 +3098,7 @@ function activeCand(){
        valid exact-package preview. While it is pending or blocked, keep the last selected
        candidate's authoritative payoff/outcomes on screen; the workbench still renders the
        edited legs independently below the ranked ideas. */
-    if(deskBackendEnabled()&&decide.kind==='idea')return authoritativeDraftSource();
-    return buildCandidate(decide.buildLegs||[]);
+    return authoritativeDraftSource();
   }
   var f=decide.cands.filter(function(c){return c.id===decide.candId;})[0];
   return f||decide.cands[0];
@@ -3148,18 +3124,19 @@ function riskCharLabel(c){ var rc=riskChar(c); return rc==='undef'?'undefined ri
 function maxLossDisp(c){ if(c.authoritative&&c.backend&&c.backend.maxLossCents==null)return 'model-dependent';return c.undef?'unbounded':'−$'+Math.round(c.maxLoss).toLocaleString(); }
 function maxProfitDisp(c){if(c.maxProfit==null)return c.undef?'uncapped':'model-dependent';return '+$'+Math.round(c.maxProfit).toLocaleString();}
 function isCollat(c){return c.legs.some(function(l){return l.t==='s';})||(c.legs.length===1&&c.legs[0].t==='p');}
-/* the judging CONTEXT — defaults to the live Decide (view/goal/caps/fan) but a held position is
-   judged against your standing POSTURE, so coherence() works OUTSIDE Decide too (in the bloom). */
+/* the judging CONTEXT — the live Decide (view/goal/caps/fan) when there is one. Outside Decide
+   there is no declaration to judge against, so the context is empty rather than invented. */
 function cohCtx(ctx){ if(ctx)return ctx; if(typeof decide==='object'&&decide&&decide.view)return decide;
   /* a HELD position is judged on thesis fit (view · goal), not re-litigated against entry caps —
      the capital is already committed — so the cap gates are off; only view/goal/edge drive the verdict. */
-  return {view:POSTURE.view, goal:POSTURE.goal, govs:{risk:Infinity,bp:Infinity,minPop:0,maxAsn:100,gapLoss:0}, cands:[]}; }
-function candGated(c,ctx){if(c&&c.authoritative)return null;ctx=cohCtx(ctx); var g=ctx.govs, risk=c.undef?60000:c.maxLoss;
-  if(!c.undef&&!isCollat(c)&&risk>g.risk)return 'risk';
-  if((isCollat(c)||c.undef)&&c.cap>g.bp)return 'bp';
-  if(c.pop!=null&&c.pop<g.minPop)return 'pop';
-  if(c.assign!=null&&c.assign>g.maxAsn)return 'assign';
-  var gl=gapLoss(c);if(g.gapLoss&&gl!=null&&-gl>g.gapLoss)return 'gaploss';
+  return {view:null, goal:null, govs:{risk:null,bp:null,minPop:null,maxAsn:null,gapLoss:null}, cands:[]}; }
+/* A screen only gates once the user has set it. An unset screen is absent, not permissive-zero. */
+function candGated(c,ctx){if(c&&c.authoritative)return null;ctx=cohCtx(ctx); var g=ctx.govs||{}, risk=c.undef?60000:c.maxLoss;
+  if(g.risk!=null&&!c.undef&&!isCollat(c)&&risk>g.risk)return 'risk';
+  if(g.bp!=null&&(isCollat(c)||c.undef)&&c.cap>g.bp)return 'bp';
+  if(g.minPop!=null&&c.pop!=null&&c.pop<g.minPop)return 'pop';
+  if(g.maxAsn!=null&&c.assign!=null&&c.assign>g.maxAsn)return 'assign';
+  var gl=gapLoss(c);if(g.gapLoss!=null&&gl!=null&&-gl>g.gapLoss)return 'gaploss';
   return null;}
 /* ---- coherence verdict: does the candidate match your GOAL · VIEW · BUDGET, and does
    anything strictly beat it (Pareto)? One verdict, four honest checks, plain-English why. ---- */
@@ -3362,15 +3339,19 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
   var fan=[];
   decide={kind:kind,posId:posId,act:actLabel||(kind==='idea'?'New idea':kind==='close'?'Close':'Roll'),
     sym:u&&u.sym||null,u:u,spot:u&&u.spot,em:u&&u.em,
-    goal:planOverride?(planOverride.intent?authHuman(planOverride.intent):'Undeclared'):declaration?authHuman(declaration.goal):POSTURE.goal,
-    view:planOverride?(planContext.thesis==null?'Undeclared':String(planContext.thesis)):declaration?String(declaration.view):POSTURE.view,
-    horizon:planOverride?(planContext.horizonDays==null?'Undeclared':String(planContext.horizonDays)+' days'):
-      declaration?String(declaration.horizon):(kind==='idea'&&String(POSTURE.goal||'').toLowerCase()==='income'?'45 days':'1 day'),
-    riskMode:planOverride?(planContext.riskMode?authHuman(planContext.riskMode):'Undeclared'):declaration?String(declaration.riskMode):postureName(),
+    /* §3.5: an idea the user has not declared is UNDECLARED. The desk used to seed it from the
+       ambient posture — Income · Neutral · 45 days · a named risk preset — and then show those
+       back as though the user had chosen them, which is how a scan answers a question nobody
+       asked. The plan-resume branch already spoke this dialect; the fresh branch now does too. */
+    goal:planOverride?(planOverride.intent?authHuman(planOverride.intent):'Undeclared'):declaration?authHuman(declaration.goal):'Undeclared',
+    view:planOverride?(planContext.thesis==null?'Undeclared':String(planContext.thesis)):declaration?String(declaration.view):'Undeclared',
+    horizon:planOverride?(planContext.horizonDays==null?'Undeclared':String(planContext.horizonDays)+' trading days'):
+      declaration?String(declaration.horizon):'Undeclared',
+    riskMode:planOverride?(planContext.riskMode?authHuman(planContext.riskMode):'Undeclared'):declaration?String(declaration.riskMode):'Undeclared',
     resumePlanId:planOverride&&planOverride.id||null,
     resumePlanContext:planOverride?{goal:planOverride.intent==null?null:String(planOverride.intent),
       view:planContext.thesis==null?null:planContext.thesis,
-      horizon:planContext.horizonDays==null?null:String(planContext.horizonDays)+' days',
+      horizon:planContext.horizonDays==null?null:String(planContext.horizonDays)+' trading days',
       riskMode:planContext.riskMode==null?null:String(planContext.riskMode),
       originPlanId:planOverride.originPlanId||null,
       targetCents:planContext.targetCents,holdingsShares:planContext.holdingsShares,
@@ -3386,8 +3367,12 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
     mode:'engine', intentOpen:symbolRequired, leftTool:null, inspect:'paths', pathView:authoritativeIdea?'pnl':'price', orderOpen:false, mcRunning:false,
     cands:fan, candId:fan.length?fan[0].id:null, deskPickId:fan.length?fan[0].id:null,
     buildLegs:null,buildSourceId:null,draftCand:null,draftPending:false,draftValid:false,draftError:null,
-    govs:{risk:POSTURE.risk,bp:POSTURE.bp,minPop:55,maxAsn:60,gapLoss:POSTURE.gapLoss||25000},govExplicit:{},
-    order:{type:'market',price:null,qty:1,lane:POSTURE.lane,review:false,placed:false,acknowledged:{}},
+    /* §3.5: a screen the user has not set does not exist. These used to open at an invented
+       $5,000 / $50,000 / 55% / 60% / $25k and the Fit tab then printed "of your $5,000 cap" as
+       though the user had declared it. A declared risk posture fills risk/bp (applyPlanContext);
+       everything else stays null until the user moves the slider. */
+    govs:{risk:null,bp:null,minPop:null,maxAsn:null,gapLoss:null},govExplicit:{},
+    order:{type:'market',price:null,qty:1,lane:null,review:false,placed:false,acknowledged:{}},
     backendPhase:kind==='idea'?(symbolRequired?'underlying-required':deskBackendEnabled()?'loading':null):null,backendError:null,backendState:null,
     backendNotes:[],backendRejections:[],missingDeclarations:[],strategyCatalog:null,pendingCandidateId:null,
     _origin:kind==='idea'?null:(origin||null), _payoffOrigin:null};
@@ -4013,32 +3998,48 @@ function drawFanIcons(){ if(!decide||!decide.cands)return;
   decide.cands.forEach(function(c){ var svg=document.getElementById('fic-'+c.id.replace(/[^a-z0-9]/gi,'')); if(svg) drawPayoff(svg, c, false); }); }
 function governorsPanel(){
   var g=decide.govs,cs=decide.cands,N=cs.length;
-  var passPop=cs.filter(function(c){return c.pop>=g.minPop;}).length;
-  var passAsn=cs.filter(function(c){return (c.assign||0)<=g.maxAsn;}).length;
-  var passGap=cs.filter(function(c){return !(g.gapLoss && -gapLoss(c) > g.gapLoss);}).length;
+  /* A pass-count for a screen nobody set would be N of N — a true statement that reads as a
+     filter doing work. Unset screens report themselves as off instead. */
+  function passCount(active,test){ return active?cs.filter(test).length:null; }
+  var passPop=passCount(g.minPop!=null,function(c){return c.pop>=g.minPop;});
+  var passAsn=passCount(g.maxAsn!=null,function(c){return (c.assign||0)<=g.maxAsn;});
+  var passGap=passCount(g.gapLoss!=null,function(c){return !(-gapLoss(c)>g.gapLoss);});
+  var setCount=['risk','bp','minPop','maxAsn','gapLoss'].filter(function(k){return g[k]!=null;}).length;
   var shown=cs.filter(function(c){return !candGated(c);}).length;
   function gv(k,label,sub,min,max,step,val,fmt,pass){
+    var unset=val==null;
     var tail=pass!=null
       ? '<div class="gpass'+(pass<N?' some':'')+'"><span class="gdot"></span><b>'+pass+'</b> of '+N+' pass this screen</div>'
+      : unset ? '<div class="govcap">Off — drag to set this screen.</div>'
       : (sub?'<div class="govcap">'+sub+'</div>':'');
-    return '<div class="gov"><div class="gh"><span>'+label+'</span><span class="num" id="gv-'+k+'">'+fmt+'</span></div>'+
-      '<input class="slider" type="range" data-gov="'+k+'" min="'+min+'" max="'+max+'" step="'+step+'" value="'+val+'">'+tail+'</div>';
+    return '<div class="gov'+(unset?' govunset':'')+'"><div class="gh"><span>'+label+'</span>'+
+      '<span class="num" id="gv-'+k+'">'+(unset?'not set':fmt)+'</span></div>'+
+      '<input class="slider" type="range" data-gov="'+k+'" min="'+min+'" max="'+max+'" step="'+step+
+      '" value="'+(unset?min:val)+'"'+(unset?' data-gov-unset="true"':'')+'>'+tail+'</div>';
   }
-  /* live buying-power readout for the active candidate — the two money types shown separately */
-  var c=activeCand(), isColl=isCollat(c)||c.undef, used=isColl?c.cap:c.maxLoss, rc=isColl?g.bp:g.risk, free=rc-used;
-  var readout='<div class="bpread"><span class="bpk">'+c.short+' ties up</span> <b class="'+(used>rc?'neg':'pos')+'">'+money(used)+'</b> '+
-    '<span class="bpk">'+(isColl?'collateral':'defined risk')+' — '+(free>=0?'<b>'+money(free)+'</b> free':'<b class="neg">over by '+money(-free)+'</b>')+' of your '+money(rc)+' cap</span></div>';
+/* live buying-power readout for the active candidate — the two money types shown separately */
+  var c=activeCand(), isColl=isCollat(c)||c.undef, used=isColl?c.cap:c.maxLoss, rc=isColl?g.bp:g.risk;
+  /* What the package ties up is a backend fact and always shown. What is "left" needs a cap the
+     user actually declared — without one there is no headroom to report, only a requirement. */
+  var free=rc==null?null:rc-used;
+  var readout='<div class="bpread"><span class="bpk">'+deskEsc(c.short||'This package')+' ties up</span> '+
+    '<b class="'+(free!=null&&free<0?'neg':'pos')+'">'+money(used)+'</b> '+
+    '<span class="bpk">'+(isColl?'collateral':'defined risk')+(rc==null
+      ? ' — no '+(isColl?'collateral':'defined-risk')+' cap declared, so there is no headroom to report.'
+      : ' — '+(free>=0?'<b>'+money(free)+'</b> free':'<b class="neg">over by '+money(-free)+'</b>')+' of your '+money(rc)+' cap')+
+    '</span></div>';
   return '<div class="govpanel">'+
-    '<div class="govhd"><span class="eyebrow">Screens &amp; caps</span><span class="hint">'+shown+' of '+N+' pass</span></div>'+
+    '<div class="govhd"><span class="eyebrow">Screens &amp; caps</span><span class="hint">'+
+      (setCount?shown+' of '+N+' pass':'no screens set · all '+N+' shown')+'</span></div>'+
     '<div class="govs">'+
       '<div class="govcol"><div class="gct">Two kinds of money</div>'+
-        gv('risk','Defined-risk cap','max loss on a spread',1000,20000,500,g.risk,'$'+g.risk.toLocaleString())+
-        gv('bp','Collateral cap','cash set aside for a CSP / covered',10000,80000,1000,g.bp,'$'+(g.bp/1000)+'k')+
+        gv('risk','Defined-risk cap','max loss on a spread',1000,20000,500,g.risk,g.risk==null?'':'$'+g.risk.toLocaleString())+
+        gv('bp','Collateral cap','cash set aside for a CSP / covered',10000,80000,1000,g.bp,g.bp==null?'':'$'+(g.bp/1000)+'k')+
       '</div>'+
       '<div class="govcol"><div class="gct">Screens</div>'+
         gv('minPop','Min chance of profit','',30,80,1,g.minPop,g.minPop+'%',passPop)+
         gv('maxAsn','Max assignment odds','',10,90,1,g.maxAsn,g.maxAsn+'%',passAsn)+
-        gv('gapLoss','Max loss on a sector gap','',5000,100000,2500,g.gapLoss,'$'+(g.gapLoss/1000)+'k',passGap)+
+        gv('gapLoss','Max loss on a sector gap','',5000,100000,2500,g.gapLoss,g.gapLoss==null?'':'$'+(g.gapLoss/1000)+'k',passGap)+
       '</div>'+
     '</div>'+readout+'</div>';
 }
@@ -4121,8 +4122,14 @@ function bookImpactPanel(c){
     :'<div class="upanel"><div class="lenshd"><span class="eyebrow">Book impact</span></div><div class="backendnotice">Book impact appears once this idea is valued on the shared futures.</div></div>';
 }
 function fitBudgetPanel(c){
-  var collateral=isCollat(c)||c.undef, cap=collateral?decide.govs.bp:decide.govs.risk, used=c.cap||c.maxLoss, pct=Math.min(100,used/Math.max(1,cap)*100), room=cap-used;
-  return '<div class="fitbudget"><div class="fbh"><span>'+(collateral?'Collateral':'Defined-risk')+' screen</span><b class="'+(room>=0?'pos':'neg')+'">'+money(used)+' / '+money(cap)+'</b></div>'+
+  var collateral=isCollat(c)||c.undef, cap=collateral?decide.govs.bp:decide.govs.risk, used=c.cap||c.maxLoss;
+  var label=collateral?'Collateral':'Defined-risk';
+  /* Without a declared cap there is no fraction to fill and no remainder to state. Show the
+     requirement — a backend fact — and name the declaration that would make it a screen. */
+  if(cap==null)return '<div class="fitbudget"><div class="fbh"><span>'+label+' required</span><b>'+money(used)+'</b></div>'+
+    '<div class="tailsub" style="margin-top:5px">No '+label.toLowerCase()+' cap is declared, so this package has nothing to be measured against. Set one in Screens &amp; caps.</div></div>';
+  var pct=Math.min(100,used/Math.max(1,cap)*100), room=cap-used;
+  return '<div class="fitbudget"><div class="fbh"><span>'+label+' screen</span><b class="'+(room>=0?'pos':'neg')+'">'+money(used)+' / '+money(cap)+'</b></div>'+
     '<div class="tailtrack"><i style="width:'+pct.toFixed(1)+'%;background:'+(room>=0?'var(--accent)':'var(--loss)')+'"></i></div><div class="tailsub" style="margin-top:5px">'+(room>=0?money(room)+' remains after this package.':'Over the stated cap by '+money(-room)+'.')+'</div></div>';
 }
 function greekInspector(c){
@@ -4332,7 +4339,10 @@ function drawDecMarketHist(){
 }
 function decUnderstand(c){
   var co=coherence(c),source=c.authoritative?authoritativeCanvas(c):null,af=c.authoritative?authoritativeFrame(c,0):null,sr=c.authoritative?null:candidateSectorRead(c),
-    greekLabel=af&&af.greeks&&af.greeks.theta!=null?'Θ '+signed(af.greeks.theta):c.authoritative?'checkpoint':'Θ '+signed(c.theta||0),
+    /* theta rides the wire as thetaCentsPerDay. signed() formats whole dollars, so printing it
+       raw overstated time decay by 100x on this badge alone; GSPEC[1] is the one place that
+       knows the unit. A non-authoritative candidate has no greeks to badge. */
+    greekLabel=af&&af.greeks&&af.greeks.theta!=null?'Θ '+gfmt(GSPEC[1],af.greeks.theta):'checkpoint',
     bookLabel=c.authoritative?(source&&source.comparison?comparisonTabLabel(source):'loading'):(sr.diversifies?'diversifies':'adds '+sr.sector),
     tabs=[['paths','path','Paths',(c.pop==null?'—':c.pop+'%')+' profit'],['fit','check','Fit',(co.word.indexOf(' · ')>=0?co.word.split(' · ').pop():co.word)],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
   if(decide.inspect==='market')decide.inspect='paths';  /* market is a standing band now, not a lens */
@@ -4340,11 +4350,13 @@ function decUnderstand(c){
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
 function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv '+(good?'pos':'neg')+'">'+v+'</span></div>'; }
-function estPrice(c){
+/* The signed package limit the user would send. Exactly two things can supply it: a price the
+   user set, or the valuation the backend declared for this exact instruction. The scan-time
+   candidate net used to be the third arm — a different basis (option-only, mid, scan-time)
+   silently standing in for an executable price that would then be POSTed as limitNetCents. */
+function estPrice(){
   if(decide.order.price!=null)return decide.order.price;
-  var order=decide.orderPreview&&decide.orderPreview.order;
-  var valued=authoritativeOrderValue(order);
-  return valued==null?c.credit:valued;
+  return authoritativeOrderValue(decide.orderPreview&&decide.orderPreview.order);
 }
 function authoritativeOrderValue(order){
   if(!order)return null;
@@ -4358,7 +4370,7 @@ function authoritativeOrderValue(order){
 function currentOrderRequest(){
   var o=decide.order, request={type:String(o.type||'market').toUpperCase(),qty:Math.max(1,Number(o.qty||1)),timeInForce:'DAY'};
   if(request.type==='LIMIT'){
-    var signedLimit=estPrice(activeCand());
+    var signedLimit=estPrice();
     if(signedLimit==null||!Number.isFinite(Number(signedLimit)))return null;
     request.limitNetCents=Math.round(Number(signedLimit)*100);
   }
@@ -4400,7 +4412,7 @@ function decExecute(c){
       '<div class="dockorder"><b>Exact package not selected yet</b><span>Use the backend preview above to replace the selected strategy before reviewing an instruction.</span></div>'+
       '<button class="btn pri place" disabled>Review →</button></div></div></div>';
   }
-  var o=decide.order, qf=o.qty, price=estPrice(c),hasSignedPrice=price!=null&&Number.isFinite(Number(price));
+  var o=decide.order, qf=o.qty, price=estPrice(),hasSignedPrice=price!=null&&Number.isFinite(Number(price));
   var ap=c.authoritative&&decide.orderPreview, preview=ap&&ap.preview, order=ap&&ap.order;
   var oi=order&&order.orderInstruction, instructionMatches=!c.authoritative||!!(oi&&String(oi.type||'').toLowerCase()===o.type&&(o.type!=='limit'||hasSignedPrice&&Number(oi.limitNetCents)===Math.round(Number(price)*100)));
   var usablePreview=!c.authoritative||!!(preview&&order&&!o.previewPending&&instructionMatches),mid=usablePreview&&order&&order.executableNetCents!=null?Number(order.executableNetCents)/100:(c.authoritative?null:c.credit);
@@ -4435,7 +4447,7 @@ function decExecute(c){
   if(!decide.orderOpen){
     var dockfill=c.authoritative?backendFill:'<div class="fillbar" title="where your '+typeLabel(o.type)+' price sits in the bid⟷ask spread"><span class="fbend">fill</span><span class="fbtrack"><i class="fbmid"></i><i class="fbmark '+(marketable?'now':'rest')+'" style="left:'+pct.toFixed(0)+'%"></i></span><span class="fbend r">price</span></div>';
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox"><div class="dockrow">'+
-      '<div class="dockorder"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b><span>'+(o.lane==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(hasExecutionValuation?' · '+signed(eNet)+' '+side:(candidateNet==null?' · execution unavailable':' · candidate '+signed(candidateNet)+' '+candidateSide+' · execution unavailable'))+'</span></div>'+dockfill+
+      '<div class="dockorder"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b><span>'+(o.lane==null?'destination not chosen':o.lane==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(hasExecutionValuation?' · '+signed(eNet)+' '+side:(candidateNet==null?' · execution unavailable':' · candidate '+signed(candidateNet)+' '+candidateSide+' · execution unavailable'))+'</span></div>'+dockfill+
       '<button class="ticketedit" data-dec="ticket" aria-label="Edit order controls" title="Edit order">'+deskGlyph('tune')+'</button>'+
       '<button class="btn pri place" data-dec="review" '+(c.authoritative&&(!usablePreview||!previewEligibility.eligible)?'disabled':'')+'>Review →</button></div>'+eligibilityNote+'</div></div>';
   }
@@ -4453,11 +4465,11 @@ function reviewBlock(c,eNet,o){
   var eligibility=c.authoritative?authoritativePreviewEligibility(decide.orderPreview):{eligible:true,immediate:true,reasons:[]};
   var immediate=!c.authoritative||eligibility.immediate;
   var canConfirm=eligibility.eligible&&immediate&&!missing.length&&o.lane==='paper'&&!o.previewPending&&!o.committing;
-  var block=o.lane==='real'?'Tracked placement requires the broker reference and exact fills; this Practice confirmation will not impersonate it.':!eligibility.eligible?eligibility.reasons.join(' '):!immediate?'This instruction is not presently executable. Adjust the signed limit or keep it resting.':missing.length?'Confirm each required risk acknowledgment.':'';
+  var block=o.lane==null?'Choose where this order goes before confirming it.':o.lane==='real'?'Tracked placement requires the broker reference and exact fills; this Practice confirmation will not impersonate it.':!eligibility.eligible?eligibility.reasons.join(' '):!immediate?'This instruction is not presently executable. Adjust the signed limit or keep it resting.':missing.length?'Confirm each required risk acknowledgment.':'';
   return '<div class="reviewbar" role="region" aria-label="Order review">'+
     '<div class="revieworder"><span class="eyebrow">Review</span><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b>'+
       '<span>'+typeLabel(o.type)+' · '+signed(eNet)+' '+(eNet>=0?'credit':'debit')+' · exp '+c.exp+'</span></div>'+
-    '<div class="reviewchecks">'+check('Structure',rcLabel,rc==='undef')+check(collateral?'Collateral':'Risk cap',inside?money(used)+' within cap':money(used)+' over cap',!inside)+check('Destination',o.lane==='paper'?'Practice ledger':'Tracked broker record',o.lane==='real')+'</div>'+acks+
+    '<div class="reviewchecks">'+check('Structure',rcLabel,rc==='undef')+check(collateral?'Collateral':'Risk cap',inside?money(used)+' within cap':money(used)+' over cap',!inside)+check('Destination',o.lane==null?'Not chosen':o.lane==='paper'?'Practice ledger':'Tracked broker record',o.lane!=='paper')+'</div>'+acks+
     (block?'<div class="placenote">'+deskEsc(block)+'</div>':'')+
     '<div class="reviewacts"><button class="btn" data-dec="cancel">← Edit</button><button class="btn pri" data-dec="confirm" '+(canConfirm?'':'disabled')+'>'+(o.committing?'Committing…':'Confirm &amp; place →')+'</button></div></div>';
 }
@@ -4567,7 +4579,15 @@ function showMapCard(id){
 /* ---- interactions (delegated once on the stable overlay) ---- */
 function decStep(kind,d){
   if(kind==='qty') decide.order.qty=Math.max(1,Math.min(20,decide.order.qty+d));
-  else if(kind==='price'&&decide.order.type==='limit'){ var base=estPrice(activeCand()); if(base==null||!Number.isFinite(Number(base)))base=0;decide.order.price=Math.round((Number(base)+d*.25)*100)/100; }
+  else if(kind==='price'&&decide.order.type==='limit'){
+    /* Stepping from zero manufactured a committable ±$0.25 package limit out of nothing. With no
+       valuation to step from there is no price to nudge — say so and leave the field empty. */
+    var base=estPrice();
+    if(base==null||!Number.isFinite(Number(base))){
+      toast('No executable valuation for this package yet — there is no price to step from.');
+      return;
+    }
+    decide.order.price=Math.round((Number(base)+d*.25)*100)/100; }
   decide.order.acknowledged={};
   if(authoritativeCandidate())queueOrderPreview(); else renderDecide();
 }
@@ -4798,7 +4818,7 @@ function wireDecide(){
     var pk=t.closest('[data-pick]'); if(pk){ setUnderlying(pk.getAttribute('data-pick')); return; }
     var cd=t.closest('[data-cand]'); if(cd){ loadCand(cd.getAttribute('data-cand')); return; }
     var mi=t.closest('[data-mapi]'); if(mi){ if(mi.getAttribute('data-mapi')!=='build')loadCand(mi.getAttribute('data-mapi')); return; }
-    var ot=t.closest('[data-otype]'); if(ot){ decide.order.type=ot.getAttribute('data-otype'); decide.order.price=decide.order.type==='limit'?estPrice(activeCand()):null; decide.order.acknowledged={};
+    var ot=t.closest('[data-otype]'); if(ot){ decide.order.type=ot.getAttribute('data-otype'); decide.order.price=decide.order.type==='limit'?estPrice():null; decide.order.acknowledged={};
       if(authoritativeCandidate())queueOrderPreview(); else renderDecide(); return; }
     var ln=t.closest('[data-lane]'); if(ln){ decide.order.lane=ln.getAttribute('data-lane'); decide.order.review=false; renderDecide(); return; }
     var st=t.closest('[data-step]'); if(st){ decStep(st.getAttribute('data-step'), +st.getAttribute('data-d')); return; }
@@ -4976,7 +4996,12 @@ function drawExposureMap(cfg){
   var W=Math.max(320,Math.round(svg.clientWidth||600)), H=Math.max(150,Math.round(svg.clientHeight||220));
   svg.setAttribute('viewBox','0 0 '+W+' '+H);
   var padL=44,padB=26,padT=14,padR=16;
-  var caps=POS.map(function(p){return p.cap;}), dl=POS.map(function(p){return +p.delta||0;});
+  /* One shared X axis compares positions, so it must carry a comparable unit. Share delta is not
+     one: 100 delta of a $30 name and 100 delta of a $900 name sat at the same x. Dollar delta is
+     the exposure each position actually carries per $1 move, and it is what the book receipt
+     publishes per row. A position with no measured delta plots at the axis with its own marker
+     rather than silently at zero. */
+  var caps=POS.map(function(p){return p.cap;}), dl=POS.map(function(p){return Number(p.dollarDelta)||0;});
   var cHi=Math.max.apply(0,caps)*1.08, cLo=0;
   var dMax=Math.max(0.8,Math.max.apply(0,dl.map(Math.abs))*1.15);
   var X=function(d){return padL+(W-padL-padR)*(d+dMax)/(2*dMax);};
@@ -4991,12 +5016,12 @@ function drawExposureMap(cfg){
   var g='';
   var xz=X(0);
   g+='<line x1="'+xz.toFixed(1)+'" y1="'+padT+'" x2="'+xz.toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line)" stroke-dasharray="3 3"/>';
-  g+='<text x="'+(padL+2)+'" y="'+(padT+11)+'" fill="var(--faint)" font-size="12">short Δ</text>';
-  g+='<text x="'+(W-padR-2)+'" y="'+(padT+11)+'" fill="var(--faint)" font-size="12" text-anchor="end">long Δ</text>';
+  g+='<text x="'+(padL+2)+'" y="'+(padT+11)+'" fill="var(--faint)" font-size="12">short exposure</text>';
+  g+='<text x="'+(W-padR-2)+'" y="'+(padT+11)+'" fill="var(--faint)" font-size="12" text-anchor="end">long exposure</text>';
   [0.25,0.5,0.75,1].forEach(function(f){var v=cHi*f,yy=Y(v);g+='<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)"/>';g+='<text x="'+(padL-5)+'" y="'+(yy+3).toFixed(1)+'" fill="var(--faint)" font-size="12" text-anchor="end" font-family="ui-monospace">'+(v>=1000?'$'+Math.round(v/1000)+'k':'$'+Math.round(v))+'</text>';});
   g+='<rect class="rkSelRect" x="0" y="0" width="0" height="0" fill="var(--accent)" fill-opacity=".08" stroke="var(--accent)" stroke-dasharray="4 3" style="display:none;pointer-events:none"/>';
   var pts=[];
-  POS.forEach(function(p,i){var x=X(+p.delta||0),y=Y(p.cap),r=6+Math.min(11,p.riskPct/3);
+  POS.forEach(function(p,i){var x=X(Number(p.dollarDelta)||0),y=Y(p.cap),r=6+Math.min(11,(Number(p.riskPct)||0)/3);
     var col=tempColor(heat[i]/maxHeat);
     pts.push({id:p.id,x:x,y:y,r:r,sym:p.sym,col:col});
     g+='<circle class="rkdot" data-id="'+p.id+'" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+r.toFixed(1)+'" fill="'+col+'" fill-opacity=".22" stroke="'+col+'" stroke-width="1.4" data-goto="'+p.id+'" style="cursor:pointer"/>';
@@ -5052,11 +5077,24 @@ function wireExpMapSelect(svg, info, cfg){
     /* Every pooled figure is a SUM of backend fields (maxLossCents, deltaShares, risk share) — never a
        re-priced scenario. The old fourth cell printed a browser-computed loss at a −11% gap under an
        "If −10%" label: a fabricated number AND a wrong one. Defined risk is what the backend states. */
-    var cap=0,nd=0,risk=0,defined=0; lines.forEach(function(p){cap+=p.cap;nd+=(+p.delta||0);risk+=p.riskPct;defined+=Math.max(0,Number(p.cap)||0);});
+    /* Only ADDITIVE facts pool. Max loss is dollars and adds; share-of-book is a share of one
+       common denominator and adds. Share delta does NOT add across different underlyings — 100
+       AMD shares and 100 XOM shares are not "200 shares" of anything — so a mixed pool reports
+       that instead of printing a sum. "Capital" and "Defined max loss" used to be the same
+       backend field summed twice and shown with opposite signs; there is one of them now. */
+    var defined=0,risk=0,dollarDelta=0,deltaKnown=true;
+    lines.forEach(function(p){
+      defined+=Math.max(0,Number(p.maxLoss)||0);
+      risk+=Number(p.riskPct)||0;
+      if(p.dollarDelta==null)deltaKnown=false; else dollarDelta+=Number(p.dollarDelta);
+    });
+    var deltaCell=deltaKnown
+      ? '<span title="Dollars this pool gains or loses per $1 move in each underlying — the delta unit that adds across different names."><i>Net exposure</i>'+signed(dollarDelta)+'</span>'
+      : '<span title="At least one pooled position has no measured delta, so the pool total would understate the real exposure."><i>Net exposure</i>unavailable</span>';
     if(info)info.innerHTML='<div class="rkselttl">'+lines.length+' lines pooled — '+lines.map(function(p){return p.sym;}).join(' · ')+'</div>'+
-      '<div class="rkselstats"><span><i>Capital</i>'+money(cap)+'</span><span><i>Net Δ</i>'+(nd>=0?'+':'')+nd.toFixed(2)+'</span>'+
-      '<span><i>Book risk</i>'+Math.round(risk)+'%</span><span class="'+(defined>0?'warnv':'')+'"><i>Defined max loss</i>'+money(-defined)+'</span></div>'+
-      '<div class="rkselnote">These '+lines.length+' move together — one SMH/SMH-put hedge would cap the pool at once.</div>';
+      '<div class="rkselstats"><span class="'+(defined>0?'warnv':'')+'"><i>Defined max loss</i>'+money(-defined)+'</span>'+deltaCell+
+      '<span><i>Share of book risk</i>'+Math.round(risk)+'%</span></div>'+
+      '<div class="rkselnote">These '+lines.length+' move together — one hedge on their shared driver would cap the pool at once.</div>';
   });
 }
 function deskGlyph(kind){
@@ -5084,7 +5122,7 @@ function showRiskMapCard(id){
     '<div class="mcg"><span class="kk">Open P/L</span><span class="vv '+(p.pnl>=0?'pos':'neg')+'">'+money(p.pnl)+'</span>'+
     '<span class="kk">Chance</span><span class="vv">'+p.pop+'%</span>'+
     '<span class="kk">Capital</span><span class="vv">'+money(p.cap)+'</span>'+
-    '<span class="kk">Book risk</span><span class="vv">'+p.riskPct+'%</span></div>';
+    '<span class="kk">Book risk</span><span class="vv">'+(p.riskPct==null?'—':Math.round(p.riskPct)+'%')+'</span></div>';
   var sr=svg.getBoundingClientRect(), vb=svg.viewBox.baseVal, hr=host.getBoundingClientRect();
   var px=(sr.left-hr.left)+m.x/vb.width*sr.width, py=(sr.top-hr.top)+m.y/vb.height*sr.height;
   card.classList.add('show');

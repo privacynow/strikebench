@@ -143,12 +143,17 @@ public final class TradeService {
         }
     }
 
-    /** One pass over the Practice book, retaining every symbol subtotal for cross-symbol Scout. */
+    /**
+     * One pass over the Practice book, retaining every symbol subtotal for cross-symbol Scout and
+     * every per-trade signed delta, so any subset (a box-selected pool, one position) can be added
+     * up in the ONE unit that is additive across underlyings without re-deriving the math.
+     */
     public record DollarDeltaBook(long grossCents, long netCents,
-                                  Map<String, Long> symbolGrossCents,
+                                  Map<String, Long> symbolGrossCents, Map<String, Long> tradeNetCents,
                                   boolean complete, String basis) {
         public DollarDeltaBook {
             symbolGrossCents = symbolGrossCents == null ? Map.of() : Map.copyOf(symbolGrossCents);
+            tradeNetCents = tradeNetCents == null ? Map.of() : Map.copyOf(tradeNetCents);
         }
         public DollarDeltaExposure focus(String symbol) {
             return new DollarDeltaExposure(grossCents, netCents,
@@ -1879,44 +1884,78 @@ public final class TradeService {
         return new OpenPositionsValue(active.size(), counted, value, unrealized, complete, worst.name());
     }
 
-    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Never touches money. */
-    public Map<String, Object> portfolioGreeks(String accountId) {
+    /** Why the book refuses to state a share-equivalent figure. Named, never a 0 and never a sum (§3.2). */
+    public static final String SHARE_GREEKS_NOT_ADDITIVE =
+            "Share-equivalent delta and gamma are per-underlying quantities and are not additive across "
+                    + "underlyings — 40 share-deltas of AAPL plus 40 of NVDA are not 80 of anything. The book "
+                    + "states dollar delta, which is additive; the share pair stays on each position row, where "
+                    + "one underlying gives it meaning.";
+
+    /**
+     * One position's greeks row: share delta/gamma mean something here, because the underlying is
+     * single. {@code netDollarDeltaCents} is the same position in the additive unit, so a surface
+     * pooling several rows adds THAT and never the share figures.
+     */
+    public record PositionGreekRow(String id, String symbol, String strategy, int qty,
+                                   PositionGreeks greeks, Long netDollarDeltaCents,
+                                   Long unrealizedCents) {}
+
+    /**
+     * Book-scope greeks. The per-share pair is deliberately absent with a stated reason (see
+     * {@link #SHARE_GREEKS_NOT_ADDITIVE}); the additive dollar delta from
+     * {@link #portfolioDollarDeltaBook} carries the book's directional exposure instead. Theta and
+     * vega DO add in money terms, so they ride the canonical cent units of
+     * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks} — the unit is in the
+     * field name so nothing sits next to cent fields wearing a bare dollar name (§7.6).
+     */
+    public record BookGreeks(long netDollarDeltaCents, long grossDollarDeltaCents,
+                             Map<String, Long> grossDollarDeltaBySymbolCents, boolean dollarDeltaComplete,
+                             Double thetaCentsPerDay, Double vegaCentsPerPoint,
+                             boolean perShareAvailable, String perShareUnavailableReason,
+                             int activeTrades, int measuredTrades, boolean complete,
+                             List<PositionGreekRow> positions, String basis) {
+        public BookGreeks {
+            grossDollarDeltaBySymbolCents = grossDollarDeltaBySymbolCents == null
+                    ? Map.of() : Map.copyOf(grossDollarDeltaBySymbolCents);
+            positions = positions == null ? List.of() : List.copyOf(positions);
+            if (!perShareAvailable && (perShareUnavailableReason == null || perShareUnavailableReason.isBlank())) {
+                throw new IllegalArgumentException("absent per-share greeks need a stated reason");
+            }
+        }
+    }
+
+    /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Exposure and model stats, never P&L. */
+    public BookGreeks portfolioGreeks(String accountId) {
         List<TradeRecord> active = activeTrades(accountId);
         Map<String, MarkView> snap = accountMarkSnapshot(accountId); // same atomic snapshot as the summary
-        double delta = 0, gamma = 0, theta = 0, vega = 0;
+        DollarDeltaBook dollarDelta = portfolioDollarDeltaBook(accountId); // same cached snapshot, one delta math site
+        double thetaCents = 0, vegaCents = 0;
         boolean complete = true;
-        List<Map<String, Object>> positions = new ArrayList<>();
+        int measured = 0;
+        List<PositionGreekRow> positions = new ArrayList<>();
         for (TradeRecord t : active) {
             MarkView view = snap.get(t.id());
             if (view == null) { complete = false; continue; }
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", t.id());
-            row.put("symbol", t.symbol());
-            row.put("strategy", t.strategy());
-            row.put("qty", t.qty());
-            if (view.greeks() == null) {
-                complete = false;
-                row.put("greeks", null);
+            var canonical = view.greeks() == null ? null : view.greeks().canonical();
+            if (canonical == null || !view.greeks().complete()) {
+                complete = false; // a missing component is disclosed, never carried into the sum as 0
             } else {
-                if (!view.greeks().complete()) complete = false;
-                delta += view.greeks().deltaShares() == null ? 0 : view.greeks().deltaShares();
-                gamma += view.greeks().gammaShares() == null ? 0 : view.greeks().gammaShares();
-                theta += view.greeks().thetaPerDay() == null ? 0 : view.greeks().thetaPerDay();
-                vega += view.greeks().vegaPerPoint() == null ? 0 : view.greeks().vegaPerPoint();
-                row.put("greeks", view.greeks());
-                row.put("unrealizedCents", view.unrealizedCents());
+                thetaCents += canonical.thetaCentsPerDay();
+                vegaCents += canonical.vegaCentsPerPoint();
+                measured++;
             }
-            positions.add(row);
+            positions.add(new PositionGreekRow(t.id(), t.symbol(), t.strategy(), t.qty(),
+                    view.greeks(), dollarDelta.tradeNetCents().get(t.id()), view.unrealizedCents()));
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("deltaShares", round2(delta));
-        out.put("gammaShares", round4(gamma));
-        out.put("thetaPerDay", round2(theta));
-        out.put("vegaPerPoint", round2(vega));
-        out.put("complete", complete);
-        out.put("positions", positions);
-        out.put("note", "Model statistics from current marks — share-equivalent delta/gamma, $/day theta, $/vol-point vega");
-        return out;
+        // An empty book honestly decays by zero; a book with nothing measurable has no decay to state.
+        boolean statable = active.isEmpty() || measured > 0;
+        return new BookGreeks(dollarDelta.netCents(), dollarDelta.grossCents(),
+                dollarDelta.symbolGrossCents(), dollarDelta.complete(),
+                statable ? round2(thetaCents) : null, statable ? round2(vegaCents) : null,
+                false, SHARE_GREEKS_NOT_ADDITIVE,
+                active.size(), measured, complete, positions,
+                "Model statistics from the current mark snapshot: dollar delta in cents, theta in cents "
+                        + "per day, vega in cents per vol point. " + dollarDelta.basis());
     }
 
     public DollarDeltaExposure portfolioDollarDelta(String accountId, String focusSymbol) {
@@ -1941,6 +1980,7 @@ public final class TradeService {
         Map<String, MarkView> marksByTrade = accountMarkSnapshot(accountId);
         long gross = 0, net = 0;
         Map<String, Long> bySymbol = new LinkedHashMap<>();
+        Map<String, Long> byTrade = new LinkedHashMap<>();
         boolean complete = true;
         for (TradeRecord trade : active) {
             MarkView mark = marksByTrade.get(trade.id());
@@ -1959,8 +1999,9 @@ public final class TradeService {
             gross = Math.addExact(gross, magnitude);
             net = Math.addExact(net, delta);
             bySymbol.merge(trade.symbol().toUpperCase(java.util.Locale.ROOT), magnitude, Math::addExact);
+            byTrade.put(trade.id(), delta);
         }
-        return new DollarDeltaBook(gross, net, Map.copyOf(bySymbol), complete,
+        return new DollarDeltaBook(gross, net, Map.copyOf(bySymbol), Map.copyOf(byTrade), complete,
                 "Current executable Practice marks in this account's market; dollar delta uses the disclosed option model."
                         + " This is exposure, not P&L or broker reserve.");
     }

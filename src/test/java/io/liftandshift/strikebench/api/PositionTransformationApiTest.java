@@ -51,7 +51,7 @@ class PositionTransformationApiTest {
     @Test
     void canonicalClosePreservesLedgerBehaviorAndFreezesTheBeforeAfterReceipt() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String order = """
                 {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,
                  "thesis":"bullish","horizon":"month","riskMode":"conservative",
@@ -118,7 +118,7 @@ class PositionTransformationApiTest {
     @Test
     void practiceVoidRequiresTheSignedPreviewAndLeavesAFrozenReceiptWhileLegacyRoutesStayAbsent() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         JsonNode created = Json.parse(createAcknowledged(
                 creditPutSpread(expiration, 1, "POSITION_TRANSFORMATION_VOID_TEST").toString()).body());
         String tradeId = created.at("/trade/id").asText();
@@ -165,7 +165,7 @@ class PositionTransformationApiTest {
     @Test
     void earlyAssignmentUsesTheSignedTransformationPathAndKeepsTheHedge() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String order = """
                 {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,
                  "thesis":"bullish","horizon":"month","riskMode":"conservative","intent":"ACQUIRE",
@@ -237,7 +237,7 @@ class PositionTransformationApiTest {
     @Test
     void lifecyclePreviewRequiresAnExplicitOptionLeg() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String tradeId = Json.parse(createAcknowledged(creditPutSpread(expiration, 1,
                 "POSITION_TRANSFORMATION_LIFECYCLE_VALIDATION").toString()).body()).at("/trade/id").asText();
         ObjectNode request = Json.MAPPER.createObjectNode();
@@ -254,7 +254,7 @@ class PositionTransformationApiTest {
     @Test
     void applyRejectsATamperedPreviewWithoutChangingTheTrade() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String order = """
                 {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":1,
                  "thesis":"bullish","horizon":"month","riskMode":"conservative",
@@ -285,8 +285,8 @@ class PositionTransformationApiTest {
     @Test
     void canonicalRollClosesAndReopensAtomicallyWithOneFrozenBeforeAfterReceipt() throws Exception {
         JsonNode expirations = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
-        String near = expirations.get(2).asText();
-        String farther = expirations.get(5).asText();
+        String near = expirations.get(2).get("date").asText();
+        String farther = expirations.get(5).get("date").asText();
         ObjectNode opening = creditPutSpread(near, 1, "POSITION_TRANSFORMATION_ROLL_TEST");
         JsonNode created = Json.parse(createAcknowledged(opening.toString()).body());
         String oldTradeId = created.at("/trade/id").asText();
@@ -353,7 +353,7 @@ class PositionTransformationApiTest {
     @Test
     void partialCloseKeepsTheSameTradeAndExactResidualBasisThroughTheFinalClose() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         JsonNode created = Json.parse(createAcknowledged(
                 creditPutSpread(expiration, 5, "POSITION_TRANSFORMATION_PARTIAL_TEST").toString()).body());
         String tradeId = created.at("/trade/id").asText();
@@ -437,7 +437,7 @@ class PositionTransformationApiTest {
     @Test
     void partialCloseTokenBindsTheServerDerivedSurvivingQuantity() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String tradeId = Json.parse(createAcknowledged(
                 creditPutSpread(expiration, 4, "POSITION_TRANSFORMATION_PARTIAL_TAMPER_TEST").toString()).body())
                 .at("/trade/id").asText();
@@ -461,8 +461,8 @@ class PositionTransformationApiTest {
     @Test
     void blockedRollReplacementLeavesTheOpenPositionAndLedgerUntouched() throws Exception {
         JsonNode expirations = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
-        String near = expirations.get(2).asText();
-        String farther = expirations.get(5).asText();
+        String near = expirations.get(2).get("date").asText();
+        String farther = expirations.get(5).get("date").asText();
         String tradeId = Json.parse(createAcknowledged(
                 creditPutSpread(near, 1, "POSITION_TRANSFORMATION_ROLL_ROLLBACK_TEST").toString()).body())
                 .at("/trade/id").asText();
@@ -500,7 +500,7 @@ class PositionTransformationApiTest {
     @Test
     void legCloseKeepsRetainedFillAndCommitsCashReserveAndReceiptTogether() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         ObjectNode opening = (ObjectNode) Json.parse("""
                 {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":2,
                  "thesis":"bullish","horizon":"month","riskMode":"conservative",
@@ -554,7 +554,7 @@ class PositionTransformationApiTest {
     @Test
     void addAndRemoveStockUseExecutableCashWithoutResettingTheOptionFill() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         ObjectNode opening = (ObjectNode) Json.parse("""
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
                  "thesis":"bullish","horizon":"month","riskMode":"conservative",
@@ -604,7 +604,7 @@ class PositionTransformationApiTest {
     @Test
     void removingACallWingStaysVisibleButCannotApplyTheBlockedFamily() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String tradeId = Json.parse(createAcknowledged(
                 creditCallSpread(expiration, 1, "POSITION_TRANSFORMATION_HEDGE_TEST").toString()).body())
                 .at("/trade/id").asText();
@@ -629,7 +629,7 @@ class PositionTransformationApiTest {
     @Test
     void removingAPutWingCanBecomeAnExplicitlyFundedShortPutInsteadOfFalseUndefinedRisk() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         String tradeId = Json.parse(createAcknowledged(
                 creditPutSpread(expiration, 1, "POSITION_TRANSFORMATION_FUNDED_PUT_TEST").toString()).body())
                 .at("/trade/id").asText();
@@ -655,7 +655,7 @@ class PositionTransformationApiTest {
     @Test
     void adjustmentPreviewTokenRejectsAChangedAfterPositionWithoutWritingAnything() throws Exception {
         String expiration = Json.parse(get("/api/research/AAPL/expirations").body())
-                .at("/expirations/2").asText();
+                .at("/expirations/2/date").asText();
         JsonNode created = Json.parse(createAcknowledged("""
                 {"symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","qty":2,
                  "thesis":"bullish","horizon":"month","riskMode":"conservative",

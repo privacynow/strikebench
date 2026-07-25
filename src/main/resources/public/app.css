@@ -3583,3 +3583,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .wholink{font-size:var(--f-sm);color:var(--accent);text-decoration:none;white-space:nowrap}
 .wholink:hover{text-decoration:underline}
 @media(max-width:900px){.whoami{display:none}}
+
+/* A screen the user has not set is visibly off, not merely at some value. */
+.gov.govunset .gh .num{color:var(--faint);font-style:italic}
+.gov.govunset .slider{opacity:.42}
+.gov.govunset:hover .slider,.gov.govunset .slider:focus{opacity:1}

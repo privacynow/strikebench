@@ -1384,10 +1384,57 @@ class PaperCoreTest {
         assertThat(previewTime).isNotNull();
         assertThat(previewTime.sessions()).isGreaterThanOrEqualTo(0);
 
-        Map<String, Object> pg = trades.portfolioGreeks(acct.id());
-        assertThat((Double) pg.get("deltaShares")).isEqualTo(40.0);
-        assertThat((Boolean) pg.get("complete")).isTrue();
-        assertThat(pg.get("positions")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).hasSize(1);
+        TradeService.BookGreeks pg = trades.portfolioGreeks(acct.id());
+        assertThat(pg.complete()).isTrue();
+        assertThat(pg.positions()).hasSize(1);
+        assertThat(pg.positions().getFirst().greeks().deltaShares()).isEqualTo(40.0);
+        assertThat(pg.thetaCentsPerDay()).isEqualTo(600.0);   // book theta names its unit
+        assertThat(pg.netDollarDeltaCents()).isEqualTo(400_000L); // 40 shares × $100
+    }
+
+    /**
+     * §3.1/§3.2: the book may not add share-equivalent greeks across underlyings, and may not
+     * paper over the gap with a 0 — it names the reason and publishes the additive dollar form.
+     */
+    @Test
+    void bookScopeNeverSumsShareGreeksAcrossDifferentUnderlyings() {
+        Account acct = accounts.getOrCreateDefault();
+        marks.exact.put("PUT100", new MarksSource.LegMark(new BigDecimal("3.00"), new BigDecimal("3.00"),
+                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        trades.create(creditPutSpread(acct.id(), 2));                       // AAPL: +40 share delta
+        trades.create(openRequest(acct.id(), "NVDA", "CREDIT_PUT_SPREAD", 2,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced"));                          // NVDA: +40 share delta
+
+        TradeService.BookGreeks book = trades.portfolioGreeks(acct.id());
+        assertThat(book.positions()).hasSize(2);
+        assertThat(book.positions()).extracting(row -> row.greeks().deltaShares())
+                .containsExactly(40.0, 40.0); // each position keeps its own share figure
+        assertThat(book.positions()).extracting(TradeService.PositionGreekRow::netDollarDeltaCents)
+                .containsExactly(400_000L, 400_000L); // …and the additive form a pool can add up
+
+        // The 80.0 that a naive sum would print cannot even be expressed by the contract.
+        assertThat(java.util.Arrays.stream(TradeService.BookGreeks.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName))
+                .doesNotContain("deltaShares", "gammaShares");
+        assertThat(book.perShareAvailable()).isFalse();
+        assertThat(book.perShareUnavailableReason()).contains("not additive across underlyings");
+
+        // The additive form IS published: 40 shares × $100 per name, both symbols retained.
+        assertThat(book.netDollarDeltaCents()).isEqualTo(800_000L);
+        assertThat(book.grossDollarDeltaCents()).isEqualTo(800_000L);
+        assertThat(book.grossDollarDeltaBySymbolCents()).containsOnlyKeys("AAPL", "NVDA")
+                .containsEntry("AAPL", 400_000L).containsEntry("NVDA", 400_000L);
+        assertThat(book.dollarDeltaComplete()).isTrue();
+        // Theta/vega do add in money terms, and carry their unit in the name.
+        assertThat(book.thetaCentsPerDay()).isEqualTo(1_200.0);
+        assertThat(book.vegaCentsPerPoint()).isEqualTo(-2_000.0);
+        assertThat(book.activeTrades()).isEqualTo(2);
+        assertThat(book.measuredTrades()).isEqualTo(2);
     }
 
     @Test
@@ -1407,8 +1454,7 @@ class PaperCoreTest {
         assertThat(trades.accountMarkSnapshot(acct.id())).hasSize(201);
         assertThat(trades.openPositionsValue(acct.id()).openTradesCount()).isEqualTo(201);
         assertThat(trades.portfolioHeat(acct.id()).get("activeTrades")).isEqualTo(201);
-        assertThat(trades.portfolioGreeks(acct.id()).get("positions"))
-                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).hasSize(201);
+        assertThat(trades.portfolioGreeks(acct.id()).positions()).hasSize(201);
         TradeService.DollarDeltaExposure exposure = trades.portfolioDollarDelta(acct.id(), "AAPL");
         assertThat(exposure.complete()).isTrue();
         assertThat(exposure.grossCents()).isPositive();

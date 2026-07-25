@@ -339,7 +339,7 @@ class ApiIntegrationTest {
     @Test
     @Order(6)
     void unsafeNakedCallIs422AndAccountUnchanged() throws Exception {
-        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).get("date").asText();
         HttpResponse<String> res = post("/api/trades", """
                 {"symbol":"AAPL","strategy":"NAKED_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
                  "legs":[{"action":"SELL","type":"CALL","strike":"260","expiration":"%s","ratio":1,
@@ -358,7 +358,7 @@ class ApiIntegrationTest {
     @Order(7)
     void createUnwindLifecycle() throws Exception {
         // Preview first: no mutation
-        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).get("date").asText();
         String spreadBody = """
                 {"symbol":"AAPL","strategy":"CREDIT_PUT_SPREAD","qty":1,"thesis":"bullish","horizon":"month","riskMode":"conservative",
                  "source":"API_TEST","fillNature":"PROPOSED",
@@ -447,7 +447,7 @@ class ApiIntegrationTest {
     @Test
     @Order(8)
     void voidRequiresSignedPreviewAndKeepsTheCorrectionReceipt() throws Exception {
-        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).get("date").asText();
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
@@ -465,7 +465,7 @@ class ApiIntegrationTest {
     @Test
     @Order(9)
     void lifecycleMutationRequiresSignedPreviewAndBadDatesAre400() throws Exception {
-        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).get("date").asText();
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
@@ -485,7 +485,7 @@ class ApiIntegrationTest {
     @Test
     @Order(8)
     void portfolioGreeksAggregateActivePositions() throws Exception {
-        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).asText();
+        String exp = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations").get(2).get("date").asText();
         String body = """
                 {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
@@ -493,10 +493,20 @@ class ApiIntegrationTest {
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
         JsonNode greeks = Json.parse(get("/api/portfolio/greeks").body());
-        assertThat(greeks.get("deltaShares").asDouble()).isGreaterThan(0); // long call = positive delta
-        assertThat(greeks.get("thetaPerDay").asDouble()).isLessThan(0);    // long premium decays
+        // Book scope publishes the additive dollar form only; the share pair is absent WITH a reason.
+        assertThat(greeks.has("deltaShares")).isFalse();
+        assertThat(greeks.has("gammaShares")).isFalse();
+        assertThat(greeks.get("perShareAvailable").asBoolean()).isFalse();
+        assertThat(greeks.get("perShareUnavailableReason").asText()).contains("not additive across underlyings");
+        assertThat(greeks.get("netDollarDeltaCents").asLong()).isGreaterThan(0); // long call = positive delta
+        assertThat(greeks.get("thetaCentsPerDay").asDouble()).isLessThan(0);     // long premium decays
         assertThat(greeks.get("positions").size()).isGreaterThanOrEqualTo(1);
-        assertThat(greeks.get("note").asText()).containsIgnoringCase("model");
+        boolean rowKeepsShareDelta = false;
+        for (JsonNode row : greeks.get("positions")) {
+            if (row.at("/greeks/deltaShares").isNumber()) rowKeepsShareDelta = true;
+        }
+        assertThat(rowKeepsShareDelta).isTrue(); // share delta survives where the underlying is single
+        assertThat(greeks.get("basis").asText()).containsIgnoringCase("model");
 
         // detail carries the same greeks + per-leg rows
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
@@ -576,8 +586,8 @@ class ApiIntegrationTest {
     @Order(16)
     void debitDiagonalWithoutEntryPricesCreates() throws Exception {
         JsonNode exps = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
-        String near = exps.get(2).asText();
-        String far = exps.get(6).asText();
+        String near = exps.get(2).get("date").asText();
+        String far = exps.get(6).get("date").asText();
         String body = """
                 {"symbol":"AAPL","strategy":"DIAGONAL_CALL","qty":1,"source":"API_TEST","fillNature":"PROPOSED",
                  "legs":[{"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
@@ -727,7 +737,7 @@ class ApiIntegrationTest {
 
         // Covered call without the shares: the reason names the shortfall, not "add a wing"
         JsonNode exps = Json.parse(get("/api/research/AAPL/expirations").body()).get("expirations");
-        String exp = exps.get(2).asText();
+        String exp = exps.get(2).get("date").asText();
         HttpResponse<String> noShares = post("/api/trades",
                 "{\"symbol\":\"AAPL\",\"strategy\":\"COVERED_CALL\",\"qty\":1,\"useHeldShares\":true,"
                 + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\","

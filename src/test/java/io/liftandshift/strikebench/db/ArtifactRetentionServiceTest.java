@@ -62,7 +62,7 @@ class ArtifactRetentionServiceTest {
         artifact("fp_decided", true);
         ensemble("pe_decided", "p_decided", "fp_decided", "STALE");
         db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,decision_seq,ensemble_id,action,quote_as_of,economic_verdict,"
-                        + "evidence_provenance,model_version,review_horizon_days,created_at) VALUES('decision_frozen',"
+                        + "evidence_provenance,model_version,review_horizon_sessions,created_at) VALUES('decision_frozen',"
                         + "'p_decided',1,1,'pe_decided','CASH',?,'MIXED','DEMO_FIXTURE','decision-1',30,?)", OLD, OLD);
 
         // A rehearsal source is a reproducibility receipt and protects both the Plan ensemble and blob.

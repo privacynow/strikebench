@@ -348,10 +348,16 @@ final class ResearchController {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
         java.time.Instant now = market.laneNow(worldParam(world), clock);
-        ctx.json(new ApiResponses.Expirations<>(symbol,
-                LocalDate.ofInstant(now, MarketHours.EASTERN).toString(),
+        LocalDate asOf = LocalDate.ofInstant(now, MarketHours.EASTERN);
+        // §7.3: the distance to an expiration is a market-calendar fact, not a weekday count.
+        // The browser used to walk Mon-Fri from asOfDate to decide which expiration the whole
+        // Desk trades, so every market holiday shifted its choice away from the server's.
+        ctx.json(new ApiResponses.Expirations<>(symbol, asOf.toString(),
                 activeExpirations(market.expirations(symbol, world), now).stream()
-                        .map(LocalDate::toString).toList()));
+                        .map(date -> new ApiResponses.ExpirationDistance(date.toString(),
+                                MarketHours.tradingDaysBetween(asOf, date),
+                                (int) java.time.temporal.ChronoUnit.DAYS.between(asOf, date)))
+                        .toList()));
     }
 
     private void chain(Context ctx) {

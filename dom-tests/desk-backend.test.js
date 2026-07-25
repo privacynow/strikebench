@@ -130,25 +130,33 @@ function emptyBookDocuments() {
       physicalAssignmentCashCents: 0,
       postPhysicalAssignmentBuyingPowerCents: 10000000
     },
+    /* Book scope publishes only the units that add. There is no deltaShares/gammaShares field
+       at all — a summed share delta across underlyings is not expressible. */
     greeks: {
       positions: [],
-      deltaShares: 0,
-      gammaShares: 0,
-      thetaPerDay: 0,
-      vegaPerPoint: 0,
+      netDollarDeltaCents: 0,
+      grossDollarDeltaCents: 0,
+      grossDollarDeltaBySymbolCents: {},
+      dollarDeltaComplete: true,
+      thetaCentsPerDay: 0,
+      vegaCentsPerPoint: 0,
+      perShareAvailable: false,
+      perShareUnavailableReason: 'Share delta is not additive across underlyings.',
+      activeTrades: 0,
+      measuredTrades: 0,
       complete: true,
-      note: 'No active Practice positions.'
+      basis: 'No active Practice positions.'
     },
     bookRisk: {
       accounts: [],
       crossAccount: null,
       practice: {
-        deltaShares: 0,
         dollarDeltaNetCents: 0,
         dollarDeltaGrossCents: 0,
-        gammaShares: 0,
-        thetaPerDay: 0,
-        vegaPerPoint: 0,
+        thetaCentsPerDay: 0,
+        vegaCentsPerPoint: 0,
+        perShareAvailable: false,
+        perShareUnavailableReason: 'Share delta is not additive across underlyings.',
         complete: true,
         basis: 'PRACTICE_EXECUTABLE_MARKS'
       },
@@ -374,19 +382,36 @@ function populatedBookDocuments() {
       physicalAssignmentCashCents: 0,
       postPhysicalAssignmentBuyingPowerCents: 9708790
     },
-    greeks: Object.assign({ positions: [{ id: BOOK_TRADE_ID }] }, current.greeks, {
-      note: 'Backend aggregate Greeks sentinel.'
-    }),
+    greeks: {
+      /* The per-position row keeps its own share delta (one underlying, so the unit means
+         something) beside the same exposure in the additive dollar unit. */
+      positions: [{
+        id: BOOK_TRADE_ID, symbol: 'AAPL', strategy: 'CREDIT_PUT_SPREAD', qty: 1,
+        greeks: current.greeks, netDollarDeltaCents: 827695, unrealizedCents: 24680
+      }],
+      netDollarDeltaCents: 827695,
+      grossDollarDeltaCents: 827695,
+      grossDollarDeltaBySymbolCents: { AAPL: 827695 },
+      dollarDeltaComplete: true,
+      thetaCentsPerDay: -1234,
+      vegaCentsPerPoint: 1850,
+      perShareAvailable: false,
+      perShareUnavailableReason: 'Share delta is not additive across underlyings.',
+      activeTrades: 1,
+      measuredTrades: 1,
+      complete: true,
+      basis: 'Backend aggregate Greeks sentinel.'
+    },
     bookRisk: {
       accounts: [],
       crossAccount: null,
       practice: {
-        deltaShares: 37.25,
         dollarDeltaNetCents: 827695,
         dollarDeltaGrossCents: 827695,
-        gammaShares: 1.75,
-        thetaPerDay: -12.34,
-        vegaPerPoint: 18.5,
+        thetaCentsPerDay: -1234,
+        vegaCentsPerPoint: 1850,
+        perShareAvailable: false,
+        perShareUnavailableReason: 'Share delta is not additive across underlyings.',
         complete: true,
         basis: 'PRACTICE_EXECUTABLE_MARKS'
       },
@@ -422,7 +447,13 @@ function populatedBookDocuments() {
     },
     expirations: {
       symbol: 'AAPL', source: 'BOOK_TEST_CHAIN_RECEIPT', freshness: 'FRESH',
-      expirations: ['2026-08-21', '2026-09-18']
+      asOfDate: '2026-07-20',
+      /* Each row states its own distance in trading sessions (market calendar, holidays
+         included) and calendar days, so the browser never counts weekdays to choose a chain. */
+      expirations: [
+        { date: '2026-08-21', tradingSessions: 24, calendarDays: 32 },
+        { date: '2026-09-18', tradingSessions: 43, calendarDays: 60 }
+      ]
     },
     chain: {
       underlying: 'AAPL', expiration: '2026-08-21', underlyingPrice: 222.22,
@@ -1763,7 +1794,8 @@ async function installBackend(page, options = {}) {
         planEligibility: 'Ready for the active observed market.'
       };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD/expirations') {
-      response = { asOfDate: '2026-07-20', expirations: ['2026-08-21'] };
+      response = { asOfDate: '2026-07-20',
+        expirations: [{ date: '2026-08-21', tradingSessions: 24, calendarDays: 32 }] };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD/chain') {
       currentExpiration = url.searchParams.get('expiration') || '2026-08-21';
       response = {
@@ -2153,7 +2185,8 @@ async function installBackend(page, options = {}) {
 async function declareWorkbench(page, opts = {}) {
   const goal = opts.goal || 'INCOME';
   const view = opts.view || 'Neutral';
-  const horizon = opts.horizon || '45 days';
+  // The control now names its unit: the backend counts TRADING days, not calendar days.
+  const horizon = opts.horizon || '45 trading days';
   const risk = opts.risk || 'Balanced';
   await page.locator(`[data-auth-scout-goal="${goal}"]`).click();
   await page.locator(`[data-auth-workbench-view="${view}"]`).click();
@@ -2872,7 +2905,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       priceAssumptionCents: window.__homeResumeContext.priceAssumptionCents,
       assignmentPreference: window.__homeResumeContext.assignmentPreference
     })), {
-      planId: BOOK_PLAN_ID, symbol: 'AAPL', goal: 'INCOME', horizon: '45 days',
+      planId: BOOK_PLAN_ID, symbol: 'AAPL', goal: 'INCOME', horizon: '45 trading days',
       originPlanId: 'plan_home_origin', targetCents: 23000, holdingsShares: 100,
       costBasisCents: 20000, priceAssumptionCents: 22100, assignmentPreference: 'AVOID'
     }, 'Home resumes the exact clicked Plan instead of minting or guessing another one');
@@ -4860,7 +4893,7 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
       'the reused Plan retains the visible Balanced risk posture');
     assert.equal(rendered.planHorizonDays, 45,
       'a brand-new Income declaration is owned by the backend at 45 sessions');
-    assert.equal(rendered.visibleHorizon, '45 days',
+    assert.equal(rendered.visibleHorizon, '45 trading days',
       'the Desk header shows the same new Income horizon');
     assert.deepEqual(rendered.positionIdentity, positionIdentity(),
       'candidate risk and structure labels come from the canonical backend catalog receipt');
@@ -7808,7 +7841,10 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     const request = backend.requests.find(row => row.method === 'POST'
       && row.path === '/api/research/scout');
     assert.deepEqual(request.body, {
-      horizons: ['month'],
+      /* The exact declaration travels. The browser used to collapse every horizon into
+         'week'/'month' with its own thresholds, so 30 and 45 became the same scan and 8-10
+         sessions bucketed differently here than in Java. */
+      horizons: ['45d'],
       maxPicks: 5,
       riskMode: 'balanced',
       allow0dte: false,
@@ -7817,7 +7853,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       universe: broadSymbols
     });
     assert.match(await page.locator('.opportunitylens').textContent(),
-      /Broad market 5.*Active names 3.*Income.*Directional.*Acquire.*Hedge.*Exit.*Bearish.*Neutral.*Bullish.*7 days.*30 days.*45 days.*Conservative.*Balanced.*Aggressive/i,
+      /Broad market 5.*Active names 3.*Income.*Directional.*Acquire.*Hedge.*Exit.*Bearish.*Neutral.*Bullish.*7 trading days.*30 trading days.*45 trading days.*Conservative.*Balanced.*Aggressive/i,
       'Home exposes field, goal, view, horizon, and risk controls without a parallel New idea surface');
   } finally {
     await context.close();
@@ -8012,7 +8048,7 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
     assert.deepEqual(await page.evaluate(() => window.__homeAnalyzeCall), {
       kind: 'idea', positionId: null, label: 'New idea', symbol: 'MU', plan: null,
       declarations: {
-        goal: 'INCOME', view: 'Neutral', horizon: '45 days', riskMode: 'Balanced',
+        goal: 'INCOME', view: 'Neutral', horizon: '45 trading days', riskMode: 'Balanced',
         targetCents: null, holdingsShares: null
       }
     }, 'the entire Scout result zooms directly into the canonical New Idea workspace');

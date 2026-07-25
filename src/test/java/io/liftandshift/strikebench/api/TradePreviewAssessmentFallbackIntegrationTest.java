@@ -37,7 +37,7 @@ class TradePreviewAssessmentFallbackIntegrationTest {
             JsonNode expirations = Json.parse(http.send(HttpRequest.newBuilder(
                             URI.create(base + "/api/research/AAPL/expirations")).GET().build(),
                     HttpResponse.BodyHandlers.ofString()).body()).get("expirations");
-            String expiration = expirations.get(2).asText();
+            String expiration = expirations.get(2).get("date").asText();
             String request = """
                     {"symbol":"AAPL","strategy":"LONG_CALL","qty":1,
                      "source":"BOUNDARY_TEST","fillNature":"PROPOSED",
