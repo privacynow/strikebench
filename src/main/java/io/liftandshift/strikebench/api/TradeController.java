@@ -181,7 +181,7 @@ final class TradeController {
                     // leg engine or the deleted client Merton tail.
                     row = row.withHeldReceipts(heldTerminalPayoff(trade),
                             mark != null && mark.greeks() != null ? mark.greeks().canonical() : null,
-                            heldJumpTail(trade));
+                            heldJumpTail(trade), heldScenarios(trade));
                 } catch (Exception ignored) {
                     // A missing live mark leaves these optional list values unavailable.
                 }
@@ -485,7 +485,7 @@ final class TradeController {
         if (TradeRecord.ACTIVE.equals(trade.status())) {
             view = view.withHeldReceipts(heldTerminalPayoff(trade),
                     current != null && current.greeks() != null ? current.greeks().canonical() : null,
-                    heldJumpTail(trade));
+                    heldJumpTail(trade), heldScenarios(trade));
         }
         return new ApiResponses.TradeDetail<>(view, current,
                 trades.marksHistory(id, 50), audit.forTrade(id, 50), payoffPoints(trade), analysis);
@@ -885,6 +885,33 @@ final class TradeController {
         long tradedLegEntry = PayoffCurve.of(trade.legs(), trade.qty()).entryNetPremiumCents();
         long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
         return PayoffCurve.of(chartLegs, trade.qty(), adjustment);
+    }
+
+    /**
+     * The HELD line's scenario grid — one priced checkpoint per NAMED story move, the same set and
+     * the same {@link io.liftandshift.strikebench.eval.RiskProfile.Scenario} shape an idea candidate
+     * carries. Without it a held position has no per-move receipt at all, which is why the desk used
+     * to price the eight stories in the browser from the legs. Valued on the server through the same
+     * curve that owns the terminal payoff, so the tiles and the payoff hero cannot disagree.
+     *
+     * <p>Probability is deliberately null: it needs a live ATM IV and time-to-expiry the roster row
+     * does not carry, and an invented probability is worse than an absent one. Mixed-expiration
+     * packages return no grid for the same reason the terminal payoff refuses them.
+     */
+    static List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> heldScenarios(TradeRecord trade) {
+        boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
+                .map(Leg::expiration).distinct().count() > 1;
+        if (mixedExpirations || trade.entryUnderlyingCents() <= 0) return List.of();
+        BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
+        PayoffCurve curve = heldPayoffCurve(trade, spot);
+        List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> out = new ArrayList<>();
+        for (double move : io.liftandshift.strikebench.eval.RiskProfiler.storyMoves()) {
+            BigDecimal price = spot.multiply(BigDecimal.valueOf(1.0 + move));
+            if (price.signum() <= 0) continue;
+            out.add(new io.liftandshift.strikebench.eval.RiskProfile.Scenario(
+                    move, curve.profitAtCents(price), null));
+        }
+        return List.copyOf(out);
     }
 
     /**

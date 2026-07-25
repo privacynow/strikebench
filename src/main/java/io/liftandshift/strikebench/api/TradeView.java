@@ -56,7 +56,11 @@ public record TradeView(
         // tail (live IV / IV-rank / DTE) rides the position-detail analysis; this roster row uses the
         // desk's documented fallbacks (IV-rank 55, expected move 6%) over the recorded entry curve.
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail
+        io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail,
+        // One priced checkpoint per NAMED story move, the same shape and move set an idea candidate
+        // carries. Held lines had no per-move receipt at all, so the desk priced the stories itself.
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        java.util.List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> scenarios
 ) {
     @SuppressWarnings("unchecked")
     public static TradeView of(TradeRecord t) {
@@ -70,7 +74,7 @@ public record TradeView(
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
                 t.intent(), t.sharesLocked(), t.proposedNetCents(), t.dataProvenance(),
-                t.dataAge(), t.dataSource(), null, null, null, null, null);
+                t.dataAge(), t.dataSource(), null, null, null, null, null, null);
     }
 
     public TradeView withUnrealized(Long unrealized, Long decisionUnrealized) {
@@ -79,18 +83,20 @@ public record TradeView(
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, proposedNetCents, dataProvenance, dataAge,
-                dataSource, unrealized, decisionUnrealized, terminalPayoff, greeks, jumpTail);
+                dataSource, unrealized, decisionUnrealized, terminalPayoff, greeks, jumpTail, scenarios);
     }
 
     /** Attach the held-line display receipts (terminal payoff curve + canonical greeks + tail lane). */
     public TradeView withHeldReceipts(io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff,
                                       io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks heldGreeks,
-                                      io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail heldJumpTail) {
+                                      io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail heldJumpTail,
+                                      java.util.List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> heldScenarios) {
         return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
                 entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents,
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, proposedNetCents, dataProvenance, dataAge,
-                dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents, payoff, heldGreeks, heldJumpTail);
+                dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents, payoff, heldGreeks, heldJumpTail,
+                heldScenarios);
     }
 }

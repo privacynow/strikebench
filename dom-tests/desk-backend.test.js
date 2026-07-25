@@ -298,7 +298,21 @@ function populatedBookDocuments() {
     dataAge: 'CURRENT',
     dataSource: 'BOOK_TEST_EXECUTABLE_RECEIPT',
     unrealizedPnlCents: 24680,
-    decisionUnrealizedPnlCents: 24680
+    decisionUnrealizedPnlCents: 24680,
+    /* The held line's own scenario receipt (TradeController.heldScenarios): one priced checkpoint
+       per NAMED story move, valued server-side through the same curve that owns its terminal
+       payoff. Held positions used to have no per-move receipt at all, which is why the desk priced
+       the eight stories in the browser from the legs. */
+    scenarios: [
+      { underlyingMovePct: -0.20, pnlCents: -43210, prob: null },
+      { underlyingMovePct: -0.09, pnlCents: -31200, prob: null },
+      { underlyingMovePct: -0.06, pnlCents: -18400, prob: null },
+      { underlyingMovePct: -0.01, pnlCents: 12500, prob: null },
+      { underlyingMovePct: 0, pnlCents: 24680, prob: null },
+      { underlyingMovePct: 0.06, pnlCents: 44300, prob: null },
+      { underlyingMovePct: 0.13, pnlCents: 68900, prob: null },
+      { underlyingMovePct: 0.20, pnlCents: 92500, prob: null }
+    ]
   };
   const current = {
     tradeId: BOOK_TRADE_ID,
@@ -1219,9 +1233,16 @@ function positionScenarioResponse(body, options = {}) {
     { sourcePathIndex: focusSourcePathIndex, role: 'FOCUS', pnl: [24680, 15000, 17500, -5000, -25000, -43200] },
     { sourcePathIndex: 70, role: 'CONTEXT', pnl: [24680, 16400, 11200, 3300, -21400, -40100] }
   ];
+  /* A CHECKPOINT SERIES across the position's life, dated the way ScenarioCanvasValuator dates
+     every valued step. The package expires 2026-08-21, which falls between the 2026-08-20 and
+     2026-08-28 checkpoints — so a desk that reads session dates cuts the fan at 2026-08-20
+     (session 23) instead of drawing a settled afterlife. */
+  const POSITION_CHECKPOINTS = [0, 5, 11, 17, 23, 29];
+  const POSITION_CHECKPOINT_DATES = ['2026-07-20', '2026-07-27', '2026-08-04', '2026-08-12', '2026-08-20', '2026-08-28'];
   const positionStepBands = [24680, 15000, 17500, -5000, -25000, -43200]
     .map((middle, step) => ({
-      step, sessionProgress: step,
+      step, sessionProgress: POSITION_CHECKPOINTS[step],
+      sessionDate: POSITION_CHECKPOINT_DATES[step],
       pnlP10Cents: middle - step * 2800 - 5000,
       pnlP25Cents: middle - step * 1300 - 2500,
       pnlP50Cents: middle,
@@ -1325,7 +1346,10 @@ function positionScenarioResponse(body, options = {}) {
         displayPaths: positionSourcePaths.map(row => ({
           sourcePathIndex: row.sourcePathIndex,
           role: row.role,
-          steps: row.pnl.map((pnlCents, step) => ({ step, sessionProgress: step, pnlCents }))
+          steps: row.pnl.map((pnlCents, step) => ({
+            step, sessionProgress: POSITION_CHECKPOINTS[step],
+            sessionDate: POSITION_CHECKPOINT_DATES[step], pnlCents
+          }))
         })),
         days: [
           {
@@ -8269,3 +8293,44 @@ test('selector census across surfaces', { skip: !process.env.SELECTOR_CENSUS_IN 
   console.log(`SELECTOR_CENSUS matched=${hits.size} of ${selectors.length}`);
 });
 
+
+test('a package fan is cut at its expiry by backend session dates, not a browser estimate', async () => {
+  /* The desk used to locate this boundary with round(calendarDays * 252/365). It now reads the
+     sessionDate the backend stamps on every valued step. The fixture's package expires 2026-08-21
+     and its dated checkpoints are 0->2026-07-20, 5->2026-07-27, 11->2026-08-04, 17->2026-08-12,
+     23->2026-08-20, 29->2026-08-28 — so the honest last session is 23: the 29th lands after expiry
+     and must not be drawn as a settled afterlife. */
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, { bookDocuments: populatedBookDocuments() });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 12000 });
+    await page.waitForFunction(id => {
+      const slot = window.BOOK_FAN?.rows?.[id];
+      return slot && slot.phase === 'ready' && (slot.frames || []).length > 0;
+    }, BOOK_TRADE_ID, { timeout: 12000 });
+
+    const life = await page.evaluate(id => {
+      const slot = window.BOOK_FAN.rows[id];
+      return {
+        lastSession: slot.frames[slot.frames.length - 1].x,
+        frameCount: slot.frames.length,
+        pathLengths: (slot.paths || []).map(p => p.length)
+      };
+    }, BOOK_TRADE_ID);
+
+    assert.equal(life.lastSession, 23,
+      'the fan stops at the last dated session on or before the 2026-08-21 expiry, not the ensemble horizon');
+    assert.equal(life.frameCount, 5, 'only checkpoints inside the package life are kept');
+    assert.ok(life.pathLengths.every(n => n === 5),
+      `every drawn path is cut to the same boundary (${life.pathLengths.join(',')})`);
+    assert.deepEqual(pageErrors, [], `dated expiry cut emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});

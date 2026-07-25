@@ -27,6 +27,9 @@ public final class RiskProfiler {
      * Every tile is now a real valuation at a move the engine actually priced.
      */
     private static final double[] MOVES = {-0.20, -0.09, -0.06, -0.01, 0.0, 0.06, 0.13, 0.20};
+    /** The named-story checkpoint set, shared so held lines price the SAME moves ideas do. */
+    public static double[] storyMoves() { return MOVES.clone(); }
+
     private static final double TAIL_MOVE = 0.20;
     private static final String TERMINAL_PAYOFF_SCHEMA = RiskProfile.TerminalPayoff.SCHEMA;
     private static final String TERMINAL_PAYOFF_MODEL = RiskProfile.TerminalPayoff.MODEL;

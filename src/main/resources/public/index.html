@@ -90,29 +90,32 @@ var SCEN=[
 ];
 function scenData(p){
   if(p&&p.authoritative){
-    var src=p.evaluation&&p.evaluation.risk&&p.evaluation.risk.scenarios||[];
+    /* One source for every surface: the engine's priced checkpoints. An idea carries them on its
+       evaluation; a held line carries them on its trade receipt (TradeController.heldScenarios,
+       valued through the same curve that owns its terminal payoff). Neither is reconstructed here. */
+    var heldTrade=p.isHeld&&p._trade||null;
+    var src=p.evaluation&&p.evaluation.risk&&p.evaluation.risk.scenarios
+      ||heldTrade&&heldTrade.scenarios||[];
     var points=src.map(function(row){return {m:Number(row.underlyingMovePct)*100,pl:Number(row.pnlCents)/100};})
       .filter(function(row){return Number.isFinite(row.m)&&Number.isFinite(row.pl);}).sort(function(a,b){return a.m-b.m;});
-    /* held positions carry no evaluation grid, but their exact legs price a terminal payoff at
-       any move through the SAME payoff engine the hero uses — honest "value at expiry" rows,
-       which is precisely the spectrum's contract. ONE spectrum component for every surface. */
-    if(points.length<2&&p.isHeld&&Array.isArray(p.legs)&&p.legs.length&&p.spot>0){
-      points=SCEN.map(function(s){return {m:s.m,pl:payFor(p,p.spot*(1+s.m/100))};});
-    }
+    /* A tile shows a move the ENGINE priced, or it shows nothing. The browser used to fill moves
+       the backend never valued by interpolating between checkpoints — and to price all eight in
+       the browser for held lines — then print the result as an outcome. RiskProfiler.MOVES IS the
+       story set, so an exact lookup succeeds for every tile that has a receipt. */
     if(points.length<2)return {rows:[],best:null,worst:null,ml:null,authoritative:true,unavailable:true};
-    function valueAt(m){
-      if(!points.length)return 0;if(m<=points[0].m)return points[0].pl;if(m>=points[points.length-1].m)return points[points.length-1].pl;
-      for(var x=1;x<points.length;x++)if(m<=points[x].m){var a=points[x-1],b=points[x],w=(m-a.m)/Math.max(1e-9,b.m-a.m);return a.pl+(b.pl-a.pl)*w;}
-      return 0;
-    }
+    var plByMove={}; points.forEach(function(row){plByMove[Math.round(row.m*100)]=row.pl;});
     /* B3: the backend supplies the risk-neutral mass per checkpoint; carry it where a story move
        matches a backend scenario move exactly (no client probability math). */
     var probByMove={}; src.forEach(function(row){ if(row.prob!=null) probByMove[Math.round(Number(row.underlyingMovePct)*1000)]=Number(row.prob); });
-    var rows=SCEN.map(function(s,i){var pk=Math.round(s.m/100*1000);return {i:i,s:s,m:s.m,px:p.spot*(1+s.m/100),pl:valueAt(s.m),prob:probByMove[pk]==null?null:probByMove[pk]};});
+    var rows=SCEN.map(function(s,i){var pk=Math.round(s.m/100*1000);return {i:i,s:s,m:s.m,px:p.spot*(1+s.m/100),pl:plByMove[Math.round(s.m*100)],prob:probByMove[pk]==null?null:probByMove[pk]};});
     var positionStored=p.isHeld?authPositionEnsemble(p):null;
     var best=rows[0],worst=rows[0],ml=rows[0],median=positionStored&&positionStored.preview&&positionStored.preview.decisionMap&&positionStored.preview.decisionMap.terminal&&positionStored.preview.decisionMap.terminal.p50||decide&&decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.endP50;
     var medianMove=median?((Number(median)/p.spot-1)*100):0;
-    rows.forEach(function(r){if(r.pl>best.pl)best=r;if(r.pl<worst.pl)worst=r;if(Math.abs(r.m-medianMove)<Math.abs(ml.m-medianMove))ml=r;});
+    /* Rank only over tiles the engine priced — an unpriced tile is not a best/worst candidate and
+       must never be read as 0. */
+    var priced=rows.filter(function(r){return Number.isFinite(r.pl);});
+    best=priced[0]||null;worst=priced[0]||null;ml=priced[0]||null;
+    priced.forEach(function(r){if(r.pl>best.pl)best=r;if(r.pl<worst.pl)worst=r;if(Math.abs(r.m-medianMove)<Math.abs(ml.m-medianMove))ml=r;});
     return {rows:rows,best:best,worst:worst,ml:ml,authoritative:true};
   }
 }
@@ -139,8 +142,12 @@ function payFor(p,px){
      display interpolation between authoritative checkpoints, not a browser pricing engine. */
   if(p&&p.authoritative&&Array.isArray(p.payoffPoints)&&p.payoffPoints.length){
     var pts=p.payoffPoints;
-    if(px<=pts[0].price)return pts[0].profit;
-    if(px>=pts[pts.length-1].price)return pts[pts.length-1].profit;
+    /* OFF-DOMAIN IS UNKNOWN, NOT FLAT. These used to CLAMP: a price beyond the served curve
+       silently returned the endpoint value, so a −20% story on a curve that only spans ±30% of the
+       ENTRY anchor reported the edge of the receipt as if the engine had priced that move. Return
+       null instead; callers that draw a line simply stop, and callers that print a number show it
+       as unavailable. */
+    if(px<pts[0].price||px>pts[pts.length-1].price)return null;
     for(var pi=1;pi<pts.length;pi++)if(px<=pts[pi].price){
       var a=pts[pi-1],b=pts[pi],w=(px-a.price)/Math.max(1e-9,b.price-a.price);
       return a.profit+(b.profit-a.profit)*w;
@@ -312,11 +319,15 @@ function drawPayoff(svg,p,full,ghost,opts){
   if(full){
     /* the market scenarios, marked ON the curve (same math the bars use) */
     if(!opts.hideScenarios)for(var si=0;si<SCEN.length;si++){var spx=p.spot*(1+SCEN[si].m/100); if(spx<lo||spx>hi)continue;
-      var sv=payFor(p,spx), scx=sx(spx), scy=sy(sv), scol=sv>=0?'var(--profit)':'var(--loss)';
+      /* Off the served curve there is no value to mark — draw nothing rather than a point at the
+         curve's edge pretending to be this move. */
+      var sv=payFor(p,spx); if(sv==null){return;}
+      var scx=sx(spx), scy=sy(sv), scol=sv>=0?'var(--profit)':'var(--loss)';
       g+='<circle class="pfscen" data-si="'+si+'" cx="'+f(scx)+'" cy="'+f(scy)+'" r="3.4" fill="var(--panel)" stroke="'+scol+'" stroke-width="1.4"/>';}
     /* a PINNED / reshaped what-if — bold adjustable marker on the curve */
     if(!opts.hideScenarios&&opts.pinM!=null){ var pmag=+opts.pinM, ppx=p.spot*(1+pmag/100);
-      if(ppx>=lo&&ppx<=hi){ var pv=payFor(p,ppx), pX=sx(ppx), pY=sy(pv), pcol=pv>=0?'var(--profit)':'var(--loss)';
+      var pvGuard=payFor(p,ppx);
+      if(ppx>=lo&&ppx<=hi&&pvGuard!=null){ var pv=pvGuard, pX=sx(ppx), pY=sy(pv), pcol=pv>=0?'var(--profit)':'var(--loss)';
         var pinAnchor=pX<x0+90?'start':pX>x1-115?'end':'middle';
         var pinTextX=pinAnchor==='start'?pX+8:pinAnchor==='end'?pX-8:pX;
         /* At the beginning of playback the scenario marker sits on the spot/mark story. Put its
@@ -330,7 +341,9 @@ function drawPayoff(svg,p,full,ghost,opts){
     /* THE NOW→AT-EXPIRY STORY at spot. For a HELD position: a hollow "now" mark dot at the
        current P/L + the filled at-expiry-if-holds dot + a dashed connector (= the time value
        still to collect). For a PROSPECTIVE candidate (Decide): just the at-expiry-at-spot dot. */
-    var expV=payFor(p,p.spot), expX=sx(p.spot), expY=sy(expV), expCol=expV>=0?'var(--profit)':'var(--loss)';
+    var expV=payFor(p,p.spot);
+    if(expV!=null){
+    var expX=sx(p.spot), expY=sy(expV), expCol=expV>=0?'var(--profit)':'var(--loss)';
     var side=expX>(x0+x1)/2, lX=side?expX-8:expX+8, anc=side?'end':'start';
     if(p.isHeld&&typeof p.pnl==='number'){
       var mkY=sy(p.pnl);
@@ -353,6 +366,7 @@ function drawPayoff(svg,p,full,ghost,opts){
     } else {
       g+='<circle cx="'+f(expX)+'" cy="'+f(expY)+'" r="4.7" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/>';
       if(!opts.labelRails)g+='<text class="pfxp" x="'+f(lX)+'" y="'+f(expY-7)+'" text-anchor="'+anc+'" fill="'+expCol+'">at spot '+money(expV)+'</text>';
+    }
     }
   }
   svg._map={lo:lo,hi:hi,x0:x0,pw:pw,yLo:yLo,yHi:yHi,y0:y0,ph:ph};   // authoritative values only use this for SVG placement
@@ -579,7 +593,7 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
       '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(positionPathPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null))+'</div>'+
       '<div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div><div class="authscenmetric"><span>Net delta</span><b data-live="delta">'+(authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2))+'</b></div><div class="authscenmetric"><span>Theta / day</span><b data-live="theta">'+(authNumber(g.thetaCentsPerDay)==null?'—':money(Number(g.thetaCentsPerDay)/100))+'</b></div><div class="authscenmetric"><span>Gamma</span><b data-live="gamma">'+(authNumber(g.gammaSharesPerDollar)==null?'—':Number(g.gammaSharesPerDollar).toFixed(3))+'</b></div><div class="authscenmetric"><span>Vega / pt</span><b data-live="vega">'+(authNumber(g.vegaCentsPerPoint)==null?'—':money(Number(g.vegaCentsPerPoint)/100))+'</b></div></div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     '<div class="authscenreceipt" id="authScenReceipt-'+deskEsc(p.id)+'">'+authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</div></section>';}
-function authPayKeyHTML(p){var unchanged=payFor(p,p.spot),bes=breakevens(p),be=bes.length?bes.slice(0,2).map(function(value){return '$'+Number(value).toLocaleString(undefined,{maximumFractionDigits:2});}).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',authSigned(unchanged),unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':authMoney(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':authMoney(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
+function authPayKeyHTML(p){var unchanged=payFor(p,p.spot),bes=breakevens(p),be=bes.length?bes.slice(0,2).map(function(value){return '$'+Number(value).toLocaleString(undefined,{maximumFractionDigits:2});}).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',unchanged==null?'unavailable':authSigned(unchanged),unchanged==null?'':unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':authMoney(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':authMoney(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
 function authRegimeSummary(research){var regime=research&&research.regime||{};if(regime.headline)return String(regime.headline);var trend=String(regime.trend||'').toLowerCase(),move=authNumber(regime.trendReturnPct),sessions=authNumber(regime.trendSessions);if(trend&&move!=null)return authHuman(trend)+' '+Math.abs(move).toFixed(1)+'% over '+(sessions||'the available')+' sessions.';return 'Market regime unavailable.';}
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
   if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The position is temporarily unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to your book</button></div></div>';return;}
@@ -1177,7 +1191,10 @@ function payoffHover(p, ev){
   var x=ev.clientX-svgR.left, price=m.lo+(x-m.x0)/m.pw*(m.hi-m.lo);
   if(price<m.lo||price>m.hi||x<m.x0-2){ hidePayoffTip(p); return; }
   var cur=(adjust&&adjust.posId===p.id)?adjustCand():p;
+  /* Off the served curve there is no value to report — say so rather than showing the curve's
+     endpoint as though it were this price. */
   var pl=payFor(cur, price), pct=(price/p.spot-1)*100;
+  if(pl==null){ hidePayoffTip(p); return; }
   tip.innerHTML='<b>'+Math.round(price)+'</b><span class="tpct">'+(pct>=0?'+':'')+pct.toFixed(1)+'%</span><span class="tpl '+(pl>=0?'pos':'neg')+'">'+money(pl)+'</span>';
   var lx=ev.clientX-wrapR.left;
   var half=Math.ceil(tip.offsetWidth/2), tipX=Math.max(half+6,Math.min(wrapR.width-half-6,lx));
@@ -3830,16 +3847,16 @@ function decScenSpectrum(c){
   var d=scenData(c), pin=(c.id in pinnedScen)?+pinnedScen[c.id]:null, pmax=0, maxAbs=1, ctl='';
   var shortNames=['Crash','Gap down','Pullback','Choppy','Flat','Grind','Rally','Melt-up'];
   if(d.unavailable)return '<div class="backendnotice">Backend scenario checkpoints are unavailable for this candidate. No browser payoff or probability substitute is shown.</div>';
-  d.rows.forEach(function(r){if(r.prob!=null)pmax=Math.max(pmax,r.prob);maxAbs=Math.max(maxAbs,Math.abs(r.pl));});
+  d.rows.forEach(function(r){if(r.prob!=null)pmax=Math.max(pmax,r.prob);if(Number.isFinite(r.pl))maxAbs=Math.max(maxAbs,Math.abs(r.pl));});
   var tiles=d.rows.map(function(r){
-    var pinned=pin===r.i, likely=r===d.ml, width=(Math.abs(r.pl)/maxAbs*49).toFixed(1);
+    var pinned=pin===r.i, likely=r===d.ml, priced=Number.isFinite(r.pl), width=(priced?Math.abs(r.pl)/maxAbs*49:0).toFixed(1);
     if(pinned)ctl=scenExpand(c);
     return '<button class="srow'+(r===d.best?' best':'')+(r===d.worst?' worst':'')+(likely?' likely':'')+(pinned?' pinned':'')+'" data-si="'+r.i+'" aria-pressed="'+pinned+'" title="Pin '+r.s.n+' and inspect its path">'+
       '<span class="sn"><span class="snm"><span class="snfull">'+r.s.n+'</span><span class="snshort">'+shortNames[r.i]+'</span></span><span class="smv '+(r.m>0?'up':r.m<0?'dn':'fl')+'">'+(r.m>0?'+':'')+r.m+'%</span><span class="sprob">'+(r.prob==null?(likely?'median':'path'):Math.round(r.prob*100)+'%')+'</span>'+glyph(r.s,'var(--dim)')+'</span>'+
       '<span class="sdesc">'+r.s.dsc+'</span>'+
       '<span class="slk"><span class="slk-b"><i style="width:'+(r.prob==null?(likely?62:18):Math.round(r.prob/(pmax||1)*100))+'%"></i></span><span class="slk-n">'+(r.prob==null?'match':Math.round(r.prob*100)+'%')+'</span></span>'+
       '<span class="sbw"><span class="sb '+(r.pl>=0?'p':'n')+'" style="width:'+width+'%"></span></span>'+
-      '<span class="sv '+(r.pl>=0?'pos':'neg')+'">'+money(r.pl)+'</span><span class="splay">'+(pinned?'❚❚':'▶')+'</span></button>';
+      '<span class="sv '+(!priced?'':r.pl>=0?'pos':'neg')+'"'+(priced?'':' title="This move was not priced by the engine"')+'>'+(priced?money(r.pl):'—')+'</span><span class="splay">'+(pinned?'❚❚':'▶')+'</span></button>';
   }).join('');
   var sum='<div class="scensum"><div class="e"><span class="lbl"><span class="sumfull">'+(d.authoritative?'Median terminal neighborhood':'Most likely')+' · '+d.ml.s.n+'</span><span class="sumshort">'+(d.authoritative?'Median':'Likely')+' · '+(shortNames[d.ml.i]||d.ml.s.n)+'</span></span><span class="v '+(d.ml.pl>=0?'pos':'neg')+'">'+(d.authoritative?'':Math.round(d.ml.prob*100)+'% · ')+money(d.ml.pl)+'</span></div>'+
     '<div class="e range"><span class="lbl"><span class="sumfull">Outcome range</span><span class="sumshort">Range</span></span><span class="v"><b class="neg">'+money(d.worst.pl)+'</b> → <b class="pos">'+money(d.best.pl)+'</b></span></div></div>';
