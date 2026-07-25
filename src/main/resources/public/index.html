@@ -1061,10 +1061,12 @@ function authLifeIndex(p){
   var expiration=authPackageExpiration(p);
   function rowProgress(row,index){return Number(row.sessionProgress==null?(row.day==null?index:row.day):row.sessionProgress);}
   if(!expiration)return {index:rows.length-1,sessions:rowProgress(rows[rows.length-1],rows.length-1)};
+  /* The expiry cut comes from the BACKEND session calendar: every valued row names the session
+     date it belongs to (ScenarioCanvasValuator.UnderlyingDay/UnderlyingStep.sessionDate). If the
+     rows are undated the boundary is genuinely unknown, so the timeline is left whole rather than
+     cut at a browser-approximated session count (the old days x 252/365 estimate). */
   var index=rows.length-1,dated=rows.some(function(r){return r.sessionDate;});
   if(dated){index=0;for(var i=0;i<rows.length;i++){if(!rows[i].sessionDate||String(rows[i].sessionDate)<=String(expiration))index=i;else break;}}
-  else {var receipt=p.authoritativeAnimation&&p.authoritativeAnimation.receipt,anchor=receipt&&receipt.anchorDate;
-    if(anchor){var sessions=histSessionsUntil(expiration,anchor);if(sessions!=null){index=0;for(var k=0;k<rows.length;k++){var pr=rowProgress(rows[k],k);if(pr<=sessions+1e-6)index=k;else break;}}}}
   var row=rows[index];
   return {index:index,sessions:rowProgress(row,index)};}
 function authLifeSessions(p){var life=authLifeIndex(p);return life&&life.sessions>0?life.sessions:Math.max(1,Number(authoritativeHorizon(p)||1));}
@@ -1332,7 +1334,6 @@ function histAggregateWeekly(rows){var out=[],cur=null,curKey=null;
     else {cur.h=Math.max(cur.h,b.h);cur.l=Math.min(cur.l,b.l);cur.c=b.c;cur.v=(cur.v||0)+(b.v||0);cur.date=b.date;}});
   if(cur)out.push(cur);return out;}
 function histVolFmt(v){if(v==null||!Number.isFinite(v))return '—';if(v>=1e9)return (v/1e9).toFixed(1)+'B';if(v>=1e6)return (v/1e6).toFixed(1)+'M';if(v>=1e3)return (v/1e3).toFixed(0)+'K';return String(Math.round(v));}
-function histSessionsUntil(dateStr,fromDateStr){var a=new Date(String(fromDateStr)+'T00:00:00Z'),b=new Date(String(dateStr)+'T00:00:00Z');if(isNaN(a)||isNaN(b))return null;var days=(b-a)/86400000;if(!(days>0))return null;return Math.max(1,Math.min(90,Math.round(days*252/365)));}
 /* what the focused trade overlays onto this symbol's history — strikes, break-evens, entry
    story, expiry, and the IV that shapes the forward cone. All values the desk already holds. */
 function histOverlayFor(hostKey,sym){
@@ -1909,8 +1910,20 @@ function authLoadBookFan(){
       var progress=display.length?(display[0].steps||[]).map(function(step,si){return Number(step.sessionProgress==null?si:step.sessionProgress);}):[];
       /* the SAME life boundary as every other fan: the package's timeline ends at its expiry,
          not at the plan's ensemble horizon — no settled afterlife drawn as a flat line */
-      var expiration=authPackageExpiration(p),anchor=response&&response.receipt&&response.receipt.anchorDate;
-      var lifeS=expiration&&anchor?histSessionsUntil(expiration,anchor):null;
+      /* The life boundary is read from the BACKEND session calendar (each step carries the
+         sessionDate it values), never from a browser weekday approximation. If the backend did not
+         date its steps, the boundary is unknown and the fan is left untruncated rather than cut at
+         a guessed session count. */
+      var expiration=authPackageExpiration(p);
+      var lifeSteps=display.length?(display[0].steps||[]):[];
+      var lifeS=null;
+      if(expiration&&lifeSteps.some(function(step){return step&&step.sessionDate;})){
+        for(var li=0;li<lifeSteps.length;li++){
+          var lsd=lifeSteps[li]&&lifeSteps[li].sessionDate;
+          if(lsd&&String(lsd)>String(expiration))break;
+          lifeS=Number(lifeSteps[li]&&lifeSteps[li].sessionProgress==null?li:lifeSteps[li].sessionProgress);
+        }
+      }
       if(lifeS!=null&&frames.length&&lifeS<frames[frames.length-1].x-1e-6){
         frames=frames.filter(function(f){return f.x<=lifeS+1e-6;});
         var keep=0;for(var pi=0;pi<progress.length;pi++){if(progress[pi]<=lifeS+1e-6)keep=pi;else break;}
