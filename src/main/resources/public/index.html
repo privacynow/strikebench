@@ -1216,8 +1216,12 @@ function hlScenMark(svg,si,on){ if(!svg)return; var c=svg.querySelector('.pfscen
 var AUTH_BOOK_PANEL_IDS=['book','riskMain','bookrisk','chainBand','univBand','sectorBand','newsBand'];
 var HOME_AUTH_SYMBOL=null;
 var HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
-var HOME_SCOUT={scope:'broad',goal:'INCOME',sector:null};
-var homeIdea={symbol:null,query:'',view:'Neutral',horizon:'45 days',riskMode:'Balanced',
+/* NO SILENT PRODUCT DEFAULTS (program §3.5). The desk used to ship goal=INCOME, view=Neutral,
+   horizon=45 days and risk=Balanced pre-selected, then send them to the engine as though the user
+   had declared them — so a scan answered a question nobody asked. Every declaration starts null;
+   the workbench names what is still unchosen and withholds Scan/Analyze until it is. */
+var HOME_SCOUT={scope:'broad',goal:null,sector:null};
+var homeIdea={symbol:null,query:'',view:null,horizon:null,riskMode:null,
   targetCents:null,holdingsShares:null};
 var HOME_SCOUT_SEQ=0,HOME_SCOUT_RAF=0;
 /* The bridge rejects stale data publication; this UI generation separately rejects stale promise
@@ -1269,9 +1273,13 @@ function authHomePrice(value){var n=authNumber(value);return n==null?'—':'$'+N
 function authHomeQuote(row){var r=row&&row.research||{},q=r.quote||{},price=authNumber(r.displayPrice),prev=authNumber(q.prevClose),pct=price!=null&&prev>0?(price/prev-1)*100:null;return {price:price,prev:prev,pct:pct,basis:r.priceIsPreviousClose===true?'previous close':r.markBasis||'market price',source:q.source||r.evidence&&r.evidence.summary&&r.evidence.summary.source||'source unavailable',freshness:q.freshness||r.freshness||'unavailable',iv:authNumber(r.ivAtm),regime:r.regime&&r.regime.headline||null};}
 function authHomeNewsItems(row){var n=row&&row.news||{},items=n.items;return Array.isArray(items)?items:[];}
 function authHomeCandles(row){var history=row&&row.history||{},candles=history.candles;return Array.isArray(candles)?candles.filter(function(c){return authNumber(c.close==null?c.c:c.close)!=null;}):[];}
-function authHomeHistoryRead(row){var history=row&&row.history||{},candles=authHomeCandles(row),win=candles.slice(-63),first=win[0]||{},last=win[win.length-1]||{},start=authNumber(first.close==null?first.c:first.close),end=authNumber(last.close==null?last.c:last.close),change=start>0&&end!=null?(end/start-1)*100:null,coverage=history.coverage||{};
+/* The trailing return is a BACKEND fact: /api/research/{symbol} serves regime.trendReturnPct over
+   regime.trendSessions (ApiResponses.Regime). The desk used to slice the last 63 stored candles
+   itself and compute (end/start-1)*100 — a displayed return the server never stated, over a
+   window the server never chose. Read the receipt; when it is absent the figure is unavailable. */
+function authHomeHistoryRead(row){var history=row&&row.history||{},candles=authHomeCandles(row),regime=row&&row.research&&row.research.regime||{},change=authNumber(regime.trendReturnPct),coverage=history.coverage||{};
   /* the stored history is range=max; the hero quotes a trailing ~3-month window so the label is true */
-  return {candles:candles,change:change,windowSessions:win.length,source:history.source||'history unavailable',freshness:history.freshness||'unavailable',coverage:authNumber(coverage.coveragePct),sessions:authNumber(coverage.availableSessions)||candles.length};}
+  return {candles:candles,change:change,windowSessions:authNumber(regime.trendSessions),source:history.source||'history unavailable',freshness:history.freshness||'unavailable',coverage:authNumber(coverage.coveragePct),sessions:authNumber(coverage.availableSessions)||candles.length};}
 function authHomeOptionRows(row,spot){var chain=row&&row.chain||{},calls=Array.isArray(chain.calls)?chain.calls:[],puts=Array.isArray(chain.puts)?chain.puts:[],strikes={},key=function(value){return Number(value).toFixed(4);};calls.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).call=q;});puts.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).put=q;});var rows=Object.keys(strikes).map(function(k){return strikes[k];});rows.sort(function(a,b){return Math.abs(a.strike-spot)-Math.abs(b.strike-spot);});rows=rows.slice(0,9);rows.sort(function(a,b){return a.strike-b.strike;});return rows;}
 function authHomeBook(q){var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask);if(bid==null||ask==null)return '—';if(bid<=0&&ask<=0)return '—';return bid.toFixed(2)+' / '+ask.toFixed(2);}
 function authHomeChainHTML(row,spot,sym){var chain=row&&row.chain||{},rows=authHomeOptionRows(row,spot),exp=chain.expiration||row&&row.expirations&&row.expirations.expirations&&row.expirations.expirations[0],status=authExceptionStatus(chain.freshness);if(!rows.length)return '<div class="backendnotice">No live option chain rows for this symbol right now. Price history and research remain ready.</div>';return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows"'+(sym?' data-chain-sym="'+deskEsc(sym)+'"':'')+'>'+rows.map(function(r){return '<div class="authchainrow" data-chain-k="'+r.strike+'" title="Hover shows this strike on the price chart"><span>'+deskEsc(authHomeBook(r.call))+'</span><b class="'+(Math.abs(r.strike-spot)<=Math.max(1,spot*.006)?'atm':'')+'">'+Number(r.strike).toFixed(r.strike%1?1:0)+'</b><span>'+deskEsc(authHomeBook(r.put))+'</span></div>';}).join('')+'</div><div class="authreceipt">'+rows.length+' strikes around the current price'+(chain.source?' · '+deskEsc(String(chain.source)):'')+(status?' · '+deskEsc(status):'')+(chain.asOfEpochMs?' · as of '+deskEsc(authWhen(chain.asOfEpochMs)):'')+'</div>';}
@@ -1280,8 +1288,9 @@ function authHomeChainHTML(row,spot,sym){var chain=row&&row.chain||{},rows=authH
    bloom, the future Market hero). One desk-wide lens state; each host is a window over the
    same stored artifact. Data: the complete stored daily history per symbol, read once
    (range=max is a zero-upstream-call stored read) and windowed client-side. Honesty laws:
-   ranges the data cannot serve render disabled with the reason; long candle windows aggregate
-   to TRUE weekly OHLC bars and say so; nothing is skipped, smoothed, or invented. */
+   ranges the data cannot serve render disabled with the reason; only bars the backend supplied are
+   ever drawn — the browser never folds them into synthetic weekly candles; nothing is skipped,
+   smoothed, or invented. */
 var MKT_CHART={preset:'3m',win:null,view:'auto',scale:'$',ov:{vol:true,ma:false,band:false,cone:true},prev:null};
 var HIST_STORE={},HIST_DRAG=null;
 function ensureHist(sym){
@@ -1328,11 +1337,6 @@ function histWindow(bars){var n=bars.length;
   var span=Math.min(n,histPresetSpan(MKT_CHART.preset||'3m',bars));
   return {start:Math.max(0,n-span),end:n-1,custom:false};}
 /* TRUE calendar-week OHLC aggregation — the only honest coarsening; always labeled. */
-function histAggregateWeekly(rows){var out=[],cur=null,curKey=null;
-  rows.forEach(function(b){var d=new Date(b.date+'T00:00:00Z');if(isNaN(d)){return;}var wd=(d.getUTCDay()+6)%7,monday=new Date(d.getTime()-wd*86400000),key=monday.toISOString().slice(0,10);
-    if(key!==curKey){if(cur)out.push(cur);cur={date:b.date,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v||0};curKey=key;}
-    else {cur.h=Math.max(cur.h,b.h);cur.l=Math.min(cur.l,b.l);cur.c=b.c;cur.v=(cur.v||0)+(b.v||0);cur.date=b.date;}});
-  if(cur)out.push(cur);return out;}
 function histVolFmt(v){if(v==null||!Number.isFinite(v))return '—';if(v>=1e9)return (v/1e9).toFixed(1)+'B';if(v>=1e6)return (v/1e6).toFixed(1)+'M';if(v>=1e3)return (v/1e3).toFixed(0)+'K';return String(Math.round(v));}
 /* what the focused trade overlays onto this symbol's history — strikes, break-evens, entry
    story, expiry, and the IV that shapes the forward cone. All values the desk already holds. */
@@ -1383,7 +1387,11 @@ function drawHistChart(wrap){
   var slot=HIST_STORE[sym]||{phase:'loading',bars:[]};
   if(slot.phase!=='ready'||slot.bars.length<2){svg.innerHTML='<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" fill="var(--dim)" font-size="11">'+deskEsc(slot.phase==='error'?(slot.error||'Stored history unavailable.'):'Loading stored history…')+'</text>';if(strip)strip.innerHTML='';if(read)read.textContent='';return;}
   var bars=slot.bars,win=histWindow(bars),daily=bars.slice(win.start,win.end+1),dailySpan=daily.length;
-  var view=histResolvedView(bars,win),weekly=view==='candles'&&dailySpan>200,rows=weekly?histAggregateWeekly(daily):daily;
+  /* Only bars the BACKEND supplied are drawn. The desk used to fold >200 daily bars into weekly
+     candles in the browser (o=first, h=max, l=min, c=last, v=sum) and present them as real weekly
+     O/H/L/C/V — prices no server ever sent, labelled 'weekly bars'. The history API serves daily
+     bars only, so daily is what is shown; density is a bar-width problem, not a data problem. */
+  var view=histResolvedView(bars,win),rows=daily;
   var spec=histOverlayFor(hostKey,sym)||{strikes:[],bes:[],iv:null,entry:null,expiry:null};
   /* The forward volatility view is the backend expected-move receipt (B4) — the risk-neutral 1σ
      band at the focused expiry, drawn as horizontal p16/p50/p84 price levels rather than a client
@@ -1396,7 +1404,7 @@ function drawHistChart(wrap){
   var hasVol=MKT_CHART.ov.vol&&daily.some(function(b){return b.v>0;});
   var padL=46,padR=spec.strikes.length||spec.bes.length?52:14,padT=9,padB=15;
   var volH=hasVol?Math.round((H-padT-padB)*.14):0,plotB=H-padB-volH-(hasVol?3:0);
-  var rowUnit=weekly?5:1,U=rows.length;
+  var U=rows.length;
   var x0=padL,x1=W-padR,plotW=x1-x0;
   var xU=function(u){return x0+plotW*u/Math.max(.0001,U);},barX=function(i){return xU(i+0.5);};
   var vals=[0];vals.length=0;
@@ -1415,11 +1423,11 @@ function drawHistChart(wrap){
   (rows.length===1?[0]:[0,1]).forEach(function(f){var idx=Math.round(f*(rows.length-1)),b=rows[idx];if(!b)return;g+='<text x="'+barX(idx).toFixed(1)+'" y="'+(H-3)+'" text-anchor="'+(rows.length===1?'middle':f===0?'start':'end')+'">'+deskEsc(String(b.date).slice(5))+'</text>';});
   /* realized ±1σ month envelope — the backend HistoryOverlays receipt (bandUp/bandDn, =SMA20·exp(±σ·√(21/252))
      computed server-side off the same RV(20)/SMA20), plotted verbatim — no client estimator */
-  if(MKT_CHART.ov.band){var bandPts=[];for(var bi=0;bi<rows.length;bi++){var gIdx=weekly?Math.min(bars.length-1,win.start+Math.round((bi+0.5)*rowUnit)):win.start+bi;var gb=bars[gIdx]||{},bu=gb.bandUp,bd=gb.bandDn;if(bu==null||bd==null){bandPts.push(null);continue;}bandPts.push({x:barX(bi),up:Yv(bu),dn:Yv(bd)});}
+  if(MKT_CHART.ov.band){var bandPts=[];for(var bi=0;bi<rows.length;bi++){var gIdx=win.start+bi;var gb=bars[gIdx]||{},bu=gb.bandUp,bd=gb.bandDn;if(bu==null||bd==null){bandPts.push(null);continue;}bandPts.push({x:barX(bi),up:Yv(bu),dn:Yv(bd)});}
     var seg=bandPts.filter(Boolean);if(seg.length>2){var up='',dn='';seg.forEach(function(pt,ix){up+=(ix?' L ':'M ')+pt.x.toFixed(1)+' '+pt.up.toFixed(1);});for(var ri=seg.length-1;ri>=0;ri--)dn+=' L '+seg[ri].x.toFixed(1)+' '+seg[ri].dn.toFixed(1);g+='<path d="'+up+dn+' Z" fill="var(--violet)" fill-opacity=".07"/>';}}
   if(hasVol){var vmax=Math.max.apply(0,rows.map(function(b){return b.v||0;}))||1,vy0=H-padB,vh=volH;
     rows.forEach(function(b,i){if(!(b.v>0))return;var bw=Math.max(1.2,Math.min(8,plotW/U*.7)),vhh=Math.max(1,vh*(b.v/vmax));g+='<rect x="'+(barX(i)-bw/2).toFixed(1)+'" y="'+(vy0-vhh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+vhh.toFixed(1)+'" fill="'+(b.c>=b.o?'var(--profit)':'var(--loss)')+'" fill-opacity=".38"/>';});}
-  if(MKT_CHART.ov.ma){[['sma20','var(--violet)'],['sma50','var(--caution)']].forEach(function(cfg){var d='';for(var mi=0;mi<rows.length;mi++){var gi=weekly?Math.min(bars.length-1,win.start+Math.round((mi+0.5)*rowUnit)):win.start+mi;var v=(bars[gi]||{})[cfg[0]];if(v==null)continue;d+=(d?' L ':'M ')+barX(mi).toFixed(1)+' '+Yv(v).toFixed(1);}if(d)g+='<path d="'+d+'" fill="none" stroke="'+cfg[1]+'" stroke-width="1.1" stroke-opacity=".75"/>';});}
+  if(MKT_CHART.ov.ma){[['sma20','var(--violet)'],['sma50','var(--caution)']].forEach(function(cfg){var d='';for(var mi=0;mi<rows.length;mi++){var gi=win.start+mi;var v=(bars[gi]||{})[cfg[0]];if(v==null)continue;d+=(d?' L ':'M ')+barX(mi).toFixed(1)+' '+Yv(v).toFixed(1);}if(d)g+='<path d="'+d+'" fill="none" stroke="'+cfg[1]+'" stroke-width="1.1" stroke-opacity=".75"/>';});}
   if(view==='candles'){var bw=Math.max(1.6,Math.min(9,plotW/U*.72));
     rows.forEach(function(b,i){var x=barX(i),up=b.c>=b.o,col=up?'var(--profit)':'var(--loss)',top=Yv(Math.max(b.o,b.c)),bot=Yv(Math.min(b.o,b.c));
       g+='<line x1="'+x.toFixed(1)+'" y1="'+Yv(b.h).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+Yv(b.l).toFixed(1)+'" stroke="'+col+'" stroke-opacity=".8"/><rect x="'+(x-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1.2,bot-top).toFixed(1)+'" rx=".7" fill="'+col+'" fill-opacity="'+(up?'.85':'.95')+'"/>';});}
@@ -1443,7 +1451,7 @@ function drawHistChart(wrap){
   spec.bes.forEach(function(b){if(b<lo||b>hi)return;var yy=Yv(b);g+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+xU(U).toFixed(1)+'" y2="'+yy.toFixed(1)+'" stroke="var(--violet)" stroke-opacity=".55" stroke-dasharray="2 4"/><text x="'+(W-2)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end" fill="var(--violet)">B/E '+Math.round(b)+'</text>';});
   if(spec.entry){var eIdx=-1;
     if(spec.entry.date){for(var di=0;di<daily.length;di++){if(String(daily[di].date)>=spec.entry.date){eIdx=di;break;}}}
-    if(eIdx>=0){var displayIdx=weekly?Math.min(rows.length-1,Math.floor(eIdx/rowUnit)):eIdx,ex=barX(displayIdx),ey=Yv(spec.entry.px),lx=barX(rows.length-1),ly=Yv(lastClose);
+    if(eIdx>=0){var displayIdx=eIdx,ex=barX(displayIdx),ey=Yv(spec.entry.px),lx=barX(rows.length-1),ly=Yv(lastClose);
       g+='<line x1="'+ex.toFixed(1)+'" y1="'+padT+'" x2="'+ex.toFixed(1)+'" y2="'+plotB+'" stroke="var(--violet)" stroke-opacity=".3"/><circle cx="'+ex.toFixed(1)+'" cy="'+ey.toFixed(1)+'" r="3.4" fill="var(--violet)" stroke="var(--ground)" stroke-width="1.4"/><text x="'+ex.toFixed(1)+'" y="'+Math.max(padT+8,ey-7).toFixed(1)+'" text-anchor="middle" fill="var(--violet)">entry</text>'+
         '<path d="M'+ex.toFixed(1)+' '+ey.toFixed(1)+' L'+lx.toFixed(1)+' '+ly.toFixed(1)+'" fill="none" stroke="var(--violet)" stroke-opacity=".5" stroke-dasharray="2 3"/>'+
         (spec.entry.pnl!=null?'<text x="'+Math.min(x1-2,lx+3).toFixed(1)+'" y="'+Math.max(padT+8,ly-7).toFixed(1)+'" text-anchor="end" fill="'+(spec.entry.pnl>=0?'var(--profit)':'var(--loss)')+'">'+deskEsc(signed(spec.entry.pnl))+' since entry</text>':'');}
@@ -1456,14 +1464,14 @@ function drawHistChart(wrap){
         (spec.entry.pnl!=null?'<text x="'+Math.min(x1-2,lx2+3).toFixed(1)+'" y="'+Math.max(padT+8,ly2-7).toFixed(1)+'" text-anchor="end" fill="'+(spec.entry.pnl>=0?'var(--profit)':'var(--loss)')+'">'+deskEsc(signed(spec.entry.pnl))+' since entry</text>':'');}}
   g+='<g data-hist-drag></g><g data-hist-cross></g>';
   g+='<rect class="mcinteraction" data-hist-surface="1" x="'+x0+'" y="'+padT+'" width="'+(x1-x0)+'" height="'+(plotB-padT+volH)+'"/>';
-  wrap._hmap={W:W,H:H,x0:x0,x1:x1,padT:padT,plotB:plotB,lo:lo,hi:hi,isPct:isPct,U:U,rows:rows,weekly:weekly,rowUnit:rowUnit,winStart:win.start,dailySpan:dailySpan,sym:sym};
+  wrap._hmap={W:W,H:H,x0:x0,x1:x1,padT:padT,plotB:plotB,lo:lo,hi:hi,isPct:isPct,U:U,rows:rows,winStart:win.start,dailySpan:dailySpan,sym:sym};
   svg.innerHTML=g;
   drawHistStrip(wrap,bars,win);
-  if(read&&!read._hot)read.textContent=histReceiptText(wrap,slot,win,rows,weekly,view);
+  if(read&&!read._hot)read.textContent=histReceiptText(wrap,slot,win,rows,view);
 }
-function histReceiptText(wrap,slot,win,rows,weekly,view){
+function histReceiptText(wrap,slot,win,rows,view){
   var bars=slot.bars,label=win.custom?(String(bars[win.start].date)+' → '+String(bars[win.end].date)+' · double-click resets'):(HIST_PRESETS.filter(function(p){return p[0]===MKT_CHART.preset;}).map(function(p){return p[1];})[0]||'3M');
-  return label+' · '+(win.end-win.start+1)+' session'+(win.end===win.start?'':'s')+' · '+(weekly?'weekly bars':'daily bars')+' · '+deskEsc(slot.source||'stored')+' · through '+String(bars[bars.length-1].date)+' · drag to zoom a window';}
+  return label+' · '+(win.end-win.start+1)+' session'+(win.end===win.start?'':'s')+' · '+'daily bars'+' · '+deskEsc(slot.source||'stored')+' · through '+String(bars[bars.length-1].date)+' · drag to zoom a window';}
 function drawHistStrip(wrap,bars,win){
   var strip=wrap.querySelector('[data-hist-strip]');if(!strip)return;
   var W=Math.max(280,Math.round(strip.clientWidth||520)),H=14;strip.setAttribute('viewBox','0 0 '+W+' '+H);
@@ -1489,7 +1497,7 @@ function histHover(wrap,e){
   var Yv=function(v){return histYv(map,v);};
   if(cross)cross.innerHTML='<line x1="'+x.toFixed(1)+'" y1="'+map.padT+'" x2="'+x.toFixed(1)+'" y2="'+map.plotB+'" stroke="var(--accent)" stroke-opacity=".4"/><circle cx="'+x.toFixed(1)+'" cy="'+Yv(b.c).toFixed(1)+'" r="2.8" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.3"/>';
   if(read){var prev=i>0?map.rows[i-1].c:b.o,chg=prev>0?(b.c/prev-1)*100:null;read._hot=true;
-    read.textContent=(map.weekly?'wk of ':'')+String(b.date)+' · O '+b.o.toFixed(2)+' H '+b.h.toFixed(2)+' L '+b.l.toFixed(2)+' C '+b.c.toFixed(2)+(chg==null?'':' · '+(chg>=0?'+':'')+chg.toFixed(1)+'%')+(b.v>0?' · vol '+histVolFmt(b.v):'');}}
+    read.textContent=String(b.date)+' · O '+b.o.toFixed(2)+' H '+b.h.toFixed(2)+' L '+b.l.toFixed(2)+' C '+b.c.toFixed(2)+(chg==null?'':' · '+(chg>=0?'+':'')+chg.toFixed(1)+'%')+(b.v>0?' · vol '+histVolFmt(b.v):'');}}
 function histHoverEnd(wrap){var svg=wrap.querySelector('[data-hist-svg]'),read=wrap.querySelector('[data-hist-read]');if(svg){var cross=svg.querySelector('[data-hist-cross]');if(cross)cross.innerHTML='';}
   if(read){read._hot=false;var map=wrap._hmap,sym=wrap.getAttribute('data-hist-sym'),slot=HIST_STORE[sym];if(map&&slot&&slot.phase==='ready'){var win=histWindow(slot.bars);read.textContent=histReceiptText(wrap,slot,win,map.rows,map.weekly,null);}}}
 function histCommitWindow(startDaily,endDaily){
@@ -1618,7 +1626,18 @@ function authOpportunityControlsHTML(){
 }
 function authScoutIdleFieldHTML(){
   var staged=!!homeIdea.symbol,loading=HOME_OPPORTUNITY.phase==='loading';
-  var ready=staged&&(HOME_SCOUT.goal!=='ACQUIRE'||Number(homeIdea.targetCents)>0&&Number(homeIdea.holdingsShares)>0);
+  /* Name what remains to be chosen rather than choosing it silently. */
+  var missing=[];
+  if(!HOME_SCOUT.goal)missing.push('a goal');
+  if(!homeIdea.view)missing.push('a market view');
+  if(!homeIdea.horizon)missing.push('a horizon');
+  if(!homeIdea.riskMode)missing.push('a risk posture');
+  if(HOME_SCOUT.goal==='ACQUIRE'&&!(Number(homeIdea.targetCents)>0))missing.push('a target price');
+  if(HOME_SCOUT.goal==='ACQUIRE'&&!(Number(homeIdea.holdingsShares)>0))missing.push('a share quantity');
+  var declared=!missing.length;
+  var ready=staged&&declared;
+  var needs=declared?'':'<div class="scoutneeds hint">Choose '+deskEsc(
+    missing.length===1?missing[0]:missing.slice(0,-1).join(', ')+' and '+missing[missing.length-1])+' to run this.</div>';
   var acquire=HOME_SCOUT.goal==='ACQUIRE'?'<div class="homeacquirefields"><label><span>Buy at or below</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="Price" data-auth-workbench-target></label><label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label></div>':'';
   /* ONE minimal bar: a field and ONE adaptive action. Empty field → Scan the current scope;
      a staged ticker → Analyze that one (with a small "scan the field" alternative). No headers,
@@ -1627,9 +1646,9 @@ function authScoutIdleFieldHTML(){
     ? '<button type="button" class="btn pri scoutgo" data-auth-workbench-analyze'+(ready?'':' disabled')+'>Analyze '+deskEsc(homeIdea.symbol)+' →</button>'
     : loading
       ? '<button type="button" class="btn pri scoutgo" disabled>Scanning…</button>'
-      : '<button type="button" class="btn pri scoutgo" data-auth-opportunity-scan>Scan →</button>';
+      : '<button type="button" class="btn pri scoutgo" data-auth-opportunity-scan'+(declared?'':' disabled')+'>Scan →</button>';
   var alt=staged&&!loading?'<button type="button" class="btn xs scoutalt" data-auth-opportunity-scan>Scan the field</button>':'';
-  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(homeIdea.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div><div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
+  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(homeIdea.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div>'+needs+'<div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
 }
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?authScoutIdleFieldHTML()+'<div class="scoutresults">'+body+'</div>':body)+'</div>';
@@ -1717,7 +1736,7 @@ function authRunOpportunityScan(){
   if(HOME_OPPORTUNITY.phase==='loading'||!window.DeskBackend||!window.DeskBackend.scoutOpportunities)return;
   var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=/^7\b/.test(homeIdea.horizon)?'week':'month';
   HOME_OPPORTUNITY={phase:'loading',data:null,error:null,progress:{phase:'STARTING',completed:0,total:(explicit||described.scout&&described.scout.symbols||[]).length||1,message:'Preparing the governed universe.'},partial:[]};authRenderOpportunityFrame();
-  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:[horizon],maxPicks:5,riskMode:String(homeIdea.riskMode||'Balanced').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:String(homeIdea.view||'Neutral').toLowerCase()},function(progress){
+  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:[horizon],maxPicks:5,riskMode:String(homeIdea.riskMode||'').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:String(homeIdea.view||'Neutral').toLowerCase()},function(progress){
     if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY.progress=progress||HOME_OPPORTUNITY.progress;
     if(progress&&progress.pick){var pick=progress.pick,key=String(pick.symbol||'')+'|'+String(pick.intent||''),found=-1;for(var i=0;i<HOME_OPPORTUNITY.partial.length;i++){var row=HOME_OPPORTUNITY.partial[i];if(String(row.symbol||'')+'|'+String(row.intent||'')===key){found=i;break;}}if(found>=0)HOME_OPPORTUNITY.partial[found]=pick;else HOME_OPPORTUNITY.partial.push(pick);}
     authScheduleOpportunityPaint();
@@ -1834,7 +1853,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
       var ch=quote.pct==null?'—':(quote.pct>=0?'+':'')+quote.pct.toFixed(2)+'%',chcls=quote.pct==null?'':quote.pct>=0?'pos':'neg',historyRead=authHomeHistoryRead(active),historyChange=historyRead.change==null?'—':(historyRead.change>=0?'+':'')+historyRead.change.toFixed(1)+'%';
       /* one hero line carries the facts inline — the chart is this panel's body and gets the height */
       heroHTML='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(active.symbol)+'</span><span class="amh-change '+chcls+'">'+deskEsc(ch)+' vs close</span>'+
-        '<span class="amh-facts"><span>IV <b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></span><span>'+(historyRead.windowSessions>=60?'3M':historyRead.windowSessions+' sessions')+' <b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></span><span>'+deskEsc(quote.basis)+'</span></span>'+
+        '<span class="amh-facts"><span>IV <b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></span><span>'+(historyRead.windowSessions==null?'trend window unavailable':historyRead.windowSessions>=60?'3M':historyRead.windowSessions+' sessions')+' <b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></span><span>'+deskEsc(quote.basis)+'</span></span>'+
         '<b class="amh-price">'+deskEsc(authHomePrice(quote.price))+'</b></div>';
     } else {
       heroHTML='<div class="backendnotice authslotnotice"><b>Live quote unavailable</b> for '+deskEsc(active.symbol)+(quoteReason?' · '+deskEsc(quoteReason):'')+'.'+(phase==='loading'?' Still loading…':'')+' <button type="button" class="btn xs" data-auth-market-symbol="'+deskEsc(active.symbol)+'">Retry</button></div>';

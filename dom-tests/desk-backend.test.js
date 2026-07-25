@@ -2116,6 +2116,22 @@ async function installBackend(page, options = {}) {
   };
 }
 
+/* The workbench ships NO silent defaults (program §3.5): goal, view, horizon and risk posture all
+   start unchosen and Scan/Analyze stay withheld until the user declares them. Tests that want to
+   reach analysis must therefore declare, exactly as a user would. */
+async function declareWorkbench(page, opts = {}) {
+  const goal = opts.goal || 'INCOME';
+  const view = opts.view || 'Neutral';
+  const horizon = opts.horizon || '45 days';
+  const risk = opts.risk || 'Balanced';
+  await page.locator(`[data-auth-scout-goal="${goal}"]`).click();
+  await page.locator(`[data-auth-workbench-view="${view}"]`).click();
+  await page.locator(`[data-auth-workbench-horizon="${horizon}"]`).click();
+  await page.locator(`[data-auth-workbench-risk="${risk}"]`).click();
+  await page.waitForFunction(() => window.HOME_SCOUT?.goal && window.homeIdea?.view
+    && window.homeIdea?.horizon && window.homeIdea?.riskMode);
+}
+
 async function startNewIdea(page, symbol = 'AMD') {
   await page.locator('#threadNewIdea').click();
   await page.waitForSelector('[data-auth-workbench-query]');
@@ -2123,6 +2139,7 @@ async function startNewIdea(page, symbol = 'AMD') {
   await page.locator('[data-auth-workbench-query]').press('Enter');
   await page.waitForFunction(expected => window.homeIdea?.symbol === expected
     && window.decide == null, symbol);
+  await declareWorkbench(page);
   await page.locator('[data-auth-workbench-analyze]').click();
 }
 
@@ -2217,6 +2234,7 @@ test('global New idea keeps the underlying absent until the user chooses it', as
 
     await page.locator('[data-auth-workbench-query]').fill('AMD');
     await page.locator('[data-auth-workbench-query]').press('Enter');
+    await declareWorkbench(page);
     const staged = await page.evaluate(() => ({
       draftSymbol: window.homeIdea?.symbol,
       liveDecide: window.decide,
@@ -2263,7 +2281,7 @@ test('Acquire requires an explicit stock-entry price and share quantity before a
     await waitForDeskBoot(page);
     await page.locator('#threadNewIdea').click();
     await page.waitForSelector('[data-auth-workbench-query]');
-    await page.locator('[data-auth-scout-goal="ACQUIRE"]').click();
+    await declareWorkbench(page, { goal: 'ACQUIRE' });
     await page.locator('[data-auth-workbench-query]').fill('AMD');
     await page.locator('[data-auth-workbench-query]').press('Enter');
 
@@ -3864,6 +3882,7 @@ test('global New idea from Position starts blank, then preserves the focused Pos
     assert.equal(backend.count('POST', '/api/plans'), 0);
     await page.locator('[data-auth-workbench-query]').fill('AAPL');
     await page.locator('[data-auth-workbench-query]').press('Enter');
+    await declareWorkbench(page);
     await page.locator('[data-auth-workbench-analyze]').click();
     await page.waitForFunction(planId => window.decide?.backendPhase === 'error'
       || (window.decide?.backendPhase === 'ready'
@@ -7742,6 +7761,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       'sector search and the persistent Market lens chips are one state');
     await page.locator('.homesectorchips button[data-auth-scout-sector=""]').click();
     await page.waitForFunction(() => window.HOME_SCOUT?.sector == null);
+    await declareWorkbench(page);
     await page.locator('[data-auth-opportunity-scan]').click();
     await page.waitForSelector('.opportunityrow');
     const result = await page.evaluate(() => window.HOME_OPPORTUNITY.data);
@@ -7887,6 +7907,7 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
         });
       };
     }, finalScout);
+    await declareWorkbench(page);
     await page.locator('#authHomeOpportunity [data-auth-opportunity-scan]').click();
     await page.waitForSelector('#authHomeOpportunity .opportunityrows.provisional .opportunityrow');
     const progressive = await page.evaluate(() => {
