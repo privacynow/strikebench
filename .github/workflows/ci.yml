@@ -141,9 +141,11 @@ jobs:
             dom-tests/shots
           retention-days: 14
 
-  # Lane (c): the §16.4 viewport matrix and overflow/bounding-box assertions. Scaffolded only —
-  # no dom-tests/*.visual.test.js exists yet, and the lane reports NOT IMPLEMENTED in the job
-  # summary rather than a green count, because zero tests is not evidence of a clean layout.
+  # Lane (c): the §16.4 viewport matrix. Ten viewports (including 2000x963, where a height-only
+  # media rule used to delete facts) times the §16.3 content states, asserting no sideways page
+  # scroll, no clipped box, no text drawn over text, no fact a taller window shows and a shorter
+  # one hides, and a real hit target under every offered action. The lane still reports NOT
+  # IMPLEMENTED if its test file ever disappears — zero tests is not evidence of a clean layout.
   browser-visual:
     runs-on: ubuntu-latest
     timeout-minutes: 20

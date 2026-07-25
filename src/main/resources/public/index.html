@@ -1636,7 +1636,16 @@ function histWidgetInnerHTML(hostKey,sym){
   var segView='<span class="histseg" role="group" aria-label="Chart style">'+[['candles','Candles'],['line','Line']].map(function(o){return '<button type="button" data-hist-view="'+o[0]+'" class="'+(view===o[0]?'on':'')+'">'+o[1]+'</button>';}).join('')+'</span>';
   var segScale='<span class="histseg" role="group" aria-label="Scale">'+[['$','$'],['%','%']].map(function(o){return '<button type="button" data-hist-scale="'+o[0]+'" class="'+(MKT_CHART.scale===o[0]?'on':'')+'" title="'+(o[0]==='%'?'Equal vertical distance = equal percentage move':'Dollar scale')+'">'+o[1]+'</button>';}).join('')+'</span>';
   var chips=[['vol','Vol','Traded volume'],['ma','MA','20 and 50-session averages'],['band','±1σ','20-session realized volatility as a one-month ±1σ envelope'],['cone','Exp ±1σ','Implied 1σ expected move to the focused expiry — the backend expected-move receipt (p16–p84)']].map(function(o){return '<button type="button" class="histchip'+(MKT_CHART.ov[o[0]]?' on':'')+'" data-hist-chip="'+o[0]+'" title="'+deskEsc(o[2])+'">'+o[1]+'</button>';}).join('');
-  var unavailable=slot.phase==='error'?'<div class="backendnotice histunavailable"><b>Price history unavailable.</b><span>'+deskEsc(slot.error||'Stored daily history is unavailable.')+'</span><a href="/#/data/sources">Review sources &amp; fetch bars →</a></div>':'';
+  /* The action here used to be a link to /#/data/sources — a route from the SPA that 8654824
+     deleted, so it reloaded the desk onto a meaningless hash. It is a real action now: refreshing
+     this symbol's market data is something the desk can actually do and report. Stored DAILY bars
+     come from a separate administrator-run sync, and the notice says so rather than implying this
+     button will conjure them. */
+  var unavailable=slot.phase==='error'?'<div class="backendnotice histunavailable"><b>Price history unavailable.</b>'+
+    '<span>'+deskEsc(slot.error||'Stored daily history is unavailable.')+'</span>'+
+    '<button type="button" class="btn xs" data-hist-refresh="'+deskEsc(sym)+'">Refresh '+deskEsc(sym)+' market data →</button>'+
+    '<span class="hint">Stored daily bars are filled by a scheduled data sync; this refreshes what this desk can fetch now.</span>'+
+    '</div>':'';
   return '<div class="histctl">'+pills+'<span class="histspacer"></span>'+segView+segScale+chips+'</div>'+
     '<svg class="histchart" data-hist-svg aria-label="'+deskEsc(sym)+' stored price history"></svg>'+
     '<svg class="histstrip" data-hist-strip aria-label="Full stored range — drag to move the window"></svg>'+
@@ -1784,7 +1793,26 @@ document.addEventListener('click',function(e){
   if(scaleBtn){MKT_CHART.scale=scaleBtn.getAttribute('data-hist-scale');redrawMarketCharts();return;}
   var chip=e.target.closest&&e.target.closest('[data-hist-chip]');
   if(chip){var key=chip.getAttribute('data-hist-chip');MKT_CHART.ov[key]=!MKT_CHART.ov[key];redrawMarketCharts();return;}
+  var refresh=e.target.closest&&e.target.closest('[data-hist-refresh]');
+  if(refresh&&!refresh.disabled){refreshMarketData(refresh.getAttribute('data-hist-refresh'),refresh);return;}
 });
+/* One real refresh: the desk asks the server to fetch this symbol now, and reports what came back.
+   It never claims to have filled the stored daily history — that is a scheduled sync. */
+function refreshMarketData(symbol,button){
+  symbol=String(symbol||'').trim().toUpperCase();
+  if(!symbol||!window.API)return;
+  button.disabled=true;var label=button.textContent;button.textContent='Refreshing '+symbol+'…';
+  window.API.post('/api/data/jobs',{kind:'refresh_now',params:{symbols:[symbol]}})
+    .then(function(job){
+      toast(symbol+' refresh '+String(job&&job.status||'started').toLowerCase()+'.');
+      if(window.DeskBackend&&window.DeskBackend.symbolHistory)
+        return window.DeskBackend.symbolHistory(symbol).catch(function(){});
+    })
+    .catch(function(error){
+      toast('That refresh was refused: '+(error&&error.message||'the request failed')+'.');
+    })
+    .then(function(){button.disabled=false;button.textContent=label;});
+}
 document.addEventListener('dblclick',function(e){
   var surf=e.target.closest&&e.target.closest('[data-hist-svg],[data-hist-strip]');
   if(!surf||!MKT_CHART.win)return;

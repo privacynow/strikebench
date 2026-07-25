@@ -485,7 +485,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 /* MARKET STRIP — the folded pulse, now living INLINE in the merged top row's middle zone (was a
    whole second .pulse row). Mode shows ONCE here: the .mktsrc source tag flips teal→violet and
    .mktstrip.sim tints every value violet — the #mktMode segment stays the control, never echoed. */
-.mktstrip{display:flex;align-items:center;gap:13px;flex:1;min-width:0;overflow:hidden;white-space:nowrap;
+.mktstrip{display:flex;align-items:center;gap:13px;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap;
   -webkit-mask-image:linear-gradient(90deg,#000 92%,transparent);mask-image:linear-gradient(90deg,#000 92%,transparent)}
 .mktstrip .mktsrc{font-size:var(--f-2xs);font-family:var(--mono);color:var(--accent);letter-spacing:.03em;flex:none}
 .mktstrip.sim .mktsrc{color:var(--violet)}
@@ -587,7 +587,9 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 }
 
 /* board = the zoom stage */
-.board{flex:1;min-height:0;display:flex;gap:14px;padding:14px;overflow:hidden}
+/* The board is the desk's one scrolling surface. It used to hide its overflow, which is how a
+   composition slightly taller than the window lost its last row instead of scrolling to it. */
+.board{flex:1;min-height:0;display:flex;gap:14px;padding:14px;overflow:hidden auto}
 
 /* --- BOOK view: one 12-column desktop cockpit. At 2560 every primary context is co-visible:
    risk map + chain + positions above; governor + market + sector/research + news below. --- */
@@ -595,13 +597,20 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   grid-template-columns:repeat(auto-fill,minmax(290px,1fr));grid-auto-rows:min-content;
   gap:12px;align-content:start;overflow:auto}
 .lv-book .board{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));
-  grid-template-rows:minmax(475px,.9fr) minmax(0,1.1fr);
+  /* `auto` maximum, not a fixed fraction: a band whose content needs more height takes it and the
+     board scrolls. A fixed-height grid with overflow:hidden is what silently cut the market chart,
+     the fan and the Scout results at every window shorter than the design height. */
+  grid-template-rows:minmax(475px,auto) minmax(0,auto);
   grid-template-areas:
     "roster roster map map map map map chain chain chain chain chain"
     "bookrisk bookrisk bookrisk univ univ univ sector sector sector news news news";
-  gap:11px;overflow:hidden}
+  gap:11px;overflow:hidden auto}
 .lv-book .book{grid-area:roster;grid-template-columns:1fr;
-  grid-template-rows:auto repeat(var(--home-position-count,6),minmax(42px,1fr));grid-auto-rows:minmax(42px,1fr);
+  /* min-content, not a fixed floor: a row is never shorter than the card inside it, and still
+     stretches to share spare height when the book is small. Dividing the roster into N equal
+     rows is what crushed twelve cards to 40px around 73px of content and then cut them. */
+  grid-template-rows:auto repeat(var(--home-position-count,6),minmax(min-content,1fr));
+  grid-auto-rows:minmax(min-content,1fr);
   overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:none;position:relative}
 .lv-book .book>.rosterhd{position:sticky;top:0;z-index:3;background:var(--panel);padding-block:2px}
 .bookoverflowmeta{margin-left:auto;min-width:112px;max-width:150px}.bookoverflowmeta .overflowhair{min-width:58px}
@@ -617,7 +626,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    page movement. Home is a glanceable desk here, so the chain shows its nine nearest strikes; the
    complete chain remains one scope change away. */
 @media (max-height:1199px) and (min-width:1701px){
-  .lv-book .board{grid-template-rows:minmax(350px,.72fr) minmax(0,1.28fr);overflow:hidden}
+  .lv-book .board{grid-template-rows:minmax(350px,auto) minmax(0,auto);overflow:hidden auto}
 }
 @media (max-width:1700px){
   .lv-book .board{grid-template-columns:1fr 1fr;grid-template-rows:minmax(400px,auto) minmax(450px,auto) minmax(545px,auto) minmax(400px,auto);
@@ -639,14 +648,14 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   .homesummary .bookline .sneed{padding:2px 3px}.homesummary .bookline .sneed .badge{font-size:10px;padding:2px 5px}
   .homesummary .posture{gap:2px;padding-left:5px}.homesummary .pchip{padding:2px 4px;font-size:10px}
   .lv-book #riskMain .lenshd{gap:5px}.lv-book #riskMain .lenshd .eyebrow{white-space:nowrap;font-size:12px}.lv-book #riskMain .rkleg{gap:4px;font-size:9px}
-  .lv-book .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(290px,1.08fr) minmax(220px,.92fr);
+  .lv-book .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(290px,auto) minmax(220px,auto);
     grid-template-areas:
       "roster roster roster map map map map chain chain chain chain chain"
       "bookrisk bookrisk bookrisk univ univ univ sector sector sector news news news";
-    gap:9px;overflow:hidden}
+    gap:9px;overflow:hidden auto}
   .lv-book #riskMain>.rkpanel,.lv-book #bookrisk>.rkpanel,.lv-book #chainBand>.rkpanel,
   .lv-book #univBand>.rkpanel,.lv-book #sectorBand>.rkpanel,.lv-book #newsBand>.rkpanel{padding:9px 10px}
-  .lv-book .book{gap:2px;grid-template-rows:auto repeat(var(--home-position-count,6),minmax(40px,1fr));grid-auto-rows:minmax(40px,1fr)}
+  .lv-book .book{gap:2px;grid-template-rows:auto repeat(var(--home-position-count,6),minmax(min-content,1fr));grid-auto-rows:minmax(min-content,1fr)}
   .lv-book .book .card{padding:2px 7px}.lv-book .book .card>.cface{grid-template-rows:auto 20px}
   .lv-book .book .cpeek{height:20px}
   #riskMain .homemap{min-height:clamp(150px,23vh,230px);margin:4px 0 3px}
@@ -1336,7 +1345,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   color:var(--dim);font-family:var(--mono);font-size:var(--f-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .backendstate i{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
 .backendstate.err{color:var(--loss);border-color:rgba(255,105,120,.35)}.backendstate.err i{background:var(--loss);box-shadow:0 0 0 3px var(--loss-wash)}
-.backendnotice{padding:7px 9px;border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:7px;background:var(--panel-2);font-size:var(--f-xs);color:var(--dim);line-height:1.45}
+.backendnotice{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:7px 9px;border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:7px;background:var(--panel-2);font-size:var(--f-xs);color:var(--dim);line-height:1.45}
 .backendnotice.err{border-left-color:var(--loss);color:var(--text)}
 .dcleft>.backendnotice,.evsimstage>.backendnotice{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
 .conditionedpatherror{height:100%;min-height:0;display:flex;align-items:center}.conditionedpatherror .backendnotice{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:12px}.conditionedpatherror .backendnotice b{color:var(--loss)}.conditionedpatherror .backendnotice .btn{margin-top:2px}
@@ -1365,7 +1374,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .bookauthority>.authpending,.bookauthority>.authempty{width:100%;height:100%}
 .bookauthority>.authfailed{margin:auto}
 .bookauthority .emptycard.hero .emptyactions{margin-top:22px}
-.authbookpanel{height:100%;min-height:0;display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel);overflow:hidden}
+.authbookpanel{height:100%;min-height:min-content;display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel)}
 .authmetricgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
 .authmetric{min-width:0;padding:9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);display:flex;flex-direction:column;gap:2px}
 .authmetric span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.06em}.authmetric b{color:var(--text);font-family:var(--mono);font-size:var(--f-sm);overflow-wrap:anywhere}.authmetric b.pos{color:var(--profit)}.authmetric b.neg{color:var(--loss)}
@@ -1404,7 +1413,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authmarketgo{min-width:64px;padding:5px 7px;border:0;border-left:1px solid var(--line-soft);background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;cursor:pointer;white-space:nowrap}.authmarketgo:hover{background:var(--accent);color:var(--bg)}
 .authhomenews{display:flex;flex-direction:column;gap:5px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}.authhomenews>[data-scroll-row]{flex:none;scroll-snap-align:start}.authhomenews a{display:block;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-xs);line-height:1.35;text-decoration:none}.authhomenews a:hover,.authhomenews a:focus-visible{border-color:var(--accent-2);color:var(--text);outline:none}.authhomenews small{display:block;margin-top:3px;color:var(--faint);font-size:var(--f-2xs)}
 .newsoverflowmeta{margin-left:auto;min-width:92px;max-width:132px}.newsoverflowmeta .overflowhair{min-width:45px}
-.authmarketpulse{gap:7px}.authmarketfacts.compact{grid-template-columns:repeat(4,minmax(0,1fr))}.authmarketfacts.compact .authmarketfact{padding:4px 6px}.authhomehistory{min-height:120px;flex:1;display:flex;flex-direction:column;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(180deg,var(--panel-2),transparent);padding:5px 6px 3px}.authhomehistory svg{width:100%;height:100%;min-height:104px;display:block}.authhomehistory svg text{font-family:var(--mono);font-size:9px;fill:var(--faint)}.authhomehistorymeta{display:flex;justify-content:space-between;gap:8px;color:var(--faint);font-family:var(--mono);font-size:var(--f-2xs)}
+.authmarketpulse{gap:7px}.authmarketfacts.compact{grid-template-columns:repeat(4,minmax(0,1fr))}.authmarketfacts.compact .authmarketfact{padding:4px 6px}.authhomehistory{min-height:min-content;flex:1;display:flex;flex-direction:column;overflow:visible;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(180deg,var(--panel-2),transparent);padding:5px 6px 3px}.authhomehistory svg{width:100%;height:100%;min-height:104px;display:block}.authhomehistory svg text{font-family:var(--mono);font-size:9px;fill:var(--faint)}.authhomehistorymeta{display:flex;justify-content:space-between;gap:8px;color:var(--faint);font-family:var(--mono);font-size:var(--f-2xs)}
 .opportunitylens{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft);min-width:0;width:100%;max-width:100%;min-height:0;overflow:hidden;display:flex;flex-direction:column}.opportunityprompt{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(100deg,var(--accent-wash),transparent)}.opportunityprompt span{flex:1;min-width:0;color:var(--dim);font-size:var(--f-xs);line-height:1.35}.opportunityrows{display:grid;gap:5px;margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:thin;scrollbar-color:transparent transparent}.opportunityrows:hover,.opportunityrows:focus-within{scrollbar-color:var(--line) transparent}.opportunityrow{display:grid;grid-template-columns:42px minmax(0,1fr) auto auto;align-items:center;gap:7px;width:100%;padding:5px 6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--dim);font:inherit;text-align:left;scroll-snap-align:start;cursor:pointer}.opportunityrow:hover,.opportunityrow:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}.opportunityrow>strong{font-family:var(--mono);color:var(--text)}.opportunityrow>span{min-width:0}.opportunityrow b,.opportunityrow small{display:block;overflow:hidden;text-overflow:ellipsis}.opportunityrow b{color:var(--text);font-size:var(--f-xs);line-height:1.25;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}.opportunityrow small{margin-top:2px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}.opportunityrow em{font-family:var(--mono);font-style:normal;color:var(--profit);font-size:var(--f-xs);white-space:nowrap}
 .opportunityrow em{color:var(--dim)}.opportunityrow em.pos{color:var(--profit)}.opportunityrow em.neg{color:var(--loss)}
 .opportunitygo{min-height:28px;padding:4px 7px;border:1px solid var(--accent-2);border-radius:5px;background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;white-space:nowrap;display:grid;place-items:center}.opportunityrow:hover .opportunitygo,.opportunityrow:focus-visible .opportunitygo{background:var(--accent);color:var(--bg)}
@@ -2755,7 +2764,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .homenews .mt{margin-top:1px}
 }
 @media (max-height:1100px) and (min-width:1701px){
-  .lv-book .board{grid-template-rows:minmax(303px,.68fr) minmax(0,1.32fr)}
+  .lv-book .board{grid-template-rows:minmax(303px,auto) minmax(0,auto);overflow:hidden auto}
   .lv-book .book{gap:1px}
   .lv-book .book .card{padding:1px 8px}
   .lv-book .book .card>.cface{grid-template-rows:auto 20px}
@@ -2914,7 +2923,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book[data-book-authority="empty"] .board{grid-template-rows:auto;grid-template-areas:"map" "chain" "univ" "sector" "news"}
   .lv-book .book,.lv-book #riskMain,.lv-book #bookrisk,.lv-book #chainBand,.lv-book #univBand,.lv-book #sectorBand,.lv-book #newsBand{min-height:210px;overflow:visible}
   .lv-book[data-book-authority="empty"] #riskMain{min-height:650px}.emptyopportunityintro{grid-template-columns:1fr;align-items:start}.emptyopportunityintro span{white-space:normal}.opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}.scoutidlefield{grid-template-columns:1fr}.scoutlaunch{grid-template-columns:1fr}.scoutlaunch .scoutprimary{width:100%}
-  .lv-book .book{grid-template-rows:auto;grid-auto-rows:minmax(54px,auto)}
+  /* min-content as the row BASE, not a pixel floor: min-content accounts for the wrapping that
+     actually happens at this width, where max-content assumes one long line and sizes the row to
+     35px around an 84px card. A pixel floor cannot know how a strategy name wraps on a phone. */
+  .lv-book .book{grid-template-rows:auto;grid-auto-rows:minmax(min-content,auto)}
   .lv-book[data-position-count="1"] .book{min-height:320px;grid-template-rows:auto auto auto;grid-auto-rows:auto}
   .lv-book[data-position-count="1"] #riskMain{min-height:360px}
   .lv-book #chainBand{min-height:480px}
@@ -2944,6 +2956,26 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .focus .card .posinspectwell{width:100%;min-height:260px;overflow:visible}
   .focus .card .pospane.on,.focus .card .posinspectwell>.pospane>.lens{height:auto;min-height:260px}
 }
+/* ============================================================
+   TOUCH FLOOR — a phone is touched, not clicked.
+
+   Controls sized for a mouse (16-20px tall pills, an 18px brand mark, a 17px command field) are a
+   coin toss under a fingertip: the press lands on the row behind, or on the neighbouring pill. On
+   a touch-primary screen every offered action gets a real target. Nothing is hidden, moved or
+   restyled — only the hit area grows, so the composition is the same one the desk shows.
+   ============================================================ */
+@media (max-width:900px) and (pointer:coarse), (max-width:500px){
+  .histpill,.histchip,.histseg button{min-height:26px;min-width:30px;padding-inline:9px}
+  .histseg button{min-width:34px}
+  .brandmk{width:28px;height:28px}
+  .mmseg button{min-height:28px}
+  .cmd input,#cmd{min-height:30px}
+  .bookfanrow{min-height:30px;align-content:center}
+  .ibrkopt{min-height:28px}
+  .opportunityrow{min-height:34px}
+  .crumb{min-height:26px}
+}
+
 /* Decide changes composition on narrow screens. The overlay itself becomes the one bounded
    reading surface; its columns do not acquire nested scrollbars, and each leg becomes a full-
    width row. This is a structural mobile layout, not the desktop grid scaled down. */
@@ -3142,7 +3174,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    the legend and the POP × loss facet ride beside it, every column clipped to the row height. */
 .bookfuturespanel{gap:6px}
 .bookfanwrap{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,200px) minmax(150px,196px);gap:9px;align-items:stretch}
-.bookfanstage{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:0;overflow:hidden}
+.bookfanstage{display:flex;flex-direction:column;gap:4px;min-width:0;min-height:min-content;overflow:visible}
 .bookfan{width:100%;flex:1;min-height:0;height:auto;display:block;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2)}
 .bookfanstage .mcpathread{flex:none}
 .bookfanactions{display:flex;align-items:center;gap:6px;flex:none}.bookfanactions .bookfanprimary{margin-left:auto;color:var(--accent);border-color:var(--accent-2);background:var(--accent-wash)}.bookfanactions span{min-width:0;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3166,7 +3198,13 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .bookfanrow i{grid-area:dot;width:9px;height:9px;border-radius:50%;flex:none}
 .bookfanrow b{grid-area:sym;color:var(--text);font-size:var(--f-xs);line-height:1.1}
 .bookfanrow span{grid-area:struct;font-size:var(--f-2xs);color:var(--faint);line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bookfanrow em{grid-area:val;justify-self:end;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;line-height:1.15}
+/* The value cell is right-aligned in a track that may shrink below its content. Without a floor of
+   its own it spilled LEFT across the symbol — "BOOK" + "needs more data" rendered as
+   "BOOKeds more data". It clips itself instead. */
+.bookfanrow em{grid-area:val;justify-self:end;min-width:0;max-width:100%;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;font-style:normal;font-family:var(--mono);
+  font-size:var(--f-xs);text-align:right;line-height:1.15}
+.bookfanrow em>*{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .bookfanrow em b{font-size:var(--f-xs)} .bookfanrow em .pos{color:var(--profit)} .bookfanrow em .neg{color:var(--loss)}
 .bookfanrow em small{display:block;color:var(--faint);font-size:var(--f-2xs)} .bookfanrow em small.warn{color:var(--caution)}
 .bookfanrow.booktotal{border-color:var(--line);background:color-mix(in srgb,var(--panel-2) 82%,var(--text) 3%);cursor:default}
@@ -3269,12 +3307,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    grows, the board already scrolls) below the wide layout. Columns are hard-contained — they can
    NEVER paint over the footer, and the chart flexes to whatever height the cell provides. */
 .authmarketpulse .pulsecols{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-height:0}
-.authmarketpulse .pulsecols>*{min-height:0;min-width:0;overflow:hidden;display:flex;flex-direction:column}
+.authmarketpulse .pulsecols>*{min-height:min-content;min-width:0;display:flex;flex-direction:column}
 .authmarketpulse .amh-facts{margin-left:auto;display:inline-flex;gap:11px;align-items:baseline;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
 .authmarketpulse .amh-facts b{color:var(--dim);font-family:var(--mono)}
 .authmarketpulse .amh-facts .pos{color:var(--profit)} .authmarketpulse .amh-facts .neg{color:var(--loss)}
 @media (min-width:1001px){
-  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(236px,272px);grid-template-rows:minmax(0,1fr);align-items:stretch;flex:1;overflow:hidden}
+  .authmarketpulse .pulsecols{grid-template-columns:minmax(0,1fr) minmax(236px,272px);grid-template-rows:minmax(min-content,1fr);align-items:stretch;flex:1}
   /* floors: Safari's wider font metrics must never flex-crush the chart or the chain */
   .authmarketpulse .authchainslice{min-height:150px}
   .authmarketpulse .authmarkethero{display:flex;align-items:baseline;gap:10px;flex:none}
@@ -3540,11 +3578,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book .board,
   .lv-book[data-position-count="1"] .board,
   .lv-book[data-position-count="1"][data-plan-count="0"] .board,
-  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(380px,1.08fr) minmax(360px,0.92fr);
+  .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(380px,auto) minmax(360px,auto);
     grid-template-areas:
       "chain chain chain chain chain chain chain chain sector sector news news"
       "map map map map map bookrisk bookrisk bookrisk roster roster univ univ";
-    gap:10px;overflow:hidden}
+    gap:10px;overflow:hidden auto}
   .lv-book[data-book-authority="empty"] .board,
   .lv-book[data-book-authority="empty"][data-position-count="1"] .board,
   .lv-book[data-book-authority="empty"][data-plan-count="0"] .board,
@@ -3608,7 +3646,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .lv-book[data-position-count="1"] #bookrisk{display:flex}
 .compactbookfutures .bookfanwrap,.compactbookfutures .bookfanwrap.singleposition{grid-template-columns:minmax(0,1fr)}
 .compactbookfutures .bookfanlegend{flex-direction:row;flex-wrap:wrap}
-.compactbookfutures .bookfanrow{flex:1 1 150px}
+.compactbookfutures .bookfanrow{flex:1 1 190px}
 .compactbookfutures .bookonefacts{flex:1 1 100%;grid-template-columns:repeat(4,minmax(0,1fr))}
 .compactbookfutures .bookmapfacet{display:none}
 .compactbookfutures .bookfan{min-height:105px}

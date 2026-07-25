@@ -3782,7 +3782,9 @@ test('missing observed history leaves Position Bloom usable with its structural 
         legs: host.querySelectorAll('.legr').length,
         failed: host.querySelectorAll('.authfailed').length,
         loading: /Loading the exact position/i.test(host.textContent),
-        sourceAction: host.querySelector('a[href="/#/data/sources"]')?.textContent.trim(),
+        sourceAction: host.querySelector('[data-hist-refresh]')?.textContent.trim(),
+        sourceActionSymbol: host.querySelector('[data-hist-refresh]')?.getAttribute('data-hist-refresh'),
+        deadLinks: host.querySelectorAll('a[href^="/#/"]').length,
         text: host.textContent.replace(/\s+/g, ' ').trim()
       };
     }, BOOK_TRADE_ID);
@@ -3795,7 +3797,13 @@ test('missing observed history leaves Position Bloom usable with its structural 
     assert.equal(rendered.legs, 2, 'the exact package legs remain visible without observed history');
     assert.equal(rendered.failed, 0);
     assert.equal(rendered.loading, false, 'missing history cannot strand the Bloom in a skeleton');
-    assert.equal(rendered.sourceAction, 'Review sources & fetch bars →');
+    // The action offered beside a missing chart must be one the desk can actually perform. It was
+    // a link to /#/data/sources — a route the deleted SPA owned — so pressing it reloaded the desk
+    // onto a hash nothing handles.
+    assert.equal(rendered.deadLinks, 0, 'no control points at a route this build does not serve');
+    assert.equal(rendered.sourceAction, 'Refresh AAPL market data →');
+    assert.equal(rendered.sourceActionSymbol, 'AAPL',
+      'and it names the symbol whose data it will refresh');
     assert.match(rendered.text, /Price history unavailable/i);
     assert.match(rendered.missing.find(row => row.key === 'history')?.message || '',
       /daily history is not stored/i);
