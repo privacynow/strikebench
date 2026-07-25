@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class PositionLifecycleReceiptTest {
 
@@ -62,8 +63,9 @@ class PositionLifecycleReceiptTest {
                 new PositionLifecycleReceipt.AssignmentLeg(OptionType.PUT, LocalDate.parse("2031-08-07"),
                         18_000, 100, 1_800_000, 17_952L, "BUY_SHARES",
                         "Strike less the current fresh-eyes executable credit.")));
-        var close = new PositionLifecycleReceipt.CloseQuote(true, -4_400L, -4_700L, -4_700L,
-                65L, -4_765L, PositionDomain.PriceAuthority.OBSERVED,
+        var close = new PositionLifecycleReceipt.CloseQuote(true,
+                TestPrices.closing(1, -4_700L, -4_700L, 65L), -4_400L,
+                PositionDomain.PriceAuthority.OBSERVED,
                 "Long legs sell at bid; short legs buy at ask.", null);
         var receipt = new PositionLifecycleReceipt(
                 PositionLifecycleReceipt.SCHEMA_VERSION, "NVDA", "position-fingerprint",
@@ -78,7 +80,7 @@ class PositionLifecycleReceiptTest {
                         180_000L, "Existing probability-map CVaR95 receipt.",
                         PositionLifecycleReceipt.STANCE_REF,
                         "One current choice; history does not vote.", limitations),
-                new PositionLifecycleReceipt.CarryCollateral(4_700L, 5.96, 16,
+                new PositionLifecycleReceipt.CarryCollateral(4_700L, 5.96, 16, 11,
                         new AuthorityFacts.MoneyFact(1_800_000L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "Cash-secured strike obligation."),
                         AuthorityFacts.RateFact.unavailable(
@@ -114,10 +116,19 @@ class PositionLifecycleReceiptTest {
                 PositionDomain.FactAuthority.UNAVAILABLE, "Unknown."))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unavailable money fact");
-        assertThatThrownBy(() -> new PositionLifecycleReceipt.CloseQuote(true, null,
-                -4_700L, -4_700L, 65L, -4_700L, PositionDomain.PriceAuthority.OBSERVED,
-                "Executable book.", null))
+        // The reconciliation now lives on the shared §7.2 receipt, so it guards every surface.
+        assertThatThrownBy(() -> new io.liftandshift.strikebench.paper.PackagePriceReceipt(1,
+                -4_700L, 0L, -4_700L, 65L, -4_700L, null, null,
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE,
+                "book", "REALTIME", 1L, "fp",
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.CLOSING, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("reconcile");
+        // …and an executable close with no price at all is still refused here.
+        assertThatThrownBy(() -> new PositionLifecycleReceipt.CloseQuote(true, null, -4_400L,
+                PositionDomain.PriceAuthority.OBSERVED, "Executable book.", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("authority");
     }
 }

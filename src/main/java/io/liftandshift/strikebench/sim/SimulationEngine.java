@@ -144,6 +144,17 @@ public final class SimulationEngine {
                                      int expirationCalendarDays, double p16, double p50, double p84,
                                      String basis) {
         /**
+         * The same range stated as a move from an anchor price. Surfaces label the band "σ+ $X
+         * (+Y%)"; deriving Y in the browser made the percentage a second, unowned statement of
+         * the same fact. Null when the anchor cannot support a ratio.
+         */
+        public Double upMovePct(Double anchorSpot) { return movePct(anchorSpot, p84); }
+        public Double downMovePct(Double anchorSpot) { return movePct(anchorSpot, p16); }
+        private static Double movePct(Double anchor, double level) {
+            if (anchor == null || !(anchor > 0)) return null;
+            return round2((level - anchor) / anchor * 100.0);
+        }
+        /**
          * THE risk-neutral 1σ expected-move range from ATM IV, session-clocked through the one
          * {@link io.liftandshift.strikebench.pricing.LognormalTerminal}. Returns null when IV/spot
          * are invalid (callers hide the cone rather than fabricate one). Shared by the ensemble

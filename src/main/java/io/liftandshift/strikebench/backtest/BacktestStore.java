@@ -63,9 +63,9 @@ public final class BacktestStore {
         values.put("max_concurrent", intOrNull(request, "maxConcurrent"));
         values.put("short_delta", doubleOrNull(request, "shortDelta"));
         values.put("width_pct", doubleOrNull(request, "widthPct"));
-        values.put("profit_target_pct", doubleOrNull(request, "profitTargetPct"));
-        values.put("stop_fraction", doubleOrNull(request, "stopFraction"));
-        values.put("roll_dte", intOrNull(request, "rollDte"));
+        values.put("take_profit_fraction", doubleOrNull(request, "takeProfitFraction"));
+        values.put("stop_multiple", doubleOrNull(request, "stopMultiple"));
+        values.put("time_rule_sessions", intOrNull(request, "timeRuleSessions"));
         values.put("pricing_mode", requiredText(report, "pricingMode"));
         values.put("confidence", requiredText(report, "confidence"));
         values.put("days_requested", intOrNull(report, "daysRequested"));
@@ -211,7 +211,7 @@ public final class BacktestStore {
     private static String baseSelect() {
         return "SELECT id,created_at::text created_at,run_kind,symbol,strategy,from_date::text from_date,to_date::text to_date," +
                 "target_dte,entry_every_days,qty,slippage_pct,starting_cash_cents,max_concurrent,short_delta,width_pct," +
-                "profit_target_pct,stop_fraction,roll_dte,pricing_mode,confidence,days_requested,days_covered,sample_size," +
+                "take_profit_fraction,stop_multiple,time_rule_sessions,pricing_mode,confidence,days_requested,days_covered,sample_size," +
                 "concurrent_peak,win_rate,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,assignments," +
                 "demo_underlying,disclaimer FROM backtests";
     }
@@ -227,8 +227,8 @@ public final class BacktestStore {
         if ("SINGLE".equals(kind)) put(request, "slippagePct", r.dblOrNull("slippage_pct"));
         else {
             put(request, "maxConcurrent", intOrNull(r, "max_concurrent")); put(request, "shortDelta", r.dblOrNull("short_delta"));
-            put(request, "widthPct", r.dblOrNull("width_pct")); put(request, "profitTargetPct", r.dblOrNull("profit_target_pct"));
-            put(request, "stopFraction", r.dblOrNull("stop_fraction")); put(request, "rollDte", intOrNull(r, "roll_dte"));
+            put(request, "widthPct", r.dblOrNull("width_pct")); put(request, "takeProfitFraction", r.dblOrNull("take_profit_fraction"));
+            put(request, "stopMultiple", r.dblOrNull("stop_multiple")); put(request, "timeRuleSessions", intOrNull(r, "time_rule_sessions"));
         }
         ObjectNode report = Json.obj();
         put(report, "id", r.str("id")); put(report, "symbol", r.str("symbol")); put(report, "strategy", r.str("strategy"));

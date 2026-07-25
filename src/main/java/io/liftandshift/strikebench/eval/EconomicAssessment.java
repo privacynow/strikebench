@@ -269,7 +269,12 @@ public record EconomicAssessment(
         if (loss > 0 && profit > 0) return Math.min(loss, profit);
         if (profit > 0) return profit;
         if (loss > 0) return loss;
-        return Math.max(1, Math.abs(c == null ? 0 : c.entryNetPremiumCents()));
+        // Last resort: the package's own size. This is a DENOMINATOR floor, never a published
+        // payoff — and an unpriced package contributes no size, exactly as a null candidate does.
+        // It can only be reached with an EV lane present, which an unpriced package never has.
+        Long packageNet = c == null || RiskProfiler.unpricedReason(c) != null
+                ? null : c.price().grossPackageNetCents();
+        return Math.max(1, packageNet == null ? 1 : Math.abs(packageNet));
     }
 
     private static RealisticRange realisticRange(Candidate c, EvalContext ctx, Long pointAfterCosts,
@@ -288,6 +293,7 @@ public record EconomicAssessment(
         double highVol = ctx.realizedVol30() * (1.0 + relativeSe);
         try {
             var curve = RiskProfiler.payoffCurve(c, ctx);
+            if (curve == null) return null; // unpriced package: no entry, so no sensitivity range
             double years = ctx.daysToExpiry() / 365.0;
             long atLow = curve.expectedValueCents(ctx.underlyingCents() / 100.0, lowVol, years, 0) - fees;
             long atHigh = curve.expectedValueCents(ctx.underlyingCents() / 100.0, highVol, years, 0) - fees;

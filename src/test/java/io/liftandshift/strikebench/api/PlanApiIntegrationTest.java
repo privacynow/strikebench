@@ -736,8 +736,8 @@ class PlanApiIntegrationTest {
             assertThat(leg.path("multiplier").asInt()).isEqualTo(10);
         }
         long sourceQty = source.path("qty").asLong(1);
-        assertThat(candidate.path("entryNetPremiumCents").asLong() * 10 * sourceQty)
-                .isEqualTo(source.path("entryNetPremiumCents").asLong() * 3);
+        assertThat(candidate.path("price").path("grossPackageNetCents").asLong() * 10 * sourceQty)
+                .isEqualTo(source.path("price").path("grossPackageNetCents").asLong() * 3);
         assertThat(candidate.path("maxLossCents").asLong() * 10 * sourceQty)
                 .isEqualTo(source.path("maxLossCents").asLong() * 3);
         assertThat(json(get("/api/plans/" + id + "/strategy/latest"))
@@ -756,7 +756,7 @@ class PlanApiIntegrationTest {
                 .as(decided.toPrettyString()).isEqualTo(10);
         assertThat(decided.at("/decision/metrics/decisionQty").asInt()).isEqualTo(3);
         assertThat(decided.at("/decision/metrics/entryNetPremiumCents").asLong())
-                .isEqualTo(candidate.path("entryNetPremiumCents").asLong());
+                .isEqualTo(candidate.path("price").path("grossPackageNetCents").asLong());
         assertThat(decided.at("/decision/maxLossCents").asLong())
                 .isEqualTo(candidate.path("maxLossCents").asLong());
     }
@@ -1121,7 +1121,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 2);
-        order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         preview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -1296,7 +1296,7 @@ class PlanApiIntegrationTest {
             var order = Json.MAPPER.createObjectNode();
             order.put("expectedVersion", selectedVersion);
             order.put("qty", 1);
-            order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+            order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
             order.put("feesOverrideCents", exactFees);
             if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
             var acks = order.putArray("acknowledgedRisks");
@@ -1706,19 +1706,20 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + version + ",\"qty\":1}"));
         assertThat(preview.at("/selected/id").asText()).isEqualTo(candidate.get("id").asText());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
-        assertThat(preview.at("/order/proposedNetCents").isNumber()).isTrue();
+        assertThat(preview.at("/order/price/grossPackageNetCents").isNumber()).isTrue();
         assertThat(preview.at("/preview/entryNetPremiumCents").asLong())
-                .isEqualTo(preview.at("/order/proposedNetCents").asLong());
+                .isEqualTo(preview.at("/order/price/grossPackageNetCents").asLong());
         assertThat(preview.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
         assertThat(preview.at("/order/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
-        assertThat(preview.at("/order/executability").asText()).isEqualTo("IMMEDIATE");
-        assertThat(preview.at("/order/presentlyExecutable").asBoolean()).isTrue();
+        assertThat(preview.at("/order/price/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(preview.at("/order/price/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");
+        assertThat(preview.at("/order/price/quantity").asInt()).isEqualTo(1);
 
-        long naturalNet = preview.at("/order/proposedNetCents").asLong();
+        long naturalNet = preview.at("/order/price/grossPackageNetCents").asLong();
         JsonNode marketableLimit = json(post("/api/plans/" + tradePlanId + "/decision/preview",
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
                         + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet - 1000) + "}}"));
-        assertThat(marketableLimit.at("/order/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(marketableLimit.at("/order/price/executability").asText()).isEqualTo("IMMEDIATE");
         assertThat(marketableLimit.at("/preview/entryNetPremiumCents").asLong()).isEqualTo(naturalNet);
         assertThat(marketableLimit.at("/order/orderInstruction/limitNetCents").asLong())
                 .isEqualTo(naturalNet - 1000);
@@ -1726,14 +1727,17 @@ class PlanApiIntegrationTest {
         JsonNode restingLimit = json(post("/api/plans/" + tradePlanId + "/decision/preview",
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
                         + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet + 1000) + "}}"));
-        assertThat(restingLimit.at("/order/executability").asText()).isEqualTo("RESTING");
-        assertThat(restingLimit.at("/order/presentlyExecutable").asBoolean()).isFalse();
+        assertThat(restingLimit.at("/order/price/executability").asText()).isEqualTo("RESTING");
+        // The resting limit is a REAL stated price on its own basis, not an absent one.
+        assertThat(restingLimit.at("/order/price/valuationBasis").asText()).isEqualTo("RESTING_LIMIT");
+        assertThat(restingLimit.at("/order/price/restingLimitNetCents").asLong())
+                .isEqualTo(naturalNet + 1000);
         assertThat(restingLimit.at("/preview/ok").asBoolean()).isFalse();
 
         JsonNode legacyMarketRoundTrip = json(post("/api/plans/" + tradePlanId + "/decision/preview",
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"proposedNetCents\":" + naturalNet + "}"));
         assertThat(legacyMarketRoundTrip.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
-        assertThat(legacyMarketRoundTrip.at("/order/proposedNetCents").asLong()).isEqualTo(naturalNet);
+        assertThat(legacyMarketRoundTrip.at("/order/price/grossPackageNetCents").asLong()).isEqualTo(naturalNet);
 
         var tradeRequest = Json.MAPPER.createObjectNode();
         tradeRequest.put("expectedVersion", version);
@@ -1757,7 +1761,7 @@ class PlanApiIntegrationTest {
                 .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
         assertThat(opened.at("/decision/orderInstruction/type").asText()).isEqualTo("MARKET");
         assertThat(opened.at("/decision/executability").asText()).isEqualTo("IMMEDIATE");
-        assertThat(opened.at("/decision/presentlyExecutable").asBoolean()).isTrue();
+        assertThat(opened.at("/decision/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");
         assertThat(opened.at("/decision/accountNlvCents").asLong()).isEqualTo(1_930_000L);
         assertThat(opened.at("/decision/riskCapitalCents").asLong()).isEqualTo(193_000L);
 
@@ -1946,7 +1950,7 @@ class PlanApiIntegrationTest {
         var request = Json.MAPPER.createObjectNode();
         request.put("expectedVersion", version);
         request.put("qty", 1);
-        request.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        request.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
         request.put("portfolioAccountId", accountId);
         request.put("externalRef", "broker-order-77");
         request.put("feesCents", 130);
@@ -2063,7 +2067,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", version);
         order.put("qty", 3);
-        order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acknowledgments = order.putArray("acknowledgedRisks");
         preview.withArray("requiredAcks").forEach(ack -> acknowledgments.add(ack.get("id").asText()));
@@ -2153,7 +2157,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
-        order.put("proposedNetCents", decisionPreview.at("/order/proposedNetCents").asLong());
+        order.put("proposedNetCents", decisionPreview.at("/order/price/grossPackageNetCents").asLong());
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -2229,7 +2233,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
-        order.put("proposedNetCents", decisionPreview.at("/order/proposedNetCents").asLong());
+        order.put("proposedNetCents", decisionPreview.at("/order/price/grossPackageNetCents").asLong());
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -2302,7 +2306,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
-        order.put("proposedNetCents", decisionPreview.at("/order/proposedNetCents").asLong());
+        order.put("proposedNetCents", decisionPreview.at("/order/price/grossPackageNetCents").asLong());
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -2362,7 +2366,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", version);
         order.put("qty", 1);
-        order.put("proposedNetCents", preview.at("/order/proposedNetCents").asLong());
+        order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acks = order.putArray("acknowledgedRisks");
         for (JsonNode ack : preview.withArray("requiredAcks")) acks.add(ack.get("id").asText());

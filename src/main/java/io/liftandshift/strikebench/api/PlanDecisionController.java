@@ -112,7 +112,7 @@ final class PlanDecisionController {
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
-                plan, candidate, orderSummary(order, payload.preview())));
+                plan, candidate, orderDock(order, payload.preview())));
     }
 
     void planDecisionTrade(Context ctx) {
@@ -268,36 +268,18 @@ final class PlanDecisionController {
         return body.proposedNetCents() == marketPreview.entryNetPremiumCents() ? marketBody : body;
     }
 
-    static ApiResponses.OrderSummary orderSummary(TradeOpenRequest order,
-                                                  io.liftandshift.strikebench.paper.TradePreview preview) {
+    /**
+     * The dock publishes the preview's OWN §7.2 receipt. It used to re-derive the valuation here by
+     * string-parsing the analytics map and re-running the executable-vs-resting ladder — a third
+     * copy of a decision TradeService had already made, published under a field named
+     * `proposedNetCents` that actually held the preview's package net, beside a fee line that
+     * defaulted to $0 whether or not fees were charged.
+     */
+    static ApiResponses.OrderDock orderDock(TradeOpenRequest order,
+                                            io.liftandshift.strikebench.paper.TradePreview preview) {
         OrderInstruction instruction = order.orderInstruction() == null
                 ? OrderInstruction.fromLegacy(order.proposedNetCents()) : order.orderInstruction();
-        Map<?, ?> quality = preview.analytics() == null ? Map.of()
-                : preview.analytics().get("executionQuality") instanceof Map<?, ?> map ? map : Map.of();
-        OrderInstruction.Executability executability;
-        try {
-            Object rawExecutability = quality.get("executability");
-            executability = OrderInstruction.Executability.valueOf(
-                    rawExecutability == null ? "UNAVAILABLE" : String.valueOf(rawExecutability));
-        } catch (IllegalArgumentException e) {
-            executability = OrderInstruction.Executability.UNAVAILABLE;
-        }
-        Long executableNet = quality.get("executableNetCents") instanceof Number number
-                ? number.longValue() : null;
-        Long valuedNet = null;
-        ApiResponses.OrderValuationBasis valuationBasis = ApiResponses.OrderValuationBasis.UNAVAILABLE;
-        if (executability == OrderInstruction.Executability.IMMEDIATE && executableNet != null) {
-            valuedNet = executableNet;
-            valuationBasis = ApiResponses.OrderValuationBasis.EXECUTABLE_BOOK;
-        } else if (executability == OrderInstruction.Executability.RESTING
-                && instruction.limitNetCents() != null) {
-            valuedNet = instruction.limitNetCents();
-            valuationBasis = ApiResponses.OrderValuationBasis.RESTING_LIMIT;
-        }
-        return new ApiResponses.OrderSummary(order.qty(), preview.entryNetPremiumCents(),
-                order.feesOverrideCents() == null ? 0L : order.feesOverrideCents(), instruction,
-                executability, executability == OrderInstruction.Executability.IMMEDIATE, executableNet,
-                valuedNet, valuationBasis);
+        return new ApiResponses.OrderDock(instruction, preview.price());
     }
 
     private static String requiredCandidateText(ObjectNode candidate, String field) {

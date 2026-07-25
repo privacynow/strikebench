@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.paper.ProtocolEvaluator;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 import io.liftandshift.strikebench.pricing.HistoricalVol;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
@@ -57,6 +58,8 @@ public final class Backtester {
     private final AppConfig cfg;
     private final HistoricalReplayKernel replay;
     private final BacktestStore store;
+    /** The shipped protocol a replay tests by default; requests may declare a named deviation. */
+    private volatile ProtocolEvaluator.Policy managementPolicy = ProtocolEvaluator.Policy.standard();
 
     public Backtester(MarketDataService market, List<HistoricalOptionsProvider> historical,
                       AppConfig cfg, Db db, Clock clock) {
@@ -102,11 +105,22 @@ public final class Backtester {
             String disclaimer
     ) {}
 
+    /**
+     * Managed-replay request. The three exit knobs are stated in the ONE policy vocabulary
+     * ({@link ProtocolEvaluator.Policy}) so a backtest replays the protocol the product tells the
+     * user to follow, and any deviation is a NAMED ad-hoc policy in the report rather than a
+     * fourth private dialect:
+     * <ul>
+     *   <li>{@code takeProfitFraction} — fraction of the option entry basis (not of max profit);</li>
+     *   <li>{@code stopMultiple} — loss as a multiple of that same basis (not of max loss);</li>
+     *   <li>{@code timeRuleSessions} — trading sessions to expiry (not calendar DTE).</li>
+     * </ul>
+     */
     public record PortfolioRequest(
             String symbol, String strategy, String from, String to,
             Integer targetDte, Integer entryEveryDays, Integer maxConcurrent, Integer qty,
-            Double shortDelta, Double widthPct, Double profitTargetPct, Double stopFraction,
-            Integer rollDte, Long startingCashCents) {}
+            Double shortDelta, Double widthPct, Double takeProfitFraction, Double stopMultiple,
+            Integer timeRuleSessions, Long startingCashCents) {}
 
     public record PortfolioTrade(String entryDate, String exitDate, String strategy,
                                  long creditCents, long pnlCents, long maxLossCents,
@@ -364,9 +378,19 @@ public final class Backtester {
         int qty = clamp(req.qty(), 1, 1, 100);
         double shortDelta = clampD(req.shortDelta(), 0.30, 0.05, 0.60);
         double widthPct = clampD(req.widthPct(), 0.05, 0.01, 0.30);
-        double profitTarget = clampD(req.profitTargetPct(), 0.50, 0.10, 1.0);
-        double stopFraction = clampD(req.stopFraction(), 0.80, 0.20, 1.0);
-        int rollDte = clamp(req.rollDte(), 7, 0, Math.max(0, targetDte - 1));
+        // ONE policy: the replay exits are the shipped protocol unless the request declares a
+        // deviation, and a declared deviation becomes a NAMED ad-hoc policy carried in the notes.
+        ProtocolEvaluator.Policy shipped = managementPolicy;
+        // No literal threshold survives here: the fallbacks ARE the shipped policy's own numbers,
+        // and the session bound uses targetDte (calendar days) only as a loose ceiling — sessions
+        // are never more numerous than calendar days over the same span.
+        ProtocolEvaluator.Policy exitPolicy = shipped.overriddenAs("BACKTEST_ADHOC",
+                req.takeProfitFraction() == null ? null
+                        : clampD(req.takeProfitFraction(), shipped.creditTakeProfitFraction(), 0.10, 1.0),
+                req.stopMultiple() == null ? null
+                        : clampD(req.stopMultiple(), shipped.creditStopMultiple(), 0.20, 10.0),
+                req.timeRuleSessions() == null ? null
+                        : clamp(req.timeRuleSessions(), shipped.timeRuleSessions(), 0, Math.max(0, targetDte - 1)));
         long startingCash = req.startingCashCents() == null ? 10_000_000L : req.startingCashCents();
         if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
         BacktestModelInputs modelInputs = BacktestModelInputs.resolve(market, targetDte, worldId);
@@ -377,6 +401,14 @@ public final class Backtester {
         List<String> notes = new ArrayList<>();
         List<PortfolioTrade> trades = new ArrayList<>();
         List<Map<String, Object>> equity = new ArrayList<>();
+        notes.add(exitPolicy.policyId().equals(shipped.policyId())
+                ? "Exits replay the shipped management policy " + shipped.policyId() + " v"
+                        + shipped.version() + " (fingerprint " + shipped.fingerprint().substring(0, 12) + ")."
+                : "Exits replay a DECLARED DEVIATION from " + shipped.policyId() + ": named policy "
+                        + exitPolicy.policyId() + " (take profit " + exitPolicy.creditTakeProfitFraction()
+                        + " of the entry basis, stop " + exitPolicy.creditStopMultiple() + "x, time rule "
+                        + exitPolicy.timeRuleSessions() + " sessions, fingerprint "
+                        + exitPolicy.fingerprint().substring(0, 12) + ").");
         if (rw.demo()) notes.add("Underlying history is built-in DEMO DATA — fabricated teaching history, not observed evidence.");
         else if (analysis.synthetic()) notes.add("Underlying history comes from generated analysis dataset "
                 + analysis.datasetId() + "; option marks and listed strikes are modeled within that same dataset.");
@@ -412,13 +444,17 @@ public final class Backtester {
                         HistoricalReplayKernel.PriceIntent.EXIT, false, evidence);
                 long closeFees = feesFor(position.legs, position.qty);
                 long pnlIfClosed = exitValue - position.entryValueCents - position.openFeesCents - closeFees;
-                String reason = null;
-                if (position.maxProfitCents > 0 && pnlIfClosed >= profitTarget * position.maxProfitCents)
-                    reason = "PROFIT_TARGET";
-                else if (position.maxLossCents > 0 && pnlIfClosed <= -stopFraction * position.maxLossCents)
-                    reason = "STOP";
-                else if (ChronoUnit.DAYS.between(date, position.expiration) <= rollDte)
-                    reason = "TIME";
+                // The SAME evaluator the product runs against a live position, on the same
+                // option-only basis and the same session clock — so a backtest tests the shipped
+                // protocol instead of a private set of denominators.
+                String reason = ProtocolEvaluator.evaluate(exitPolicy, new ProtocolEvaluator.Inputs(
+                                position.creditCents, pnlIfClosed,
+                                ProtocolEvaluator.timeTo(date, position.expiration))).stream()
+                        .map(trigger -> switch (trigger.rule()) {
+                            case ProtocolEvaluator.TAKE_PROFIT -> "PROFIT_TARGET";
+                            case ProtocolEvaluator.STOP_LOSS -> "STOP";
+                            default -> "TIME";
+                        }).findFirst().orElse(null);
                 if (reason != null) {
                     run.realized += pnlIfClosed;
                     trades.add(closeManaged(position, date, pnlIfClosed, reason));

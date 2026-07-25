@@ -990,7 +990,7 @@
       symbol: position.symbol,
       qty: position.qty,
       legs: previewLegs(position, preview),
-      entryNetPremiumCents: preview.entryNetPremiumCents,
+      price: preview.price || null,
       maxLossCents: preview.maxLossCents,
       maxProfitCents: preview.maxProfitCents,
       combinedMaxLossCents: preview.analytics && preview.analytics.combinedMaxLossCents,
@@ -1415,10 +1415,14 @@
     var optionLeg = (candidate.legs || []).find(function (leg) {
       return String(leg.type || '').toUpperCase() !== 'STOCK';
     });
-    var entry = candidate.entryNetPremiumCents == null ? null : Number(candidate.entryNetPremiumCents) / 100;
-    // D (#12): option-only net premium (credit>0/debit<0) — equals entry for non-stock structures;
+    // §7.2: one package-price receipt per package. entryNetPremiumCents/optionNetPremiumCents are
+    // gone from the wire — both were views of the same receipt, and keeping two names is how the
+    // rail and the dock came to state different prices for one package.
+    var price = candidate.price || null;
+    var entry = price && price.grossPackageNetCents != null ? Number(price.grossPackageNetCents) / 100 : null;
+    // Option-only net premium (credit>0/debit<0) — equals the package net for non-stock structures;
     // the stock outlay stays represented only by Capital, never folded into the collect cell.
-    var optionNet = candidate.optionNetPremiumCents == null ? null : Number(candidate.optionNetPremiumCents) / 100;
+    var optionNet = price && price.optionNetPremiumCents != null ? Number(price.optionNetPremiumCents) / 100 : null;
     var identity = candidate.positionIdentity || candidate.identity || null;
     var explicitDefinedRisk = identity && typeof identity.definedRisk === 'boolean'
       ? identity.definedRisk : typeof candidate.definedRisk === 'boolean' ? candidate.definedRisk : null;
@@ -1454,6 +1458,7 @@
       net: entry,
       credit: entry,
       optionNet: optionNet,
+      price: price,
       creditAmount: entry == null ? null : entry > 0 ? entry : 0,
       debitAmount: entry == null ? null : entry < 0 ? -entry : 0,
       entryEconomics: entry == null ? 'UNAVAILABLE' : entry > 0 ? 'CREDIT' : entry < 0 ? 'DEBIT' : 'EVEN',
@@ -1892,7 +1897,9 @@
   function assertOrderEcho(order, body) {
     if (!order) throw new Error('The backend order preview omitted its execution receipt.');
     var expected = body.orderInstruction || {}, actual = order.orderInstruction || {};
-    if (Number(order.qty) !== Number(body.qty)
+    // Quantity is a component of the package-price receipt now — the order node no longer carries
+    // a second copy of it.
+    if (Number(order.price && order.price.quantity) !== Number(body.qty)
         || String(actual.type || '').toUpperCase() !== String(expected.type || '').toUpperCase()
         || String(actual.timeInForce || '').toUpperCase() !== String(expected.timeInForce || '').toUpperCase()
         || (expected.type === 'LIMIT' && Number(actual.limitNetCents) !== Number(expected.limitNetCents))) {

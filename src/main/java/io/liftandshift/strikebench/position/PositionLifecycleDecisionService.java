@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.BookActionProjectionService;
 import io.liftandshift.strikebench.paper.BookRiskService;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
+import io.liftandshift.strikebench.paper.ProtocolEvaluator;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -70,7 +71,7 @@ public final class PositionLifecycleDecisionService {
             OffsetDateTime observedAt,
             Verdict verdict,
             String summary,
-            AccountObjectiveService.LifecyclePolicy policy,
+            ProtocolEvaluator.Policy policy,
             String policyFingerprint,
             String marketSnapshotFingerprint,
             String modelFingerprint,
@@ -126,7 +127,7 @@ public final class PositionLifecycleDecisionService {
                                     AccountObjectiveService.CapacityContext capacity) {
         requireInputs(lifecycle, projections, capacity);
         var policy = capacity.accountPolicy() == null
-                ? AccountObjectiveService.LifecyclePolicy.standard()
+                ? ProtocolEvaluator.Policy.standard()
                 : capacity.accountPolicy().lifecyclePolicy();
         String policyFingerprint = fingerprint(policy, capacity.declarationFingerprint());
         var hold = action(projections, "HOLD");
@@ -140,20 +141,25 @@ public final class PositionLifecycleDecisionService {
         ReductionProposal reduction = reduction(limits, closes);
 
         Dimension mechanics = mechanics(lifecycle);
+        Dimension protocol = mechanicalProtocol(lifecycle, policy);
         CapacityResult capacityResult = capacity(lifecycle, capacity, policy);
         Dimension accountLimits = accountLimits(limits, reduction);
         Dimension economics = economics(lifecycle);
         Dimension tailAndEvents = tailAndEvents(lifecycle, hold, policy);
         Dimension carry = carry(lifecycle, policy);
         Dimension history = history(lifecycle);
-        List<Dimension> dimensions = List.of(mechanics, capacityResult.dimension(), accountLimits,
-                economics, tailAndEvents, carry, history);
+        List<Dimension> dimensions = List.of(mechanics, protocol, capacityResult.dimension(),
+                accountLimits, economics, tailAndEvents, carry, history);
 
         Verdict verdict;
         if (mechanics.policySignal() != null) verdict = mechanics.policySignal();
+        // §6.4: DEFEND must name the trigger that fired. The stop-loss and the near-expiry time
+        // rule are two of those named triggers, and they outrank every discretionary dimension.
+        else if (protocol.policySignal() == Verdict.DEFEND) verdict = Verdict.DEFEND;
         else if (capacityResult.dimension().policySignal() == Verdict.DEFEND) verdict = Verdict.DEFEND;
         else if (accountLimits.policySignal() != null) verdict = accountLimits.policySignal();
         else if (capacityResult.assignmentActive()) verdict = Verdict.ACCEPT_ASSIGNMENT;
+        else if (protocol.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
         else if (economics.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
         else if (tailAndEvents.policySignal() != null) verdict = tailAndEvents.policySignal();
         else if (carry.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
@@ -339,9 +345,66 @@ public final class PositionLifecycleDecisionService {
                         + close.unavailableReason());
     }
 
+    /**
+     * The named mechanical triggers §6.4 requires DEFEND to be able to point at — evaluated by the
+     * ONE {@link ProtocolEvaluator} against this position's own option-only opening basis, its
+     * P/L-if-closed, and the session clock. STOP_LOSS and a near-expiry time rule are DEFEND
+     * triggers; TAKE_PROFIT is a HARVEST trigger; a time rule that is merely inside the decision
+     * window is stated without forcing a verdict, because "decide whether to roll" is not a defense.
+     */
+    private static Dimension mechanicalProtocol(PositionLifecycleReceipt lifecycle,
+                                                ProtocolEvaluator.Policy policy) {
+        var history = lifecycle.history();
+        Long basis = history.signedOptionOpeningCashCents();
+        List<String> reasons = new ArrayList<>();
+        if (!history.available() || basis == null) {
+            reasons.add("No recorded option-only opening basis, so the take-profit and stop lines "
+                    + "cannot be placed: " + (history.unavailableReason() == null
+                    ? "opening history is unavailable." : history.unavailableReason()));
+            return new Dimension("MECHANICAL_PROTOCOL", "UNAVAILABLE", null, reasons);
+        }
+        Integer sessions = lifecycle.carryCollateral().tradingSessionsRemaining();
+        var time = sessions == null ? null
+                : io.liftandshift.strikebench.market.OptionTime.ofRecordedUnits(sessions,
+                        lifecycle.carryCollateral().calendarDaysRemaining());
+        var rules = ProtocolEvaluator.rules(policy, basis);
+        for (ProtocolEvaluator.Rule rule : rules) {
+            reasons.add(rule.rule() + " line of policy " + rule.policyId() + ": "
+                    + (rule.triggerPnlCents() != null ? rule.triggerPnlCents() + " cents P/L"
+                    : rule.triggerSessionsToExpiry() + " trading sessions to expiry")
+                    + " — " + rule.summary() + ".");
+        }
+        List<ProtocolEvaluator.Trigger> fired = ProtocolEvaluator.evaluate(policy,
+                new ProtocolEvaluator.Inputs(basis, history.netPnlIfClosedCents(), time));
+        if (history.netPnlIfClosedCents() == null) {
+            reasons.add("No net P/L-if-closed receipt, so the price rules stay silent rather than guess.");
+        }
+        Verdict signal = null;
+        String status = "PASS";
+        for (ProtocolEvaluator.Trigger trigger : fired) {
+            reasons.add("FIRED " + trigger.rule() + ": " + trigger.summary() + ".");
+            if (ProtocolEvaluator.STOP_LOSS.equals(trigger.rule())) {
+                signal = Verdict.DEFEND;
+                status = "STOP_LOSS_TRIGGER";
+            } else if (ProtocolEvaluator.TIME_EXIT.equals(trigger.rule()) && signal == null
+                    && sessions != null && sessions <= policy.nearExpirySessions()) {
+                // Inside the near-expiry window the time rule IS a defense: rolling has stopped
+                // being management and the position must be closed or settled deliberately.
+                signal = Verdict.DEFEND;
+                status = "EXPIRY_TIME_TRIGGER";
+            } else if (ProtocolEvaluator.TAKE_PROFIT.equals(trigger.rule()) && signal == null) {
+                signal = Verdict.HARVEST;
+                status = "TAKE_PROFIT_TRIGGER";
+            } else if (signal == null) {
+                status = "TIME_DECISION_OPEN";
+            }
+        }
+        return new Dimension("MECHANICAL_PROTOCOL", status, signal, reasons);
+    }
+
     private static CapacityResult capacity(PositionLifecycleReceipt lifecycle,
                                            AccountObjectiveService.CapacityContext context,
-                                           AccountObjectiveService.LifecyclePolicy policy) {
+                                           ProtocolEvaluator.Policy policy) {
         long putShares = assignment(lifecycle, OptionType.PUT, true);
         long putDollars = assignment(lifecycle, OptionType.PUT, false);
         long callShares = assignment(lifecycle, OptionType.CALL, true);
@@ -389,13 +452,16 @@ public final class PositionLifecycleDecisionService {
             }
             if (!inadequate) reasons.add("The exact package declaration does not reject its physical quantities.");
         }
-        Integer dte = lifecycle.carryCollateral().calendarDaysRemaining();
-        boolean assignmentActive = !inadequate && exact != null && putShares > 0 && dte != null
-                && dte <= policy.assignmentDecisionDte()
+        // ONE clock: the assignment decision is measured in trading sessions like every other
+        // policy threshold, so "5" means the same distance here as it does in the alert rail.
+        Integer sessions = lifecycle.carryCollateral().tradingSessionsRemaining();
+        boolean assignmentActive = !inadequate && exact != null && putShares > 0 && sessions != null
+                && sessions <= policy.assignmentDecisionSessions()
                 && exact.acceptedAssignmentShares() != null && exact.acceptedAssignmentShares() >= putShares
                 && exact.acceptedAssignmentDollarsCents() != null
                 && exact.acceptedAssignmentDollarsCents() >= putDollars;
-        if (assignmentActive) reasons.add("Assignment is now an active near-expiry decision under the named DTE threshold.");
+        if (assignmentActive) reasons.add("Assignment is now an active near-expiry decision under the named "
+                + policy.assignmentDecisionSessions() + "-session threshold of policy " + policy.policyId() + ".");
         return new CapacityResult(new Dimension("INTENT_CAPACITY",
                 inadequate ? "INCOHERENT" : exact == null ? "UNDECLARED" : "COHERENT",
                 inadequate ? Verdict.DEFEND : assignmentActive ? Verdict.ACCEPT_ASSIGNMENT : null,
@@ -447,7 +513,7 @@ public final class PositionLifecycleDecisionService {
 
     private static Dimension tailAndEvents(PositionLifecycleReceipt lifecycle,
                                            BookActionProjectionService.ActionProjection hold,
-                                           AccountObjectiveService.LifecyclePolicy policy) {
+                                           ProtocolEvaluator.Policy policy) {
         List<String> reasons = new ArrayList<>();
         boolean confirmed = lifecycle.assignmentExit().eventCrossings().stream()
                 .anyMatch(event -> "CONFIRMED".equals(event.status()));
@@ -476,7 +542,7 @@ public final class PositionLifecycleDecisionService {
     }
 
     private static Dimension carry(PositionLifecycleReceipt lifecycle,
-                                   AccountObjectiveService.LifecyclePolicy policy) {
+                                   ProtocolEvaluator.Policy policy) {
         var carry = lifecycle.carryCollateral();
         List<String> reasons = new ArrayList<>();
         if (carry.grossRemainingPremiumCents() != null) {
@@ -491,8 +557,8 @@ public final class PositionLifecycleDecisionService {
                 && underRemainingThreshold(carry.grossRemainingPremiumCents(), policy);
         long assignmentDollars = assignment(lifecycle, OptionType.PUT, false);
         var close = lifecycle.currentChoice().close();
-        long closeCost = close.signedNetCloseCashCents() == null ? Long.MAX_VALUE
-                : Math.max(0, -close.signedNetCloseCashCents());
+        long closeCost = close.price().afterFeeNetCents() == null ? Long.MAX_VALUE
+                : Math.max(0, -close.price().afterFeeNetCents());
         Double closePct = assignmentDollars <= 0 || closeCost == Long.MAX_VALUE ? null
                 : 100.0 * closeCost / assignmentDollars;
         boolean cheapRiskRemoval = assignmentDollars > 0 && closePct != null
@@ -614,7 +680,7 @@ public final class PositionLifecycleDecisionService {
     }
 
     private static boolean underRemainingThreshold(Long remaining,
-                                                    AccountObjectiveService.LifecyclePolicy policy) {
+                                                    ProtocolEvaluator.Policy policy) {
         return remaining != null && policy.harvestRemainingPremiumMaxCents() != null
                 && remaining <= policy.harvestRemainingPremiumMaxCents();
     }

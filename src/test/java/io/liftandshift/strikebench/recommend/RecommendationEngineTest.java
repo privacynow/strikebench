@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class RecommendationEngineTest {
 
@@ -217,7 +218,7 @@ class RecommendationEngineTest {
                         new LegView("SELL", "PUT", shortPut, "2026-08-21", 1, "0.40", 100, "OPEN"),
                         new LegView("SELL", "CALL", shortCall, "2026-08-21", 1, "0.40", 100, "OPEN"),
                         new LegView("BUY", "CALL", longCall, "2026-08-21", 1, "0.10", 100, "OPEN")),
-                1, creditCents, creditCents, creditCents, maxLossCents, List.of(), 0.50, 0L,
+                1, TestPrices.optionOnly(1, creditCents), creditCents, maxLossCents, List.of(), 0.50, 0L,
                 0.50, "DELAYED", List.of(), 0.50, "range income", "credit", "wing risk",
                 "breakout", "four defined-risk legs", "INCOME", List.of("INCOME"),
                 0.20, null, null, null, false, null, null);
@@ -250,7 +251,7 @@ class RecommendationEngineTest {
             StrategyFamily family = StrategyFamily.valueOf(c.strategy());
             assertThat(family.servesIntent(io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isTrue();
             assertThat(c.intent()).isEqualTo("INCOME");
-            if (c.entryNetPremiumCents() > 0 && !family.multiExpiration()) {
+            if (c.price().grossPackageNetCents() > 0 && !family.multiExpiration()) {
                 assertThat(c.assignmentProb()).isNotNull().isBetween(0.0, 1.0);
                 assertThat(c.intentNote()).contains("Collect");
             }
@@ -283,20 +284,20 @@ class RecommendationEngineTest {
                     return leg.action().equals("SELL") ? cents : -cents;
                 }).sum();
 
-        assertThat(coveredCall.entryNetPremiumCents()).isNegative();
+        assertThat(coveredCall.price().grossPackageNetCents()).isNegative();
         assertThat(optionCredit).isPositive();
         // #12-backend: the option-only net premium is the positive premium the option legs collect,
         // NOT the stock-inclusive package net. It must match the credit computed from the legs and
         // stay distinct from (and opposite-signed to) the stock-inclusive entry net.
-        assertThat(coveredCall.optionNetPremiumCents())
+        assertThat(coveredCall.price().optionNetPremiumCents())
                 .as("option-only net premium is the option-leg credit, reused from the engine")
                 .isEqualTo(optionCredit)
                 .isPositive();
-        assertThat(coveredCall.optionNetPremiumCents())
-                .isNotEqualTo(coveredCall.entryNetPremiumCents());
+        assertThat(coveredCall.price().optionNetPremiumCents())
+                .isNotEqualTo(coveredCall.price().grossPackageNetCents());
         assertThat(coveredCall.beginnerExplanation())
                 .contains("complete stock-plus-options package costs "
-                        + Money.fmt(-coveredCall.entryNetPremiumCents()))
+                        + Money.fmt(-coveredCall.price().grossPackageNetCents()))
                 .contains("option legs collect " + Money.fmt(optionCredit) + " net")
                 .doesNotContain("most you can lose on the options portion");
     }
@@ -314,7 +315,7 @@ class RecommendationEngineTest {
         assertThat(cc.sharesNeeded()).isEqualTo(300);
         assertThat(cc.maxLossCents()).isZero(); // no NEW cash at risk
         assertThat(cc.combinedMaxLossCents()).isPositive(); // but the shares' own downside is disclosed
-        assertThat(cc.entryNetPremiumCents()).isPositive();
+        assertThat(cc.price().grossPackageNetCents()).isPositive();
         // Short strike honors the target sell price
         double strike = Double.parseDouble(cc.legs().getFirst().strike());
         assertThat(strike).isGreaterThanOrEqualTo(260.0);
@@ -424,7 +425,7 @@ class RecommendationEngineTest {
         assertThat(csp.qty()).isEqualTo(1);
         double strike = Double.parseDouble(csp.legs().getFirst().strike());
         long openingFees = 600;
-        long netPremium = csp.entryNetPremiumCents() - openingFees;
+        long netPremium = csp.price().grossPackageNetCents() - openingFees;
         int dte = (int) java.time.temporal.ChronoUnit.DAYS.between(TODAY,
                 LocalDate.parse(csp.legs().getFirst().expiration()));
         double expectedYield = Math.round(100.0 * (netPremium / (strike * 100.0 * 100.0))
@@ -757,8 +758,8 @@ class RecommendationEngineTest {
         for (Candidate c : result.candidates()) {
             if (!c.strategy().equals("LONG_STRADDLE") && !c.strategy().equals("LONG_STRANGLE")) continue;
             assertThat(c.legs()).hasSize(2);
-            assertThat(c.entryNetPremiumCents()).isNegative();              // both legs bought
-            assertThat(c.maxLossCents()).isEqualTo(-c.entryNetPremiumCents()); // risk = the debit
+            assertThat(c.price().grossPackageNetCents()).isNegative();     // both legs bought
+            assertThat(c.maxLossCents()).isEqualTo(-c.price().grossPackageNetCents()); // risk = the debit
             assertThat(c.maxProfitCents()).isNull();                        // uncapped either way
             assertThat(c.breakevens()).hasSize(2);                          // one below, one above
         }
@@ -813,7 +814,7 @@ class RecommendationEngineTest {
                 StrategyFamily fam = StrategyFamily.valueOf(c.strategy());
                 assertThat(c.strategy()).as("no diagonal on the income menu").doesNotContain("DIAGONAL");
                 if (!fam.multiExpiration() && !fam.needsStock()) {
-                    assertThat(c.entryNetPremiumCents())
+                    assertThat(c.price().grossPackageNetCents())
                             .as(view + " income " + c.strategy() + " must collect a credit, not pay a debit")
                             .isPositive();
                 }

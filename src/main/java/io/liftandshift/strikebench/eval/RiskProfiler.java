@@ -52,7 +52,15 @@ public final class RiskProfiler {
         String expiration = c.legs() == null ? null : c.legs().stream()
                 .filter(l -> l.expiration() != null && !l.expiration().isBlank())
                 .map(LegView::expiration).findFirst().orElse(null);
-        if (distinctExpirations > 1) {
+        // §3.2: a P/L curve needs an ENTRY. When the §7.2 receipt states no package price there is
+        // nothing to subtract, and the leg marks alone are exactly what was missing — building the
+        // curve anyway would publish a payoff for a package whose cost is unknown, and would price
+        // an unmarked leg at $0 as if it were free.
+        String unpriced = unpricedReason(c);
+        if (unpriced != null) {
+            terminalPayoff = unavailableTerminalPayoff(unpriced);
+            jumpTail = unavailableJumpTail(unpriced);
+        } else if (distinctExpirations > 1) {
             terminalPayoff = unavailableTerminalPayoff(
                     "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
             jumpTail = unavailableJumpTail(
@@ -130,7 +138,9 @@ public final class RiskProfiler {
         Long evHistVol = null;
         String basisNote = String.format("market EV = present-value risk-neutral approximation "
                 + "(market IV, r=%.2f%%, q=0 assumed); pre-commission", ctx.riskFreeRate() * 100);
-        if (distinctExpirations <= 1
+        if (unpriced != null) {
+            basisNote = "Both EV lanes are unavailable because this package has no entry price: " + unpriced;
+        } else if (distinctExpirations <= 1
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
             try {
@@ -157,34 +167,57 @@ public final class RiskProfiler {
     }
 
     /**
+     * THE one question every payoff consumer asks first: is this package priced, and if not, why?
+     * Null means priced. Every lane that needs an entry (the terminal curve, the tail, both EV
+     * lanes, participation capture) branches on this ONE answer so they cannot disagree about
+     * whether a payoff exists (§3.2, §3.8).
+     */
+    static String unpricedReason(Candidate c) {
+        if (c == null) return "No candidate was supplied, so there is no package to price.";
+        var price = c.price();
+        if (price != null && price.priced()) return null;
+        String reason = price == null ? null : price.unavailableReason();
+        return reason == null || reason.isBlank()
+                ? "This package has no price receipt, so no entry basis exists." : reason;
+    }
+
+    /**
      * Builds the exact package curve once for every risk lane. The package-level entry is
      * authoritative (a user's limit/fill need not equal the sum of executable leg marks), while
      * held-share candidates add one stock lot PER package unit. {@code sharesNeeded} is the total
      * across quantity, so using it directly as a leg ratio would multiply quantity twice.
+     *
+     * <p>Returns NULL when {@link #unpricedReason} is non-null. Callers must branch and publish
+     * that reason; there is no zero-entry curve to fall back on (§3.2).</p>
      */
     static PayoffCurve payoffCurve(Candidate c, EvalContext ctx) {
-        CurveInput input = curveInput(c, ctx);
-        return PayoffCurve.of(input.legs(), Math.max(1, c.qty()), input.entryAdjustmentCents());
+        if (unpricedReason(c) != null) return null;
+        return PayoffCurve.of(combinedLegs(c, ctx), Math.max(1, c.qty()),
+                entryAdjustmentCents(c, ctx));
     }
 
+    /**
+     * The package's legs, including the synthetic stock lot a held-share candidate locks. Geometry
+     * only — deliberately independent of the package PRICE, so Greeks and exposure survive a
+     * package the market could not mark.
+     */
     static List<Leg> combinedLegs(Candidate c, EvalContext ctx) {
-        return curveInput(c, ctx).legs();
-    }
-
-    private static CurveInput curveInput(Candidate c, EvalContext ctx) {
         int qty = Math.max(1, c.qty());
-        List<Leg> optionPackage = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
-        long markedEntry = PayoffCurve.of(optionPackage, qty).entryNetPremiumCents();
-        long entryAdjustment = c.entryNetPremiumCents() - markedEntry;
-        List<Leg> combined = new ArrayList<>(optionPackage);
+        List<Leg> combined = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
         if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
             int sharesPerUnit = Math.max(1, c.sharesNeeded() / qty);
             combined.add(Leg.stockShares(LegAction.BUY, sharesPerUnit, cents(ctx.underlyingCents())));
         }
-        return new CurveInput(combined, entryAdjustment);
+        return combined;
     }
 
-    private record CurveInput(List<Leg> legs, long entryAdjustmentCents) {}
+    /** The authoritative package net less what the leg marks alone add up to. Priced packages only. */
+    private static long entryAdjustmentCents(Candidate c, EvalContext ctx) {
+        int qty = Math.max(1, c.qty());
+        long markedEntry = PayoffCurve.of(
+                c.legs().stream().map(LegView::toLeg).toList(), qty).entryNetPremiumCents();
+        return c.price().grossPackageNetCents() - markedEntry;
+    }
 
     private static BigDecimal cents(long c) { return BigDecimal.valueOf(c).movePointLeft(2); }
 }

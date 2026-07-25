@@ -92,6 +92,27 @@ class ManagedBacktestTest {
     }
 
     @Test
+    void exitsReplayTheShippedProtocolAndNameAnyDeclaredDeviation() {
+        // §7.5: a backtest must test the protocol the product tells the user to follow. With no
+        // overrides the replay runs the SHIPPED named policy and says so; with overrides it runs a
+        // NAMED ad-hoc policy and declares the deviation instead of hiding a private dialect.
+        var shipped = io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy.standard();
+        var defaults = backtester.runPortfolio(new Backtester.PortfolioRequest("AAPL",
+                "CREDIT_PUT_SPREAD", "2026-01-02", "2026-06-01", 30, 5, 4, 1, 0.30, 0.05,
+                null, null, null, 100_000_00L));
+        assertThat(defaults.notes()).anyMatch(note ->
+                note.contains("shipped management policy " + shipped.policyId())
+                        && note.contains(shipped.fingerprint().substring(0, 12)));
+        assertThat(defaults.trades()).isNotEmpty();
+        assertThat(defaults.trades()).extracting(Backtester.PortfolioTrade::exitReason)
+                .allMatch(EXIT_REASONS::contains);
+
+        var deviated = backtester.runPortfolio(req("CREDIT_PUT_SPREAD"));
+        assertThat(deviated.notes()).anyMatch(note -> note.contains("DECLARED DEVIATION")
+                && note.contains("BACKTEST_ADHOC"));
+    }
+
+    @Test
     void isDeterministic() {
         var first = backtester.runPortfolio(req("CREDIT_PUT_SPREAD"));
         var second = backtester.runPortfolio(req("CREDIT_PUT_SPREAD"));

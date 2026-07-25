@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class BookActionProjectionServiceTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-22T16:00:00Z"), ZoneOffset.UTC);
@@ -65,8 +66,9 @@ class BookActionProjectionServiceTest {
                         LocalDate.parse("2026-08-07"), 1, BigDecimal.ZERO)),
                 null, "16d", "DEFINED", "INCOME", false,
                 null, null, "IMPORT", "EXECUTED");
-        var close = new PositionLifecycleReceipt.CloseQuote(true, -14_250L, -15_000L,
-                -15_000L, 300L, -15_300L, PositionDomain.PriceAuthority.OBSERVED,
+        var close = new PositionLifecycleReceipt.CloseQuote(true,
+                TestPrices.closing(3, -15_000L, -15_000L, 300L), -14_250L,
+                PositionDomain.PriceAuthority.OBSERVED,
                 "Observed executable ask plus explicit closing fees.", null);
 
         var result = projections.project("local", account.id(), request, close, "position-fingerprint");
@@ -123,8 +125,9 @@ class BookActionProjectionServiceTest {
                         LocalDate.parse("2026-08-21"), 1, BigDecimal.ZERO)),
                 null, "30d", "DEFINED", "INCOME", true,
                 null, null, "IMPORT", "EXECUTED");
-        var close = new PositionLifecycleReceipt.CloseQuote(true, -30_000L, -32_000L,
-                -32_000L, 200L, -32_200L, PositionDomain.PriceAuthority.OBSERVED,
+        var close = new PositionLifecycleReceipt.CloseQuote(true,
+                TestPrices.closing(2, -32_000L, -32_000L, 200L), -30_000L,
+                PositionDomain.PriceAuthority.OBSERVED,
                 "Observed executable ask plus explicit closing fees.", null);
 
         var result = projections.project("local", account.id(), request, close, "call-fingerprint");

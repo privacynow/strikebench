@@ -24,12 +24,20 @@ public final class ScoreComposer {
         if (cap.incrementalCents() > ctx.buyingPowerCents())
             gateFailures.add("insufficient buying power ($" + dollars(cap.incrementalCents())
                     + " needed vs $" + dollars(ctx.buyingPowerCents()) + ")");
+        // §3.2: an unpriced package is not a cheap package — it is an unknown one, and the gate is
+        // exactly where "we cannot judge this" must stop being confused with "this is fine". The
+        // absence is stated as its own failure so the surface can name what is missing, and the
+        // credit test below is skipped rather than reading a null as "pays nothing".
+        String unpriced = RiskProfiler.unpricedReason(c);
+        if (unpriced != null) {
+            gateFailures.add("this package has no price, so it cannot be screened — " + unpriced);
+        }
         // EXECUTABLE MARKET: a structure sold as a credit must actually EARN a credit at the
         // executable sides — a "credit spread" that pays nothing (or costs money) after crossing
         // the books is the book telling you it cannot be traded politely this week.
         String fam = c.strategy() == null ? "" : c.strategy();
         boolean creditFamily = fam.contains("CREDIT") || fam.startsWith("IRON");
-        if (creditFamily && c.entryNetPremiumCents() <= 0) {
+        if (unpriced == null && creditFamily && c.price().grossPackageNetCents() <= 0) {
             gateFailures.add("a credit structure that pays nothing at executable sides — the book is too wide to earn a credit");
         }
         boolean gatePassed = gateFailures.isEmpty();

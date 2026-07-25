@@ -29,6 +29,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class PlanOutcomeServiceTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC);
@@ -229,7 +230,12 @@ class PlanOutcomeServiceTest {
                         "bullish", 3, null, "conservative", null, null, null, null));
         ObjectNode candidate = (ObjectNode) Json.parse("""
                 {"strategy":"DEBIT_CALL_SPREAD","displayName":"Bull call spread","structureGroup":"DIRECTIONAL",
-                 "label":"BUY 250C / SELL 260C","qty":1,"entryNetPremiumCents":-30000,
+                 "label":"BUY 250C / SELL 260C","qty":1,
+	                 "price":{"quantity":1,"optionNetPremiumCents":-30000,"stockCashFlowCents":0,
+	                   "grossPackageNetCents":-30000,"openingFeesCents":130,"afterFeeNetCents":-30130,
+	                   "executableNetCents":-30000,"valuationBasis":"EXECUTABLE_BOOK",
+	                   "executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE",
+	                   "observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},
 	                 "maxProfitCents":70000,"maxLossCents":30000,"breakevens":[253],
 	                 "liquidityScore":0.9,"freshness":"FIXTURE","warnings":[],
 	                 "confidence":0.8,"intent":"DIRECTIONAL","intents":["DIRECTIONAL"],
@@ -404,7 +410,8 @@ class PlanOutcomeServiceTest {
                         Map.entry("ask", "7.0456"), Map.entry("mid", "6.97895"),
                         Map.entry("fill", "7.0456"), Map.entry("iv", 0.3))), List.of(),
                 Map.of("probabilityMap", Map.of("pMaxProfit", 0.2, "pMaxLoss", 0.3,
-                        "cvar95Cents", -28_000L)));
+                        "cvar95Cents", -28_000L)),
+                TestPrices.withFees(1, -30_000L, -30_000L, 65L));
         EconomicAssessment economics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED,
                 "LEARN_FROM", "Mixed", "Costs matter", -1_420L, 480L, 520L,
                 -4.7, false, List.of("Generated evidence"));

@@ -22,6 +22,19 @@ public final class OptionTime {
         if (expiry == null) return new Measure(0, 0, 0.5 / 365.0, "no option legs");
         long calendarDays = Math.max(0, ChronoUnit.DAYS.between(today, expiry));
         int sessions = MarketHours.tradingDaysBetween(today, expiry);
+        return measure(sessions, calendarDays);
+    }
+
+    /**
+     * Rebuilds the measure from a receipt that already recorded both units, for consumers that hold
+     * a persisted receipt rather than the expiry date. It never infers a session count from
+     * calendar days — {@link MarketHours} remains the only place sessions are counted.
+     */
+    public static Measure ofRecordedUnits(int sessions, Integer calendarDays) {
+        return measure(sessions, calendarDays == null ? sessions : calendarDays);
+    }
+
+    private static Measure measure(int sessions, long calendarDays) {
         // Vendors annualize listed-option IV on calendar time. Trading sessions describe the
         // near-expiry regime and management urgency, but do not silently change the IV clock.
         double years = Math.max(calendarDays, 0.5) / 365.0;

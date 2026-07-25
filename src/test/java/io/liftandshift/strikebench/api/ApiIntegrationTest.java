@@ -861,7 +861,7 @@ class ApiIntegrationTest {
             assertThat(strike).isLessThanOrEqualTo(255.30 + 0.01); // at or below fixture spot
             assertThat(strike).isLessThan(prev);
             prev = strike;
-            assertThat(r.get("entryNetPremiumCents").asLong()).isPositive(); // paid to wait
+            assertThat(r.at("/price/grossPackageNetCents").asLong()).isPositive(); // paid to wait
             assertThat(Double.parseDouble(r.get("effectivePrice").asText())).isLessThan(strike);
             assertThat(r.get("assignmentProb").isNumber()).isTrue();
             assertThat(r.get("annualizedYieldPct").isNumber()).isTrue();
@@ -1688,6 +1688,44 @@ class ApiIntegrationTest {
         HttpResponse<String> unacknowledged = post("/api/trades", cashSecuredPut);
         assertThat(unacknowledged.statusCode()).isEqualTo(422);
         assertThat(unacknowledged.body()).contains("ack-capital");
+
+        // The management plan on the wire is the ONE named policy's typed output: rule constants,
+        // trigger VALUES with their units, and a typed regime — nothing a consumer must parse.
+        JsonNode plan = preview.at("/preview/analytics/managementPlan");
+        assertThat(plan.path("policyId").asText()).isEqualTo("STANDARD_V1");
+        assertThat(plan.path("policyVersion").asInt()).isEqualTo(1);
+        assertThat(plan.path("policyFingerprint").asText()).isNotBlank();
+        assertThat(plan.path("regime").asText()).isIn("NEAR_EXPIRY", "SHORT_DATED", "STANDARD");
+        assertThat(plan.path("side").asText()).isEqualTo("CREDIT");
+        assertThat(java.util.stream.StreamSupport.stream(plan.withArray("rules").spliterator(), false)
+                .map(rule -> rule.path("rule").asText()).toList())
+                .contains("TAKE_PROFIT", "STOP_LOSS");
+        assertThat(plan.withArray("rules").get(0).path("triggerPnlCents").isNumber()).isTrue();
+    }
+
+    @Test
+    @Order(46)
+    void aNearExpiryTicketStillDemandsTheGammaAcknowledgmentThroughTheTypedRegime() throws Exception {
+        // Regression for §7.5: the acknowledgment used to depend on the words "near-expiry"
+        // appearing in a prose regime string. It now switches on the typed Regime enum, so
+        // rewording a rule can never silently drop a required risk acknowledgment.
+        JsonNode research = Json.parse(get("/api/research/AAPL").body());
+        String nearest = research.get("expirations").get(0).asText();
+        String ticket = """
+                {"symbol":"AAPL","strategy":"CASH_SECURED_PUT","qty":1,"riskMode":"conservative",
+                 "source":"API_TEST","fillNature":"PROPOSED","legs":[
+                  {"action":"SELL","type":"PUT","strike":"250","expiration":"%s","ratio":1,
+                   "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(nearest);
+        JsonNode preview = Json.parse(post("/api/trades/preview", ticket).body());
+        String regime = preview.at("/preview/analytics/managementPlan/regime").asText();
+        boolean nearExpiry = "NEAR_EXPIRY".equals(regime);
+        boolean hasDteAck = java.util.stream.StreamSupport.stream(
+                        preview.withArray("requiredAcks").spliterator(), false)
+                .anyMatch(ack -> "ack-dte".equals(ack.path("id").asText()));
+        assertThat(hasDteAck)
+                .as("the gamma acknowledgment must track the typed regime exactly, both ways")
+                .isEqualTo(nearExpiry);
     }
 
     @Test
@@ -1741,7 +1779,14 @@ class ApiIntegrationTest {
         assertThat(analyzed.at("/decision/analysis/schemaVersion").asText())
                 .isEqualTo("position-lifecycle-decision-v1");
         assertThat(analyzed.at("/decision/receiptFingerprint").asText()).hasSize(64);
-        assertThat(analyzed.at("/decision/analysis/dimensions")).hasSize(7);
+        // Eight dimensions: MECHANICAL_PROTOCOL joined the lane so DEFEND can name the stop-loss
+        // and expiry/time triggers §6.4 requires it to point at.
+        assertThat(analyzed.at("/decision/analysis/dimensions")).hasSize(8);
+        assertThat(java.util.stream.StreamSupport.stream(
+                        analyzed.at("/decision/analysis/dimensions").spliterator(), false)
+                .map(row -> row.get("name").asText()).toList()).contains("MECHANICAL_PROTOCOL");
+        assertThat(analyzed.at("/decision/analysis/policy/policyId").asText()).isEqualTo("STANDARD_V1");
+        assertThat(analyzed.at("/decision/analysis/policy/timeRuleSessions").asInt()).isEqualTo(15);
 
         String positionFingerprint = analyzed.at("/lifecycle/positionFingerprint").asText();
         HttpResponse<String> capacityRevision = post("/api/portfolio/accounts/" + id + "/objective", """

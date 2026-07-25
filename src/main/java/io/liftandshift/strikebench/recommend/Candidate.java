@@ -21,8 +21,11 @@ public record Candidate(
         String label,                 // short human summary, e.g. "SELL 555P / BUY 550P Aug 21"
         List<LegView> legs,
         int qty,
-        long entryNetPremiumCents,    // credit > 0, debit < 0 — INCLUDES any stock leg (a buy-write is net-negative)
-        long optionNetPremiumCents,   // option legs ONLY, credit > 0 / debit < 0; equals entryNetPremiumCents when there is no stock leg
+        // THE canonical package-price receipt (§7.2) — the same object the preview, the order dock,
+        // the review screen and a held close carry. It replaced the bare entryNetPremiumCents /
+        // optionNetPremiumCents pair, which stated two amounts on an undisclosed basis at an
+        // undisclosed time and so could never be reconciled against the dock's number (§3.3).
+        io.liftandshift.strikebench.paper.PackagePriceReceipt price,
         Long maxProfitCents,          // null = uncapped or model-dependent
         long maxLossCents,
         List<String> breakevens,
@@ -46,4 +49,17 @@ public record Candidate(
         Boolean usesHeldShares,
         Integer sharesNeeded,         // held shares this trade would lock, when usesHeldShares
         Long combinedMaxLossCents     // worst case incl. locked shares from today's price, when usesHeldShares
-) {}
+) {
+    /**
+     * Every candidate carries a §7.2 receipt — a missing one IS the unpriced state, so it is
+     * normalized here rather than left as a null that each of the dozen downstream consumers would
+     * have to remember to guard. Consumers ask {@code price().priced()} and get one answer.
+     */
+    public Candidate {
+        if (price == null) {
+            price = io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(
+                    Math.max(1, qty), io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
+                    "No package-price receipt was produced for this candidate.");
+        }
+    }
+}

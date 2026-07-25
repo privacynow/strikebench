@@ -337,8 +337,11 @@ class PlanServiceTest {
                         "VALUES(?,?,1,?,'paths-test',10000,'fixture','FIXTURE',now(),?,'CURRENT','GBM','BASE',30," +
                         "1,0,0.2,0,0,0,8,42,2,0.2,0.2,'FLAT')",
                 ensemble, planId, fingerprint, "ensemble-input-" + suffix);
-        db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,evaluation_snapshot) " +
-                        "VALUES(?,?,1,'LONG_CALL',?,'CURRENT','{}'::jsonb)",
+        // Every candidate row states a §7.2 basis; this fixture never priced one, so it says so.
+        db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,evaluation_snapshot," +
+                        "valuation_basis,price_executability,price_fee_side,price_unavailable_reason) " +
+                        "VALUES(?,?,1,'LONG_CALL',?,'CURRENT','{}'::jsonb,'UNAVAILABLE','UNAVAILABLE','OPENING'," +
+                        "'this fixture never priced the package')",
                 candidate, planId, "candidate-input-" + suffix);
         db.exec("INSERT INTO plan_outcome_run(id,plan_id,context_rev,candidate_id,ensemble_id,basis,interpretation," +
                         "input_hash,engine_version,state) VALUES(?,?,1,?,?,'PARAMETRIC','test run',?,'outcome-test','CURRENT')",

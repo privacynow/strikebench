@@ -48,10 +48,17 @@ public final class CampaignService {
 
     private final Db db;
     private final Clock clock;
+    /** The named policy adherence is scored against; {@link ProtocolEvaluator} owns the numbers. */
+    private volatile ProtocolEvaluator.Policy managementPolicy = ProtocolEvaluator.Policy.standard();
 
     public CampaignService(Db db, Clock clock) {
         this.db = db;
         this.clock = clock;
+    }
+
+    /** Selects the named management policy campaign reviews score adherence against. */
+    public void setManagementPolicy(ProtocolEvaluator.Policy policy) {
+        if (policy != null) this.managementPolicy = policy;
     }
 
     // ---- Public shapes ----
@@ -120,7 +127,8 @@ public final class CampaignService {
 
     /** Review of one frozen mechanical rule from one Plan decision. */
     public record ProtocolAdherence(String planId, String decisionId, String executionLane,
-                                    String rule, Long triggerPnlCents, Integer triggerDaysToExpiry,
+                                    String policyId, String rule, Long triggerPnlCents,
+                                    Integer triggerSessionsToExpiry,
                                     String ruleSummary, String status, String triggeredAt,
                                     Long observedPnlAtTriggerCents, String responseKind,
                                     String responseAt, Long responseResultCents,
@@ -950,16 +958,30 @@ public final class CampaignService {
         record Action(String kind, OffsetDateTime at, Long unrealizedCents, Long realizedCents,
                       String tradeId, Integer tradeQty) {}
         record Seen(String rule, int actionIndex, OffsetDateTime at, Long pnlCents) {}
+        // ONE basis: the frozen protocol lines are measured on the OPTION-ONLY net. The recorded
+        // proposed net is authoritative when there is no stock leg (it can carry a package-level
+        // limit the legs alone cannot reproduce); with a stock leg present the option portion is
+        // recomputed from the frozen option legs so a buy-write is never judged on its shares.
         List<Decision> decisions = Db.queryOn(c,
                 "SELECT d.plan_id,d.id,d.action,d.qty,d.proposed_net_cents,d.quote_as_of," +
                         "(SELECT MIN(l.expiration) FROM plan_decision_leg l " +
-                        "WHERE l.decision_id=d.id AND l.expiration IS NOT NULL) nearest_expiry " +
+                        "WHERE l.decision_id=d.id AND l.expiration IS NOT NULL) nearest_expiry," +
+                        "(CASE WHEN EXISTS(SELECT 1 FROM plan_decision_leg l WHERE l.decision_id=d.id " +
+                        "AND l.instrument_type='STOCK') THEN 1 ELSE 0 END) has_stock_leg," +
+                        "(SELECT COALESCE(SUM((CASE WHEN l.action='SELL' THEN 1 ELSE -1 END) " +
+                        "* ROUND(COALESCE(l.fill_price,l.mid_price,0) * l.ratio * l.multiplier * 100)),0) " +
+                        "FROM plan_decision_leg l WHERE l.decision_id=d.id " +
+                        "AND l.instrument_type<>'STOCK')::bigint option_unit_cents " +
                         "FROM campaign_plan_member cm JOIN plan_decision d ON d.plan_id=cm.plan_id " +
                         "WHERE cm.campaign_id=? AND d.action IN ('TRADE','BROKER') " +
                         "AND d.proposed_net_cents IS NOT NULL ORDER BY d.quote_as_of,d.id",
                 r -> new Decision(r.str("plan_id"), r.str("id"), r.str("action"),
-                        integerOrNull(r, "qty"), r.lng("proposed_net_cents"), r.odt("quote_as_of"),
-                        r.date("nearest_expiry")),
+                        integerOrNull(r, "qty"),
+                        r.bool("has_stock_leg")
+                                ? Math.multiplyExact(r.lng("option_unit_cents"),
+                                        Math.max(1, (long) integerOrDefault(r, "qty", 1)))
+                                : r.lng("proposed_net_cents"),
+                        r.odt("quote_as_of"), r.date("nearest_expiry")),
                 row.id());
         List<ProtocolAdherence> out = new ArrayList<>();
         for (Decision decision : decisions) {
@@ -969,20 +991,28 @@ public final class CampaignService {
                     r -> new Action(r.str("kind"), r.odt("action_at"),
                             r.lngOrNull("unrealized_cents"), r.lngOrNull("realized_cents"),
                             r.str("trade_id"), integerOrNull(r, "trade_qty")), decision.id());
-            List<ProtocolEvaluator.Rule> rules = ProtocolEvaluator.rules(decision.entryCents());
+            ProtocolEvaluator.Policy policy = managementPolicy;
+            List<ProtocolEvaluator.Rule> rules = ProtocolEvaluator.rules(policy, decision.entryCents());
             Map<String, Seen> seen = new LinkedHashMap<>();
-            Integer entryDte = daysToExpiry(decision.at(), decision.nearestExpiry());
-            for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(
-                    new ProtocolEvaluator.Inputs(decision.entryCents(), 0L, entryDte))) {
+            var entryTime = ProtocolEvaluator.timeTo(marketDate(decision.at()), decision.nearestExpiry());
+            // A package OPENED inside the time window was never "still holding past the line" — the
+            // rule is NOT_APPLICABLE for it, otherwise a 14-DTE credit spread can never be adherent
+            // and a final review scores it OVERRIDDEN for a rule it could not have obeyed.
+            boolean openedInsideTimeWindow = entryTime != null
+                    && entryTime.sessions() <= policy.timeRuleSessions();
+            for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(policy,
+                    new ProtocolEvaluator.Inputs(decision.entryCents(), 0L, entryTime))) {
+                if (openedInsideTimeWindow && trigger.triggerSessionsToExpiry() != null) continue;
                 seen.putIfAbsent(trigger.rule(), new Seen(trigger.rule(), -1, decision.at(), 0L));
             }
             boolean hasRecordedMark = false;
             for (int i = 0; i < actions.size(); i++) {
                 Action action = actions.get(i);
                 if ("MARK".equals(action.kind())) hasRecordedMark = true;
-                Integer dte = daysToExpiry(action.at(), decision.nearestExpiry());
-                for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(
-                        new ProtocolEvaluator.Inputs(decision.entryCents(), action.unrealizedCents(), dte))) {
+                var time = ProtocolEvaluator.timeTo(marketDate(action.at()), decision.nearestExpiry());
+                for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(policy,
+                        new ProtocolEvaluator.Inputs(decision.entryCents(), action.unrealizedCents(), time))) {
+                    if (openedInsideTimeWindow && trigger.triggerSessionsToExpiry() != null) continue;
                     seen.putIfAbsent(trigger.rule(), new Seen(trigger.rule(), i, action.at(),
                             action.unrealizedCents()));
                 }
@@ -990,17 +1020,25 @@ public final class CampaignService {
             for (ProtocolEvaluator.Rule rule : rules) {
                 Seen trigger = seen.get(rule.rule());
                 String lane = "BROKER".equals(decision.action()) ? "REAL" : "PRACTICE";
+                boolean timeRule = rule.triggerSessionsToExpiry() != null;
                 if (trigger == null) {
-                    boolean knowable = rule.triggerDaysToExpiry() != null
-                            ? decision.nearestExpiry() != null : hasRecordedMark;
-                    out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane, rule.rule(),
-                            rule.triggerPnlCents(), rule.triggerDaysToExpiry(), rule.summary(),
-                            knowable ? "NOT_TRIGGERED" : "UNAVAILABLE", null, null, null, null,
-                            null, null, knowable
-                            ? "The frozen line was not crossed in the recorded evidence."
-                            : rule.triggerDaysToExpiry() != null
+                    boolean knowable = timeRule ? decision.nearestExpiry() != null : hasRecordedMark;
+                    String status = timeRule && openedInsideTimeWindow ? "NOT_APPLICABLE"
+                            : !timeRule && rule.triggerPnlCents() == null ? "NOT_APPLICABLE"
+                            : knowable ? "NOT_TRIGGERED" : "UNAVAILABLE";
+                    out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane,
+                            rule.policyId(), rule.rule(),
+                            rule.triggerPnlCents(), rule.triggerSessionsToExpiry(), rule.summary(),
+                            status, null, null, null, null,
+                            null, null, switch (status) {
+                        case "NOT_APPLICABLE" -> timeRule
+                                ? "Not applicable — this package was already inside the time window when it opened."
+                                : "Not applicable — this package opened flat, so there is no premium basis for a price line.";
+                        case "NOT_TRIGGERED" -> "The frozen line was not crossed in the recorded evidence.";
+                        default -> timeRule
                                 ? "Unavailable — the frozen decision has no option expiry for this time rule."
-                                : "Unavailable — no recorded marks can establish whether this price rule fired."));
+                                : "Unavailable — no recorded marks can establish whether this price rule fired.";
+                    }));
                     continue;
                 }
                 int responseIndex = -1;
@@ -1013,10 +1051,10 @@ public final class CampaignService {
                 for (int i = trigger.actionIndex() + 1; i < limit; i++) {
                     Action later = actions.get(i);
                     if (!"MARK".equals(later.kind()) || later.unrealizedCents() == null
-                            || rule.triggerDaysToExpiry() != null) continue;
-                    Integer laterDte = daysToExpiry(later.at(), decision.nearestExpiry());
-                    boolean stillTriggered = ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(
-                                    decision.entryCents(), later.unrealizedCents(), laterDte)).stream()
+                            || timeRule) continue;
+                    var laterTime = ProtocolEvaluator.timeTo(marketDate(later.at()), decision.nearestExpiry());
+                    boolean stillTriggered = ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(
+                                    decision.entryCents(), later.unrealizedCents(), laterTime)).stream()
                             .anyMatch(t -> t.rule().equals(rule.rule()));
                     if (!stillTriggered) { triggerPassedBeforeResponse = true; break; }
                 }
@@ -1044,20 +1082,15 @@ public final class CampaignService {
                             ? "The record shows an override, but the trigger and response do not prove the same whole-package quantity/basis; signed cost is withheld."
                             : "Signed override cost = recorded response result minus the P/L at the trigger mark; negative cost hurt, positive cost helped.";
                 };
-                out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane, rule.rule(),
-                        rule.triggerPnlCents(), rule.triggerDaysToExpiry(), rule.summary(), status,
+                out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane,
+                        rule.policyId(), rule.rule(),
+                        rule.triggerPnlCents(), rule.triggerSessionsToExpiry(), rule.summary(), status,
                         iso(trigger.at()), trigger.pnlCents(), response == null ? null : response.kind(),
                         response == null ? null : iso(response.at()),
                         response == null ? null : response.realizedCents(), signedCost, note));
             }
         }
         return List.copyOf(out);
-    }
-
-    private static Integer daysToExpiry(OffsetDateTime at, LocalDate expiry) {
-        if (at == null || expiry == null) return null;
-        long days = ChronoUnit.DAYS.between(marketDate(at), expiry);
-        return (int) Math.max(0, Math.min(Integer.MAX_VALUE, days));
     }
 
     private static boolean isPositionResponse(String kind) {
@@ -1686,6 +1719,11 @@ public final class CampaignService {
     private static Integer integerOrNull(Db.Row row, String column) {
         Long value = row.lngOrNull(column);
         return value == null ? null : Math.toIntExact(value);
+    }
+
+    private static int integerOrDefault(Db.Row row, String column, int fallback) {
+        Long value = row.lngOrNull(column);
+        return value == null ? fallback : Math.toIntExact(value);
     }
 
     private static String optionalText(String value, String what, int max) {

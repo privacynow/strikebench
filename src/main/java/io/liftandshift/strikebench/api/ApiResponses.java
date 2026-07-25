@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.recommend.Rejection;
 
@@ -344,18 +345,20 @@ public final class ApiResponses {
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit,
                                        io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
-    public enum OrderValuationBasis { EXECUTABLE_BOOK, RESTING_LIMIT, UNAVAILABLE }
-    public record OrderSummary(int qty, long proposedNetCents, long feesOverrideCents,
-                               OrderInstruction orderInstruction,
-                               OrderInstruction.Executability executability,
-                               boolean presentlyExecutable, Long executableNetCents,
-                               Long valuedNetCents, OrderValuationBasis valuationBasis) {}
+    /**
+     * The order dock. `OrderSummary` used to sit here with nine fields, four of which were names
+     * for the same money on different bases (proposedNetCents, executableNetCents, valuedNetCents,
+     * the instruction's limitNetCents) and one — feesOverrideCents — which was an OVERRIDE that
+     * defaulted to 0 and made the dock claim $0 of fees. All of it is now the ONE §7.2 receipt the
+     * candidate rail also carries, so the two screens are finally comparable (§3.3, §3.8).
+     */
+    public record OrderDock(OrderInstruction orderInstruction, PackagePriceReceipt price) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
                                              Guardrails guardrails,
                                              List<RiskAcknowledgment> requiredAcks,
                                              String ackToken, AccountFit accountFit,
-                                             T plan, U selected, OrderSummary order) {}
+                                             T plan, U selected, OrderDock order) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
     public record TrackedPackageAnalysis(TradePreview preview, EvaluationReceipt evaluation,

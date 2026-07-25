@@ -101,35 +101,50 @@ public record PositionLifecycleReceipt(
         }
     }
 
+    /**
+     * Today's executable close, priced on the SAME §7.2 receipt a candidate, a preview and an order
+     * dock carry — so "what would it cost to get out" and "what would it cost to get in" are finally
+     * the same shape of fact. The six loose cash fields that used to live here are now the receipt's
+     * grossPackageNetCents / optionNetPremiumCents / stockCashFlowCents / openingFeesCents (with
+     * feeSide=CLOSING) / afterFeeNetCents, and the reconciliation invariant this record pioneered
+     * now guards every surface instead of only this one.
+     *
+     * <p>The midpoint stays a separate, explicitly named BENCHMARK. It is not the price: a package
+     * cannot be closed at the midpoint, and publishing it as a second "close cash" is how one screen
+     * ends up contradicting another.</p>
+     */
     public record CloseQuote(
             boolean executable,
+            io.liftandshift.strikebench.paper.PackagePriceReceipt price,
             Long signedMidCloseCashCents,
-            Long signedExecutableCloseCashCents,
-            Long signedOptionExecutableCloseCashCents,
-            Long closingFeesCents,
-            Long signedNetCloseCashCents,
             PositionDomain.PriceAuthority priceAuthority,
             String basis,
             String unavailableReason
     ) {
         public CloseQuote {
             required(basis, "close-quote basis");
-            nonNegative(closingFeesCents, "closing fees");
             if (executable) {
-                if (signedExecutableCloseCashCents == null || signedOptionExecutableCloseCashCents == null
-                        || closingFeesCents == null
-                        || signedNetCloseCashCents == null || priceAuthority == null) {
+                if (price == null || !price.priced() || price.openingFeesCents() == null
+                        || price.afterFeeNetCents() == null || priceAuthority == null) {
                     throw new IllegalArgumentException("an executable close needs cash, fees, net cash, and authority");
+                }
+                if (price.feeSide() != io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.CLOSING) {
+                    throw new IllegalArgumentException("a close quote charges CLOSING fees");
                 }
                 if (unavailableReason != null) {
                     throw new IllegalArgumentException("an executable close cannot have an unavailable reason");
                 }
-                if (signedNetCloseCashCents != signedExecutableCloseCashCents - closingFeesCents) {
-                    throw new IllegalArgumentException("net close cash must reconcile to executable cash less fees");
-                }
             } else {
                 required(unavailableReason, "close unavailable reason");
             }
+        }
+
+        /** The unpriced close: §3.2 says the reason travels, never a substituted zero. */
+        public static CloseQuote unavailable(int quantity, String basis, String reason) {
+            return new CloseQuote(false,
+                    io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(quantity,
+                            io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.CLOSING, reason),
+                    null, null, basis, reason);
         }
     }
 
@@ -165,6 +180,10 @@ public record PositionLifecycleReceipt(
             Long grossRemainingPremiumCents,
             Double grossAnnualizedRemainingPremiumPct,
             Integer calendarDaysRemaining,
+            // The ONE policy clock (§7.6): every management threshold is in trading sessions and
+            // MarketHours owns the calendar. Calendar days stay beside it as a disclosed second
+            // unit — the annualized carry rate needs them — but never as a threshold.
+            Integer tradingSessionsRemaining,
             AuthorityFacts.MoneyFact collateral,
             AuthorityFacts.RateFact concurrentCollateralIncome,
             AuthorityFacts.MoneyFact encumbrance,
@@ -180,6 +199,7 @@ public record PositionLifecycleReceipt(
             }
             nonNegative(grossRemainingPremiumCents, "gross remaining premium");
             nonNegative(calendarDaysRemaining, "calendar days remaining");
+            nonNegative(tradingSessionsRemaining, "trading sessions remaining");
             nonNegative(sharesReleasedByClosing, "shares released");
             required(basis, "carry/collateral basis");
             limitations = copy(limitations);

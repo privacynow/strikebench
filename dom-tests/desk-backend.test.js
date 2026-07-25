@@ -724,7 +724,8 @@ function candidate() {
     strategy: 'CALL_DEBIT_SPREAD',
     symbol: 'AMD',
     qty: 1,
-    entryNetPremiumCents: -12345,
+    price: priceReceipt({ optionNetPremiumCents: -12345, openingFeesCents: 260,
+      executableNetCents: -12345, fingerprint: 'price-candidate-debit' }),
     maxLossCents: 12345,
     maxProfitCents: 87655,
     assignmentProb: 0.08,
@@ -881,7 +882,7 @@ function customCandidate(position) {
     strategy: 'CUSTOM',
     symbol: 'AMD',
     qty: position.qty,
-    entryNetPremiumCents: preview.entryNetPremiumCents,
+    price: preview.price,
     maxLossCents: preview.maxLossCents,
     maxProfitCents: preview.maxProfitCents,
     assignmentProb: 0.04,
@@ -933,6 +934,9 @@ function customTradePreview(position) {
     preview: {
       ok: valid,
       entryNetPremiumCents: valid ? -31000 : -62000,
+      price: priceReceipt({ quantity: position.qty || 1,
+        optionNetPremiumCents: valid ? -31000 : -62000, openingFeesCents: 260,
+        executableNetCents: valid ? -31000 : -62000, fingerprint: 'price-custom-draft' }),
       maxLossCents: valid ? 31000 : 62000,
       maxProfitCents: valid ? 69000 : null,
       reserveCents: valid ? 31000 : 62000,
@@ -1059,10 +1063,31 @@ function ensemble(version = 13, market = {}) {
   };
 }
 
+/* §7.2 package-price receipt, exactly as PackagePriceReceipt serializes it: all sixteen keys,
+   explicit nulls for what is genuinely unknown. Fixtures build it through one helper so a surface
+   that reads a field the server never sends fails here rather than on the owner's screen. */
+function priceReceipt({ quantity = 1, optionNetPremiumCents = null, stockCashFlowCents = 0,
+  grossPackageNetCents = null, openingFeesCents = null, afterFeeNetCents = null,
+  executableNetCents = null, restingLimitNetCents = null, valuationBasis = 'EXECUTABLE_BOOK',
+  executability = 'IMMEDIATE', source = 'BACKEND_TEST_RECEIPT', freshness = 'FRESH',
+  observedAt = '2026-07-24T20:00:00Z', fingerprint = 'price-fixture', feeSide = 'OPENING',
+  unavailableReason = null } = {}) {
+  const option = optionNetPremiumCents == null ? grossPackageNetCents : optionNetPremiumCents;
+  const gross = grossPackageNetCents == null
+    ? (option == null ? null : option + (stockCashFlowCents || 0)) : grossPackageNetCents;
+  const afterFee = afterFeeNetCents == null
+    ? (gross == null || openingFeesCents == null ? gross : gross - Math.abs(openingFeesCents))
+    : afterFeeNetCents;
+  return { quantity, optionNetPremiumCents: option, stockCashFlowCents, grossPackageNetCents: gross,
+    openingFeesCents, afterFeeNetCents: afterFee, executableNetCents, restingLimitNetCents,
+    valuationBasis, executability, source, freshness, observedAt, fingerprint, feeSide,
+    unavailableReason };
+}
+
 function decisionPreview(requestBody, selected = candidate(), version = 14) {
   const instruction = requestBody.orderInstruction;
   const limit = instruction.limitNetCents;
-  const proposedNetCents = selected.entryNetPremiumCents;
+  const proposedNetCents = selected.price.grossPackageNetCents;
   const executable = instruction.type === 'MARKET' || limit <= proposedNetCents;
   const isCustom = selected.id === CUSTOM_CANDIDATE_ID;
   const restingReason = executable ? null
@@ -1071,7 +1096,12 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
     plan: plan(version),
     selected,
     preview: {
-      entryNetPremiumCents: proposedNetCents,
+      price: priceReceipt({ quantity: requestBody.qty, grossPackageNetCents: proposedNetCents,
+        optionNetPremiumCents: selected.price.optionNetPremiumCents, openingFeesCents: 260,
+        executableNetCents: proposedNetCents,
+        restingLimitNetCents: executable ? null : limit,
+        valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT',
+        executability: executable ? 'IMMEDIATE' : 'RESTING' }),
       maxLossCents: selected.maxLossCents,
       maxProfitCents: selected.maxProfitCents,
       reserveCents: selected.maxLossCents,
@@ -1093,15 +1123,14 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
     requiredAcks: [],
     ackToken: 'ack-desk-test',
     order: {
-      qty: requestBody.qty,
-      proposedNetCents,
-      feesOverrideCents: 0,
       orderInstruction: instruction,
-      executability: executable ? 'IMMEDIATE' : 'RESTING',
-      presentlyExecutable: executable,
-      executableNetCents: proposedNetCents,
-      valuedNetCents: executable ? proposedNetCents : limit,
-      valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT'
+      price: priceReceipt({ quantity: requestBody.qty, grossPackageNetCents: proposedNetCents,
+        optionNetPremiumCents: selected.price.optionNetPremiumCents, openingFeesCents: 260,
+        executableNetCents: proposedNetCents,
+        restingLimitNetCents: executable ? null : limit,
+        afterFeeNetCents: executable ? proposedNetCents - 260 : limit - 260,
+        valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT',
+        executability: executable ? 'IMMEDIATE' : 'RESTING' })
     }
   };
 }
@@ -1362,14 +1391,14 @@ function positionScenarioResponse(body, options = {}) {
           focusPrice: 177.78, atmIv: 0.39
         }
       ],
-      underlyingSteps: [
-        { step: 0, sessionProgress: 0, focusPrice: 222.22, atmIv: 0.27 },
-        { step: 1, sessionProgress: 1, focusPrice: 215.1, atmIv: 0.30 },
-        { step: 2, sessionProgress: 2, focusPrice: 218.2, atmIv: 0.31 },
-        { step: 3, sessionProgress: 3, focusPrice: 199.9, atmIv: 0.34 },
-        { step: 4, sessionProgress: 4, focusPrice: 190.3, atmIv: 0.37 },
-        { step: 5, sessionProgress: 5, focusPrice: 177.78, atmIv: 0.39 }
-      ],
+      /* The dated session calendar rides UnderlyingStep — the one place the backend puts it.
+         DisplayPositionStep is (step, sessionProgress, pnlCents) and carries no date, so a
+         consumer looking for dates on the P/L steps finds none. */
+      underlyingSteps: [222.22, 215.1, 218.2, 199.9, 190.3, 177.78].map((focusPrice, step) => ({
+        step, sessionProgress: POSITION_CHECKPOINTS[step],
+        sessionDate: POSITION_CHECKPOINT_DATES[step], focusPrice,
+        atmIv: [0.27, 0.30, 0.31, 0.34, 0.37, 0.39][step]
+      })),
       positions: [{
         key: expectedFocus,
         source: 'PRACTICE_TRADE',
@@ -1378,8 +1407,7 @@ function positionScenarioResponse(body, options = {}) {
           sourcePathIndex: row.sourcePathIndex,
           role: row.role,
           steps: row.pnl.map((pnlCents, step) => ({
-            step, sessionProgress: POSITION_CHECKPOINTS[step],
-            sessionDate: POSITION_CHECKPOINT_DATES[step], pnlCents
+            step, sessionProgress: POSITION_CHECKPOINTS[step], pnlCents
           }))
         })),
         days: [
@@ -2110,12 +2138,10 @@ async function installBackend(page, options = {}) {
           payoff: []
         });
         response.order = Object.assign({}, response.order, {
-          proposedNetCents: 0,
-          executability: 'UNAVAILABLE',
-          presentlyExecutable: false,
-          executableNetCents: null,
-          valuedNetCents: null,
-          valuationBasis: 'UNAVAILABLE'
+          price: priceReceipt({ optionNetPremiumCents: null, grossPackageNetCents: null,
+            openingFeesCents: null, afterFeeNetCents: null, executableNetCents: null,
+            valuationBasis: 'UNAVAILABLE', executability: 'UNAVAILABLE',
+            fingerprint: null, unavailableReason: reason })
         });
         response.guardrails = { level: 'WARN', blockReasons: [], warnings: [reason] };
       }
@@ -4211,9 +4237,12 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
     assert.doesNotMatch(ready.text, /browser-generated|locally generated|straight-line/i,
       'the authoritative panel makes no claim of a local or straight-line simulation');
 
+    /* The package expires 2026-08-21, so its life ends at the 08-20 session (checkpoint index 4)
+       and the 08-28 checkpoint is past expiry. Half of that life lands exactly on the stored
+       08-04 checkpoint — the same one this assertion has always pinned. */
     const scrub = page.locator(`${stageSelector} .scrub[data-wf="scrub"]`);
     await scrub.evaluate(input => {
-      input.value = '40';
+      input.value = '50';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await page.waitForFunction(selector => {
@@ -4229,15 +4258,18 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
         progress: Number(stage.querySelector('.scrub').value)
       };
     }, stageSelector);
-    assert.deepEqual(middle, { price: '$218.20', pnl: '$175', progress: 40 },
+    assert.deepEqual(middle, { price: '$218.20', pnl: '$175', progress: 50 },
       'scrubbing lands on the exact second stored valuation checkpoint');
 
     await scrub.evaluate(input => {
       input.value = '100';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
+    /* Fully scrubbed lands on the last session the package is ALIVE for — 2026-08-20, price
+       $190.30 — not on the 08-28 checkpoint, which falls after the 2026-08-21 expiry. A fan that
+       ran to 08-28 was drawing settled afterlife. */
     await page.waitForFunction(selector => document.querySelector(selector)
-      ?.querySelector('[data-live="px"]')?.textContent === '$177.78', stageSelector);
+      ?.querySelector('[data-live="px"]')?.textContent === '$190.30', stageSelector);
     const terminal = await page.evaluate(stageSelector => {
       const stage = document.querySelector(stageSelector);
       const svg = stage.querySelector('.authpathchart');
@@ -4256,8 +4288,8 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
         payoffMarker: document.querySelectorAll('.authpayoff .authpayframe').length
       };
     }, stageSelector);
-    assert.equal(terminal.price, '$177.78');
-    assert.match(terminal.pnl, /−\$432|-\$432/);
+    assert.equal(terminal.price, '$190.30');
+    assert.match(terminal.pnl, /−\$250|-\$250/);
     assert.ok(terminal.endX >= terminal.viewWidth - 11,
       'the selected stored trajectory spans the chart through its conditioned target');
     assert.ok(terminal.revealWidth >= terminal.viewWidth - terminal.clipX - 12,
@@ -4283,8 +4315,8 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
         scrub: Number(stage.querySelector('.scrub').value)
       };
     }, stageSelector);
-    assert.equal(played.price, '$177.78');
-    assert.match(played.pnl, /−\$432|-\$432/);
+    assert.equal(played.price, '$190.30');
+    assert.match(played.pnl, /−\$250|-\$250/);
     assert.equal(played.scrub, 100,
       'playback completes on the same exact endpoint as direct checkpoint scrubbing');
 
@@ -5247,8 +5279,9 @@ test('unavailable execution preserves candidate economics without promoting zero
         payoffPathCount: document.querySelectorAll('#decPay path[d]').length,
         dockText: dock?.textContent.replace(/\s+/g, ' ').trim(),
         reviewDisabled: dock?.querySelector('[data-dec="review"]')?.disabled,
-        orderState: window.decide.orderPreview.order.executability,
-        valuedNetCents: window.decide.orderPreview.order.valuedNetCents,
+        orderState: window.decide.orderPreview.order.price.executability,
+        valuedNetCents: window.decide.orderPreview.order.price.afterFeeNetCents,
+        priceUnavailableReason: window.decide.orderPreview.order.price.unavailableReason,
         candidateFreshness: active.backend.freshness,
         quoteFreshness: state.market.quote.freshness,
         chainFreshness: state.market.chain.freshness,
@@ -5267,6 +5300,8 @@ test('unavailable execution preserves candidate economics without promoting zero
       'an unavailable execution book cannot blank the candidate payoff chart');
     assert.equal(rendered.orderState, 'UNAVAILABLE');
     assert.equal(rendered.valuedNetCents, null);
+    assert.match(rendered.priceUnavailableReason, /stale observed option book/i,
+      'an unpriced package says WHY rather than showing a zero');
     assert.equal(rendered.candidateFreshness, 'STALE');
     assert.equal(rendered.quoteFreshness, 'STALE');
     assert.equal(rendered.chainFreshness, 'STALE');

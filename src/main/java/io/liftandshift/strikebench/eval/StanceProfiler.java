@@ -69,7 +69,11 @@ final class StanceProfiler {
         double move = Math.max(0.01, sigma * Math.sqrt(Math.max(1, duration) / 365.0));
         Long down1 = null, down2 = null, up1 = null, up2 = null;
         PayoffCurve curve = null;
-        if (expirations <= 1) {
+        // Greeks above are GEOMETRY — strikes, expiries and vol — so they survive a package the
+        // market could not mark. The four stressed P/L points below are payoff, and payoff needs an
+        // entry price; without one they stay null rather than reporting the loss of a free package.
+        String unpriced = RiskProfiler.unpricedReason(candidate);
+        if (expirations <= 1 && unpriced == null) {
             curve = RiskProfiler.payoffCurve(candidate, ctx);
             down1 = lossAt(curve, spot * Math.max(0, 1 - move));
             down2 = lossAt(curve, spot * Math.max(0, 1 - 2 * move));
@@ -86,9 +90,11 @@ final class StanceProfiler {
                 Math.subtractExact(curve.profitAtCents(Money.priceFromCents(intervalEnd)),
                         curve.profitAtCents(Money.priceFromCents(intervalStart))),
                 Math.multiplyExact(Math.subtractExact(intervalEnd, intervalStart), equivalentShares));
-        String terminalBasis = curve == null
-                ? "unavailable: multiple expirations require path valuation"
-                : "expiration payoff over the +1 sigma interval; fees excluded";
+        String terminalBasis = curve != null
+                ? "expiration payoff over the +1 sigma interval; fees excluded"
+                : unpriced != null
+                ? "unavailable: this package has no entry price. " + unpriced
+                : "unavailable: multiple expirations require path valuation";
         ParticipationProfile participation = new ParticipationProfile(localBps, terminalBps,
                 intervalStart, intervalEnd, dominantExpiry, "current dollar delta versus "
                 + equivalentShares + " equivalent shares", terminalBasis, regimePoints(legs));

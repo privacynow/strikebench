@@ -49,11 +49,12 @@ final class ResearchController {
      */
     record ExpectedMove(String symbol, boolean available, String reason,
                         Double atmIv, String expiration, Integer horizonSessions, Integer expirationCalendarDays,
-                        Double p16, Double p50, Double p84, String basis,
+                        Double p16, Double p50, Double p84,
+                        Double p16MovePct, Double p84MovePct, String basis,
                         Double anchorSpot, String anchorSource, String anchorFreshness, String asOf) {
         static ExpectedMove unavailable(String symbol, String reason) {
             return new ExpectedMove(symbol, false, reason, null, null, null, null,
-                    null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -321,6 +322,7 @@ final class ResearchController {
         if (range == null) { ctx.json(ExpectedMove.unavailable(symbol, "insufficient inputs")); return; }
         ctx.json(new ExpectedMove(symbol, true, null, range.atmIv(), range.expiration(),
                 range.horizonSessions(), range.expirationCalendarDays(), range.p16(), range.p50(), range.p84(),
+                range.downMovePct(spot), range.upMovePct(spot),
                 range.basis(), spot, current.source(), current.markFreshness().name(), today.toString()));
     }
 

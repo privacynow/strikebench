@@ -28,5 +28,11 @@ public record TradePreview(
         Double assignmentProb,         // chance ANY short strike finishes ITM; null if no shorts
         List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
         List<Map<String, Object>> payoff,  // expiration P/L samples {price, profitCents}; empty for multi-expiration
-        Map<String, Object> analytics      // probabilityMap / evSensitivity / executionQuality / managementPlan / verdict
+        Map<String, Object> analytics,     // probabilityMap / evSensitivity / managementPlan / verdict
+        // THE canonical package-price receipt (§7.2). entryNetPremiumCents/feesOpenCents above are
+        // this receipt's grossPackageNetCents/openingFeesCents; the receipt adds the option-only
+        // net, the stock cash flow, the after-fee net, the executable vs resting distinction, the
+        // basis, the quantity and the observation stamp — everything a surface needs to reconcile
+        // its number against the candidate rail's instead of guessing (§3.3).
+        PackagePriceReceipt price
 ) {}

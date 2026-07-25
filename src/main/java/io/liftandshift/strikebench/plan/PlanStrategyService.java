@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
@@ -461,8 +463,27 @@ public final class PlanStrategyService {
         values.put("family", family);
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
         values.put("assignment_probability", doubleOrNull(n, "assignmentProb"));
-        values.put("entry_net_cents", longOrNull(n, "entryNetPremiumCents"));
-        values.put("option_net_cents", longOrNull(n, "optionNetPremiumCents"));
+        // §7.2: the WHOLE package-price receipt is persisted, not two bare amounts. Without the
+        // basis, the fee and — above all — the observation stamp, a restored rail can never be
+        // reconciled against a live order dock, and §3.3 stays open however good the object is.
+        // The incoming node is rebuilt INTO the record first, so an inbound price that breaks the
+        // receipt's own identities never reaches the columns and cannot be restored later as a
+        // self-contradictory rail.
+        PackagePriceReceipt price = requirePriceReceipt(n.path("price"));
+        values.put("entry_net_cents", price.grossPackageNetCents());
+        values.put("option_net_cents", price.optionNetPremiumCents());
+        values.put("stock_cash_flow_cents", price.stockCashFlowCents());
+        values.put("opening_fees_cents", price.openingFeesCents());
+        values.put("after_fee_net_cents", price.afterFeeNetCents());
+        values.put("executable_net_cents", price.executableNetCents());
+        values.put("resting_limit_net_cents", price.restingLimitNetCents());
+        values.put("valuation_basis", price.valuationBasis().name());
+        values.put("price_executability", price.executability().name());
+        values.put("price_fee_side", price.feeSide().name());
+        values.put("price_source", price.source());
+        values.put("price_observed_at_epoch_ms", price.observedAt());
+        values.put("price_fingerprint", price.fingerprint());
+        values.put("price_unavailable_reason", price.unavailableReason());
         values.put("max_loss_cents", longOrNull(n, "maxLossCents")); values.put("max_profit_cents", longOrNull(n, "maxProfitCents"));
         values.put("input_hash", sha256(n));
         values.put("state", state); values.put("selected", 0); values.put("run_id", runId); values.put("source_kind", sourceKind);
@@ -530,7 +551,8 @@ public final class PlanStrategyService {
         put(n, "sentimentScorerVersion", r.sentimentScorerVersion());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
-        put(n, "entryNetPremiumCents", r.entryNet()); put(n, "optionNetPremiumCents", r.optionNet()); put(n, "maxProfitCents", r.maxProfit());
+        n.set("price", Json.MAPPER.valueToTree(priceReceipt(r)));
+        put(n, "maxProfitCents", r.maxProfit());
         put(n, "maxLossCents", r.maxLoss());
         put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness());
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
@@ -557,7 +579,11 @@ public final class PlanStrategyService {
 
     private static String candidateSelect() {
         return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.recommendation_id,pc.source_kind,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
-                "pc.entry_net_cents,pc.option_net_cents,pc.max_profit_cents,pc.max_loss_cents," +
+                "pc.entry_net_cents,pc.option_net_cents,pc.stock_cash_flow_cents,pc.opening_fees_cents," +
+                "pc.after_fee_net_cents,pc.executable_net_cents,pc.resting_limit_net_cents," +
+                "pc.valuation_basis,pc.price_executability,pc.price_fee_side,pc.price_source," +
+                "pc.price_observed_at_epoch_ms,pc.price_fingerprint,pc.price_unavailable_reason," +
+                "pc.max_profit_cents,pc.max_loss_cents," +
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
                 "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
                 "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
@@ -570,8 +596,14 @@ public final class PlanStrategyService {
         return new CandidateRow(r.str("id"), r.str("underlying_symbol"), r.str("scout_thesis"),
                 r.str("recommendation_id"), r.str("source_kind"),
                 r.str("family"), r.str("display_name"), r.str("structure_group"),
-                r.str("position_label"), integerOrNull(r, "qty"), r.lngOrNull("entry_net_cents"),
-                r.lngOrNull("option_net_cents"),
+                r.str("position_label"), integerOrNull(r, "qty"),
+                new CandidatePriceRow(r.lngOrNull("entry_net_cents"), r.lngOrNull("option_net_cents"),
+                        r.lngOrNull("stock_cash_flow_cents"), r.lngOrNull("opening_fees_cents"),
+                        r.lngOrNull("after_fee_net_cents"), r.lngOrNull("executable_net_cents"),
+                        r.lngOrNull("resting_limit_net_cents"), r.str("valuation_basis"),
+                        r.str("price_executability"), r.str("price_fee_side"), r.str("price_source"),
+                        r.lngOrNull("price_observed_at_epoch_ms"), r.str("price_fingerprint"),
+                        r.str("price_unavailable_reason")),
                 r.lngOrNull("max_profit_cents"), r.lngOrNull("max_loss_cents"),
                 r.dblOrNull("liquidity_score"), r.str("freshness"),
                 r.dblOrNull("confidence"), r.str("why_considered"),
@@ -854,12 +886,86 @@ public final class PlanStrategyService {
     private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
                                 String sourceKind,
                                 String family, String displayName, String structureGroup, String label,
-                                Integer qty, Long entryNet, Long optionNet, Long maxProfit, Long maxLoss,
+                                Integer qty, CandidatePriceRow price, Long maxProfit, Long maxLoss,
                                 Double liquidity, String freshness, Double confidence,
                                 String why, String upside, String risk, String invalidate,
                                 String beginner, String intent, Double assignment, Double annualized,
                                 String effectivePrice, String intentNote, Boolean usesHeld, Integer sharesNeeded,
                                 Long combinedMaxLoss, String evaluationSnapshot, boolean selected,
                                 String sentimentScorerVersion) {}
+
+    /** The persisted §7.2 receipt, exactly as the columns store it. */
+    private record CandidatePriceRow(Long gross, Long optionNet, Long stockCashFlow, Long openingFees,
+                                     Long afterFeeNet, Long executableNet, Long restingLimitNet,
+                                     String valuationBasis, String executability, String feeSide,
+                                     String source, Long observedAt, String fingerprint,
+                                     String unavailableReason) {}
+
+    /**
+     * The inbound package-price receipt, rebuilt through the canonical record so the same compact
+     * constructor that guards the live engine also guards what reaches the columns (§3.3). A
+     * candidate with no price receipt at all is refused rather than stored as a nameless amount:
+     * the engine always emits one, and an unpriced package has {@link PackagePriceReceipt#unavailable}.
+     */
+    private static PackagePriceReceipt requirePriceReceipt(JsonNode price) {
+        if (!price.isObject()) {
+            throw new IllegalArgumentException("candidate package-price receipt is required");
+        }
+        String basis = text(price, "valuationBasis");
+        if (basis == null) {
+            throw new IllegalArgumentException("candidate package-price receipt requires a valuationBasis");
+        }
+        String feeSide = text(price, "feeSide");
+        String executability = text(price, "executability");
+        int quantity = price.path("quantity").isNumber() ? price.get("quantity").asInt() : 0;
+        return new PackagePriceReceipt(quantity,
+                longOrNull(price, "optionNetPremiumCents"), longOrNull(price, "stockCashFlowCents"),
+                longOrNull(price, "grossPackageNetCents"), longOrNull(price, "openingFeesCents"),
+                longOrNull(price, "afterFeeNetCents"), longOrNull(price, "executableNetCents"),
+                longOrNull(price, "restingLimitNetCents"),
+                PackagePriceReceipt.ValuationBasis.valueOf(basis),
+                executability == null ? OrderInstruction.Executability.UNAVAILABLE
+                        : OrderInstruction.Executability.valueOf(executability),
+                text(price, "source"), text(price, "freshness"), longOrNull(price, "observedAt"),
+                text(price, "fingerprint"),
+                feeSide == null ? PackagePriceReceipt.FeeSide.OPENING
+                        : PackagePriceReceipt.FeeSide.valueOf(feeSide),
+                text(price, "unavailableReason"));
+    }
+
+    /**
+     * Restores the package-price receipt THROUGH the canonical record, so a rail rebuilt from the
+     * database and a rail straight off a scan are the same object — enforced by the same compact
+     * constructor, not merely by two field lists that happen to agree today.
+     *
+     * <p>This used to assemble the wire node field by field, which let it write a stored
+     * {@code entry_net_cents} beside a defaulted {@code UNAVAILABLE} basis and an "unavailable"
+     * reason: a combination {@link PackagePriceReceipt} itself declares illegal, published to the
+     * browser because nothing round-tripped the node back through the record. A restored candidate
+     * is either fully priced with a stated basis, or honestly unpriced with a reason — never both.</p>
+     */
+    private static PackagePriceReceipt priceReceipt(CandidateRow r) {
+        CandidatePriceRow p = r.price();
+        int quantity = r.qty() == null || r.qty() < 1 ? 1 : r.qty();
+        PackagePriceReceipt.FeeSide feeSide = p.feeSide() == null
+                ? PackagePriceReceipt.FeeSide.OPENING
+                : PackagePriceReceipt.FeeSide.valueOf(p.feeSide());
+        // No stated basis means no price receipt was ever written for this row. The schema keeps a
+        // price and its basis together (see V10), so there is no stranded amount to publish here —
+        // the candidate is unpriced, says why, and a re-scan is what prices it.
+        if (p.valuationBasis() == null
+                || PackagePriceReceipt.ValuationBasis.UNAVAILABLE.name().equals(p.valuationBasis())) {
+            return PackagePriceReceipt.unavailable(quantity, feeSide,
+                    p.unavailableReason() != null ? p.unavailableReason()
+                            : "this candidate was stored before its price receipt existed — re-scan to price it");
+        }
+        return new PackagePriceReceipt(quantity, p.optionNet(), p.stockCashFlow(), p.gross(),
+                p.openingFees(), p.afterFeeNet(), p.executableNet(), p.restingLimitNet(),
+                PackagePriceReceipt.ValuationBasis.valueOf(p.valuationBasis()),
+                p.executability() == null ? OrderInstruction.Executability.UNAVAILABLE
+                        : OrderInstruction.Executability.valueOf(p.executability()),
+                p.source(), r.freshness(), p.observedAt(), p.fingerprint(), feeSide,
+                p.unavailableReason());
+    }
 
 }

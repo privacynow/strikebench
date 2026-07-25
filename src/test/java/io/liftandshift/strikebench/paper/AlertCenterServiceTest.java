@@ -361,23 +361,105 @@ class AlertCenterServiceTest {
 
     @Test
     void protocolEvaluatorIsTheSingleSourceOfTriggerMath() {
-        // Credit: stop at 2x credit, take-profit at 50% capture, roll window at 21 days.
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, -36000L, 44)))
+        var policy = ProtocolEvaluator.Policy.standard();
+        // Sessions, not calendar days: the same clock every consumer reads (MarketHours owns it).
+        var far = time(60);   // ~42 sessions — outside the time rule
+        var inWindow = time(21);  // ~15 sessions — inside the time rule
+        var nearExpiry = time(5); // ~3 sessions — inside the near-expiry window
+
+        // Credit: stop at 2x credit, take-profit at 50% capture, roll inside the time window.
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, -36000L, far)))
                 .anyMatch(t -> t.rule().equals("STOP_LOSS") && t.severity().equals("URGENT"));
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, 9000L, 44)))
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, 9000L, far)))
                 .anyMatch(t -> t.rule().equals("TAKE_PROFIT") && t.severity().equals("ATTENTION"));
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, 0L, 20)))
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, 0L, inWindow)))
                 .anyMatch(t -> t.rule().equals("ROLL") && t.severity().equals("INFO"));
-        // Debit: stop at 50% of the debit, take-profit at 50%, time exit at 21 days.
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(-20000L, -10000L, 44)))
+        // Debit: stop at 50% of the debit, take-profit at 50%, time exit inside the window.
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(-20000L, -10000L, far)))
                 .anyMatch(t -> t.rule().equals("STOP_LOSS"));
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(-20000L, 10000L, 44)))
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(-20000L, 10000L, far)))
                 .anyMatch(t -> t.rule().equals("TAKE_PROFIT"));
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(-20000L, 0L, 10)))
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(-20000L, 0L, inWindow)))
+                .anyMatch(t -> t.rule().equals("TIME_EXIT"));
+        // Near expiry a CREDIT package is told to exit, not roll — rolling stops being management.
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, 0L, nearExpiry)))
                 .anyMatch(t -> t.rule().equals("TIME_EXIT"));
         // Quiet inside the thresholds; no marks -> no profit/loss opinion.
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, 1000L, 44))).isEmpty();
-        assertThat(ProtocolEvaluator.evaluate(new ProtocolEvaluator.Inputs(18000L, null, 44))).isEmpty();
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, 1000L, far))).isEmpty();
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, null, far))).isEmpty();
+        // Every trigger names the policy that produced it (§7.5).
+        assertThat(ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(18000L, -36000L, far)))
+                .allSatisfy(t -> {
+                    assertThat(t.policyId()).isEqualTo("STANDARD_V1");
+                    assertThat(t.policyFingerprint()).isEqualTo(policy.fingerprint());
+                });
+    }
+
+    @Test
+    void everySurfaceGetsTheSameAnswerFromTheSamePolicy() {
+        // ONE owner: the ticket plan, Decide's management plan, and the campaign-review frozen
+        // lines must place the SAME target and stop for the same package under the same policy.
+        var policy = ProtocolEvaluator.Policy.standard();
+        long credit = 18_000L;
+        var rules = ProtocolEvaluator.rules(policy, credit);
+        var plan = ProtocolEvaluator.plan(policy, credit, time(60), true);
+        assertThat(rules.get(0).triggerPnlCents()).isEqualTo(9_000L);   // 50% of the credit
+        assertThat(rules.get(1).triggerPnlCents()).isEqualTo(-36_000L); // 2x the credit
+        assertThat(plan.rules()).extracting(ProtocolEvaluator.Rule::rule)
+                .containsExactly("TAKE_PROFIT", "STOP_LOSS", "ROLL", "ASSIGNMENT", "INVALIDATION");
+        assertThat(plan.rules().get(0).triggerPnlCents()).isEqualTo(rules.get(0).triggerPnlCents());
+        assertThat(plan.rules().get(1).triggerPnlCents()).isEqualTo(rules.get(1).triggerPnlCents());
+        assertThat(plan.policyId()).isEqualTo(policy.policyId());
+        assertThat(plan.policyFingerprint()).isEqualTo(policy.fingerprint());
+        assertThat(plan.regime()).isEqualTo(ProtocolEvaluator.Regime.STANDARD);
+
+        // ONE basis: a covered call is a CREDIT on its option legs even though the package net is
+        // negative because of the shares. It must never be told to stop at half the debit paid.
+        List<Leg> buyWrite = List.of(
+                Leg.stock(LegAction.BUY, 1, new BigDecimal("100.00")),
+                Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"),
+                        LocalDate.of(2026, 8, 21), 1, new BigDecimal("2.00")));
+        long packageNet = io.liftandshift.strikebench.pricing.PayoffCurve.of(buyWrite, 1).entryNetPremiumCents();
+        long optionNet = ProtocolEvaluator.optionEntryBasisCents(buyWrite, 1, packageNet);
+        assertThat(packageNet).isNegative();
+        assertThat(optionNet).isEqualTo(20_000L); // $2.00 x 100 shares
+        assertThat(ProtocolEvaluator.side(optionNet)).isEqualTo(ProtocolEvaluator.Side.CREDIT);
+        assertThat(ProtocolEvaluator.side(packageNet)).isEqualTo(ProtocolEvaluator.Side.DEBIT);
+        assertThat(ProtocolEvaluator.rules(policy, optionNet).get(1).triggerPnlCents())
+                .as("the stop is 2x the $200 option credit, not half the $10,000 share purchase")
+                .isEqualTo(-40_000L);
+        // Zero is FLAT, never a credit, and a flat package has no price line to place.
+        assertThat(ProtocolEvaluator.side(0L)).isEqualTo(ProtocolEvaluator.Side.FLAT);
+        // …and an ABSENT price is UNPRICED, never silently flattened to that same zero (§3.2).
+        assertThat(ProtocolEvaluator.side(null)).isEqualTo(ProtocolEvaluator.Side.UNPRICED);
+        assertThat(ProtocolEvaluator.unpricedRules(policy, "no mark for the short leg").get(0)
+                .triggerPnlCents()).isNull();
+        assertThat(ProtocolEvaluator.unpricedRules(policy, "no mark for the short leg").get(1)
+                .summary()).contains("no mark for the short leg");
+        assertThat(ProtocolEvaluator.rules(policy, 0).get(0).triggerPnlCents()).isNull();
+        assertThat(ProtocolEvaluator.evaluate(policy,
+                new ProtocolEvaluator.Inputs(0, -50_000L, time(60)))).isEmpty();
+    }
+
+    @Test
+    void anExpiredLegHasNoTimeRuleLeftAndTrackedLotsProrateToTheAllocatedQuantity() {
+        var policy = ProtocolEvaluator.Policy.standard();
+        LocalDate today = LocalDate.of(2026, 7, 8);
+        assertThat(ProtocolEvaluator.timeTo(today, today.minusDays(1)))
+                .as("settlement mechanics own an expired leg; the roll/exit rule has nothing to ask")
+                .isNull();
+        assertThat(ProtocolEvaluator.evaluate(policy,
+                new ProtocolEvaluator.Inputs(18_000L, 0L, ProtocolEvaluator.timeTo(today, today.minusDays(1)))))
+                .isEmpty();
+        // A lot half-allocated to this structure contributes half its economic remaining amount,
+        // so the frozen lines are compared against the quantity the close is priced on.
+        assertThat(ProtocolEvaluator.trackedLotBasisCents("SHORT", 10_000L, 2, 4)).isEqualTo(5_000L);
+        assertThat(ProtocolEvaluator.trackedLotBasisCents("LONG", 10_000L, 4, 4)).isEqualTo(-10_000L);
+    }
+
+    private static io.liftandshift.strikebench.market.OptionTime.Measure time(int calendarDays) {
+        LocalDate today = LocalDate.of(2026, 7, 8);
+        return ProtocolEvaluator.timeTo(today, today.plusDays(calendarDays));
     }
 
     private static void await(java.util.function.BooleanSupplier condition) {

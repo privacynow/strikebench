@@ -24,16 +24,24 @@ public final class StrategyEvaluator {
     private final RiskProfiler risk = new RiskProfiler();
     private final EvidenceAssembler evidence = new EvidenceAssembler();
     private final ManagementPlanner management = new ManagementPlanner();
+    /** The named management policy every evaluation renders; configurable, never universal truth. */
+    private volatile io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy managementPolicy =
+            io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy.standard();
     private final ScoreComposer score = new ScoreComposer();
     private final Explainer explainer = new Explainer();
     private final StanceProfiler stance = new StanceProfiler();
+
+    /** Selects the named management policy this evaluator renders. */
+    public void setManagementPolicy(io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy policy) {
+        if (policy != null) this.managementPolicy = policy;
+    }
 
     public StrategyEvaluation evaluate(Candidate c, StrategySpec spec, EvalContext ctx) {
         CapitalProfile cap = capital.profile(c, ctx);
         VolatilityProfile vol = volatility.profile(ctx);
         RiskProfile rsk = risk.profile(c, ctx);
         EvidenceProfile ev = evidence.assemble(c, ctx);
-        ManagementPlan plan = management.plan(c, spec);
+        ManagementPlan plan = management.plan(c, spec, ctx, managementPolicy);
         ScoreBreakdown sb = score.compose(c, cap, rsk, ev, ctx);
         EconomicAssessment economics = EconomicAssessment.assess(c, rsk, ev, sb, ctx);
         StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
@@ -42,7 +50,7 @@ public final class StrategyEvaluator {
                 metrics.stance(), ctx.portfolioExposure(), ctx.declared());
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb,
                 assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
-                IvContext.from(c.entryNetPremiumCents(), vol), metrics.coverage(), exp);
+                ivContext(c, vol), metrics.coverage(), exp);
     }
 
     /**
@@ -56,7 +64,7 @@ public final class StrategyEvaluator {
         VolatilityProfile vol = volatility.profile(ctx);
         RiskProfile rsk = risk.profile(c, ctx);
         EvidenceProfile ev = evidence.assemble(c, ctx);
-        ManagementPlan plan = management.plan(c, spec);
+        ManagementPlan plan = management.plan(c, spec, ctx, managementPolicy);
         ScoreBreakdown rankedScore = score.compose(c, cap, rsk, ev, ctx);
         java.util.LinkedHashSet<String> failures = new java.util.LinkedHashSet<>(rankedScore.gateFailures());
         if (mechanicalFailures != null) failures.addAll(mechanicalFailures);
@@ -72,7 +80,19 @@ public final class StrategyEvaluator {
                 metrics.stance(), ctx.portfolioExposure(), ctx.declared());
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan,
                 exactScore, assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
-                IvContext.from(c.entryNetPremiumCents(), vol), metrics.coverage(), exp);
+                ivContext(c, vol), metrics.coverage(), exp);
+    }
+
+    /**
+     * The volatility-entry reading for one candidate. §3.2: an unpriced §7.2 receipt means the
+     * debit-or-credit side is UNKNOWN, so it is reported as unavailable with the receipt's own
+     * reason — never unboxed into a "flat" $0 entry. One helper so the ranked and exact lanes
+     * cannot read the same receipt differently.
+     */
+    private static IvContext ivContext(Candidate c, VolatilityProfile vol) {
+        String unpriced = RiskProfiler.unpricedReason(c);
+        return IvContext.from(unpriced == null ? c.price().grossPackageNetCents() : null,
+                vol, unpriced);
     }
 
     private static FourOutputAssessment assessment(ScoreBreakdown score, EconomicAssessment economics,

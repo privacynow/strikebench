@@ -764,16 +764,12 @@ final class TradeController {
                     .shareContextUnitsNeeded(request.legs());
             sharesNeeded = Math.toIntExact(Math.multiplyExact(units, request.qty()));
         }
-        // Option-only net premium: for a buy-write / covered exact ticket the package net is
-        // stock-inclusive (negative), so the option premium is computed from the option legs alone
-        // via the same canonical PayoffCurve. With no stock leg it equals the package net.
-        boolean hasStockLeg = request.legs().stream().anyMatch(io.liftandshift.strikebench.model.Leg::isStock);
-        long optionNetPremiumCents = hasStockLeg
-                ? PayoffCurve.of(request.legs().stream()
-                        .filter(leg -> !leg.isStock()).toList(), request.qty()).entryNetPremiumCents()
-                : preview.entryNetPremiumCents();
+        // The exact ticket carries the preview's OWN §7.2 receipt. It used to build its option-only
+        // net from request.legs() — the prices the customer SUBMITTED — while taking the package net
+        // from the preview's FILLED legs, which TradeService may have swapped to the natural
+        // executable book. For a marketable buy-write those were two different bases on one object.
         return new Candidate(request.strategy(), display, group, display, legs, request.qty(),
-                preview.entryNetPremiumCents(), optionNetPremiumCents, preview.maxProfitCents(), preview.maxLossCents(),
+                preview.price(), preview.maxProfitCents(), preview.maxLossCents(),
                 preview.breakevens(), preview.popEntry(), preview.expectedValueCents(),
                 liquid ? 1.0 : 0.0, preview.freshness(), preview.warnings(), 1,
                 "Exact ticket", "", "", "", "", intent, intents, preview.assignmentProb(),
@@ -802,10 +798,12 @@ final class TradeController {
                     "Entering surrenders " + Math.round(Math.abs(concession) * 100)
                             + "% of the package midpoint to the bid/ask spread."));
         }
+        // Typed regime, not prose: renaming a rule's wording must never silently drop a required
+        // risk acknowledgment (§7.5).
         Object management = preview.analytics().get("managementPlan");
-        if (management instanceof Map<?, ?> plan
-                && String.valueOf(plan.get("regime")).contains("near-expiry")) {
-            out.add(new ApiResponses.RiskAcknowledgment("ack-dte", "Only " + plan.get("sessions")
+        if (management instanceof io.liftandshift.strikebench.paper.ProtocolEvaluator.Plan plan
+                && plan.regime() == io.liftandshift.strikebench.paper.ProtocolEvaluator.Regime.NEAR_EXPIRY) {
+            out.add(new ApiResponses.RiskAcknowledgment("ack-dte", "Only " + plan.sessionsToExpiry()
                     + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
         }
         if (effectiveRiskBudgetCents > 0 && preview.maxLossCents() > effectiveRiskBudgetCents) {

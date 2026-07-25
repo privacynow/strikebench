@@ -105,7 +105,7 @@ public final class BookActionProjectionService {
                 long reserveAfter = Math.max(0, Math.subtractExact(account.reservedCents(), reserveRelease));
                 long obligationReleased = proportional(packagePutObligation, quantity, trade.qty());
                 long obligationAfter = Math.max(0, Math.subtractExact(obligation, obligationReleased));
-                Long optionCash = lifecycle.currentChoice().close().signedOptionExecutableCloseCashCents();
+                Long optionCash = lifecycle.currentChoice().close().price().optionNetPremiumCents();
                 long proportionalOptionCash = optionCash == null ? closingCash
                         : proportional(optionCash, quantity, trade.qty());
                 ExecutableCost cost = new ExecutableCost(closingCash, proportionalOptionCash,
@@ -324,9 +324,9 @@ public final class BookActionProjectionService {
         if (!mutation.available()) {
             return unavailable(action, quantity, position.qty() - quantity, mutation.unavailableReason(), position);
         }
-        long signedCash = proportional(close.signedExecutableCloseCashCents(), quantity, position.qty());
-        long signedOptionCash = proportional(close.signedOptionExecutableCloseCashCents(), quantity, position.qty());
-        long fees = proportional(close.closingFeesCents(), quantity, position.qty());
+        long signedCash = proportional(close.price().grossPackageNetCents(), quantity, position.qty());
+        long signedOptionCash = proportional(close.price().optionNetPremiumCents(), quantity, position.qty());
+        long fees = proportional(close.price().openingFeesCents(), quantity, position.qty());
         long signedNet = Math.subtractExact(signedCash, fees);
         long cashAfter = Math.addExact(currentCash, signedNet);
         BasisEffect basis = new BasisEffect(mutation.taxBasisRemovedCents(),

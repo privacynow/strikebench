@@ -42,7 +42,7 @@ class PlanStrategyServiceTest {
                  "disclaimer":"Education only","candidates":[{
                    "strategy":"IRON_CONDOR","displayName":"Iron condor","structureGroup":"RANGE",
                    "label":"SELL 245P / BUY 240P / SELL 265C / BUY 270C","qty":1,
-                   "entryNetPremiumCents":12500,"maxProfitCents":12500,"maxLossCents":37500,
+                   "price":{"quantity":1,"optionNetPremiumCents":12500,"stockCashFlowCents":0,"grossPackageNetCents":12500,"openingFeesCents":65,"afterFeeNetCents":12435,"executableNetCents":12500,"valuationBasis":"EXECUTABLE_BOOK","executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE","observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},"maxProfitCents":12500,"maxLossCents":37500,
                    "breakevens":["243.75","266.25"],"pop":0.61,"expectedValueCents":-1200,
                    "liquidityScore":0.82,"freshness":"FIXTURE","warnings":["Teaching data"],
                    "confidence":0.7,"whyConsidered":"Range view","bestUpside":"Time decay",
@@ -148,7 +148,7 @@ class PlanStrategyServiceTest {
                         "bullish", 45, null, "balanced", null, null, null, null));
         ObjectNode candidate = (ObjectNode) Json.parse("""
                 {"strategy":"CUSTOM","displayName":"Custom position","structureGroup":"custom",
-                 "label":"BUY 250C / SELL 265C","qty":2,"entryNetPremiumCents":-85000,
+                 "label":"BUY 250C / SELL 265C","qty":2,"price":{"quantity":2,"optionNetPremiumCents":-85000,"stockCashFlowCents":0,"grossPackageNetCents":-85000,"openingFeesCents":65,"afterFeeNetCents":-85065,"executableNetCents":-85000,"valuationBasis":"EXECUTABLE_BOOK","executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE","observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},
                  "maxProfitCents":215000,"maxLossCents":85000,"breakevens":[254.25],"pop":0.43,
                  "expectedValueCents":-3200,"liquidityScore":1.0,"freshness":"FIXTURE",
                  "warnings":[],"confidence":1.0,"whyConsidered":"Exact ticket",
@@ -244,7 +244,7 @@ class PlanStrategyServiceTest {
         result.putArray("candidates").add(Json.parse("""
                 {"strategy":"CREDIT_PUT_SPREAD","displayName":"Bull put spread",
                  "structureGroup":"credit_vertical","label":"SELL 250P / BUY 245P","qty":1,
-                 "entryNetPremiumCents":12000,"maxProfitCents":12000,"maxLossCents":38000,
+                 "price":{"quantity":1,"optionNetPremiumCents":12000,"stockCashFlowCents":0,"grossPackageNetCents":12000,"openingFeesCents":65,"afterFeeNetCents":11935,"executableNetCents":12000,"valuationBasis":"EXECUTABLE_BOOK","executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE","observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},"maxProfitCents":12000,"maxLossCents":38000,
                  "evaluation":{"available":true,"decisionScore":62.0,"viable":true,
                    "capital":{},"volatility":{},"risk":{},"evidence":{},"management":{},"score":{},
                    "assessment":{},"stance":{},"participation":{},"impliedStance":{},
@@ -293,7 +293,7 @@ class PlanStrategyServiceTest {
         result.putArray("candidates").add(Json.parse("""
                 {"strategy":"CREDIT_PUT_SPREAD","displayName":"Bull put spread",
                  "structureGroup":"credit_vertical","label":"SELL 250P / BUY 245P","qty":1,
-                 "entryNetPremiumCents":12000,"maxProfitCents":12000,"maxLossCents":38000,
+                 "price":{"quantity":1,"optionNetPremiumCents":12000,"stockCashFlowCents":0,"grossPackageNetCents":12000,"openingFeesCents":65,"afterFeeNetCents":11935,"executableNetCents":12000,"valuationBasis":"EXECUTABLE_BOOK","executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE","observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},"maxProfitCents":12000,"maxLossCents":38000,
                  "evaluation":{"available":true,"decisionScore":62.0,"viable":true,
                    "capital":{},"volatility":{},"risk":{},"evidence":{},"management":{},"score":{},
                    "assessment":{},"stance":{},"participation":{},"impliedStance":{},
@@ -364,7 +364,7 @@ class PlanStrategyServiceTest {
                    "symbol":"SPY","scoutThesis":"BULLISH","strategy":"DEBIT_CALL_SPREAD",
                    "sentimentScorerVersion":"sentiment-keyword-v1",
                    "displayName":"Bull call spread","structureGroup":"DIRECTIONAL","label":"BUY 560C / SELL 570C",
-                   "qty":1,"entryNetPremiumCents":-34000,"maxProfitCents":66000,"maxLossCents":34000,
+                   "qty":1,"price":{"quantity":1,"optionNetPremiumCents":-34000,"stockCashFlowCents":0,"grossPackageNetCents":-34000,"openingFeesCents":65,"afterFeeNetCents":-34065,"executableNetCents":-34000,"valuationBasis":"EXECUTABLE_BOOK","executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE","observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},"maxProfitCents":66000,"maxLossCents":34000,
                    "breakevens":[563.4],"pop":0.47,"expectedValueCents":-900,"liquidityScore":0.92,
                    "freshness":"FIXTURE","warnings":[],"confidence":0.72,
                    "whyConsidered":"Bullish peer","bestUpside":"Capped gain","biggestRisk":"Stock falls",

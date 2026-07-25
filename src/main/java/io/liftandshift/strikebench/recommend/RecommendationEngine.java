@@ -366,7 +366,7 @@ public final class RecommendationEngine {
                     Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
                             ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
                             builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
-                            quote, ctx.riskFreeRate(), probe);
+                            quote, ctx.riskFreeRate(), lane, probe);
                     if (candidate == null) {
                         if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
                                 List.of(probe.reason != null ? probe.reason
@@ -543,7 +543,7 @@ public final class RecommendationEngine {
             Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
-                    quote, riskFreeRate, new CandidateProbe());
+                    quote, riskFreeRate, lane, new CandidateProbe());
             if (c == null) continue;
             String filterReason = failsFilter(c, filters);
             if (filterReason != null) {
@@ -620,7 +620,9 @@ public final class RecommendationEngine {
                                   LocalDate today, long budget, long buyingPowerCents, Freshness freshness, boolean avoidEarnings,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
                                   long coverSharesPerUnit, int freeShares, Quote underlyingQuote,
-                                  double riskFreeRate, CandidateProbe probe) {
+                                  double riskFreeRate,
+                                  io.liftandshift.strikebench.market.MarketLane lane,
+                                  CandidateProbe probe) {
         // Re-price legs at the EXECUTABLE side (buys pay the ask, sells receive the bid) so
         // the numbers a learner sees here match what a fill would actually cost. Structures
         // whose legs have no executable side are not real opportunities.
@@ -808,7 +810,10 @@ public final class RecommendationEngine {
                     .shareContextUnitsNeeded(built.legs());
         }
         if (packageShareUnitsPerUnit <= 0) packageShareUnitsPerUnit = Leg.SHARES_PER_CONTRACT;
-        long optionNetCents = PayoffCurve.of(optionLegs, qty).entryNetPremiumCents();
+        // The option-only basis comes from the ONE canonical owner, not a second private copy of
+        // the same PayoffCurve call (§3.8).
+        long optionNetCents = io.liftandshift.strikebench.paper.ProtocolEvaluator
+                .optionEntryBasisCents(built.legs(), qty, entryNet);
         long optionContracts = Fees.optionContracts(optionLegs, qty);
         long openingFees = Fees.openingCents(optionContracts, feePerContractCents, feePerOrderCents);
         long netOptionIncomeCents = optionNetCents - openingFees;
@@ -914,9 +919,56 @@ public final class RecommendationEngine {
             OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
             legViews.add(LegView.of(built.legs().get(i), quoteReceipt));
         }
+        // THE §7.2 receipt for this candidate, stating ONLY what the legs' own evidence supports.
+        // Every leg was re-priced to the natural side above (buys pay the ask, sells receive the
+        // bid), but a natural side is not automatically a TRADEABLE side: the scan gate is
+        // usableIn(lane) — analysis grade — while execution requires executableIn(lane), which for
+        // OBSERVED means REALTIME or DELAYED. An EOD or last-trade-fallback chain is a legitimate
+        // scan input and scores 0.70 freshness, so hardcoding EXECUTABLE_BOOK/IMMEDIATE here made
+        // every rail row state that a package was immediately tradeable at that price while
+        // TradeService refused the identical package and published UNAVAILABLE (§3.1/§3.2). The
+        // basis is now DERIVED from the same evidence the order lane will consult.
+        List<io.liftandshift.strikebench.model.DataEvidence> priceEvidence =
+                new ArrayList<>(built.legs().size());
+        for (int i = 0; i < built.legs().size(); i++) {
+            OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
+            priceEvidence.add(built.legs().get(i).isStock() || quoteReceipt == null
+                    ? underlyingQuote.evidence() : quoteReceipt.evidence());
+        }
+        var packageEvidence = io.liftandshift.strikebench.model.DataEvidence.aggregate(priceEvidence);
+        boolean executableBook = !priceEvidence.isEmpty()
+                && priceEvidence.stream().allMatch(e -> e.executableIn(lane));
+        // No midpoint can enter this package: ExecutablePrice.forAction returns null on a one-sided
+        // or crossed book and the candidate is refused above, so the only two honest outcomes are
+        // "the natural book, executable now" and "natural sides of a book nobody can trade now".
+        var valuationBasis = io.liftandshift.strikebench.paper.PackagePriceReceipt
+                .markBasis(executableBook, false);
+        var executability = io.liftandshift.strikebench.paper.OrderInstruction.market()
+                .executability(entryNet, executableBook);
+        if (!executableBook) {
+            candidateWarnings.add("These prices come from " + packageEvidence.provenance() + " "
+                    + packageEvidence.age() + " marks (" + packageEvidence.source() + "), which are not "
+                    + "an executable book in the " + lane + " market. The package can be studied at this "
+                    + "price; it cannot be traded at it until the market quotes it again.");
+        }
+        Long scannedAt = io.liftandshift.strikebench.paper.PackagePriceReceipt.observedAtOf(
+                legViews.stream().map(LegView::quoteAsOfEpochMs).toList());
+        var price = io.liftandshift.strikebench.paper.PackagePriceReceipt.of(qty, entryNet, optionNetCents,
+                io.liftandshift.strikebench.paper.ProtocolEvaluator.stockEntryBasisCents(built.legs(), qty),
+                openingFees, io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
+                // A field named "executable" never carries a price nobody can trade on (§3.2).
+                executableBook ? entryNet : null,
+                io.liftandshift.strikebench.paper.OrderInstruction.market(),
+                executability, valuationBasis,
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.sourceOf(
+                        legViews.stream().map(LegView::quoteSource).toList()),
+                freshness.name(), scannedAt,
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.fingerprintOf(built.legs(), qty,
+                        entryNet, valuationBasis, scannedAt));
+
         return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
                 List.copyOf(legViews), qty,
-                entryNet, optionNetCents, maxProfit, maxLoss, breakevens, pop, ev,
+                price, maxProfit, maxLoss, breakevens, pop, ev,
                 round2(liquidity), freshness.name(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
@@ -1117,8 +1169,15 @@ public final class RecommendationEngine {
                 return String.format("Annualized yield %.1f%% is below your minimum %.1f%%", c.annualizedYieldPct(), f.minAnnualizedYieldPct());
             }
         }
-        if (f.maxCostCents() != null && c.entryNetPremiumCents() < 0 && -c.entryNetPremiumCents() > f.maxCostCents()) {
-            return "Entry cost " + Money.fmt(-c.entryNetPremiumCents()) + " exceeds your cap of " + Money.fmt(f.maxCostCents());
+        Long packageNet = c.price() == null ? null : c.price().grossPackageNetCents();
+        if (packageNet == null) {
+            // A filter is a promise about a number. With no package price the promise cannot be
+            // kept, so the candidate is excluded WITH the reason — never admitted on an assumed
+            // zero cost, which would slip an unpriced package past a max-cost cap (§3.2).
+            return "This package has no price, so your entry-cost and premium filters cannot be applied to it";
+        }
+        if (f.maxCostCents() != null && packageNet < 0 && -packageNet > f.maxCostCents()) {
+            return "Entry cost " + Money.fmt(-packageNet) + " exceeds your cap of " + Money.fmt(f.maxCostCents());
         }
         return null;
     }
@@ -1269,15 +1328,20 @@ public final class RecommendationEngine {
             return "At executable prices this structure cannot profit under any outcome (max profit "
                     + Money.fmt(c.maxProfitCents()) + ") — not a usable trade.";
         }
+        Long entryNet = c.price() == null ? null : c.price().grossPackageNetCents();
+        if (entryNet == null) {
+            return "This package has no entry price, so whether it collects or pays premium — the "
+                    + "whole question this intent turns on — cannot be answered.";
+        }
         // TWO-TIER income check (paired with StrategyEvaluator.objectiveCoherence): this is the cheap
         // GENERATION-time gate on entry cashflow — a single-expiration income structure must COLLECT a
         // credit. The precise EVAL-time judgment is the carry/theta diagnostic in objectiveCoherence;
         // a structure offered as income here should read carry-coherent there. Distinct inputs at
         // distinct stages, intentionally — not a duplicate check.
         if (intent == StrategyIntent.INCOME && !family.multiExpiration() && !family.needsStock()
-                && c.entryNetPremiumCents() <= 0) {
+                && entryNet <= 0) {
             return "Earning income means COLLECTING premium, but this structure pays a net debit of "
-                    + Money.fmt(-c.entryNetPremiumCents())
+                    + Money.fmt(-entryNet)
                     + " at entry — it costs money to hold rather than paying you to wait.";
         }
         return null;
@@ -1286,7 +1350,13 @@ public final class RecommendationEngine {
     /** Structural viability only; the complete economics/evidence judgment remains downstream. */
     static String packageViability(StrategyFamily family, Candidate c) {
         if (family != StrategyFamily.IRON_CONDOR) return null;
-        long credit = c.entryNetPremiumCents();
+        Long stated = c.price() == null ? null : c.price().grossPackageNetCents();
+        if (stated == null) {
+            // Every condor ratio below is credit-to-width. With no credit there is no ratio, and
+            // a null read as $0 would report a perfectly good condor as paying nothing (§3.2).
+            return "this package has no executable credit to measure its wings against";
+        }
+        long credit = stated;
         double grossWidth = (double) c.maxLossCents() + credit;
         double creditToWidth = grossWidth > 0 ? credit / grossWidth : 0.0;
         double wingBalance = condorWingBalance(c);

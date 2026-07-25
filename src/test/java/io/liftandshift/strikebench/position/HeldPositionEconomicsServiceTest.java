@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class HeldPositionEconomicsServiceTest {
     private static final Clock CLOCK = Clock.fixed(
@@ -47,9 +48,14 @@ class HeldPositionEconomicsServiceTest {
         assertThat(receipt.currentChoice().close()).satisfies(close -> {
             assertThat(close.executable()).isTrue();
             assertThat(close.signedMidCloseCashCents()).isEqualTo(-4_750L);
-            assertThat(close.signedExecutableCloseCashCents()).isEqualTo(-4_800L);
-            assertThat(close.closingFeesCents()).isEqualTo(65L);
-            assertThat(close.signedNetCloseCashCents()).isEqualTo(-4_865L);
+            assertThat(close.price().grossPackageNetCents()).isEqualTo(-4_800L);
+            assertThat(close.price().openingFeesCents()).isEqualTo(65L);
+            assertThat(close.price().afterFeeNetCents()).isEqualTo(-4_865L);
+            // The fee is disclosed as a CLOSING fee rather than borrowing the opening field's name.
+            assertThat(close.price().feeSide())
+                    .isEqualTo(io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.CLOSING);
+            assertThat(close.price().grossPackageNetCents())
+                    .isEqualTo(close.price().optionNetPremiumCents() + close.price().stockCashFlowCents());
             assertThat(close.priceAuthority()).isEqualTo(PositionDomain.PriceAuthority.OBSERVED);
         });
         // Substitution = -(4,700 - 65) - (-4,865) = +230. The canonical model values
@@ -62,6 +68,11 @@ class HeldPositionEconomicsServiceTest {
         assertThat(receipt.carryCollateral()).satisfies(carry -> {
             assertThat(carry.grossRemainingPremiumCents()).isEqualTo(4_800L);
             assertThat(carry.calendarDaysRemaining()).isEqualTo(16);
+            // Both units on the ONE receipt: MarketHours counts the sessions the policy thresholds
+            // are stated in; calendar days stay beside them for the annualized carry rate only.
+            assertThat(carry.tradingSessionsRemaining()).isEqualTo(
+                    io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(
+                            java.time.LocalDate.parse("2026-07-08"), java.time.LocalDate.parse("2026-07-24")));
             assertThat(carry.grossAnnualizedRemainingPremiumPct()).isEqualTo(6.0833);
             assertThat(carry.collateral().cents()).isEqualTo(1_800_000L);
             assertThat(carry.collateral().authority()).isEqualTo(PositionDomain.FactAuthority.MODEL_DERIVED);
@@ -142,8 +153,34 @@ class HeldPositionEconomicsServiceTest {
                 .noneMatch(note -> note.contains("Event crossings remain unavailable"));
     }
 
+    /**
+     * §3.2/§3.5 — the unpriced close must state the SIZE it could not price. The close-quote
+     * refusal hardcoded quantity 1 with {@code request.qty()} in scope at both call sites, so a
+     * five-lot position whose book went one-sided published a single-contract receipt: a silent
+     * product default inside the very object that exists to stop invented amounts. Everything
+     * downstream (the dock's "unavailable for N lots", any partial-close projection) reads it.
+     */
+    @Test void anUnpricedCloseStatesTheSizeItCouldNotPriceRatherThanOneLot() {
+        var service = new HeldPositionEconomicsService(CLOCK);
+        var request = request(5, Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO));
+        // Closing a short put BUYS it back, so the close needs an ask. This book has none.
+        TradePreview preview = preview("0.47", null, "0.475", 4_700L, 1_800_000L);
+
+        var close = service.compose(request, preview, evaluation()).currentChoice().close();
+
+        assertThat(close.executable()).isFalse();
+        assertThat(close.price().quantity()).isEqualTo(5);
+        assertThat(close.price().priced()).isFalse();
+        assertThat(close.price().unavailableReason()).contains("No executable ask");
+    }
+
     private static TradeService.OpenRequest request(Leg leg) {
-        return new TradeService.OpenRequest("tracked", "NVDA", "CASH_SECURED_PUT", 1,
+        return request(1, leg);
+    }
+
+    private static TradeService.OpenRequest request(int qty, Leg leg) {
+        return new TradeService.OpenRequest("tracked", "NVDA", "CASH_SECURED_PUT", qty,
                 List.of(leg), null, null, null, "INCOME", false,
                 null, null, "TEST", "PROPOSED");
     }
@@ -172,7 +209,8 @@ class HeldPositionEconomicsServiceTest {
                 100_000_000L, 100_000_000L + entryNet - 65,
                 0, reserve, 100_000_000L, 100_000_000L + entryNet - 65 - reserve,
                 "DELAYED", DataEvidence.of("observed test book", Freshness.DELAYED),
-                21_000L, .10, List.of(leg), List.of(), analytics);
+                21_000L, .10, List.of(leg), List.of(), analytics,
+                TestPrices.withFees(1, entryNet, entryNet, 65L));
     }
 
     private static StrategyEvaluation evaluation() {

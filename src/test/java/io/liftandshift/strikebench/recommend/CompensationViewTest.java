@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 /** Earnings proximity is a named, evidence-bearing part of the beside-not-instead ranking. */
 class CompensationViewTest {
@@ -75,6 +76,26 @@ class CompensationViewTest {
                 .contains("Missing evidence is neutral");
     }
 
+    /**
+     * §3.2: "premium per unit of realized risk" has no numerator without a package price. An
+     * unpriced package is therefore absent from this view — the same way a debit structure is —
+     * rather than crashing the whole ranking on an unboxed null or being ranked as if it collected
+     * nothing. The priced entry beside it still publishes normally, so one blocked package cannot
+     * take the compensation lane down with it.
+     */
+    @Test
+    void anUnpricedPackageIsAbsentFromCompensationRatherThanCrashingOrScoringAsZeroPremium() {
+        EvaluationService evaluations = service(Map.of());
+        StrategyEvaluation priced = evaluation("priced", "2026-08-21");
+        StrategyEvaluation unpriced = unpricedEvaluation("unpriced", "2026-08-21");
+
+        List<CompensationView.CompensationEntry> result = CompensationView.compute(
+                List.of(unpriced, priced), evaluations, null);
+
+        assertThat(result).extracting(CompensationView.CompensationEntry::evaluationId)
+                .containsExactly("priced");
+    }
+
     private EvaluationService service(Map<String, List<LocalDate>> reports) {
         db = TestDb.fresh();
         FixtureProvider fixture = new FixtureProvider(CLOCK);
@@ -99,10 +120,23 @@ class CompensationViewTest {
     }
 
     private static StrategyEvaluation evaluation(String id, String expiration) {
+        return evaluation(id, expiration, TestPrices.optionOnly(1, 35_000L));
+    }
+
+    /** The same package, refused before it could be priced: the §7.2 receipt states no amounts. */
+    private static StrategyEvaluation unpricedEvaluation(String id, String expiration) {
+        return evaluation(id, expiration,
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(1,
+                        io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
+                        "No market or model mark for the 240 put."));
+    }
+
+    private static StrategyEvaluation evaluation(String id, String expiration,
+            io.liftandshift.strikebench.paper.PackagePriceReceipt price) {
         Candidate candidate = new Candidate("CASH_SECURED_PUT", "Cash-secured put",
                 "acquisition_income", "SELL 240P", List.of(
                         new LegView("SELL", "PUT", "240", expiration, 1, "3.50", 100, "OPEN")),
-                1, 35_000L, 35_000L, 35_000L, 2_365_000L, List.of(), 0.60, 1_800L,
+                1, price, 35_000L, 2_365_000L, List.of(), 0.60, 1_800L,
                 0.70, "DELAYED", List.of(), 0.6, "Paid to bid", "Keep premium",
                 "Assigned in a selloff", "Crash through strike", "You collect premium",
                 "INCOME", List.of("INCOME", "ACQUIRE"), 0.35, 12.0,

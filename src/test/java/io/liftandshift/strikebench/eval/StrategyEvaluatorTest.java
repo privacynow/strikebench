@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 /** The Phase-2 backbone: producers + evaluator assemble a coherent, honest evaluation. */
 class StrategyEvaluatorTest {
@@ -25,7 +26,7 @@ class StrategyEvaluatorTest {
                 new LegView("SELL", "CALL", "255", expiration, 1, "2.00", 100, "OPEN"));
         // $2.00 debit and $5.00 width per share -> $200 debit / $300 profit / $200 loss PER CONTRACT (cents).
         return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
-                legs, 1, -20_000L, -20_000L, 30_000L, 20_000L, List.of("252.00"),
+                legs, 1, TestPrices.optionOnly(1, -20_000L), 30_000L, 20_000L, List.of("252.00"),
                 0.45, 2_000L, 0.70, freshness, List.of(),
                 confidence, "Cheap defined-risk way to play a move up",
                 "Up to $300 if AAPL is above $255", "Loses the $200 debit if AAPL stays flat/down",
@@ -103,7 +104,7 @@ class StrategyEvaluatorTest {
                 new LegView("SELL", "CALL", "788", "2026-09-04", 1, "0.70", 100, "OPEN"),
                 new LegView("BUY", "CALL", "792", "2026-09-04", 1, "0.25", 100, "OPEN"));
         Candidate candidate = new Candidate("IRON_CONDOR", "Iron condor", "range_credit",
-                "SPY wide-put-wing reproduction", legs, 1, 10_500L, 10_500L, 10_500L, 179_500L,
+                "SPY wide-put-wing reproduction", legs, 1, TestPrices.optionOnly(1, 10_500L), 10_500L, 179_500L,
                 List.of("592.95", "789.05"), 0.70, 0L, 0.80, "DELAYED", List.of(),
                 0.70, "range income", "credit", "wide put wing", "breakout",
                 "defined-risk package", "INCOME", List.of("INCOME"), 0.30,
@@ -156,9 +157,24 @@ class StrategyEvaluatorTest {
         assertThat(e.rankScore()).isBetween(0.0, 100.0);
         assertThat(e.decisionScore()).isBetween(1.0, 100.0);
 
-        // Management: a real plan with a debit-trade summary and rules.
+        // Management: a real plan with a debit-trade summary and rules, RENDERED from the one
+        // named policy — same rule constants and same trigger values the runtime evaluator uses.
         assertThat(e.management().summary()).containsIgnoringCase("debit");
         assertThat(e.management().rules()).isNotEmpty();
+        assertThat(e.management().policyId()).isEqualTo("STANDARD_V1");
+        assertThat(e.management().side())
+                .isEqualTo(io.liftandshift.strikebench.paper.ProtocolEvaluator.Side.DEBIT);
+        assertThat(e.management().rules()).extracting(ManagementPlan.Rule::rule)
+                .containsExactly("TAKE_PROFIT", "STOP_LOSS", "TIME_EXIT", "ASSIGNMENT", "INVALIDATION");
+        // $200 debit: take profit at +$100, stop at -$100 — the SAME numbers ProtocolEvaluator
+        // publishes for this basis, so Decide and the alert rail cannot disagree.
+        var owned = io.liftandshift.strikebench.paper.ProtocolEvaluator.rules(
+                io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy.standard(), -20_000L);
+        assertThat(e.management().rules().get(0).triggerPnlCents())
+                .isEqualTo(owned.get(0).triggerPnlCents()).isEqualTo(10_000L);
+        assertThat(e.management().rules().get(1).triggerPnlCents())
+                .isEqualTo(owned.get(1).triggerPnlCents()).isEqualTo(-10_000L);
+        assertThat(e.management().rules()).noneMatch(r -> r.trigger().contains("21 days"));
 
         // Explanation: carries the honest assumptions.
         assertThat(e.explanation().assumptions())
@@ -482,7 +498,7 @@ class StrategyEvaluatorTest {
     private static Candidate candidate(String strategy, List<LegView> legs, long entryNet,
                                        Long maxProfit, Long maxLoss) {
         return new Candidate(strategy, strategy.replace('_', ' '), "test", strategy, legs, 1,
-                entryNet, entryNet, maxProfit, maxLoss, List.of(), 0.50, 0L, 0.8, "DELAYED", List.of(),
+                TestPrices.optionOnly(1, entryNet), maxProfit, maxLoss, List.of(), 0.50, 0L, 0.8, "DELAYED", List.of(),
                 0.7, "test", "test", "test", "test", "test", "DIRECTIONAL",
                 List.of("DIRECTIONAL"), null, null, null, null, false, null, maxLoss);
     }

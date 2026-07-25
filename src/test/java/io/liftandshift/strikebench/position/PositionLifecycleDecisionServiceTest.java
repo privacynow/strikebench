@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
+import io.liftandshift.strikebench.paper.ProtocolEvaluator;
 import io.liftandshift.strikebench.paper.BookActionProjectionService;
 import io.liftandshift.strikebench.paper.BookRiskService;
 import io.liftandshift.strikebench.paper.MarksSource;
@@ -28,6 +29,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class PositionLifecycleDecisionServiceTest {
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2031-07-22T16:00:00Z"), ZoneOffset.UTC);
@@ -80,8 +82,7 @@ class PositionLifecycleDecisionServiceTest {
                 false, null, null, "IMPORT", "EXECUTED");
         PositionLifecycleReceipt lifecycle = lifecycle();
 
-        var fullPolicy = new AccountObjectiveService.LifecyclePolicy("FULL_ASSIGNMENT_CAPACITY",
-                90, 1_000L, 0, 5, false, null);
+        var fullPolicy = policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5);
         var fullCapacity = capacity(fullPolicy, List.of());
         var fullRevision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()), fullCapacity);
@@ -98,16 +99,14 @@ class PositionLifecycleDecisionServiceTest {
         assertThat(full.alternatives()).extracting(PositionLifecycleDecisionService.ActionAlternative::quantityAffected)
                 .containsExactly(1, 2, 3);
 
-        var assignmentPolicy = new AccountObjectiveService.LifecyclePolicy("ASSIGNMENT_READY",
-                90, 1_000L, 0, 20, false, null);
+        var assignmentPolicy = policy("ASSIGNMENT_READY", 90, 1_000L, 0, 20);
         var assignmentRevision = objectives.declare("local", account.id(), "ACCUMULATE", "BULLISH",
                 null, "ACCEPT", List.of(packageCapacity()), capacity(assignmentPolicy, List.of()));
         assertThat(decisions.analyze(lifecycle, actionSet,
                 AccountObjectiveService.capacityContext(assignmentRevision, POSITION)).verdict())
                 .isEqualTo(PositionLifecycleDecisionService.Verdict.ACCEPT_ASSIGNMENT);
 
-        var limitedPolicy = new AccountObjectiveService.LifecyclePolicy("CONCENTRATION_LIMITED",
-                90, 1_000L, 0, 5, false, null);
+        var limitedPolicy = policy("CONCENTRATION_LIMITED", 90, 1_000L, 0, 5);
         var limitedCapacity = capacity(limitedPolicy, List.of(new AccountObjectiveService.ScopedCeiling(
                 "QQQ", 5_000_000L, AccountObjectiveService.Enforcement.HARD)));
         var limitedRevision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
@@ -123,8 +122,7 @@ class PositionLifecycleDecisionServiceTest {
             assertThat(limit.restoredByClosingQuantity()).isEqualTo(2);
         });
 
-        var cheapPolicy = new AccountObjectiveService.LifecyclePolicy("CHEAP_RISK_REMOVAL",
-                90, 20_000L, 1.0, 5, false, null);
+        var cheapPolicy = policy("CHEAP_RISK_REMOVAL", 90, 20_000L, 1.0, 5);
         var cheapRevision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()), capacity(cheapPolicy, List.of()));
         var surfaced = decisions.surface("local", account.id(), lifecycle, actionSet,
@@ -179,8 +177,7 @@ class PositionLifecycleDecisionServiceTest {
                 false, null, null, "IMPORT", "EXECUTED");
         var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()),
-                capacity(new AccountObjectiveService.LifecyclePolicy("FULL_ASSIGNMENT_CAPACITY",
-                        90, 1_000L, 0, 5, false, null), List.of()));
+                capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
         PositionLifecycleReceipt blocked = lifecycleUnavailable();
         var actionSet = projections.project("local", account.id(), request, blocked);
         var decision = decisions.analyze(blocked, actionSet,
@@ -207,8 +204,7 @@ class PositionLifecycleDecisionServiceTest {
                 false, null, null, "IMPORT", "EXECUTED");
         var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()),
-                capacity(new AccountObjectiveService.LifecyclePolicy("FULL_ASSIGNMENT_CAPACITY",
-                        90, 1_000L, 0, 5, false, null), List.of()));
+                capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
         PositionLifecycleReceipt receipt = lifecycleForwardUnavailable();
         var actionSet = projections.project("local", account.id(), request, receipt);
         var decision = decisions.analyze(receipt, actionSet,
@@ -223,8 +219,72 @@ class PositionLifecycleDecisionServiceTest {
         assertThat(decision.summary()).contains("NO VERDICT").contains("no action is recommended");
     }
 
+    @Test
+    void defendNamesTheStopLossTriggerAndHarvestNamesTheTakeProfitTrigger() {
+        // §6.4: DEFEND must say WHICH named trigger fired. The stop-loss and expiry/time rules
+        // now reach the verdict lane through the ONE ProtocolEvaluator, on this position's own
+        // option-only opening basis (+$600 credit) and the same session clock.
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Synthetic policy book", "TAXABLE", null, "FIFO", null, null, null, null, 100_000_000L));
+        var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
+                        EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
+                false, null, null, "IMPORT", "EXECUTED");
+        var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
+                null, "ACCEPT", List.of(packageCapacity()),
+                capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
+        var context = AccountObjectiveService.capacityContext(revision, POSITION);
+        var shipped = ProtocolEvaluator.Policy.standard();
+
+        // Quiet: +$147 against a +$300 target and a −$1,200 stop. The lines are still published.
+        var quiet = decisions.analyze(lifecycle(),
+                projections.project("local", account.id(), request, lifecycle()), context);
+        assertThat(quiet.dimensions()).filteredOn(d -> d.name().equals("MECHANICAL_PROTOCOL"))
+                .singleElement().satisfies(d -> {
+                    assertThat(d.policySignal()).isNull();
+                    assertThat(d.reasons()).anyMatch(r -> r.startsWith("TAKE_PROFIT line of policy"));
+                    assertThat(d.reasons()).anyMatch(r -> r.startsWith("STOP_LOSS line of policy"));
+                });
+        assertThat(quiet.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.KEEP);
+
+        // Past the stop line: DEFEND, naming STOP_LOSS — never a bare "defend".
+        var breached = lifecycleWithNetPnl(-Math.round(shipped.creditStopMultiple() * 60_000L) - 1);
+        var defend = decisions.analyze(breached,
+                projections.project("local", account.id(), request, breached), context);
+        assertThat(defend.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.DEFEND);
+        assertThat(defend.dimensions()).filteredOn(d -> d.name().equals("MECHANICAL_PROTOCOL"))
+                .singleElement().satisfies(d -> {
+                    assertThat(d.status()).isEqualTo("STOP_LOSS_TRIGGER");
+                    assertThat(d.reasons()).anyMatch(r -> r.startsWith("FIRED STOP_LOSS"));
+                });
+
+        // Past the take-profit line: HARVEST, naming TAKE_PROFIT, under the SAME policy record.
+        var captured = lifecycleWithNetPnl(Math.round(shipped.creditTakeProfitFraction() * 60_000L));
+        var harvest = decisions.analyze(captured,
+                projections.project("local", account.id(), request, captured), context);
+        assertThat(harvest.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.HARVEST);
+        assertThat(harvest.dimensions()).filteredOn(d -> d.name().equals("MECHANICAL_PROTOCOL"))
+                .singleElement().satisfies(d ->
+                        assertThat(d.status()).isEqualTo("TAKE_PROFIT_TRIGGER"));
+    }
+
+    /**
+     * A named lifecycle variant of the ONE shipped policy. Only the lifecycle thresholds under
+     * test vary; the mechanical take-profit/stop/time lines stay the shipped ones, which is the
+     * whole point of the consolidation — there is no second threshold record to diverge.
+     */
+    private static ProtocolEvaluator.Policy policy(String id, double harvestPct, Long residualMax,
+                                                   double cheapPct, int assignmentSessions) {
+        var shipped = ProtocolEvaluator.Policy.standard();
+        return new ProtocolEvaluator.Policy(id, shipped.version(),
+                shipped.creditTakeProfitFraction(), shipped.creditStopMultiple(),
+                shipped.debitTakeProfitFraction(), shipped.debitStopFraction(),
+                shipped.timeRuleSessions(), shipped.nearExpirySessions(), assignmentSessions,
+                harvestPct, residualMax, cheapPct, false, null);
+    }
+
     private static AccountObjectiveService.AccountCapacityPolicy capacity(
-            AccountObjectiveService.LifecyclePolicy policy,
+            ProtocolEvaluator.Policy policy,
             List<AccountObjectiveService.ScopedCeiling> symbolCeilings) {
         return new AccountObjectiveService.AccountCapacityPolicy(symbolCeilings, List.of(), List.of(),
                 null, policy);
@@ -236,9 +296,9 @@ class PositionLifecycleDecisionServiceTest {
     }
 
     private static PositionLifecycleReceipt.CloseQuote availableClose() {
-        return new PositionLifecycleReceipt.CloseQuote(true, -14_250L, -15_000L,
-                -15_000L, 300L, -15_300L, PositionDomain.PriceAuthority.OBSERVED,
-                "Observed ask plus fees.", null);
+        return new PositionLifecycleReceipt.CloseQuote(true,
+                TestPrices.closing(1, -15_000L, -15_000L, 300L), -14_250L,
+                PositionDomain.PriceAuthority.OBSERVED, "Observed ask plus fees.", null);
     }
 
     private static PositionLifecycleReceipt.ForwardEconomics availableForward() {
@@ -249,16 +309,27 @@ class PositionLifecycleDecisionServiceTest {
     /** One shared receipt body; the two evidence dimensions under test (mark, forward economics) vary. */
     private static PositionLifecycleReceipt lifecycleWith(PositionLifecycleReceipt.CloseQuote close,
                                                           PositionLifecycleReceipt.ForwardEconomics forward) {
+        return lifecycleWith(close, forward, 14_700L);
+    }
+
+    /** {@link #lifecycleWith} with the net P/L-if-closed the mechanical price rules read. */
+    private static PositionLifecycleReceipt lifecycleWithNetPnl(long netPnlIfClosedCents) {
+        return lifecycleWith(availableClose(), availableForward(), netPnlIfClosedCents);
+    }
+
+    private static PositionLifecycleReceipt lifecycleWith(PositionLifecycleReceipt.CloseQuote close,
+                                                          PositionLifecycleReceipt.ForwardEconomics forward,
+                                                          Long netPnlIfClosedCents) {
         return new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION, "QQQ", POSITION,
                 new PositionLifecycleReceipt.History(true, 60_000L, 60_000L, 0L, 60_000L,
-                        60_000L, 30_000L, 50.0, 14_700L, null, null,
+                        60_000L, 30_000L, 50.0, netPnlIfClosedCents, null, null,
                         "Recorded opening fill and executable close.", null, List.of("tracked-lots")),
                 new PositionLifecycleReceipt.CurrentChoice(close,
                         "Would you open the exact position you still own today, ignoring sunk campaign cash?",
                         PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF, forward, 1_350_000L,
                         "Canonical probability-map CVaR95.", PositionLifecycleReceipt.STANCE_REF,
                         "Executable hold-vs-close choice.", List.of()),
-                new PositionLifecycleReceipt.CarryCollateral(15_000L, 2.5347, 16,
+                new PositionLifecycleReceipt.CarryCollateral(15_000L, 2.5347, 16, 11,
                         new AuthorityFacts.MoneyFact(13_500_000L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "Strike obligation."),
                         AuthorityFacts.RateFact.unavailable("No broker settlement rate."),
@@ -287,7 +358,7 @@ class PositionLifecycleDecisionServiceTest {
 
     /** {@link #lifecycle()} but with a NON-executable close (no current mark) — mechanics has no evidence. */
     private static PositionLifecycleReceipt lifecycleUnavailable() {
-        return lifecycleWith(new PositionLifecycleReceipt.CloseQuote(false, null, null, null, 0L, null, null,
+        return lifecycleWith(PositionLifecycleReceipt.CloseQuote.unavailable(1,
                 "No executable close from the current book.", "No live opposite-side quote to close against."),
                 availableForward());
     }

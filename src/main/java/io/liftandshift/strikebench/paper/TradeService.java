@@ -52,6 +52,12 @@ public final class TradeService {
     private final MarksSource marks;
     private final AuditLog audit;
     private final Clock clock;
+    /**
+     * The named mechanical management policy the ticket renders (§7.5). It is a SELECTION, never
+     * universal financial truth: configurable per deployment, defaulting to the shipped
+     * STANDARD_V1. {@link ProtocolEvaluator} owns the numbers; this class only names one.
+     */
+    private volatile ProtocolEvaluator.Policy managementPolicy = ProtocolEvaluator.Policy.standard();
 
     public TradeService(Db db, AppConfig cfg, MarksSource marks, AuditLog audit, Clock clock) {
         this.db = db;
@@ -59,6 +65,16 @@ public final class TradeService {
         this.marks = marks;
         this.audit = audit;
         this.clock = clock;
+    }
+
+    /** Selects the named management policy every ticket preview renders. */
+    public void setManagementPolicy(ProtocolEvaluator.Policy policy) {
+        if (policy != null) this.managementPolicy = policy;
+    }
+
+    /** The named management policy in force — surfaces render it, they never restate it. */
+    public ProtocolEvaluator.Policy managementPolicy() {
+        return managementPolicy;
     }
 
     /**
@@ -333,7 +349,7 @@ public final class TradeService {
                 reservedBeforeCents, blocks.isEmpty() ? reservedAfter : reservedBeforeCents,
                 buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price());
     }
 
     /**
@@ -367,7 +383,7 @@ public final class TradeService {
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price());
     }
 
     /**
@@ -850,7 +866,7 @@ public final class TradeService {
                 0, blocks.isEmpty() ? reservedAfter : 0,
                 trackedCashCents, blocks.isEmpty() ? cashAfter - reservedAfter : trackedCashCents,
                 p.freshness.name(), trackedAnalysisEvidence(p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics());
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price());
     }
 
     private static io.liftandshift.strikebench.model.DataEvidence trackedAnalysisEvidence(Freshness freshness) {
@@ -2079,30 +2095,33 @@ public final class TradeService {
                         Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
                         long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
-                        List<Map<String, Object>> payoff, Map<String, Object> analytics) {
+                        List<Map<String, Object>> payoff, Map<String, Object> analytics,
+                        PackagePriceReceipt price) {
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
-             List<Map<String, Object>> payoff) {
+             List<Map<String, Object>> payoff, PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
                     underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock,
-                    legDetails, assignmentProb, payoff, Map.of());
-        }
-
-        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
-             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
-             Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson) {
-            this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
-                    underlyingCents, freshness, blocks, warnings, snapshotJson, 0, List.of(), null, List.of());
+                    legDetails, assignmentProb, payoff, Map.of(), price);
         }
 
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
-             long sharesToLock) {
+             PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
-                    underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock, List.of(), null, List.of());
+                    underlyingCents, freshness, blocks, warnings, snapshotJson, 0, List.of(), null, List.of(), price);
+        }
+
+        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+             Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
+             long sharesToLock, PackagePriceReceipt price) {
+            this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
+                    underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock, List.of(), null,
+                    List.of(), price);
         }
     }
 
@@ -2131,11 +2150,9 @@ public final class TradeService {
         else if (req.qty() > 100 && !analysisOnly) blocks.add("Quantity exceeds the 100-contract practice cap");
         if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
         if (!blocks.isEmpty()) {
-            Map<String, Object> analytics = new LinkedHashMap<>();
-            annotateExecution(analytics, req.orderInstruction(),
-                    OrderInstruction.Executability.UNAVAILABLE, null, 0);
             return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
-                    Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), analytics);
+                    Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
+                    unpricedPackage(req, blocks));
         }
 
         String world = worldWasSupplied ? selectedWorld : worldOf(req.accountId());
@@ -2164,11 +2181,9 @@ public final class TradeService {
             }
         }
         if (!blocks.isEmpty()) {
-            Map<String, Object> analytics = new LinkedHashMap<>();
-            annotateExecution(analytics, req.orderInstruction(),
-                    OrderInstruction.Executability.UNAVAILABLE, null, 0);
             return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
-                    Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), analytics);
+                    Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
+                    unpricedPackage(req, blocks));
         }
         if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(nowInstant)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
@@ -2184,6 +2199,10 @@ public final class TradeService {
         List<Double> legIvs = new ArrayList<>(); // index-aligned with filled (nulls kept)
         int suppliedEntryPrices = 0;
         int modeledEntryPrices = 0;
+        // Legs whose price IS the midpoint of a one-sided/dead book. Counted separately from
+        // modeledEntryPrices (which also counts perfectly two-sided marks that simply are not
+        // executable in this lane) because it is the fact that decides MID_MARKET vs MODELED.
+        int midPricedLegs = 0;
         for (Leg leg : req.legs()) {
             boolean suppliedEntryPrice = req.explicitFillMeaning()
                     && leg.entryPrice() != null && leg.entryPrice().signum() > 0;
@@ -2242,6 +2261,7 @@ public final class TradeService {
                 if (analysisOnly) {
                     marketPrice = mark.mid();
                     modeledEntryPrices++;
+                    if (!suppliedEntryPrice) midPricedLegs++;
                     warnings.add("No executable " + (leg.action() == LegAction.BUY ? "ask" : "bid") + " for "
                             + legDesc(leg) + "; ANALYZE uses the labeled midpoint and does not claim a fill.");
                 } else {
@@ -2314,11 +2334,9 @@ public final class TradeService {
             snapshotLegs.add(snap);
         }
         if (!blocks.isEmpty()) {
-            Map<String, Object> analytics = new LinkedHashMap<>();
-            annotateExecution(analytics, req.orderInstruction(),
-                    OrderInstruction.Executability.UNAVAILABLE, null, 0);
             return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
-                    worst, blocks, warnings, "{}", 0, List.of(), null, List.of(), analytics);
+                    worst, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
+                    unpricedPackage(req, blocks));
         }
 
         if (modeledEntryPrices > 0) {
@@ -2336,12 +2354,14 @@ public final class TradeService {
         if (req.heldShares()) {
             if (filled.stream().anyMatch(Leg::isStock)) {
                 blocks.add("useHeldShares cannot be combined with stock legs — either buy shares inside the trade or write against shares you already hold");
-                return new Plan(filled, 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying), worst, blocks, warnings, "{}");
+                return new Plan(filled, 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                        worst, blocks, warnings, "{}", unpricedPackage(req, blocks));
             }
             coverSharesPerUnit = io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(filled);
             if (coverSharesPerUnit < 0) {
                 blocks.add("Held shares can only cover short CALLS — this structure has uncovered short puts or short stock that shares cannot protect");
-                return new Plan(filled, 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying), worst, blocks, warnings, "{}");
+                return new Plan(filled, 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                        worst, blocks, warnings, "{}", unpricedPackage(req, blocks));
             }
         }
         long sharesToLock = Math.multiplyExact(coverSharesPerUnit, req.qty());
@@ -2357,6 +2377,21 @@ public final class TradeService {
                 : req.orderInstruction().executability(naturalExecutableNet, executableBook);
         Long packageMid = packageMidCents(snapshotLegs, req.qty());
 
+        // §7.2: the basis the package net is STATED on is decided exactly where the price is
+        // decided — the branch below already knows whether it took the natural book, a recorded
+        // fill or the customer's own price; until now it simply never said so, which is what let
+        // the rail and the dock print different numbers with nothing to explain the difference.
+        // A package priced off MARKS names its basis through the receipt's own rule, so this lane
+        // and the scan rail cannot label the same evidence differently. It also stops calling a
+        // midpoint "MODELED": the ANALYZE lane above genuinely prices one-sided legs at the
+        // midpoint, which is a real, nameable basis (and left ValuationBasis.MID_MARKET assigned
+        // nowhere in the product while the label on screen was wrong).
+        PackagePriceReceipt.ValuationBasis valuationBasis = suppliedEntryPrices > 0
+                ? (req.executedFill() ? PackagePriceReceipt.ValuationBasis.RECORDED_FILL
+                        // Entered proposed prices are analysis inputs, never a fill claim.
+                        : PackagePriceReceipt.ValuationBasis.MODELED)
+                : PackagePriceReceipt.markBasis(executableBook, midPricedLegs > 0);
+
         // MARKET and marketable LIMIT orders transact at the current natural package, never at a
         // worse user bound or stale per-leg proposal. A resting limit is still useful analysis,
         // but remains blocked until the market can satisfy it. Recorded fills remain exact facts.
@@ -2368,6 +2403,7 @@ public final class TradeService {
             filled = new ArrayList<>(marketFilled);
             curve = PayoffCurve.of(filled, req.qty());
             entryNet = curve.entryNetPremiumCents();
+            valuationBasis = PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK;
             for (int i = 0; i < snapshotLegs.size() && i < filled.size(); i++) {
                 Map<String, Object> snap = snapshotLegs.get(i);
                 Object requested = snap.get("fill");
@@ -2391,6 +2427,9 @@ public final class TradeService {
                 curve = PayoffCurve.of(filled, req.qty(), netAdjust);
                 entryNet = curve.entryNetPremiumCents();
             }
+            valuationBasis = recordedFill || req.executedFill()
+                    ? PackagePriceReceipt.ValuationBasis.RECORDED_FILL
+                    : PackagePriceReceipt.ValuationBasis.RESTING_LIMIT;
             warnings.add((recordedFill ? "Priced at YOUR net price (recorded executed net) " : "Analyzed at your resting limit ")
                     + Money.fmt(req.proposedNetCents()) + " — the executable sides right now say "
                     + (naturalExecutableNet == null ? "unavailable" : Money.fmt(naturalExecutableNet))
@@ -2418,6 +2457,35 @@ public final class TradeService {
             else blocks.add(message + " Refresh the quote before placing it.");
         }
 
+        // The credit/debit BASIS the management protocol is measured on is option-only: a
+        // buy-write's package net is negative because of the shares, and stopping at "~50% of the
+        // debit paid" there would mean half the share purchase (§7.5). Computed AFTER the package
+        // net is finalized, and carrying the package-level net adjustment — which only ever prices
+        // option premium (the branch above requires an option package; stock fills are exact).
+        long optionEntryNet = ProtocolEvaluator.optionEntryBasisCents(filled, req.qty(), entryNet)
+                + (filled.stream().anyMatch(Leg::isStock) ? netAdjust : 0);
+        // The stock side is measured from the stock legs themselves, NOT as "package net less the
+        // option net". Share fills are exact — a customer net override only ever reprices option
+        // premium (the override branch above requires an option package), so the shares are the one
+        // part of a buy-write that never absorbs the difference. Measuring it independently is what
+        // gives the receipt's additive identity something real to catch.
+        long stockCashFlow = ProtocolEvaluator.stockEntryBasisCents(filled, req.qty());
+
+        // THE package-price receipt (§7.2). Everything it needs is settled above, so every exit
+        // from here down publishes the same amounts on the same stated basis. `naturalExecutableNet`
+        // — not `executableNet` — is what travels: the latter silently falls back to the recorded
+        // net on a one-sided book, and a field named "executable" must never carry a price nobody
+        // can trade on. Fees are unknown at this point and stay null until they are charged.
+        Long packageObservedAt = packageObservedAt(snapshotLegs,
+                marks.underlyingAsOfMs(req.symbol(), world).orElse(null));
+        PackagePriceReceipt price = PackagePriceReceipt.of(req.qty(), entryNet, optionEntryNet,
+                stockCashFlow,
+                null, PackagePriceReceipt.FeeSide.OPENING, naturalExecutableNet,
+                req.orderInstruction(), executability, valuationBasis,
+                packageSource(snapshotLegs), worst.name(), packageObservedAt,
+                PackagePriceReceipt.fingerprintOf(filled, req.qty(), entryNet, valuationBasis,
+                        packageObservedAt));
+
         LocalDate laneToday = java.time.LocalDate.ofInstant(nowInstant,
                 io.liftandshift.strikebench.market.MarketHours.EASTERN);
         io.liftandshift.strikebench.market.OptionTime.Measure tte =
@@ -2439,7 +2507,8 @@ public final class TradeService {
         if (mixedExpirations) {
             if (entryNet >= 0) {
                 blocks.add("Multi-expiration credit positions can carry undefined risk after the near leg expires; blocked");
-                return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying), worst, blocks, warnings, "{}");
+                return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                        worst, blocks, warnings, "{}", price);
             }
             // A net debit does NOT prove defined risk: a short leg that outlives (or out-strikes)
             // its cover has unlimited downside the single-expiration curve cannot see.
@@ -2447,7 +2516,8 @@ public final class TradeService {
                     .uncoveredShortsWithHeldShares(filled, coverSharesPerUnit);
             if (!uncovered.isEmpty()) {
                 blocks.addAll(uncovered);
-                return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying), worst, blocks, warnings, "{}");
+                return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                        worst, blocks, warnings, "{}", price);
             }
             long maxLossCal = -entryNet;
             long feesCal = feesFor(filled, req.qty());
@@ -2461,7 +2531,7 @@ public final class TradeService {
             snapCal.put("legs", snapshotLegs);
             return new Plan(filled, entryNet, feesCal, 0, maxLossCal, null, List.of(), null, null,
                     Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock,
-                    snapshotLegs, assignProb, List.of());
+                    snapshotLegs, assignProb, List.of(), price.withFees(feesCal));
         }
 
         // Held-shares trades are risk-shaped as the COMBINED position (option legs + the held
@@ -2523,20 +2593,18 @@ public final class TradeService {
         if (riskCurve.maxLossUnbounded()) {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
             Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
-                    snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
+                    snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
                     0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
-            annotateExecution(analyticsBlocked, req.orderInstruction(), executability,
-                    naturalExecutableNet, entryNet);
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
-                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked);
+                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked, price);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
         if (combinedMaxLoss <= 0 && !shareContext) {
             blocks.add("Computed max loss is $0.00 — a risk-free position does not exist in real markets. "
                     + "The quotes feeding this trade are unreliable (stale, crossed, or expired book); refusing to fill.");
             return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
-                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff);
+                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, price);
         }
         long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
@@ -2568,16 +2636,14 @@ public final class TradeService {
                 Math.multiplyExact(contextSharesPerUnit, req.qty()));
 
         Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
-                snapshotLegs, req.qty(), entryNet, executableNet, packageMid, req.proposedNetCents(),
+                snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
                 fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
-        annotateExecution(analytics, req.orderInstruction(), executability,
-                naturalExecutableNet, entryNet);
         if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
         return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
-                snapshotLegs, assignProb, payoff, analytics);
+                snapshotLegs, assignProb, payoff, analytics, price.withFees(fees));
     }
 
     private static List<Map<String, Object>> chartPointMaps(PayoffCurve curve, BigDecimal spot) {
@@ -2589,6 +2655,32 @@ public final class TradeService {
             out.add(m);
         }
         return out;
+    }
+
+    // ---- Package price receipt (program §7.2) ----
+
+    /**
+     * §3.2: a package refused before it could be priced publishes NO price. The first blocking
+     * reason travels with the receipt so the surface can say what is missing instead of printing
+     * a zero that looks like a free trade.
+     */
+    private static PackagePriceReceipt unpricedPackage(OpenRequest req, List<String> blocks) {
+        return PackagePriceReceipt.unavailable(req.qty(), PackagePriceReceipt.FeeSide.OPENING,
+                blocks == null || blocks.isEmpty()
+                        ? "this package was refused before it could be priced" : blocks.getFirst());
+    }
+
+    /** Package source/observation reduced from the leg snapshots by the receipt's own reducers. */
+    private static String packageSource(List<Map<String, Object>> snaps) {
+        return PackagePriceReceipt.sourceOf(snaps.stream()
+                .map(snap -> snap.get("source") == null ? null : String.valueOf(snap.get("source"))).toList());
+    }
+
+    private static Long packageObservedAt(List<Map<String, Object>> snaps, Long underlyingAsOf) {
+        Long oldest = PackagePriceReceipt.observedAtOf(snaps.stream()
+                .map(snap -> snap.get("asOfEpochMs") instanceof Number stamp ? stamp.longValue() : null)
+                .toList());
+        return oldest != null ? oldest : underlyingAsOf;
     }
 
     // ---- Evaluation analytics (the one pipeline every entry path shares) ----
@@ -2633,33 +2725,6 @@ public final class TradeService {
         return number.intValue();
     }
 
-    @SuppressWarnings("unchecked")
-    private static void annotateExecution(Map<String, Object> analytics,
-                                          OrderInstruction instruction,
-                                          OrderInstruction.Executability executability,
-                                          Long executableNetCents,
-                                          long fillNetCents) {
-        if (analytics == null) return;
-        Object value = analytics.get("executionQuality");
-        Map<String, Object> execution;
-        if (value instanceof Map<?, ?> existing) {
-            execution = (Map<String, Object>) existing;
-        } else {
-            execution = new LinkedHashMap<>();
-            analytics.put("executionQuality", execution);
-        }
-        execution.put("orderType", instruction.type().name());
-        execution.put("timeInForce", instruction.timeInForce().name());
-        if (instruction.limitNetCents() != null) {
-            execution.put("limitNetCents", instruction.limitNetCents());
-        }
-        execution.put("executability", executability.name());
-        execution.put("presentlyExecutable", executability == OrderInstruction.Executability.IMMEDIATE);
-        execution.put("executableNetCents", executableNetCents);
-        execution.put("fillNetCents", fillNetCents);
-        execution.put("economicSide", fillNetCents > 0 ? "CREDIT" : fillNetCents < 0 ? "DEBIT" : "FLAT");
-    }
-
 
     /**
      * The assembled judgment every Review consumer shares: full probability map (risk-neutral,
@@ -2670,7 +2735,8 @@ public final class TradeService {
                                                io.liftandshift.strikebench.market.OptionTime.Measure tte,
                                                List<BigDecimal> shortStrikes,
                                                List<Map<String, Object>> snaps, int qty,
-                                               long entryNet, long executableNet, Long packageMid,
+                                               long entryNet, long optionEntryNet,
+                                               long executableNet, Long packageMid,
                                                Long proposedNet, long fees, Long maxLoss, Long maxProfit,
                                                Long ev, Freshness freshness, Long sourceAsOf, double rfr,
                                                io.liftandshift.strikebench.model.DataEvidence rateEvidence) {
@@ -2699,10 +2765,13 @@ public final class TradeService {
                 .toList();
         out.put("evSensitivity", sens);
 
+        // Execution QUALITY, not price. The package net, the executable net, the resting limit, the
+        // executability and the order type all moved onto the one §7.2 receipt (§3.8); publishing
+        // them here as well is how `fillNetCents`, `proposedNetCents`, `executableNetCents` and
+        // `valuedNetCents` became four names for the same money. The midpoint stays because it is
+        // the concession benchmark computed below, and it is labelled as such.
         Map<String, Object> exec = new LinkedHashMap<>();
-        exec.put("executableNetCents", executableNet);
         exec.put("midNetCents", packageMid);
-        if (proposedNet != null) exec.put("proposedNetCents", proposedNet);
         Long spread = packageSpreadCents(snaps, qty);
         exec.put("packageSpreadCents", spread);
         if (spread != null) exec.put("exitSpreadEstimateCents", spread / 2);
@@ -2716,7 +2785,11 @@ public final class TradeService {
         }
         out.put("executionQuality", exec);
 
-        out.put("managementPlan", dtePlan(tte, entryNet >= 0));
+        // The ONE mechanical policy owner renders this (§7.5): a typed, named, fingerprinted plan
+        // on the OPTION-ONLY basis and the session clock. Nothing here restates a threshold in
+        // prose, and no consumer sniffs the regime out of a string any more.
+        out.put("managementPlan", ProtocolEvaluator.plan(managementPolicy, optionEntryNet, tte,
+                !shortStrikes.isEmpty()));
         // B5: the exact trading-sessions/calendar-days-to-expiry receipt (MarketHours via OptionTime),
         // the SAME time convention the ticket and outcome use — so a preview and its order agree.
         out.put("time", tte);
@@ -2824,40 +2897,6 @@ public final class TradeService {
 
     private static int asInt(Object v, int fallback) {
         return v instanceof Number n ? n.intValue() : fallback;
-    }
-
-    /** DTE-aware management plan: a 3-day trade must never be told to 'roll at 21 DTE'. */
-    private static Map<String, Object> dtePlan(
-            io.liftandshift.strikebench.market.OptionTime.Measure tte, boolean credit) {
-        List<String> rules = new ArrayList<>();
-        String regime;
-        if (tte.sessions() <= 5) {
-            regime = "near-expiry (" + tte.sessions() + " session" + (tte.sessions() == 1 ? "" : "s") + ")";
-            rules.add("Take profits early — at 50% of the maximum, do not wait for the last dollar");
-            rules.add("If price TOUCHES a short strike, close that side immediately; do not hold and hope");
-            rules.add("Do not carry a short strike that is near the money into the final hour — pin and assignment mechanics take over");
-            if (tte.calendarDays() - tte.sessions() >= 2) {
-                rules.add("A weekend/holiday gap sits inside this trade — the market can reopen through your strikes with no chance to react");
-            }
-            rules.add("Rolling is NOT a plan at this distance — closing is");
-        } else if (tte.sessions() <= 15) {
-            regime = "short-dated (~" + tte.sessions() + " sessions)";
-            rules.add("Take profit at 50% of the maximum" + (credit ? " credit" : ""));
-            rules.add(credit ? "Stop if the loss reaches the credit received (1x) — being wrong fast is information"
-                    : "Stop if the position loses half its cost");
-            rules.add("In the final week, close or roll — do not let a winner decay into a coin flip at expiry");
-        } else {
-            regime = "standard (" + tte.calendarDays() + " days)";
-            rules.add("Take profit at 50% of the maximum" + (credit ? " credit" : ""));
-            rules.add(credit ? "Stop at 2x the credit received" : "Stop at half the debit paid");
-            rules.add("Manage or roll around 21 days to expiration — gamma grows fast after that");
-        }
-        Map<String, Object> plan = new LinkedHashMap<>();
-        plan.put("regime", regime);
-        plan.put("sessions", tte.sessions());
-        plan.put("calendarDays", tte.calendarDays());
-        plan.put("rules", rules);
-        return plan;
     }
 
     // ---- Shared helpers ----

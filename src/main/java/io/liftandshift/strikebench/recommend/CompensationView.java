@@ -33,7 +33,13 @@ public final class CompensationView {
                 new java.util.HashMap<>();
         for (StrategyEvaluation evaluation : evaluationsRanked) {
             var candidate = evaluation.candidate();
-            if (candidate.entryNetPremiumCents() <= 0) continue; // premium collectors only, by design
+            // Premium collectors only, by design. An UNPRICED package is not a collector either:
+            // "premium per unit of risk" has no numerator without a package price, and admitting it
+            // with an assumed zero would rank an unknown package as if it collected nothing (§3.2).
+            // Absence here is silent by the same design that omits every non-collector.
+            Long packageNet = candidate.price() == null ? null
+                    : candidate.price().grossPackageNetCents();
+            if (packageNet == null || packageNet <= 0) continue;
             // Share/strike-backed structures carry a collateral yield; defined-risk credit
             // structures annualize the credit over their risk capital instead.
             Double yieldPct = candidate.annualizedYieldPct();

@@ -180,8 +180,12 @@ class ArtifactRetentionServiceTest {
     }
 
     private void candidate(String id, String planId, String runId, boolean selected) {
+	        // Every candidate row states a §7.2 basis; a retention fixture never priced one.
 	        db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,selected,run_id,"
-	                        + "evaluation_snapshot,created_at) VALUES(?,?,1,'LONG_CALL',?,'STALE',?,?,?::jsonb,?)",
+	                        + "evaluation_snapshot,valuation_basis,price_executability,price_fee_side,"
+	                        + "price_unavailable_reason,created_at) "
+	                        + "VALUES(?,?,1,'LONG_CALL',?,'STALE',?,?,?::jsonb,'UNAVAILABLE','UNAVAILABLE','OPENING',"
+	                        + "'this retention fixture never priced the package',?)",
 	                id, planId, "input_" + id, selected, runId, currentEvaluationReceipt(), OLD);
     }
 

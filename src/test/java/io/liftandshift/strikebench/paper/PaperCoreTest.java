@@ -235,13 +235,26 @@ class PaperCoreTest {
         assertThat((String) prob.get("basis")).containsIgnoringCase("risk-neutral");
         @SuppressWarnings("unchecked")
         Map<String, Object> exec = (Map<String, Object>) atMine.analytics().get("executionQuality");
-        assertThat((Long) exec.get("executableNetCents")).isEqualTo(180_00L);
-        assertThat((Long) exec.get("proposedNetCents")).isEqualTo(160_00L);
         // Zero-spread stub book: mid == executable, so the concession vs mid is exactly the give-up.
         assertThat((Long) exec.get("concessionVsMidCents")).isEqualTo(20_00L);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> plan = (Map<String, Object>) atMine.analytics().get("managementPlan");
-        assertThat((java.util.List<String>) plan.get("rules")).isNotEmpty();
+        // The PRICES moved onto the one §7.2 receipt; executionQuality keeps only quality metrics.
+        assertThat(exec).doesNotContainKeys("executableNetCents", "proposedNetCents", "fillNetCents");
+        assertThat(atMine.price().executableNetCents()).isEqualTo(180_00L);
+        assertThat(atMine.price().restingLimitNetCents()).isEqualTo(160_00L);
+        assertThat(atMine.price().grossPackageNetCents()).isEqualTo(160_00L);
+        assertThat(atMine.price().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.RECORDED_FILL);
+        // The management plan is the ONE policy owner's typed output — named, versioned,
+        // fingerprinted, with a trigger VALUE on every price line (§7.5).
+        var plan = (ProtocolEvaluator.Plan) atMine.analytics().get("managementPlan");
+        assertThat(plan.rules()).isNotEmpty();
+        assertThat(plan.policyId()).isEqualTo("STANDARD_V1");
+        assertThat(plan.policyFingerprint()).isEqualTo(ProtocolEvaluator.Policy.standard().fingerprint());
+        assertThat(plan.side()).isEqualTo(ProtocolEvaluator.Side.CREDIT);
+        assertThat(plan.rules()).filteredOn(r -> ProtocolEvaluator.TAKE_PROFIT.equals(r.rule()))
+                .singleElement().satisfies(r -> assertThat(r.triggerPnlCents()).isEqualTo(80_00L));
+        assertThat(plan.rules()).filteredOn(r -> ProtocolEvaluator.STOP_LOSS.equals(r.rule()))
+                .singleElement().satisfies(r -> assertThat(r.triggerPnlCents()).isEqualTo(-320_00L));
 
         TradeRecord opened = trades.create(mine);
         assertThat(trades.currentMark(opened.id()).popNow())
@@ -262,14 +275,12 @@ class PaperCoreTest {
         assertThat(marketPreview.entryNetPremiumCents())
                 .as("MARKET ignores entered proposal prices and fills the natural package")
                 .isEqualTo(180_00L);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> marketExecution =
-                (Map<String, Object>) marketPreview.analytics().get("executionQuality");
-        assertThat(marketExecution).containsEntry("orderType", "MARKET")
-                .containsEntry("executability", "IMMEDIATE")
-                .containsEntry("presentlyExecutable", true)
-                .containsEntry("economicSide", "CREDIT")
-                .containsEntry("fillNetCents", 180_00L);
+        assertThat(marketPreview.price().executability())
+                .isEqualTo(OrderInstruction.Executability.IMMEDIATE);
+        assertThat(marketPreview.price().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK);
+        assertThat(marketPreview.price().restingLimitNetCents()).isNull();
+        assertThat(marketPreview.price().grossPackageNetCents()).isEqualTo(180_00L);
 
         TradeService.OpenRequest marketableLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
@@ -279,13 +290,12 @@ class PaperCoreTest {
         assertThat(improved.entryNetPremiumCents())
                 .as("a marketable limit receives the better natural executable price")
                 .isEqualTo(180_00L);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> improvedExecution =
-                (Map<String, Object>) improved.analytics().get("executionQuality");
-        assertThat(improvedExecution).containsEntry("orderType", "LIMIT")
-                .containsEntry("limitNetCents", 160_00L)
-                .containsEntry("executability", "IMMEDIATE")
-                .containsEntry("fillNetCents", 180_00L);
+        assertThat(improved.price().restingLimitNetCents()).isEqualTo(160_00L);
+        assertThat(improved.price().executability())
+                .isEqualTo(OrderInstruction.Executability.IMMEDIATE);
+        assertThat(improved.price().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK);
+        assertThat(improved.price().grossPackageNetCents()).isEqualTo(180_00L);
 
         TradeService.OpenRequest restingLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
@@ -295,12 +305,12 @@ class PaperCoreTest {
         assertThat(resting.entryNetPremiumCents()).isEqualTo(200_00L);
         assertThat(resting.blockReasons()).anySatisfy(reason ->
                 assertThat(reason).contains("RESTING").contains("not presently executable"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> restingExecution =
-                (Map<String, Object>) resting.analytics().get("executionQuality");
-        assertThat(restingExecution).containsEntry("executability", "RESTING")
-                .containsEntry("presentlyExecutable", false)
-                .containsEntry("economicSide", "CREDIT");
+        assertThat(resting.price().executability())
+                .isEqualTo(OrderInstruction.Executability.RESTING);
+        assertThat(resting.price().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.RESTING_LIMIT);
+        assertThat(resting.price().restingLimitNetCents()).isEqualTo(200_00L);
+        assertThat(resting.price().executableNetCents()).isEqualTo(180_00L);
         assertThatThrownBy(() -> trades.create(restingLimit))
                 .isInstanceOf(TradeRejectedException.class);
 
@@ -312,6 +322,38 @@ class PaperCoreTest {
                 .isEqualTo(OrderInstruction.Executability.RESTING);
         assertThatThrownBy(() -> new OrderInstruction(OrderInstruction.Type.MARKET, 1L, null))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot carry");
+    }
+
+    /**
+     * §3.3 — a package the ANALYZE lane priced at the MIDPOINT says so. The lane genuinely falls
+     * back to {@code mark.mid()} when a leg has no tradeable side, but the receipt called that
+     * MODELED, which reads as "a model produced this" and left ValuationBasis.MID_MARKET assigned
+     * nowhere in the product. A midpoint is nobody's fill, and the reader is entitled to know that
+     * is what they are looking at rather than being told a model made it up.
+     */
+    @Test
+    void anAnalysisPackagePricedAtTheMidpointSaysMidMarketNotModeled() {
+        Account acct = accounts.getOrCreateDefault();
+        // No bid at all on the short leg: closing/opening that side has no executable price.
+        marks.exact.put("PUT100", new MarksSource.LegMark(null, new BigDecimal("3.20"),
+                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE));
+        TradeService.OpenRequest analyze = new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1,
+                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
+                "bullish", "month", "balanced", null, null, null, null,
+                "ANALYZE", "PROPOSED");
+
+        TradePreview preview = trades.analyze(analyze);
+
+        assertThat(preview.ok()).isTrue();
+        assertThat(preview.price().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.MID_MARKET);
+        // …and a midpoint is still not executable: no fill claim rides along with the label.
+        assertThat(preview.price().executability())
+                .isEqualTo(OrderInstruction.Executability.UNAVAILABLE);
+        assertThat(preview.price().executableNetCents()).isNull();
+        assertThat(preview.warnings()).anySatisfy(message ->
+                assertThat(message).contains("labeled midpoint"));
     }
 
     @Test
@@ -330,9 +372,10 @@ class PaperCoreTest {
                 .containsExactly("USER_PROPOSED", "EXECUTABLE_BOOK");
         assertThat(preview.warnings()).anySatisfy(message ->
                 assertThat(message).contains("entered leg price").contains("blank legs"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> execution = (Map<String, Object>) preview.analytics().get("executionQuality");
-        assertThat(execution.get("executableNetCents")).isEqualTo(180_00L);
+        assertThat(preview.price().executableNetCents()).isEqualTo(180_00L);
+        // Entered leg prices are analysis inputs, so the basis says MODELED, not EXECUTABLE_BOOK.
+        assertThat(preview.price().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.MODELED);
 
         TradePreview tracked = trades.previewTracked(mixed, 1_000_00L);
         assertThat(tracked.cashBeforeCents()).isEqualTo(1_000_00L);
@@ -683,10 +726,14 @@ class PaperCoreTest {
                 "bullish", "week", "balanced");
         TradePreview p = trades.preview(shortDte);
         assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Near-expiry gamma"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> plan = (Map<String, Object>) p.analytics().get("managementPlan");
-        assertThat((String) plan.get("regime")).contains("near-expiry");
-        assertThat(String.join(" ", (java.util.List<String>) plan.get("rules"))).doesNotContain("21 days");
+        var plan = (ProtocolEvaluator.Plan) p.analytics().get("managementPlan");
+        assertThat(plan.regime()).isEqualTo(ProtocolEvaluator.Regime.NEAR_EXPIRY);
+        // Near expiry the rule KIND changes: a credit package is told to EXIT, not to roll, and no
+        // rule anywhere restates the standard-regime distance.
+        assertThat(plan.rules()).extracting(ProtocolEvaluator.Rule::rule).contains("TIME_EXIT")
+                .doesNotContain("ROLL");
+        assertThat(plan.rules().stream().map(ProtocolEvaluator.Rule::summary).toList())
+                .noneMatch(summary -> summary.contains("21"));
         // Time basis: sessions/252, disclosed.
         @SuppressWarnings("unchecked")
         Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
@@ -726,15 +773,16 @@ class PaperCoreTest {
         // Near-expiry regime: gamma warning + a plan that NEVER says roll-at-21-DTE.
         assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Near-expiry gamma"));
         assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Pin/assignment risk"));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> plan = (Map<String, Object>) p.analytics().get("managementPlan");
-        assertThat(String.join(" ", (List<String>) plan.get("rules"))).doesNotContain("21 days");
+        var plan = (ProtocolEvaluator.Plan) p.analytics().get("managementPlan");
+        assertThat(plan.regime()).isEqualTo(ProtocolEvaluator.Regime.NEAR_EXPIRY);
+        assertThat(plan.rules()).extracting(ProtocolEvaluator.Rule::rule).doesNotContain("ROLL");
         // NO invented earnings: the stub world has no filings, so no calendar estimate may fire.
         assertThat(p.warnings()).noneSatisfy(w -> assertThat(w).contains("Earnings ESTIMATED"));
         // Execution quality is aggregated and the verdict is assembled.
         @SuppressWarnings("unchecked")
         Map<String, Object> exec = (Map<String, Object>) p.analytics().get("executionQuality");
-        assertThat(exec).containsKeys("executableNetCents", "midNetCents", "proposedNetCents");
+        assertThat(exec).containsKeys("midNetCents", "packageSpreadCents");
+        assertThat(p.price().priced()).isTrue();
         assertThat((String) p.analytics().get("verdict")).isIn("favorable", "mixed", "unfavorable");
         assertThat((String) p.analytics().get("verdictReason")).isNotBlank();
     }

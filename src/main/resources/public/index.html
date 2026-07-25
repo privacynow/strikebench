@@ -113,12 +113,21 @@ function scenData(p){
     var rows=SCEN.map(function(s,i){var pk=Math.round(s.m/100*1000);return {i:i,s:s,m:s.m,px:p.spot*(1+s.m/100),pl:plByMove[Math.round(s.m*100)],prob:probByMove[pk]==null?null:probByMove[pk]};});
     var positionStored=p.isHeld?authPositionEnsemble(p):null;
     var best=rows[0],worst=rows[0],ml=rows[0],median=positionStored&&positionStored.preview&&positionStored.preview.decisionMap&&positionStored.preview.decisionMap.terminal&&positionStored.preview.decisionMap.terminal.p50||decide&&decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.endP50;
-    var medianMove=median?((Number(median)/p.spot-1)*100):0;
+    /* No stored median means no median marker — not a 0% move labelled "median terminal
+       neighborhood", which is where the tile at spot used to come from. */
+    var medianMove=median!=null&&p.spot?((Number(median)/p.spot-1)*100):null;
     /* Rank only over tiles the engine priced — an unpriced tile is not a best/worst candidate and
        must never be read as 0. */
     var priced=rows.filter(function(r){return Number.isFinite(r.pl);});
-    best=priced[0]||null;worst=priced[0]||null;ml=priced[0]||null;
-    priced.forEach(function(r){if(r.pl>best.pl)best=r;if(r.pl<worst.pl)worst=r;if(Math.abs(r.m-medianMove)<Math.abs(ml.m-medianMove))ml=r;});
+    best=priced[0]||null;worst=priced[0]||null;
+    /* The median tile exists only when the stored ensemble states a median. Nearest-to-zero was
+       not "most likely" — it was the tile closest to no move at all. */
+    ml=medianMove==null?null:priced[0]||null;
+    priced.forEach(function(r){
+      if(r.pl>best.pl)best=r;
+      if(r.pl<worst.pl)worst=r;
+      if(ml&&Math.abs(r.m-medianMove)<Math.abs(ml.m-medianMove))ml=r;
+    });
     return {rows:rows,best:best,worst:worst,ml:ml,authoritative:true};
   }
 }
@@ -140,6 +149,19 @@ var cardEl={};
    PAYOFF — leg engine + true-pixel SVG sketch (plan-desk technique:
    measure clientWidth/Height, viewBox 1:1, default preserveAspectRatio)
    ====================================================================== */
+/* The priced checkpoint nearest a hovered price, or null when the price is off the served
+   curve. One owner for "what did the engine actually say at a price near here". */
+function nearestServedPayoffPoint(p,px){
+  var pts=p&&Array.isArray(p.payoffPoints)?p.payoffPoints:null;
+  if(!pts||!pts.length)return null;
+  if(px<pts[0].price||px>pts[pts.length-1].price)return null;
+  var best=null,bestGap=Infinity;
+  for(var i=0;i<pts.length;i++){
+    var gap=Math.abs(pts[i].price-px);
+    if(gap<bestGap){bestGap=gap;best=pts[i];}
+  }
+  return best;
+}
 function payFor(p,px){
   /* Production candidates carry a server-generated payoff polyline. Linear interpolation is
      display interpolation between authoritative checkpoints, not a browser pricing engine. */
@@ -393,7 +415,17 @@ function authLifecycleAnalysis(data,id){var rows=data&&data.positionAnalyses||{}
 function authLifecyclePriority(verdict){return {DEFEND:0,REDUCE:1,HARVEST:2,ACCEPT_ASSIGNMENT:3,KEEP:4}[String(verdict||'').toUpperCase()]??9;}
 function authLifecycleClass(verdict){var v=String(verdict||'').toUpperCase();return v==='DEFEND'?'bad':v==='NEEDS_EVIDENCE'?'warn':v==='REDUCE'?'warn':v==='HARVEST'?'pick':v==='ACCEPT_ASSIGNMENT'?'violet':'ok';}
 function authLifecycleLabel(verdict,compact){var v=String(verdict||'').toUpperCase();if(v==='DEFEND')return compact?'Action required':'Defend · action required';if(v==='NEEDS_EVIDENCE')return compact?'Evidence needed':'No verdict · evidence needed';if(compact){if(v==='HARVEST')return 'Take profit';if(v==='REDUCE')return 'Trim';if(v==='KEEP')return 'On plan';if(v==='ACCEPT_ASSIGNMENT')return 'Assignment likely';}return authHuman(verdict);}
-function authLifecycleRead(analysis){var decision=analysis&&analysis.decision||{},life=analysis&&analysis.lifecycle||{},carry=life.carryCollateral||{},history=life.history||{},close=life.currentChoice&&life.currentChoice.close||{},evidence=life.evidence||{},events=life.assignmentExit&&life.assignmentExit.eventCrossings||[];return {verdict:decision.verdict||null,summary:decision.summary||null,remaining:authDollarsFromCents(carry.grossRemainingPremiumCents),annualized:authNumber(carry.grossAnnualizedRemainingPremiumPct),captured:authNumber(history.grossPremiumCapturedPct),closeCost:authDollarsFromCents(close.signedNetCloseCashCents==null?null:Math.max(0,-Number(close.signedNetCloseCashCents))),events:Array.isArray(events)?events:[],reduction:decision.reduction||null,dimensions:Array.isArray(decision.dimensions)?decision.dimensions:[],unavailableReason:close.unavailableReason||null,observedAt:evidence.observedAt||null,snapshotFingerprint:evidence.marketSnapshotFingerprint||null};}
+/* What buying this package back costs, fees included — straight off the close quote's own price
+   receipt. The sign flip and the max(0,...) clamp used to live here, which meant the browser
+   decided both the direction and the floor of a cash figure the engine had already stated. */
+function authCloseCostDollars(close){
+  var price=close&&close.price||null;
+  var cents=price&&(price.afterFeeNetCents==null?price.grossPackageNetCents:price.afterFeeNetCents);
+  if(cents==null)return null;
+  var dollars=authDollarsFromCents(cents);
+  return dollars==null?null:Math.abs(dollars);
+}
+function authLifecycleRead(analysis){var decision=analysis&&analysis.decision||{},life=analysis&&analysis.lifecycle||{},carry=life.carryCollateral||{},history=life.history||{},close=life.currentChoice&&life.currentChoice.close||{},evidence=life.evidence||{},events=life.assignmentExit&&life.assignmentExit.eventCrossings||[];return {verdict:decision.verdict||null,summary:decision.summary||null,remaining:authDollarsFromCents(carry.grossRemainingPremiumCents),annualized:authNumber(carry.grossAnnualizedRemainingPremiumPct),captured:authNumber(history.grossPremiumCapturedPct),closeCost:authCloseCostDollars(close),events:Array.isArray(events)?events:[],reduction:decision.reduction||null,dimensions:Array.isArray(decision.dimensions)?decision.dimensions:[],unavailableReason:close.unavailableReason||null,observedAt:evidence.observedAt||null,snapshotFingerprint:evidence.marketSnapshotFingerprint||null};}
 /* B9: a DEFEND driven only by the MECHANICS dimension being BLOCKED means the position cannot be
    evaluated from the current book (no executable close evidence) — it is "reviewing / data
    unavailable", NOT an actionable trigger. A substantive DEFEND (tail, event, capacity, hard
@@ -544,7 +576,16 @@ function authLifecycleReceiptHTML(analysis,compact){if(!analysis)return '<div cl
      Retry. The metric grid stays "—". */
   if(blocked){var missing=[];if(r.unavailableReason)missing.push('<span>Missing input · '+deskEsc(r.unavailableReason)+'</span>');var seen=authWhen(r.observedAt);if(seen)missing.push('<span>Last observation · '+deskEsc(seen)+'</span>');if(r.snapshotFingerprint)missing.push('<span>Snapshot · '+deskEsc(r.snapshotFingerprint)+'</span>');
     return '<div class="authlifecycle lifeblocked"><span class="badge lifebadge">'+deskEsc('Current mark unavailable')+'</span><b>'+deskEsc(compact?'Today’s decision':'Would you open this position today?')+'</b><p>This position cannot be evaluated from the current book right now — its live mark is missing, so no hold-or-close directive is issued.</p><div class="authlifefacts">'+(missing.join('')||'<span>Live mark unavailable</span>')+'</div>'+(compact?'':'<div class="authfailact"><button type="button" class="btn xs" data-auth-position-retry>Retry current mark</button></div>')+'</div>';}
-  var facts=[],trigger=String(verdict).toUpperCase()==='DEFEND'&&r.dimensions.find(function(row){return String(row.policySignal||'').toUpperCase()==='DEFEND'||String(row.status||'').toUpperCase().indexOf('DEFEND')>=0||String(row.status||'').toUpperCase().indexOf('BLOCK')>=0;});if(trigger)facts.push(authHuman(trigger.name)+' trigger');if(r.remaining!=null)facts.push(authMoney(r.remaining)+' gross premium left');if(r.closeCost!=null)facts.push(authMoney(r.closeCost)+' executable close');if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');if(r.reduction)facts.push('close '+r.reduction.quantityToClose+' restores policy');return '<div class="authlifecycle '+(blocked?'':authLifecycleClass(verdict))+'"><span class="badge lifebadge '+(blocked?'':authLifecycleClass(verdict))+'">'+deskEsc(blocked?'Reviewing · data unavailable':authLifecycleLabel(verdict,compact))+'</span><b>'+deskEsc(compact?'Today’s decision':(analysis.lifecycle&&analysis.lifecycle.currentChoice&&analysis.lifecycle.currentChoice.freshEyesQuestion||'Would you open this position today?'))+'</b><p>'+deskEsc(r.summary||'The named lifecycle policy keeps economics, events, capacity, and history separate.')+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';}
+  var facts=[],trigger=String(verdict).toUpperCase()==='DEFEND'&&r.dimensions.find(function(row){return String(row.policySignal||'').toUpperCase()==='DEFEND'||String(row.status||'').toUpperCase().indexOf('DEFEND')>=0||String(row.status||'').toUpperCase().indexOf('BLOCK')>=0;});if(trigger)facts.push(authHuman(trigger.name)+' trigger');
+  /* The mechanical policy now names WHICH line was crossed. A verdict of DEFEND that only says
+     "defend" leaves the user to guess whether it was the stop, the clock, or the book. */
+  var mech=r.dimensions.find(function(row){return String(row.name||'').toUpperCase()==='MECHANICAL_PROTOCOL';});
+  var mechStatus=mech&&String(mech.status||'').toUpperCase();
+  if(mechStatus&&mechStatus!=='PASS'&&mechStatus!=='UNAVAILABLE'){
+    facts.push({STOP_LOSS_TRIGGER:'stop-loss line crossed',EXPIRY_TIME_TRIGGER:'expiry time rule',
+      TAKE_PROFIT_TRIGGER:'take-profit line reached',TIME_DECISION_OPEN:'time decision open'}[mechStatus]
+      ||authHuman(mechStatus));
+  }if(r.remaining!=null)facts.push(authMoney(r.remaining)+' gross premium left');if(r.closeCost!=null)facts.push(authMoney(r.closeCost)+' executable close');if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');if(r.reduction)facts.push('close '+r.reduction.quantityToClose+' restores policy');return '<div class="authlifecycle '+(blocked?'':authLifecycleClass(verdict))+'"><span class="badge lifebadge '+(blocked?'':authLifecycleClass(verdict))+'">'+deskEsc(blocked?'Reviewing · data unavailable':authLifecycleLabel(verdict,compact))+'</span><b>'+deskEsc(compact?'Today’s decision':(analysis.lifecycle&&analysis.lifecycle.currentChoice&&analysis.lifecycle.currentChoice.freshEyesQuestion||'Would you open this position today?'))+'</b><p>'+deskEsc(r.summary||'The named lifecycle policy keeps economics, events, capacity, and history separate.')+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';}
 function authPositionEnsemble(p){return p&&p._positionData&&p._positionData.positionEnsemble||null;}
 function authPositionFocusedScenario(p){var response=p&&p.authoritativeAnimation,rows=response&&response.checkpoints&&response.checkpoints.positions||[];return rows.find(function(row){return String(row&&row.key||'')===String(p.id);})||null;}
 function authPositionScenarioTargetIndex(p,steps){steps=steps||[];if(!steps.length)return -1;var pins=p&&p.authoritativeAnimation&&p.authoritativeAnimation.receipt&&p.authoritativeAnimation.receipt.conditioningAssumptions&&p.authoritativeAnimation.receipt.conditioningAssumptions.waypoints||[],target=pins.length?pins.reduce(function(max,row){return Math.max(max,Number(row.dayIndex||0));},0):Infinity,best=0;steps.forEach(function(row,index){var progress=Number(row.sessionProgress==null?row.step==null?index:row.step:row.sessionProgress);if(progress<=target)best=index;});return best;}
@@ -602,11 +643,19 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
   if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div>';return;}
   var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},greeks=p.greeks||{};
   var payoffReady=Array.isArray(p.payoffPoints)&&p.payoffPoints.length>1;
-  var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authExceptionStatus(cur.freshness||p.provenance.freshness||ev.quote&&ev.quote.age)||'current';
+  var closeRead=authLifecycleRead(detail.analysis||p.lifecycle);
+  var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authFreshnessLabel(cur.freshness,p.provenance.freshness,ev.quote&&ev.quote.age);
   host.innerHTML='<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>The chart will appear when its position values are ready.</div>')+'</section>'+
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
-      '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div><div class="authmetric"><span>Close cost</span><b>'+authMoney(authDollarsFromCents(cur.closeCostCents))+'</b></div>'+
+      '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div>'+
+      /* ONE close price on this screen. This tile used to show the mark-based closeCostCents
+         while the lifecycle receipt two panels away showed the fee-inclusive executable close —
+         two different numbers for the same act, side by side, with nothing to reconcile them. */
+      '<div class="authmetric"><span title="What buying this package back would cost right now, fees included — the same figure the lifecycle decision uses">Cost to close</span><b>'+
+        (closeRead.closeCost==null
+          ? '<span class="dim">unavailable</span>'
+          : authMoney(closeRead.closeCost))+'</b></div>'+
       '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span title="Probability of profit — the estimated chance this position is profitable at expiry">POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
       '<div class="authmetric"><span title="'+deskEsc(greekDesc('delta'))+'">Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span title="'+deskEsc(greekDesc('theta'))+'">Theta / day</span><b>'+gfmt(GSPEC[1],greeks.thetaCentsPerDay)+'</b></div></div>'+
       '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+'</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
@@ -785,7 +834,11 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
   var authReady=!p.authoritative||!!(p.authoritativeAnimation&&p.authoritativeAnimation.checkpoints);
   var authError=p.authoritative&&p._authoritativeScenarioError;
   var pinProb=(ar&&ar.sourcePathCount?Math.round(ar.withinToleranceCount/ar.sourcePathCount*100):null);
-  var af=authoritativeFrame(p,t),curPx=af?af.price:p.spot*(1+mag*t/100),curM=(curPx/p.spot-1)*100,ivsh=p.isHeld?0:iv*t,dfwd=af?af.day:days*t,pv=af&&af.pnl!=null?af.pnl:null;
+  /* Before the authoritative frame lands there is no priced underlying for this point in the
+     story. The desk used to synthesize one — spot x (1 + move x scrub) — and print it beside a
+     real P/L, so a fabricated price sat next to an engine number in the same readout. */
+  var af=authoritativeFrame(p,t),curPx=af?af.price:null,curM=curPx!=null&&p.spot?(curPx/p.spot-1)*100:null,
+      ivsh=p.isHeld?0:iv*t,dfwd=af?af.day:null,pv=af&&af.pnl!=null?af.pnl:null;
   var statusRead=authError?'<b class="neg">market story unavailable</b>':
     (p.authoritative?(pin===FAN_STORY?'<b>one exact stored path</b>':pinProb==null?'<b>finding matching paths…</b>':'<b>'+pinProb+'%</b> of paths fit this story'):'<b>'+pinProb+'%</b> likely')+' · '+scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv);
   function stp(key,lbl,val,cls){ return '<span class="mstp" data-asm="'+key+'"><span class="ml">'+lbl+'</span><button data-wf="'+key+'dn">−</button><span class="mv '+(cls||'')+'">'+val+'</span><button data-wf="'+key+'up">+</button></span>'; }
@@ -1164,10 +1217,14 @@ function renderAtPrice(s){
 }
 /* concise, low-precision readout of the live assumptions + the resulting mark */
 function scenReadoutHTML(p,curM,curPx,ivsh,dfwd,pv){
-  var asm='<b class="'+(curM>=0?'pos':'neg')+'">'+(curM>0?'+':'')+Math.round(curM)+'%</b>';
-  if(Math.round(ivsh)!==0) asm+=' · IV <b>'+(ivsh>0?'+':'')+Math.round(ivsh)+'</b>';
-  var td=tDisp(dfwd,tUnitOf(p)); if(parseInt(td,10)>0) asm+=' · <b>+'+td+'</b>';
-  return '<b>'+p.sym+'</b> → <b>'+Math.round(curPx)+'</b> ('+asm+') marks '+(pv==null?'<b>unavailable</b>':'<b class="'+(pv>=0?'pos':'neg')+'">'+money(pv)+'</b>');
+  /* Every part of this line is a receipt or it is absent. A story point that has not been valued
+     yet says so instead of naming a price the engine has not reached. */
+  if(curPx==null)return '<b>'+deskEsc(p.sym)+'</b> · this point in the story is not valued yet';
+  var asm=curM==null?'':'<b class="'+(curM>=0?'pos':'neg')+'">'+(curM>0?'+':'')+Math.round(curM)+'%</b>';
+  if(Math.round(ivsh)!==0) asm+=(asm?' · ':'')+'IV <b>'+(ivsh>0?'+':'')+Math.round(ivsh)+'</b>';
+  if(dfwd!=null){var td=tDisp(dfwd,tUnitOf(p)); if(parseInt(td,10)>0) asm+=(asm?' · ':'')+'<b>+'+td+'</b>';}
+  return '<b>'+deskEsc(p.sym)+'</b> → <b>'+Math.round(curPx)+'</b>'+(asm?' ('+asm+')':'')+' marks '
+    +(pv==null?'<b>unavailable</b>':'<b class="'+(pv>=0?'pos':'neg')+'">'+money(pv)+'</b>');
 }
 /* HOVER the hero payoff → a tooltip + crosshair showing the value at any price (replaces reliance on tiny labels) */
 var _dragActive=false;
@@ -1180,12 +1237,16 @@ function payoffHover(p, ev){
   var svgR=svg.getBoundingClientRect(), wrapR=wrap.getBoundingClientRect(), m=svg._map;
   var x=ev.clientX-svgR.left, price=m.lo+(x-m.x0)/m.pw*(m.hi-m.lo);
   if(price<m.lo||price>m.hi||x<m.x0-2){ hidePayoffTip(p); return; }
-  var cur=p;
-  /* Off the served curve there is no value to report — say so rather than showing the curve's
-     endpoint as though it were this price. */
-  var pl=payFor(cur, price), pct=(price/p.spot-1)*100;
-  if(pl==null){ hidePayoffTip(p); return; }
-  tip.innerHTML='<b>'+Math.round(price)+'</b><span class="tpct">'+(pct>=0?'+':'')+pct.toFixed(1)+'%</span><span class="tpl '+(pl>=0?'pos':'neg')+'">'+money(pl)+'</span>';
+  /* The readout SNAPS to the nearest priced point on the served curve. Reading a value between
+     two checkpoints is fine for drawing the line; printing it as this position's P/L at the
+     hovered price states a number the engine never produced. Off the curve there is nothing to
+     report at all. */
+  var snapped=nearestServedPayoffPoint(p, price);
+  if(!snapped){ hidePayoffTip(p); return; }
+  var pl=snapped.profit, pct=p.spot?(snapped.price/p.spot-1)*100:null;
+  tip.innerHTML='<b>'+Math.round(snapped.price)+'</b>'
+    +(pct==null?'':'<span class="tpct">'+(pct>=0?'+':'')+pct.toFixed(1)+'%</span>')
+    +'<span class="tpl '+(pl>=0?'pos':'neg')+'">'+money(pl)+'</span>';
   var lx=ev.clientX-wrapR.left;
   var half=Math.ceil(tip.offsetWidth/2), tipX=Math.max(half+6,Math.min(wrapR.width-half-6,lx));
   if(wrapR.width<tip.offsetWidth+12)tipX=wrapR.width/2;
@@ -1237,6 +1298,22 @@ var HOME_AUTH_FOCUS_SEQ=0;
 function authSetBookPanels(hidden){AUTH_BOOK_PANEL_IDS.forEach(function(id){var el=document.getElementById(id);if(el)el.hidden=!!hidden;});}
 function authMetric(label,value,cls){return '<div class="authmetric"><span>'+deskEsc(label)+'</span><b class="'+(cls||'')+'">'+deskEsc(value==null?'—':value)+'</b></div>';}
 function authExceptionStatus(value){var raw=String(value||'').trim(),upper=raw.toUpperCase();if(!raw)return '';if(upper.indexOf('STALE')>=0)return 'stale';if(upper.indexOf('DELAYED')>=0)return 'delayed';if(upper.indexOf('MISSING')>=0)return 'missing';if(upper.indexOf('INCOMPLETE')>=0||upper.indexOf('PARTIAL')>=0)return 'partial';if(upper.indexOf('UNAVAILABLE')>=0||upper.indexOf('ERROR')>=0)return 'unavailable';return '';}
+/* A freshness WORD, only when a receipt states one. authExceptionStatus returns '' for anything
+   that is not a named exception — including nothing at all — so a 4-deep fallback ending in
+   'current' printed absent evidence as fresh evidence (§3.2). */
+function authFreshnessLabel(){
+  for(var i=0;i<arguments.length;i++){
+    var raw=String(arguments[i]==null?'':arguments[i]).trim();
+    if(!raw)continue;
+    var status=authExceptionStatus(raw);
+    if(status)return status;
+    var upper=raw.toUpperCase();
+    if(upper.indexOf('FRESH')>=0||upper.indexOf('REALTIME')>=0)return 'current';
+    if(upper.indexOf('EOD')>=0)return 'end of day';
+    return raw.toLowerCase();
+  }
+  return 'freshness unstated';
+}
 function authExceptionChip(value){var status=authExceptionStatus(value);return status?'<span class="pchip static '+(status==='stale'||status==='missing'||status==='unavailable'?'warn':'')+'">'+deskEsc(status)+'</span>':'';}
 function authLiquidityFigure(liq,s){
   function cents(receipt,fallback){var value=authNumber(receipt&&receipt.cents);return value==null?authNumber(fallback):Math.max(0,value);}
@@ -1449,7 +1526,9 @@ function drawHistChart(wrap){
      labels; otherwise it collapses to one honest receipt line. Hidden when the anchor is stale. */
   function emMoney(v){return v>=1000?'$'+(v/1000).toFixed(1)+'k':'$'+v.toFixed(2);}
   if(emRails){var exR=xU(U),eyHi=Yv(emP84),eyLo=Yv(emP16),eyMid=Yv(emP50);
-    var eAnchor=authNumber(em.anchorSpot),eUp=(eAnchor&&eAnchor>0)?(emP84-eAnchor)/eAnchor*100:null,eDn=(eAnchor&&eAnchor>0)?(emP16-eAnchor)/eAnchor*100:null;
+    /* The band's move percentages ride the same receipt as its prices. Re-deriving them here
+       from three served numbers made the percentage a second, unowned statement of one fact. */
+    var eUp=authNumber(em.p84MovePct),eDn=authNumber(em.p16MovePct);
     g+='<rect x="'+x0+'" y="'+eyHi.toFixed(1)+'" width="'+(exR-x0).toFixed(1)+'" height="'+Math.max(0,eyLo-eyHi).toFixed(1)+'" fill="var(--accent)" fill-opacity=".06"/>';
     [eyHi,eyLo].forEach(function(yy){g+='<line x1="'+x0+'" y1="'+yy.toFixed(1)+'" x2="'+exR.toFixed(1)+'" y2="'+yy.toFixed(1)+'" stroke="var(--accent-2)" stroke-opacity=".4" stroke-dasharray="2 4"/>';});
     g+='<line x1="'+x0+'" y1="'+eyMid.toFixed(1)+'" x2="'+exR.toFixed(1)+'" y2="'+eyMid.toFixed(1)+'" stroke="var(--accent-2)" stroke-opacity=".55" stroke-dasharray="4 3"/>';
@@ -1922,6 +2001,20 @@ function authJointBookFan(){var measured=authMeasuredBook();if(!measured)return 
   var paths=display.map(function(path){return (path.steps||[]).map(function(step){var v=authNumber(step.pnlCents);return v==null?null:v/100;});}).filter(function(path){return path.length>1&&path.every(function(v){return v!=null;});});
   var progress=display.length?(display[0].steps||[]).map(function(step,i){return Number(step.sessionProgress==null?i:step.sessionProgress);}):[];
   return {phase:frames.length?'ready':'unavailable',frames:frames,paths:paths,progress:progress,chance:authNumber(scenario.chanceOfGainPct),anchor:measured.anchorDate||null,basis:measured.basis||'',error:frames.length?null:'The measured Book returned no path checkpoints.'};}
+/* The last session on the stored grid that still falls on or before an expiry, read from the
+   backend's own dated steps. Null when either input is missing — an unknown boundary leaves the
+   fan untruncated rather than cut at a guessed session count. */
+function authSessionAtExpiry(underlyingSteps,expiration){
+  if(!expiration||!Array.isArray(underlyingSteps)||!underlyingSteps.length)return null;
+  var last=null;
+  for(var i=0;i<underlyingSteps.length;i++){
+    var row=underlyingSteps[i],date=row&&row.sessionDate;
+    if(!date)continue;
+    if(String(date)>String(expiration))break;
+    last=Number(row.sessionProgress==null?i:row.sessionProgress);
+  }
+  return last;
+}
 function authBookFanKey(){var joint=authMeasuredBook(),jointKey=joint&&joint.scenario&&joint.scenario.jointFingerprint||joint&&joint.unavailableReason||'';return jointKey+'|'+POS.map(function(p){return p.id+':'+(p._plan&&p._plan.id||'')+':'+String(p._trade&&p._trade.updatedAt||'');}).join('|');}
 function authBookFanBands(row){var bands=row&&(Array.isArray(row.stepBands)&&row.stepBands.length?row.stepBands:Array.isArray(row.days)?row.days:[])||[];
   return bands.map(function(step,i){function cents(key){var v=authNumber(step[key]);return v==null?null:v/100;}
@@ -1956,15 +2049,11 @@ function authLoadBookFan(){
          date its steps, the boundary is unknown and the fan is left untruncated rather than cut at
          a guessed session count. */
       var expiration=authPackageExpiration(p);
-      var lifeSteps=display.length?(display[0].steps||[]):[];
-      var lifeS=null;
-      if(expiration&&lifeSteps.some(function(step){return step&&step.sessionDate;})){
-        for(var li=0;li<lifeSteps.length;li++){
-          var lsd=lifeSteps[li]&&lifeSteps[li].sessionDate;
-          if(lsd&&String(lsd)>String(expiration))break;
-          lifeS=Number(lifeSteps[li]&&lifeSteps[li].sessionProgress==null?li:lifeSteps[li].sessionProgress);
-        }
-      }
+      /* The dated session calendar lives on the response's underlyingSteps, not on the P/L steps —
+         a display step carries only (step, sessionProgress, pnlCents). This guard used to test the
+         P/L steps for a sessionDate they never had, so it was permanently false and every book fan
+         drew settled afterlife past its own expiry while the position fan refused to. */
+      var lifeS=authSessionAtExpiry(response&&response.checkpoints&&response.checkpoints.underlyingSteps,expiration);
       if(lifeS!=null&&frames.length&&lifeS<frames[frames.length-1].x-1e-6){
         frames=frames.filter(function(f){return f.x<=lifeS+1e-6;});
         var keep=0;for(var pi=0;pi<progress.length;pi++){if(progress[pi]<=lifeS+1e-6)keep=pi;else break;}
@@ -2590,7 +2679,8 @@ function applyAuthoritativePreview(envelope){
   decide.orderPreview=envelope;
   var selected=envelope.selected, id=selected&&selected.id, c=decide.cands.find(function(row){return String(row.id)===String(id||decide.candId);});
   if(!c)return;
-  var p=envelope.preview, candidateQty=Number(c.backend&&c.backend.qty||1), previewQty=Number(envelope.order&&envelope.order.qty||candidateQty);
+  var p=envelope.preview, orderPrice=envelope.order&&envelope.order.price||null;
+  var candidateQty=Number(c.backend&&c.backend.qty||1), previewQty=Number(orderPrice&&orderPrice.quantity||candidateQty);
   var instruction=String(envelope.order&&envelope.order.orderInstruction&&envelope.order.orderInstruction.type||'MARKET').toUpperCase();
   /* The candidate/outcome remains the economic source of truth. A first MARKET preview may
      supply its exact payoff points, but later execution-instruction previews stay in the dock. */
@@ -2606,13 +2696,15 @@ function applyAuthoritativePreview(envelope){
   var pg=p.analytics&&p.analytics.greeks;
   if(pg){ c.greeks=pg; c.delta=authNumber(pg.deltaShares); c.gamma=authNumber(pg.gammaSharesPerDollar);
     c.theta=authNumber(pg.thetaCentsPerDay); c.vega=authNumber(pg.vegaCentsPerPoint); }
-  decide.order.qty=Number(envelope.order&&envelope.order.qty||decide.order.qty||1);
+  decide.order.qty=Number(orderPrice&&orderPrice.quantity||decide.order.qty||1);
   var oi=envelope.order&&envelope.order.orderInstruction;
   if(oi){decide.order.type=String(oi.type||'MARKET').toLowerCase();decide.order.price=oi.limitNetCents==null?null:Number(oi.limitNetCents)/100;}
   decide.order.previewPending=false;
-  decide.order.executable=envelope.order&&envelope.order.presentlyExecutable;
-  decide.order.executability=envelope.order&&envelope.order.executability;
-  decide.order.executableNetCents=envelope.order&&envelope.order.executableNetCents;
+  /* One receipt states the price, its basis, and whether it can execute now. presentlyExecutable
+     was a second field for a fact executability already carried. */
+  decide.order.receipt=orderPrice;
+  decide.order.executability=orderPrice&&orderPrice.executability;
+  decide.order.executable=String(orderPrice&&orderPrice.executability||'').toUpperCase()==='IMMEDIATE';
 }
 function applyAuthoritativePlanContext(plan){
   if(!decide||!plan)return;
@@ -3135,7 +3227,7 @@ function candGated(c,ctx){if(c&&c.authoritative)return null;ctx=cohCtx(ctx); var
   if(g.risk!=null&&!c.undef&&!isCollat(c)&&risk>g.risk)return 'risk';
   if(g.bp!=null&&(isCollat(c)||c.undef)&&c.cap>g.bp)return 'bp';
   if(g.minPop!=null&&c.pop!=null&&c.pop<g.minPop)return 'pop';
-  if(g.maxAsn!=null&&c.assign!=null&&c.assign>g.maxAsn)return 'assign';
+  if(g.maxAsn!=null&&c.assign!=null&&Number(c.assign)>g.maxAsn)return 'assign';
   var gl=gapLoss(c);if(g.gapLoss!=null&&gl!=null&&-gl>g.gapLoss)return 'gaploss';
   return null;}
 /* ---- coherence verdict: does the candidate match your GOAL · VIEW · BUDGET, and does
@@ -3173,7 +3265,10 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
 }
 /* The boxed KPI numrow is one shared component for the Position and New Idea heroes. */
 function stratKPIs(c, opts){ opts=opts||{};
-  var credit=(candCollect(c)!=null?candCollect(c):c.net),creditKnown=credit!=null&&Number.isFinite(Number(credit));if(creditKnown)credit=Number(credit);
+  /* The option-only net, or nothing. Falling back to the whole-package net here made a buy-write's
+     hero read "+$480 net credit" while the dock read the stock-inclusive figure — one package
+     stating two prices a panel apart (§3.3). The receipt under the row reconciles them. */
+  var credit=candCollect(c),creditKnown=credit!=null&&Number.isFinite(Number(credit));if(creditKnown)credit=Number(credit);
   if(opts.calm){
     var primary=[
       kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
@@ -3193,7 +3288,8 @@ function stratKPIs(c, opts){ opts=opts||{};
     kcell('Break-even', beLabel(c), '')
   ];
   var n=cells.length;
-  return '<div class="kgrid boxed numrow" style="grid-template-columns:repeat('+n+',1fr);margin-top:9px">'+cells.join('')+'</div>';
+  return '<div class="kgrid boxed numrow" style="grid-template-columns:repeat('+n+',1fr);margin-top:9px">'+cells.join('')+'</div>'
+    +packagePriceReconcileLine(c&&c.price);
 }
 /* ---- seeded Monte-Carlo over the SAME payoff engine (payFor) -----------------
    The market path artifact belongs to the IDEA CONTEXT, not to an individual
@@ -3667,7 +3763,7 @@ function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
   var fits=decide.cands.filter(function(row){return deskBackendEnabled()?authoritativeEndorsable(row):coherence(row).verdict==='on'&&!candGated(row);}).length,
     favorableEconomics=deskBackendEnabled()?decide.cands.filter(authoritativeEconomicFavorable).length:fits,adjacent=decide.cands.length-fits,
-    executionUnavailable=!!(decide.orderPreview&&decide.orderPreview.order&&String(decide.orderPreview.order.executability||'').toUpperCase()==='UNAVAILABLE'),
+    executionUnavailable=String(orderPriceReceipt(decide.orderPreview&&decide.orderPreview.order)&&orderPriceReceipt(decide.orderPreview&&decide.orderPreview.order).executability||'').toUpperCase()==='UNAVAILABLE',
     comparisonCount=decide.deskPickId?adjacent:decide.cands.length;
   var rankRead=deskBackendEnabled()
     ? (decide.deskPickId
@@ -3757,7 +3853,9 @@ function decisionLegMeta(l,ownSymbol){
   if(bid!=null&&ask!=null)part('legdetail-book','bid / ask '+bid.toFixed(2)+' / '+ask.toFixed(2));
   if(l.entryPrice!=null)part('legdetail-entry','fill: '+(l.q<0?'sell at bid ':'buy at ask ')+Number(l.entryPrice).toFixed(2));
   var iv=authNumber(quote.iv),delta=authNumber(quote.delta);
-  if(iv!=null)part('legdetail-wide','IV '+(Math.abs(iv)<=2?iv*100:iv).toFixed(1)+'%');
+  /* Chain IV rides the wire as a FRACTION (0.28 = 28%). The old magnitude guess — treat it as a
+     percentage above 2.0 — silently changed the reading of one field at a 200% vol boundary. */
+  if(iv!=null)part('legdetail-wide','IV '+(Number(iv)*100).toFixed(1)+'%');
   if(delta!=null)part('legdetail-wide','Δ '+delta.toFixed(2));
   if(quote.captured){
     var source=String(quote.source||''),freshness=String(quote.freshness||'');
@@ -3846,7 +3944,9 @@ function decScenSpectrum(c){
       '<span class="sbw"><span class="sb '+(r.pl>=0?'p':'n')+'" style="width:'+width+'%"></span></span>'+
       '<span class="sv '+(!priced?'':r.pl>=0?'pos':'neg')+'"'+(priced?'':' title="This move was not priced by the engine"')+'>'+(priced?money(r.pl):'—')+'</span><span class="splay">'+(pinned?'❚❚':'▶')+'</span></button>';
   }).join('');
-  var sum='<div class="scensum"><div class="e"><span class="lbl"><span class="sumfull">'+(d.authoritative?'Median terminal neighborhood':'Most likely')+' · '+d.ml.s.n+'</span><span class="sumshort">'+(d.authoritative?'Median':'Likely')+' · '+(shortNames[d.ml.i]||d.ml.s.n)+'</span></span><span class="v '+(d.ml.pl>=0?'pos':'neg')+'">'+(d.authoritative?'':Math.round(d.ml.prob*100)+'% · ')+money(d.ml.pl)+'</span></div>'+
+  /* The median line appears only when the stored ensemble supplied a median to sit near. */
+  var medianCell=!d.ml?'':'<div class="e"><span class="lbl"><span class="sumfull">'+(d.authoritative?'Median terminal neighborhood':'Most likely')+' · '+d.ml.s.n+'</span><span class="sumshort">'+(d.authoritative?'Median':'Likely')+' · '+(shortNames[d.ml.i]||d.ml.s.n)+'</span></span><span class="v '+(d.ml.pl>=0?'pos':'neg')+'">'+(d.authoritative?'':Math.round(d.ml.prob*100)+'% · ')+money(d.ml.pl)+'</span></div>';
+  var sum='<div class="scensum">'+medianCell+
     '<div class="e range"><span class="lbl"><span class="sumfull">Outcome range</span><span class="sumshort">Range</span></span><span class="v"><b class="neg">'+money(d.worst.pl)+'</b> → <b class="pos">'+money(d.best.pl)+'</b></span></div></div>';
   if(pin===FAN_STORY){var mag=magOf(c);
     ctl='<div class="customstory"><span class="csdot"></span><span class="cslbl"><b>Chosen future</b><span>a real path from the market fan · ends <b class="'+(mag>=0?'pos':'neg')+'">'+(mag>0?'+':'')+(mag==null?'—':mag)+'%</b></span></span></div>'+scenExpand(c);}
@@ -3960,7 +4060,19 @@ function fanVerdictIcon(co,gated){
 /* D (#12): the collect cell shows OPTION-only net premium when the structure has a stock leg
    (equals entry net otherwise); the stock outlay is represented only by the Capital column. One
    helper feeds all four display sites so they never diverge. */
-function candCollect(c){return c&&c.optionNet!=null?c.optionNet:(c?c.credit:null);}
+/* The option-only net premium, stated by the package's own price receipt. Falling back to the
+   whole-package net when the option-only figure is absent silently reported a covered call's
+   stock-inclusive debit as its "net credit" (§3.3). Absent is absent. */
+/* How hard a sector-gap loss lands, measured against the package's own defined risk. Returns ''
+   when either side is unknown — an uncoloured cell rather than a colour that means nothing. */
+function stressSeverity(c,gapLoss){
+  if(gapLoss==null)return '';
+  var risk=c&&(c.maxLoss!=null?Math.abs(Number(c.maxLoss)):c.cap!=null?Math.abs(Number(c.cap)):null);
+  if(!(risk>0))return '';
+  var share=Math.abs(Number(gapLoss))/risk;
+  return share>=0.9?'bad':share>=0.5?'warn':'ok';
+}
+function candCollect(c){return c&&c.optionNet!=null?c.optionNet:null;}
 function candCollectLabel(c){var v=candCollect(c);return v==null?'Net premium':v>=0?'Net credit':'Net debit';}
 function fanList(){
   /* ONE row per idea. Labels live ONCE in the header; rows are the numbers, colored by meaning. */
@@ -3975,7 +4087,10 @@ function fanList(){
     '<span class="fnum fcol-cap" title="Capital or collateral this ties up">capital</span>'+
     '<span class="fnum" title="Realized-volatility EV (after costs) — the ranking number">EV</span></div>';
   var rows=decide.cands.map(function(c){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'), gl=gapLoss(c);
-    var gcls=gl==null?'':gl<=-15000?'bad':gl<=-6000?'warn':'ok', fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=c.authoritative?co.prose:c.why;
+    /* Severity is relative to what this package can actually lose, not to two hardcoded dollar
+       lines. −$15,000 was "bad" for every account and every package size; a $600 max-loss spread
+       could never reach it and a $200k book was never warned by it. */
+    var gcls=stressSeverity(c,gl), fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=c.authoritative?co.prose:c.why;
     var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
     var evNum=c.authoritative&&c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
     return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+whyRead+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="Analyze '+deskEsc(c.short)+'">'+
@@ -4077,6 +4192,48 @@ function tailBlock(c){
       (tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+'</div><div class="tailsub">'+stressCopy+' No browser tail model is added to this result.</div></div>';
   }
   return ''; }
+/* The mechanical protocol this package would be managed under, straight off the wire: a NAMED,
+   versioned policy and its typed rules with their trigger values and units. The desk used to say
+   nothing about what happens after you open — the thresholds existed in five backend dialects and
+   reached no user at all (§7.5). Rendering only; every number and every rule name is the policy's. */
+function managementPlanOf(c){
+  var plan=c&&c.evaluation&&c.evaluation.management;
+  if(plan&&Array.isArray(plan.rules)&&plan.rules.length)return plan;
+  var preview=c&&c.preview&&c.preview.analytics&&c.preview.analytics.managementPlan;
+  return preview&&Array.isArray(preview.rules)&&preview.rules.length?preview:null;
+}
+function protocolRuleLabel(rule){
+  return {TAKE_PROFIT:'Take profit',STOP_LOSS:'Stop loss',ROLL:'Roll',TIME_EXIT:'Time exit',
+    ASSIGNMENT:'Assignment',INVALIDATION:'Thesis invalidated'}[String(rule||'').toUpperCase()]
+    ||authHuman(rule||'Rule');
+}
+function protocolTriggerText(row){
+  var parts=[];
+  if(row.triggerPnlCents!=null)parts.push(authSigned(authDollarsFromCents(row.triggerPnlCents)));
+  if(row.triggerSessionsToExpiry!=null)parts.push(row.triggerSessionsToExpiry+' session'
+    +(Number(row.triggerSessionsToExpiry)===1?'':'s')+' left');
+  if(!parts.length&&row.trigger)return String(row.trigger);
+  return parts.join(' · ');
+}
+function managementProtocolPanel(c){
+  var plan=managementPlanOf(c);
+  if(!plan)return '<div class="upanel protocolpanel"><div class="lenshd"><span class="eyebrow">If you open this</span></div>'
+    +'<div class="backendnotice">The management protocol appears once this exact package is valued.</div></div>';
+  var regime=String(plan.regime||'').replace(/_/g,' ').toLowerCase();
+  var rows=(plan.rules||[]).map(function(row){
+    var trig=protocolTriggerText(row);
+    return '<div class="protorow"><span class="protok">'+deskEsc(protocolRuleLabel(row.rule))+'</span>'
+      +'<b class="protov">'+deskEsc(trig||'—')+'</b>'
+      +'<span class="protoa">'+deskEsc(row.action||row.summary||'')+'</span></div>';
+  }).join('');
+  var notes=(plan.regimeNotes||[]).map(function(n){return '<span>'+deskEsc(n)+'</span>';}).join('');
+  return '<div class="upanel protocolpanel"><div class="lenshd"><span class="eyebrow">If you open this</span>'
+    +'<span class="hint" title="These lines come from a named, versioned policy — not from universal financial truth.">'
+    +deskEsc(String(plan.policyId||'policy'))+' v'+deskEsc(String(plan.policyVersion==null?'?':plan.policyVersion))+'</span></div>'
+    +'<div class="protogrid">'+rows+'</div>'
+    +(regime?'<div class="protometa"><span>'+deskEsc(regime)+'</span>'+notes+'</div>':(notes?'<div class="protometa">'+notes+'</div>':''))
+    +'</div>';
+}
 function decCoherence(c){ var co=coherence(c);
   var pips=co.checks.map(function(ch){ return '<span class="cohpip '+ch.s+'" title="'+ch.note+'"><i class="cohmk">'+(ch.s==='on'?'✓':ch.s==='off'?'✕':'~')+'</i>'+ch.k+'<em class="cohnote">'+ch.note+'</em></span>'; }).join('');
   var dom=co.dom?'<button class="cohswap" data-dec="pickcand" data-cid="'+co.dom.id+'">⇄ switch to '+co.dom.short+'</button>':'';
@@ -4244,7 +4401,7 @@ function evidencePanel(c){
     '<div class="evgrid">'+evidenceRows+'</div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+receipt+'</div>';
 }
 function inspectPane(c){
-  if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+(c.authoritative?evReceiptHTML((authoritativeAssessment(c)||{}).economics):'')+tailBlock(c)+fitBudgetPanel(c)+'</div>';
+  if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+(c.authoritative?evReceiptHTML((authoritativeAssessment(c)||{}).economics):'')+tailBlock(c)+managementProtocolPanel(c)+fitBudgetPanel(c)+'</div>';
   if(decide.inspect==='mechanics') return '<div class="inspectpane">'+greekInspector(c)+'</div>';
   if(decide.inspect==='book') return '<div class="inspectpane">'+bookImpactPanel(c)+'</div>';
   return '<div class="inspectpane">'+evidencePanel(c)+'</div>';
@@ -4291,21 +4448,26 @@ function candidateQuoteReceiptHTML(c,market){
     var stamp=authNumber(quote.asOfEpochMs);
     if(stamp!=null&&(asOf==null||stamp<asOf))asOf=stamp;
   });
-  var body='<div class="evgrid">'+
-    '<div class="evrow"><span class="evk">Priced from</span><span class="evtxt">'+
-      deskEsc(receipts.join(' + ')||'exact source receipt unavailable')+'</span></div>'+
-    '<div class="evrow"><span class="evk">Executable book</span><span class="evtxt">'+
-      priced+' of '+rows.length+' option leg'+(rows.length===1?'':'s')+' carry a two-sided quote</span></div>'+
-    (asOf!=null?'<div class="evrow"><span class="evk">Captured</span><span class="evtxt">'+
-      deskEsc(authWhen(asOf))+'</span></div>':'')+
-    '</div>';
+  /* WHICH book priced this package, how completely, and as of when — one line. The same three
+     facts used to stack as three labelled rows, which cost the market lens ~90px of the height its
+     chart and news needed. The package-level source/freshness/observedAt also ride the order
+     dock's price receipt; this line is the LEG-level book identity, which is a different fact
+     whenever a package's legs come from an expiration other than the ambient chain. */
+  var body='<div class="evline"><span class="evk">Priced from</span>'
+    +'<b>'+deskEsc(receipts.join(' + ')||'exact source receipt unavailable')+'</b>'
+    +'<span class="evsep">·</span><span>'+priced+' of '+rows.length+' leg'+(rows.length===1?'':'s')+' two-sided</span>'
+    +(asOf!=null?'<span class="evsep">·</span><span>'+deskEsc(authWhen(asOf))+'</span>':'')
+    +'</div>';
   var chain=market&&market.chain||{},ambientExpiration=String(chain.expiration||market&&market.expiration||''),
     isoDate=function(value){var match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);return match?match[0]:String(value||'').trim();},
     sameExpiration=expirations.length===1&&isoDate(ambientExpiration)!==''&&isoDate(ambientExpiration)===isoDate(expirations[0]),
     ambient=sameExpiration?'<div class="packagebooknear"><span class="hint">Nearby '+deskEsc(ambientExpiration)+' strikes · matches this package\u2019s expiry</span>'+
       authHomeChainHTML({chain:chain},decide.spot||0,decide.sym)+'</div>':
       '<div class="mcreceipt"><span>Nearby '+deskEsc(ambientExpiration||'ambient')+' chain withheld here because this package expires '+deskEsc(expirations.join(' + ')||'on another date')+'.</span></div>';
-  return '<div class="packagebook"><div class="packagebookhead"><span>Side / contract</span><span>Strike</span><span>Expiry</span><span>Bid / ask</span><span>Entry side</span><span>Receipt</span></div>'+body+'</div>'+ambient;
+  /* §3.8: the package's own provenance — priced from, executable book, captured at — is stated by
+     the order dock's price receipt (source · freshness · observedAt · fingerprint). This panel
+     keeps the one thing only it shows: the nearby strikes around the package's own expiry. */
+  return '<div class="packagebook">'+body+ambient+'</div>';
 }
 function decMarketPanel(c){
   if(!c||!c.authoritative)return '';
@@ -4356,16 +4518,31 @@ function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</spa
    silently standing in for an executable price that would then be POSTed as limitNetCents. */
 function estPrice(){
   if(decide.order.price!=null)return decide.order.price;
-  return authoritativeOrderValue(decide.orderPreview&&decide.orderPreview.order);
+  /* A LIMIT is a package price the exchange will compare against the book — a GROSS package net.
+     Anchoring it on the after-fee net (what lands in cash) sent an instruction shifted against the
+     user by the commission, because the backend reprices the same field as a gross package net. */
+  return orderLimitAnchor(decide.orderPreview&&decide.orderPreview.order);
 }
+/* The gross package net an instruction rests at. Deliberately NOT the after-fee net: fees are
+   settlement, not a price the market matches on. */
+function orderLimitAnchor(order){
+  var price=orderPriceReceipt(order);
+  if(!price||String(price.valuationBasis||'UNAVAILABLE').toUpperCase()==='UNAVAILABLE')return null;
+  var cents=price.restingLimitNetCents!=null?price.restingLimitNetCents
+    :price.executableNetCents!=null?price.executableNetCents:price.grossPackageNetCents;
+  return cents==null?null:Number(cents)/100;
+}
+/* The order's own price receipt. The three-arm ladder that used to live here — valued, else
+   executable, else the resting limit — now runs once on the server inside PackagePriceReceipt,
+   so the dock reads a value instead of choosing one (§3.3). */
+function orderPriceReceipt(order){ return order&&order.price||null; }
+/* What this instruction is worth in CASH once fees settle — the number the dock prints. Distinct
+   from orderLimitAnchor, which is the gross price the instruction rests at. */
 function authoritativeOrderValue(order){
-  if(!order)return null;
-  var state=String(order.executability||'UNAVAILABLE').toUpperCase();
-  if(order.valuedNetCents!=null&&String(order.valuationBasis||'').toUpperCase()!=='UNAVAILABLE')return Number(order.valuedNetCents)/100;
-  /* Migration fallback for servers predating the explicit valuation receipt. */
-  if(state==='IMMEDIATE'&&order.executableNetCents!=null)return Number(order.executableNetCents)/100;
-  if(state==='RESTING'&&order.orderInstruction&&order.orderInstruction.limitNetCents!=null)return Number(order.orderInstruction.limitNetCents)/100;
-  return null;
+  var price=orderPriceReceipt(order);
+  if(!price||String(price.valuationBasis||'UNAVAILABLE').toUpperCase()==='UNAVAILABLE')return null;
+  var cents=price.afterFeeNetCents==null?price.grossPackageNetCents:price.afterFeeNetCents;
+  return cents==null?null:Number(cents)/100;
 }
 function currentOrderRequest(){
   var o=decide.order, request={type:String(o.type||'market').toUpperCase(),qty:Math.max(1,Number(o.qty||1)),timeInForce:'DAY'};
@@ -4387,7 +4564,8 @@ function authoritativePreviewEligibility(envelope){
   if(fit.overRiskCapital===true)add('This package exceeds the account risk-capital limit.');
   if(preview&&preview.ok===false&&!reasons.length)add('This exact instruction is unavailable.');
   return {eligible:!!preview&&!!order&&preview.ok!==false&&!reasons.length,
-    immediate:!!(order&&order.presentlyExecutable),reasons:reasons};
+    immediate:String(orderPriceReceipt(order)&&orderPriceReceipt(order).executability||'').toUpperCase()==='IMMEDIATE',
+    reasons:reasons};
 }
 var ORDER_PREVIEW_TIMER=0;
 function queueOrderPreview(){
@@ -4415,9 +4593,9 @@ function decExecute(c){
   var o=decide.order, qf=o.qty, price=estPrice(),hasSignedPrice=price!=null&&Number.isFinite(Number(price));
   var ap=c.authoritative&&decide.orderPreview, preview=ap&&ap.preview, order=ap&&ap.order;
   var oi=order&&order.orderInstruction, instructionMatches=!c.authoritative||!!(oi&&String(oi.type||'').toLowerCase()===o.type&&(o.type!=='limit'||hasSignedPrice&&Number(oi.limitNetCents)===Math.round(Number(price)*100)));
-  var usablePreview=!c.authoritative||!!(preview&&order&&!o.previewPending&&instructionMatches),mid=usablePreview&&order&&order.executableNetCents!=null?Number(order.executableNetCents)/100:(c.authoritative?null:c.credit);
+  var usablePreview=!c.authoritative||!!(preview&&order&&!o.previewPending&&instructionMatches),mid=usablePreview&&orderPriceReceipt(order)&&orderPriceReceipt(order).executableNetCents!=null?Number(orderPriceReceipt(order).executableNetCents)/100:null;
   var previewEligibility=c.authoritative&&usablePreview?authoritativePreviewEligibility(ap):{eligible:!c.authoritative,immediate:!c.authoritative,reasons:[]};
-  var executionState=c.authoritative?(usablePreview?String(order.executability||'UNAVAILABLE').toUpperCase():'PENDING'):(o.type==='market'||price<=mid?'IMMEDIATE':'RESTING');
+  var executionState=usablePreview?String(orderPriceReceipt(order)&&orderPriceReceipt(order).executability||'UNAVAILABLE').toUpperCase():'PENDING';
   var eNet=c.authoritative?(usablePreview?authoritativeOrderValue(order):null):c.credit*qf, side=eNet==null?null:eNet>=0?'credit':'debit';
   var candidateNet=c.credit==null?null:Number(c.credit),candidateSide=candidateNet==null?null:candidateNet>=0?'credit':'debit';
   var marketable=c.authoritative?executionState==='IMMEDIATE':executionState==='IMMEDIATE',status=executionState;
@@ -4452,7 +4630,57 @@ function decExecute(c){
       '<button class="btn pri place" data-dec="review" '+(c.authoritative&&(!usablePreview||!previewEligibility.eligible)?'disabled':'')+'>Review →</button></div>'+eligibilityNote+'</div></div>';
   }
   var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button><button class="btn pri place" data-dec="review" '+(c.authoritative&&(!usablePreview||!previewEligibility.eligible)?'disabled':'')+'>Review →</button><span class="placenote">Nothing is sent until you confirm.</span></div>';
-  return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary+foot+'</div></div>';
+  return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
+    +packagePriceReceiptHTML(orderPriceReceipt(order),'this instruction')+foot+'</div></div>';
+}
+/* §3.3: ONE component for "what is this price made of", used by the order dock, the candidate
+   row, and the position close. Every line is a field of the same server-built receipt, so two
+   surfaces showing the same package show byte-identical numbers — and when they differ, the
+   observedAt/fingerprint lines say why instead of leaving the reader to guess which is wrong. */
+/* ONE line, and only where it is needed: when a package moves cash in shares as well as options,
+   the hero's option-only "net credit" and the dock's whole-package net are DIFFERENT numbers for
+   the same trade. This states the bridge between them inline rather than leaving the reader to
+   discover it. An options-only package needs no line — the two numbers are the same. */
+function packagePriceReconcileLine(price){
+  if(!price||price.stockCashFlowCents==null||Number(price.stockCashFlowCents)===0)return '';
+  var opt=authDollarsFromCents(price.optionNetPremiumCents),stock=authDollarsFromCents(price.stockCashFlowCents),
+      gross=authDollarsFromCents(price.grossPackageNetCents);
+  if(opt==null||stock==null||gross==null)return '';
+  return '<div class="prline" title="Options and shares move cash separately; the package net is the two together, before fees.">'
+    +'<span>options <b>'+authSigned(opt)+'</b></span>'
+    +'<span>shares <b>'+authSigned(stock)+'</b></span>'
+    +'<span class="prsum">package <b>'+authSigned(gross)+'</b></span></div>';
+}
+function packagePriceReceiptHTML(price,what){
+  if(!price)return '';
+  var basis=String(price.valuationBasis||'UNAVAILABLE').toUpperCase();
+  if(basis==='UNAVAILABLE')return '<div class="pricereceipt unavailable"><span class="prk">Package price</span>'
+    +'<span class="prv">unavailable</span><span class="prwhy">'+deskEsc(price.unavailableReason||'No executable book priced this package.')+'</span></div>';
+  function cents(v){return v==null?null:authDollarsFromCents(v);}
+  function row(k,v,title){
+    if(v==null)return '';
+    return '<div class="prrow"'+(title?' title="'+deskEsc(title)+'"':'')+'><span class="prk">'+deskEsc(k)+'</span>'
+      +'<b class="prv">'+authSigned(v)+'</b></div>';
+  }
+  var qty=price.quantity==null?null:Number(price.quantity);
+  var feeLabel=String(price.feeSide||'OPENING').toUpperCase()==='CLOSING'?'Closing fees':'Opening fees';
+  var stamp=price.observedAt?String(price.observedAt).replace('T',' ').replace(/\..*$/,''):null;
+  var basisWord={EXECUTABLE_BOOK:'executable book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
+    MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
+  return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">What '+deskEsc(what||'this package')+' costs</span>'
+    +'<span class="hint">'+deskEsc(basisWord)+(qty?' · '+qty+' package'+(qty===1?'':'s'):'')+'</span></div>'
+    +'<div class="prgrid">'
+      +row('Option net',cents(price.optionNetPremiumCents),'The option legs only — credit positive, debit negative')
+      +row('Stock cash flow',cents(price.stockCashFlowCents),'Cash moved by any share leg in the package')
+      +row('Package net',cents(price.grossPackageNetCents),'Options and shares together, before fees')
+      +row(feeLabel,cents(price.openingFeesCents==null?null:-Math.abs(Number(price.openingFeesCents))),'Commissions and exchange fees for this instruction')
+      +row('After fees',cents(price.afterFeeNetCents),'What actually moves in or out of cash')
+      +row('Executable now',cents(price.executableNetCents),'What the current book would fill at')
+      +row('Resting limit',cents(price.restingLimitNetCents),'What this instruction would rest at if it does not fill')
+    +'</div>'
+    +'<div class="prmeta">'+[price.source,price.freshness,stamp].filter(Boolean).map(function(v){return '<span>'+deskEsc(String(v))+'</span>';}).join('')
+      +(price.fingerprint?'<span class="prfp" title="Receipt identity — two surfaces showing the same fingerprint are showing the same valuation">'+deskEsc(String(price.fingerprint).slice(0,10))+'</span>':'')
+    +'</div></div>';
 }
 function typeLabel(t){ return {limit:'limit order',market:'market order'}[t]||t; }
 function reviewBlock(c,eNet,o){

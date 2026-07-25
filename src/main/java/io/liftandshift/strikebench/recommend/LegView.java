@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -56,17 +57,17 @@ public record LegView(
                 // Canonical decimal formatting (strip trailing zeros) so a candidate's legs round-trip
                 // byte-identically through the custom-builder store, which persists + re-emits via the
                 // same stripped form. Without this, "13.20" (engine) vs "13.2" (store) broke exact-leg
-                // equality whenever a strip-sensitive price surfaced at candidates[0].
-                leg.isStock() ? null : leg.strike().stripTrailingZeros().toPlainString(),
+                // equality whenever a strip-sensitive price surfaced at candidates[0]. The spelling
+                // itself lives in ONE place — Money.canonicalPrice — shared with the §7.2 package
+                // fingerprint, which was hashing the unstripped form and so disagreed with this one.
+                leg.isStock() ? null : Money.canonicalPrice(leg.strike()),
                 leg.isStock() ? null : leg.expiration().toString(),
                 leg.ratio(),
-                leg.entryPrice().stripTrailingZeros().toPlainString(),
+                Money.canonicalPrice(leg.entryPrice()),
                 leg.multiplier(),
                 "OPEN",
-                quote == null || quote.bid() == null ? null
-                        : quote.bid().stripTrailingZeros().toPlainString(),
-                quote == null || quote.ask() == null ? null
-                        : quote.ask().stripTrailingZeros().toPlainString(),
+                quote == null || quote.bid() == null ? null : Money.canonicalPrice(quote.bid()),
+                quote == null || quote.ask() == null ? null : Money.canonicalPrice(quote.ask()),
                 quote == null ? null : quote.asOfEpochMs(),
                 quote == null ? null : quote.source(),
                 quote == null || quote.freshness() == null ? null : quote.freshness().name());

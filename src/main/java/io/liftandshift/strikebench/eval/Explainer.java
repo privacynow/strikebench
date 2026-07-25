@@ -40,7 +40,14 @@ public final class Explainer {
         assumptions.addAll(HistoryFit.sentences(c, ctx));
 
         List<String> failureModes = new ArrayList<>();
-        if (c.entryNetPremiumCents() < 0) {
+        // The debit and credit failure stories are opposites, and choosing between them requires a
+        // price. §3.2: with no price receipt, say so — do not default to the credit branch, which
+        // is what an unboxed null-as-zero silently did.
+        String unpriced = RiskProfiler.unpricedReason(c);
+        if (unpriced != null) {
+            failureModes.add("This package has no price, so its debit-versus-credit failure modes "
+                    + "cannot be stated: " + unpriced);
+        } else if (c.price().grossPackageNetCents() < 0) {
             failureModes.add("The move doesn't happen in time — theta erodes the debit.");
             failureModes.add("Implied vol falls after entry (IV crush), shrinking the option's value.");
         } else {

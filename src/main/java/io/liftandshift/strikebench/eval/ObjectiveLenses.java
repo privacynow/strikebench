@@ -77,13 +77,24 @@ public final class ObjectiveLenses {
                     String.format("the $%s strike is %.0f%% below the current price — you are paid to bid there",
                             shortPutStrike.stripTrailingZeros().toPlainString(), discount * 100)));
             if (c.annualizedYieldPct() != null) {
-                long premium = Math.max(0, c.entryNetPremiumCents());
+                // The repeatability caution stands on the declared yield alone. Only the "buys ~N
+                // more shares" arithmetic needs the collected premium, so an unpriced package keeps
+                // the caution and drops the share count rather than reporting ~0 shares (§3.2).
+                String unpriced = RiskProfiler.unpricedReason(c);
                 long collateral = Math.round(shortPutStrike.doubleValue() * 100) * 100L;
-                long redeployShares = collateral > 0 ? premium / (collateral / 100) : 0;
+                String redeployment;
+                if (unpriced != null) {
+                    redeployment = " How many more shares that premium would buy is unavailable: " + unpriced;
+                } else {
+                    long premium = Math.max(0, c.price().grossPackageNetCents());
+                    long redeployShares = collateral > 0 ? premium / (collateral / 100) : 0;
+                    redeployment = String.format(" Redeployed instead of taken, this cycle's premium "
+                            + "buys ~%d more share%s at the strike.",
+                            redeployShares, redeployShares == 1 ? "" : "s");
+                }
                 cautions.add(String.format("Income honesty: %.1f%% annualized on the strike collateral "
-                                + "IF this cycle is repeatable — one cycle proves nothing. Redeployed instead of "
-                                + "taken, this cycle's premium buys ~%d more share%s at the strike.",
-                        c.annualizedYieldPct(), redeployShares, redeployShares == 1 ? "" : "s"));
+                                + "IF this cycle is repeatable — one cycle proves nothing.",
+                        c.annualizedYieldPct()) + redeployment);
             }
         }
 

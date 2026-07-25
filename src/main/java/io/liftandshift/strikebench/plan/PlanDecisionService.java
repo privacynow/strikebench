@@ -169,9 +169,7 @@ public final class PlanDecisionService {
                     instruction.put("limitNetCents", metrics.path("orderLimitNetCents").asLong());
                 }
                 put(out, "executability", metrics.path("orderExecutability").asText(null));
-                if (metrics.has("orderPresentlyExecutable")) {
-                    out.put("presentlyExecutable", metrics.path("orderPresentlyExecutable").asDouble() != 0.0);
-                }
+                put(out, "valuationBasis", metrics.path("orderValuationBasis").asText(null));
             }
             return out;
         });
@@ -285,14 +283,14 @@ public final class PlanDecisionService {
             if (input.orderInstruction().limitNetCents() != null) {
                 metric(connection, id, "orderLimitNetCents", input.orderInstruction().limitNetCents(), true);
             }
-            Object execution = preview.analytics() == null ? null : preview.analytics().get("executionQuality");
-            if (execution instanceof Map<?, ?> quality) {
-                Object executability = quality.get("executability");
-                if (executability != null) metric(connection, id, "orderExecutability", executability, false);
-                Object presentlyExecutable = quality.get("presentlyExecutable");
-                if (presentlyExecutable instanceof Boolean value) {
-                    metricNumber(connection, id, "orderPresentlyExecutable", value ? 1 : 0);
-                }
+            // The frozen decision records the execution facts from the ONE §7.2 receipt, not from a
+            // string-keyed analytics map. `presentlyExecutable` is gone: it was never a second fact,
+            // only `executability == IMMEDIATE` restated (§3.8).
+            if (preview.price() != null && preview.price().executability() != null) {
+                metric(connection, id, "orderExecutability",
+                        preview.price().executability().name(), false);
+                metric(connection, id, "orderValuationBasis",
+                        preview.price().valuationBasis().name(), false);
             }
         }
         if (input.note() != null && !input.note().isBlank()) metric(connection, id, "decisionNote", input.note().trim(), false);

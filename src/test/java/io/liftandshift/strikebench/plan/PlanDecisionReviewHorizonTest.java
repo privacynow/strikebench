@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 /**
  * The frozen decision receipt counts TRADING SESSIONS, so the cash-decision review lands on the
@@ -48,9 +49,13 @@ class PlanDecisionReviewHorizonTest {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("review-horizon", "AAPL", "INCOME", null, null,
                         "neutral", DECLARED_SESSIONS, null, "conservative", 0L, null, null, null));
+        // This fixture is about the review clock, not the price, so the row carries an explicit
+        // UNAVAILABLE §7.2 receipt: every candidate states a basis, and "no receipt" is not a state.
         db.exec("INSERT INTO plan_candidate(id,plan_id,context_rev,family,input_hash,state,selected," +
-                        "underlying_symbol,evaluation_snapshot) " +
-                        "VALUES('pcand-review',?,1,'LONG_CALL','input-review','CURRENT',1,'AAPL','{}'::jsonb)",
+                        "underlying_symbol,evaluation_snapshot,valuation_basis,price_executability," +
+                        "price_fee_side,price_unavailable_reason) " +
+                        "VALUES('pcand-review',?,1,'LONG_CALL','input-review','CURRENT',1,'AAPL','{}'::jsonb," +
+                        "'UNAVAILABLE','UNAVAILABLE','OPENING','this review-clock fixture never priced the package')",
                 plan.id());
         db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded," +
                         "created_at,updated_at) VALUES('acct-review','Review account','DEMO'," +
@@ -99,7 +104,8 @@ class PlanDecisionReviewHorizonTest {
                         Map.entry("ask", "7.0456"), Map.entry("mid", "6.97895"),
                         Map.entry("fill", "7.0456"), Map.entry("iv", 0.3))), List.of(),
                 Map.of("probabilityMap", Map.of("pMaxProfit", 0.2, "pMaxLoss", 0.3,
-                        "cvar95Cents", -28_000L)));
+                        "cvar95Cents", -28_000L)),
+                TestPrices.withFees(1, -30_000L, -30_000L, 65L));
     }
 
     private static EconomicAssessment economics() {

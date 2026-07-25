@@ -327,6 +327,20 @@ public final class ApiServer {
     public Javalin start(int port) {
         accounts.getOrCreateDefault();
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
+        // §7.5: the alert rail renders the account's DECLARED named policy — the same record the
+        // held-position lifecycle reads — instead of holding its own copy of the thresholds.
+        alertCenter.setPolicySource((user, account) -> {
+            try {
+                var revision = accountObjectives.latest(user, account);
+                return revision == null || revision.capacityPolicy() == null
+                        ? io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy.standard()
+                        : revision.capacityPolicy().lifecyclePolicy();
+            } catch (RuntimeException e) {
+                // A paper/practice account has no portfolio objective revision at all; the shipped
+                // policy is the honest answer, never a silently different set of numbers.
+                return io.liftandshift.strikebench.paper.ProtocolEvaluator.Policy.standard();
+            }
+        });
         var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
                 db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades,
                 positions, pathEnsembles,

@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestPrices;
 
 class PlanAdoptionReviewServiceTest {
     private static final Clock CLOCK = Clock.fixed(
@@ -155,9 +156,9 @@ class PlanAdoptionReviewServiceTest {
     }
 
     private static ApiResponses.TrackedPackageAnalysis analysisStub(String accountId, String symbol) {
-        var close = new PositionLifecycleReceipt.CloseQuote(true, 1_100_000L,
-                1_100_000L, 0L, 0L, 1_100_000L, PositionDomain.PriceAuthority.OBSERVED,
-                "Observed executable stock bid.", null);
+        var close = new PositionLifecycleReceipt.CloseQuote(true,
+                TestPrices.closing(1, 1_100_000L, 0L, 0L), 1_100_000L,
+                PositionDomain.PriceAuthority.OBSERVED, "Observed executable stock bid.", null);
         var lifecycle = new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION,
                 symbol, "position-fingerprint",
                 PositionLifecycleReceipt.History.unavailable("Not linked yet.", "No inferred history."),
@@ -168,7 +169,7 @@ class PlanAdoptionReviewServiceTest {
                                 "Stub has no economics.", "Canonical economics reference only."),
                         null, null, PositionLifecycleReceipt.STANCE_REF,
                         "Canonical current choice.", List.of()),
-                new PositionLifecycleReceipt.CarryCollateral(0L, null, null,
+                new PositionLifecycleReceipt.CarryCollateral(0L, null, null, null,
                         new AuthorityFacts.MoneyFact(0L,
                                 PositionDomain.FactAuthority.MODEL_DERIVED, "No option reserve."),
                         AuthorityFacts.RateFact.unavailable("No settlement receipt."),

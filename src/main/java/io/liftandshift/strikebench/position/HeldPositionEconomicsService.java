@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.strategy.CoverageCheck;
@@ -101,7 +102,7 @@ public final class HeldPositionEconomicsService {
 
         int days = singleExpirationDays(request.legs());
         long grossRemaining = close.executable()
-                ? Math.max(0, Math.negateExact(close.signedOptionExecutableCloseCashCents())) : 0;
+                ? Math.max(0, Math.negateExact(close.price().optionNetPremiumCents())) : 0;
         long modeledCollateral = Math.max(0, preview.reserveCents());
         Double grossAnnualized = days > 0 && modeledCollateral > 0 && grossRemaining > 0
                 ? round4(100.0 * grossRemaining / modeledCollateral * 365.0 / days) : null;
@@ -152,7 +153,8 @@ public final class HeldPositionEconomicsService {
                         currentLimitations),
                 new PositionLifecycleReceipt.CarryCollateral(
                         close.executable() ? grossRemaining : null,
-                        grossAnnualized, days < 0 ? null : days, collateral,
+                        grossAnnualized, days < 0 ? null : days,
+                        singleExpirationSessions(request.legs()), collateral,
                         AuthorityFacts.RateFact.unavailable(
                                 "No broker-reported settlement-fund rate/income receipt is linked to this analysis."),
                         encumbrance, release, sharesReleased,
@@ -238,13 +240,13 @@ public final class HeldPositionEconomicsService {
         Long netPnl = null;
         var close = base.currentChoice().close();
         if (available && grossCredit != null && grossCredit > 0 && close.executable()) {
-            captured = Math.addExact(grossCredit, close.signedOptionExecutableCloseCashCents());
+            captured = Math.addExact(grossCredit, close.price().optionNetPremiumCents());
             capturedPct = round4(100.0 * captured / grossCredit);
         }
         if (available && context.openingFeesCents() != null && close.executable()) {
             netPnl = Math.subtractExact(Math.addExact(
                     Math.subtractExact(signedOptionOpening, context.openingFeesCents()),
-                    close.signedOptionExecutableCloseCashCents()), close.closingFeesCents());
+                    close.price().optionNetPremiumCents()), close.price().openingFeesCents());
         }
         List<String> refs = new ArrayList<>(context.sourceRefs());
         for (OpeningLeg leg : context.openingLegs()) {
@@ -279,10 +281,14 @@ public final class HeldPositionEconomicsService {
     private PositionLifecycleReceipt.CloseQuote closeQuote(TradeService.OpenRequest request,
                                                             TradePreview preview) {
         if (preview.legs() == null || preview.legs().size() != request.legs().size()) {
-            return unavailableClose("The exact preview does not contain one current quote receipt per leg.");
+            return unavailableClose(request.qty(),
+                    "The exact preview does not contain one current quote receipt per leg.");
         }
         long executableCash = 0;
         long optionExecutableCash = 0;
+        // Measured in the SAME pass, from the same executable per-leg prices, so the receipt's
+        // additive identity compares three separately accumulated facts instead of restating one.
+        long stockExecutableCash = 0;
         long midCash = 0;
         boolean midComplete = true;
         PositionDomain.PriceAuthority authority = authority(preview);
@@ -294,7 +300,7 @@ public final class HeldPositionEconomicsService {
             BigDecimal mid = decimal(quote.get("mid"));
             BigDecimal executable = ExecutablePrice.forAction(bid, ask, leg.action().opposite());
             if (executable == null) {
-                return unavailableClose("No executable "
+                return unavailableClose(request.qty(), "No executable "
                         + (leg.action() == LegAction.BUY ? "bid" : "ask")
                         + " exists for current leg " + (i + 1) + "; hold-vs-close economics stay unavailable.");
             }
@@ -302,7 +308,10 @@ public final class HeldPositionEconomicsService {
             int sign = leg.action() == LegAction.BUY ? 1 : -1;
             executableCash = Math.addExact(executableCash,
                     Math.multiplyExact(sign, Money.centsFromPrice(executable, units)));
-            if (!leg.isStock()) {
+            if (leg.isStock()) {
+                stockExecutableCash = Math.addExact(stockExecutableCash,
+                        Math.multiplyExact(sign, Money.centsFromPrice(executable, units)));
+            } else {
                 optionExecutableCash = Math.addExact(optionExecutableCash,
                         Math.multiplyExact(sign, Money.centsFromPrice(executable, units)));
             }
@@ -312,16 +321,41 @@ public final class HeldPositionEconomicsService {
                 midComplete = false;
             }
         }
-        long fees = Math.max(0, preview.feesOpenCents());
-        long net = Math.subtractExact(executableCash, fees);
-        return new PositionLifecycleReceipt.CloseQuote(true,
-                midComplete ? midCash : null, executableCash, optionExecutableCash, fees, net, authority,
+        // The symmetric fee schedule charges the same commission either way, but this is the CLOSING
+        // side and the receipt now says so rather than borrowing a field named for the opening.
+        // No local clamp: the receipt owns the "fees are never negative" rule and now enforces it
+        // instead of two producers quietly rewriting the commission they were handed.
+        long fees = preview.feesOpenCents();
+        var price = PackagePriceReceipt.of(request.qty(), executableCash, optionExecutableCash,
+                stockExecutableCash, fees,
+                PackagePriceReceipt.FeeSide.CLOSING, executableCash, null,
+                io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                preview.evidence() == null ? null : preview.evidence().source(), preview.freshness(),
+                snapshotObservedAt(preview),
+                PackagePriceReceipt.fingerprintOf(request.legs(), request.qty(), executableCash,
+                        PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, snapshotObservedAt(preview)));
+        return new PositionLifecycleReceipt.CloseQuote(true, price, midComplete ? midCash : null, authority,
                 "Every long leg closes at bid and every short leg closes at ask; crossed/one-sided books are unavailable. "
                         + "Closing fees use the exact preview's configured symmetric fee schedule.", null);
     }
 
-    private static PositionLifecycleReceipt.CloseQuote unavailableClose(String reason) {
-        return new PositionLifecycleReceipt.CloseQuote(false, null, null, null, null, null, null,
+    /** The stalest leg stamp on the preview — the package is no fresher than its oldest quote. */
+    private static Long snapshotObservedAt(TradePreview preview) {
+        if (preview.legs() == null) return null;
+        return PackagePriceReceipt.observedAtOf(preview.legs().stream()
+                .map(leg -> leg.get("asOfEpochMs") instanceof Number stamp ? stamp.longValue() : null)
+                .toList());
+    }
+
+    /**
+     * §3.2/§3.5: the unpriced close still states the SIZE it failed to price. The quantity was
+     * hardcoded to 1 with {@code request.qty()} in scope at both call sites, so a 5-lot position
+     * whose book went one-sided published a receipt for a single contract — a silent product
+     * default sitting inside the very object that exists to stop invented amounts.
+     */
+    private static PositionLifecycleReceipt.CloseQuote unavailableClose(int quantity, String reason) {
+        return PositionLifecycleReceipt.CloseQuote.unavailable(quantity,
                 "Executable close quotes require every opposite-side book.", reason);
     }
 
@@ -338,7 +372,7 @@ public final class HeldPositionEconomicsService {
         }
         long immediateOpenNet = Math.subtractExact(preview.entryNetPremiumCents(), preview.feesOpenCents());
         long substitution = Math.subtractExact(Math.negateExact(immediateOpenNet),
-                close.signedNetCloseCashCents());
+                close.price().afterFeeNetCents());
         Long market = shifted(freshEyes.marketEvAfterCostsCents(), substitution);
         Long realized = shifted(freshEyes.realizedVolEvAfterCostsCents(), substitution);
         Long low = shifted(freshEyes.realisticEvLowAfterCostsCents(), substitution);
@@ -399,6 +433,16 @@ public final class HeldPositionEconomicsService {
         if (expiration == null) return -1;
         LocalDate today = LocalDate.ofInstant(clock.instant(), MARKET_ZONE);
         return Math.toIntExact(Math.max(0, ChronoUnit.DAYS.between(today, expiration)));
+    }
+
+    /**
+     * The policy clock for this package: trading sessions to the single expiry, from the ONE
+     * measured receipt (MarketHours owns the calendar). Null when there is no single live expiry.
+     */
+    private Integer singleExpirationSessions(List<Leg> legs) {
+        var time = io.liftandshift.strikebench.paper.ProtocolEvaluator.timeTo(
+                LocalDate.ofInstant(clock.instant(), MARKET_ZONE), singleExpiration(legs));
+        return time == null ? null : time.sessions();
     }
 
     private static LocalDate singleExpiration(List<Leg> legs) {

@@ -100,8 +100,8 @@ final class PlanOutcomeController {
     public record PlanBacktestRequest(Long expectedVersion, String engine, String from, String to,
                                       Integer targetDte, Integer entryEveryDays, Integer maxConcurrent,
                                       Integer qty, Double slippagePct, Long startingCashCents,
-                                      Double shortDelta, Double widthPct, Double profitTargetPct,
-                                      Double stopFraction, Integer rollDte) {}
+                                      Double shortDelta, Double widthPct, Double takeProfitFraction,
+                                      Double stopMultiple, Integer timeRuleSessions) {}
     void planOutcomesLatest(Context ctx) {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         ObjectNode out = planOutcomes.latest(root.ownerId(ctx), plan, root.analysisCtx(ctx));
@@ -670,8 +670,8 @@ final class PlanOutcomeController {
         if ("portfolio".equals(engineKind)) {
             report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family, body.from(), body.to(),
                     body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
-                    body.maxConcurrent(), body.qty(), body.shortDelta(), body.widthPct(), body.profitTargetPct(),
-                    body.stopFraction(), body.rollDte(), body.startingCashCents()), root.analysisCtx(ctx),
+                    body.maxConcurrent(), body.qty(), body.shortDelta(), body.widthPct(), body.takeProfitFraction(),
+                    body.stopMultiple(), body.timeRuleSessions(), body.startingCashCents()), root.analysisCtx(ctx),
                     root.ownerId(ctx), world);
         } else if ("single".equals(engineKind)) {
             report = backtester.run(new Backtester.BacktestRequest(plan.symbol(), family, body.from(), body.to(),
@@ -739,7 +739,9 @@ final class PlanOutcomeController {
                     leg.path("expiration").asText(null), null, leg.path("ratio").asInt(),
                     leg.path("multiplier").asInt()));
         }
-        Long entryNet = candidate.hasNonNull("entryNetPremiumCents") ? candidate.path("entryNetPremiumCents").longValue() : null;
+        // The package net now lives on the canonical §7.2 price receipt, not loose on the candidate.
+        JsonNode gross = candidate.path("price").path("grossPackageNetCents");
+        Long entryNet = gross.isNumber() ? gross.longValue() : null;
         return new io.liftandshift.strikebench.outcomes.OutcomeContract.Position(candidate.path("id").asText(), legs,
                 candidate.path("qty").asInt(), entryNet == null ? null : -entryNet);
     }

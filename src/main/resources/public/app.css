@@ -2924,7 +2924,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .srow .sprob{display:inline}.dccenter .srow .slk{display:none}
   .understand,.understand .inspectwell{height:auto;min-height:0;overflow:visible}
   .understand .inspectpane{height:auto;min-height:470px;overflow:visible}
-  .understand .evsimstage{flex:none;height:280px;min-height:280px}
+  /* On one narrow column the page scrolls, so the paths stage sizes to ITS OWN content. A fixed
+     280px box clipped ~190px of the fan's own statistics — the numbers the panel exists for. */
+  .understand .evsimstage{flex:none;height:auto;min-height:280px}
   .understand .ensembleresult{grid-template-rows:auto minmax(190px,1fr) auto}
   .understand .ensembleresult .mcfan{min-height:190px}
   .decdock{margin-top:10px}
@@ -3588,3 +3590,86 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .gov.govunset .gh .num{color:var(--faint);font-style:italic}
 .gov.govunset .slider{opacity:.42}
 .gov.govunset:hover .slider,.gov.govunset .slider:focus{opacity:1}
+
+/* The centre market lens carries four things at once — quote hero, price history, execution
+   evidence, and news. In a tight column the chart lost the flex fight and collapsed to zero
+   height while the evidence columns kept their natural height and painted straight through the
+   panel's own bottom edge, over whatever sat below. The chart keeps a floor, the context region
+   takes the remainder, and each column scrolls inside itself instead of escaping the panel. */
+.dccenter .marketlens{min-height:clamp(210px,24vh,300px);max-height:clamp(250px,32vh,380px)}
+/* The centre column shares its height between three jobs: the payoff being decided, the story
+   tiles, and the market lens. The lens must never grow so far that the payoff is crushed to a
+   sliver — at 1440x900 it took 414 of 723px and left the payoff 85px showing a 301px chart. */
+.dccenter .dccpay{min-height:clamp(165px,20vh,240px)}
+.dccenter .marketlens .histwrap{flex:1 1 auto;min-height:112px}
+.dccenter .marketlens .histchart{min-height:96px}
+.dccenter .marketlens .marketctx{flex:0 1 auto;min-height:0;max-height:46%;overflow:hidden}
+.dccenter .marketlens .marketcol,.dccenter .marketlens .packagebookcol{min-height:0;overflow:visible}
+.dccenter .marketlens .packagebooknear,.dccenter .marketlens .authnews{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* The nearby-strike list is the column's only content now, and it is the designated scroller. */
+.dccenter .marketlens .packagebook{display:flex;flex-direction:column;min-height:0;flex:1 1 auto}
+
+/* Laptop heights between the short-desktop rules (<=850) and the tall-desktop rules (>=1000).
+   Without this the story tiles kept their tall two-line layout and clipped their own values,
+   and the Evidence stage cut its stats off at the panel edge. */
+@media (min-height:851px) and (max-height:999px){
+  /* The payoff chart yields height before its own numbers do: a 40px shorter curve still reads,
+     a clipped max-loss figure does not. */
+  .dccenter .decpay{min-height:clamp(140px,16vh,190px)}
+  /* The payoff panel carries its own KPI row and secondary line; it needs the height for all
+     three or it clips the numbers. The market lens gives it up — the lens still shows a full
+     chart and its evidence columns scroll. */
+  .dccenter .dccpay{min-height:265px}
+  .dccenter .marketlens{max-height:clamp(216px,27vh,300px)}
+  /* The volume strip under the price chart is the first thing traded away for headroom, as it
+     already is on shorter desktops. */
+  .dccenter .marketlens .histstrip{display:none}
+  /* The chart itself flexes into whatever the wrapper has left, and its provenance caption stays
+     on one line, so the price history and the execution evidence both stay whole. */
+  .dccenter .marketlens .histwrap{min-height:124px}
+  .dccenter .marketlens .histchart{flex:1 1 auto;height:auto;min-height:64px}
+  .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dccenter .marketlens .marketctx{max-height:34%}
+  .understand .evsimstage{min-height:196px}
+}
+
+/* The mechanical protocol: one row per typed rule — what it is, the value that triggers it with
+   its unit, and what the policy says to do. Values are tabular so the lines compare down the
+   column, the way a rule sheet should read. */
+.protocolpanel{margin-top:7px}
+.protogrid{display:flex;flex-direction:column;gap:4px}
+.protorow{display:grid;grid-template-columns:minmax(84px,auto) minmax(70px,auto) 1fr;gap:8px;align-items:baseline;
+  padding:5px 7px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2)}
+.protok{font-size:var(--f-sm);color:var(--text);font-weight:600;white-space:nowrap}
+.protov{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:var(--f-sm);color:var(--accent);white-space:nowrap}
+.protoa{font-size:var(--f-xs);color:var(--dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.protometa{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;font-size:var(--f-xs);color:var(--faint)}
+.protometa span:not(:last-child)::after{content:'·';margin-left:6px;color:var(--line)}
+
+/* §3.3 package-price receipt — one component, three placements (order dock, candidate row,
+   position close). Values are tabular so option net, package net, fees and after-fee net line up
+   down the column and the arithmetic is checkable by eye. */
+.pricereceipt{margin-top:8px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
+.pricereceipt .prhd{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px}
+.prgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:2px 12px}
+.prrow{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
+.prk{font-size:var(--f-xs);color:var(--dim);white-space:nowrap}
+.prv{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:var(--f-sm)}
+.prmeta{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:var(--f-2xs);color:var(--faint)}
+.prmeta span:not(.prfp):not(:last-child)::after{content:'·';margin-left:6px;color:var(--line)}
+.prfp{font-family:var(--mono);color:var(--faint);opacity:.8}
+.pricereceipt.unavailable{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.pricereceipt.unavailable .prv{color:var(--caution)}
+.pricereceipt.unavailable .prwhy{font-size:var(--f-xs);color:var(--dim);min-width:0}
+
+/* The one-line option/shares/package bridge under a hero KPI row. Present only when a package
+   moves cash in shares as well as options — otherwise the two numbers are the same and a line
+   explaining their difference would be noise. */
+.prline{display:flex;flex-wrap:wrap;gap:10px;margin-top:5px;font-size:var(--f-xs);color:var(--dim)}
+.prline b{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--text);margin-left:4px}
+.prline .prsum b{color:var(--accent)}
+
+/* Package provenance on one line: which book priced it, how completely, as of when. */
+.evline{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px;font-size:var(--f-xs);color:var(--dim);margin-bottom:5px;min-width:0}
+.evline b{color:var(--text);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evline .evsep{color:var(--line)}

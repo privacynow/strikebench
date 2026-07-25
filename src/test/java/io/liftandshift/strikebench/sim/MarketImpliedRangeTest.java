@@ -38,6 +38,19 @@ class MarketImpliedRangeTest {
     }
 
     @Test
+    void theRangeStatesItsOwnMovePercentagesSoNoSurfaceReDerivesThem() {
+        var r = SimulationEngine.MarketImpliedRange.of(100, 0.4, 21, "2026-02-20", 30, 0.04);
+        assertThat(r.upMovePct(100.0)).isEqualTo(Numbers.round2((r.p84() - 100) / 100 * 100));
+        assertThat(r.downMovePct(100.0)).isEqualTo(Numbers.round2((r.p16() - 100) / 100 * 100));
+        assertThat(r.upMovePct(100.0)).isPositive();
+        assertThat(r.downMovePct(100.0)).isNegative();
+        // Without a usable anchor there is no ratio to state — and no percentage to print.
+        assertThat(r.upMovePct(null)).isNull();
+        assertThat(r.upMovePct(0.0)).isNull();
+        assertThat(r.downMovePct(-1.0)).isNull();
+    }
+
+    @Test
     void ofHidesTheConeOnInvalidInputs() {
         assertThat(SimulationEngine.MarketImpliedRange.of(100, 0, 21, "e", 30, 0.04)).isNull();        // no IV
         assertThat(SimulationEngine.MarketImpliedRange.of(100, -0.1, 21, "e", 30, 0.04)).isNull();     // negative IV

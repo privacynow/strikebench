@@ -13,7 +13,6 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -50,13 +49,21 @@ public final class AlertCenterService implements AutoCloseable {
     static final double PIN_BAND_FRACTION = 0.01;
     /** ... with at most this many trading sessions to expiry (weekends excluded). */
     static final int PIN_SESSIONS = 3;
-    /** Assignment/expiry attention window in trading sessions. */
-    static final int EXPIRY_SESSIONS = 5;
 
     /** Narrow seam over the canonical event owner so tests can supply one authority receipt. */
     @FunctionalInterface
     public interface EarningsSource {
         EventService.EventEvidence earnings(String symbol);
+    }
+
+    /**
+     * Narrow seam over the account's declared management policy. The alert center never invents
+     * thresholds: it renders whichever named {@link ProtocolEvaluator.Policy} the account declared,
+     * falling back to the shipped standard policy when no objective revision exists.
+     */
+    @FunctionalInterface
+    public interface PolicySource {
+        ProtocolEvaluator.Policy policyFor(String userId, String portfolioAccountId);
     }
 
     public record Alert(String id, String kind, String severity, String severityLabel,
@@ -88,6 +95,16 @@ public final class AlertCenterService implements AutoCloseable {
     private final java.util.Set<String> pendingOwners = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService refreshes;
     private final Runnable unsubscribeEvents;
+    private volatile PolicySource policies = (user, account) -> ProtocolEvaluator.Policy.standard();
+
+    /**
+     * Wires the declared-policy lookup once the account objective service exists. Until then the
+     * shipped standard policy applies — the same fallback {@code capacityContext} uses for an
+     * account that never declared a revision.
+     */
+    public void setPolicySource(PolicySource source) {
+        if (source != null) this.policies = source;
+    }
 
     public AlertCenterService(Db db, Clock clock, TradeService trades, MarksSource marks,
                               EarningsSource earnings, EventBus events, long feePerContractCents) {
@@ -207,11 +224,16 @@ public final class AlertCenterService implements AutoCloseable {
                 TradeService.MarkView mark = safeMark(t.id());
                 Long spotCents = mark == null ? null : mark.underlyingCents();
                 Long unrealized = mark == null ? null : mark.unrealizedCents();
+                // ONE basis: the protocol lines are always measured on the OPTION-ONLY net, so a
+                // buy-write's share purchase never becomes "the debit paid".
+                long optionBasis = ProtocolEvaluator.optionEntryBasisCents(
+                        t.legs(), t.qty(), t.entryNetPremiumCents());
                 positionAlerts(out, new PositionRef("TRADE", t.id(), planId, null,
                                 account.id(), account.name(), laneOf(account.type()), t.symbol(),
                                 strategyLabel(t.strategy()), deepLink),
-                        t.legs(), t.qty(), t.entryNetPremiumCents(), unrealized, spotCents,
-                        leg -> optionMidCents(t.symbol(), leg, trades.worldOf(account.id())), today);
+                        t.legs(), t.qty(), optionBasis, unrealized, spotCents,
+                        leg -> optionMidCents(t.symbol(), leg, trades.worldOf(account.id())), today,
+                        policies.policyFor(owner, account.id()));
             }
         }
     }
@@ -238,8 +260,11 @@ public final class AlertCenterService implements AutoCloseable {
                 legs.add(leg);
                 if (lot.option()) {
                     hasOption = true;
-                    entryNet += "SHORT".equals(lot.side()) ? lot.economicRemainingCents()
-                            : -lot.economicRemainingCents();
+                    // The lot's economic remaining amount covers its WHOLE remaining position; the
+                    // close below is priced on the allocated quantity. Prorate through the one
+                    // shared helper or a partially allocated lot fires the lines at the wrong P/L.
+                    entryNet += ProtocolEvaluator.trackedLotBasisCents(lot.side(),
+                            lot.economicRemainingCents(), lot.quantity(), lot.remainingQuantity());
                 }
                 if (closeValue != null) {
                     Long legClose = closeCents(s.symbol(), leg, lot.side(), lot.quantity(), lot.multiplier());
@@ -252,7 +277,8 @@ public final class AlertCenterService implements AutoCloseable {
                             s.label() == null || s.label().isBlank() ? "tracked structure" : s.label(),
                             deepLink),
                     legs, 1, hasOption ? entryNet : 0, unrealized, spotCents,
-                    leg -> optionMidCents(s.symbol(), leg, null), today);
+                    leg -> optionMidCents(s.symbol(), leg, null), today,
+                    policies.policyFor(owner, s.accountId()));
         }
     }
 
@@ -282,49 +308,54 @@ public final class AlertCenterService implements AutoCloseable {
      * structures both land here — same math, different plumbing.
      */
     private void positionAlerts(List<Alert> out, PositionRef ref, List<Leg> legs, int qty,
-                                long entryNetPremiumCents, Long unrealizedCents, Long spotCents,
-                                java.util.function.Function<Leg, Long> optionMid, LocalDate today) {
+                                long optionNetPremiumCents, Long unrealizedCents, Long spotCents,
+                                java.util.function.Function<Leg, Long> optionMid, LocalDate today,
+                                ProtocolEvaluator.Policy policy) {
         LocalDate nearest = legs.stream().filter(l -> !l.isStock()).map(Leg::expiration)
                 .filter(java.util.Objects::nonNull).min(LocalDate::compareTo).orElse(null);
-        Integer daysToExpiry = nearest == null ? null
-                : (int) java.time.temporal.ChronoUnit.DAYS.between(today, nearest);
-        int sessionsToNearest = nearest == null ? Integer.MAX_VALUE : sessionsUntil(today, nearest);
+        // ONE clock: MarketHours owns the calendar, and the same measure feeds the protocol, the
+        // expiry window, and the pin/assignment windows below.
+        var time = ProtocolEvaluator.timeTo(today, nearest);
+        int sessionsToNearest = time == null ? Integer.MAX_VALUE : time.sessions();
+        int expirySessions = policy.nearExpirySessions();
 
         // Protocol — one alert per position carrying the top trigger; the time rule stays quiet
         // inside the expiry window so the rail never says the same thing twice.
-        List<ProtocolEvaluator.Trigger> triggers = ProtocolEvaluator.evaluate(
-                new ProtocolEvaluator.Inputs(entryNetPremiumCents, unrealizedCents, daysToExpiry));
+        List<ProtocolEvaluator.Trigger> triggers = ProtocolEvaluator.evaluate(policy,
+                new ProtocolEvaluator.Inputs(optionNetPremiumCents, unrealizedCents, time));
         ProtocolEvaluator.Trigger top = triggers.stream()
-                .filter(t -> !INFO.equals(t.severity()) || sessionsToNearest > EXPIRY_SESSIONS)
+                .filter(t -> !INFO.equals(t.severity()) || sessionsToNearest > expirySessions)
                 .findFirst().orElse(null);
-        if (top != null && entryNetPremiumCents != 0) {
-            boolean credit = entryNetPremiumCents > 0;
+        if (top != null && optionNetPremiumCents != 0) {
+            boolean credit = ProtocolEvaluator.side(optionNetPremiumCents) == ProtocolEvaluator.Side.CREDIT;
             String headline = switch (top.rule()) {
                 case ProtocolEvaluator.STOP_LOSS -> ref.symbol() + " " + ref.positionLabel()
                         + ": past your loss line — your protocol says close it.";
                 case ProtocolEvaluator.TAKE_PROFIT -> ref.symbol() + " " + ref.positionLabel()
                         + ": most of the profit is in hand — your protocol says take it.";
                 case ProtocolEvaluator.ROLL -> ref.symbol() + " " + ref.positionLabel()
-                        + ": " + daysToExpiry + " days to expiry — decide: roll or close.";
+                        + ": " + sessionsToNearest + " trading sessions to expiry — decide: roll or close.";
                 default -> ref.symbol() + " " + ref.positionLabel()
-                        + ": " + daysToExpiry + " days to expiry — exit if the thesis has not moved.";
+                        + ": " + sessionsToNearest + " trading sessions to expiry — exit if the thesis has not moved.";
             };
             String detail = (credit
-                    ? "This position collected " + Money.fmt(entryNetPremiumCents) + " up front"
-                    : "This position paid " + Money.fmt(-entryNetPremiumCents) + " up front")
+                    ? "This position collected " + Money.fmt(optionNetPremiumCents) + " of option premium up front"
+                    : "This position paid " + Money.fmt(-optionNetPremiumCents) + " of option premium up front")
                     + (unrealizedCents != null
                             ? " and now stands at " + Money.fmt(unrealizedCents) + " at live closing prices"
                             : "")
                     + ". Trigger: " + top.summary()
-                    + ". A mechanical management rule, not a prediction.";
+                    + ". A mechanical rule from your named policy " + top.policyId() + ", not a prediction.";
             out.add(alert(ref, "PROTOCOL_BREACH", top.severity(), headline, detail,
                     Map.of("rule", top.rule(),
-                            "entryNetPremiumCents", entryNetPremiumCents,
+                            "policyId", top.policyId(),
+                            "policyFingerprint", top.policyFingerprint(),
+                            "optionNetPremiumCents", optionNetPremiumCents,
                             "unrealizedCents", unrealizedCents == null ? 0L : unrealizedCents)));
         }
 
         // Expiry today / this week, with strike notional (the settlement ceiling, unit-labeled).
-        if (nearest != null && sessionsToNearest <= EXPIRY_SESSIONS && daysToExpiry >= 0) {
+        if (nearest != null && sessionsToNearest <= expirySessions) {
             long notional = 0;
             for (Leg leg : legs) {
                 if (leg.isStock() || !nearest.equals(leg.expiration())) continue;
@@ -347,8 +378,9 @@ public final class AlertCenterService implements AutoCloseable {
         // Pin risk + extrinsic-based early assignment: short legs only, both labeled heuristics.
         for (Leg leg : legs) {
             if (leg.isStock() || leg.action() != LegAction.SELL || leg.expiration() == null) continue;
-            int legSessions = sessionsUntil(today, leg.expiration());
-            if (leg.expiration().isBefore(today)) continue;
+            var legTime = ProtocolEvaluator.timeTo(today, leg.expiration());
+            if (legTime == null) continue; // already expired: settlement mechanics own it
+            int legSessions = legTime.sessions();
             long strikeCents = Money.toCents(leg.strike());
             if (spotCents != null && legSessions <= PIN_SESSIONS
                     && Math.abs(spotCents - strikeCents) <= Math.round(strikeCents * PIN_BAND_FRACTION)) {
@@ -363,7 +395,7 @@ public final class AlertCenterService implements AutoCloseable {
                                 "optionType", leg.type().name(),
                                 "sessionsToExpiry", legSessions, "heuristic", true)));
             }
-            if (spotCents != null && legSessions <= EXPIRY_SESSIONS) {
+            if (spotCents != null && legSessions <= expirySessions) {
                 boolean itm = leg.type() == OptionType.CALL ? spotCents > strikeCents : spotCents < strikeCents;
                 Long midCents = itm ? optionMid.apply(leg) : null;
                 if (itm && midCents != null) {
@@ -382,7 +414,7 @@ public final class AlertCenterService implements AutoCloseable {
                                 Map.of("strikeCents", strikeCents, "optionType", leg.type().name(),
                                         "extrinsicPerContractCents", Math.max(0, extrinsicPerContract),
                                         "sessionsToExpiry", legSessions, "heuristic", true,
-                                        "entryNetPremiumCents", entryNetPremiumCents,
+                                        "optionNetPremiumCents", optionNetPremiumCents,
                                         "quantity", (long) leg.ratio() * qty,
                                         "multiplier", leg.multiplier())));
                     }
@@ -491,27 +523,18 @@ public final class AlertCenterService implements AutoCloseable {
             row.legs().addAll(Db.queryOn(c,
                     "SELECT pl.instrument_type, pl.side, pl.option_type, pl.strike::text strike, "
                             + "pl.expiration::text expiration, pl.multiplier, psm.allocated_quantity, "
-                            + "pl.economic_remaining_open_amount_cents econ "
+                            + "pl.remaining_quantity, pl.economic_remaining_open_amount_cents econ "
                             + "FROM portfolio_structure_member psm "
                             + "JOIN portfolio_lot pl ON pl.id = psm.lot_id "
                             + "WHERE psm.revision_id=? AND pl.remaining_quantity > 0 ORDER BY psm.leg_no",
                     r -> new LotLeg(r.str("instrument_type"), r.str("side"), r.str("option_type"),
                             r.str("strike"), r.str("expiration"), r.intv("multiplier"),
-                            r.lng("allocated_quantity"), r.lng("econ")), row.revisionId()));
+                            r.lng("allocated_quantity"), r.lng("remaining_quantity"),
+                            r.lng("econ")), row.revisionId()));
         }
         return rows;
     }
 
-    /** Trading sessions (weekdays) strictly after {@code from} up to and including {@code to}. */
-    static int sessionsUntil(LocalDate from, LocalDate to) {
-        if (!to.isAfter(from)) return 0;
-        int n = 0;
-        for (LocalDate d = from.plusDays(1); !d.isAfter(to); d = d.plusDays(1)) {
-            DayOfWeek dow = d.getDayOfWeek();
-            if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) n++;
-        }
-        return n;
-    }
 
     static String severityLabel(String severity) {
         return switch (severity) {
@@ -578,7 +601,8 @@ public final class AlertCenterService implements AutoCloseable {
                                 String accountName, String revisionId, List<LotLeg> legs) {}
 
     private record LotLeg(String instrumentType, String side, String optionType, String strike,
-                          String expiration, int multiplier, long quantity, long economicRemainingCents) {
+                          String expiration, int multiplier, long quantity, long remainingQuantity,
+                          long economicRemainingCents) {
         boolean option() { return "OPTION".equals(instrumentType); }
 
         Leg toLeg() {
