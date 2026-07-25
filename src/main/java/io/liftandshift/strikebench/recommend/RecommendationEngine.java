@@ -470,6 +470,19 @@ public final class RecommendationEngine {
         if (ready == null) {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
+        // HEDGE and EXIT act on shares you already own. With fewer than 100 free shares a covered-call
+        // / protective-put ladder could only be built by fabricating a 100-share stock purchase
+        // (StrategyBuilder inserts Leg.stock(BUY) whenever sharesHeld is false). Reject before any rung
+        // is constructed so no stock leg is ever manufactured. This is a semantic rejection and holds
+        // regardless of buying power — ACQUIRE (a cash-secured put) legitimately needs no held shares.
+        boolean holdBasedIntent = intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE;
+        if (holdBasedIntent && freeShares < 100) {
+            notes.add("This " + intent.name().toLowerCase() + " ladder starts from shares you own. With no "
+                    + "eligible held shares of " + symbol + ", a strike ladder here would have to manufacture a "
+                    + "100-share purchase, so it is withheld — buy practice shares first (Acquire), or build the "
+                    + "full package in Structure.");
+            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
+        }
         var lane = ready.lane();
         Quote quote = ready.quote();
         List<LocalDate> expirations = ready.expirations();
@@ -546,11 +559,10 @@ public final class RecommendationEngine {
             filterExamples.forEach(example -> notes.add("Excluded " + example));
         }
         if (rungs.isEmpty()) {
+            // Hold-based intents without eligible shares are already rejected up front (semantic gate),
+            // so an empty ladder here is only ever a filter or a strike/budget shortfall.
             if (filteredRungs > 0) {
                 notes.add("No ladder rung passed every selected limit");
-            } else if (!sharesHeld && (intent == StrategyIntent.HEDGE || intent == StrategyIntent.EXIT)) {
-                notes.add("This goal starts from shares you own. No stock-plus-option package fits the selected "
-                        + "per-idea risk limit; buy practice shares first or construct the full package in Structure.");
             } else {
                 notes.add("No tradable strikes fit this ladder and its stated budget right now");
             }

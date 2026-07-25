@@ -157,6 +157,11 @@ public final class PositionLifecycleDecisionService {
         else if (economics.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
         else if (tailAndEvents.policySignal() != null) verdict = tailAndEvents.policySignal();
         else if (carry.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
+        // Minimum-evidence contract: an affirmative KEEP ("hold, no action") must rest on an evaluated
+        // hold-vs-close economics. If forward economics is unavailable and nothing above produced an
+        // action signal, there is no basis to affirm a hold — surface NEEDS_EVIDENCE (the missing input
+        // is named in the FORWARD_ECONOMICS dimension) rather than a silent affirmative hold.
+        else if (!lifecycle.currentChoice().holdVsClose().available()) verdict = Verdict.NEEDS_EVIDENCE;
         else verdict = Verdict.KEEP;
 
         List<ActionAlternative> alternatives = alternatives(closes, limits);
@@ -639,7 +644,7 @@ public final class PositionLifecycleDecisionService {
                     : reduction.quantityToClose() + " package(s)") + "; the full Book was recomputed at each quantity.";
             case DEFEND -> "DEFEND: resolve the named mechanical, capacity, hard-limit, or tail trigger before treating carry as permission to hold.";
             case ACCEPT_ASSIGNMENT -> "ACCEPT ASSIGNMENT is active near expiry and fits the exact declared share-and-dollar capacity; economics and Book risk remain visible.";
-            case NEEDS_EVIDENCE -> "NO VERDICT: the current mark is unavailable, so this position cannot be evaluated. Resolve the named missing input before any keep, defend, or harvest decision — no action is recommended.";
+            case NEEDS_EVIDENCE -> "NO VERDICT: a required input for this decision is unavailable, so this position cannot be evaluated. Resolve the named missing input (see the dimension reasons) before any keep, defend, or harvest decision — no action is recommended.";
         };
     }
 

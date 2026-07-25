@@ -193,6 +193,36 @@ class PositionLifecycleDecisionServiceTest {
         assertThat(decision.summary()).contains("NO VERDICT").contains("no action is recommended");
     }
 
+    @Test
+    void unavailableForwardEconomicsYieldsNoVerdictNotAffirmativeKeep() {
+        // The mark IS available (mechanics passes) but the hold-vs-close forward economics is
+        // unavailable. With the same generous policy that otherwise yields KEEP, the minimum-evidence
+        // contract must surface NEEDS_EVIDENCE — an affirmative "hold, no action" verdict may not rest
+        // on an unevaluated economics dimension. Regression for the ladder-of-precedence fallthrough.
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Synthetic policy book", "TAXABLE", null, "FIFO", null, null, null, null, 100_000_000L));
+        var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
+                        EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
+                false, null, null, "IMPORT", "EXECUTED");
+        var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
+                null, "ACCEPT", List.of(packageCapacity()),
+                capacity(new AccountObjectiveService.LifecyclePolicy("FULL_ASSIGNMENT_CAPACITY",
+                        90, 1_000L, 0, 5, false, null), List.of()));
+        PositionLifecycleReceipt receipt = lifecycleForwardUnavailable();
+        var actionSet = projections.project("local", account.id(), request, receipt);
+        var decision = decisions.analyze(receipt, actionSet,
+                AccountObjectiveService.capacityContext(revision, POSITION));
+
+        assertThat(decision.verdict())
+                .as("missing forward economics must not become an affirmative hold")
+                .isEqualTo(PositionLifecycleDecisionService.Verdict.NEEDS_EVIDENCE);
+        assertThat(decision.verdict()).isNotEqualTo(PositionLifecycleDecisionService.Verdict.KEEP);
+        assertThat(decision.dimensions()).filteredOn(d -> d.name().equals("FORWARD_ECONOMICS"))
+                .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("UNAVAILABLE"));
+        assertThat(decision.summary()).contains("NO VERDICT").contains("no action is recommended");
+    }
+
     private static AccountObjectiveService.AccountCapacityPolicy capacity(
             AccountObjectiveService.LifecyclePolicy policy,
             List<AccountObjectiveService.ScopedCeiling> symbolCeilings) {
@@ -205,12 +235,20 @@ class PositionLifecycleDecisionServiceTest {
                 45_000L, null, null);
     }
 
-    private static PositionLifecycleReceipt lifecycle() {
-        var close = new PositionLifecycleReceipt.CloseQuote(true, -14_250L, -15_000L,
+    private static PositionLifecycleReceipt.CloseQuote availableClose() {
+        return new PositionLifecycleReceipt.CloseQuote(true, -14_250L, -15_000L,
                 -15_000L, 300L, -15_300L, PositionDomain.PriceAuthority.OBSERVED,
                 "Observed ask plus fees.", null);
-        var forward = new PositionLifecycleReceipt.ForwardEconomics(true, -300L, 500L,
+    }
+
+    private static PositionLifecycleReceipt.ForwardEconomics availableForward() {
+        return new PositionLifecycleReceipt.ForwardEconomics(true, -300L, 500L,
                 -100L, 900L, 50L, true, "Observed hold-vs-close economics.", null);
+    }
+
+    /** One shared receipt body; the two evidence dimensions under test (mark, forward economics) vary. */
+    private static PositionLifecycleReceipt lifecycleWith(PositionLifecycleReceipt.CloseQuote close,
+                                                          PositionLifecycleReceipt.ForwardEconomics forward) {
         return new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION, "QQQ", POSITION,
                 new PositionLifecycleReceipt.History(true, 60_000L, 60_000L, 0L, 60_000L,
                         60_000L, 30_000L, 50.0, 14_700L, null, null,
@@ -243,42 +281,22 @@ class PositionLifecycleDecisionServiceTest {
                         "m".repeat(64), "model-v1", "FACTS_ONLY", List.of("preview", "book"), List.of()));
     }
 
-    /** The same receipt as {@link #lifecycle()} but with a NON-executable close (no current mark). */
+    private static PositionLifecycleReceipt lifecycle() {
+        return lifecycleWith(availableClose(), availableForward());
+    }
+
+    /** {@link #lifecycle()} but with a NON-executable close (no current mark) — mechanics has no evidence. */
     private static PositionLifecycleReceipt lifecycleUnavailable() {
-        var close = new PositionLifecycleReceipt.CloseQuote(false, null, null, null, 0L, null, null,
-                "No executable close from the current book.", "No live opposite-side quote to close against.");
-        var forward = new PositionLifecycleReceipt.ForwardEconomics(true, -300L, 500L,
-                -100L, 900L, 50L, true, "Observed hold-vs-close economics.", null);
-        return new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION, "QQQ", POSITION,
-                new PositionLifecycleReceipt.History(true, 60_000L, 60_000L, 0L, 60_000L,
-                        60_000L, 30_000L, 50.0, 14_700L, null, null,
-                        "Recorded opening fill and executable close.", null, List.of("tracked-lots")),
-                new PositionLifecycleReceipt.CurrentChoice(close,
-                        "Would you open the exact position you still own today, ignoring sunk campaign cash?",
-                        PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF, forward, 1_350_000L,
-                        "Canonical probability-map CVaR95.", PositionLifecycleReceipt.STANCE_REF,
-                        "Executable hold-vs-close choice.", List.of()),
-                new PositionLifecycleReceipt.CarryCollateral(15_000L, 2.5347, 16,
-                        new AuthorityFacts.MoneyFact(13_500_000L,
-                                PositionDomain.FactAuthority.MODEL_DERIVED, "Strike obligation."),
-                        AuthorityFacts.RateFact.unavailable("No broker settlement rate."),
-                        new AuthorityFacts.MoneyFact(13_500_000L,
-                                PositionDomain.FactAuthority.MODEL_DERIVED, "Theoretical encumbrance."),
-                        new AuthorityFacts.MoneyFact(13_500_000L,
-                                PositionDomain.FactAuthority.MODEL_DERIVED, "Theoretical release."),
-                        0L, "Carry and collateral are separate.", List.of()),
-                new PositionLifecycleReceipt.AssignmentExit(List.of(
-                        new PositionLifecycleReceipt.AssignmentLeg(OptionType.PUT, EXPIRY, 45_000L,
-                                300L, 13_500_000L, 44_950L, "BUY_SHARES", "Exact strike geometry.")),
-                        AuthorityFacts.MoneyFact.unavailable("No linked tax-lot basis."),
-                        AuthorityFacts.MoneyFact.unavailable("No linked campaign basis."),
-                        List.of(new PositionLifecycleReceipt.EventCrossing("EARNINGS",
-                                LocalDate.parse("2031-08-04"), "AFTER_CLOSE", "CONFIRMED",
-                                "Issuer IR", "https://example.test/issuer", OffsetDateTime.now(CLOCK),
-                                "e".repeat(64))), "CONFIRMED", "bookActions",
-                        "Exact assignment and event evidence.", List.of()),
-                new PositionLifecycleReceipt.Evidence(OffsetDateTime.now(CLOCK), "COMPLETE",
-                        "m".repeat(64), "model-v1", "FACTS_ONLY", List.of("preview", "book"), List.of()));
+        return lifecycleWith(new PositionLifecycleReceipt.CloseQuote(false, null, null, null, 0L, null, null,
+                "No executable close from the current book.", "No live opposite-side quote to close against."),
+                availableForward());
+    }
+
+    /** {@link #lifecycle()} with the mark available but forward hold-vs-close economics UNAVAILABLE. */
+    private static PositionLifecycleReceipt lifecycleForwardUnavailable() {
+        return lifecycleWith(availableClose(), new PositionLifecycleReceipt.ForwardEconomics(false,
+                null, null, null, null, null, false, "Hold-vs-close economics unavailable.",
+                "No forward economics receipt for this position."));
     }
 
     private long count(String table) {

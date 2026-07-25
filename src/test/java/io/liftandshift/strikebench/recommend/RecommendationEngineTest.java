@@ -470,6 +470,39 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void hedgeOrExitLADDERWithoutEligibleSharesNeverManufacturesAStockLeg() {
+        // The strike-LADDER route (engine.ladder) must apply the SAME holdings gate as recommend().
+        // With ample buying power — so emptiness cannot be blamed on the risk budget — and zero eligible
+        // shares, a hedge/exit ladder must be withheld BEFORE construction, never building a covered-call
+        // or protective-put rung by fabricating the 100-share purchase StrategyBuilder would insert.
+        for (String intent : new String[]{"hedge", "exit"}) {
+            RecommendationEngine.LadderResult ladder = engine.ladder(intentReq(intent, null, null), BP);
+            assertThat(ladder.rungs())
+                    .as("intent=%s must be rejected by the holdings gate (semantic), not budget; notes=%s",
+                            intent, ladder.notes())
+                    .isEmpty();
+            // No rung — but even had one been built, none may carry a fabricated stock leg.
+            assertThat(ladder.rungs()).allSatisfy(rung ->
+                    assertThat(rung.legs()).noneMatch(l -> "STOCK".equals(l.type())));
+            assertThat(ladder.notes()).anySatisfy(n -> assertThat(n)
+                    .contains("starts from shares you own")      // semantic (held shares), not budget
+                    .containsIgnoringCase("manufacture")          // names the exact harm being prevented
+                    .containsIgnoringCase("acquire"));            // the actionable next step
+        }
+
+        // Contrast proof that the GATE — not the market or the budget — rejected the no-share case:
+        // with 100+ held shares the same exit ladder DOES produce covered-call rungs, each written
+        // against the held shares (so still no manufactured BUY-stock leg).
+        RecommendationEngine.Holdings held = new RecommendationEngine.Holdings(200, 21_000L, null);
+        RecommendationEngine.LadderResult heldExit = engine.ladder(intentReq("exit", held, null), BP);
+        assertThat(heldExit.rungs())
+                .as("held shares make a covered-call ladder buildable; notes=%s", heldExit.notes())
+                .isNotEmpty();
+        assertThat(heldExit.rungs()).allSatisfy(rung ->
+                assertThat(rung.legs()).noneMatch(l -> "STOCK".equals(l.type())));
+    }
+
+    @Test
     void filtersRejectCandidatesWithHumanReadableReasons() {
         RecommendationEngine.Filters strictPop = new RecommendationEngine.Filters(0.99, null, null, null);
         RecommendationEngine.Result r1 = engine.recommend(intentReq("income", null, strictPop), BP);
