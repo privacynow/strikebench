@@ -438,9 +438,13 @@ public final class MarketDataEngine {
         MarketSnapshot prev = snapshots.get(symbol);
         long now = clock.millis();
         if (prev != null) {
-            // keep the last good data, just record the failed refresh
+            // A failed refresh means we could NOT confirm this quote is still current. Keep the
+            // last-known numbers but degrade freshness to STALE — otherwise an aging, unconfirmed quote
+            // keeps presenting as LIVE/DELAYED indefinitely. The next SUCCESSFUL refresh restores the
+            // true tier via commit(). (Matches lastKnownFrom(), which also forces STALE for unconfirmed
+            // last-known data so it can never read as live.)
             commit(symbol, new MarketSnapshot(prev.symbol(), prev.description(), prev.last(), prev.bid(),
-                    prev.ask(), prev.prevClose(), prev.optionable(), prev.freshness(), prev.source(),
+                    prev.ask(), prev.prevClose(), prev.optionable(), Freshness.STALE, prev.source(),
                     prev.asOfEpochMs(), now, false, error));
         } else {
             commit(symbol, new MarketSnapshot(symbol, null, null, null, null, null, false,

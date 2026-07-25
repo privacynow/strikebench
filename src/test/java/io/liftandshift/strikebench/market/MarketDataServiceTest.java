@@ -288,7 +288,11 @@ class MarketDataServiceTest {
         assertThat(candles.condition()).isEqualTo("HISTORICAL_RANGE");
         assertThat(candles.state()).isEqualTo("PRE_HISTORY"); // NOT ERROR — the breaker is untouched
         assertThat(candles.detail()).contains("coverage begins 2010-01-04");
-        assertThat(svc.preHistoryBoundary("AAPL")).contains(LocalDate.parse("2010-01-04"));
+        assertThat(svc.preHistoryBoundary("prehistory", "AAPL")).contains(LocalDate.parse("2010-01-04"));
+        // Provider-scoped: another provider is NOT clamped by prehistory's short coverage.
+        assertThat(svc.preHistoryBoundary("yahoo", "AAPL"))
+                .as("a different provider's usable history must not be clamped by another's range-absence")
+                .isEmpty();
     }
 
     @Test

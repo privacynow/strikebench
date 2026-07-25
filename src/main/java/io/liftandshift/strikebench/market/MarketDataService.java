@@ -111,6 +111,8 @@ public final class MarketDataService {
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
     // Per-symbol earliest-available boundary learned from provider range-absence (PRE_HISTORY). A
     // backfill orchestrator reads this to persist a durable clamp; not a substitute for it.
+    // Keyed by (provider, symbol) via phKey() — a provider-scoped boundary so one provider's short
+    // coverage can NEVER clamp another provider's usable history.
     private final Map<String, java.time.LocalDate> preHistoryBoundaries = new ConcurrentHashMap<>();
     // Per-provider budget reset time, learned from a local BUDGET_EXHAUSTED denial. A backfill
     // orchestrator reads this to schedule the next attempt at reset instead of retrying now.
@@ -921,16 +923,24 @@ public final class MarketDataService {
                                   io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
         java.time.LocalDate earliest = rue.earliestAvailable();
         if (earliest != null) {
-            preHistoryBoundaries.merge(symbol, earliest, (a, b) -> a.isAfter(b) ? a : b);
+            // Merge only within THIS provider's boundary — never across providers.
+            preHistoryBoundaries.merge(phKey(provider, symbol), earliest, (a, b) -> a.isAfter(b) ? a : b);
         }
-        java.time.LocalDate boundary = preHistoryBoundaries.get(symbol);
+        java.time.LocalDate boundary = preHistoryBoundaries.get(phKey(provider, symbol));
         recordCondition(provider, Domain.CANDLES, ReadCondition.HISTORICAL_RANGE, "PRE_HISTORY",
                 boundary == null ? "no data this far back" : "coverage begins " + boundary);
     }
 
-    /** The earliest date any provider has said it can serve for this symbol, learned from range-absence. */
-    public java.util.Optional<java.time.LocalDate> preHistoryBoundary(String symbol) {
-        return java.util.Optional.ofNullable(preHistoryBoundaries.get(norm(symbol)));
+    /** The earliest date THIS PROVIDER has said it can serve for this symbol, learned from range-absence.
+     *  Provider-scoped so a Yahoo/SNDK short-coverage report never clamps a provider with deeper history. */
+    public java.util.Optional<java.time.LocalDate> preHistoryBoundary(String provider, String symbol) {
+        return java.util.Optional.ofNullable(preHistoryBoundaries.get(phKey(provider, symbol)));
+    }
+
+    /** (provider, symbol) composite key for the pre-history boundary map; both sides normalize so a
+     *  case/whitespace difference between the reporting call and the backfill lookup can never miss. */
+    private static String phKey(String provider, String symbol) {
+        return (provider == null ? "" : provider.trim().toLowerCase(java.util.Locale.ROOT)) + " " + norm(symbol);
     }
 
     /**

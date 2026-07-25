@@ -128,11 +128,13 @@ public final class UnderlyingBackfill {
                 return new BackfillResult(sym, actualSource, false, 0, from, to, note,
                         plan.missingSessions(), plan.ranges().size(), false, quarantined);
             }
-            // M2-(a): a provider range-absence teaches us where coverage begins. Persist it durably so
-            // the planner clamps future requests and never re-spends the allowance on the impossible
-            // pre-history interval. Recorded under the same source key the planner reads by.
-            market.preHistoryBoundary(sym).ifPresent(coverageStart ->
-                    syncState.recordEarliestAvailable(sourceRequest, sym, coverageStart));
+            // M2-(a): a provider range-absence teaches us where THAT PROVIDER's coverage begins. Look it
+            // up and persist it under the SAME provider the planner reads by (the resolved provider when
+            // the request was "auto"), never merged across providers and never under the generic "auto"
+            // key — so one provider's short history can't clamp another provider's usable range.
+            String boundaryProvider = "auto".equals(sourceRequest) ? actualSource : sourceRequest;
+            market.preHistoryBoundary(boundaryProvider, sym).ifPresent(coverageStart ->
+                    syncState.recordEarliestAvailable(boundaryProvider, sym, coverageStart));
             MissingRangePlanner.Plan after = planner.plan(sym, from, to,
                     "auto".equals(sourceRequest) ? actualSource : sourceRequest);
             boolean complete = after.complete();
