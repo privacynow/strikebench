@@ -976,12 +976,12 @@ CREATE TABLE public.plan_decision (
     evidence_provenance text NOT NULL,
     model_version text NOT NULL,
     study_key text,
-    review_horizon_sessions integer NOT NULL,
+    review_horizon_days integer NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     decision_seq bigint NOT NULL,
     CONSTRAINT plan_decision_action_check CHECK ((action = ANY (ARRAY['TRADE'::text, 'CASH'::text, 'BROKER'::text]))),
     CONSTRAINT plan_decision_check CHECK ((((action = ANY (ARRAY['TRADE'::text, 'BROKER'::text])) AND (qty IS NOT NULL) AND (qty > 0)) OR ((action = 'CASH'::text) AND (qty IS NULL)))),
-    CONSTRAINT plan_decision_review_horizon_sessions_check CHECK ((review_horizon_sessions > 0))
+    CONSTRAINT plan_decision_review_horizon_days_check CHECK ((review_horizon_days > 0))
 );
 
 
