@@ -73,7 +73,7 @@ class EvaluationStoreTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> risk = (Map<String, Object>) receipt.get("risk");
         assertThat(risk).containsKey("scenarios");
-        assertThat((List<?>) risk.get("scenarios")).hasSize(7);
+        assertThat((List<?>) risk.get("scenarios")).hasSize(8);   // one checkpoint per NAMED story move
         @SuppressWarnings("unchecked")
         Map<String, Object> assessment = (Map<String, Object>) receipt.get("assessment");
         @SuppressWarnings("unchecked")

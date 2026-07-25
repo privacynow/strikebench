@@ -96,7 +96,7 @@ class EvaluateIntegrationTest {
         JsonNode terminalPayoff = top.get("risk").get("terminalPayoff");
         assertThat(terminalPayoff).isNotNull();
         if (terminalPayoff.get("available").asBoolean()) {
-            assertThat(top.get("risk").get("scenarios")).hasSize(7);
+            assertThat(top.get("risk").get("scenarios")).hasSize(8);   // one checkpoint per NAMED story move
             assertThat(terminalPayoff.get("points")).hasSizeGreaterThan(2);
         } else {
             assertThat(top.get("risk").get("scenarios")).isEmpty();

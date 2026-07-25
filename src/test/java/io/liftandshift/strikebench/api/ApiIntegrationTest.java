@@ -932,7 +932,7 @@ class ApiIntegrationTest {
         assertThat(economics.get("verdict").asText()).isNotBlank();
         assertThat(economics.has("marketEvAfterCostsCents")).isTrue();
         assertThat(evaluation.get("capital").get("incrementalCents").asLong()).isPositive();
-        assertThat(evaluation.get("risk").get("scenarios").size()).isEqualTo(7);
+        assertThat(evaluation.get("risk").get("scenarios").size()).isEqualTo(8);   // one checkpoint per NAMED story move
         assertThat(evaluation.get("evidence").get("perDimension").has("pricing")).isTrue();
         assertThat(evaluation.get("management").get("rules").isArray()).isTrue();
         assertThat(evaluation.get("score").has("riskAdjustedScore")).isTrue();

@@ -740,8 +740,15 @@ function candidate() {
           ]
         },
         scenarios: [
+          /* One checkpoint per NAMED story move — RiskProfiler.MOVES is that set, so the desk
+             never has to fill a gap by interpolating between checkpoints. */
           { underlyingMovePct: -0.20, pnlCents: -12345 },
+          { underlyingMovePct: -0.09, pnlCents: 30100 },
+          { underlyingMovePct: -0.06, pnlCents: 45200 },
+          { underlyingMovePct: -0.01, pnlCents: 72400 },
           { underlyingMovePct: 0, pnlCents: 77700 },
+          { underlyingMovePct: 0.06, pnlCents: 61800 },
+          { underlyingMovePct: 0.13, pnlCents: 40500 },
           { underlyingMovePct: 0.20, pnlCents: 22200 }
         ]
       }

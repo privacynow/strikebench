@@ -140,7 +140,7 @@ class StrategyEvaluatorTest {
         assertThat(e.volatility().varianceRiskPremium()).isCloseTo(0.05, org.assertj.core.data.Offset.offset(1e-9));
 
         // Risk: a real 7-point payoff grid; worst case is the $200 debit; best case $300.
-        assertThat(e.risk().scenarios()).hasSize(7);
+        assertThat(e.risk().scenarios()).hasSize(8);   // one checkpoint per NAMED story move
         assertThat(e.risk().maxLossCents()).isEqualTo(20_000);
         assertThat(e.risk().tailLossCents()).isEqualTo(20_000);
         long best = e.risk().scenarios().stream().mapToLong(RiskProfile.Scenario::pnlCents).max().orElse(0);

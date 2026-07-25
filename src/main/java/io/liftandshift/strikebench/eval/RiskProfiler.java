@@ -19,7 +19,14 @@ import java.util.List;
  */
 public final class RiskProfiler {
 
-    private static final double[] MOVES = {-0.20, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20};
+    /**
+     * The product's NAMED scenarios ("Market crash", "Gap down", "Orderly pullback", "Choppy",
+     * "Flat", "Grind higher", "Strong rally", "Melt-up"). The desk shows one tile per story, so the
+     * checkpoint set must BE that set: when the two disagreed, the browser filled the five missing
+     * moves by interpolating between checkpoints and displayed the result as a priced outcome.
+     * Every tile is now a real valuation at a move the engine actually priced.
+     */
+    private static final double[] MOVES = {-0.20, -0.09, -0.06, -0.01, 0.0, 0.06, 0.13, 0.20};
     private static final double TAIL_MOVE = 0.20;
     private static final String TERMINAL_PAYOFF_SCHEMA = RiskProfile.TerminalPayoff.SCHEMA;
     private static final String TERMINAL_PAYOFF_MODEL = RiskProfile.TerminalPayoff.MODEL;
