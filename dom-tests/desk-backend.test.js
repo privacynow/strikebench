@@ -6,6 +6,11 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
+/* §7.2 receipt shape, arithmetic and invariants live in ONE place — fixtures/price.js, which is
+   checked field-by-field against the Java record by fixtures/fixtures.test.js in this same lane.
+   This file supplies only the desk's default PROFILE (its source/freshness/fingerprint), so a
+   drifting wire contract fails the self-check instead of quietly agreeing with a stale copy. */
+const { packagePrice, unavailablePackagePrice } = require('./fixtures/price');
 
 const PUBLIC = path.resolve(__dirname, '../src/main/resources/public');
 const CANDIDATE_ID = 'candidate_backend_debit';
@@ -849,6 +854,24 @@ function favorableMixedFitCandidate() {
   return row;
 }
 
+/* A ranked package the option book could not price. PackagePriceReceipt.unavailable(...) nulls
+   every amount, source, freshness, stamp and fingerprint and keeps only the reason, so this is the
+   exact wire shape — the compact constructor refuses an UNAVAILABLE basis beside any net. */
+function unpricedCandidate() {
+  const row = candidate();
+  row.id = 'candidate_backend_unpriced';
+  row.label = 'Backend unpriced package';
+  row.displayName = 'Backend unpriced package';
+  row.price = priceReceipt({
+    optionNetPremiumCents: null, stockCashFlowCents: null, grossPackageNetCents: null,
+    openingFeesCents: null, afterFeeNetCents: null, executableNetCents: null,
+    valuationBasis: 'UNAVAILABLE', executability: 'UNAVAILABLE',
+    source: null, freshness: null, observedAt: null, fingerprint: null,
+    unavailableReason: 'No two-sided book priced both legs of this package.'
+  });
+  return row;
+}
+
 function fourLegCandidate() {
   const row = candidate();
   row.id = 'candidate_backend_four_leg';
@@ -1066,22 +1089,38 @@ function ensemble(version = 13, market = {}) {
 /* §7.2 package-price receipt, exactly as PackagePriceReceipt serializes it: all sixteen keys,
    explicit nulls for what is genuinely unknown. Fixtures build it through one helper so a surface
    that reads a field the server never sends fails here rather than on the owner's screen. */
+/* observedAt is `Long observedAt` on the record — epoch MILLISECONDS of the quotes the price was
+   struck from, produced by PackagePriceReceipt.observedAtOf over the legs' asOfEpochMs stamps.
+   This fixture used to hand the browser an ISO-8601 string, which no producer ever sends. That
+   single untruthful key is why the suite stayed green while the served order dock printed the raw
+   number 1784913960000 to the owner: the mock silently satisfied a renderer that only works on
+   strings. A fixture that lies about the wire type cannot catch a formatter that trusts it. */
+const RECEIPT_OBSERVED_AT_EPOCH_MS = 1784913960000; // 2026-07-24T17:26:00Z
 function priceReceipt({ quantity = 1, optionNetPremiumCents = null, stockCashFlowCents = 0,
   grossPackageNetCents = null, openingFeesCents = null, afterFeeNetCents = null,
   executableNetCents = null, restingLimitNetCents = null, valuationBasis = 'EXECUTABLE_BOOK',
   executability = 'IMMEDIATE', source = 'BACKEND_TEST_RECEIPT', freshness = 'FRESH',
-  observedAt = '2026-07-24T20:00:00Z', fingerprint = 'price-fixture', feeSide = 'OPENING',
+  observedAt = RECEIPT_OBSERVED_AT_EPOCH_MS, fingerprint = 'price-fixture', feeSide = 'OPENING',
   unavailableReason = null } = {}) {
+  const desk = { quantity, source, freshness, observedAt, fingerprint, feeSide };
+  if (String(valuationBasis).toUpperCase() === 'UNAVAILABLE') {
+    /* the canonical builder names this parameter `reason` */
+    return unavailablePackagePrice(Object.assign({}, desk, {
+      reason: unavailableReason || 'This package could not be priced.'
+    }));
+  }
+  /* The desk's callers name the package net and let the option-only side follow, which is the
+     opposite of the canonical builder's argument order; translate rather than re-derive. */
   const option = optionNetPremiumCents == null ? grossPackageNetCents : optionNetPremiumCents;
-  const gross = grossPackageNetCents == null
-    ? (option == null ? null : option + (stockCashFlowCents || 0)) : grossPackageNetCents;
-  const afterFee = afterFeeNetCents == null
-    ? (gross == null || openingFeesCents == null ? gross : gross - Math.abs(openingFeesCents))
-    : afterFeeNetCents;
-  return { quantity, optionNetPremiumCents: option, stockCashFlowCents, grossPackageNetCents: gross,
-    openingFeesCents, afterFeeNetCents: afterFee, executableNetCents, restingLimitNetCents,
-    valuationBasis, executability, source, freshness, observedAt, fingerprint, feeSide,
-    unavailableReason };
+  const stock = grossPackageNetCents == null || option == null
+    ? (stockCashFlowCents || 0) : grossPackageNetCents - option;
+  const built = packagePrice(Object.assign({}, desk, {
+    optionNetPremiumCents: option, stockCashFlowCents: stock, openingFeesCents,
+    executableNetCents, restingLimitNetCents, valuationBasis, executability
+  }));
+  /* A few desk fixtures pin an after-fee net that differs from gross-minus-fees on purpose (a
+     resting limit settles against the limit, not the book). Honour that explicitly. */
+  return afterFeeNetCents == null ? built : Object.assign({}, built, { afterFeeNetCents });
 }
 
 function decisionPreview(requestBody, selected = candidate(), version = 14) {
@@ -8401,6 +8440,506 @@ test('a package fan is cut at its expiry by backend session dates, not a browser
     assert.ok(life.pathLengths.every(n => n === 5),
       `every drawn path is cut to the same boundary (${life.pathLengths.join(',')})`);
     assert.deepEqual(pageErrors, [], `dated expiry cut emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+/* ======================================================================
+   M0 — RENDERED-STRING CONTRACTS (audit §16.3, program §3.1/§3.2)
+
+   Everything above asserts DOM structure, bridge state and request counts against mocked APIs.
+   None of it asserts a money string a reader can see, which is how three rendering regressions
+   reached the owner's screen while this suite reported a full green run. Each test below reads the
+   exact text rendered into a named surface and says, in its own failure message, which defect it
+   found and where. They are contract tests, not journeys: one defect, one surface, one string.
+   ====================================================================== */
+
+test('an unpriced package renders as unavailable in the candidate rail, never a fabricated +$0', async () => {
+  /* candCollect() returns null for a package the book could not price. Its callers then ask
+     `candCollect(c) >= 0` and `signed(candCollect(c))`. In JavaScript `null >= 0` is true and
+     signed(null) is money(0) with a "+" in front, so BOTH the ranked rail and the risk-map hover
+     card state that this package collects exactly zero premium — a number no receipt contains
+     (§3.2: missing evidence never becomes a value). The unpriced row is a comparison row here;
+     the priced candidate stays selected so the surface under test is the rail itself. */
+  const unpriced = unpricedCandidate();
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    strategyCandidates: [candidate(), unpriced]
+  });
+  try {
+    await page.waitForSelector(`.fanr[data-cand="${unpriced.id}"]`);
+    const rendered = await page.evaluate(id => {
+      const row = document.querySelector(`.fanr[data-cand="${id}"]`);
+      const model = window.decide.cands.find(c => c.id === id);
+      const net = row.querySelectorAll('.fnum')[0];
+      window.showMapCard(id);
+      const card = document.querySelector('#decMapCard');
+      const cardValues = Array.from(card.querySelectorAll('.mcg .vv')).map(el => el.textContent.trim());
+      const cardKeys = Array.from(card.querySelectorAll('.mcg .kk')).map(el => el.textContent.trim());
+      return {
+        optionNet: model.optionNet,
+        valuationBasis: model.price.valuationBasis,
+        unavailableReason: model.price.unavailableReason,
+        railNet: net.textContent.trim(),
+        railNetClass: net.className,
+        railNetTitle: net.getAttribute('title'),
+        mapCardShown: card.classList.contains('show'),
+        mapCardNetKey: cardKeys[0],
+        mapCardNetValue: cardValues[0]
+      };
+    }, unpriced.id);
+
+    // The receipt itself is unambiguous before anything renders it.
+    assert.equal(rendered.valuationBasis, 'UNAVAILABLE');
+    assert.equal(rendered.optionNet, null,
+      'the bridge must carry an unpriced package as null, not as a zero');
+    assert.match(rendered.unavailableReason, /priced both legs/i);
+
+    assert.doesNotMatch(rendered.railNet, /\$\s*0(?:[^\d]|$)/,
+      `New Idea candidate rail: the net-premium cell of an UNAVAILABLE package renders "${rendered.railNet}". `
+      + 'candCollect() returns null and signed(null) prints "+$0", so the rail states that a package '
+      + 'the option book refused to price collects exactly zero premium (audit §5.2.1, program §3.2).');
+    assert.match(rendered.railNet, /^(?:—|–|-|n\/a|unavailable|unpriced)$/i,
+      `New Idea candidate rail: the net-premium cell of an UNAVAILABLE package must carry an explicit `
+      + `unavailable marker; it renders "${rendered.railNet}".`);
+    assert.doesNotMatch(rendered.railNetClass, /\bpos\b/,
+      `New Idea candidate rail: the net-premium cell of an UNAVAILABLE package is styled "${rendered.railNetClass}". `
+      + '`candCollect(c) >= 0` is true for null, so an unpriced package is coloured as a credit.');
+
+    // Guarded, so a hover card that silently failed to open cannot pass the two checks below.
+    assert.equal(rendered.mapCardShown, true,
+      'the risk-map hover card must open for the unpriced package before its cells can be read');
+    assert.doesNotMatch(rendered.mapCardNetValue, /\$\s*0(?:[^\d]|$)/,
+      `New Idea risk-map hover card: the same null renders "${rendered.mapCardNetValue}" for an UNAVAILABLE `
+      + 'package. This is the second caller of candCollect() with the same null-coercion defect.');
+    assert.doesNotMatch(rendered.mapCardNetKey, /^Net credit$/i,
+      `New Idea risk-map hover card: an unpriced package is labelled "${rendered.mapCardNetKey}" because `
+      + '`candCollect(c) >= 0` chooses the credit label for null.');
+
+    assert.deepEqual(pageErrors, [], `unpriced candidate rendering emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('one unpriced scenario skips its own marker instead of aborting the payoff renderer', async () => {
+  /* drawPayoff()'s scenario loop reads `var sv = payFor(p, spx); if (sv == null) { return; }`.
+     That `return` leaves drawPayoff itself, not the iteration — and it sits BEFORE `svg.innerHTML = g`,
+     so a single story move that lands off the served payoff curve discards the whole render: every
+     later scenario marker, the pinned what-if marker, the at-spot annotation, the axes and the
+     curve. The trigger is ordinary: pinning a what-if beyond the served curve widens the drawn
+     domain by 5% of its span, which admits a scenario price the engine never valued.
+
+     Fixture geometry, all from candidate(): spot 100, served payoff checkpoints 90/100/110.
+     Pinning the −20% crash sets lo = 80 − (110−90)*0.05 = 79, so SCEN[0] at price 80 is inside the
+     drawn window but outside the receipt. SCEN[1..5] (−9%, −6%, −1%, 0%, +6% → 91…106) are priced
+     and must still be marked; SCEN[6] and SCEN[7] (113, 120) stay outside the window and are
+     correctly skipped by the existing bounds check. */
+  const { context, page, pageErrors } = await openAuthoritativeDesk();
+  try {
+    const drawn = await page.evaluate(id => {
+      const c = window.decide.cands.find(row => row.id === id);
+      const svg = document.querySelector('#decPay');
+      const priceAt = pct => c.spot * (1 + pct / 100);
+      // Empty the canvas first so what is counted is the output of exactly ONE drawPayoff call.
+      // Without this, an aborted render leaves the previous frame on screen and reads as success.
+      svg.innerHTML = '';
+      window.drawPayoff(svg, c, true, null, { interactive: false, pinM: window.SCEN[0].m });
+      return {
+        pinnedMove: window.SCEN[0].m,
+        servedDomain: [c.payoffPoints[0].price, c.payoffPoints[c.payoffPoints.length - 1].price],
+        crashValue: window.payFor(c, priceAt(window.SCEN[0].m)),
+        pricedValues: [1, 2, 3, 4, 5].map(i => window.payFor(c, priceAt(window.SCEN[i].m))),
+        scenarioMarkers: Array.from(svg.querySelectorAll('circle.pfscen')).map(el => el.dataset.si),
+        atSpotAnnotation: svg.querySelector('text.pfxp')?.textContent || null,
+        pathCount: svg.querySelectorAll('path[d]').length
+      };
+    }, CANDIDATE_ID);
+
+    // The premise: exactly one story move is off the receipt and five others are on it.
+    assert.equal(drawn.pinnedMove, -20);
+    assert.deepEqual(drawn.servedDomain, [90, 110]);
+    assert.equal(drawn.crashValue, null, 'the −20% crash is genuinely off the served payoff curve');
+    assert.ok(drawn.pricedValues.every(v => v != null),
+      `the other five story moves are priced by the receipt (${JSON.stringify(drawn.pricedValues)})`);
+
+    assert.deepEqual(drawn.scenarioMarkers, ['1', '2', '3', '4', '5'],
+      'New Idea payoff hero: one unpriced scenario (−20%, off the served curve) removed the markers for the '
+      + `five scenarios the engine DID price — drew [${drawn.scenarioMarkers.join(',')}] instead of [1,2,3,4,5]. `
+      + '`if (sv == null) { return; }` returns from drawPayoff() rather than skipping that scenario '
+      + '(audit §5.2.2).');
+    assert.ok(drawn.pathCount > 0,
+      'New Idea payoff hero: one unpriced scenario left the chart completely empty — the abort happens before '
+      + `svg.innerHTML = g, so the curve, the axes and the shaded areas are never written (${drawn.pathCount} paths drawn).`);
+    assert.ok(drawn.atSpotAnnotation && /\$/.test(drawn.atSpotAnnotation),
+      'New Idea payoff hero: one unpriced scenario deleted the at-spot value annotation, which is drawn '
+      + `after the scenario loop (rendered ${JSON.stringify(drawn.atSpotAnnotation)}).`);
+
+    assert.deepEqual(pageErrors, [], `payoff scenario skip emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('the order receipt renders its epoch-millisecond observation as a human timestamp', async () => {
+  /* PackagePriceReceipt.observedAt is `Long` — epoch ms of the quotes the price was struck from.
+     packagePriceReceiptHTML formats it with
+       String(price.observedAt).replace('T',' ').replace(/\..*$/,'')
+     which is ISO-string surgery. Neither replacement matches a number, so the dock prints the raw
+     count of milliseconds. The owner's capture of the served order controls shows 1784913960000
+     sitting in the receipt's provenance line beside the source and freshness (audit §5.2.3). */
+  const { context, page, pageErrors } = await openAuthoritativeDesk();
+  try {
+    await page.locator('.execute [data-dec="ticket"]').click();
+    await page.waitForSelector('.execute .pricereceipt .prmeta');
+    const receipt = await page.evaluate(() => {
+      const meta = document.querySelector('.execute .pricereceipt .prmeta');
+      const wire = window.decide.orderPreview.order.price;
+      return {
+        wireObservedAt: wire.observedAt,
+        wireType: typeof wire.observedAt,
+        // Cell by cell: the provenance row concatenates its spans without separators, so the raw
+        // epoch is invisible to a whole-row regex — exactly the kind of blind spot this lane exists
+        // to remove.
+        metaSpans: Array.from(meta.querySelectorAll('span')).map(el => el.textContent.trim())
+      };
+    });
+
+    assert.equal(receipt.wireType, 'number',
+      'the fixture must carry observedAt in the declared wire unit (epoch ms), as the record does');
+    assert.equal(receipt.wireObservedAt, RECEIPT_OBSERVED_AT_EPOCH_MS);
+
+    const rawEpochCell = receipt.metaSpans.find(text => /^\d{10,}$/.test(text));
+    assert.equal(rawEpochCell, undefined,
+      `New Idea order dock, package-price receipt: the observation stamp renders as the bare number `
+      + `"${rawEpochCell}" beside the source and freshness. observedAt is a Long of epoch milliseconds and `
+      + 'the renderer applies ISO-string replacements that a number never matches, so the reader is shown '
+      + `a millisecond count instead of a time (audit §5.2.3). Full row: ${JSON.stringify(receipt.metaSpans)}.`);
+    /* A readable date, not a specific one. The first draft of this assertion required the literal
+       "2026", which pinned a format rather than the property: authWhen — the desk's one time
+       renderer — prints "Jul 24, 10:26 AM" for a recent stamp and would have failed while being
+       entirely correct. Requiring a month name and a clock time keeps the real guarantee (an
+       epoch is formatted from its declared unit) without dictating one locale's output. */
+    assert.ok(receipt.metaSpans.some(text =>
+      /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(text) && /\d{1,2}:\d{2}/.test(text)),
+      `New Idea order dock, package-price receipt: no rendered provenance cell names a readable date; the row `
+      + `reads ${JSON.stringify(receipt.metaSpans)}. An epoch stamp must be formatted from its declared unit.`);
+
+    assert.deepEqual(pageErrors, [], `order receipt stamp emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+/* §16.3's cross-surface identity check needs ONE package whose every displayed fact comes from a
+   single set of server numbers. These constants ARE that receipt: populatedBookDocuments() already
+   states them for the held AAPL line, and goldenCandidate() restates the identical package as a
+   ranked New Idea candidate. Any string difference between the three surfaces is therefore a
+   presentation difference — there is no second number anywhere for them to disagree about. */
+const GOLDEN = {
+  symbol: 'AAPL',
+  candidateId: 'candidate_golden_receipt',
+  expiration: '2026-08-21',
+  maxLossCents: 43210,           // $432.10
+  maxProfitCents: 156790,        // $1,567.90
+  optionNetPremiumCents: -43210, // −$432.10 paid to open
+  popEntryPct: 57,               // popEntry 0.57 — the package's own chance of profit
+  popNowPct: 64,                 // popNow 0.64 — a DIFFERENT fact, measured today
+  unrealizedPnlCents: 24680,     // $246.80 open P/L on the held line
+  breakeven: 217.16,
+  lastPrice: 222.22,
+  changePct: -0.84
+};
+
+function goldenBookDocuments() {
+  const documents = populatedBookDocuments();
+  /* One golden quote. displayPrice (what Home reads) and quote.last (what New Idea and Position
+     read) are the same fact, so the receipt states it once, and the day change is served rather
+     than derived on any surface. */
+  documents.research.displayPrice = GOLDEN.lastPrice;
+  documents.research.displayChangePct = GOLDEN.changePct;
+  Object.assign(documents.research.quote, {
+    last: GOLDEN.lastPrice, bid: GOLDEN.lastPrice - 0.02, ask: GOLDEN.lastPrice + 0.02,
+    prevClose: 224.10, changePct: GOLDEN.changePct,
+    // Both stamp names, as the served research contract carries them. The Book fixture only ever
+    // needed asOfEpochMs because no test had run an idea on a Book symbol; the ensemble identity
+    // check reads asOf and refuses an artifact whose observation instant it cannot establish.
+    asOf: 1784563200000, asOfEpochMs: 1784563200000
+  });
+  documents.chain.asOfEpochMs = 1784563200000;
+  documents.chain.calls = documents.chain.calls.map(row => Object.assign({ iv: 0.30 }, row));
+  documents.chain.puts = documents.chain.puts.map(row => Object.assign({ iv: 0.30 }, row));
+  return documents;
+}
+
+function goldenCandidate() {
+  const row = candidate();
+  const held = populatedBookDocuments().activeTrades[0];
+  row.id = GOLDEN.candidateId;
+  row.symbol = GOLDEN.symbol;
+  row.label = 'Golden AAPL call debit spread';
+  row.displayName = 'Golden AAPL call debit spread';
+  row.legs = JSON.parse(JSON.stringify(held.legs));
+  row.price = priceReceipt({ optionNetPremiumCents: GOLDEN.optionNetPremiumCents,
+    openingFeesCents: 260, executableNetCents: GOLDEN.optionNetPremiumCents,
+    fingerprint: 'price-golden-receipt' });
+  row.maxLossCents = GOLDEN.maxLossCents;
+  row.maxProfitCents = GOLDEN.maxProfitCents;
+  row.breakevens = [GOLDEN.breakeven];
+  row.evaluation.capital.incrementalCents = GOLDEN.maxLossCents;
+  row.evaluation.risk.pop = GOLDEN.popEntryPct / 100;
+  row.evaluation.risk.terminalPayoff.anchorSpotCents = Math.round(GOLDEN.lastPrice * 100);
+  row.evaluation.risk.terminalPayoff.expiration = GOLDEN.expiration;
+  row.evaluation.risk.terminalPayoff.points = [
+    { price: 200, profitCents: -GOLDEN.maxLossCents },
+    { price: GOLDEN.lastPrice, profitCents: GOLDEN.unrealizedPnlCents },
+    { price: 230, profitCents: GOLDEN.maxProfitCents }
+  ];
+  return row;
+}
+
+/* The amount inside a rendered money string, sign discarded. Two surfaces agreeing here while
+   disagreeing on the exact string means one receipt with two grammars — a presentation split, not
+   a wrong number. Keeping the two questions separate is what lets the failure say which it is. */
+function moneyMagnitude(text) {
+  const digits = String(text == null ? '' : text).replace(/[^\d.]/g, '');
+  return digits === '' ? null : Number(digits);
+}
+
+test('Home, New Idea, and Position render one golden receipt identically', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, {
+    bookDocuments: goldenBookDocuments(),
+    universeSymbols: [GOLDEN.symbol],
+    scoutSymbols: [GOLDEN.symbol],
+    strategyCandidates: [goldenCandidate()],
+    ideaSymbol: GOLDEN.symbol,
+    /* The ambient quote and the Book research quote are the SAME observation — one receipt is the
+       premise of this test. The default fixture quote is an AMD one, and leaving it in place makes
+       the ensemble's anchor provenance disagree with the surface's quote provenance. */
+    quote: {
+      symbol: GOLDEN.symbol, bid: GOLDEN.lastPrice - 0.02, ask: GOLDEN.lastPrice + 0.02,
+      last: GOLDEN.lastPrice, prevClose: 224.10, changePct: GOLDEN.changePct,
+      source: 'BOOK_TEST_RESEARCH_RECEIPT', freshness: 'FRESH', asOf: 1784563200000,
+      evidence: { source: 'BOOK_TEST_RESEARCH_RECEIPT', lane: 'OBSERVED', provenance: 'OBSERVED' }
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.waitForSelector(`#book .card[data-id="${BOOK_TRADE_ID}"]`);
+    await page.waitForSelector('.bookonefacts');
+    await page.waitForFunction(symbol => Array.from(document.querySelectorAll('.authmarketrow'))
+      .some(row => row.dataset.authMarketRowSymbol === symbol), GOLDEN.symbol);
+
+    const home = await page.evaluate(tradeId => {
+      const facts = {};
+      document.querySelectorAll('.bookonefacts .authmetric').forEach(cell => {
+        facts[cell.querySelector('span').textContent.trim()] = cell.querySelector('b').textContent.trim();
+      });
+      const card = document.querySelector(`#book .card[data-id="${tradeId}"]`);
+      const marketRow = document.querySelector('.authmarketrow.on .authmarketfocus')
+        || document.querySelector('.authmarketrow .authmarketfocus');
+      return {
+        pnl: card.querySelector('.cpnl').textContent.trim(),
+        maxLoss: facts['Max loss'],
+        pop: facts.Chance,
+        expiry: facts.Expiry,
+        price: marketRow.querySelector('em').textContent.trim(),
+        // The watch row prefixes its sector group in a <small>; the change is the rest of the cell.
+        change: marketRow.querySelector('span').lastChild.textContent.trim()
+      };
+    }, BOOK_TRADE_ID);
+
+    await page.locator(`#authBookFanLegend [data-fan-pos="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(tradeId => window.state?.level === 'position'
+      && window.state.focus === tradeId
+      && window.DeskBackend.state().position?.phase === 'ready', BOOK_TRADE_ID);
+    await page.waitForSelector('[data-auth-position-detail] .authpaykey');
+
+    const position = await page.evaluate(() => {
+      const view = document.querySelector('[data-auth-position-detail]');
+      const pay = {};
+      view.querySelectorAll('.authpaykey > span').forEach(cell => {
+        pay[cell.childNodes[0].textContent.trim()] = cell.querySelector('b').textContent.trim();
+      });
+      const metrics = {};
+      view.querySelectorAll('.authmetric').forEach(cell => {
+        metrics[cell.querySelector('span').textContent.trim()] = cell.querySelector('b').textContent.trim();
+      });
+      const rows = {};
+      view.querySelectorAll('.authlistrow').forEach(row => {
+        rows[row.querySelector('b').textContent.trim()] = row.querySelector('span').textContent.trim();
+      });
+      return {
+        pnl: pay.Now,
+        maxLoss: pay['Max loss'],
+        maxProfit: pay['Max profit'],
+        price: metrics.Last,
+        popNow: metrics['POP now'],
+        breakeven: pay['Break-even'],
+        expiry: rows.Expiry,
+        metricLabels: Object.keys(metrics),
+        payLabels: Object.keys(pay)
+      };
+    });
+
+    await startNewIdea(page, GOLDEN.symbol);
+    try {
+      await page.waitForFunction(id => window.decide?.backendPhase === 'ready'
+        && window.decide.candId === id && window.decide.orderPreview, GOLDEN.candidateId);
+    } catch (error) {
+      /* The idea lane refuses an outcome fan whose anchor provenance disagrees with the surface's
+         quote, so name both when this walk cannot reach analysis. */
+      const diagnosis = await page.evaluate(() => {
+        const state = window.DeskBackend.state();
+        return {
+          phase: window.decide && window.decide.backendPhase,
+          candId: window.decide && window.decide.candId,
+          backendError: window.decide && window.decide.backendError,
+          planSymbol: state.plan && state.plan.symbol,
+          quote: state.market && state.market.quote,
+          ensembleAnchor: state.ensemble && state.ensemble.preview.receipt
+        };
+      });
+      throw new Error(`${error.message}\nNew Idea diagnosis: ${JSON.stringify(diagnosis)}`
+        + `\nPage errors: ${pageErrors.join('\n')}`);
+    }
+
+    const newIdea = await page.evaluate(id => {
+      const kpis = {};
+      document.querySelectorAll('.dccpay .kgrid .k').forEach(cell => {
+        kpis[cell.querySelector('.lbl').textContent.trim()] = cell.querySelector('.v').textContent.trim();
+      });
+      // The calm hero keeps max profit, capital and break-even in a secondary row beside the grid.
+      const secondary = {};
+      document.querySelectorAll('.dccpay .ksecondary > span').forEach(cell => {
+        const value = cell.querySelector('b').textContent.trim();
+        secondary[cell.textContent.replace(value, '').trim()] = value;
+      });
+      const row = document.querySelector(`.fanr[data-cand="${id}"]`);
+      const cells = row.querySelectorAll('.fnum');
+      return {
+        heroMaxLoss: kpis['Max loss'],
+        heroMaxProfit: secondary['Max profit'],
+        heroBreakeven: secondary['Break-even'],
+        heroPop: kpis.Chance,
+        heroNet: kpis['Net debit'] || kpis['Net credit'] || kpis['Net premium'],
+        railMaxLoss: cells[1].textContent.trim(),
+        railPop: cells[2].textContent.trim(),
+        price: document.querySelector('.authmarkethero .amh-price').textContent.trim(),
+        change: document.querySelector('.authmarkethero .amh-change').textContent.trim(),
+        expiryHint: document.querySelector('.dccpay .paytitle .hint').textContent.trim(),
+        kpiLabels: Object.keys(kpis).concat(Object.keys(secondary)),
+        text: document.querySelector('#decideStage').textContent.replace(/\s+/g, ' ').trim()
+      };
+    }, GOLDEN.candidateId);
+
+    const surfaces = JSON.stringify({ home, position,
+      newIdea: Object.assign({}, newIdea, { text: undefined }) }, null, 1);
+    const newIdeaExpiry = (newIdea.expiryHint.match(/\d{4}-\d{2}-\d{2}/) || [])[0];
+
+    /* ---- 1. one authority: every surface received the SAME amount ----------------------
+       These must hold before any string comparison means anything. If a magnitude disagrees the
+       defect is a second source of truth (§3.1); if only the strings disagree the defect is a
+       second display grammar for one number, which is what §16.3 is asking about. */
+    assert.deepEqual(
+      [moneyMagnitude(home.maxLoss), moneyMagnitude(newIdea.heroMaxLoss), moneyMagnitude(position.maxLoss)],
+      [432, 432, 432], `max loss reached the three surfaces as different amounts. ${surfaces}`);
+    assert.deepEqual(
+      [moneyMagnitude(home.pop), moneyMagnitude(newIdea.heroPop), moneyMagnitude(newIdea.railPop)],
+      [GOLDEN.popEntryPct, GOLDEN.popEntryPct, GOLDEN.popEntryPct],
+      `the package's entry chance reached the surfaces as different numbers. ${surfaces}`);
+    assert.deepEqual([moneyMagnitude(home.pnl), moneyMagnitude(position.pnl)],
+      [GOLDEN.unrealizedPnlCents / 100, GOLDEN.unrealizedPnlCents / 100].map(v => Math.round(v)),
+      `open P/L reached Home and Position as different amounts. ${surfaces}`);
+    assert.deepEqual(
+      [moneyMagnitude(home.price), moneyMagnitude(newIdea.price), moneyMagnitude(position.price)],
+      [GOLDEN.lastPrice, GOLDEN.lastPrice, GOLDEN.lastPrice],
+      `the underlying price reached the surfaces as different amounts. ${surfaces}`);
+
+    /* ---- 2. facts a surface genuinely does not carry — stated, never skipped ------------ */
+    /* Position shows today's chance, a DIFFERENT measurement from the package's entry chance. */
+    assert.equal(moneyMagnitude(position.popNow), GOLDEN.popNowPct,
+      `Position states today's chance (${GOLDEN.popNowPct}%), not the package's entry chance; it rendered `
+      + `"${position.popNow}".`);
+    assert.ok(!position.metricLabels.includes('Chance'),
+      'Position must not restate the entry chance beside today\'s, but its metrics are '
+      + `${JSON.stringify(position.metricLabels)}.`);
+    /* New Idea analyses a package nobody holds, so a mark-to-market P/L there would be invented. */
+    assert.ok(!newIdea.kpiLabels.includes('Now') && !/\bOpen P\/L\b/.test(newIdea.text),
+      `New Idea must not show an open P/L for an unheld package; its hero cells are ${JSON.stringify(newIdea.kpiLabels)}.`);
+    /* The Position research panel carries no day change at all. */
+    assert.ok(!position.metricLabels.some(label => /change/i.test(label)),
+      `Position research metrics are ${JSON.stringify(position.metricLabels)}; a day change appearing here `
+      + 'must come from the same served receipt, never a derived one.');
+    /* Home and New Idea both carry it, and both must print the served percentage. */
+    const servedChange = `${GOLDEN.changePct.toFixed(2)}% vs close`;
+    assert.ok(home.change.includes(servedChange),
+      `Home must render the served day change "${servedChange}"; it rendered "${home.change}".`);
+    assert.ok(newIdea.change.includes(servedChange),
+      `New Idea must render the served day change "${servedChange}"; it rendered "${newIdea.change}".`);
+
+    /* ---- 3. one receipt, one rendered string --------------------------------------------
+       Collected rather than asserted one at a time: a reader fixing this needs the whole list of
+       surfaces that disagree, not whichever comparison happens to be written first. */
+    const divergences = [];
+    function sameString(fact, cells, why) {
+      const distinct = Array.from(new Set(cells.map(cell => cell.text)));
+      if (distinct.length <= 1) return;
+      divergences.push(`${fact}: ` + cells.map(cell => `${cell.surface} "${cell.text}"`).join(', ')
+        + `. ${why}`);
+    }
+    sameString('Max loss',
+      [{ surface: 'Home single-position receipt', text: home.maxLoss },
+        { surface: 'New Idea hero', text: newIdea.heroMaxLoss },
+        { surface: 'New Idea rail', text: newIdea.railMaxLoss },
+        { surface: 'Position payoff rail', text: position.maxLoss }],
+      'maxLossDisp() prefixes a minus sign on the New Idea hero and rail while authMoney() prints the same '
+      + 'magnitude unsigned on Home and Position, so a reader comparing an idea to the position it becomes '
+      + 'is shown the one loss cap two ways.');
+    sameString('Chance of profit',
+      [{ surface: 'Home single-position receipt', text: home.pop },
+        { surface: 'New Idea hero', text: newIdea.heroPop },
+        { surface: 'New Idea rail', text: newIdea.railPop }],
+      'the New Idea hero renders its unit inside a <small> element with a leading space, so one percentage '
+      + 'is two strings on adjacent surfaces.');
+    sameString('Open P/L',
+      [{ surface: 'Home roster card', text: home.pnl },
+        { surface: 'Position payoff rail', text: position.pnl }],
+      'the roster card uses authMoney() and the Position payoff rail uses authSigned(), so the same open '
+      + 'profit is signed on one surface and unsigned on the other.');
+    sameString('Underlying price',
+      [{ surface: 'Home market band', text: home.price },
+        { surface: 'New Idea market hero', text: newIdea.price },
+        { surface: 'Position research panel', text: position.price }],
+      'Home formats the served price with toLocaleString and the other two with toFixed(2).');
+    sameString('Max profit',
+      [{ surface: 'New Idea hero', text: newIdea.heroMaxProfit },
+        { surface: 'Position payoff rail', text: position.maxProfit }],
+      'maxProfitDisp() signs the New Idea figure and authMoney() does not sign the Position one.');
+    sameString('Break-even',
+      [{ surface: 'New Idea hero', text: newIdea.heroBreakeven },
+        { surface: 'Position payoff rail', text: position.breakeven }],
+      'beLabel() rounds the served break-even to whole dollars and drops the currency mark, so New Idea '
+      + 'states a materially coarser price than the Position built from the same receipt.');
+    sameString('Expiry',
+      [{ surface: 'Home single-position receipt', text: home.expiry },
+        { surface: 'New Idea payoff hint', text: newIdeaExpiry },
+        { surface: 'Position management rows', text: position.expiry }],
+      'the package expires once.');
+
+    assert.deepEqual(divergences, [],
+      `ONE golden package receipt renders differently across Home, New Idea and Position (audit §16.3). `
+      + `Every amount above agrees, so each entry below is one fact with two display grammars:\n  - `
+      + `${divergences.join('\n  - ')}\nCaptured surfaces: ${surfaces}`);
+
+    assert.deepEqual(pageErrors, [], `golden-receipt walk emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }

@@ -1,4 +1,4 @@
-name: Live Provider Verification
+name: Live Provider Capture
 
 on:
   workflow_dispatch:
@@ -10,11 +10,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-provider-verification
+  group: live-provider-capture
   cancel-in-progress: false
 
+# This is a capture, not a gate, and the name now says so. The lane that asserted observed
+# fail-closed states in the browser (dom-tests/dom-live.test.js, invoked as npm run test:live)
+# was deleted with the SPA in 8654824, and nothing has replaced it; the aggregated
+# `release-matrix.mjs --live-only` step went with it, since it reads the dom-live.tap that lane
+# produced. Until a live journey suite exists (dom-tests/*.journey.test.js, run by lane.js), we
+# record what the real keyless providers actually returned so an outage or an unavailable state
+# can be read after the fact. Provider trouble is captured, not failed: only our own server
+# failing to boot fails this job.
 jobs:
-  observed-lane:
+  observed-capture:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -26,12 +34,6 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: dom-tests/package-lock.json
-
       - name: Start isolated PostgreSQL
         run: |
           docker compose up -d db
@@ -42,33 +44,43 @@ jobs:
           docker compose logs db
           exit 1
 
-      - name: Build the current jar
-        run: mvn -q -DskipTests package
+      - name: Package the jar under test
+        run: mvn -q clean package -DskipTests
 
-      - name: Install browser runtime
-        working-directory: dom-tests
+      # AppConfig defaults already point at the docker-compose database on 7070, and
+      # FIXTURES_ONLY defaults to false, which is the whole point here: real providers.
+      - name: Boot the packaged jar against real providers
         run: |
-          npm ci
-          npx playwright install --with-deps chromium
+          nohup java -jar target/strikebench.jar > target/live-server.log 2>&1 &
+          for attempt in {1..60}; do
+            curl --silent --fail http://127.0.0.1:7070/api/health > /dev/null && exit 0
+            sleep 2
+          done
+          cat target/live-server.log
+          exit 1
 
-      - name: Exercise real keyless providers and observed fail-closed states
-        working-directory: dom-tests
+      - name: Capture observed provider readiness
+        env:
+          SYMBOL: NVDA
+          OUT_DIR: target/live-capture
         run: |
-          set -o pipefail
-          npm run test:live | tee ../target/dom-live.tap
+          scripts/live-market-probe.sh
+          {
+            echo '### Live provider capture'
+            echo ''
+            echo 'Raw HTTP status per read (a non-200 is a provider or fail-closed state, not a test failure):'
+            echo ''
+            echo '```'
+            cat target/live-capture/http-status.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish generated live-provider evidence
-        run: |
-          node scripts/release-matrix.mjs --live-only
-          cat target/live-release-matrix.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Preserve live-provider evidence
+      - name: Preserve the capture
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-provider-evidence-${{ github.run_id }}
+          name: live-provider-capture-${{ github.run_id }}
           path: |
-            dom-tests/shots
-            target/dom-live.tap
-            target/live-release-matrix.md
+            target/live-capture
+            target/live-server.log
           retention-days: 14

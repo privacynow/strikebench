@@ -220,7 +220,9 @@ function breakevens(p){
     pv=v; ppx=px;}
   return out;
 }
-function beLabel(p){var b=breakevens(p); if(!b.length)return '—'; return b.slice(0,2).map(function(x){return Math.round(x).toLocaleString();}).join(' · ');}
+/* A break-even is a PRICE. Rounding it to whole dollars made New Idea state a materially coarser
+   level than the Position built from the same receipt ("217" against "$217.16"). */
+function beLabel(p){var b=breakevens(p); if(!b.length)return '—'; return b.slice(0,2).map(priceLevel).join(' · ');}
 
 /* payoff tween — a strike/size/premium edit MORPHS the curve smoothly instead of snapping.
    Same leg TYPES → interpolate strikes/qty/net over ~170ms; add/remove leg or type-change draws instantly. */
@@ -346,7 +348,10 @@ function drawPayoff(svg,p,full,ghost,opts){
     if(!opts.hideScenarios)for(var si=0;si<SCEN.length;si++){var spx=p.spot*(1+SCEN[si].m/100); if(spx<lo||spx>hi)continue;
       /* Off the served curve there is no value to mark — draw nothing rather than a point at the
          curve's edge pretending to be this move. */
-      var sv=payFor(p,spx); if(sv==null){return;}
+      /* `continue`, not `return`: this is a for-loop inside drawPayoff, so returning here abandoned
+         the remaining scenario markers, the pinned what-if marker and every annotation drawn after
+         them. An unpriced move skips its own marker and nothing else. */
+      var sv=payFor(p,spx); if(sv==null)continue;
       var scx=sx(spx), scy=sy(sv), scol=sv>=0?'var(--profit)':'var(--loss)';
       g+='<circle class="pfscen" data-si="'+si+'" cx="'+f(scx)+'" cy="'+f(scy)+'" r="3.4" fill="var(--panel)" stroke="'+scol+'" stroke-width="1.4"/>';}
     /* a PINNED / reshaped what-if — bold adjustable marker on the curve */
@@ -407,6 +412,18 @@ function signed(n){return (n>=0?'+':'')+money(n);}
 function authNumber(v){var n=Number(v);return v==null||!Number.isFinite(n)?null:n;}
 function authDollarsFromCents(v){var n=authNumber(v);return n==null?null:n/100;}
 function authMoney(v){return v==null?'—':money(v);}
+/* SEMANTIC MONEY. money()/signed() decide only how digits look; these decide what a KIND of
+   number means, so one fact cannot arrive on two surfaces in two grammars. The identity test
+   found exactly that: a max loss shown "$432" on Home and "−$432" on New Idea, an open P/L
+   signed on one surface and unsigned on another, a break-even rounded to whole dollars in one
+   place and given to the cent in another (audit §16.3). */
+function lossAmount(v){return v==null?'—':'−$'+Math.abs(Math.round(Number(v))).toLocaleString();}
+function profitAmount(v){return v==null?'—':'+$'+Math.abs(Math.round(Number(v))).toLocaleString();}
+function plAmount(v){return v==null?'—':signed(Number(v));}
+/* A PRICE is a level, not a quantity of money moved: never signed, always to the cent, because a
+   break-even rounded to the dollar is a materially different price. */
+function priceLevel(v){return v==null?'—':'$'+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function percentAmount(v){return v==null?'—':Math.round(Number(v))+'%';}
 function authSigned(v){return v==null?'—':signed(v);}
 function authPct(v,digits){var n=authNumber(v);return n==null?'—':(n*100).toFixed(digits==null?0:digits)+'%';}
 function authHuman(value){return String(value||'Position').toLowerCase().replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});}
@@ -479,7 +496,7 @@ function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},ne
 function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{},lr=authLifecycleRead(p.lifecycle),verdict=lr.verdict,lifeBlocked=authLifecycleBlockedByEvidence(lr);
   /* the dot is the position's CANONICAL identity color — the same color its fan line, legend
      row, and every future surface use. One palette, matched everywhere. */
-  var exception=authExceptionStatus(prov.freshness);return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(lifeBlocked?'<span class="badge lifebadge" title="Close evidence is unavailable, so this position cannot be evaluated from the current book right now.">reviewing · data unavailable</span>':verdict?'<span class="badge lifebadge '+authLifecycleClass(verdict)+'" title="'+(String(verdict).toUpperCase()==='DEFEND'?'A named mechanical, capacity, hard-limit, or tail trigger needs resolution before holding.':'Lifecycle policy verdict')+'">'+deskEsc(authLifecycleLabel(verdict,true))+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+authMoney(pnl)+'</span></div>'+
+  var exception=authExceptionStatus(prov.freshness);return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span>'+(lifeBlocked?'<span class="badge lifebadge" title="Close evidence is unavailable, so this position cannot be evaluated from the current book right now.">reviewing · data unavailable</span>':verdict?'<span class="badge lifebadge '+authLifecycleClass(verdict)+'" title="'+(String(verdict).toUpperCase()==='DEFEND'?'A named mechanical, capacity, hard-limit, or tail trigger needs resolution before holding.':'Lifecycle policy verdict')+'">'+deskEsc(authLifecycleLabel(verdict,true))+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'<span class="cpnl '+cls+'">'+plAmount(pnl)+'</span></div>'+
     '<div class="cshareRow"><span class="cshare" title="share of maximum loss"><i style="width:'+share.toFixed(1)+'%"></i></span><span class="csharev">'+(share?share.toFixed(0)+'%':'—')+'</span><svg class="cplspark" id="plsp-'+deskEsc(p.id)+'" title="mark history"></svg></div>'+
     '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?authMoney(p.cap)+' max loss':authMoney(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
 }
@@ -636,7 +653,7 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
       '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(positionPathPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null))+'</div>'+
       '<div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div><div class="authscenmetric"><span>Net delta</span><b data-live="delta">'+(authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2))+'</b></div><div class="authscenmetric"><span>Theta / day</span><b data-live="theta">'+(authNumber(g.thetaCentsPerDay)==null?'—':money(Number(g.thetaCentsPerDay)/100))+'</b></div><div class="authscenmetric"><span>Gamma</span><b data-live="gamma">'+(authNumber(g.gammaSharesPerDollar)==null?'—':Number(g.gammaSharesPerDollar).toFixed(3))+'</b></div><div class="authscenmetric"><span>Vega / pt</span><b data-live="vega">'+(authNumber(g.vegaCentsPerPoint)==null?'—':money(Number(g.vegaCentsPerPoint)/100))+'</b></div></div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     '<div class="authscenreceipt" id="authScenReceipt-'+deskEsc(p.id)+'">'+authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</div></section>';}
-function authPayKeyHTML(p){var unchanged=payFor(p,p.spot),bes=breakevens(p),be=bes.length?bes.slice(0,2).map(function(value){return '$'+Number(value).toLocaleString(undefined,{maximumFractionDigits:2});}).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',unchanged==null?'unavailable':authSigned(unchanged),unchanged==null?'':unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':authMoney(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':authMoney(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
+function authPayKeyHTML(p){var unchanged=payFor(p,p.spot),bes=breakevens(p),be=bes.length?bes.slice(0,2).map(priceLevel).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',unchanged==null?'unavailable':authSigned(unchanged),unchanged==null?'':unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':profitAmount(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':lossAmount(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
 function authRegimeSummary(research){var regime=research&&research.regime||{};if(regime.headline)return String(regime.headline);var trend=String(regime.trend||'').toLowerCase(),move=authNumber(regime.trendReturnPct),sessions=authNumber(regime.trendSessions);if(trend&&move!=null)return authHuman(trend)+' '+Math.abs(move).toFixed(1)+'% over '+(sessions||'the available')+' sessions.';return 'Market regime unavailable.';}
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
   if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The position is temporarily unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to your book</button></div></div>';return;}
@@ -2080,7 +2097,7 @@ function authBookFanLegendHTML(){
   }).join('');
   if(POS.length===1){var p=POS[0],expiration=authPackageExpiration(p);rows+='<div class="bookonefacts" aria-label="Single position risk receipt">'+
     authMetric('Chance',p.pop==null?'—':Number(p.pop).toFixed(0)+'%')+
-    authMetric('Max loss',authMoney(p.cap))+
+    authMetric('Max loss',lossAmount(p.cap))+
     authMetric('Entry credit',authMoney(p.net))+
     authMetric('Expiry',expiration||'—')+'</div>';}
   return book+rows;
@@ -2430,7 +2447,7 @@ function threadStateHTML(lv,fp){
     z.push(_tz('Move', decide.kind==='idea'?'New idea':(decide.act||'Roll')));
     z.push(_tz('Lane', (decide.order&&decide.order.lane)||'not chosen'));
   } else if(lv==='position' && fp){
-    if(fp.authoritative){z.push(_tz('P/L',authSigned(fp.pnl),fp.pnl==null?'':fp.pnl>=0?'pos':'neg'));z.push(_tz('Max loss',authMoney(fp.cap)));z.push(_tz('POP',fp.pop==null?'—':Number(fp.pop).toFixed(0)+'%'));}
+    if(fp.authoritative){z.push(_tz('P/L',authSigned(fp.pnl),fp.pnl==null?'':fp.pnl>=0?'pos':'neg'));z.push(_tz('Max loss',lossAmount(fp.cap)));z.push(_tz('POP',fp.pop==null?'—':Number(fp.pop).toFixed(0)+'%'));}
     else{z.push(_tz('P/L', signed(fp.pnl), fp.pnl>=0?'pos':'neg'));z.push(_tz('Risk', fp.riskPct+'% of book'));z.push(_tz('POP', fp.pop+'%'));}
   }
   return z.join('<span class="tdot"></span>');
@@ -3213,8 +3230,8 @@ function riskChar(c){ if(c.authoritative&&String(c.risk||'unknown').toLowerCase(
 function riskCharCol(c){ var rc=riskChar(c); return rc==='undef'?'var(--loss)':rc==='collat'?'var(--violet)':rc==='unknown'?'var(--caution)':'var(--profit)'; }
 function riskCharLabel(c){ var rc=riskChar(c); return rc==='undef'?'undefined risk':rc==='collat'?'collateralized · you’d own the shares':rc==='unknown'?'risk classification unavailable':'defined risk'; }
 /* max-loss display: a collateralized short's "loss" is stock ownership; an uncovered short is unbounded */
-function maxLossDisp(c){ if(c.authoritative&&c.backend&&c.backend.maxLossCents==null)return 'model-dependent';return c.undef?'unbounded':'−$'+Math.round(c.maxLoss).toLocaleString(); }
-function maxProfitDisp(c){if(c.maxProfit==null)return c.undef?'uncapped':'model-dependent';return '+$'+Math.round(c.maxProfit).toLocaleString();}
+function maxLossDisp(c){ if(c.authoritative&&c.backend&&c.backend.maxLossCents==null)return 'model-dependent';return c.undef?'unbounded':lossAmount(c.maxLoss);}
+function maxProfitDisp(c){if(c.maxProfit==null)return c.undef?'uncapped':'model-dependent';return profitAmount(c.maxProfit);}
 function isCollat(c){return c.legs.some(function(l){return l.t==='s';})||(c.legs.length===1&&c.legs[0].t==='p');}
 /* the judging CONTEXT — the live Decide (view/goal/caps/fan) when there is one. Outside Decide
    there is no declaration to judge against, so the context is empty rather than invented. */
@@ -3273,7 +3290,7 @@ function stratKPIs(c, opts){ opts=opts||{};
     var primary=[
       kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
       kcell('Max loss', maxLossDisp(c), 'neg'),
-      kcell('Chance', (c.pop!=null?c.pop:'—')+'<small> %</small>', '')
+      kcell('Chance', percentAmount(c.pop), '')
     ];
     return '<div class="kgrid boxed numrow calm" style="margin-top:8px">'+primary.join('')+'</div>'+
       '<div class="ksecondary"><span>Max profit <b>'+maxProfitDisp(c)+'</b></span>'+
@@ -3283,7 +3300,7 @@ function stratKPIs(c, opts){ opts=opts||{};
     kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
     kcell('Max loss', maxLossDisp(c), 'neg'),
     kcell('Max profit', maxProfitDisp(c), 'pos'),
-    kcell('Chance', (c.pop!=null?c.pop:'—')+'<small> %</small>', ''),
+    kcell('Chance', percentAmount(c.pop), ''),
     kcell('Capital', c.cap==null?'—':money(c.cap), ''),
     kcell('Break-even', beLabel(c), '')
   ];
@@ -4073,6 +4090,15 @@ function stressSeverity(c,gapLoss){
   return share>=0.9?'bad':share>=0.5?'warn':'ok';
 }
 function candCollect(c){return c&&c.optionNet!=null?c.optionNet:null;}
+/* ONE money cell. `null >= 0` is TRUE in JavaScript and `signed(null)` prints "+$0", so every
+   site that compared an amount before rendering it turned "the option book refused to price this
+   package" into "this package collects exactly zero" (§3.2). An unknown amount renders as an
+   em dash carrying its own label, never as a number and never as a sign. */
+function moneyCell(cls,amount,label){
+  var known=amount!=null&&Number.isFinite(Number(amount));
+  if(!known)return '<span class="'+cls+' dim" title="'+deskEsc((label||'This amount')+' — not priced')+'">—</span>';
+  return '<span class="'+cls+' '+(Number(amount)>=0?'pos':'neg')+'" title="'+deskEsc(label||'')+'">'+signed(Number(amount))+'</span>';
+}
 function candCollectLabel(c){var v=candCollect(c);return v==null?'Net premium':v>=0?'Net credit':'Net debit';}
 function fanList(){
   /* ONE row per idea. Labels live ONCE in the header; rows are the numbers, colored by meaning. */
@@ -4097,7 +4123,7 @@ function fanList(){
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
       '<span class="fanname"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span><small class="fsub">'+deskEsc(exact||co.prose||whyRead||'Exact package priced from the current chain')+'</small></span>'+
       fanVerdictIcon(co,gt)+
-      '<span class="fnum '+(candCollect(c)>=0?'pos':'neg')+'" title="'+deskEsc(candCollectLabel(c))+'">'+signed(candCollect(c))+'</span>'+
+      moneyCell('fnum',candCollect(c),candCollectLabel(c))+
       '<span class="fnum">'+maxLossDisp(c)+'</span>'+
       '<span class="fnum">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
       '<span class="fnum fcol-stress '+gcls+'">'+(gl==null?'—':money(gl))+'</span>'+
@@ -4664,7 +4690,9 @@ function packagePriceReceiptHTML(price,what){
   }
   var qty=price.quantity==null?null:Number(price.quantity);
   var feeLabel=String(price.feeSide||'OPENING').toUpperCase()==='CLOSING'?'Closing fees':'Opening fees';
-  var stamp=price.observedAt?String(price.observedAt).replace('T',' ').replace(/\..*$/,''):null;
+  /* PackagePriceReceipt.observedAt is epoch MILLISECONDS (Long). Treating it as an ISO string
+     printed the raw 13-digit number into the order receipt. authWhen owns this rendering. */
+  var stamp=authNumber(price.observedAt)==null?null:authWhen(Number(price.observedAt));
   var basisWord={EXECUTABLE_BOOK:'executable book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
     MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
   return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">What '+deskEsc(what||'this package')+' costs</span>'
@@ -4790,7 +4818,7 @@ function showMapCard(id){
   var gt=candGated(c);
   var co=coherence(c);
   card.innerHTML='<div class="mcnm"><span class="mcrisk" style="background:'+riskCharCol(c)+'"></span>'+c.short+'</div>'+
-    '<div class="mcg"><span class="kk">'+(candCollect(c)>=0?'Net credit':'Net debit')+'</span><span class="vv '+(candCollect(c)>=0?'pos':'neg')+'">'+signed(candCollect(c))+'</span>'+
+    '<div class="mcg"><span class="kk">'+deskEsc(candCollectLabel(c))+'</span>'+moneyCell('vv',candCollect(c),candCollectLabel(c))+
     '<span class="kk">'+(riskChar(c)==='collat'?'If assigned':'Max loss')+'</span><span class="vv neg">'+maxLossDisp(c)+'</span>'+
     '<span class="kk">Chance</span><span class="vv">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
     '<span class="kk">Capital</span><span class="vv">'+(c.cap?money(c.cap):'$0')+'</span></div>'+
@@ -5166,7 +5194,7 @@ function renderImportPreview(){
     '<div class="kgrid boxed" style="grid-template-columns:repeat(4,1fr)">'+
       kcell('Net',signed(p.net),p.net>=0?'pos':'neg')+
       kcell('Max loss','−$'+Math.round(p.maxLoss).toLocaleString(),'neg')+
-      kcell('Chance',p.pop+'<small> %</small>','')+
+      kcell('Chance',percentAmount(p.pop),'')+
       kcell('Capital',money(p.cap),'')+
     '</div>'+
     /* engine read — honest, never a rejection */

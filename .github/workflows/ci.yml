@@ -11,10 +11,11 @@ concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The three verification surfaces are independent: the JUnit matrix, the deterministic
-# contract/journey browser lanes, and the grown-state browser matrix. Running them as
-# parallel jobs cuts the wall clock roughly in half; the release matrix merges their
-# evidence at the end so the summary still covers everything in one table.
+# Four independent verification surfaces, split as the audit §16.2 requires: the JUnit matrix,
+# the fast source-served browser contracts, the packaged-jar journeys, and the visual/geometry
+# matrix. Every browser job calls a lane (dom-tests/lane.js), never an individual file, so a
+# suite added or retired in dom-tests changes coverage here without a workflow edit — the drift
+# that let this workflow invoke nine deleted npm scripts while still reporting green.
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -41,21 +42,52 @@ jobs:
       - name: Backend matrix and release jar
         run: mvn -q clean package
 
-      - name: Share backend evidence
+      - name: Preserve backend evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: evidence-backend
           path: target/surefire-reports
-          retention-days: 3
-
-      - name: Preserve failure evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: strikebench-backend-failure-evidence
-          path: target/surefire-reports
           retention-days: 14
 
+  # Lane (a): formatters, exact rendered strings, no silent defaults, receipt-to-text mapping.
+  # It serves src/main/resources/public directly and mocks every API, so it needs neither a
+  # database nor a jar; it must stay fast enough to block every push.
+  browser-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dom-tests/package-lock.json
+
+      - name: Install browser runtime
+        working-directory: dom-tests
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Source-served deterministic contracts
+        working-directory: dom-tests
+        run: npm run test:contracts
+
+      - name: Preserve contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-contracts
+          path: |
+            target/dom-contracts.tap
+            dom-tests/shots
+          retention-days: 14
+
+  # Lane (b): the browser drives the artifact we ship. Each shard boots its own jar against its
+  # own fresh database (dom-tests/pgtest.js) with its own browser, and lane.js refuses to start
+  # if target/strikebench.jar is missing or older than the desk sources it is meant to contain.
   browser-journeys:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -84,7 +116,7 @@ jobs:
           docker compose logs db
           exit 1
 
-      - name: Release jar for browser evidence
+      - name: Package the jar under test
         run: mvn -q clean package -DskipTests
 
       - name: Install browser runtime
@@ -93,49 +125,30 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Deterministic browser contracts
+      # Includes the auth-on security contract (dom-auth.test.js), which drives a real OIDC
+      # issuer against the packaged jar and is the private instance's only sign-in gate.
+      - name: Packaged-jar journeys
         working-directory: dom-tests
-        run: |
-          set -o pipefail
-          npm run test:defaults | tee ../target/dom-defaults.tap
-          npm run test:scenario | tee ../target/dom-scenario.tap
-          npm run test:spa | tee ../target/dom-spa.tap
+        run: npm run test:journeys
 
-      - name: Isolated browser journeys
-        working-directory: dom-tests
-        run: |
-          set -o pipefail
-          npm run test:journeys | tee ../target/dom-fixture.tap
-
-      - name: Share journey evidence
+      - name: Preserve journey evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: evidence-journeys
-          path: target/dom-*.tap
-          retention-days: 3
-
-      - name: Preserve failure evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: strikebench-journeys-failure-evidence
           path: |
-            target/dom-*.tap
-            target/dom-journey-shards
+            target/dom-journeys.tap
             dom-tests/shots
           retention-days: 14
 
-  browser-matrix:
+  # Lane (c): the §16.4 viewport matrix and overflow/bounding-box assertions. Scaffolded only —
+  # no dom-tests/*.visual.test.js exists yet, and the lane reports NOT IMPLEMENTED in the job
+  # summary rather than a green count, because zero tests is not evidence of a clean layout.
+  browser-visual:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
 
       - uses: actions/setup-node@v4
         with:
@@ -143,80 +156,28 @@ jobs:
           cache: npm
           cache-dependency-path: dom-tests/package-lock.json
 
-      - name: Start isolated PostgreSQL
-        run: |
-          docker compose up -d db
-          for attempt in {1..30}; do
-            docker compose exec -T db pg_isready -U strikebench -d strikebench_dev && exit 0
-            sleep 2
-          done
-          docker compose logs db
-          exit 1
-
-      - name: Release jar for browser evidence
-        run: mvn -q clean package -DskipTests
-
       - name: Install browser runtime
         working-directory: dom-tests
         run: |
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Grown-state, responsive, auth-on, Book Risk, adoption, Desk, and Learn browser matrix
+      - name: Visual and geometry matrix
         working-directory: dom-tests
-        run: |
-          set -o pipefail
-          npm run test:seeded | tee ../target/dom-seeded.tap
-          npm run test:audit | tee ../target/dom-audit.tap
-          npm run test:auth | tee ../target/dom-auth.tap
-          npm run test:bookrisk | tee ../target/dom-bookrisk.tap
-          npm run test:adoption | tee ../target/dom-adoption.tap
-          npm run test:desk | tee ../target/dom-desk.tap
-          npm run test:learn:coverage | tee ../target/dom-learn-coverage.tap
-          node --test dom-learn.test.js | tee ../target/dom-learn.tap
+        run: npm run test:visual
 
-      - name: Share matrix evidence
+      - name: Preserve visual evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-matrix
-          path: target/dom-*.tap
-          retention-days: 3
-
-      - name: Preserve failure evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: strikebench-matrix-failure-evidence
+          name: evidence-visual
           path: |
-            target/dom-*.tap
+            target/dom-visual.tap
             dom-tests/shots
           retention-days: 14
 
-  release-matrix:
-    needs: [backend, browser-journeys, browser-matrix]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Collect evidence from every lane
-        uses: actions/download-artifact@v4
-        with:
-          pattern: evidence-*
-          merge-multiple: true
-          path: target
-
-      - name: Restore surefire layout
-        run: |
-          mkdir -p target/surefire-reports
-          find target -maxdepth 1 -name 'TEST-*.xml' -exec mv {} target/surefire-reports/ \; || true
-          find target -maxdepth 1 -name '*.txt' -exec mv {} target/surefire-reports/ \; || true
-
-      - name: Publish generated release matrix
-        run: |
-          node scripts/release-matrix.mjs
-          cat target/release-matrix.md >> "$GITHUB_STEP_SUMMARY"
+# Retired here: the aggregated release-matrix job (node scripts/release-matrix.mjs). That script
+# still demands a TAP report per SPA-era lane — dom-defaults, dom-scenario, dom-spa, dom-fixture,
+# dom-audit, dom-seeded, dom-bookrisk, dom-adoption, dom-learn, dom-learn-coverage — all deleted
+# with the SPA in 8654824, so no invocation of it can succeed. Each lane now publishes its own
+# real numbers to the job summary; restore one table here once the aggregator is reconciled.

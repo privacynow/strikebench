@@ -2927,6 +2927,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   /* On one narrow column the page scrolls, so the paths stage sizes to ITS OWN content. A fixed
      280px box clipped ~190px of the fan's own statistics — the numbers the panel exists for. */
   .understand .evsimstage{flex:none;height:auto;min-height:280px}
+  .understand .evsimstage .ensembleresult{position:static}
   .understand .ensembleresult{grid-template-rows:auto minmax(190px,1fr) auto}
   .understand .ensembleresult .mcfan{min-height:190px}
   .decdock{margin-top:10px}
@@ -3603,7 +3604,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .dccenter .dccpay{min-height:clamp(165px,20vh,240px)}
 .dccenter .marketlens .histwrap{flex:1 1 auto;min-height:112px}
 .dccenter .marketlens .histchart{min-height:96px}
-.dccenter .marketlens .marketctx{flex:0 1 auto;min-height:0;max-height:46%;overflow:hidden}
+.dccenter .marketlens .marketctx{flex:0 1 auto;min-height:56px;max-height:46%;overflow:hidden}
 .dccenter .marketlens .marketcol,.dccenter .marketlens .packagebookcol{min-height:0;overflow:visible}
 .dccenter .marketlens .packagebooknear,.dccenter .marketlens .authnews{min-height:0;overflow-y:auto;overscroll-behavior:contain}
 /* The nearby-strike list is the column's only content now, and it is the designated scroller. */
@@ -3620,14 +3621,19 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      three or it clips the numbers. The market lens gives it up — the lens still shows a full
      chart and its evidence columns scroll. */
   .dccenter .dccpay{min-height:265px}
+  /* REMOVED 2026-07-25: this block previously hid .marketctx and .ksecondary and hard-coded a
+     251/257/210 split measured on one 1440x900 canvas. The media query has no width bound, so it
+     also fires at the owner's real 2000x963 viewport — where it deleted max profit, capital,
+     breakeven, and the entire chain/news context — and on a 390x900 phone. Hiding exact facts to
+     make a layout fit is forbidden (audit §18); the centre column gets container-aware component
+     density in M3, not another measured-canvas patch. */
   .dccenter .marketlens{max-height:clamp(216px,27vh,300px)}
   /* The volume strip under the price chart is the first thing traded away for headroom, as it
      already is on shorter desktops. */
   .dccenter .marketlens .histstrip{display:none}
   /* The chart itself flexes into whatever the wrapper has left, and its provenance caption stays
      on one line, so the price history and the execution evidence both stay whole. */
-  .dccenter .marketlens .histwrap{min-height:124px}
-  .dccenter .marketlens .histchart{flex:1 1 auto;height:auto;min-height:64px}
+  .dccenter .marketlens .histchart{flex:1 1 auto;height:auto;min-height:54px}
   .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dccenter .marketlens .marketctx{max-height:34%}
   .understand .evsimstage{min-height:196px}
@@ -3669,7 +3675,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .prline b{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--text);margin-left:4px}
 .prline .prsum b{color:var(--accent)}
 
-/* Package provenance on one line: which book priced it, how completely, as of when. */
+/* Package provenance on one line inside the package-book column: which book priced it, how
+   completely, as of when. */
 .evline{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px;font-size:var(--f-xs);color:var(--dim);margin-bottom:5px;min-width:0}
 .evline b{color:var(--text);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .evline .evsep{color:var(--line)}
