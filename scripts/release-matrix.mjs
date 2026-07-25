@@ -48,22 +48,17 @@ function browserResult(file) {
   };
 }
 
+/* One row per lane that actually runs. The retired SPA lanes (dom-defaults/scenario/spa/fixture/
+   audit/seeded/bookrisk/adoption/learn) went with workspace.html in 8654824; demanding their TAPs
+   made this report unproducible, which is why CI stopped generating release evidence at all. The
+   three lanes below are the ones dom-tests/lane.js writes. */
 const rows = liveOnly
-  ? [['Live-provider browser', browserResult('dom-live.tap')]]
+  ? [['Live-provider capture', browserResult('dom-live.tap')]]
   : [
       ['JUnit', junitResult()],
-      ['No-silent-defaults contract', browserResult('dom-defaults.tap')],
-      ['Scenario level-lens contract', browserResult('dom-scenario.tap')],
-      ['Mounted SPA identity contract', browserResult('dom-spa.tap')],
-      ['Fixture browser', browserResult('dom-fixture.tap')],
-      ['Responsive widths', browserResult('dom-audit.tap')],
-      ['Grown-state browser', browserResult('dom-seeded.tap')],
-      ['Auth-on browser (signed-out + signed-in)', browserResult('dom-auth.tap')],
-      ['Book Risk browser', browserResult('dom-bookrisk.tap')],
-      ['Adopted-position two-lens browser', browserResult('dom-adoption.tap')],
-      ['Desk/New Idea/Position browser', browserResult('dom-desk.tap')],
-      ['Learn explanation coverage', browserResult('dom-learn-coverage.tap')],
-      ['Learn SPA browser', browserResult('dom-learn.tap')]
+      ['Browser contracts (deterministic, mocked APIs)', browserResult('dom-contracts.tap')],
+      ['Browser journeys (packaged jar, fresh database)', browserResult('dom-journeys.tap')],
+      ['Visual/geometry matrix', browserResult('dom-visual.tap')]
     ];
 if (!liveOnly && fs.existsSync(path.join(target, 'dom-live.tap'))) {
   rows.push(['Live-provider browser', browserResult('dom-live.tap')]);

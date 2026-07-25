@@ -316,6 +316,31 @@ function populatedBookDocuments() {
        per NAMED story move, valued server-side through the same curve that owns its terminal
        payoff. Held positions used to have no per-move receipt at all, which is why the desk priced
        the eight stories in the browser from the legs. */
+    /* ONE held curve, on the trade. */
+    terminalPayoff: {
+      schemaVersion: 'risk-terminal-payoff-1',
+      modelVersion: 'payoff-curve-1',
+      available: true,
+      anchorSpotCents: 22222,
+      expiration: '2026-08-21',
+      basis: 'EXPIRATION_INTRINSIC',
+      entryBasis: 'RECORDED_ENTRY',
+      feesIncluded: false,
+      points: [
+        { price: 200, profitCents: -43210 },
+        { price: 222.22, profitCents: 24680 },
+        { price: 230, profitCents: 156790 }
+      ]
+    },
+    /* "If price holds" is the engine's own curve value at the spot the receipt names — not a
+       browser interpolation printed as a financial fact. */
+    spotPnl: {
+      terminalPnlAtCurrentSpotCents: 24680,
+      spotCents: 22222,
+      spotBasis: 'LIVE_MARK',
+      freshness: 'FRESH',
+      withinServedCurve: true
+    },
     scenarios: [
       { underlyingMovePct: -0.20, pnlCents: -43210, prob: null },
       { underlyingMovePct: -0.09, pnlCents: -31200, prob: null },
@@ -338,10 +363,9 @@ function populatedBookDocuments() {
     freshness: 'FRESH',
     greeks: {
       deltaShares: 37.25,
-      gammaShares: 1.75,
-      thetaPerDay: -12.34,
-      vegaPerPoint: 18.5,
-      complete: true
+      gammaSharesPerDollar: 1.75,
+      thetaCentsPerDay: -1234,
+      vegaCentsPerPoint: 1850
     },
     legGreeks: []
   };
@@ -355,12 +379,10 @@ function populatedBookDocuments() {
         Object.assign({}, current, { ts: '2026-07-19T16:00:00Z', unrealizedCents: 11220 }),
         current
       ],
-      audit: [],
-      payoff: [
-        { price: 200, profitCents: -43210 },
-        { price: 222.22, profitCents: 24680 },
-        { price: 230, profitCents: 156790 }
-      ]
+      audit: []
+      /* No `payoff` here: ApiResponses.TradeDetail is five components and the held curve has one
+         owner, trade.terminalPayoff. A second list on this envelope is what let a detail event
+         overwrite the good curve with an empty array (audit §5.4). */
     },
     summary: {
       cashCents: 9752000,
@@ -1826,11 +1848,29 @@ async function installBackend(page, options = {}) {
       response = {
         marketLane: activeMarketLane,
         world: activeWorld,
+        /* §5.5: a batch row IS a typed QuoteView — the same receipt the single-symbol Research
+           document carries — so the browser passes it through instead of deciding a display price
+           from `last` and the previous close. */
         quotes: requested.map(symbol => {
           const researchQuote = bookDocuments.research
             && String(bookDocuments.research.symbol || '').toUpperCase() === symbol
             ? bookDocuments.research.quote : null;
-          return Object.assign({}, researchQuote || quote, { symbol, refreshing: false });
+          const source = researchQuote || quote;
+          const price = source.last != null ? source.last : source.prevClose;
+          return {
+            symbol,
+            priced: price != null,
+            displayPrice: price,
+            displayChangePct: source.changePct != null ? source.changePct : null,
+            markBasis: source.last != null ? 'LAST' : price != null ? 'PREVIOUS_CLOSE' : null,
+            priceIsPreviousClose: source.last == null && source.prevClose != null,
+            freshness: source.freshness || null,
+            source: source.source || null,
+            asOfEpochMs: source.asOfEpochMs != null ? source.asOfEpochMs : null,
+            quote: Object.assign({}, source, { symbol, refreshing: false }),
+            evidence: source.evidence || null,
+            unavailableReason: price == null ? 'No usable price for ' + symbol + '.' : null
+          };
         })
       };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD') {

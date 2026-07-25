@@ -33,7 +33,9 @@ final class MarketFrameBroadcaster implements AutoCloseable {
         }
     }
 
-    record Draft(String world, List<Map<String, Object>> quotes, String simTime, long asOf) {
+    /** {@code quotes} is a list of {@link ApiResponses.QuoteView} rows; the transport only diffs
+     *  and serializes them, so it deliberately does not re-state the row contract here. */
+    record Draft(String world, List<?> quotes, String simTime, long asOf) {
         Draft {
             world = world == null ? "observed" : world;
             quotes = quotes == null ? List.of() : List.copyOf(quotes);

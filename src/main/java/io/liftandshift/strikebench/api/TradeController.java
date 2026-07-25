@@ -180,8 +180,8 @@ final class TradeController {
                     // receipt off the roster row itself, so activeTrades never falls back to a client
                     // leg engine or the deleted client Merton tail.
                     row = row.withHeldReceipts(heldTerminalPayoff(trade),
-                            mark != null && mark.greeks() != null ? mark.greeks().canonical() : null,
-                            heldJumpTail(trade), heldScenarios(trade));
+                            mark == null ? null : mark.greeks(),
+                            heldJumpTail(trade), heldScenarios(trade), heldSpotPnl(trade, mark));
                 } catch (Exception ignored) {
                     // A missing live mark leaves these optional list values unavailable.
                 }
@@ -481,14 +481,21 @@ final class TradeController {
                 log.debug("Practice lifecycle analysis detail for " + id, e);
             }
         }
-        TradeView view = TradeView.of(trade);
-        if (TradeRecord.ACTIVE.equals(trade.status())) {
-            view = view.withHeldReceipts(heldTerminalPayoff(trade),
-                    current != null && current.greeks() != null ? current.greeks().canonical() : null,
-                    heldJumpTail(trade), heldScenarios(trade));
-        }
+        // §5.4: ONE held payoff on this envelope. The terminal-payoff receipt is attached for every
+        // status — a closed package still has an exact recorded curve — because the second
+        // `payoff` list that used to carry it for non-active trades is deleted.
+        boolean active = TradeRecord.ACTIVE.equals(trade.status());
+        TradeView view = TradeView.of(trade).withHeldReceipts(
+                heldTerminalPayoff(trade),
+                current == null ? null : current.greeks(),
+                active ? heldJumpTail(trade) : null,
+                active ? heldScenarios(trade) : List.of(),
+                // "If price holds" is a question about a package still exposed to the market. A
+                // closed line has a REALIZED result; publishing a hypothetical beside it would
+                // invite reading the wrong number as today's outcome.
+                active ? heldSpotPnl(trade, current) : null);
         return new ApiResponses.TradeDetail<>(view, current,
-                trades.marksHistory(id, 50), audit.forTrade(id, 50), payoffPoints(trade), analysis);
+                trades.marksHistory(id, 50), audit.forTrade(id, 50), analysis);
     }
 
     static long decisionPnl(TradeRecord trade, long packagePnlCents) {
@@ -858,16 +865,41 @@ final class TradeController {
         }
     }
 
-    static List<ApiResponses.PayoffPoint> payoffPoints(TradeRecord trade) {
+    /**
+     * §5.4: the engine's own answer to "if price holds" — the SAME held curve that produced
+     * {@link #heldTerminalPayoff}, evaluated at one declared spot. The desk used to interpolate the
+     * served polyline in JavaScript and print the result as a financial fact; worse, a position that
+     * had moved more than 30% from its entry anchor fell off the served domain and printed
+     * "unavailable" for a number the engine could state exactly.
+     *
+     * <p>The spot is the live mark when there is one, else the recorded entry — always named in
+     * {@code spotBasis}, so no reader has to guess which price the figure quotes.
+     */
+    static ApiResponses.HeldSpotPnl heldSpotPnl(TradeRecord trade, TradeService.MarkView mark) {
         boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
-        if (mixedExpirations) return List.of();
-        BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
-        PayoffCurve curve = heldPayoffCurve(trade, spot);
-        return curve.chartPoints(spot).stream()
-                .map(point -> new ApiResponses.PayoffPoint(
-                        point.price().toPlainString(), point.profitCents()))
-                .toList();
+        if (mixedExpirations) {
+            return ApiResponses.HeldSpotPnl.unavailable("A mixed-expiration package requires "
+                    + "supplied-path valuation; no single-expiration payoff was substituted.");
+        }
+        if (trade.entryUnderlyingCents() <= 0) {
+            return ApiResponses.HeldSpotPnl.unavailable(
+                    "No positive underlying anchor is recorded for this trade.");
+        }
+        BigDecimal anchor = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
+        Long liveSpotCents = mark == null ? null : mark.underlyingCents();
+        boolean live = liveSpotCents != null && liveSpotCents > 0;
+        long spotCents = live ? liveSpotCents : trade.entryUnderlyingCents();
+        BigDecimal spot = BigDecimal.valueOf(spotCents).movePointLeft(2);
+        PayoffCurve curve = heldPayoffCurve(trade, anchor);
+        List<PayoffCurve.ChartPoint> served = curve.chartPoints(anchor);
+        boolean within = !served.isEmpty()
+                && spot.compareTo(served.getFirst().price()) >= 0
+                && spot.compareTo(served.getLast().price()) <= 0;
+        return new ApiResponses.HeldSpotPnl(curve.profitAtCents(spot), spotCents,
+                live ? "LIVE_MARK" : "RECORDED_ENTRY",
+                live && mark.freshness() != null ? mark.freshness() : "RECORDED",
+                within, null);
     }
 
     /** The one held-line payoff curve (folds locked shares in as a synthetic lot at entry spot). */

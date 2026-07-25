@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradePreview;
@@ -60,6 +61,76 @@ public final class ApiResponses {
                             int limit, String marketLane) {}
     public record WorldQuotes<T>(T quotes, int requested, int considered, boolean truncated,
                                  int limit, String world, String marketLane) {}
+
+    /**
+     * THE quote row (§3.1, §5.5). One shape for every batch lane — observed engine snapshots,
+     * the demo market and simulated worlds — and the same display authority the single-symbol
+     * research receipt publishes, produced HERE from {@link Quote} so no surface can pick between
+     * two price sources.
+     *
+     * <p>{@code displayPrice}/{@code displayChangePct}/{@code markBasis} are the served decision;
+     * {@code last}/{@code bid}/{@code ask}/{@code prevClose} are raw evidence a surface may show but
+     * must never re-derive a price from. A row is either priced with a stated basis, or unpriced
+     * with a stated reason — never an invented 0 and never a silently substituted previous close
+     * (§3.2).</p>
+     */
+    public record QuoteView(String symbol, String description,
+                            BigDecimal displayPrice, Double displayChangePct, String markBasis,
+                            boolean priceIsPreviousClose, boolean priced,
+                            String quoteUnavailableReason,
+                            BigDecimal last, BigDecimal bid, BigDecimal ask, BigDecimal prevClose,
+                            boolean optionable, String freshness, String source,
+                            DataEvidence evidence, Long asOf, boolean refreshing) {
+        public QuoteView {
+            if (symbol == null || symbol.isBlank()) {
+                throw new IllegalArgumentException("a quote row needs a symbol");
+            }
+            // A stated price and a stated reason are mutually exclusive: an unpriced row may not
+            // ship a number, and a priced row may not carry an excuse that hides it.
+            if (priced == (displayPrice == null)) {
+                throw new IllegalArgumentException("quote row for " + symbol
+                        + " must either carry a display price or be unpriced, not both/neither");
+            }
+            if (priced == (quoteUnavailableReason != null)) {
+                throw new IllegalArgumentException("quote row for " + symbol
+                        + " must state exactly one of a display price or an unavailability reason");
+            }
+        }
+
+        /** The served row for a quote the market actually has. */
+        public static QuoteView of(Quote quote, boolean refreshing) {
+            Quote.MarkBasis basis = quote.markBasis();
+            if (basis == Quote.MarkBasis.UNAVAILABLE) {
+                return unavailable(quote.symbol(),
+                        quote.symbol() + " has no last trade, no two-sided book and no previous close"
+                                + " in this market, so it has no price to show",
+                        quote.description(), quote.optionable(), quote.markFreshness().name(),
+                        quote.source(), quote.evidence(), quote.asOfEpochMs(), refreshing);
+            }
+            return new QuoteView(quote.symbol(), quote.description(),
+                    quote.mark(), quote.markChangePct(), basis.name(),
+                    quote.usesPreviousCloseFallback(), true, null,
+                    quote.last(), quote.bid(), quote.ask(), quote.prevClose(),
+                    quote.optionable(), quote.markFreshness().name(), quote.source(),
+                    quote.evidence(), quote.asOfEpochMs(), refreshing);
+        }
+
+        /** The served row for a symbol the market cannot price, carrying WHY (§3.2). */
+        public static QuoteView unavailable(String symbol, String reason) {
+            return unavailable(symbol, reason, null, false, "UNAVAILABLE", null, null, null, false);
+        }
+
+        private static QuoteView unavailable(String symbol, String reason, String description,
+                                             boolean optionable, String freshness, String source,
+                                             DataEvidence evidence, Long asOf, boolean refreshing) {
+            if (reason == null || reason.isBlank()) {
+                throw new IllegalArgumentException("an unpriced quote row for " + symbol + " needs a reason");
+            }
+            return new QuoteView(symbol, description, null, null,
+                    Quote.MarkBasis.UNAVAILABLE.name(), false, false, reason,
+                    null, null, null, null, optionable, freshness, source, evidence, asOf, refreshing);
+        }
+    }
     public record Revision(long rev) {}
     public record Workspace<T>(long rev, String updatedAt, T state) {}
     public record SavedRevision(boolean ok, long rev) {}
@@ -198,11 +269,20 @@ public final class ApiResponses {
     public record ExpirationDistance(String date, int tradingSessions, int calendarDays) {}
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
+    /**
+     * The single-symbol research document. Its {@code quote} slot IS a {@link QuoteView} — the same
+     * row, field for field, that {@code /api/quotes} serves for that symbol — and its top-level
+     * display fields are copied from it. Home and Research therefore cannot disagree about one
+     * symbol's price, because there is only one decision to disagree with.
+     */
     public record ResearchDetail<T, U, V, W>(String symbol, T quote, BigDecimal displayPrice,
                                               /* Change of displayPrice against the previous close, in
                                                  percent — the backend owns this arithmetic so no
                                                  surface recomputes it. Null when unknowable. */
                                               Double displayChangePct,
+                                              /* WHICH input displayPrice quotes: MID, LAST,
+                                                 PREVIOUS_CLOSE or UNAVAILABLE (Quote.MarkBasis). */
+                                              String markBasis,
                                               String quoteUnavailableReason,
                                               boolean priceIsPreviousClose, String marketLane,
                                               boolean optionable, Double ivAtm,
@@ -378,9 +458,34 @@ public final class ApiResponses {
                                            io.liftandshift.strikebench.paper.BookActionProjectionService.ProjectionSet bookActions,
                                            io.liftandshift.strikebench.paper.AccountObjectiveService.CapacityContext capacity,
                                            io.liftandshift.strikebench.position.PositionLifecycleDecisionService.DecisionAnalysis decision) {}
-    public record PayoffPoint(String price, long profitCents) {}
+    /**
+     * §5.4: THE backend answer to "what is this package worth if the price holds".
+     *
+     * <p>The held terminal payoff evaluated at ONE declared spot, on the same curve and the same
+     * price/evidence snapshot that produced the served polyline — so the printed number and the
+     * drawn line can never come from different engines. The browser may still interpolate the
+     * polyline to place pixels; it may not originate this figure (§3.1).
+     *
+     * <p>{@code spotBasis} says where the price came from ({@code LIVE_MARK} or
+     * {@code RECORDED_ENTRY}) and {@code withinServedCurve} says whether the served polyline even
+     * reaches that price. When there is no answer, {@code unavailableReason} states why — never a
+     * substituted 0 (§3.2).
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record HeldSpotPnl(Long terminalPnlAtCurrentSpotCents, Long spotCents, String spotBasis,
+                              String freshness, boolean withinServedCurve, String unavailableReason) {
+        public static HeldSpotPnl unavailable(String reason) {
+            return new HeldSpotPnl(null, null, null, null, false, reason);
+        }
+    }
+
+    /**
+     * §5.4: the position detail carries exactly ONE held payoff — {@code trade.terminalPayoff}, the
+     * shared {@code RiskProfile.TerminalPayoff} receipt an idea candidate also carries. The former
+     * second copy on this envelope ({@code payoff}, a {@code price}/{@code profitCents} list) is
+     * deleted: the browser used to consume one and then overwrite it with the other.
+     */
     public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
-                                           List<PayoffPoint> payoff,
                                            PracticePositionAnalysis analysis) {}
     public record OptionLifecycleProjection(String action, int legIndex, String contract,
                                             String expiration, long settlementUnderlyingCents,

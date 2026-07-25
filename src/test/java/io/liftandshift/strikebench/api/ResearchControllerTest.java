@@ -114,9 +114,16 @@ class ResearchControllerTest {
     void missingQuoteReturns200WithQuoteUnavailableButHistoryAndOptionsPresent() throws Exception {
         JsonNode body = get("/api/research/AAPL");
 
-        // Quote slot: unavailable, with a reason, and MISSING provenance in the per-input evidence map.
-        assertThat(body.path("quote").isNull()).isTrue();
+        // Quote slot: the SAME typed row /api/quotes serves (§5.5), marked unpriced with a reason,
+        // and MISSING provenance in the per-input evidence map. The slot is always answered — an
+        // absent quote is a stated absence, not a hole the browser has to interpret.
+        assertThat(body.at("/quote/priced").asBoolean()).isFalse();
+        assertThat(body.at("/quote/markBasis").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(body.at("/quote/quoteUnavailableReason").asText()).contains("AAPL");
+        JsonNode slotPrice = body.path("quote").path("displayPrice");
+        assertThat(slotPrice.isNull() || slotPrice.isMissingNode()).isTrue();
         assertThat(body.path("displayPrice").isNull()).isTrue();
+        assertThat(body.get("markBasis").asText()).isEqualTo("UNAVAILABLE");
         assertThat(body.get("quoteUnavailableReason").asText()).contains("AAPL");
         assertThat(body.at("/evidence/inputs/quote/provenance").asText()).isEqualTo("MISSING");
 

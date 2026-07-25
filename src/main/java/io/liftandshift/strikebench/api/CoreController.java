@@ -158,47 +158,59 @@ final class CoreController implements AutoCloseable {
         ctx.json(universe.describe());
     }
 
+    /**
+     * ONE batch-quote authority (§5.5). Every requested symbol gets exactly one
+     * {@link ApiResponses.QuoteView} — the same typed receipt the single-symbol research document
+     * publishes — in every lane. A symbol the market cannot price still gets a row, stating why,
+     * so a caller never has to infer a price from `last` and a previous close, and never sees a
+     * symbol silently disappear from the answer.
+     */
     private void quotesBatch(Context ctx) {
         String raw = ctx.queryParam("symbols");
         String world = worldParam(activeWorld.apply(ctx));
+        int limit = SimulationSessions.MAX_SYMBOLS;
         if (world != null) {
             List<String> symbols = raw == null || raw.isBlank()
                     ? MarketUniverseView.symbolsForWorld(market, universe, world)
                     : parseSymbols(raw);
             int requested = symbols.size();
-            int limit = SimulationSessions.MAX_SYMBOLS;
             List<String> bounded = symbols.stream().limit(limit).toList();
-            List<Map<String, Object>> rows = new ArrayList<>();
+            MarketLane lane = market.lane(world);
+            List<ApiResponses.QuoteView> rows = new ArrayList<>();
             for (String symbol : bounded) {
-                market.quote(symbol, world).ifPresent(quote -> {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("symbol", quote.symbol());
-                    row.put("description", quote.description());
-                    row.put("last", quote.last());
-                    row.put("bid", quote.bid());
-                    row.put("ask", quote.ask());
-                    row.put("prevClose", quote.prevClose());
-                    row.put("optionable", quote.optionable());
-                    row.put("asOf", quote.asOfEpochMs());
-                    row.put("freshness", quote.markFreshness().name());
-                    row.put("source", quote.source());
-                    row.put("evidence", quote.evidence());
-                    rows.add(row);
-                });
+                rows.add(market.quote(symbol, world)
+                        .map(quote -> ApiResponses.QuoteView.of(quote, false))
+                        .orElseGet(() -> ApiResponses.QuoteView.unavailable(symbol,
+                                worldUnavailableReason(symbol, world, lane))));
             }
             ctx.json(new ApiResponses.WorldQuotes<>(rows, requested, bounded.size(),
-                    requested > limit, limit, world, market.lane(world).name()));
+                    requested > limit, limit, world, lane.name()));
             return;
         }
         List<String> symbols = raw == null || raw.isBlank()
                 ? universe.active().symbols() : parseSymbols(raw);
         int requested = symbols.size();
-        int limit = SimulationSessions.MAX_SYMBOLS;
         if (symbols.size() > limit) symbols = symbols.subList(0, limit);
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (var snapshot : engine.quotes(symbols)) rows.add(MarketDataEngine.toRow(snapshot));
+        Map<String, MarketDataEngine.MarketSnapshot> priced = new LinkedHashMap<>();
+        for (var snapshot : engine.quotes(symbols)) priced.put(snapshot.symbol(), snapshot);
+        List<ApiResponses.QuoteView> rows = new ArrayList<>();
+        for (String symbol : symbols) {
+            var snapshot = priced.get(symbol);
+            rows.add(snapshot == null
+                    ? ApiResponses.QuoteView.unavailable(symbol, engine.unavailableReason(symbol))
+                    : ApiResponses.QuoteView.of(snapshot.toQuote(), snapshot.refreshing()));
+        }
         ctx.json(new ApiResponses.Quotes<>(rows, requested, symbols.size(), requested > limit,
                 limit, cfg.fixturesOnly() ? "DEMO" : "OBSERVED"));
+    }
+
+    /** Why a non-observed market has no quote for a symbol — named per lane, never guessed. */
+    private static String worldUnavailableReason(String symbol, String world, MarketLane lane) {
+        if (lane == MarketLane.DEMO) {
+            return "the demo market has no teaching quote for " + symbol;
+        }
+        return "simulated world " + world + " does not price " + symbol
+                + " — its symbol set was fixed when the world was created";
     }
 
     private void workspaceGet(Context ctx) {

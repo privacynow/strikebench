@@ -129,24 +129,20 @@ public final class TradeService {
         }
     }
 
-    /** Position greeks: share-equivalent delta/gamma, $ per day theta, $ per vol-point vega. Model stats, not money. */
-    public record PositionGreeks(Double deltaShares, Double gammaShares, Double thetaPerDay, Double vegaPerPoint, boolean complete) {
-        /**
-         * THE one greeks contract, expressed in the canonical
-         * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks} units
-         * (deltaShares, gammaSharesPerDollar, thetaCentsPerDay, vegaCentsPerPoint) so a held
-         * position, an idea candidate and the scenario canvas all report greeks in ONE unit.
-         * This is a pure unit adapter (theta/vega dollars -> cents), never a re-pricing.
-         * Null when any component is missing, so an incomplete strip stays honestly absent.
-         */
-        public io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks canonical() {
-            if (deltaShares == null || gammaShares == null || thetaPerDay == null || vegaPerPoint == null) {
-                return null;
-            }
-            return new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
-                    deltaShares, gammaShares, thetaPerDay * 100.0, vegaPerPoint * 100.0);
-        }
-    }
+    /**
+     * §5.3: one leg's contribution to a position's greeks, plus the per-share mark that produced it.
+     *
+     * <p>{@code greeks} is THE canonical greeks view — the same record, the same field names and the
+     * same units a position, an idea candidate and the scenario canvas publish — already scaled by
+     * sign x deliverable x ratio x quantity, so no surface multiplies anything. The per-share values
+     * carry their unit in the name and are the raw quote, never a position figure. A mark component
+     * the provider did not supply is an ABSENT field, never a 0 (§3.2).
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    public record LegGreekRow(String leg, String bid, String ask, Double iv,
+                              Double deltaPerShare, Double gammaPerSharePerDollar,
+                              Double thetaCentsPerSharePerDay, Double vegaCentsPerSharePerPoint,
+                              io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks) {}
 
     /** Dollar-delta exposure for a lane-aware before/after assessment. */
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
@@ -178,9 +174,19 @@ public final class TradeService {
         }
     }
 
+    /**
+     * One mark snapshot of a held package.
+     *
+     * <p>§5.3: {@code greeks} is THE canonical greeks view (deltaShares, gammaSharesPerDollar,
+     * thetaCentsPerDay, vegaCentsPerPoint). There is no second greeks shape anywhere in this
+     * codebase or on the wire — every surface reads these four names in these units. It is null,
+     * never a partial sum, when any option leg's mark lacks greeks, so an exposure figure that
+     * silently omits a leg can no longer be published (§3.2).
+     */
     public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
                            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
-                           PositionGreeks greeks, List<Map<String, Object>> legGreeks) {}
+                           io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+                           List<LegGreekRow> legGreeks) {}
 
     /** Worst and best executable-mark excursions recorded while a trade was open. */
     public record Excursion(Long adverseCents, Long favorableCents) {}
@@ -1777,7 +1783,7 @@ public final class TradeService {
         List<Double> ivs = new ArrayList<>();
         double dDelta = 0, dGamma = 0, dTheta = 0, dVega = 0;
         boolean greeksComplete = true;
-        List<Map<String, Object>> legGreeks = new ArrayList<>();
+        List<LegGreekRow> legGreeks = new ArrayList<>();
         long heldContextShares = heldShareContextShares(t);
         for (Leg leg : t.legs()) {
             var mark = marks.legMark(t.symbol(), leg, world).orElse(null);
@@ -1800,32 +1806,28 @@ public final class TradeService {
                 dTheta += (mark.theta() == null ? 0 : mark.theta()) * mult;
                 dVega += (mark.vega() == null ? 0 : mark.vega()) * mult;
             }
-            Map<String, Object> lg = new LinkedHashMap<>();
-            lg.put("leg", legDesc(leg));
-            lg.put("bid", mark.bid() == null ? null : mark.bid().toPlainString());
-            lg.put("ask", mark.ask() == null ? null : mark.ask().toPlainString());
-            lg.put("delta", mark.delta());
-            lg.put("gamma", mark.gamma());
-            lg.put("theta", mark.theta());
-            lg.put("vega", mark.vega());
-            lg.put("iv", mark.iv());
-            legGreeks.add(lg);
+            legGreeks.add(new LegGreekRow(legDesc(leg),
+                    mark.bid() == null ? null : mark.bid().toPlainString(),
+                    mark.ask() == null ? null : mark.ask().toPlainString(),
+                    mark.iv(), mark.delta(), mark.gamma(),
+                    mark.theta() == null ? null : round2(mark.theta() * 100.0),
+                    mark.vega() == null ? null : round2(mark.vega() * 100.0),
+                    legGreeksView(mark, leg.isStock(), mult)));
         }
         if (complete && heldContextShares > 0) {
             dDelta += heldContextShares;
-            Map<String, Object> held = new LinkedHashMap<>();
-            held.put("leg", heldContextShares + " held shares");
-            held.put("bid", null);
-            held.put("ask", null);
-            held.put("delta", 1.0);
-            held.put("gamma", 0.0);
-            held.put("theta", 0.0);
-            held.put("vega", 0.0);
-            held.put("iv", null);
-            legGreeks.add(held);
+            legGreeks.add(new LegGreekRow(heldContextShares + " held shares", null, null, null,
+                    1.0, 0.0, 0.0, 0.0,
+                    new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
+                            heldContextShares, 0.0, 0.0, 0.0)));
         }
-        PositionGreeks greeks = complete
-                ? new PositionGreeks(round2(dDelta), round4(dGamma), round2(dTheta), round2(dVega), greeksComplete)
+        // §3.2: an incomplete greeks strip is ABSENT, not a partial sum. A leg whose mark carried no
+        // greeks used to be skipped while the remaining legs were still published as the position's
+        // delta/gamma/theta/vega — a fabricated exposure that read as complete. Same rule the idea
+        // path already applies in packageGreeks. Units are canonical: theta/vega in CENTS.
+        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks = complete && greeksComplete
+                ? new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
+                        round2(dDelta), round4(dGamma), round2(dTheta * 100.0), round2(dVega * 100.0))
                 : null;
         Long closeCost = complete ? closeValue : null;
         // Opening fees already left cash and belong in today's P/L. The only omitted cost is the
@@ -1875,6 +1877,22 @@ public final class TradeService {
     private static Double round2(double v) { return Math.round(v * 100.0) / 100.0; }
     private static Double round4(double v) { return Math.round(v * 10000.0) / 10000.0; }
 
+    /**
+     * One leg's greeks in the canonical view: the SAME four names and units the position publishes,
+     * already scaled by sign x deliverable x ratio x quantity. Null — never a zeroed strip — when an
+     * option leg's mark carried no delta, which is exactly the leg that made the position figure
+     * unavailable (§3.2).
+     */
+    private static io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks legGreeksView(
+            MarksSource.LegMark mark, boolean stock, double mult) {
+        if (mark.delta() == null && !stock) return null;
+        return new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
+                round2((mark.delta() == null ? 0 : mark.delta()) * mult),
+                round4((mark.gamma() == null ? 0 : mark.gamma()) * mult),
+                round2((mark.theta() == null ? 0 : mark.theta()) * mult * 100.0),
+                round2((mark.vega() == null ? 0 : mark.vega()) * mult * 100.0));
+    }
+
     /** Liquidation view of all ACTIVE trades: what unwinding everything now would pay
      *  (executable sides, BEFORE close fees). Sums computeMark per trade; incomplete marks
      *  make the whole answer honest-partial rather than silently wrong. */
@@ -1913,8 +1931,8 @@ public final class TradeService {
      * pooling several rows adds THAT and never the share figures.
      */
     public record PositionGreekRow(String id, String symbol, String strategy, int qty,
-                                   PositionGreeks greeks, Long netDollarDeltaCents,
-                                   Long unrealizedCents) {}
+                                   io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+                                   Long netDollarDeltaCents, Long unrealizedCents) {}
 
     /**
      * Book-scope greeks. The per-share pair is deliberately absent with a stated reason (see
@@ -1952,8 +1970,8 @@ public final class TradeService {
         for (TradeRecord t : active) {
             MarkView view = snap.get(t.id());
             if (view == null) { complete = false; continue; }
-            var canonical = view.greeks() == null ? null : view.greeks().canonical();
-            if (canonical == null || !view.greeks().complete()) {
+            var canonical = view.greeks();
+            if (canonical == null) {
                 complete = false; // a missing component is disclosed, never carried into the sum as 0
             } else {
                 thetaCents += canonical.thetaCentsPerDay();
@@ -1961,7 +1979,7 @@ public final class TradeService {
                 measured++;
             }
             positions.add(new PositionGreekRow(t.id(), t.symbol(), t.strategy(), t.qty(),
-                    view.greeks(), dollarDelta.tradeNetCents().get(t.id()), view.unrealizedCents()));
+                    canonical, dollarDelta.tradeNetCents().get(t.id()), view.unrealizedCents()));
         }
         // An empty book honestly decays by zero; a book with nothing measurable has no decay to state.
         boolean statable = active.isEmpty() || measured > 0;
@@ -2000,8 +2018,7 @@ public final class TradeService {
         boolean complete = true;
         for (TradeRecord trade : active) {
             MarkView mark = marksByTrade.get(trade.id());
-            if (mark == null || mark.underlyingCents() == null || mark.greeks() == null
-                    || mark.greeks().deltaShares() == null || !mark.greeks().complete()) {
+            if (mark == null || mark.underlyingCents() == null || mark.greeks() == null) {
                 complete = false;
                 continue;
             }

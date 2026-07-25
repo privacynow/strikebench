@@ -1400,24 +1400,36 @@ class PaperCoreTest {
                 io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
         TradeRecord t = trades.create(creditPutSpread(acct.id(), 2)); // qty 2
 
+        // §5.3: the mark carries THE canonical greeks view and nothing else — one shape, units named.
         TradeService.MarkView view = trades.currentMark(t.id());
         assertThat(view.greeks()).isNotNull();
-        assertThat(view.greeks().complete()).isTrue();
         // delta: SELL(-1)*(-0.30)*100*2 + BUY(+1)*(-0.10)*100*2 = 60 - 20 = 40 share-equivalents
         assertThat(view.greeks().deltaShares()).isEqualTo(40.0);
-        // theta: SELL(-1)*(-0.05)*200 + BUY(+1)*(-0.02)*200 = 10 - 4 = +6 $/day (short premium earns decay)
-        assertThat(view.greeks().thetaPerDay()).isEqualTo(6.0);
-        assertThat(view.greeks().vegaPerPoint()).isEqualTo(-10.0); // -0.10*200 + 0.05*200
-        assertThat(view.legGreeks()).hasSize(2);
-        assertThat(view.legGreeks().getFirst()).containsKeys("leg", "delta", "bid", "ask");
+        // theta: SELL(-1)*(-0.05)*200 + BUY(+1)*(-0.02)*200 = 10 - 4 = +6 $/day -> 600 cents/day
+        assertThat(view.greeks().thetaCentsPerDay()).isEqualTo(600.0);
+        assertThat(view.greeks().vegaCentsPerPoint()).isEqualTo(-1000.0); // (-0.10*200 + 0.05*200) $ -> cents
+        assertThat(view.greeks().gammaSharesPerDollar()).isEqualTo(-2.0); // 0.02*(-200) + 0.01*200
 
-        // B6: the ONE canonical greeks contract — a pure unit adapter (theta/vega $ -> cents).
-        var canon = view.greeks().canonical();
-        assertThat(canon).isNotNull();
-        assertThat(canon.deltaShares()).isEqualTo(40.0);
-        assertThat(canon.gammaSharesPerDollar()).isEqualTo(view.greeks().gammaShares());
-        assertThat(canon.thetaCentsPerDay()).isEqualTo(600.0);   // 6.0 $/day -> 600 cents/day
-        assertThat(canon.vegaCentsPerPoint()).isEqualTo(-1000.0); // -10.0 $/pt -> -1000 cents/pt
+        // §5.3: the alternate shape is gone from the type system, not merely unused.
+        assertThat(java.util.Arrays.stream(view.greeks().getClass().getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName))
+                .containsExactlyInAnyOrder("deltaShares", "gammaSharesPerDollar",
+                        "thetaCentsPerDay", "vegaCentsPerPoint");
+
+        // §15.1: per-leg detail speaks the SAME canonical view, already scaled to the position.
+        assertThat(view.legGreeks()).hasSize(2);
+        TradeService.LegGreekRow shortLeg = view.legGreeks().getFirst();
+        assertThat(shortLeg.leg()).isNotBlank();
+        assertThat(shortLeg.bid()).isEqualTo("3.00");
+        assertThat(shortLeg.deltaPerShare()).isEqualTo(-0.30);
+        assertThat(shortLeg.thetaCentsPerSharePerDay()).isEqualTo(-5.0); // -0.05 $/day -> -5 cents
+        assertThat(shortLeg.greeks().deltaShares()).isEqualTo(60.0);     // SELL(-1)*(-0.30)*100*2
+        assertThat(shortLeg.greeks().thetaCentsPerDay()).isEqualTo(1_000.0);
+        // The legs sum to the position figure — one unit, no conversion anywhere downstream.
+        assertThat(view.legGreeks().stream().mapToDouble(r -> r.greeks().deltaShares()).sum())
+                .isEqualTo(view.greeks().deltaShares());
+        assertThat(view.legGreeks().stream().mapToDouble(r -> r.greeks().thetaCentsPerDay()).sum())
+                .isEqualTo(view.greeks().thetaCentsPerDay());
 
         // B5 + B6: the same-shape package greeks and the trading-sessions receipt ride the preview.
         TradePreview preview = trades.preview(creditPutSpread(acct.id(), 2));
@@ -1438,6 +1450,42 @@ class PaperCoreTest {
         assertThat(pg.positions().getFirst().greeks().deltaShares()).isEqualTo(40.0);
         assertThat(pg.thetaCentsPerDay()).isEqualTo(600.0);   // book theta names its unit
         assertThat(pg.netDollarDeltaCents()).isEqualTo(400_000L); // 40 shares × $100
+    }
+
+    /**
+     * §3.2 / §5.3: a leg whose mark carries no greeks makes the POSITION greeks unavailable. The
+     * old contract summed the remaining legs and shipped that partial figure with a quiet
+     * {@code complete:false} beside it, so a two-leg spread missing one delta published the other
+     * leg's exposure as the position's. Absence is now expressed as absence.
+     */
+    @Test
+    void positionGreeksAreAbsentRatherThanAPartialSumWhenALegHasNoGreeks() {
+        Account acct = accounts.getOrCreateDefault();
+        marks.exact.put("PUT100", new MarksSource.LegMark(new BigDecimal("3.00"), new BigDecimal("3.00"),
+                new BigDecimal("3.00"), 0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        // Priced, but the provider supplied no greeks for this leg.
+        marks.exact.put("PUT95", new MarksSource.LegMark(new BigDecimal("1.20"), new BigDecimal("1.20"),
+                new BigDecimal("1.20"), 0.25, Freshness.FIXTURE, null, null, null, null,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        TradeRecord t = trades.create(creditPutSpread(acct.id(), 2));
+
+        TradeService.MarkView view = trades.currentMark(t.id());
+        // The package is still fully PRICED — only the greeks are unavailable.
+        assertThat(view.closeCostCents()).isNotNull();
+        assertThat(view.greeks()).isNull(); // never +60 share-deltas from the marked leg alone
+        assertThat(view.legGreeks()).hasSize(2);
+        assertThat(view.legGreeks().getFirst().greeks()).isNotNull();
+        assertThat(view.legGreeks().getLast().greeks()).isNull();
+        assertThat(view.legGreeks().getLast().deltaPerShare()).isNull();
+
+        // The book discloses the gap instead of adding a partial position into its totals.
+        TradeService.BookGreeks book = trades.portfolioGreeks(acct.id());
+        assertThat(book.complete()).isFalse();
+        assertThat(book.measuredTrades()).isZero();
+        assertThat(book.positions()).hasSize(1);
+        assertThat(book.positions().getFirst().greeks()).isNull();
+        assertThat(book.dollarDeltaComplete()).isFalse();
     }
 
     /**
@@ -2130,8 +2178,9 @@ class PaperCoreTest {
         TradeService.MarkView combined = trades.currentMark(t.id());
         assertThat(combined.greeks().deltaShares()).isEqualTo(50.0); // 100 held shares - 50 put delta
         assertThat(combined.legGreeks()).anySatisfy(row -> {
-            assertThat(row.get("leg")).isEqualTo("100 held shares");
-            assertThat(row.get("delta")).isEqualTo(1.0);
+            assertThat(row.leg()).isEqualTo("100 held shares");
+            assertThat(row.deltaPerShare()).isEqualTo(1.0);
+            assertThat(row.greeks().deltaShares()).isEqualTo(100.0); // the lot, in the canonical unit
         });
 
         // Without the shares, the same request is refused — the combined framing needs them

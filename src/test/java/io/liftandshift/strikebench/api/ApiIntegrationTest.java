@@ -200,8 +200,11 @@ class ApiIntegrationTest {
         HttpResponse<String> nope = get("/api/research/NOPE");
         assertThat(nope.statusCode()).isEqualTo(200);
         JsonNode nopeBody = Json.parse(nope.body());
-        // The server mapper omits null fields, so an absent quote is either an explicit null or missing.
-        assertThat(nopeBody.path("quote").isNull() || nopeBody.path("quote").isMissingNode()).isTrue();
+        // The quote slot is the same typed row /api/quotes serves: present, unpriced, and saying why.
+        assertThat(nopeBody.at("/quote/priced").asBoolean()).isFalse();
+        assertThat(nopeBody.at("/quote/markBasis").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(nopeBody.path("quote").path("displayPrice").isMissingNode()
+                || nopeBody.path("quote").path("displayPrice").isNull()).isTrue();
         assertThat(nopeBody.get("quoteUnavailableReason").asText()).contains("NOPE");
         assertThat(nopeBody.at("/evidence/inputs/quote/provenance").asText()).isEqualTo("MISSING");
         assertThat(nopeBody.get("planEligible").asBoolean()).isFalse();
@@ -398,16 +401,30 @@ class ApiIntegrationTest {
         assertThat(rowPayoff.get("schemaVersion").asText()).isEqualTo("risk-terminal-payoff-1");
         assertThat(rowPayoff.get("points").size()).isGreaterThanOrEqualTo(2);
         assertThat(rowPayoff.at("/points/0/price").asDouble()).isPositive();
-        // B6: held greeks in the ONE canonical unit ride the roster row (short-put-spread => positive delta).
+        // §5.3: held greeks in the ONE canonical shape ride the roster row (short-put-spread => positive delta).
         JsonNode rowGreeks = list.at("/trades/0/greeks");
         assertThat(rowGreeks.get("deltaShares").asDouble()).isGreaterThan(0);
         assertThat(rowGreeks.has("thetaCentsPerDay")).isTrue();
         assertThat(rowGreeks.has("vegaCentsPerPoint")).isTrue();
         assertThat(rowGreeks.has("gammaSharesPerDollar")).isTrue();
+        assertOnlyCanonicalGreeks(list);
+        // §5.4: the roster row also carries the ENGINE's "if price holds" figure, with the spot and
+        // the basis it quotes — the browser no longer interpolates that number itself.
+        JsonNode rowSpotPnl = list.at("/trades/0/spotPnl");
+        assertThat(rowSpotPnl.has("terminalPnlAtCurrentSpotCents")).isTrue();
+        assertThat(rowSpotPnl.get("spotCents").asLong()).isPositive();
+        assertThat(rowSpotPnl.get("spotBasis").asText()).isIn("LIVE_MARK", "RECORDED_ENTRY");
+        assertThat(rowSpotPnl.has("unavailableReason")).isFalse();
         JsonNode beforeLifecycleRead = Json.parse(get("/api/account").body());
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/trade/id").asText()).isEqualTo(tradeId);
-        assertThat(detail.get("payoff").size()).isGreaterThan(30);
+        // §5.4: exactly ONE held payoff on the envelope. The second `payoff` list is deleted; the
+        // shared terminal-payoff receipt on the trade is the only curve any surface can read.
+        assertThat(detail.has("payoff")).isFalse();
+        assertThat(detail.at("/trade/terminalPayoff/points").size()).isGreaterThan(30);
+        assertThat(detail.at("/trade/terminalPayoff/schemaVersion").asText())
+                .isEqualTo("risk-terminal-payoff-1");
+        assertOnlyCanonicalGreeks(detail);
         assertThat(detail.at("/current/popNow").asDouble()).isBetween(0.0, 1.0);
         assertThat(detail.at("/analysis/lifecycle/history/available").asBoolean()).isTrue();
         assertThat(detail.at("/analysis/lifecycle/currentChoice/freshEyesQuestion").asText())
@@ -508,18 +525,60 @@ class ApiIntegrationTest {
         assertThat(rowKeepsShareDelta).isTrue(); // share delta survives where the underlying is single
         assertThat(greeks.get("basis").asText()).containsIgnoringCase("model");
 
-        // detail carries the same greeks + per-leg rows
+        assertOnlyCanonicalGreeks(greeks);
+
+        // §5.3: the detail's position greeks, its per-leg rows and the trade view all speak the ONE
+        // canonical shape — the same four names in the same units — so no surface has to choose.
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
         assertThat(detail.at("/current/greeks/deltaShares").asDouble()).isGreaterThan(0);
         assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
-        // B6: the trade VIEW carries the canonical greeks contract (thetaCentsPerDay == thetaPerDay*100).
+        JsonNode legRow = detail.at("/current/legGreeks/0");
+        assertThat(legRow.at("/greeks/deltaShares").asDouble()).isGreaterThan(0);
+        assertThat(legRow.has("thetaCentsPerSharePerDay")).isTrue();
         JsonNode canonical = detail.at("/trade/greeks");
-        assertThat(canonical.get("deltaShares").asDouble()).isGreaterThan(0);
+        assertThat(canonical.get("deltaShares").asDouble())
+                .isEqualTo(detail.at("/current/greeks/deltaShares").asDouble());
         assertThat(canonical.get("thetaCentsPerDay").asDouble())
-                .isCloseTo(detail.at("/current/greeks/thetaPerDay").asDouble() * 100.0,
-                        org.assertj.core.data.Offset.offset(0.5));
+                .isEqualTo(detail.at("/current/greeks/thetaCentsPerDay").asDouble());
+        // The leg rows add up to the position figure in that same unit.
+        assertThat(legRow.at("/greeks/thetaCentsPerDay").asDouble())
+                .isEqualTo(canonical.get("thetaCentsPerDay").asDouble());
+        assertOnlyCanonicalGreeks(detail);
 
         transform(tradeId, "VOID");
+    }
+
+    /**
+     * §5.3 / §14: there is exactly ONE greeks shape on the wire. This walks every field name in a
+     * response and fails if the retired {@code PositionGreeks} names reappear anywhere, at any
+     * depth — a regression that previously made the desk render "—" for theta while a panel below
+     * it showed a value. It also refuses a greeks object that mixes the two vocabularies.
+     */
+    private static void assertOnlyCanonicalGreeks(JsonNode root) {
+        java.util.Set<String> retired = java.util.Set.of("gammaShares", "thetaPerDay", "vegaPerPoint");
+        java.util.Deque<JsonNode> stack = new java.util.ArrayDeque<>(java.util.List.of(root));
+        int greeksObjects = 0;
+        while (!stack.isEmpty()) {
+            JsonNode node = stack.pop();
+            if (node.isObject()) {
+                java.util.Iterator<String> names = node.fieldNames();
+                while (names.hasNext()) {
+                    String name = names.next();
+                    assertThat(retired).as("retired greeks field %s is still on the wire", name)
+                            .doesNotContain(name);
+                    stack.push(node.get(name));
+                }
+                if (node.has("deltaShares")) {
+                    greeksObjects++;
+                    assertThat(node.has("gammaSharesPerDollar")).isTrue();
+                    assertThat(node.has("thetaCentsPerDay")).isTrue();
+                    assertThat(node.has("vegaCentsPerPoint")).isTrue();
+                }
+            } else if (node.isArray()) {
+                node.forEach(stack::push);
+            }
+        }
+        assertThat(greeksObjects).as("response carried no greeks to canonicalize").isPositive();
     }
 
     @Test
@@ -778,9 +837,11 @@ class ApiIntegrationTest {
         // the hidden Observed universe while another lane is active.
         assertThat(put("/api/universe", "{\"sector\":\"DEFENSE\"}").statusCode()).isEqualTo(409);
 
-        // Batch quotes: light rows for whatever has data, silently skipping the unknown
+        // Batch quotes (§5.5): ONE typed row per requested symbol — the same display receipt the
+        // single-symbol research document serves. An unknown symbol is answered as unpriced with a
+        // reason instead of vanishing from the response.
         JsonNode quotes = Json.parse(get("/api/quotes?symbols=AAPL,TSLA,ZZZZ").body()).get("quotes");
-        assertThat(quotes.size()).isEqualTo(2);
+        assertThat(quotes.size()).isEqualTo(3);
         assertThat(quotes.get(0).get("last").asText()).isNotBlank();
         JsonNode aaplQuote = java.util.stream.StreamSupport.stream(quotes.spliterator(), false)
                 .filter(q -> "AAPL".equals(q.get("symbol").asText())).findFirst().orElseThrow();
@@ -788,6 +849,17 @@ class ApiIntegrationTest {
         assertThat(aaplQuote.get("bid").asText()).isNotBlank();
         assertThat(aaplQuote.get("ask").asText()).isNotBlank();
         assertThat(aaplQuote.get("asOf").asLong()).isPositive();
+        assertThat(aaplQuote.get("priced").asBoolean()).isTrue();
+        assertThat(aaplQuote.get("markBasis").asText()).isIn("MID", "LAST", "PREVIOUS_CLOSE");
+        assertThat(aaplQuote.get("displayPrice").decimalValue())
+                .isEqualByComparingTo(Json.parse(get("/api/research/AAPL").body())
+                        .get("displayPrice").decimalValue());
+        JsonNode unknown = java.util.stream.StreamSupport.stream(quotes.spliterator(), false)
+                .filter(q -> "ZZZZ".equals(q.get("symbol").asText())).findFirst().orElseThrow();
+        assertThat(unknown.get("priced").asBoolean()).isFalse();
+        assertThat(unknown.get("quoteUnavailableReason").asText()).contains("ZZZZ");
+        assertThat(unknown.path("displayPrice").isMissingNode()
+                || unknown.path("displayPrice").isNull()).isTrue();
         assertThat(Json.parse(get("/api/quotes?symbols=VTSAX").body())
                 .at("/quotes/0/optionable").asBoolean()).isFalse();
         // No symbols param -> the active universe

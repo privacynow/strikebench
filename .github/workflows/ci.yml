@@ -176,8 +176,33 @@ jobs:
             dom-tests/shots
           retention-days: 14
 
-# Retired here: the aggregated release-matrix job (node scripts/release-matrix.mjs). That script
-# still demands a TAP report per SPA-era lane — dom-defaults, dom-scenario, dom-spa, dom-fixture,
-# dom-audit, dom-seeded, dom-bookrisk, dom-adoption, dom-learn, dom-learn-coverage — all deleted
-# with the SPA in 8654824, so no invocation of it can succeed. Each lane now publishes its own
-# real numbers to the job summary; restore one table here once the aggregator is reconciled.
+  # Release evidence for the exact branch tip. The aggregator used to demand a TAP per SPA-era
+  # lane — all deleted with workspace.html in 8654824 — so it could never succeed and CI simply
+  # stopped producing evidence. It now sums the three lanes that exist plus Surefire.
+  release-evidence:
+    needs: [backend, browser-contracts, browser-journeys, browser-visual]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          path: target
+          merge-multiple: true
+      - name: Summarize
+        run: |
+          node scripts/release-matrix.mjs | tee target/release-matrix.md
+          cat target/release-matrix.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-matrix
+          path: |
+            target/release-matrix.md
+            target/dom-contracts.tap
+            target/dom-journeys.tap
+            target/dom-visual.tap
+          retention-days: 14

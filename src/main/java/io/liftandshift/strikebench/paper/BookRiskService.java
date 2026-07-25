@@ -174,11 +174,32 @@ public final class BookRiskService {
                                double annualRate, DataEvidence rateEvidence,
                                String basis) {}
 
+    /**
+     * One open position's share of the book's defined risk, and where it ranks. The numerator, the
+     * denominator, and the denominator's basis all travel with the percentage, so any reader can
+     * re-derive the number by hand instead of trusting it. {@code sharePct} and {@code rank} exist
+     * only when a denominator exists; otherwise both are null and {@code unavailableReason} says
+     * why — a withheld share, never a 0% that would read as "this position carries no risk".
+     */
+    public record BookShareRow(String tradeId, String symbol, String strategy, long riskCents,
+                               Long denominatorCents, String denominatorBasis, Double sharePct,
+                               Integer rank, Integer rankOf, String unavailableReason) {}
+
+    /** The Book heat roster: every open position ranked against ONE declared denominator. */
+    public record BookShareRoster(boolean available, String unavailableReason, String accountId,
+                                  int positions, Long denominatorCents, String denominatorBasis,
+                                  List<BookShareRow> rows, String basis) {
+        public BookShareRoster {
+            rows = rows == null ? List.of() : List.copyOf(rows);
+        }
+    }
+
     /** Practice book greeks in the same additive-only grammar as {@link GreekBlock}. */
     public record PracticeLane(Long dollarDeltaNetCents, Long dollarDeltaGrossCents,
                                Double thetaCentsPerDay, Double vegaCentsPerPoint,
                                boolean perShareAvailable, String perShareUnavailableReason,
-                               boolean complete, String basis, MeasuredBook measuredBook) {}
+                               boolean complete, String basis, MeasuredBook measuredBook,
+                               BookShareRoster shareRoster) {}
 
     public record Lane(List<AccountRisk> accounts, CrossAccount crossAccount,
                        PracticeLane practice, String basis) {}
@@ -919,7 +940,128 @@ public final class BookRiskService {
                         + "because share delta does not add across underlyings; theta is cents per day "
                         + "and vega cents per vol point, from current Practice marks; dollar delta uses "
                         + "the disclosed option model.",
-                measuredPracticeBook(practiceAccountId));
+                measuredPracticeBook(practiceAccountId),
+                bookShareRoster(practiceAccountId));
+    }
+
+    // ---- Book share and rank (ONE owner for the fact — §3.1) ----
+
+    /** The single denominator every Book share is measured against, named on every row. */
+    public static final String SHARE_DENOMINATOR_BASIS =
+            "Book defined risk: the sum of every ACTIVE position's maximum loss in this account, "
+                    + "read from the canonical portfolio-heat receipt (totalMaxLossCents).";
+
+    private static final String SHARE_ROSTER_BASIS =
+            "Each open position's share of this account's defined book risk: that position's own "
+                    + "maximum loss divided by the one declared denominator, in percent. Rows run "
+                    + "largest risk first, and positions carrying identical risk share one rank "
+                    + "(1, 2, 2, 4). This describes recorded positions at their recorded risk — it "
+                    + "is not a forecast. With no book total there is no share and no rank: both are "
+                    + "withheld with the reason, never reported as 0%.";
+
+    /** Read the ONE canonical book total; never re-summed here, so the two can never disagree. */
+    private static final String HEAT_TOTAL_KEY = "totalMaxLossCents";
+
+    /**
+     * Book share and rank for every ACTIVE position in an account — the backend owner of a fact the
+     * browser used to originate. The numerator is each position's own defined risk; the denominator
+     * is the canonical portfolio-heat total, quoted on every row with its basis. Missing or zero
+     * denominators are reported unavailable with a reason (§3.2), never substituted with 0.
+     */
+    public BookShareRoster bookShareRoster(String accountId) {
+        if (trades == null) {
+            return unavailableRoster(accountId, List.of(), null,
+                    "The trade book is not wired in this service context, so no book total exists "
+                            + "to measure a share against.");
+        }
+        List<TradeRecord> active;
+        try {
+            active = activePositions(accountId);
+        } catch (RuntimeException e) {
+            return unavailableRoster(accountId, List.of(), null,
+                    reason(e, "The open-position roster could not be read."));
+        }
+        Long denominator;
+        try {
+            denominator = heatTotalMaxLossCents(accountId);
+        } catch (RuntimeException e) {
+            return unavailableRoster(accountId, active, null,
+                    reason(e, "The portfolio-heat receipt could not be read, so this book's "
+                            + "defined-risk total is unknown."));
+        }
+        return shareRoster(accountId, active, denominator);
+    }
+
+    /**
+     * The ranking rule over an already-evidenced denominator. Kept separate from the evidence read
+     * so the missing-denominator behaviour is directly testable with real positions.
+     */
+    static BookShareRoster shareRoster(String accountId, List<TradeRecord> active,
+                                       Long denominatorCents) {
+        List<TradeRecord> ranked = new ArrayList<>(active == null ? List.of() : active);
+        ranked.sort(Comparator.comparingLong(TradeRecord::maxLossCents).reversed()
+                .thenComparing(TradeRecord::symbol).thenComparing(TradeRecord::id));
+        if (ranked.isEmpty()) {
+            return unavailableRoster(accountId, ranked, denominatorCents,
+                    "This account holds no open positions, so there is no book risk to take a "
+                            + "share of.");
+        }
+        if (denominatorCents == null) {
+            return unavailableRoster(accountId, ranked, null,
+                    "The portfolio-heat receipt did not report a book total (" + HEAT_TOTAL_KEY
+                            + "), so no position's share of it can be measured.");
+        }
+        if (denominatorCents <= 0) {
+            return unavailableRoster(accountId, ranked, denominatorCents,
+                    "This book's defined risk totals " + Money.fmt(denominatorCents) + " across "
+                            + ranked.size() + " open position" + (ranked.size() == 1 ? "" : "s")
+                            + ", so no position has a measurable share of it.");
+        }
+        List<BookShareRow> rows = new ArrayList<>();
+        int rank = 0;
+        long previousRisk = 0;
+        for (int i = 0; i < ranked.size(); i++) {
+            TradeRecord trade = ranked.get(i);
+            if (i == 0 || trade.maxLossCents() != previousRisk) rank = i + 1;
+            previousRisk = trade.maxLossCents();
+            rows.add(new BookShareRow(trade.id(), trade.symbol(), trade.strategy(),
+                    trade.maxLossCents(), denominatorCents, SHARE_DENOMINATOR_BASIS,
+                    trade.maxLossCents() * 100.0 / denominatorCents, rank, ranked.size(), null));
+        }
+        return new BookShareRoster(true, null, accountId, rows.size(), denominatorCents,
+                SHARE_DENOMINATOR_BASIS, rows, SHARE_ROSTER_BASIS);
+    }
+
+    /** Every position still carries its own risk amount; only the share and the rank are withheld. */
+    private static BookShareRoster unavailableRoster(String accountId, List<TradeRecord> active,
+                                                     Long denominatorCents, String reason) {
+        List<BookShareRow> rows = new ArrayList<>();
+        for (TradeRecord trade : active) {
+            rows.add(new BookShareRow(trade.id(), trade.symbol(), trade.strategy(),
+                    trade.maxLossCents(), denominatorCents, SHARE_DENOMINATOR_BASIS,
+                    null, null, null, reason));
+        }
+        return new BookShareRoster(false, reason, accountId, rows.size(), denominatorCents,
+                SHARE_DENOMINATOR_BASIS, rows, SHARE_ROSTER_BASIS);
+    }
+
+    /** Every ACTIVE position, never a first page of them — a truncated roster would misrank. */
+    private List<TradeRecord> activePositions(String accountId) {
+        TradeService.Page page = trades.list(accountId, TradeRecord.ACTIVE, 0, 500);
+        if (page.total() > page.trades().size()) {
+            page = trades.list(accountId, TradeRecord.ACTIVE, 0,
+                    (int) Math.min(page.total(), Integer.MAX_VALUE));
+        }
+        return page.trades();
+    }
+
+    private Long heatTotalMaxLossCents(String accountId) {
+        Object total = trades.portfolioHeat(accountId).get(HEAT_TOTAL_KEY);
+        return total instanceof Number number ? number.longValue() : null;
+    }
+
+    private static String reason(RuntimeException e, String fallback) {
+        return e.getMessage() == null || e.getMessage().isBlank() ? fallback : e.getMessage();
     }
 
     private MeasuredBook measuredPracticeBook(String accountId) {

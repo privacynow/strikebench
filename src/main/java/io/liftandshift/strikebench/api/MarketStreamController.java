@@ -8,15 +8,12 @@ import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
-import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.util.EventBus;
 
 import java.time.Clock;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -78,7 +75,7 @@ final class MarketStreamController implements AutoCloseable {
 
     private MarketFrameBroadcaster.Draft loadFrame(MarketFrameBroadcaster.Request request) {
         String world = activeWorldFor.apply(request.owner());
-        List<Map<String, Object>> rows = quoteRows(world, request.owner(),
+        List<ApiResponses.QuoteView> rows = quoteRows(world, request.owner(),
                 request.customSymbols(), request.symbols());
         String simTime = null;
         if (!"observed".equals(world)) {
@@ -88,13 +85,14 @@ final class MarketStreamController implements AutoCloseable {
         return new MarketFrameBroadcaster.Draft(world, rows, simTime, clock.millis());
     }
 
-    private List<Map<String, Object>> quoteRows(String world, String owner, boolean customSymbols,
-                                                List<String> requestedSymbols) {
-        List<Map<String, Object>> rows = new ArrayList<>();
+    /** The live tape serves the SAME typed row as the /api/quotes batch — one shape, one price. */
+    private List<ApiResponses.QuoteView> quoteRows(String world, String owner, boolean customSymbols,
+                                                   List<String> requestedSymbols) {
+        List<ApiResponses.QuoteView> rows = new ArrayList<>();
         if ("observed".equals(world)) {
             List<String> symbols = customSymbols ? requestedSymbols : universe.active().symbols();
             for (var snapshot : engine.quotes(symbols)) {
-                rows.add(MarketDataEngine.toRow(snapshot));
+                rows.add(ApiResponses.QuoteView.of(snapshot.toQuote(), snapshot.refreshing()));
             }
             return rows;
         }
@@ -109,25 +107,10 @@ final class MarketStreamController implements AutoCloseable {
                     .orElse(List.of());
         }
         for (String symbol : symbols) {
-            market.quote(symbol, world).ifPresent(quote -> rows.add(quoteRow(quote)));
+            market.quote(symbol, world)
+                    .ifPresent(quote -> rows.add(ApiResponses.QuoteView.of(quote, false)));
         }
         return rows;
-    }
-
-    private static Map<String, Object> quoteRow(Quote quote) {
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("symbol", quote.symbol());
-        row.put("description", quote.description());
-        row.put("last", quote.last() == null ? null : quote.last().toPlainString());
-        row.put("bid", quote.bid() == null ? null : quote.bid().toPlainString());
-        row.put("ask", quote.ask() == null ? null : quote.ask().toPlainString());
-        row.put("prevClose", quote.prevClose() == null ? null : quote.prevClose().toPlainString());
-        row.put("optionable", quote.optionable());
-        row.put("freshness", quote.markFreshness().name());
-        row.put("evidence", quote.evidence());
-        row.put("asOf", quote.asOfEpochMs());
-        row.put("refreshing", false);
-        return row;
     }
 
     void eventStream(SseClient client) {

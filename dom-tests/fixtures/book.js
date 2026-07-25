@@ -260,7 +260,6 @@ function portfolioSummary(trades, shares) {
     openTradesUnrealizedCents: openTradesUnrealizedCents,
     totalValueCents: totalValueCents,
     totalPnlCents: totalValueCents - startingCashCents,
-    complete: true,
     freshness: 'REALTIME',
     note: rows.length
       ? 'Fixture Practice account receipt; reserve remains inside cash, before close fees.'
@@ -305,9 +304,9 @@ function portfolioHeat(trades, summary) {
 /**
  * `TradeService.BookGreeks`.
  *
- * The per-position rows carry `TradeService.PositionGreeks` — `gammaShares`, `thetaPerDay`,
- * `vegaPerPoint` — which is NOT the canonical unit set `TradeView.greeks` uses
- * (`gammaSharesPerDollar`, `thetaCentsPerDay`, `vegaCentsPerPoint`). That divergence is real and
+ * The per-position rows carry the ONE canonical greeks view (ScenarioCanvasValuator.Greeks:
+ * deltaShares, gammaSharesPerDollar, thetaCentsPerDay, vegaCentsPerPoint). The old
+ * TradeService.PositionGreeks dialect was deleted from the wire; the divergence it documented is
  * live; §5.3 of the audit is the work to end it. The fixture mirrors today's wire, so this file
  * must be revisited in the same change that canonicalizes the contract — a fixture that jumped
  * ahead to the intended shape would make the migration look already-done.
@@ -322,10 +321,9 @@ function portfolioGreeks(trades) {
     qty: trade.qty,
     greeks: {
       deltaShares: canonical.deltaShares,
-      gammaShares: canonical.gammaSharesPerDollar,
-      thetaPerDay: canonical.thetaCentsPerDay / 100,
-      vegaPerPoint: canonical.vegaCentsPerPoint / 100,
-      complete: true
+      gammaSharesPerDollar: canonical.gammaSharesPerDollar,
+      thetaCentsPerDay: canonical.thetaCentsPerDay,
+      vegaCentsPerPoint: canonical.vegaCentsPerPoint
     },
     netDollarDeltaCents: Math.round(canonical.deltaShares * trade.entryUnderlyingCents),
     unrealizedCents: trade.unrealizedPnlCents || 0
@@ -348,7 +346,6 @@ function portfolioGreeks(trades) {
     perShareUnavailableReason: 'Share delta is not additive across underlyings.',
     activeTrades: rows.length,
     measuredTrades: rows.length,
-    complete: true,
     positions: perPosition,
     basis: rows.length ? 'PRACTICE_EXECUTABLE_MARKS' : 'No active Practice positions.'
   };
@@ -366,7 +363,6 @@ function bookRisk(greeks) {
       vegaCentsPerPoint: greeks.vegaCentsPerPoint,
       perShareAvailable: false,
       perShareUnavailableReason: 'Share delta is not additive across underlyings.',
-      complete: true,
       basis: 'PRACTICE_EXECUTABLE_MARKS'
     },
     basis: 'PRACTICE_EXECUTABLE_MARKS'
@@ -391,10 +387,9 @@ function tradeDetail(trade) {
     freshness: 'REALTIME',
     greeks: {
       deltaShares: canonical.deltaShares,
-      gammaShares: canonical.gammaSharesPerDollar,
-      thetaPerDay: canonical.thetaCentsPerDay / 100,
-      vegaPerPoint: canonical.vegaCentsPerPoint / 100,
-      complete: true
+      gammaSharesPerDollar: canonical.gammaSharesPerDollar,
+      thetaCentsPerDay: canonical.thetaCentsPerDay,
+      vegaCentsPerPoint: canonical.vegaCentsPerPoint
     },
     legGreeks: []
   };
@@ -410,8 +405,10 @@ function tradeDetail(trade) {
         unrealizedCents: Math.round((trade.unrealizedPnlCents || 0) / 2) }),
       current
     ],
-    audit: [],
-    payoff: payoff
+    audit: []
+    /* No `payoff` here on purpose: ApiResponses.TradeDetail is five components, and the held curve
+       has one owner — trade.terminalPayoff. A second list on this envelope is exactly what let a
+       detail event overwrite the good curve with an empty array. */
   };
 }
 

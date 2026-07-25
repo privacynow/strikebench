@@ -472,7 +472,98 @@ class BookRiskServiceTest {
         assertThat(lane.practice()).isNull();
     }
 
+    /**
+     * §5.6: Book share and rank are backend facts. Two positions of different size get the exact
+     * shares and ranks of ONE declared denominator — the canonical portfolio-heat total, quoted on
+     * every row so the percentage can be re-derived by hand.
+     */
+    @Test
+    void bookShareAndRankAreMeasuredAgainstOneDeclaredDenominator() {
+        seedPracticeTrade("trade-nvda", "NVDA", "CASH_SECURED_PUT", "950", 1_500_000L);
+        seedPracticeTrade("trade-amd", "AMD", "CREDIT_PUT_SPREAD", "160", 500_000L);
+
+        var roster = risk.bookShareRoster(practice.id());
+
+        assertThat(roster.available()).as(roster.unavailableReason()).isTrue();
+        assertThat(roster.unavailableReason()).isNull();
+        assertThat(roster.positions()).isEqualTo(2);
+        assertThat(roster.denominatorCents()).isEqualTo(2_000_000L); // the heat receipt's own total
+        assertThat(roster.denominatorBasis()).contains("portfolio-heat receipt");
+        assertThat(roster.basis()).contains("never reported as 0%");
+        assertThat(roster.rows()).extracting(BookRiskService.BookShareRow::tradeId)
+                .containsExactly("trade-nvda", "trade-amd"); // largest defined risk first
+
+        var biggest = roster.rows().getFirst();
+        assertThat(biggest.symbol()).isEqualTo("NVDA");
+        assertThat(biggest.riskCents()).isEqualTo(1_500_000L);
+        assertThat(biggest.denominatorCents()).isEqualTo(2_000_000L);
+        assertThat(biggest.sharePct()).isEqualTo(75.0);
+        assertThat(biggest.rank()).isEqualTo(1);
+        assertThat(biggest.rankOf()).isEqualTo(2);
+        assertThat(biggest.unavailableReason()).isNull();
+
+        var smallest = roster.rows().get(1);
+        assertThat(smallest.symbol()).isEqualTo("AMD");
+        assertThat(smallest.riskCents()).isEqualTo(500_000L);
+        assertThat(smallest.sharePct()).isEqualTo(25.0);
+        assertThat(smallest.rank()).isEqualTo(2);
+        assertThat(smallest.rankOf()).isEqualTo(2);
+
+        // the same receipt travels on the Practice lane, so no caller recomputes it
+        assertThat(risk.lane("local", practice.id()).practice().shareRoster().rows())
+                .extracting(BookRiskService.BookShareRow::sharePct)
+                .containsExactly(75.0, 25.0);
+    }
+
+    /** §3.2: with no book total there is no share and no rank — a stated reason, never a 0%. */
+    @Test
+    void aBookWithNoRiskTotalWithholdsShareAndRankWithAReason() {
+        assertThat(risk.bookShareRoster(practice.id()).unavailableReason())
+                .contains("no open positions");
+
+        seedPracticeTrade("trade-nvda", "NVDA", "CASH_SECURED_PUT", "950", 1_500_000L);
+        seedPracticeTrade("trade-amd", "AMD", "CREDIT_PUT_SPREAD", "160", 500_000L);
+        var active = trades.list(practice.id(), TradeRecord.ACTIVE, 0, 10).trades();
+
+        var zeroTotal = BookRiskService.shareRoster(practice.id(), active, 0L);
+        assertThat(zeroTotal.available()).isFalse();
+        assertThat(zeroTotal.unavailableReason())
+                .contains("$0.00").contains("2 open positions").contains("measurable share");
+        assertThat(zeroTotal.rows()).hasSize(2).allSatisfy(row -> {
+            assertThat(row.sharePct()).isNull();
+            assertThat(row.rank()).isNull();
+            assertThat(row.rankOf()).isNull();
+            assertThat(row.riskCents()).isPositive(); // the position's own risk is still known
+            assertThat(row.unavailableReason()).isEqualTo(zeroTotal.unavailableReason());
+        });
+
+        var absentTotal = BookRiskService.shareRoster(practice.id(), active, null);
+        assertThat(absentTotal.available()).isFalse();
+        assertThat(absentTotal.denominatorCents()).isNull();
+        assertThat(absentTotal.unavailableReason()).contains("totalMaxLossCents");
+        assertThat(absentTotal.rows()).hasSize(2).allSatisfy(row -> {
+            assertThat(row.sharePct()).isNull();
+            assertThat(row.rank()).isNull();
+        });
+    }
+
     // ---- helpers (same shapes as PortfolioAccountingServiceTest) ----
+
+    /** One ACTIVE Practice position with an exact recorded defined risk. */
+    private void seedPracticeTrade(String id, String symbol, String strategy, String strike,
+                                   long maxLossCents) {
+        List<Leg> legs = List.of(Leg.option(io.liftandshift.strikebench.model.LegAction.SELL,
+                io.liftandshift.strikebench.model.OptionType.PUT, new BigDecimal(strike),
+                LocalDate.parse("2026-08-07"), 1, new BigDecimal("4")));
+        db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,"
+                        + "risk_mode,entry_underlying_cents,entry_net_premium_cents,max_loss_cents,"
+                        + "breakevens_json,entry_snapshot_json,is_live,created_at,updated_at) "
+                        + "VALUES(?,?,?,?,'ACTIVE',1,?::jsonb,'income','month','conservative',"
+                        + "16000,-40000,?,'[]'::jsonb,'{}'::jsonb,0,?::timestamptz,?::timestamptz)",
+                id, practice.id(), symbol, strategy,
+                io.liftandshift.strikebench.util.Json.write(legs), maxLossCents,
+                CLOCK.instant().toString(), CLOCK.instant().toString());
+    }
 
     private static PortfolioAccountingService.AccountInput account(String name, String type, Long cash) {
         return new PortfolioAccountingService.AccountInput(name, type, null, "FIFO", null, null, null, null, cash);

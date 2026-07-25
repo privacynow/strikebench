@@ -2752,24 +2752,16 @@
     return load;
   }
 
-  function quoteContextRow(symbol, quote, lane) {
-    if (!quote) return { symbol: symbol, research: null, news: null, missing: [] };
-    var last = number(quote.last), previousClose = number(quote.prevClose);
+  /* §5.5: the browser does not decide a display price. This used to pick `last`, else the previous
+     close, and label the basis itself — while the backend's Quote.markBasis() prefers the MID on
+     any sane two-sided book, so Home showed `last` for every symbol that had a book while
+     /api/quotes and /api/research both published the mid. One symbol, two prices. The batch row IS
+     a typed QuoteView now; it is passed through verbatim, absence and stated reason included. */
+  function quoteContextRow(symbol, quoteView, lane) {
+    if (!quoteView) return { symbol: symbol, research: null, news: null, missing: [] };
     return {
       symbol: symbol,
-      research: {
-        symbol: symbol,
-        marketLane: lane || null,
-        // The bounded watch already owns an authoritative Quote receipt. Use its observed last
-        // directly (or its explicitly labeled previous close) instead of leaving every non-focused
-        // symbol visually blank while the richer Research document remains intentionally unfetched.
-        displayPrice: last != null ? last : previousClose,
-        priceIsPreviousClose: last == null && previousClose != null,
-        markBasis: last != null ? 'LAST' : previousClose != null ? 'PREVIOUS_CLOSE' : null,
-        freshness: quote.freshness || null,
-        quote: quote,
-        evidence: { inputs: { quote: quote.evidence || null } }
-      },
+      research: Object.assign({ symbol: symbol, marketLane: lane || null }, quoteView),
       news: null,
       missing: []
     };

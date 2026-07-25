@@ -10,7 +10,6 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -258,14 +257,34 @@ public final class MarketDataEngine {
     }
 
     /** A snapshot can still carry an honest mark when the feed omits last trade: a sane
-     * two-sided book or the explicitly stale previous close remains usable and disclosed. */
+     * two-sided book or the explicitly stale previous close remains usable and disclosed.
+     * The rule itself belongs to {@link Quote#markBasis()} — the engine asks, it does not
+     * keep a second copy of it. */
     private static boolean hasUsablePrice(MarketSnapshot snapshot) {
-        if (snapshot == null) return false;
-        if (snapshot.last() != null && snapshot.last().signum() > 0) return true;
-        if (snapshot.bid() != null && snapshot.ask() != null
-                && snapshot.bid().signum() > 0 && snapshot.ask().signum() > 0
-                && snapshot.bid().compareTo(snapshot.ask()) <= 0) return true;
-        return snapshot.prevClose() != null && snapshot.prevClose().signum() > 0;
+        return snapshot != null && snapshot.toQuote().markBasis() != Quote.MarkBasis.UNAVAILABLE;
+    }
+
+    /**
+     * WHY this symbol has no usable mark right now, in the engine's own words. Callers publish
+     * this instead of dropping the symbol or substituting a zero (§3.2); the engine is the only
+     * thing that knows whether the symbol was never fetched, failed, or is still in flight.
+     */
+    public String unavailableReason(String symbol) {
+        String s = norm(symbol);
+        MarketSnapshot snap = snapshots.get(s);
+        if (snap == null) {
+            return "the market engine holds no snapshot for " + s
+                    + " — no configured provider returned data for that symbol";
+        }
+        if (snap.error() != null && !snap.error().isBlank()) {
+            return "the last " + s + " refresh failed: " + snap.error();
+        }
+        if (snap.refreshing()) {
+            return s + " is being fetched now — no last trade, two-sided book or previous close"
+                    + " has arrived yet";
+        }
+        return "the " + s + " snapshot from " + snap.source()
+                + " carries no last trade, no two-sided book and no previous close";
     }
 
     /** Single-symbol accessor: warm state now (refresh behind if stale), or a blocking fetch if cold. */
@@ -527,35 +546,8 @@ public final class MarketDataEngine {
         return r -> { Thread t = new Thread(r, name); t.setDaemon(true); return t; };
     }
 
-    /** JSON-friendly rows for the tape / quotes batch (keeps the existing /api/quotes shape + extras). */
-    /** The price a row actually shows: mid of a sane two-sided book, else last, else previous close. */
-    private static java.math.BigDecimal rowMark(MarketSnapshot s) {
-        if (s.bid() != null && s.ask() != null && s.bid().signum() > 0 && s.ask().signum() > 0
-                && s.ask().compareTo(s.bid()) >= 0) {
-            return s.bid().add(s.ask()).divide(java.math.BigDecimal.valueOf(2),
-                    io.liftandshift.strikebench.util.Money.PRICE_SCALE, java.math.RoundingMode.HALF_UP);
-        }
-        if (s.last() != null && s.last().signum() > 0) return s.last();
-        return s.prevClose();
-    }
-
-    public static Map<String, Object> toRow(MarketSnapshot s) {
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("symbol", s.symbol());
-        row.put("description", s.description());
-        row.put("last", s.last() == null ? null : s.last().toPlainString());
-        row.put("bid", s.bid() == null ? null : s.bid().toPlainString());
-        row.put("ask", s.ask() == null ? null : s.ask().toPlainString());
-        row.put("prevClose", s.prevClose() == null ? null : s.prevClose().toPlainString());
-        // The day change is a BACKEND fact. Serving it here stops each surface deriving its own
-        // (price/prevClose-1)*100 from whichever price it happens to hold.
-        row.put("changePct", io.liftandshift.strikebench.model.Quote.changePct(rowMark(s), s.prevClose()));
-        row.put("optionable", s.optionable());
-        row.put("freshness", s.freshness().name());
-        row.put("source", s.source());
-        row.put("evidence", io.liftandshift.strikebench.model.DataEvidence.of(s.source(), s.freshness()));
-        row.put("asOf", s.asOfEpochMs());
-        row.put("refreshing", s.refreshing());
-        return row;
-    }
+    // The engine no longer hand-builds a quote row. It once carried its own rowMark() (mid, else
+    // last, else previous close) and its own map shape, which made the batch a SECOND price
+    // authority beside Quote.mark(). Callers now serve ApiResponses.QuoteView.of(snapshot.toQuote())
+    // — one row shape, one price decision, for the batch, the tape and the research receipt.
 }

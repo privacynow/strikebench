@@ -45,8 +45,11 @@ class DocumentationContractTest {
         assertThat(TRANSCRIBED_TEST_COUNT.matcher(evidenceSections).find())
                 .as("release evidence must come from scripts/release-matrix.mjs, never prose counts")
                 .isFalse();
-        assertThat(ci).contains("target/dom-fixture.tap", "target/dom-seeded.tap",
-                "target/dom-audit.tap", "target/dom-auth.tap", "scripts/release-matrix.mjs");
+        // The lanes CI actually runs (dom-tests/lane.js writes one TAP each). The retired SPA
+        // lanes this used to pin went with workspace.html in 8654824; pinning them kept the
+        // release report unproducible, which is worse than no report because it reads as one.
+        assertThat(ci).contains("target/dom-contracts.tap", "target/dom-journeys.tap",
+                "target/dom-visual.tap", "scripts/release-matrix.mjs");
         assertThat(auth).contains("verified OIDC sign-in reaches the owner-scoped application")
                 .contains("two signed-in identities are isolated and non-admin routes fail with 403")
                 .contains("an idle authenticated server session expires and loses protected access")

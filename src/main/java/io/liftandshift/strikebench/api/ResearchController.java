@@ -272,10 +272,16 @@ final class ResearchController {
                     "demo".equals(world) ? "demo sessions (fabricated teaching data)"
                             : world != null && !"observed".equals(world) ? "this simulated world's sessions"
                             : "observed sessions"));
-            ctx.json(new ApiResponses.ResearchDetail<>(symbol, current,
-                    current != null ? current.mark() : null,
-                    current != null ? current.markChangePct() : null, quoteUnavailableReason,
-                    current != null && current.usesPreviousCloseFallback(), lane.name(),
+            // ONE price decision for this symbol: the same QuoteView the /api/quotes batch serves.
+            // Research does not re-derive a display price, a day change or a basis of its own.
+            ApiResponses.QuoteView quoteView = current == null
+                    ? ApiResponses.QuoteView.unavailable(symbol, quoteUnavailableReason)
+                    : ApiResponses.QuoteView.of(current, false);
+            ctx.json(new ApiResponses.ResearchDetail<>(symbol, quoteView,
+                    quoteView.displayPrice(),
+                    quoteView.displayChangePct(), quoteView.markBasis(),
+                    quoteView.quoteUnavailableReason(),
+                    quoteView.priceIsPreviousClose(), lane.name(),
                     current != null && current.optionable(), option.atmIv(),
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
                     volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
@@ -286,8 +292,7 @@ final class ResearchController {
                     demoHistory, candles.barBasis(), candles.priceBasis(), evidence,
                     option.expirations().stream().map(LocalDate::toString).toList(),
                     eligibility.eligible(), eligibility.detail(), benchmarkFuture.get(),
-                    current != null ? current.markFreshness().name() : "UNAVAILABLE",
-                    today.toString(), regime));
+                    quoteView.freshness(), today.toString(), regime));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);

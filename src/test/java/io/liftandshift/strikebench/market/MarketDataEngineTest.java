@@ -105,6 +105,24 @@ class MarketDataEngineTest {
     }
 
     @Test
+    void aSymbolTheEngineCannotPriceExplainsItselfInsteadOfDisappearing() {
+        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
+        CountingProvider p = new CountingProvider(clock);
+        MarketDataEngine eng = engine(p, cfg);
+
+        // §3.2: the batch drops unpriced symbols from its rows, so the engine — the only thing that
+        // knows WHY — has to be able to say so. Nothing here may become a price.
+        var rows = eng.quotes(List.of("AAPL", "ZZZZ"));
+        assertThat(rows).extracting(MarketDataEngine.MarketSnapshot::symbol).containsExactly("AAPL");
+        assertThat(eng.unavailableReason("ZZZZ"))
+                .contains("ZZZZ")
+                .containsIgnoringCase("no")
+                .isNotBlank();
+        // The priced symbol's row still comes from the ONE price rule, mid-first.
+        assertThat(rows.getFirst().toQuote().markBasis()).isEqualTo(io.liftandshift.strikebench.model.Quote.MarkBasis.MID);
+    }
+
+    @Test
     void repeatedSymbolInOneBatchCollapsesToASingleFetch() {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         CountingProvider p = new CountingProvider(clock);

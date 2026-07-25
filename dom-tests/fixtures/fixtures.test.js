@@ -321,7 +321,7 @@ test('portfolio documents match their wire contracts', () => {
   documents.greeks.positions.forEach(row =>
     assertShape(row, 'paper/TradeService.java', 'PositionGreekRow'));
   documents.greeks.positions.forEach(row =>
-    assertShape(row.greeks, 'paper/TradeService.java', 'PositionGreeks'));
+    assertShape(row.greeks, 'sim/ScenarioCanvasValuator.java', 'Greeks'));
   documents.sharePositions.forEach(row =>
     assertShape(row, 'paper/PositionsService.java', 'PositionView'));
   // Portfolio heat is assembled as a Map, so the method body is its contract.
@@ -588,13 +588,17 @@ test('the golden package is the same package as an idea and as a position', () =
     `the same move must price the same on both surfaces at ${row.underlyingMovePct}`));
 });
 
-test('the held payoff carries a STRING price and the idea payoff a NUMBER', () => {
+test('the held payoff has ONE shape, and the detail envelope no longer carries a second list', () => {
+  /* ApiResponses.PayoffPoint (a String price) was deleted with TradeDetail.payoff. There is one
+     held curve — RiskProfile.TerminalPayoff, whose price is a JSON number — and the detail
+     envelope must not reintroduce a second, because the browser consumed one and then let the
+     other overwrite it (audit §5.4). */
   assert.equal(typeof golden.goldenTerminalPayoff().points[0].price, 'number',
-    'RiskProfile.PayoffPoint.price is a BigDecimal');
-  assert.equal(typeof golden.goldenHeldPayoff()[0].price, 'string',
-    'ApiResponses.PayoffPoint.price is toPlainString()');
+    'RiskProfile.TerminalPayoff.price is a BigDecimal, serialized as a number');
   const detail = book.tradeDetail(book.goldenHeldTrade());
-  detail.payoff.forEach(point => assert.equal(typeof point.price, 'string'));
+  assert.equal(Object.hasOwn(detail, 'payoff'), false,
+    'TradeDetail has five components; a second payoff list here is the deleted duplicate');
+  assert.equal(typeof detail.trade.terminalPayoff.points[0].price, 'number');
 });
 
 // ---------------------------------------------------------------------------------------------
