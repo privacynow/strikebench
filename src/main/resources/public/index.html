@@ -28,7 +28,7 @@
     </div>
     <div class="cmd">
       <div class="searchbox sm">
-        <button class="cmdsym" id="cmdSym" title="focused underlying — click to search another" style="display:none">◎ <b></b></button>
+        <button class="cmdsym" id="cmdSym" title="focused underlying — click to search another" hidden>◎ <b></b></button>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input id="cmd" placeholder="symbol · sector · or learn — XOM · financials · iron condor · theta" autocomplete="off" spellcheck="false">
       </div>
@@ -316,7 +316,7 @@ function drawPayoff(svg,p,full,ghost,opts){
     for(var i=0;i<p.legs.length;i++){var l=p.legs[i]; if(l.t==='s')continue; var k=l.k; if(k<lo||k>hi)continue; var kx=sx(k);
       if(opts.interactive){
         var hcol=l.q<0?'var(--loss)':'var(--profit)';
-        g+='<g class="pfhandle" data-legk="'+i+'" style="cursor:ew-resize">';
+        g+='<g class="pfhandle" data-legk="'+i+'">';
         g+='<rect x="'+f(kx-7)+'" y="'+y0+'" width="14" height="'+(y1-y0)+'" fill="transparent"/>';   // wide grab band
         g+='<line x1="'+hx(kx)+'" y1="'+y0+'" x2="'+hx(kx)+'" y2="'+(y1-6)+'" stroke="'+hcol+'" stroke-opacity=".4" stroke-width="1"/>';
         g+='<rect x="'+f(kx-7.5)+'" y="'+(y1-8)+'" width="15" height="13" rx="3" fill="'+hcol+'"/>';
@@ -2411,9 +2411,9 @@ function drawAuthoritativeBookFan(){
   /* The neutral Book field is the only aggregate. It comes from same-index synchronized paths. */
   if(jointReady){
     [['p5','p95','.055'],['p25','p75','.10']].forEach(function(band){var frames=joint.frames.filter(function(f){return f[band[0]]!=null&&f[band[1]]!=null;});if(frames.length<2)return;var upper=frames.map(function(f,i){return (i?'L':'M')+X(f.x).toFixed(1)+' '+Y(f[band[1]]).toFixed(1);}).join(' '),lower=frames.slice().reverse().map(function(f){return 'L'+X(f.x).toFixed(1)+' '+Y(f[band[0]]).toFixed(1);}).join(' ');g+='<path d="'+upper+lower+'Z" fill="var(--text)" fill-opacity="'+band[2]+'"/>';});
-    (joint.paths||[]).forEach(function(path){var d=fanPathD(path,function(v,i){return X(fanPathDay(i,path,joint.progress,maxX));},function(v){return Y(v);},'M',' L');g+='<path d="'+d+'" fill="none" stroke="var(--text)" stroke-width=".8" stroke-opacity=".11" style="pointer-events:none"/>';});
+    (joint.paths||[]).forEach(function(path){var d=fanPathD(path,function(v,i){return X(fanPathDay(i,path,joint.progress,maxX));},function(v){return Y(v);},'M',' L');g+='<path d="'+d+'" fill="none" stroke="var(--text)" stroke-width=".8" stroke-opacity=".11" class="svgink"/>';});
     var bookLine=fanPathD(joint.frames,function(f){return X(f.x);},function(f){return Y(f.p50);},'M',' L'),bookEnd=joint.frames[joint.frames.length-1];
-    g+='<path d="'+bookLine+'" fill="none" stroke="var(--text)" stroke-width="2.2" stroke-opacity=".82" style="pointer-events:none"/><circle cx="'+X(bookEnd.x).toFixed(1)+'" cy="'+Y(bookEnd.p50).toFixed(1)+'" r="3" fill="var(--text)"/><text x="'+(X(bookEnd.x)-5).toFixed(1)+'" y="'+(Y(bookEnd.p50)-7).toFixed(1)+'" text-anchor="end" fill="var(--text)" font-size="9" font-family="var(--mono)">BOOK '+deskEsc(signed(bookEnd.p50))+'</text>';
+    g+='<path d="'+bookLine+'" fill="none" stroke="var(--text)" stroke-width="2.2" stroke-opacity=".82" class="svgink"/><circle cx="'+X(bookEnd.x).toFixed(1)+'" cy="'+Y(bookEnd.p50).toFixed(1)+'" r="3" fill="var(--text)"/><text x="'+(X(bookEnd.x)-5).toFixed(1)+'" y="'+(Y(bookEnd.p50)-7).toFixed(1)+'" text-anchor="end" fill="var(--text)" font-size="9" font-family="var(--mono)">BOOK '+deskEsc(signed(bookEnd.p50))+'</text>';
   }
   /* quantile bands: the hovered position gets its full P10–P90 + P25–P75 story (idea-fan grammar) */
   ready.forEach(function(e){
@@ -2430,7 +2430,7 @@ function drawAuthoritativeBookFan(){
     var color=positionColor(e.p.id),isHot=String(e.p.id)===hot,dim=hot&&!isHot;
     (e.slot.paths||[]).forEach(function(path){
       var d=fanPathD(path,function(v,i){return X(fanPathDay(i,path,e.slot.progress,maxX));},function(v){return Y(v);},'M',' L');
-      g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width=".8" stroke-opacity="'+(dim?'.05':isHot?'.34':'.14')+'" style="pointer-events:none"/>';
+      g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width=".8" stroke-opacity="'+(dim?'.05':isHot?'.34':'.14')+'" class="svgink"/>';
     });
   });
   var labels=[];
@@ -2438,9 +2438,9 @@ function drawAuthoritativeBookFan(){
     var color=positionColor(e.p.id),isHot=String(e.p.id)===hot,dim=hot&&!isHot;
     var d=fanPathD(e.slot.frames,function(f){return X(f.x);},function(f){return Y(f.p50);},'M',' L');
     var terminal=e.slot.frames[e.slot.frames.length-1];
-    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?2.6:1.7)+'" stroke-opacity="'+(dim?.3:.95)+'" style="pointer-events:none"/>';
+    g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="'+(isHot?2.6:1.7)+'" stroke-opacity="'+(dim?.3:.95)+'" class="svgink"/>';
     if(terminal.p10!=null&&terminal.p90!=null){var ty1=Y(terminal.p90),ty2=Y(terminal.p10),tx=X(terminal.x);
-      g+='<line x1="'+tx.toFixed(1)+'" y1="'+ty1.toFixed(1)+'" x2="'+tx.toFixed(1)+'" y2="'+ty2.toFixed(1)+'" stroke="'+color+'" stroke-opacity="'+(dim?.15:.45)+'" stroke-width="1.4" style="pointer-events:none"/>';}
+      g+='<line x1="'+tx.toFixed(1)+'" y1="'+ty1.toFixed(1)+'" x2="'+tx.toFixed(1)+'" y2="'+ty2.toFixed(1)+'" stroke="'+color+'" stroke-opacity="'+(dim?.15:.45)+'" stroke-width="1.4" class="svgink"/>';}
     labels.push({id:e.p.id,x:X(terminal.x),y:Y(terminal.p50),sym:e.p.sym,color:color,dim:dim,
       read:(slotChance(e.slot)!=null?slotChance(e.slot).toFixed(0)+'% · ':'')+signed(terminal.p50)});
   });
@@ -2453,10 +2453,10 @@ function drawAuthoritativeBookFan(){
   var overflow=labels.length?labels[labels.length-1].ly-(H-pad.b-4):0;
   if(overflow>0)labels.forEach(function(lb){lb.ly-=overflow;});
   labels.forEach(function(lb){
-    g+='<circle cx="'+lb.x.toFixed(1)+'" cy="'+lb.y.toFixed(1)+'" r="2.6" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.35:1)+'" style="pointer-events:none"/>'+
-      '<path d="M'+lb.x.toFixed(1)+' '+lb.y.toFixed(1)+' L'+(labelX-3).toFixed(1)+' '+lb.ly.toFixed(1)+'" fill="none" stroke="'+lb.color+'" stroke-opacity="'+(lb.dim?.12:.3)+'" stroke-dasharray="2 3" style="pointer-events:none"/>'+
-      '<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+(wideLabels?-2:3)).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.sym)+'</text>'+
-      (wideLabels?'<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" style="pointer-events:none;font-family:var(--mono)">'+deskEsc(lb.read)+'</text>':'');
+    g+='<circle cx="'+lb.x.toFixed(1)+'" cy="'+lb.y.toFixed(1)+'" r="2.6" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.35:1)+'" class="svgink"/>'+
+      '<path d="M'+lb.x.toFixed(1)+' '+lb.y.toFixed(1)+' L'+(labelX-3).toFixed(1)+' '+lb.ly.toFixed(1)+'" fill="none" stroke="'+lb.color+'" stroke-opacity="'+(lb.dim?.12:.3)+'" stroke-dasharray="2 3" class="svgink"/>'+
+      '<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+(wideLabels?-2:3)).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.4:.95)+'" font-size="9.5" class="svgink svgmono">'+deskEsc(lb.sym)+'</text>'+
+      (wideLabels?'<text x="'+labelX.toFixed(1)+'" y="'+(lb.ly+8).toFixed(1)+'" fill="'+lb.color+'" fill-opacity="'+(lb.dim?.3:.7)+'" font-size="8.5" class="svgink svgmono">'+deskEsc(lb.read)+'</text>':'');
   });
   /* same chart-wide hover/click surface as the other fans: nearest position lights up, click opens it */
   if(ready.length)g+='<rect class="mcinteraction" data-fan-surface="1" role="button" aria-label="Hover an independent position projection to inspect it; choose one to open it" x="'+pad.l+'" y="'+pad.t+'" width="'+(W-pad.l-pad.r)+'" height="'+(H-pad.t-pad.b)+'"/>';
@@ -2678,7 +2678,7 @@ function updateThread(){
   /* the symbol pill echoes the FOCUSED underlying only (position / Decide) — hidden at book level so
      it doesn't read as a stray label stuck in the corner. */
   var ctxSym = decide ? decide.sym : (lv==='position'&&fp ? fp.sym : null);
-  if(cmdSym){ if(ctxSym){ cmdSym.style.display=''; cmdSym.innerHTML='◎ <b>'+ctxSym+'</b>'; } else { cmdSym.style.display='none'; } }
+  if(cmdSym){ cmdSym.hidden=!ctxSym; if(ctxSym)cmdSym.innerHTML='◎ <b>'+ctxSym+'</b>'; }
   if(!zoomed){
     /* BOOK: the middle zone IS the market strip (mode signalled once, here); crumbs/state cleared */
     crumbsEl.innerHTML=''; var ts0=document.getElementById('threadState'); if(ts0)ts0.innerHTML='';
@@ -3547,7 +3547,7 @@ function stratKPIs(c, opts){ opts=opts||{};
       kcell('Max loss', maxLossDisp(c), 'neg'),
       kcell('Chance', percentAmount(c.pop), '')
     ];
-    return '<div class="kgrid boxed numrow calm" style="margin-top:8px">'+primary.join('')+'</div>'+
+    return '<div class="kgrid boxed numrow calm">'+primary.join('')+'</div>'+
       '<div class="ksecondary"><span>Max profit <b>'+maxProfitDisp(c)+'</b></span>'+
       '<span>Capital <b>'+(c.cap==null?'—':money(c.cap))+'</b></span><span>Break-even <b>'+beLabel(c)+'</b></span></div>';
   }
@@ -3560,7 +3560,7 @@ function stratKPIs(c, opts){ opts=opts||{};
     kcell('Break-even', beLabel(c), '')
   ];
   var n=cells.length;
-  return '<div class="kgrid boxed numrow" style="grid-template-columns:repeat('+n+',1fr);margin-top:9px">'+cells.join('')+'</div>'
+  return '<div class="kgrid boxed numrow" style="--numrow-cols:'+n+'">'+cells.join('')+'</div>'
     +packagePriceReconcileLine(c&&c.price);
 }
 /* ---- seeded Monte-Carlo over the SAME payoff engine (payFor) -----------------
@@ -4067,7 +4067,7 @@ function leftCol(c){
     '<div class="railtools"><button class="railtool'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-label="Browse the supported strategy catalog" title="Supported strategy catalog">'+deskGlyph('book')+'</button><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
   var map='<div class="pickmap'+(decide.cands.length<2?' single-point':'')+'"><div class="srchd sub"><span class="lbl">Risk / reward map</span><span class="hint">'+(decide.cands.length<2?'one surviving package · not a comparison':'linked to ideas · size = capital')+'</span></div>'+
     '<svg class="decmap" id="decMap"></svg><div class="mapcard" id="decMapCard"></div>'+
-    '<div class="fanleg"><span><i style="background:var(--profit)"></i>defined</span><span><i style="background:var(--violet)"></i>secured</span><span><i style="background:var(--loss)"></i>undefined</span></div></div>';
+    '<div class="fanleg"><span><i class="swatch defined"></i>defined</span><span><i class="swatch secured"></i>secured</span><span><i class="swatch undefined"></i>undefined</span></div></div>';
   var drawer=decide.leftTool==='caps'?'<div class="raildrawer capsdrawer">'+governorsPanel()+'</div>':decide.leftTool==='catalog'?'<div class="raildrawer catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
   var notice='';
   /* A refused adoption stands ABOVE the competition, because it changes what the field on screen
@@ -4186,7 +4186,7 @@ function centerCol(c){
     '<div class="dcctop">'+   /* causal stack, not competing side rails: payoff then its scenario spectrum */
       '<div class="dccpay">'+
         '<div class="paytitle"><span class="lbl">'+payoffLabel+' — '+c.short+'</span>'+
-          '<span class="hint" style="margin-left:auto">'+payoffHint+'</span></div>'+
+          '<span class="hint pushright">'+payoffHint+'</span></div>'+
         '<svg class="decpay" id="decPay"></svg>'+
         stratKPIs(c,{calm:true})+
       '</div>'+
@@ -4262,20 +4262,20 @@ function renderClose(){
   var closeCostText=closeCost==null?null:money(-Math.abs(closeCost));
   var closeCostReason=lifeRead.unavailableReason||'no executable close quote in the current book';
   var hasSh=p.legs.some(function(l){return l.t==='s';});
-  var box='<div class="placebox" style="max-width:540px">'+
+  var box='<div class="placebox">'+
     '<div class="field-lbl"><span class="lbl">Close order</span><span class="hint">buy to close</span></div>'+
-    '<div class="booktext" style="margin:3px 0 11px">Close your <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — buy back the options'+(hasSh?' and keep the shares':'')+', locking in today’s result.</div>'+
+    '<div class="booktext closelede">Close your <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — buy back the options'+(hasSh?' and keep the shares':'')+', locking in today’s result.</div>'+
     '<div class="kv"><span>Realized P/L</span><span class="num '+(realized>=0?'pos':'neg')+'">'+money(realized)+'</span></div>'+
     '<div class="kv"><span>Cost to close</span>'+(closeCostText==null
       ? '<span class="num">unavailable · '+deskEsc(closeCostReason)+'</span>'
       : '<span class="num neg">'+closeCostText+'</span>')+'</div>'+
-    '<div class="psec" style="margin-top:10px"><div class="field-lbl"><span class="lbl">Lane</span><span class="hint">paper vs real</span></div>'+
+    '<div class="psec"><div class="field-lbl"><span class="lbl">Lane</span><span class="hint">paper vs real</span></div>'+
       seg3(o.lane,[['paper','Paper'],['real','Real']],'data-lane')+'</div>'+
     (o.review?
-      '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext" style="margin-top:6px">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · '+(closeCostText==null?'cost to close unavailable ('+deskEsc(closeCostReason)+')':'cost to close '+closeCostText)+' · realizes <b>'+money(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
+      '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext confirmline">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · '+(closeCostText==null?'cost to close unavailable ('+deskEsc(closeCostReason)+')':'cost to close '+closeCostText)+' · realizes <b>'+money(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
       :'<div class="placefoot"><button class="btn pri place" data-dec="review">Review &amp; close →</button><span class="placenote">Nothing is sent until you confirm.</span></div>')+
   '</div>';
-  var intent='<div class="intent"><div class="dctx" style="color:var(--dim)">Closing your held <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — a simple exit, no new structure.</div></div>';
+  var intent='<div class="intent"><div class="dctx dctxdim">Closing your held <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — a simple exit, no new structure.</div></div>';
   decideEl.innerHTML='<div class="decwrap closewrap">'+decHead()+intent+box+'</div>';
 }
 function decHead(){
@@ -4315,7 +4315,7 @@ function underlyingChip(){
         return '<button class="univrow'+(selected?' on':'')+'" role="option" aria-selected="'+selected+'" data-pick="'+deskEsc(x.sym)+'">'+
           '<span class="us">'+deskEsc(x.sym)+'</span><span class="un">'+deskEsc(x.name||x.sym)+(held?' <span class="uheld">held</span>':'')+'</span>'+
           (deskBackendEnabled()?'<span class="uv">stage</span><span class="ue">—</span>':knownSpot?'<span class="uv">'+Number(x.spot).toFixed(x.spot>=100?0:2)+'</span><span class="ue '+(x.chg>=0?'pos':'neg')+'">'+(x.chg>=0?'+':'')+x.chg+'%</span>':'<span class="uv">quote unavailable</span><span class="ue">—</span>')+'</button>';
-      }).join('')||(q?'<div class="hint" style="padding:9px 10px">No symbol matches “'+deskEsc(decide.pickq)+'”.</div>':'<div class="hint" style="padding:12px 10px">Type a symbol or company name. Results appear here.</div>');
+      }).join('')||(q?'<div class="hint pickempty">No symbol matches “'+deskEsc(decide.pickq)+'”.</div>':'<div class="hint pickprompt">Type a symbol or company name. Results appear here.</div>');
     pop='<div class="univpop"><div class="univsearch">'+
         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>'+
         '<input id="univq" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="univresults" placeholder="Search symbol or company…" autocomplete="off" spellcheck="false" value="'+deskEsc(decide.pickq||'')+'"></div>'+
@@ -4591,10 +4591,10 @@ function fitBudgetPanel(c){
   /* Without a declared cap there is no fraction to fill and no remainder to state. Show the
      requirement — a backend fact — and name the declaration that would make it a screen. */
   if(cap==null)return '<div class="fitbudget"><div class="fbh"><span>'+label+' required</span><b>'+money(used)+'</b></div>'+
-    '<div class="tailsub" style="margin-top:5px">No '+label.toLowerCase()+' cap is declared, so this package has nothing to be measured against. Set one in Screens &amp; caps.</div></div>';
+    '<div class="tailsub">No '+label.toLowerCase()+' cap is declared, so this package has nothing to be measured against. Set one in Screens &amp; caps.</div></div>';
   var pct=Math.min(100,used/Math.max(1,cap)*100), room=cap-used;
   return '<div class="fitbudget"><div class="fbh"><span>'+label+' screen</span><b class="'+(room>=0?'pos':'neg')+'">'+money(used)+' / '+money(cap)+'</b></div>'+
-    '<div class="tailtrack"><i style="width:'+pct.toFixed(1)+'%;background:'+(room>=0?'var(--accent)':'var(--loss)')+'"></i></div><div class="tailsub" style="margin-top:5px">'+(room>=0?money(room)+' remains after this package.':'Over the stated cap by '+money(-room)+'.')+'</div></div>';
+    '<div class="tailtrack"><i style="width:'+pct.toFixed(1)+'%;background:'+(room>=0?'var(--accent)':'var(--loss)')+'"></i></div><div class="tailsub">'+(room>=0?money(room)+' remains after this package.':'Over the stated cap by '+money(-room)+'.')+'</div></div>';
 }
 function greekInspector(c){
   /* Front B S2: the fixture branch (liveGreeks BS-engine sensitivities) is removed. Greeks are
@@ -4610,7 +4610,7 @@ function authoritativeGreekInspector(c){
     trace='<div class="sensitivity"><span class="lbl">Same-path checkpoint trace</span>'+row('Now',now)+row('Target · session '+Math.round(target.day),target)+'</div>';
   }
   var legs=c.legs.map(function(l){var side=l.q<0?'sell':'buy',body=l.t==='s'?Math.abs(l.q)+' shares':Math.abs(l.q)+'× '+Math.round(l.k)+(l.t==='c'?'C':'P');return '<span class="lsleg '+side+'"><i>'+(side==='sell'?'−':'+')+'</i><b>'+body+'</b></span>';}).join('');
-  return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Greeks</span><span class="hint">same market path</span></div>'+body+trace+'<div class="legreceipt"><span class="lbl" style="flex-basis:100%">Package legs</span>'+legs+'</div>'+
+  return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Greeks</span><span class="hint">same market path</span></div>'+body+trace+'<div class="legreceipt"><span class="lbl legreceiptlbl">Package legs</span>'+legs+'</div>'+
     (days.length?'<div class="panefoot">'+days.length+' valuation checkpoints across the path.</div>':'')+'</div>';
 }
 /* C: ONE classifier so the tab label and the panel header can never disagree about what the
@@ -5012,7 +5012,7 @@ function reviewBlock(c,eNet,o){
 }
 function confirmBlock(c,eCredit,o){
   return '<div class="confirmwrap"><div class="lbl">Confirm order</div>'+
-    '<div class="booktext" style="margin-top:6px"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b> · '+typeLabel(o.type)+' · '+signed(eCredit)+' credit · <span class="badge '+(o.lane==='paper'?'':'ok')+'" style="'+(o.lane==='paper'?'color:var(--violet);border-color:var(--violet)':'')+'">'+o.lane+'</span></div>'+
+    '<div class="booktext confirmline"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b> · '+typeLabel(o.type)+' · '+signed(eCredit)+' credit · <span class="badge '+(o.lane==='paper'?'paperlane':'ok')+'">'+o.lane+'</span></div>'+
     '<div class="crow"><button class="btn pri" data-dec="confirm">Confirm &amp; place →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>';
 }
 
@@ -5066,17 +5066,17 @@ function drawDecMap(){
     if(coherence(c).verdict==='on'&&!gated)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+2.6).toFixed(1)+'" fill="none" stroke="var(--accent)" stroke-opacity=".7" stroke-width="1.2"/>';
     if(sel)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+5.5).toFixed(1)+'" fill="none" stroke="#fff" stroke-opacity=".92" stroke-width="1.4"/>';
     if(hot)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+8).toFixed(1)+'" fill="none" stroke="'+col+'" stroke-opacity=".45" stroke-width="1"/>';
-    g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+rr.toFixed(1)+'" fill="'+col+'" fill-opacity="'+op+'" stroke="'+col+'" stroke-opacity="'+(gated?.4:1)+'" data-mapi="'+c.id+'" style="cursor:pointer"/>';
-    if(c.undef&&!gated)g+='<text x="'+x.toFixed(1)+'" y="'+(y+3.2).toFixed(1)+'" fill="#06212a" font-size="11" font-weight="700" text-anchor="middle" style="pointer-events:none">!</text>';
+    g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+rr.toFixed(1)+'" fill="'+col+'" fill-opacity="'+op+'" stroke="'+col+'" stroke-opacity="'+(gated?.4:1)+'" data-mapi="'+c.id+'" class="mapdot"/>';
+    if(c.undef&&!gated)g+='<text x="'+x.toFixed(1)+'" y="'+(y+3.2).toFixed(1)+'" fill="#06212a" font-size="11" font-weight="700" text-anchor="middle" class="svgink">!</text>';
   });
   if(buildC){
     var bx=X(buildC.pop),by=Y(Math.max(300,buildC.credit)),br=6+Math.min(8,Math.sqrt(Math.max(buildC.cap,buildC.maxLoss))/75);
     var src=DEC_MPOS.filter(function(m){return String(m.id)===String(decide.buildSourceId);})[0];
     if(src)g+='<path d="M'+src.x.toFixed(1)+' '+src.y.toFixed(1)+' L'+bx.toFixed(1)+' '+by.toFixed(1)+'" fill="none" stroke="var(--accent)" stroke-opacity=".58" stroke-width="1.3" stroke-dasharray="3 3"/>';
     DEC_MPOS.push({id:'build',x:bx,y:by,r:br});
-    g+='<circle cx="'+bx.toFixed(1)+'" cy="'+by.toFixed(1)+'" r="'+br.toFixed(1)+'" fill="var(--panel)" stroke="var(--accent)" stroke-width="2" data-mapi="build" style="cursor:default"/>'+
-      '<circle cx="'+bx.toFixed(1)+'" cy="'+by.toFixed(1)+'" r="2.2" fill="var(--accent)" style="pointer-events:none"/>'+
-      '<text x="'+Math.min(W-padR,bx+br+4).toFixed(1)+'" y="'+Math.max(padT+9,by-5).toFixed(1)+'" fill="var(--accent)" font-size="10" font-family="ui-monospace" style="pointer-events:none">your build</text>';
+    g+='<circle cx="'+bx.toFixed(1)+'" cy="'+by.toFixed(1)+'" r="'+br.toFixed(1)+'" fill="var(--panel)" stroke="var(--accent)" stroke-width="2" data-mapi="build" class="mapbuild"/>'+
+      '<circle cx="'+bx.toFixed(1)+'" cy="'+by.toFixed(1)+'" r="2.2" fill="var(--accent)" class="svgink"/>'+
+      '<text x="'+Math.min(W-padR,bx+br+4).toFixed(1)+'" y="'+Math.max(padT+9,by-5).toFixed(1)+'" fill="var(--accent)" font-size="10" font-family="ui-monospace" class="svgink">your build</text>';
   }
   svg.innerHTML=g;
 }
@@ -5103,7 +5103,7 @@ function showMapCard(id){
     '<span class="kk">'+(riskChar(c)==='collat'?'If assigned':'Max loss')+'</span><span class="vv neg">'+maxLossDisp(c)+'</span>'+
     '<span class="kk">Chance</span><span class="vv">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
     '<span class="kk">Capital</span><span class="vv">'+(c.cap?money(c.cap):'$0')+'</span></div>'+
-    '<div class="mcfit">'+co.word+' · '+riskCharLabel(c)+(gt?' · <span style="color:var(--caution)">screened out</span>':'')+'</div>';
+    '<div class="mcfit">'+co.word+' · '+riskCharLabel(c)+(gt?' · <span class="screenedout">screened out</span>':'')+'</div>';
   var svg=document.getElementById('decMap'), W=svg.clientWidth, H=svg.clientHeight, cw=card.offsetWidth, ch=card.offsetHeight;
   var left=m.x+14; if(left+cw>W-2) left=m.x-cw-14; if(left<2)left=2;
   var top=m.y-ch-8; if(top<2) top=m.y+14; if(top+ch>H-2) top=Math.max(2,H-ch-2);
@@ -5530,24 +5530,24 @@ function importSourceHTML(){
     return '<button class="ibrkopt'+(imp.broker===b.id?' on':'')+'" data-imp-broker="'+b.id+'">'+deskEsc(b.label)+'</button>';
   }).join('');
   return '<div class="impsrc">'+
-    '<div class="lenshd" style="margin-bottom:10px"><span class="eyebrow">Paste a statement or trade confirmation</span>'+
+    '<div class="lenshd"><span class="eyebrow">Paste a statement or trade confirmation</span>'+
       '<span class="hint">read here, written only after you confirm</span></div>'+
     '<div class="field-lbl"><span class="lbl">Which broker exported it?</span></div>'+
     '<div class="ibrkopts">'+brokers+'</div>'+
-    '<div class="field-lbl" style="margin-top:12px"><span class="lbl">Account label</span><span class="hint">optional · groups the packages</span></div>'+
+    '<div class="field-lbl"><span class="lbl">Account label</span><span class="hint">optional · groups the packages</span></div>'+
     '<input class="pasteinp" data-imp-account value="'+deskEsc(imp.account||'')+'" placeholder="e.g. Individual ••••4417" autocomplete="off" spellcheck="false">'+
-    '<div class="field-lbl" style="margin-top:12px"><span class="lbl">The rows</span>'+
+    '<div class="field-lbl"><span class="lbl">The rows</span>'+
       '<span class="hint">paste the export exactly — the parser reads its columns</span></div>'+
     '<textarea class="pastearea" data-imp-text spellcheck="false" placeholder="Paste the exported rows here.">'+deskEsc(imp.text||'')+'</textarea>'+
-    '<button class="btn pri wide" data-imp-act="read"'+(importReadable()&&!imp.busy?'':' disabled')+' style="margin-top:10px">'+
+    '<button class="btn pri wide" data-imp-act="read"'+(importReadable()&&!imp.busy?'':' disabled')+'>'+
       (imp.phase==='reading'?'Reading…':'Read this statement →')+'</button>'+
-    (imp.error?'<div class="backendnotice" style="margin-top:10px">'+deskEsc(imp.error)+'</div>':'')+
+    (imp.error?'<div class="backendnotice">'+deskEsc(imp.error)+'</div>':'')+
   '</div>';
 }
 function importPreviewHTML(){
   if(imp.result)return importResultHTML();
-  if(imp.phase==='reading')return '<div class="imppreview empty"><div class="hint" style="text-align:center;padding:40px 20px">Reading the statement…</div></div>';
-  if(!imp.preview)return '<div class="imppreview empty"><div class="hint" style="text-align:center;padding:40px 20px">'+
+  if(imp.phase==='reading')return '<div class="imppreview empty"><div class="hint">Reading the statement…</div></div>';
+  if(!imp.preview)return '<div class="imppreview empty"><div class="hint">'+
     'Pick the broker and paste the rows. Everything you see next is what the server read — no package is written until you confirm it.</div></div>';
   var parsed=imp.preview.parsed||{},groups=importGroups(),quarantine=parsed.quarantine||[];
   var selected=importSelectedGroups().length;
@@ -5654,12 +5654,12 @@ function importResultHTML(){
   var r=imp.result;
   return '<div class="imppreview">'+
     '<div class="lenshd"><span class="eyebrow">Imported</span><span class="hint">'+importCount(r.selected)+' package'+(r.selected===1?'':'s')+' selected</span></div>'+
-    '<div class="kgrid boxed" style="grid-template-columns:repeat(3,1fr)">'+
+    '<div class="kgrid boxed impresult">'+
       kcell('Written to the ledger',importCount(r.exactTransactions),'')+
       kcell('Held pending prices',importCount(r.pendingImports),'')+
       kcell('Already imported',importCount(r.duplicates),'')+
     '</div>'+
-    (r.note?'<div class="decband tone-ok" style="margin-top:12px"><div class="decmain"><div class="decread">'+deskEsc(r.note)+'</div></div></div>':'')+
+    (r.note?'<div class="decband tone-ok impnote"><div class="decmain"><div class="decread">'+deskEsc(r.note)+'</div></div></div>':'')+
     '<div class="placefoot"><button class="btn pri wide" data-imp-act="book">See it in your book →</button></div>'+
   '</div>';
 }
@@ -5737,12 +5737,12 @@ function drawExposureMap(cfg){
   g+='<text x="'+(padL+2)+'" y="'+(padT+11)+'" fill="var(--faint)" font-size="12">short exposure</text>';
   g+='<text x="'+(W-padR-2)+'" y="'+(padT+11)+'" fill="var(--faint)" font-size="12" text-anchor="end">long exposure</text>';
   [0.25,0.5,0.75,1].forEach(function(f){var v=cHi*f,yy=Y(v);g+='<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="var(--line-soft)"/>';g+='<text x="'+(padL-5)+'" y="'+(yy+3).toFixed(1)+'" fill="var(--faint)" font-size="12" text-anchor="end" font-family="ui-monospace">'+(v>=1000?'$'+Math.round(v/1000)+'k':'$'+Math.round(v))+'</text>';});
-  g+='<rect class="rkSelRect" x="0" y="0" width="0" height="0" fill="var(--accent)" fill-opacity=".08" stroke="var(--accent)" stroke-dasharray="4 3" style="display:none;pointer-events:none"/>';
+  g+='<rect class="rkSelRect" x="0" y="0" width="0" height="0" fill="var(--accent)" fill-opacity=".08" stroke="var(--accent)" stroke-dasharray="4 3" class="svgink" hidden/>';
   var pts=[];
   POS.forEach(function(p,i){var x=X(Number(p.dollarDelta)||0),y=Y(p.cap),r=6+Math.min(11,(Number(p.riskPct)||0)/3);
     var col=tempColor(heat[i]/maxHeat);
     pts.push({id:p.id,x:x,y:y,r:r,sym:p.sym,col:col});
-    g+='<circle class="rkdot" data-id="'+p.id+'" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+r.toFixed(1)+'" fill="'+col+'" fill-opacity=".22" stroke="'+col+'" stroke-width="1.4" data-goto="'+p.id+'" style="cursor:pointer"/>';
+    g+='<circle class="rkdot" data-id="'+p.id+'" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+r.toFixed(1)+'" fill="'+col+'" fill-opacity=".22" stroke="'+col+'" stroke-width="1.4" data-goto="'+p.id+'" class="mapdot"/>';
   });
   /* ticker labels: score each candidate slot (below/above/right/left/diagonals) by out-of-bounds,
      clash with already-placed labels, and overlap with ANY dot (incl. its own) — pick the lowest
@@ -5761,7 +5761,7 @@ function drawExposureMap(cfg){
       if(sc<bestScore){bestScore=sc;best=cands[ci];} }
     var lx=Math.max(padL+lw/2, Math.min(W-padR-lw/2, best[0])), ly=Math.max(padT+9,Math.min(H-padB-2,best[1]));
     lboxes.push({x0:lx-lw/2,x1:lx+lw/2,y0:ly-lh,y1:ly+2});
-    g+='<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" fill="var(--text)" font-size="9.5" font-weight="700" text-anchor="middle" style="pointer-events:none;font-family:ui-monospace">'+pt.sym+'</text>';
+    g+='<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" fill="var(--text)" font-size="9.5" font-weight="700" text-anchor="middle" class="svgink svgmono">'+pt.sym+'</text>';
   });
   svg.innerHTML=g;
   svg._pts=pts;                          /* per-svg geometry — two maps can coexist without clobbering hit-tests */

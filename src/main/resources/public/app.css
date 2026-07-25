@@ -2533,6 +2533,14 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
    rather than a short form beside a tall result */
 .impsrc{display:flex;flex-direction:column;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:14px 15px}
 .impsrc .pastearea{flex:1 1 auto}
+/* the surface owns its own rhythm; it used to be eleven inline nudges */
+.impsrc>.lenshd{margin-bottom:10px}
+.impsrc>.field-lbl+.ibrkopts{margin-bottom:2px}
+.impsrc>.ibrkopts+.field-lbl,.impsrc>.pasteinp+.field-lbl{margin-top:12px}
+.impsrc>.btn.pri.wide,.impsrc>.backendnotice{margin-top:10px}
+.imppreview.empty .hint{text-align:center;padding:40px 20px}
+.impresult{grid-template-columns:repeat(3,minmax(0,1fr))}
+.impnote{margin-top:12px}
 .pasteinp{width:100%;background:#0d131c;border:1px solid var(--line);border-radius:7px;color:var(--text);
   font-family:var(--mono);font-size:var(--f-xs);padding:9px 11px}
 .pastearea{width:100%;min-height:200px;resize:vertical;background:#0d131c;border:1px solid var(--line);
@@ -3768,3 +3776,43 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .evline{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px;font-size:var(--f-xs);color:var(--dim);margin-bottom:5px;min-width:0}
 .evline b{color:var(--text);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .evline .evsep{color:var(--line)}
+
+
+/* ============================================================
+   M3: the last static inline styles, moved into the components that own them.
+
+   What remains inline in index.html is only DRAWING data — a bar's computed width, a series
+   colour, a marker's position — which belongs on the element because it is the datum. Spacing,
+   alignment and palette are the stylesheet's job, and having them in markup meant one component
+   had as many grammars as it had call sites.
+   ============================================================ */
+.kgrid.boxed.numrow.calm{margin-top:8px}
+.kgrid.boxed.numrow{margin-top:9px}
+.kgrid.boxed.numrow[style*="--numrow-cols"]{grid-template-columns:repeat(var(--numrow-cols),minmax(0,1fr))}
+.hint.pushright{margin-left:auto}
+.placebox{max-width:540px}
+.booktext.closelede{margin:3px 0 11px}
+.booktext.confirmline{margin-top:6px}
+.dctx.dctxdim{color:var(--dim)}
+.hint.pickempty{padding:9px 10px}
+.hint.pickprompt{padding:12px 10px}
+.tailsub{margin-top:5px}
+.legreceipt .lbl.legreceiptlbl{flex-basis:100%}
+.badge.paperlane{color:var(--violet);border-color:var(--violet)}
+.screenedout{color:var(--caution)}
+[data-mapi].mapdot{cursor:pointer}
+[data-mapi].mapbuild{cursor:default}
+.psec+.psec,.placebox>.psec{margin-top:10px}
+
+/* Ink drawn INSIDE an interactive canvas: labels, guides, markers. They are read, never pressed,
+   so they must not swallow the pointer meant for the shape underneath. One class says that once,
+   instead of thirteen identical inline declarations. */
+.svgink{pointer-events:none}
+.svgmono{font-family:var(--mono)}
+/* the risk-character key: three swatches whose colour IS the vocabulary */
+.fanleg .swatch,.legendkey .swatch{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.swatch.defined{background:var(--profit)}
+.swatch.secured{background:var(--violet)}
+.swatch.undefined{background:var(--loss)}
+.pfhandle{cursor:ew-resize}
+[hidden]{display:none!important}

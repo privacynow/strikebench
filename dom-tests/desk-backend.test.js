@@ -9496,3 +9496,34 @@ test('two structures on one symbol are two Scout rows, and each opens its own pa
     await context.close();
   }
 });
+
+test('inline styles carry drawing data only — spacing and palette live in the stylesheet', () => {
+  /*
+   * Audit M3 acceptance. A component whose spacing lives at its call sites has as many grammars as
+   * it has callers, which is how one concept ended up with several looks. Inline style is reserved
+   * for values the STYLESHEET cannot know: a bar's computed width, a series' colour, a marker's
+   * position. Everything else belongs to the component.
+   */
+  const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  const DRAWING = /^(--[a-z-]+|width|height|left|right|top|bottom|background|background-color|stroke|fill|transform|opacity)$/;
+  const offenders = [];
+  for (const match of html.matchAll(/style="([^"]*)"/g)) {
+    const declaration = match[1];
+    // A declaration built from an expression is drawing data by construction — it interpolates a
+    // computed number or colour. Only fully static declarations are judged property by property.
+    if (declaration.includes("'+") || declaration.includes("+'")) {
+      if (!DRAWING.test(declaration.split(':')[0].trim().replace(/^.*?([a-z-]+)$/, '$1'))
+          && !/(width|left|right|top|bottom|background|--)/.test(declaration)) {
+        offenders.push(declaration);
+      }
+      continue;
+    }
+    for (const rule of declaration.split(';').map(part => part.trim()).filter(Boolean)) {
+      const property = rule.split(':')[0].trim();
+      if (!DRAWING.test(property)) offenders.push(rule);
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'these inline declarations are presentation, not drawing data, and belong in app.css:\n  '
+    + offenders.join('\n  '));
+});
