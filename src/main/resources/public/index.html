@@ -4916,9 +4916,13 @@ function drawExposureMap(cfg){
   var dMax=Math.max(0.8,Math.max.apply(0,dl.map(Math.abs))*1.15);
   var X=function(d){return padL+(W-padL-padR)*(d+dMax)/(2*dMax);};
   var Y=function(v){return H-padB-(H-padB-padT)*(v-cLo)/((cHi-cLo)||1);};
-  /* stress = loss on the characteristic sector gap; drives temperature (honest — a collateralised CSP that only dips stays cool, not scary-red) */
-  var gapF=1-0.11, stress=POS.map(function(p){var v=payFor(p,p.spot*gapF);return v<0?-v:0;});   /* Front B E: fixed characteristic-gap stress; the fixture per-sector gap model is deleted */
-  var maxStress=Math.max.apply(0,stress)||1;
+  /* Dot temperature encodes each position's SHARE OF DEFINED BOOK RISK — p.riskPct, derived from the
+     backend's maxLossCents. It used to re-price every position in the browser at a hard-coded −11%
+     gap via payFor(), which originated a stress loss the backend never sent (and the pooled readout
+     then labelled that 11% figure "If −10%"). BookRiskService owns the canonical shock (SHOCK_PCT);
+     until a per-position stress receipt is served, the map encodes only what the backend states. */
+  var heat=POS.map(function(p){return Math.max(0,Number(p.riskPct)||0);});
+  var maxHeat=Math.max.apply(0,heat)||1;
   var g='';
   var xz=X(0);
   g+='<line x1="'+xz.toFixed(1)+'" y1="'+padT+'" x2="'+xz.toFixed(1)+'" y2="'+(H-padB)+'" stroke="var(--line)" stroke-dasharray="3 3"/>';
@@ -4928,7 +4932,7 @@ function drawExposureMap(cfg){
   g+='<rect class="rkSelRect" x="0" y="0" width="0" height="0" fill="var(--accent)" fill-opacity=".08" stroke="var(--accent)" stroke-dasharray="4 3" style="display:none;pointer-events:none"/>';
   var pts=[];
   POS.forEach(function(p,i){var x=X(+p.delta||0),y=Y(p.cap),r=6+Math.min(11,p.riskPct/3);
-    var col=tempColor(stress[i]/maxStress);
+    var col=tempColor(heat[i]/maxHeat);
     pts.push({id:p.id,x:x,y:y,r:r,sym:p.sym,col:col});
     g+='<circle class="rkdot" data-id="'+p.id+'" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+r.toFixed(1)+'" fill="'+col+'" fill-opacity=".22" stroke="'+col+'" stroke-width="1.4" data-goto="'+p.id+'" style="cursor:pointer"/>';
   });
@@ -4980,10 +4984,13 @@ function wireExpMapSelect(svg, info, cfg){
     var lines=POS.filter(function(p){return sel.indexOf(p.id)>=0;});
     svg.querySelectorAll('.rkdot').forEach(function(c){c.classList.toggle('selon',sel.indexOf(c.getAttribute('data-id'))>=0);});
     if(!lines.length){ if(info)info.innerHTML='<b>Nothing enclosed.</b> Drag a box around two or more dots to pool them.'; return; }
-    var gapF2=1-0.11, cap=0,nd=0,st=0,risk=0; lines.forEach(function(p){cap+=p.cap;nd+=(+p.delta||0);st+=Math.max(0,-payFor(p,p.spot*gapF2));risk+=p.riskPct;});
+    /* Every pooled figure is a SUM of backend fields (maxLossCents, deltaShares, risk share) — never a
+       re-priced scenario. The old fourth cell printed a browser-computed loss at a −11% gap under an
+       "If −10%" label: a fabricated number AND a wrong one. Defined risk is what the backend states. */
+    var cap=0,nd=0,risk=0,defined=0; lines.forEach(function(p){cap+=p.cap;nd+=(+p.delta||0);risk+=p.riskPct;defined+=Math.max(0,Number(p.cap)||0);});
     if(info)info.innerHTML='<div class="rkselttl">'+lines.length+' lines pooled — '+lines.map(function(p){return p.sym;}).join(' · ')+'</div>'+
       '<div class="rkselstats"><span><i>Capital</i>'+money(cap)+'</span><span><i>Net Δ</i>'+(nd>=0?'+':'')+nd.toFixed(2)+'</span>'+
-      '<span><i>Book risk</i>'+Math.round(risk)+'%</span><span class="'+(st>0?'warnv':'')+'"><i>If −10%</i>'+money(-st)+'</span></div>'+
+      '<span><i>Book risk</i>'+Math.round(risk)+'%</span><span class="'+(defined>0?'warnv':'')+'"><i>Defined max loss</i>'+money(-defined)+'</span></div>'+
       '<div class="rkselnote">These '+lines.length+' move together — one SMH/SMH-put hedge would cap the pool at once.</div>';
   });
 }
