@@ -191,9 +191,15 @@ function positionStoredEnsemble() {
 }
 
 function measuredJointBookReceipt() {
+  /* Session dates are what the real backend emits (ScenarioCanvasValuator dates every valued row
+     via MarketHours), and they are what the desk reads to cut a package's fan at its expiry. The
+     fixture used to omit them, so the tests only ever exercised the undated branch. Trading days
+     after the 2026-07-20 anchor: 15 -> 2026-08-10, 30 -> 2026-08-31, 45 -> 2026-09-21. */
+  const SESSION_DATES = ['2026-07-20', '2026-08-10', '2026-08-31', '2026-09-21'];
   const stepBands = [0, 15, 30, 45].map((sessionProgress, index) => ({
     step: sessionProgress,
     sessionProgress,
+    sessionDate: SESSION_DATES[index],
     pnlP5Cents: [-0, -42000, -88000, -135000][index],
     pnlP10Cents: [0, -30000, -65000, -94000][index],
     pnlP25Cents: [0, -10000, -24000, -36000][index],
@@ -212,6 +218,7 @@ function measuredJointBookReceipt() {
     steps: values.map((pnlCents, index) => ({
       step: stepBands[index].step,
       sessionProgress: stepBands[index].sessionProgress,
+      sessionDate: stepBands[index].sessionDate,
       pnlCents
     }))
   }));
@@ -8233,3 +8240,4 @@ test('selector census across surfaces', { skip: !process.env.SELECTOR_CENSUS_IN 
   await fsp.writeFile(process.env.SELECTOR_CENSUS_OUT, JSON.stringify([...hits]));
   console.log(`SELECTOR_CENSUS matched=${hits.size} of ${selectors.length}`);
 });
+
