@@ -333,17 +333,17 @@ public final class PathEnsembleService {
         List<DisplayPath> chosen = new ArrayList<>(Math.min(limit, ranked.size()));
         if (constrained || ranked.size() <= limit) {
             int chosenCount = Math.min(limit, ranked.size());
-            int focusIndex = constrained ? 0 : (chosenCount - 1) / 2;
+            int focusIndex = constrained ? 0 : Quantiles.index(chosenCount, .50);
             for (int i = 0; i < chosenCount; i++) {
                 chosen.add(ranked.get(i).display(i == focusIndex ? "FOCUS" : "CONTEXT", displaySteps));
             }
         } else {
             int focusSlot = limit / 2;
-            int medianAt = (ranked.size() - 1) / 2;
+            int medianAt = Quantiles.index(ranked.size(), .50);
             for (int slot = 0; slot < limit; slot++) {
                 int at = limit == 1 ? medianAt
                         : slot == focusSlot ? medianAt
-                        : (int) Math.round((double) slot * (ranked.size() - 1) / (limit - 1));
+                        : Quantiles.index(ranked.size(), (double) slot / (limit - 1));
                 chosen.add(ranked.get(at).display(slot == focusSlot ? "FOCUS" : "CONTEXT", displaySteps));
             }
         }

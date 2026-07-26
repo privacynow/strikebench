@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,6 +35,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     /** Upsert one symbol's last-known quote (best-effort; called after a successful refresh). */
     @Override public void save(MarketSnapshot s) {
         if (s == null || s.symbol() == null || s.last() == null) return;
+        String symbol = Symbol.normalize(s.symbol());
         var evidence = io.liftandshift.strikebench.model.DataEvidence.of(s.source(), s.freshness());
         if (evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED
                 && evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.BROKER) return;
@@ -43,7 +45,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
               + "ON CONFLICT (symbol) DO UPDATE SET description=excluded.description, last=excluded.last, "
               + "bid=excluded.bid, ask=excluded.ask, prev_close=excluded.prev_close, optionable=excluded.optionable, "
               + "source=excluded.source, freshness=excluded.freshness, as_of=excluded.as_of, captured_at=now()",
-                s.symbol(), s.description(), s.last(), s.bid(), s.ask(), s.prevClose(), s.optionable(),
+                symbol, s.description(), s.last(), s.bid(), s.ask(), s.prevClose(), s.optionable(),
                 s.source(), s.freshness() == null ? null : s.freshness().name(),
                 java.time.Instant.ofEpochMilli(s.asOfEpochMs()).atOffset(java.time.ZoneOffset.UTC)));
     }
@@ -58,10 +60,11 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
 
     /** Read one last-known observed quote for a user-facing request whose provider refresh failed. */
     @Override public Optional<MarketSnapshot> load(String symbol) {
-        if (symbol == null || symbol.isBlank()) return Optional.empty();
+        Symbol key = Symbol.optional(symbol);
+        if (key == null) return Optional.empty();
         return db.query("SELECT " + SNAPSHOT_COLUMNS + " FROM market_snapshot WHERE symbol=? AND " + OBSERVED_ONLY,
                 MarketSnapshotStore::staleSnapshot,
-                symbol.trim().toUpperCase(java.util.Locale.ROOT)).stream().findFirst();
+                key.value()).stream().findFirst();
     }
 
     /** Every persisted row reads back STALE by construction (observed last-known, never live). */

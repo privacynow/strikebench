@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataProvenance;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -89,7 +90,8 @@ public final class ScenarioCanvasTemplateService {
             throw new IllegalArgumentException("At least two SEC-filing-window price analogs are required; this template will not replace them with ordinary trading-day gaps.");
         }
         gaps.sort(Double::compareTo);
-        double gap = Math.clamp(gaps.get((int) Math.floor(.75 * (gaps.size() - 1))), .02, .20);
+        double gap = Math.clamp(Quantiles.of(gaps.stream().mapToDouble(Double::doubleValue).toArray(), .75),
+                .02, .20);
         double ratio = 1 + (up ? gap : -gap);
         List<ScenarioSpec.Waypoint> pins = new ArrayList<>(spec.waypoints());
         putPin(pins, new ScenarioSpec.Waypoint(eventDay, ratio));

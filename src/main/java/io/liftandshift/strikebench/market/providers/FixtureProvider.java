@@ -180,8 +180,8 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
                 bid, ask, bd(mid), volume, oi, iv,
                 BlackScholes.delta(call, s, k, t, RISK_FREE, 0, iv),
                 BlackScholes.gamma(s, k, t, RISK_FREE, 0, iv),
-                BlackScholes.theta(call, s, k, t, RISK_FREE, 0, iv) / 365.0,
-                BlackScholes.vega(s, k, t, RISK_FREE, 0, iv) / 100.0,
+                BlackScholes.thetaPerDay(call, s, k, t, RISK_FREE, 0, iv),
+                BlackScholes.vegaPerVolPoint(s, k, t, RISK_FREE, 0, iv),
                 nowMs(), NAME, freshness);
     }
 

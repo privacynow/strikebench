@@ -123,14 +123,14 @@ class MarketDataEngineTest {
     }
 
     @Test
-    void repeatedSymbolInOneBatchCollapsesToASingleFetch() {
+    void repeatedSymbolSpellingsInOneBatchCollapseToASingleFetch() {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         CountingProvider p = new CountingProvider(clock);
         MarketDataEngine eng = engine(p, cfg);
 
-        var rows = eng.quotes(List.of("AAPL", "AAPL", "AAPL"));
+        var rows = eng.quotes(List.of("AAPL", "aapl", " AAPL "));
         assertThat(rows).extracting(MarketDataEngine.MarketSnapshot::symbol).containsOnly("AAPL");
-        // Singleflight: three requests for AAPL in one batch → one provider fetch.
+        // One canonical Symbol owns cache and singleflight identity across caller spellings.
         assertThat(p.quoteCalls.get("AAPL").get()).isEqualTo(1);
     }
 
@@ -236,7 +236,7 @@ class MarketDataEngineTest {
     void snapshotStoreQuarantinesFabricatedMarkets() {
         db = TestDb.fresh();
         var store = new io.liftandshift.strikebench.db.MarketSnapshotStore(db);
-        store.save(new MarketDataEngine.MarketSnapshot("REAL", "Observed", new java.math.BigDecimal("10"),
+        store.save(new MarketDataEngine.MarketSnapshot(" real ", "Observed", new java.math.BigDecimal("10"),
                 new java.math.BigDecimal("9.99"), new java.math.BigDecimal("10.01"),
                 new java.math.BigDecimal("9.50"), true, io.liftandshift.strikebench.model.Freshness.DELAYED,
                 "cboe", clock.millis(), clock.millis(), false, null));

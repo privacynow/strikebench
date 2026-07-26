@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.util.Json;
 
@@ -54,8 +55,8 @@ public final class YahooFinanceProvider implements MarketDataProvider {
      * requests whose whole range is before it, leaving newer ranges eligible. Both survive one
      * restart (a corrected alias/provider heals without a permanent local blacklist).
      */
-    private final Set<String> poisonSymbols = ConcurrentHashMap.newKeySet();
-    private final Map<String, LocalDate> earliestAvailable = new ConcurrentHashMap<>();
+    private final Set<Symbol> poisonSymbols = ConcurrentHashMap.newKeySet();
+    private final Map<Symbol, LocalDate> earliestAvailable = new ConcurrentHashMap<>();
 
     public YahooFinanceProvider(AppConfig cfg) {
         this(cfg, null);
@@ -85,15 +86,15 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         if (from == null || to == null || from.isAfter(to)) {
             throw new IllegalArgumentException("Yahoo candle range requires from <= to");
         }
-        String requestedSymbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        String yahooSymbol = yahooSymbol(requestedSymbol);
+        Symbol requestedSymbol = Symbol.of(symbol);
+        String yahooSymbol = yahooSymbol(requestedSymbol.value());
         // The first malformed request is surfaced and logged with its provider diagnostic. Later
         // maintenance passes skip a poison identifier quietly so it cannot create a permanent warning
         // heartbeat or consume another request; the normal provider chain may continue.
-        if (poisonSymbols.contains(yahooSymbol)) return List.of();
+        if (poisonSymbols.contains(requestedSymbol)) return List.of();
         // A known pre-history boundary short-circuits ONLY requests whose whole range predates it;
         // a range that reaches into covered dates is still worth one request.
-        LocalDate boundary = earliestAvailable.get(yahooSymbol);
+        LocalDate boundary = earliestAvailable.get(requestedSymbol);
         if (boundary != null && to.isBefore(boundary)) return List.of();
         long p1 = from.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
@@ -122,11 +123,12 @@ public final class YahooFinanceProvider implements MarketDataProvider {
                     // requested range is entirely before coverage, so coverage begins no earlier than
                     // the day after this range's end; a later request refines the boundary upward.
                     LocalDate earliest = to.plusDays(1);
-                    earliestAvailable.merge(yahooSymbol, earliest,
+                    earliestAvailable.merge(requestedSymbol, earliest,
                             (existing, fresh) -> existing.isAfter(fresh) ? existing : fresh);
-                    throw new Http.RangeUnavailableException(url, e.body(), earliestAvailable.get(yahooSymbol));
+                    throw new Http.RangeUnavailableException(
+                            url, e.body(), earliestAvailable.get(requestedSymbol));
                 }
-                poisonSymbols.add(yahooSymbol);
+                poisonSymbols.add(requestedSymbol);
             }
             throw e;
         }
@@ -187,9 +189,7 @@ public final class YahooFinanceProvider implements MarketDataProvider {
      * Keep this provider alias at the boundary; canonical StrikeBench identity remains untouched.
      */
     static String yahooSymbol(String requested) {
-        if (requested == null || requested.isBlank()) throw new IllegalArgumentException("symbol is required");
-        String normalized = requested.trim().toUpperCase(Locale.ROOT);
-        if (normalized.matches("[A-Z]{1,6}\\.[A-Z]")) normalized = normalized.replace('.', '-');
+        String normalized = Symbol.of(requested).providerAlias("yahoo");
         if (!normalized.matches("[A-Z0-9^=._\\-]{1,20}")) {
             throw new IllegalArgumentException("symbol is not supported by Yahoo daily history: " + requested);
         }

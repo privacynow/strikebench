@@ -3,8 +3,8 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.BoundedFanout;
-import io.liftandshift.strikebench.util.Symbols;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -74,7 +74,7 @@ public final class OpportunityScanner {
                                     String worldId, Long maxLossCents,
                                     java.util.function.Function<List<StrategyEvaluation>,
                                             RedeploymentFrontier.Context> contextFactory) {
-        List<String> normalized = Symbols.normalize(symbols);
+        List<String> normalized = Symbol.list(symbols);
         if (normalized.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
 
         record PerSymbol(List<StrategyEvaluation> viable, String note) {}

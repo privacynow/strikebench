@@ -764,16 +764,16 @@ public final class ScenarioCanvasValuator {
             return compared == 0 ? Integer.compare(left, right) : compared;
         });
         LinkedHashSet<Integer> selected = new LinkedHashSet<>();
-        if (limit == 1) selected.add(ranked.get((ranked.size() - 1) / 2));
+        if (limit == 1) selected.add(ranked.get(Quantiles.index(ranked.size(), .50)));
         else {
             for (int slot = 0; slot < limit; slot++) {
-                int at = (int) Math.round(slot * (ranked.size() - 1.0) / (limit - 1.0));
+                int at = Quantiles.index(ranked.size(), (double) slot / (limit - 1));
                 selected.add(ranked.get(at));
             }
-            selected.add(ranked.get((ranked.size() - 1) / 2));
+            selected.add(ranked.get(Quantiles.index(ranked.size(), .50)));
         }
         if (selected.size() > limit) {
-            Integer median = ranked.get((ranked.size() - 1) / 2);
+            Integer median = ranked.get(Quantiles.index(ranked.size(), .50));
             List<Integer> bounded = new ArrayList<>(selected);
             while (bounded.size() > limit) {
                 int remove = bounded.size() - 2;
@@ -796,8 +796,7 @@ public final class ScenarioCanvasValuator {
             int compared = Long.compare(terminal[left], terminal[right]);
             return compared == 0 ? Integer.compare(left, right) : compared;
         });
-        return ranked.get(Math.max(0, Math.min(ranked.size() - 1,
-                (int) Math.floor(probability * (ranked.size() - 1)))));
+        return ranked.get(Quantiles.index(ranked.size(), probability));
     }
 
     private static int indexOfMinimum(long[] values) {

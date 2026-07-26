@@ -27,6 +27,10 @@ class BlackScholesTest {
         assertThat(BlackScholes.gamma(100, 100, 1, 0.05, 0, 0.20)).isCloseTo(0.018762, within(1e-4));
         assertThat(BlackScholes.vega(100, 100, 1, 0.05, 0, 0.20)).isCloseTo(37.524, within(1e-2));
         assertThat(BlackScholes.theta(true, 100, 100, 1, 0.05, 0, 0.20)).isCloseTo(-6.414, within(1e-2));
+        assertThat(BlackScholes.vegaPerVolPoint(100, 100, 1, 0.05, 0, 0.20))
+                .isCloseTo(37.524 / 100.0, within(1e-4));
+        assertThat(BlackScholes.thetaPerDay(true, 100, 100, 1, 0.05, 0, 0.20))
+                .isCloseTo(-6.414 / 365.0, within(1e-4));
     }
 
     @Test

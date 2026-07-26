@@ -517,8 +517,8 @@ public final class SimulatedWorld {
                         oi / 10, oi, iv,
                         BlackScholes.delta(call, spot, k, tte, rateAnnual(), 0, iv),
                         BlackScholes.gamma(spot, k, tte, rateAnnual(), 0, iv),
-                        BlackScholes.theta(call, spot, k, tte, rateAnnual(), 0, iv) / 365.0,
-                        BlackScholes.vega(spot, k, tte, rateAnnual(), 0, iv) / 100.0,
+                        BlackScholes.thetaPerDay(call, spot, k, tte, rateAnnual(), 0, iv),
+                        BlackScholes.vegaPerVolPoint(spot, k, tte, rateAnnual(), 0, iv),
                         simMillis(), "simulated", Freshness.SIMULATED);
                 (call ? calls : puts).add(q);
             }

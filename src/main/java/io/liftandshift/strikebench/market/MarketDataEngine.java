@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.market;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,7 +12,6 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,9 +74,9 @@ public final class MarketDataEngine {
     private final Clock clock;
     private io.liftandshift.strikebench.market.ports.SnapshotStore snapshotStore; // persist/boot last-known quotes (nullable)
 
-    private final Map<String, MarketSnapshot> snapshots = new ConcurrentHashMap<>();
-    private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();   // for LRU eviction of tracked symbols
-    private final Map<String, java.util.concurrent.CompletableFuture<Void>> inFlight = new ConcurrentHashMap<>(); // singleflight: callers JOIN the in-flight refresh
+    private final Map<Symbol, MarketSnapshot> snapshots = new ConcurrentHashMap<>();
+    private final Map<Symbol, Long> lastAccess = new ConcurrentHashMap<>();   // for LRU eviction of tracked symbols
+    private final Map<Symbol, java.util.concurrent.CompletableFuture<Void>> inFlight = new ConcurrentHashMap<>(); // singleflight: callers JOIN the in-flight refresh
     private final AtomicLong refreshCount = new AtomicLong();
     private final AtomicLong refreshLatencyTotalMs = new AtomicLong();
     private volatile long lastRefreshEpochMs = 0L;
@@ -98,7 +98,7 @@ public final class MarketDataEngine {
     }
 
     /** The queued (not yet started) task per symbol — so a higher-priority join can ESCALATE it. */
-    private final java.util.concurrent.ConcurrentHashMap<String, PriorityTask> queuedTask = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Symbol, PriorityTask> queuedTask = new java.util.concurrent.ConcurrentHashMap<>();
     /** How many user-blocking fetches are in flight — background work YIELDS while this is nonzero. */
     private final java.util.concurrent.atomic.AtomicInteger pendingInteractive = new java.util.concurrent.atomic.AtomicInteger();
     private ScheduledExecutorService scheduler;
@@ -131,7 +131,12 @@ public final class MarketDataEngine {
             try {
                 int seeded = 0;
                 for (MarketSnapshot s : snapshotStore.loadAll()) {
-                    if (s.last() != null) { snapshots.put(s.symbol(), s); track(s.symbol()); seeded++; }
+                    if (s.last() != null) {
+                        Symbol symbol = Symbol.of(s.symbol());
+                        snapshots.put(symbol, s);
+                        track(symbol);
+                        seeded++;
+                    }
                 }
                 if (seeded > 0) log.info("market engine restored {} last-known quotes from the local snapshot cache", seeded);
             } catch (Exception e) {
@@ -156,7 +161,7 @@ public final class MarketDataEngine {
             // one warm task ever waits at the gate; fixture mode warms instantly.
             long warmSpacingMs = cfg.fixturesOnly() ? 0 : 1500;
             for (int i = 0; i < active.size(); i++) {
-                String s = active.get(i);
+                Symbol s = Symbol.of(active.get(i));
                 track(s);
                 if (warmSpacingMs == 0) backgroundRefresh(s);
                 else scheduler.schedule(() -> backgroundRefresh(s), i * warmSpacingMs, TimeUnit.MILLISECONDS);
@@ -192,7 +197,8 @@ public final class MarketDataEngine {
                 List<String> chunk = new ArrayList<>(all.subList(i, Math.min(i + batch, all.size())));
                 long delaySec = 1L + (i / batch) * 3L; // ~8 symbols every 3s
                 if (scheduler != null && !scheduler.isShutdown()) {
-                    scheduler.schedule(() -> chunk.forEach(s -> { track(s); backgroundRefresh(s); }), delaySec, TimeUnit.SECONDS);
+                    scheduler.schedule(() -> chunk.stream().map(Symbol::of)
+                            .forEach(s -> { track(s); backgroundRefresh(s); }), delaySec, TimeUnit.SECONDS);
                 }
             }
             log.info("market engine trickling full universe ({} symbols) in batches of {}", all.size(), batch);
@@ -231,14 +237,15 @@ public final class MarketDataEngine {
     /** MEMORY-ONLY read: what the engine already knows, with zero fetch side effects — the
      *  anchor resolver's background tier reads this so a cold sector can never cause a burst. */
     public java.util.Optional<MarketSnapshot> peek(String symbol) {
-        return java.util.Optional.ofNullable(snapshots.get(norm(symbol)));
+        Symbol key = Symbol.optional(symbol);
+        return key == null ? Optional.empty() : Optional.ofNullable(snapshots.get(key));
     }
 
     public List<MarketSnapshot> quotes(List<String> symbols) {
-        List<String> missing = new ArrayList<>();
-        for (String raw : symbols) {
-            String s = norm(raw);
-            if (s.isEmpty()) continue;
+        List<Symbol> requested = symbols == null ? List.of() : symbols.stream()
+                .map(Symbol::optional).filter(java.util.Objects::nonNull).toList();
+        List<Symbol> missing = new ArrayList<>();
+        for (Symbol s : requested) {
             track(s);
             MarketSnapshot snap = snapshots.get(s);
             if (snap == null) missing.add(s);
@@ -249,8 +256,8 @@ public final class MarketDataEngine {
         if (!missing.isEmpty()) fetchBlocking(missing);
 
         List<MarketSnapshot> out = new ArrayList<>();
-        for (String raw : symbols) {
-            MarketSnapshot snap = snapshots.get(norm(raw));
+        for (Symbol symbol : requested) {
+            MarketSnapshot snap = snapshots.get(symbol);
             if (hasUsablePrice(snap)) out.add(snap);
         }
         return out;
@@ -270,7 +277,7 @@ public final class MarketDataEngine {
      * thing that knows whether the symbol was never fetched, failed, or is still in flight.
      */
     public String unavailableReason(String symbol) {
-        String s = norm(symbol);
+        Symbol s = Symbol.of(symbol);
         MarketSnapshot snap = snapshots.get(s);
         if (snap == null) {
             return "the market engine holds no snapshot for " + s
@@ -289,8 +296,8 @@ public final class MarketDataEngine {
 
     /** Single-symbol accessor: warm state now (refresh behind if stale), or a blocking fetch if cold. */
     public Optional<MarketSnapshot> quote(String symbol) {
-        String s = norm(symbol);
-        if (s.isEmpty()) return Optional.empty();
+        Symbol s = Symbol.optional(symbol);
+        if (s == null) return Optional.empty();
         track(s);
         MarketSnapshot snap = snapshots.get(s);
         if (snap == null) { fetchBlocking(List.of(s)); return Optional.ofNullable(snapshots.get(s)); }
@@ -308,7 +315,7 @@ public final class MarketDataEngine {
             if (pendingInteractive.get() > 0) return;
             int interval = currentIntervalSeconds();
             long now = clock.millis();
-            for (String s : new ArrayList<>(lastAccess.keySet())) {
+            for (Symbol s : new ArrayList<>(lastAccess.keySet())) {
                 MarketSnapshot snap = snapshots.get(s);
                 long age = snap == null ? Long.MAX_VALUE : now - snap.lastRefreshEpochMs();
                 if (age >= interval * 1000L) refreshAsync(s);
@@ -324,11 +331,11 @@ public final class MarketDataEngine {
      * is atomic, so a warm-on-boot refresh and a concurrent request for the same symbol join ONE
      * provider call instead of racing (and a blocking caller can await the warm's future).
      */
-    private java.util.concurrent.CompletableFuture<Void> refreshFuture(String symbol) {
+    private java.util.concurrent.CompletableFuture<Void> refreshFuture(Symbol symbol) {
         return refreshFuture(symbol, P_SCREEN);
     }
 
-    private java.util.concurrent.CompletableFuture<Void> refreshFuture(String symbol, int priority) {
+    private java.util.concurrent.CompletableFuture<Void> refreshFuture(Symbol symbol, int priority) {
         if (refreshPool == null || refreshPool.isShutdown()) {
             try { doRefresh(symbol); } catch (Exception e) { /* recorded on the snapshot */ }
             return java.util.concurrent.CompletableFuture.completedFuture(null);
@@ -366,7 +373,7 @@ public final class MarketDataEngine {
         });
     }
 
-    private void escalate(String symbol, int priority) {
+    private void escalate(Symbol symbol, int priority) {
         PriorityTask task = queuedTask.get(symbol);
         if (task == null || priority >= task.priority || task.started.get()) return;
         if (refreshPool.remove(task)) { // only a task still WAITING can be requeued
@@ -383,32 +390,33 @@ public final class MarketDataEngine {
      * report success for a refresh that hasn't happened. Joins any in-flight refresh (singleflight).
      */
     public boolean refreshBlocking(String symbol, long timeoutMs) {
-        track(symbol);
+        Symbol key = Symbol.of(symbol);
+        track(key);
         try {
-            refreshFuture(symbol, P_JOB).get(Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
-            MarketSnapshot snap = snapshots.get(norm(symbol));
+            refreshFuture(key, P_JOB).get(Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
+            MarketSnapshot snap = snapshots.get(key);
             return snap != null && snap.last() != null && snap.error() == null;
         } catch (Exception e) {
             return false;
         }
     }
 
-    private void refreshAsync(String symbol) {
+    private void refreshAsync(Symbol symbol) {
         try { refreshFuture(symbol); } catch (Exception e) { /* pool rejected; next tick retries */ }
     }
 
     /** Background variant: WARM class (drains last) + yields while a user fetch is in flight. */
-    private void backgroundRefresh(String symbol) {
+    private void backgroundRefresh(Symbol symbol) {
         if (pendingInteractive.get() > 0) return;
         try { refreshFuture(symbol, P_WARM); } catch (Exception e) { /* pool rejected; next tick retries */ }
     }
 
     /** Blocking parallel fill for cold symbols: JOINS any in-flight (e.g. warm) refresh, never skips. */
-    private void fetchBlocking(List<String> symbols) {
+    private void fetchBlocking(List<Symbol> symbols) {
         pendingInteractive.incrementAndGet();
         try {
             List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
-            for (String s : symbols) {
+            for (Symbol s : symbols) {
                 try { futures.add(refreshFuture(s, P_INTERACTIVE)); } catch (Exception e) { /* skip; snapshot may stay cold */ }
             }
             java.util.concurrent.CompletableFuture
@@ -420,10 +428,10 @@ public final class MarketDataEngine {
         }
     }
 
-    private void doRefresh(String symbol) {
+    private void doRefresh(Symbol symbol) {
         long t0 = clock.millis();
         try {
-            Optional<Quote> q = market.quote(symbol);
+            Optional<Quote> q = market.quote(symbol.value());
             long t1 = clock.millis();
             refreshCount.incrementAndGet();
             refreshLatencyTotalMs.addAndGet(Math.max(0, t1 - t0));
@@ -443,7 +451,7 @@ public final class MarketDataEngine {
 
     /** Write a snapshot only if the symbol is still tracked — a refresh finishing after eviction must
      *  not re-orphan the symbol (present in snapshots, absent from lastAccess). */
-    private void commit(String symbol, MarketSnapshot snap) {
+    private void commit(Symbol symbol, MarketSnapshot snap) {
         if (lastAccess.containsKey(symbol)) snapshots.put(symbol, snap);
         else snapshots.remove(symbol);
         // Mirror eligible observed quotes to the durable snapshot cache (best-effort) so the next
@@ -453,7 +461,7 @@ public final class MarketDataEngine {
         }
     }
 
-    private void putError(String symbol, String error) {
+    private void putError(Symbol symbol, String error) {
         MarketSnapshot prev = snapshots.get(symbol);
         long now = clock.millis();
         if (prev != null) {
@@ -466,12 +474,12 @@ public final class MarketDataEngine {
                     prev.ask(), prev.prevClose(), prev.optionable(), Freshness.STALE, prev.source(),
                     prev.asOfEpochMs(), now, false, error));
         } else {
-            commit(symbol, new MarketSnapshot(symbol, null, null, null, null, null, false,
+            commit(symbol, new MarketSnapshot(symbol.value(), null, null, null, null, null, false,
                     Freshness.MISSING, null, 0L, now, false, error));
         }
     }
 
-    private void markRefreshing(String symbol, boolean refreshing) {
+    private void markRefreshing(Symbol symbol, boolean refreshing) {
         MarketSnapshot s = snapshots.get(symbol);
         if (s == null) return;
         if (s.refreshing() == refreshing) return;
@@ -482,20 +490,23 @@ public final class MarketDataEngine {
 
     // ---- Tracking / eviction ----
 
-    private void track(String symbol) { lastAccess.put(symbol, clock.millis()); }
+    private void track(Symbol symbol) { lastAccess.put(symbol, clock.millis()); }
 
     /** LRU-evict tracked symbols beyond the cap, but never the active universe (it stays warm). */
     private void evictOverflow() {
         int cap = Math.max(20, cfg.engineMaxTracked());
         if (lastAccess.size() <= cap) return;
-        java.util.Set<String> keep;
-        try { keep = new java.util.HashSet<>(universe.active().symbols()); }
+        java.util.Set<Symbol> keep;
+        try {
+            keep = universe.active().symbols().stream().map(Symbol::of)
+                    .collect(java.util.stream.Collectors.toSet());
+        }
         catch (Exception e) { keep = java.util.Set.of(); }
-        List<Map.Entry<String, Long>> byAge = new ArrayList<>(lastAccess.entrySet());
+        List<Map.Entry<Symbol, Long>> byAge = new ArrayList<>(lastAccess.entrySet());
         byAge.sort(Comparator.comparingLong(Map.Entry::getValue)); // oldest access first
-        for (Map.Entry<String, Long> e : byAge) {
+        for (Map.Entry<Symbol, Long> e : byAge) {
             if (lastAccess.size() <= cap) break;
-            String s = e.getKey();
+            Symbol s = e.getKey();
             if (keep.contains(s)) continue;
             lastAccess.remove(s);
             snapshots.remove(s);
@@ -509,15 +520,15 @@ public final class MarketDataEngine {
         int interval = currentIntervalSeconds();
         int warmed = 0, stale = 0, errors = 0;
         List<SymbolStatus> syms = new ArrayList<>();
-        List<String> tracked = new ArrayList<>(lastAccess.keySet());
+        List<Symbol> tracked = new ArrayList<>(lastAccess.keySet());
         tracked.sort(Comparator.naturalOrder());
-        for (String s : tracked) {
+        for (Symbol s : tracked) {
             MarketSnapshot snap = snapshots.get(s);
             boolean w = snap != null && snap.last() != null;
             if (w) warmed++;
             if (snap != null && isStale(snap)) stale++;
             if (snap != null && snap.error() != null) errors++;
-            syms.add(new SymbolStatus(s, w, snap != null && snap.refreshing(),
+            syms.add(new SymbolStatus(s.value(), w, snap != null && snap.refreshing(),
                     snap == null ? "MISSING" : snap.freshness().name(),
                     snap == null ? null : snap.source(),
                     snap == null ? -1 : now - snap.lastRefreshEpochMs(),
@@ -539,8 +550,6 @@ public final class MarketDataEngine {
     private boolean isStale(MarketSnapshot snap) {
         return clock.millis() - snap.lastRefreshEpochMs() >= currentIntervalSeconds() * 1000L;
     }
-
-    private static String norm(String s) { return s == null ? "" : s.trim().toUpperCase(Locale.ROOT); }
 
     private static java.util.concurrent.ThreadFactory daemon(String name) {
         return r -> { Thread t = new Thread(r, name); t.setDaemon(true); return t; };

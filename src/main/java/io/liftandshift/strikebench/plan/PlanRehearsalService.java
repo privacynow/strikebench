@@ -10,6 +10,7 @@ import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -210,7 +211,7 @@ public final class PlanRehearsalService {
         for (int i = 0; i < paths.length; i++) terminal[i] = paths[i][paths[i].length - 1];
         if (selection == Selection.TYPICAL) {
             double[] copy = terminal.clone(); java.util.Arrays.sort(copy);
-            double median = copy[copy.length / 2]; return nearest(terminal, median);
+            return nearest(terminal, Quantiles.of(copy, .50));
         }
         if (selection == Selection.STRESS) {
             int best = 0; double worstDrawdown = 0;

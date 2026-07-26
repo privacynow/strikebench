@@ -118,10 +118,10 @@ public final class PathValuationKernel {
                 annualRate, q, iv);
         double gamma = BlackScholes.gamma(underlying, leg.strike().doubleValue(), t,
                 annualRate, q, iv);
-        double theta = BlackScholes.theta(call, underlying, leg.strike().doubleValue(), t,
-                annualRate, q, iv) / 365.0;
-        double vega = BlackScholes.vega(underlying, leg.strike().doubleValue(), t,
-                annualRate, q, iv) / 100.0;
+        double theta = BlackScholes.thetaPerDay(call, underlying, leg.strike().doubleValue(), t,
+                annualRate, q, iv);
+        double vega = BlackScholes.vegaPerVolPoint(underlying, leg.strike().doubleValue(), t,
+                annualRate, q, iv);
         return new LegPoint(sign * units * px, px,
                 sign * units * delta, sign * units * gamma,
                 sign * units * theta, sign * units * vega, "LIVE_MODELED", transformation);

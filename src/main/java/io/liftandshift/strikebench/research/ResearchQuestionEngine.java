@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.LocalDate;
 import java.time.Clock;
@@ -320,7 +321,7 @@ public final class ResearchQuestionEngine {
         double[] a = rs.stream().mapToDouble(Double::doubleValue).sorted().toArray();
         int wins = 0; double sum = 0, worst = a[0], best = a[a.length - 1];
         for (double r : a) { if (r > 0) wins++; sum += r; }
-        double median = a.length % 2 == 1 ? a[a.length / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2.0;
+        double median = Quantiles.of(a, .50);
         return new Stat(a.length, round((double) wins / a.length * 100), round(sum / a.length * 100),
                 round(median * 100), round(worst * 100), round(best * 100));
     }

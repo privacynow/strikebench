@@ -329,7 +329,7 @@ public final class ScenarioSimulator {
         Integer[] idx = new Integer[paths.length];
         for (int i = 0; i < idx.length; i++) idx[i] = i;
         java.util.Arrays.sort(idx, (a, b) -> Double.compare(paths[a][steps], paths[b][steps]));
-        return idx[idx.length / 2];
+        return idx[Quantiles.index(idx.length, .50)];
     }
 
 }

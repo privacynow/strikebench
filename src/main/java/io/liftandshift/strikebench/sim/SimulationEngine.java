@@ -196,7 +196,8 @@ public final class SimulationEngine {
                        DecisionMap decisionMap, MarketImpliedRange marketImplied,
                        EnsembleReceipt receipt, List<String> notes) {
             this(symbol, spot, paths, horizonDays, pathModelVersion, bands, List.of(), samples,
-                    List.of(), samples == null || samples.isEmpty() ? -1 : samples.size() / 2,
+                    List.of(), samples == null || samples.isEmpty()
+                            ? -1 : Quantiles.index(samples.size(), .50),
                     endP10, endP50, endP90, decisionMap, marketImplied, receipt, notes);
         }
     }
@@ -371,12 +372,12 @@ public final class SimulationEngine {
                     .comparingDouble((Integer p) -> paths[p][paths[p].length - 1])
                     .thenComparingInt(Integer::intValue));
             int sampleCount = Math.min(48, paths.length);
-            focusIndex = sampleCount == 0 ? -1 : sampleCount / 2;
+            focusIndex = sampleCount == 0 ? -1 : Quantiles.index(sampleCount, .50);
             List<Integer> canonical = new ArrayList<>(sampleCount);
             for (int slot = 0; slot < sampleCount; slot++) {
-                int at = sampleCount == 1 || slot == focusIndex ? (paths.length - 1) / 2
-                        : (int) Math.round((double) slot * (paths.length - 1)
-                            / (sampleCount - 1));
+                int at = sampleCount == 1 || slot == focusIndex
+                        ? Quantiles.index(paths.length, .50)
+                        : Quantiles.index(paths.length, (double) slot / (sampleCount - 1));
                 canonical.add(terminalOrder[at]);
             }
             selected = List.copyOf(canonical);

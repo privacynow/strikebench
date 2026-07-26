@@ -30,7 +30,8 @@ final class StanceProfiler {
         List<Leg> legs = RiskProfiler.combinedLegs(candidate, ctx);
         double spot = ctx.underlyingCents() / 100.0;
         double sigma = modelVol(ctx);
-        double deltaShares = 0, gammaSharesPerDollar = 0, thetaDollarsPerYear = 0, vegaDollarsPerOne = 0;
+        double deltaShares = 0, gammaSharesPerDollar = 0;
+        double thetaDollarsPerDay = 0, vegaDollarsPerPoint = 0;
         int duration = 0;
         double durationYears = 0;
         long equivalentShares = 0;
@@ -62,17 +63,17 @@ final class StanceProfiler {
                     ctx.riskFreeRate(), 0, sigma);
             gammaSharesPerDollar += sign * units * BlackScholes.gamma(spot, strike, t,
                     ctx.riskFreeRate(), 0, sigma);
-            thetaDollarsPerYear += sign * units * BlackScholes.theta(call, spot, strike, t,
+            thetaDollarsPerDay += sign * units * BlackScholes.thetaPerDay(call, spot, strike, t,
                     ctx.riskFreeRate(), 0, sigma);
-            vegaDollarsPerOne += sign * units * BlackScholes.vega(spot, strike, t,
+            vegaDollarsPerPoint += sign * units * BlackScholes.vegaPerVolPoint(spot, strike, t,
                     ctx.riskFreeRate(), 0, sigma);
         }
         if (equivalentShares <= 0) throw new IllegalArgumentException("stance needs positive deliverable units");
 
         long dollarDelta = Money.toCents(deltaShares * spot);
         long gammaDollarDelta = Money.toCents(gammaSharesPerDollar * (spot * 0.01) * spot);
-        long theta = Money.toCents(thetaDollarsPerYear / 365.0);
-        long vega = Money.toCents(vegaDollarsPerOne / 100.0);
+        long theta = Money.toCents(thetaDollarsPerDay);
+        long vega = Money.toCents(vegaDollarsPerPoint);
 
         int expirations = (int) legs.stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count();

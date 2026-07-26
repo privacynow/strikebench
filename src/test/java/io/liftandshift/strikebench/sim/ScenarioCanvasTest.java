@@ -572,7 +572,7 @@ class ScenarioCanvasTest {
         assertThat(events.quarterlyReportDates("AAPL")).containsExactly(
                 LocalDate.of(2026, 4, 30), LocalDate.of(2026, 1, 29), LocalDate.of(2025, 10, 30));
         assertThat(seeded.spec().waypoints()).singleElement().satisfies(pin ->
-                assertThat(pin.priceRatio()).isCloseTo(1.07,
+                assertThat(pin.priceRatio()).isCloseTo(1.085,
                         org.assertj.core.data.Offset.offset(.0001)));
         assertThat(seeded.canvas().template().observed()).isTrue();
         assertThat(seeded.canvas().template().source()).contains("SEC EDGAR filing dates");

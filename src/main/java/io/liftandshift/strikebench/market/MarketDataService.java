@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,34 +62,40 @@ public final class MarketDataService {
     private static final Duration EMPTY_HISTORY_TTL = Duration.ofSeconds(15);
     private static final Duration EMPTY_NEWS_TTL = Duration.ofSeconds(30);
     private static final Duration MODELED_RATE_TTL = Duration.ofMinutes(5);
-    private final Cache<String, Optional<Quote>> quoteCache = Caffeine.newBuilder()
-            .expireAfter(MarketDataService.<Quote>optionalExpiry(Duration.ofSeconds(15), EMPTY_QUOTE_TTL))
+    private final Cache<Symbol, Optional<Quote>> quoteCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<Symbol, Quote>optionalExpiry(
+                    Duration.ofSeconds(15), EMPTY_QUOTE_TTL))
             .maximumSize(500).build();
-    private final Cache<String, Optional<OptionChain>> chainCache = Caffeine.newBuilder()
-            .expireAfter(MarketDataService.<OptionChain>optionalExpiry(Duration.ofSeconds(60), EMPTY_OPTION_TTL))
+    private record ChainKey(Symbol symbol, LocalDate expiration) {}
+    private final Cache<ChainKey, Optional<OptionChain>> chainCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<ChainKey, OptionChain>optionalExpiry(
+                    Duration.ofSeconds(60), EMPTY_OPTION_TTL))
             .maximumSize(200).build();
-    private final Cache<String, List<LocalDate>> expirationsCache = Caffeine.newBuilder()
-            .expireAfter(MarketDataService.<LocalDate>listExpiry(Duration.ofSeconds(60), EMPTY_OPTION_TTL))
+    private final Cache<Symbol, List<LocalDate>> expirationsCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<Symbol, LocalDate>listExpiry(
+                    Duration.ofSeconds(60), EMPTY_OPTION_TTL))
             .maximumSize(200).build();
     private record CachedCandleSeries(CandleSeries series, boolean partialObserved) {}
+    private record CandleKey(String dataset, Symbol symbol, LocalDate from, LocalDate to) {}
     private static final Duration COMPLETE_CANDLE_CACHE_TTL = Duration.ofHours(1);
     private static final Duration PARTIAL_CANDLE_CACHE_TTL = Duration.ofMinutes(5);
-    private final Cache<String, Optional<CachedCandleSeries>> candlesCache = Caffeine.newBuilder()
-            .expireAfter(new Expiry<String, Optional<CachedCandleSeries>>() {
-                @Override public long expireAfterCreate(String key, Optional<CachedCandleSeries> value, long currentTime) {
+    private final Cache<CandleKey, Optional<CachedCandleSeries>> candlesCache = Caffeine.newBuilder()
+            .expireAfter(new Expiry<CandleKey, Optional<CachedCandleSeries>>() {
+                @Override public long expireAfterCreate(CandleKey key, Optional<CachedCandleSeries> value, long currentTime) {
                     return value.map(v -> candleCacheTtl(v.partialObserved())).orElse(EMPTY_HISTORY_TTL).toNanos();
                 }
-                @Override public long expireAfterUpdate(String key, Optional<CachedCandleSeries> value, long currentTime,
+                @Override public long expireAfterUpdate(CandleKey key, Optional<CachedCandleSeries> value, long currentTime,
                                                         long currentDuration) {
                     return value.map(v -> candleCacheTtl(v.partialObserved())).orElse(EMPTY_HISTORY_TTL).toNanos();
                 }
-                @Override public long expireAfterRead(String key, Optional<CachedCandleSeries> value, long currentTime,
+                @Override public long expireAfterRead(CandleKey key, Optional<CachedCandleSeries> value, long currentTime,
                                                       long currentDuration) {
                     return currentDuration;
                 }
             }).maximumSize(100).build();
-    private final Cache<String, List<NewsItem>> newsCache = Caffeine.newBuilder()
-            .expireAfter(MarketDataService.<NewsItem>listExpiry(Duration.ofMinutes(5), EMPTY_NEWS_TTL))
+    private final Cache<Symbol, List<NewsItem>> newsCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<Symbol, NewsItem>listExpiry(
+                    Duration.ofMinutes(5), EMPTY_NEWS_TTL))
             .maximumSize(200).build();
     private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder()
             .expireAfter(new Expiry<Integer, RateQuote>() {
@@ -105,7 +112,8 @@ public final class MarketDataService {
     /** Provider I/O never runs while a Caffeine mapping lock is held. One explicit future per
      * domain/key collapses concurrent misses, while cacheGeneration prevents an old request from
      * repopulating data after a world/reset invalidation. */
-    private final Map<String, CompletableFuture<Object>> inFlightLoads = new ConcurrentHashMap<>();
+    private record FlightKey(String domain, long generation, Object key) {}
+    private final Map<FlightKey, CompletableFuture<Object>> inFlightLoads = new ConcurrentHashMap<>();
     private final AtomicLong cacheGeneration = new AtomicLong();
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
@@ -182,21 +190,21 @@ public final class MarketDataService {
         return MarketLane.of(worldId, fixtureOnlyChain, context);
     }
 
-    private static <T> Expiry<String, Optional<T>> optionalExpiry(Duration present, Duration empty) {
+    private static <K, T> Expiry<K, Optional<T>> optionalExpiry(Duration present, Duration empty) {
         return new Expiry<>() {
             private long ttl(Optional<T> value) { return (value.isPresent() ? present : empty).toNanos(); }
-            @Override public long expireAfterCreate(String key, Optional<T> value, long now) { return ttl(value); }
-            @Override public long expireAfterUpdate(String key, Optional<T> value, long now, long current) { return ttl(value); }
-            @Override public long expireAfterRead(String key, Optional<T> value, long now, long current) { return current; }
+            @Override public long expireAfterCreate(K key, Optional<T> value, long now) { return ttl(value); }
+            @Override public long expireAfterUpdate(K key, Optional<T> value, long now, long current) { return ttl(value); }
+            @Override public long expireAfterRead(K key, Optional<T> value, long now, long current) { return current; }
         };
     }
 
-    private static <T> Expiry<String, List<T>> listExpiry(Duration present, Duration empty) {
+    private static <K, T> Expiry<K, List<T>> listExpiry(Duration present, Duration empty) {
         return new Expiry<>() {
             private long ttl(List<T> value) { return (value == null || value.isEmpty() ? empty : present).toNanos(); }
-            @Override public long expireAfterCreate(String key, List<T> value, long now) { return ttl(value); }
-            @Override public long expireAfterUpdate(String key, List<T> value, long now, long current) { return ttl(value); }
-            @Override public long expireAfterRead(String key, List<T> value, long now, long current) { return current; }
+            @Override public long expireAfterCreate(K key, List<T> value, long now) { return ttl(value); }
+            @Override public long expireAfterUpdate(K key, List<T> value, long now, long current) { return ttl(value); }
+            @Override public long expireAfterRead(K key, List<T> value, long now, long current) { return current; }
         };
     }
 
@@ -205,7 +213,7 @@ public final class MarketDataService {
         V hit = cache.getIfPresent(key);
         if (hit != null) return hit;
         long generation = cacheGeneration.get();
-        String flightKey = domain + "|" + generation + "|" + key;
+        FlightKey flightKey = new FlightKey(domain, generation, key);
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> joined = inFlightLoads.putIfAbsent(flightKey, mine);
         if (joined != null) {
@@ -264,7 +272,7 @@ public final class MarketDataService {
     /** Lookup within the selected market; explicit worlds never suggest symbols from Observed. */
     public List<SymbolMatch> lookup(String query, String worldId) {
         if (observedWorld(worldId)) return lookup(query);
-        String needle = norm(query);
+        String needle = query == null ? "" : query.trim().toUpperCase(Locale.ROOT);
         return worldSymbols(worldId).orElseGet(java.util.Set::of).stream()
                 .filter(sym -> needle.isBlank() || sym.contains(needle))
                 .sorted()
@@ -326,21 +334,28 @@ public final class MarketDataService {
 
     /** World-aware quote: a simulated world serves ITS data (labeled SIMULATED); else observed. */
     public Optional<Quote> quote(String symbol, String worldId) {
-        if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.quote(norm(symbol));
+        if ("demo".equals(worldId)) {
+            return demoProvider == null ? Optional.empty() : demoProvider.quote(Symbol.normalize(symbol));
+        }
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol);
         return observedWorld(worldId) ? quote(symbol) : Optional.empty();
     }
 
     public List<LocalDate> expirations(String symbol, String worldId) {
-        if ("demo".equals(worldId)) return demoProvider == null ? List.of() : demoProvider.expirations(norm(symbol));
+        if ("demo".equals(worldId)) {
+            return demoProvider == null ? List.of() : demoProvider.expirations(Symbol.normalize(symbol));
+        }
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol).isPresent() ? w.get().expirations() : List.of();
         return observedWorld(worldId) ? expirations(symbol) : List.of();
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration, String worldId) {
-        if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.chain(norm(symbol), expiration);
+        if ("demo".equals(worldId)) {
+            return demoProvider == null ? Optional.empty()
+                    : demoProvider.chain(Symbol.normalize(symbol), expiration);
+        }
         var w = world(worldId);
         if (w.isPresent()) return w.get().chain(symbol, expiration);
         return observedWorld(worldId) ? chain(symbol, expiration) : Optional.empty();
@@ -357,12 +372,12 @@ public final class MarketDataService {
         }
         if ("demo".equals(worldId)) {
             if (demoProvider == null) return CandleSeries.EMPTY;
-            List<Candle> cs = demoProvider.candles(norm(symbol), from, to);
+            List<Candle> cs = demoProvider.candles(Symbol.normalize(symbol), from, to);
             return cs.size() < 2 ? CandleSeries.EMPTY : new CandleSeries(cs, "fixture", Freshness.FIXTURE);
         }
         var w = world(worldId);
         if (w.isPresent()) {
-            List<Candle> cs = w.get().candles(norm(symbol), from, to);
+            List<Candle> cs = w.get().candles(Symbol.normalize(symbol), from, to);
             return cs.size() < 2 ? CandleSeries.EMPTY
                     : new CandleSeries(cs, "simulated", Freshness.SIMULATED);
         }
@@ -392,7 +407,7 @@ public final class MarketDataService {
         if (from == null || to == null || from.isAfter(to)) {
             throw new IllegalArgumentException("a valid local history range is required");
         }
-        String sym = norm(symbol);
+        String sym = Symbol.normalize(symbol);
         io.liftandshift.strikebench.db.AnalysisContext analysis = actx == null
                 ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : actx;
         String dataset = analysis.datasetId();
@@ -455,8 +470,9 @@ public final class MarketDataService {
     }
 
     public Optional<Quote> quote(String symbol) {
-        String sym = norm(symbol);
-        Optional<Quote> loaded = cached(quoteCache, sym, "quote", () -> {
+        Symbol key = Symbol.of(symbol);
+        String sym = key.value();
+        Optional<Quote> loaded = cached(quoteCache, key, "quote", () -> {
             Quote q = firstNonEmpty(Domain.QUOTES, p -> p.quote(sym).orElse(null));
             if (q == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
                 try { q = quoteSnapshotStore.load(sym)
@@ -472,8 +488,9 @@ public final class MarketDataService {
     }
 
     public List<LocalDate> expirations(String symbol) {
-        String sym = norm(symbol);
-        return cached(expirationsCache, sym, "expirations", () -> {
+        Symbol key = Symbol.of(symbol);
+        String sym = key.value();
+        return cached(expirationsCache, key, "expirations", () -> {
             List<LocalDate> values = firstNonEmptyList(Domain.OPTIONS, p -> p.expirations(sym));
             // The live provider yielded nothing (exhausted, rate-limited, or absent): fall back to
             // the expirations present in the last-known warm capture rather than reporting none.
@@ -486,13 +503,15 @@ public final class MarketDataService {
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
-        String k = norm(symbol) + "|" + expiration;
-        Optional<OptionChain> loaded = cached(chainCache, k, "chain", () -> {
-            OptionChain live = firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null));
+        Symbol symbolKey = Symbol.of(symbol);
+        String sym = symbolKey.value();
+        ChainKey key = new ChainKey(symbolKey, expiration);
+        Optional<OptionChain> loaded = cached(chainCache, key, "chain", () -> {
+            OptionChain live = firstNonEmpty(Domain.OPTIONS, p -> p.chain(sym, expiration).orElse(null));
             // Same warm fallback as expirations(): a live miss serves the last-known stored chain
             // (labeled EOD via its "stored" source) so a scan reads warm data instead of empty.
             if (live == null && warmOptions != null) {
-                live = warmOptions.latestChain(norm(symbol), expiration)
+                live = warmOptions.latestChain(sym, expiration)
                         .map(io.liftandshift.strikebench.market.ports.WarmOptionStore.Read::chain)
                         .orElse(null);
             }
@@ -527,20 +546,21 @@ public final class MarketDataService {
         String dataset = actx == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : actx.datasetId();
         // The dataset id is part of the cache key: switching datasets must never serve another
         // dataset's cached candles.
-        String k = dataset + "|" + norm(symbol) + "|" + from + "|" + to;
-        Optional<CachedCandleSeries> r = cached(candlesCache, k, "candles",
-                () -> loadCandles(symbol, from, to, dataset));
+        Symbol symbolKey = Symbol.of(symbol);
+        CandleKey key = new CandleKey(dataset, symbolKey, from, to);
+        Optional<CachedCandleSeries> r = cached(candlesCache, key, "candles",
+                () -> loadCandles(symbolKey, from, to, dataset));
         return r.map(CachedCandleSeries::series).orElse(CandleSeries.EMPTY);
     }
 
-    private Optional<CachedCandleSeries> loadCandles(String symbol, LocalDate from, LocalDate to,
+    private Optional<CachedCandleSeries> loadCandles(Symbol symbol, LocalDate from, LocalDate to,
                                                       String dataset) {
         CandleStore.Read storedFallback = null;
         // Complete persisted bars win. Partial observed history remains a fallback, but first
         // gives an eligible provider the chance to enrich the requested range.
         if (candleStore != null) {
             try {
-                Optional<CandleStore.Read> stored = candleStore.candles(norm(symbol), from, to, dataset);
+                Optional<CandleStore.Read> stored = candleStore.candles(symbol.value(), from, to, dataset);
                 if (stored.isPresent() && !stored.get().series().candles().isEmpty()
                         && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
                             || observedEvidence(stored.get().series().evidence()))) {
@@ -550,20 +570,21 @@ public final class MarketDataService {
                     }
                     storedFallback = stored.get();
                 }
-            } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
+            } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol.value(), e.toString()); }
         }
         // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
         // falling through here would splice observed or Demo prices into a scenario lane.
         if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return Optional.empty();
-        CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
+        CandleSeries fromProviders = candleSeriesFromProviders(symbol.value(), from, to);
         if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
                 && observedEvidence(fromProviders.evidence()) && candleStore != null) {
             try {
                 var providerCoverage = CandleCoverage.assess(fromProviders.candles(), from, to);
-                int persisted = candleStore.persistObserved(norm(symbol), fromProviders);
+                int persisted = candleStore.persistObserved(symbol.value(), fromProviders);
                 if (persisted > 0) log.debug("Saved {} observed daily bars for local reuse", persisted);
                 if (!providerCoverage.complete()) {
-                    Optional<CandleStore.Read> refreshed = candleStore.candles(norm(symbol), from, to, dataset);
+                    Optional<CandleStore.Read> refreshed = candleStore.candles(
+                            symbol.value(), from, to, dataset);
                     if (refreshed.isPresent()
                             && (refreshed.get().coverage().complete()
                             || refreshed.get().coverage().availableSessions() >= providerCoverage.availableSessions())) {
@@ -601,13 +622,15 @@ public final class MarketDataService {
      * partial history could only ever "backfill" the rows it already had.
      */
     public CandleSeries candleSeriesFromProviders(String symbol, LocalDate from, LocalDate to) {
+        Symbol symbolKey = Symbol.of(symbol);
+        String sym = symbolKey.value();
         // The provider that reported range-absence IS evidence even though it returned no candles:
         // the caller must persist the learned coverage boundary under THAT provider, never under the
         // generic "auto" request. Remember it so the empty result can still name it.
         String absenceProvider = null;
         for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
             try {
-                List<Candle> candles = p.candles(norm(symbol), from, to);
+                List<Candle> candles = p.candles(sym, from, to);
                 if (candles != null && !candles.isEmpty()) {
                     Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
                     CandleSeries series = new CandleSeries(candles, p.name(), f);
@@ -621,13 +644,13 @@ public final class MarketDataService {
                 }
                 recordEmpty(p.name(), Domain.CANDLES);
             } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
-                recordPreHistory(p.name(), norm(symbol), rue);
+                recordPreHistory(p.name(), symbolKey, rue);
                 if (absenceProvider == null) absenceProvider = p.name();
             } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
                 recordBudgetExhausted(p.name(), budget);
             } catch (Exception e) {
                 recordError(p.name(), Domain.CANDLES, e,
-                        "symbol " + norm(symbol) + " · " + from + " to " + to);
+                        "symbol " + sym + " · " + from + " to " + to);
             }
         }
         return CandleSeries.emptyFrom(absenceProvider);
@@ -643,12 +666,14 @@ public final class MarketDataService {
      * through to a different source whose rights, adjustment basis, and request budget differ.
      */
     public CandleSeries candleSeriesFromProvider(String source, String symbol, LocalDate from, LocalDate to) {
+        Symbol symbolKey = Symbol.of(symbol);
+        String sym = symbolKey.value();
         String wanted = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
         MarketDataProvider provider = providersFor(Domain.CANDLES).stream()
                 .filter(p -> p.name().equalsIgnoreCase(wanted)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("Candle source '" + wanted + "' is not configured"));
         try {
-            List<Candle> candles = provider.candles(norm(symbol), from, to);
+            List<Candle> candles = provider.candles(sym, from, to);
             if (candles == null || candles.isEmpty()) {
                 recordEmpty(provider.name(), Domain.CANDLES);
                 return CandleSeries.EMPTY;
@@ -665,7 +690,7 @@ public final class MarketDataService {
             // Range-absence is not a failure — record it as PRE_HISTORY and return empty so the
             // backfill treats it as "nothing older to fetch", not an outage to retry. The empty
             // result still NAMES this provider so the caller persists the learned boundary under it.
-            recordPreHistory(provider.name(), norm(symbol), rue);
+            recordPreHistory(provider.name(), symbolKey, rue);
             return CandleSeries.emptyFrom(provider.name());
         } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
             // Local allowance denial: no request was sent. Record BUDGET_EXHAUSTED and return empty so
@@ -674,7 +699,7 @@ public final class MarketDataService {
             return CandleSeries.EMPTY;
         } catch (RuntimeException e) {
             recordError(provider.name(), Domain.CANDLES, e,
-                    "symbol " + norm(symbol) + " · " + from + " to " + to);
+                    "symbol " + sym + " · " + from + " to " + to);
             throw e;
         }
     }
@@ -687,8 +712,9 @@ public final class MarketDataService {
      * to fabricated headlines when observed news is unavailable.
      */
     public List<NewsItem> news(String symbol) {
-        String sym = norm(symbol);
-        return cached(newsCache, sym, "news", () -> {
+        Symbol key = Symbol.of(symbol);
+        String sym = key.value();
+        return cached(newsCache, key, "news", () -> {
             if (fixtureOnlyChain) {
                 List<NewsItem> demo = new ArrayList<>();
                 for (NewsFilingsProvider p : newsProviders) {
@@ -711,7 +737,10 @@ public final class MarketDataService {
 
     /** World-aware news: simulated worlds have none; Demo gets Fixture Wire; Observed gets only real sources. */
     public List<NewsItem> news(String symbol, String worldId) {
-        if ("demo".equals(worldId)) return demoNewsProvider == null ? List.of() : demoNewsProvider.news(norm(symbol));
+        if ("demo".equals(worldId)) {
+            return demoNewsProvider == null ? List.of()
+                    : demoNewsProvider.news(Symbol.normalize(symbol));
+        }
         if (world(worldId).isPresent()) return List.of();
         return observedWorld(worldId) ? news(symbol) : List.of();
     }
@@ -925,7 +954,7 @@ public final class MarketDataService {
      * masks an OK read of a different condition.
      */
     /** Learns the symbol's earliest-available boundary and records a PRE_HISTORY (non-failure) state. */
-    private void recordPreHistory(String provider, String symbol,
+    private void recordPreHistory(String provider, Symbol symbol,
                                   io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
         java.time.LocalDate earliest = rue.earliestAvailable();
         HistoricalAbsenceKey key = new HistoricalAbsenceKey(provider, symbol);
@@ -945,10 +974,10 @@ public final class MarketDataService {
      * both sides once, so the reporting call and the backfill lookup can never miss each other on
      * case or whitespace, and equality is structural rather than string-concatenation folklore.
      */
-    public record HistoricalAbsenceKey(String provider, String symbol) {
+    public record HistoricalAbsenceKey(String provider, Symbol symbol) {
         public HistoricalAbsenceKey {
             provider = provider == null ? "" : provider.trim().toLowerCase(java.util.Locale.ROOT);
-            symbol = norm(symbol);
+            symbol = java.util.Objects.requireNonNull(symbol, "symbol");
         }
     }
 
@@ -956,7 +985,7 @@ public final class MarketDataService {
      *  Provider-scoped so a Yahoo/SNDK short-coverage report never clamps a provider with deeper history. */
     public java.util.Optional<java.time.LocalDate> preHistoryBoundary(String provider, String symbol) {
         return java.util.Optional.ofNullable(
-                preHistoryBoundaries.get(new HistoricalAbsenceKey(provider, symbol)));
+                preHistoryBoundaries.get(new HistoricalAbsenceKey(provider, Symbol.of(symbol))));
     }
 
     /**
@@ -995,7 +1024,4 @@ public final class MarketDataService {
         return "source request failed";
     }
 
-    private static String norm(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-    }
 }

@@ -76,11 +76,23 @@ public final class BlackScholes {
         return term1 + r * k * disc(r, t) * normCdf(-d2) - q * s * disc(q, t) * normCdf(-d1);
     }
 
+    /** Theta per calendar day, in dollars for one underlying share. */
+    public static double thetaPerDay(boolean call, double s, double k, double t,
+                                     double r, double q, double sigma) {
+        return theta(call, s, k, t, r, q, sigma) / 365.0;
+    }
+
     /** Vega per 1.00 change in vol. */
     public static double vega(double s, double k, double t, double r, double q, double sigma) {
         if (t <= 0 || sigma <= 0) return 0.0;
         double d1 = d1(s, k, t, r, q, sigma);
         return s * disc(q, t) * normPdf(d1) * Math.sqrt(t);
+    }
+
+    /** Vega per one volatility point (0.01), in dollars for one underlying share. */
+    public static double vegaPerVolPoint(double s, double k, double t,
+                                         double r, double q, double sigma) {
+        return vega(s, k, t, r, q, sigma) / 100.0;
     }
 
     private static double disc(double rate, double t) {

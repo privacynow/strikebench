@@ -7,6 +7,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -368,7 +369,8 @@ public final class EventService {
         }
         if (gaps.isEmpty()) return null;
         gaps.sort(Long::compareTo);
-        long cadence = Math.clamp(gaps.get(gaps.size() / 2), 60, 120);
+        long cadence = Math.clamp(Quantiles.of(gaps.stream().mapToLong(Long::longValue).toArray(), .50),
+                60, 120);
         LocalDate today = LocalDate.now(clock);
         LocalDate projected = reports.getFirst().date().plusDays(cadence);
         int guard = 0;
