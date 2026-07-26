@@ -1,0 +1,239 @@
+{
+ "innerH": 1080,
+ "dcctop": {
+  "r": {
+   "x": 681,
+   "y": 96,
+   "w": 674,
+   "h": 635,
+   "bottom": 731
+  },
+  "oy": "visible",
+  "ch": 635,
+  "sh": 635,
+  "display": "flex",
+  "rows": "none"
+ },
+ "band": {
+  "x": 681,
+  "y": 740,
+  "w": 674,
+  "h": 259,
+  "bottom": 999
+ },
+ "tileSample": [],
+ "spilled": [],
+ "copy": {
+  "canonicalEngine": true,
+  "coverage": "1 exact Income package priced now\n0 screened now · 6 families in the canonical engine\nPut verticals and calendars are in the supported field; open this receipt to see why each is compared, screened, or assigned to another goal.\nSee full field →",
+  "marketFanHint": [
+   "one market fan across ideas"
+  ],
+  "mcreceipt": [
+   "SIMULATED PATHSEvery idea is judged against this same market fan."
+  ],
+  "threadState": "ON\nAMD\nMOVE\nNew idea\nLANE\nnot chosen",
+  "laneWords": [
+   {
+    "cls": "tk",
+    "r": {
+     "x": 826,
+     "y": 15,
+     "w": 32,
+     "h": 16,
+     "bottom": 31
+    }
+   }
+  ],
+  "fsub": [
+   {
+    "t": "Realized-volatility EV +$15; tested range −$3 to +$34. Market-implied EV −$52.",
+    "cw": 175,
+    "sw": 428,
+    "ov": "hidden",
+    "r": {
+     "x": 61,
+     "y": 286,
+     "w": 175,
+     "h": 14,
+     "bottom": 300
+    }
+   }
+  ],
+  "dbread": [
+   {
+    "t": "Realized-volatility EV +$15; tested range −$3 to +$34. Market-implied EV −$52.",
+    "r": {
+     "x": 1380,
+     "y": 160,
+     "w": 513,
+     "h": 17,
+     "bottom": 177
+    }
+   }
+  ],
+  "legrows": [
+   "BUY CALL − 100 + − 1 + ✕ exp 2026-08-21 · bid / ask 5.80 / 6.20 · fill: buy at ask 6.00 · IV 30.0%",
+   "SELL CALL − 110 + − 1 + ✕ exp 2026-08-21 · bid / ask 1.80 / 2.20 · fill: sell at bid 2.00 · IV 30.0%"
+  ],
+  "heldHint": false
+ },
+ "badges": {
+  ".badge": [
+   {
+    "t": "reviewing",
+    "vis": true
+   },
+   {
+    "t": "exp 2026-08-21",
+    "vis": true
+   },
+   {
+    "t": "SIMULATED PATHS",
+    "vis": true
+   }
+  ],
+  ".lifebadge": [
+   {
+    "t": "reviewing",
+    "vis": true
+   }
+  ],
+  ".fvd": [
+   {
+    "t": "✓",
+    "vis": true
+   }
+  ],
+  ".dbfit": [
+   {
+    "t": "coherent",
+    "vis": true
+   }
+  ],
+  ".backendstate": [
+   {
+    "t": "ready · balanced",
+    "vis": true
+   }
+  ],
+  ".declegstate": [
+   {
+    "t": "Engine",
+    "vis": true
+   }
+  ],
+  ".mktsrc": [
+   {
+    "t": "● PRACTICE",
+    "vis": false
+   }
+  ]
+ },
+ "lrm": [
+  {
+   "r": {
+    "x": 259,
+    "y": 356,
+    "w": 19,
+    "h": 20,
+    "bottom": 376
+   },
+   "color": "rgb(91, 101, 119)",
+   "txt": "✕"
+  },
+  {
+   "r": {
+    "x": 262,
+    "y": 408,
+    "w": 19,
+    "h": 20,
+    "bottom": 428
+   },
+   "color": "rgb(91, 101, 119)",
+   "txt": "✕"
+  }
+ ],
+ "mstp": [
+  {
+   "r": {
+    "x": 104,
+    "y": 353,
+    "w": 22,
+    "h": 26,
+    "bottom": 379
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 156,
+    "y": 353,
+    "w": 22,
+    "h": 26,
+    "bottom": 379
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 182,
+    "y": 353,
+    "w": 22,
+    "h": 26,
+    "bottom": 379
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 234,
+    "y": 353,
+    "w": 22,
+    "h": 26,
+    "bottom": 379
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 107,
+    "y": 405,
+    "w": 22,
+    "h": 26,
+    "bottom": 431
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 159,
+    "y": 405,
+    "w": 22,
+    "h": 26,
+    "bottom": 431
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 185,
+    "y": 405,
+    "w": 22,
+    "h": 26,
+    "bottom": 431
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 237,
+    "y": 405,
+    "w": 22,
+    "h": 26,
+    "bottom": 431
+   },
+   "t": "+"
+  }
+ ]
+}

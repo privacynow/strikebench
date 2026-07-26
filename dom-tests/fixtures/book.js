@@ -293,6 +293,19 @@ function portfolioHeat(trades, summary) {
     bySymbolMaxLossCents: bySymbol,
     concentrationPct: totalMaxLossCents > 0
       ? Math.round(100 * worstSymbol / totalMaxLossCents) : 0,
+    /* Each trade's share of defined book risk and its rank — book facts, because both depend on
+       every other open trade (audit §15.5). Ranked by defined loss, id breaking ties, exactly as
+       TradeService.portfolioHeat does, so a surface reading this fixture reads the real ordering. */
+    positions: rows.slice()
+      .sort((a, b) => (b.maxLossCents - a.maxLossCents) || a.id.localeCompare(b.id))
+      .map((trade, index) => ({
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        maxLossCents: trade.maxLossCents,
+        riskSharePct: totalMaxLossCents > 0 ? 100 * trade.maxLossCents / totalMaxLossCents : null,
+        riskRank: index + 1
+      })),
+    rankedPositions: rows.length,
     earlyAssignmentLiquidityCents: shortPutObligationCents,
     physicalAssignmentCashCents: shortPutObligationCents,
     assignmentReserveReleasedCents: totalMaxLossCents,

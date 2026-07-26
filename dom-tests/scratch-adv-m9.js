@@ -9790,3 +9790,460 @@ test('ADV9 pathpanel scrollability', async () => {
     await context.close();
   }
 });
+
+test('ADV9 user-reachable scroll only', async () => {
+  for (const vp of [{ width: 2000, height: 963 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
+    const context = await browser.newContext({ viewport: vp });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    await installBackend(page, { bookDocuments: populatedBookDocuments() });
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.locator('#book .card[data-id="' + BOOK_TRADE_ID + '"]').click();
+    await page.waitForFunction(() => ['partial', 'ready'].includes(window.DeskBackend.state().position?.phase));
+    await page.waitForTimeout(900);
+    const r = await page.evaluate(() => {
+      const pos = document.querySelector('.authpos');
+      pos.scrollTop = pos.scrollHeight;           // user-reachable: wheel on the real scroller
+      const panel = document.querySelector('.authpathpanel');
+      const names = ['Gamma', 'Vega', 'Theta', 'Scenario P/L'];
+      const rows = names.map(n => {
+        const el = Array.from(panel.querySelectorAll('.authscenmetric')).find(e => e.textContent.includes(n));
+        if (!el) return { n, missing: true };
+        const r = el.getBoundingClientRect(), pr = panel.getBoundingClientRect();
+        const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+        const hit = (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) ? document.elementFromPoint(cx, cy) : null;
+        return { n, y: Math.round(r.y), b: Math.round(r.bottom),
+          panelBottom: Math.round(pr.bottom - parseFloat(getComputedStyle(panel).paddingBottom)),
+          clippedByPanel: r.bottom > pr.bottom, offBottom: r.bottom > innerHeight,
+          hit: hit ? (hit.className || hit.tagName) : null,
+          hitInside: !!(hit && (el === hit || el.contains(hit))) };
+      });
+      const receipt = panel.querySelector('.mcreceipt, .authpathreceipt');
+      return { panelScrollTop: panel.scrollTop, panelCh: panel.clientHeight, panelSh: panel.scrollHeight,
+        posScrollTop: pos.scrollTop, posMax: pos.scrollHeight - pos.clientHeight,
+        rows, receiptText: receipt ? receipt.textContent.replace(/\s+/g, ' ').trim().slice(0, 90) : null,
+        panelText: panel.innerText.replace(/\s+/g, ' ').trim().slice(-160) };
+    });
+    console.log(vp.width + 'x' + vp.height, JSON.stringify(r, null, 0));
+    await page.screenshot({ path: path.join(M9OUT, `posBottom-${vp.width}x${vp.height}.png`) });
+    await context.close();
+  }
+});
+
+test('ADV9 new idea surface', async () => {
+  for (const vp of [{ width: 2000, height: 963 }, { width: 2560, height: 1440 }, { width: 1920, height: 1080 }, { width: 1440, height: 900 }]) {
+    const { context, page } = await openAuthoritativeDesk({ viewport: vp, bookDocuments: populatedBookDocuments() });
+    await page.waitForTimeout(700);
+    const r = await page.evaluate(() => {
+      const rect = el => { if (!el) return null; const b = el.getBoundingClientRect();
+        return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height), bottom: Math.round(b.bottom) }; };
+      const top = document.querySelector('.dccenter .dcctop') || document.querySelector('.dcctop');
+      const band = document.querySelector('.decmarketband');
+      const out = { innerH: innerHeight };
+      if (top) { const cs = getComputedStyle(top);
+        out.dcctop = { r: rect(top), oy: cs.overflowY, ch: top.clientHeight, sh: top.scrollHeight,
+          display: cs.display, rows: cs.gridTemplateRows }; }
+      if (band) out.band = rect(band);
+      // do the market-band nodes actually paint on top of the tiles?
+      const tiles = Array.from(document.querySelectorAll('.dcctop .scentile, .dcctop [data-scen], .dcctop .scen'));
+      out.tileSample = tiles.slice(0, 6).map(t => ({ t: t.textContent.replace(/\s+/g, ' ').trim().slice(0, 30), r: rect(t) }));
+      // overlap census: any element visually below dcctop's box that is a descendant of dcctop
+      if (top) {
+        const tb = top.getBoundingClientRect();
+        const spilled = Array.from(top.querySelectorAll('*')).filter(e => {
+          const b = e.getBoundingClientRect();
+          return b.height > 0 && b.top >= tb.bottom - 1 && b.top < innerHeight;
+        }).slice(0, 12).map(e => ({ cls: e.className, t: (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40), r: rect(e) }));
+        out.spilled = spilled;
+      }
+      // copy findings
+      const txt = document.body.innerText.replace(/\s+/g, ' ');
+      out.copy = {
+        canonicalEngine: /families in the canonical engine/.test(txt),
+        coverage: (document.querySelector('.strategycoverage') || {}).innerText,
+        marketFanHint: Array.from(document.querySelectorAll('.upanel .lenshd .hint, .lenshd .hint')).map(e => e.textContent.trim()).filter(t => /market fan/.test(t)),
+        mcreceipt: Array.from(document.querySelectorAll('.mcreceipt')).map(e => e.textContent.replace(/\s+/g, ' ').trim()),
+        threadState: (document.querySelector('#threadState') || {}).innerText,
+        laneWords: Array.from(document.querySelectorAll('*')).filter(e => e.children.length === 0 && /^Lane$/.test(e.textContent.trim())).map(e => ({ cls: e.className, r: rect(e) })),
+        fsub: Array.from(document.querySelectorAll('.fsub')).map(e => ({ t: e.textContent.trim(), cw: e.clientWidth, sw: e.scrollWidth, ov: getComputedStyle(e).overflow, r: rect(e) })),
+        dbread: Array.from(document.querySelectorAll('.dbread')).map(e => ({ t: e.textContent.replace(/\s+/g, ' ').trim().slice(0, 120), r: rect(e) })),
+        legrows: Array.from(document.querySelectorAll('.legr')).map(e => e.innerText.replace(/\s+/g, ' ').trim()),
+        heldHint: /Held package — touching a control opens a new idea/.test(txt)
+      };
+      out.badges = {};
+      ['.badge', '.lifebadge', '.fvd', '.dbfit', '.backendstate', '.declegstate', '.mktsrc'].forEach(s => {
+        out.badges[s] = Array.from(document.querySelectorAll(s)).map(e => ({ t: e.textContent.replace(/\s+/g, ' ').trim(), vis: e.getBoundingClientRect().height > 0 }));
+      });
+      out.lrm = Array.from(document.querySelectorAll('.lrm')).map(b => { const cs = getComputedStyle(b);
+        return { r: rect(b), color: cs.color, txt: b.textContent.trim() }; });
+      out.mstp = Array.from(document.querySelectorAll('.mstp button')).map(b => ({ r: rect(b), t: b.textContent.trim() }));
+      return out;
+    });
+    fs.writeFileSync(path.join(M9OUT, `newidea-${vp.width}x${vp.height}.json`), JSON.stringify(r, null, 1));
+    await page.screenshot({ path: path.join(M9OUT, `newidea-${vp.width}x${vp.height}.png`) });
+    console.log(vp.width + 'x' + vp.height, JSON.stringify({ dcctop: r.dcctop, band: r.band, spilled: (r.spilled || []).length }));
+    await context.close();
+  }
+});
+
+test('ADV9 dcctop overlap', async () => {
+  for (const vp of [{ width: 2000, height: 963 }, { width: 1920, height: 1080 }]) {
+    const { context, page } = await openAuthoritativeDesk({ viewport: vp, bookDocuments: populatedBookDocuments() });
+    await page.waitForTimeout(700);
+    const r = await page.evaluate(() => {
+      const top = document.querySelector('.dcctop');
+      const tb = top.getBoundingClientRect();
+      let maxBottom = 0, worst = null;
+      Array.from(top.querySelectorAll('*')).forEach(e => {
+        const b = e.getBoundingClientRect();
+        if (b.height > 0 && b.width > 0 && b.bottom > maxBottom) { maxBottom = b.bottom; worst = e; }
+      });
+      const band = document.querySelector('.decmarketband');
+      const bb = band.getBoundingClientRect();
+      // hit-test the top 40px of the band: which element paints there?
+      const probes = [];
+      for (let y = Math.round(bb.top) + 2; y < Math.round(bb.top) + 40; y += 6) {
+        const el = document.elementFromPoint(Math.round(bb.left + bb.width / 2), y);
+        probes.push({ y, cls: el ? (el.className || el.tagName) : null,
+          inTop: !!(el && top.contains(el)), inBand: !!(el && band.contains(el)),
+          t: el ? (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30) : null });
+      }
+      return { tb: { y: Math.round(tb.y), bottom: Math.round(tb.bottom) }, maxBottom: Math.round(maxBottom),
+        worstCls: worst ? worst.className : null, worstText: worst ? worst.textContent.replace(/\s+/g, ' ').trim().slice(0, 40) : null,
+        band: { y: Math.round(bb.y), bottom: Math.round(bb.bottom) }, probes,
+        css: { oy: getComputedStyle(top).overflowY, ch: top.clientHeight, sh: top.scrollHeight, display: getComputedStyle(top).display } };
+    });
+    console.log(vp.width + 'x' + vp.height, JSON.stringify(r, null, 0));
+    await context.close();
+  }
+});
+
+test('ADV9 dcctop anchor rule applicability', async () => {
+  const { context, page } = await openAuthoritativeDesk({ viewport: { width: 2000, height: 963 }, bookDocuments: populatedBookDocuments() });
+  const r = await page.evaluate(() => {
+    const mq = '(min-width:1001px) and (max-width:1899px) and (min-height:851px) and (max-height:1150px)';
+    const before = { ch: document.querySelector('.dcctop').clientHeight, sh: document.querySelector('.dcctop').scrollHeight };
+    // apply the PROPOSED change exactly as written, inside the same media query
+    const s = document.createElement('style');
+    s.textContent = '@media ' + mq + '{.dccenter .dcctop{flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,1.35fr) minmax(210px,.85fr);gap:7px;margin-bottom:0;overflow-y:auto;overscroll-behavior:contain}}';
+    document.head.appendChild(s);
+    const top = document.querySelector('.dcctop');
+    let maxBottom = 0;
+    Array.from(top.querySelectorAll('*')).forEach(e => { const b = e.getBoundingClientRect(); if (b.height > 0 && b.bottom > maxBottom) maxBottom = b.bottom; });
+    return { mqMatches: matchMedia(mq).matches, before,
+      after: { ch: top.clientHeight, sh: top.scrollHeight, oy: getComputedStyle(top).overflowY,
+        bottom: Math.round(top.getBoundingClientRect().bottom), maxBottom: Math.round(maxBottom) } };
+  });
+  console.log(JSON.stringify(r));
+  await context.close();
+});
+
+test('ADV9 position scenario pinned probes', async () => {
+  for (const vp of [{ width: 2000, height: 963 }, { width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
+    const context = await browser.newContext({ viewport: vp });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    await installBackend(page, { bookDocuments: populatedBookDocuments() });
+    const stageSelector = `#authScenStage-${BOOK_TRADE_ID}`;
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(id => window.DeskBackend.state().position?.phase === 'ready' && window.state?.focus === id, BOOK_TRADE_ID);
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"]`);
+    await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"] path.focuspath`);
+    await page.waitForTimeout(200);
+    const before = await page.evaluate(() => {
+      const b = document.querySelector('.playb');
+      return b ? { glyph: b.textContent.trim(), aria: b.getAttribute('aria-label'), title: b.getAttribute('title'),
+        pressed: b.getAttribute('aria-pressed'), r: (r => ({ w: Math.round(r.width), h: Math.round(r.height) }))(b.getBoundingClientRect()) } : null;
+    });
+    await page.locator(`${stageSelector} [data-wf="playtoggle"]`).click();
+    await page.waitForTimeout(120);
+    const after = await page.evaluate(() => {
+      const b = document.querySelector('.playb');
+      return b ? { glyph: b.textContent.trim(), aria: b.getAttribute('aria-label'), title: b.getAttribute('title'),
+        pressed: b.getAttribute('aria-pressed'), playing: window.scenSt ? undefined : undefined } : null;
+    });
+    // panel + receipt after pin
+    const panel = await page.evaluate(() => {
+      const pos = document.querySelector('.authpos'); if (pos) pos.scrollTop = pos.scrollHeight;
+      const p = document.querySelector('.authpathpanel');
+      const pr = p.getBoundingClientRect();
+      const nodes = Array.from(p.querySelectorAll('.authscenmetric, .mcreceipt, .authscenreceipt')).map(e => {
+        const b = e.getBoundingClientRect();
+        return { cls: e.className, t: e.textContent.replace(/\s+/g, ' ').trim().slice(0, 70),
+          y: Math.round(b.y), bottom: Math.round(b.bottom), clipped: b.bottom > pr.bottom };
+      });
+      return { ch: p.clientHeight, sh: p.scrollHeight, panelBottom: Math.round(pr.bottom), nodes, innerH: innerHeight };
+    });
+    console.log(vp.width + 'x' + vp.height, JSON.stringify({ before, after, panel }));
+    await page.screenshot({ path: path.join(M9OUT, `posPinned-${vp.width}x${vp.height}.png`) });
+    await context.close();
+  }
+});
+
+function m9contrast() {
+  function lum(r, g, b) {
+    const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  }
+  function parse(c) { const m = c.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/);
+    return m ? { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] } : null; }
+  function backdrop(el) {
+    let e = el;
+    while (e) { const bg = parse(getComputedStyle(e).backgroundColor);
+      if (bg && bg.a > 0.9) return bg; e = e.parentElement; }
+    return { r: 8, g: 11, b: 17, a: 1 };
+  }
+  const fails = [];
+  Array.from(document.querySelectorAll('*')).forEach(el => {
+    if (!el.childNodes.length) return;
+    const hasText = Array.from(el.childNodes).some(n => n.nodeType === 3 && n.textContent.trim().length > 1);
+    if (!hasText) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.top > innerHeight) return;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.opacity === '0') return;
+    const fg = parse(cs.color); if (!fg) return;
+    const bg = backdrop(el);
+    const l1 = lum(fg.r, fg.g, fg.b), l2 = lum(bg.r, bg.g, bg.b);
+    const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+    const size = parseFloat(cs.fontSize);
+    const bold = parseInt(cs.fontWeight, 10) >= 700;
+    const large = size >= 24 || (bold && size >= 18.66);
+    const min = large ? 3 : 4.5;
+    if (ratio < min) fails.push({ cls: String(el.className).slice(0, 40), tag: el.tagName,
+      color: cs.color, bg: `rgb(${bg.r}, ${bg.g}, ${bg.b})`, size, ratio: +ratio.toFixed(2),
+      t: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 40) });
+  });
+  const byColor = {};
+  fails.forEach(f => { const k = f.color + '|' + f.bg + '|' + f.size; byColor[k] = (byColor[k] || 0) + 1; });
+  return { total: fails.length, byColor, sample: fails.slice(0, 25) };
+}
+
+test('ADV9 contrast + focus census', async () => {
+  const vp = { width: 2000, height: 963 };
+  const context = await browser.newContext({ viewport: vp });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: populatedBookDocuments() });
+  await page.goto(deskUrl);
+  await waitForDeskBoot(page);
+  await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+  await page.waitForTimeout(700);
+  const homeContrast = await page.evaluate(m9contrast);
+  console.log('HOME contrast', JSON.stringify(homeContrast.byColor), 'total', homeContrast.total);
+  console.log('HOME sample', JSON.stringify(homeContrast.sample.slice(0, 8)));
+  // token proof
+  const tokens = await page.evaluate(() => {
+    const cs = getComputedStyle(document.documentElement);
+    return ['--faint', '--dim', '--ground', '--panel', '--panel-2', '--row-hover', '--accent-2', '--line']
+      .reduce((a, k) => (a[k] = cs.getPropertyValue(k).trim(), a), {});
+  });
+  console.log('TOKENS', JSON.stringify(tokens));
+  // focus ring scan
+  const focus = [];
+  for (let i = 0; i < 60; i += 1) {
+    await page.keyboard.press('Tab');
+    const info = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      const hit = (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) ? document.elementFromPoint(cx, cy) : null;
+      return { cls: String(el.className).slice(0, 40), tag: el.tagName,
+        label: (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40),
+        matchesFV: el.matches(':focus-visible'),
+        outlineStyle: cs.outlineStyle, outlineWidth: cs.outlineWidth, outlineColor: cs.outlineColor,
+        boxShadow: cs.boxShadow.slice(0, 40), borderColor: cs.borderTopColor,
+        onScreen: r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight,
+        occluded: !!(hit && !el.contains(hit) && hit !== el) };
+    });
+    if (info) focus.push(info);
+  }
+  fs.writeFileSync(path.join(M9OUT, 'home-focus.json'), JSON.stringify(focus, null, 1));
+  const noRing = focus.filter(f => f.matchesFV && f.outlineStyle === 'none');
+  console.log('FOCUS stops', focus.length, 'no-ring', noRing.length);
+  console.log('FOCUS noRing sample', JSON.stringify(noRing.slice(0, 10)));
+  await context.close();
+});
+
+test('ADV9 focus indicator delta + overlay containment', async () => {
+  const vp = { width: 2000, height: 963 };
+  const { context, page } = await openAuthoritativeDesk({ viewport: vp, bookDocuments: populatedBookDocuments() });
+  await page.waitForTimeout(600);
+  // 1) overlay containment: tab from the top of the document with #decideStage open
+  await page.evaluate(() => { document.body.focus(); if (document.activeElement) document.activeElement.blur(); });
+  const stops = [];
+  for (let i = 0; i < 100; i += 1) {
+    await page.keyboard.press('Tab');
+    const info = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return { none: true };
+      const r = el.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      const hit = (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) ? document.elementFromPoint(cx, cy) : null;
+      const stage = document.querySelector('#decideStage');
+      return { cls: String(el.className).slice(0, 36), tag: el.tagName,
+        label: (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40),
+        inDecide: !!(stage && stage.contains(el)),
+        occludedByDecide: !!(hit && stage && stage.contains(hit) && !stage.contains(el)),
+        hidden: r.width === 0 || r.height === 0 };
+    });
+    stops.push(info);
+  }
+  const firstDecide = stops.findIndex(s => s.inDecide);
+  const occluded = stops.filter(s => s.occludedByDecide).length;
+  console.log('OVERLAY stops', stops.length, 'firstDecideIndex', firstDecide, 'occluded', occluded);
+  console.log('OVERLAY pre', JSON.stringify(stops.slice(0, 6)), JSON.stringify(stops.slice(Math.max(0, firstDecide - 4), firstDecide + 2)));
+  fs.writeFileSync(path.join(M9OUT, 'newidea-tabs.json'), JSON.stringify(stops, null, 1));
+  // 2) focus indicator delta for named selectors
+  const delta = await page.evaluate(() => {
+    const sels = ['.strategycoverage', '.homeideamatch', '.authlistbutton', '.opportunityrow', '.catalogrow', '.authmarketrow', '.authhomenews a'];
+    return sels.map(sel => {
+      const el = document.querySelector(sel);
+      if (!el) return { sel, missing: true };
+      const rest = getComputedStyle(el);
+      const restVals = { outline: rest.outlineStyle, bs: rest.boxShadow, bc: rest.borderTopColor, bg: rest.backgroundColor };
+      el.focus();
+      const f = getComputedStyle(el);
+      const fv = el.matches(':focus-visible');
+      const focVals = { outline: f.outlineStyle, bs: f.boxShadow, bc: f.borderTopColor, bg: f.backgroundColor };
+      el.blur();
+      return { sel, fv, restVals, focVals,
+        changed: JSON.stringify(restVals) !== JSON.stringify(focVals) };
+    });
+  });
+  console.log('FOCUS DELTA', JSON.stringify(delta, null, 1));
+  await page.screenshot({ path: path.join(M9OUT, 'newidea-overlay.png') });
+  await context.close();
+});
+
+test('ADV9 realistic overlay tab', async () => {
+  const { context, page } = await openAuthoritativeDesk({ viewport: { width: 2000, height: 963 }, bookDocuments: populatedBookDocuments() });
+  await page.waitForTimeout(600);
+  const start = await page.evaluate(() => ({
+    active: document.activeElement ? String(document.activeElement.className || document.activeElement.tagName) : null,
+    backCount: document.querySelectorAll('.dback').length,
+    backTabIndex: document.querySelector('.dback') ? document.querySelector('.dback').tabIndex : null,
+    backInStage: (() => { const b = document.querySelector('.dback'); const s = document.querySelector('#decideStage'); return !!(b && s && s.contains(b)); })(),
+    stageId: !!document.querySelector('#stage'), threadInStage: (() => { const t = document.querySelector('#thread'); const s = document.querySelector('#stage'); return !!(t && s && s.contains(t)); })(),
+    decideInStage: (() => { const d = document.querySelector('#decideStage'); const s = document.querySelector('#stage'); return !!(d && s && s.contains(d)); })()
+  }));
+  console.log('START', JSON.stringify(start));
+  const stops = [];
+  for (let i = 0; i < 70; i += 1) {
+    await page.keyboard.press('Tab');
+    stops.push(await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return { none: true };
+      const stage = document.querySelector('#decideStage');
+      const r = el.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      const hit = (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) ? document.elementFromPoint(cx, cy) : null;
+      return { cls: String(el.className).slice(0, 30), label: (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 34),
+        inDecide: !!(stage && stage.contains(el)), occ: !!(hit && stage && stage.contains(hit) && !stage.contains(el)) };
+    }));
+  }
+  const first = stops.findIndex(s => s.inDecide);
+  console.log('REALISTIC firstDecide', first, 'occludedBefore', stops.slice(0, first < 0 ? stops.length : first).filter(s => s.occ).length);
+  console.log(JSON.stringify(stops.slice(0, Math.min(20, first + 2))));
+  await context.close();
+});
+
+test('ADV9 home copy + position legs', async () => {
+  const context = await browser.newContext({ viewport: { width: 2000, height: 963 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: populatedBookDocuments() });
+  await page.goto(deskUrl);
+  await waitForDeskBoot(page);
+  await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+  await page.waitForTimeout(800);
+  const home = await page.evaluate(() => {
+    const vis = el => { if (!el) return false; const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && r.top < innerHeight && r.bottom > 0; };
+    const grab = sel => Array.from(document.querySelectorAll(sel)).map(e => ({
+      t: e.textContent.replace(/\s+/g, ' ').trim(), vis: vis(e),
+      y: Math.round(e.getBoundingClientRect().y) }));
+    return {
+      lenshdHints: grab('.lenshd .hint'),
+      scoutneeds: grab('.scoutneeds'),
+      homeideahelp: grab('.homeideahelp'),
+      scoutidle: grab('.scoutidle'),
+      bookFanHint: grab('.bookfanwrap .hint, .lenshd .hint').filter(x => /BOOK line|single-position/.test(x.t)),
+      legend: grab('#authBookFanLegend .bookfanrow').slice(0, 4),
+      bookonefacts: grab('.bookonefacts .authmetric'),
+      importBtn: grab('[data-import], .btn').filter(x => /Import/.test(x.t))
+    };
+  });
+  console.log('HOME', JSON.stringify(home, null, 1));
+  // open position, read legs + hint, then back home and re-read Chance
+  await page.locator('#book .card[data-id="' + BOOK_TRADE_ID + '"]').click();
+  await page.waitForFunction(() => ['partial', 'ready'].includes(window.DeskBackend.state().position?.phase));
+  await page.waitForTimeout(800);
+  const pos = await page.evaluate(() => ({
+    legrows: Array.from(document.querySelectorAll('.legr')).map(e => e.innerText.replace(/\s+/g, ' ').trim()),
+    heldHint: Array.from(document.querySelectorAll('.hint')).map(e => e.textContent.trim()).filter(t => /Held package/.test(t)),
+    legdetailBook: document.querySelectorAll('.legdetail-book').length,
+    legdetailWide: document.querySelectorAll('.legdetail-wide').length,
+    tz: Array.from(document.querySelectorAll('.tz')).map(e => e.textContent.replace(/\s+/g, ' ').trim()),
+    metrics: Array.from(document.querySelectorAll('.authmetric')).map(e => e.textContent.replace(/\s+/g, ' ').trim()).filter(t => /POP|Chance/i.test(t))
+  }));
+  console.log('POS', JSON.stringify(pos, null, 1));
+  await page.evaluate(() => { const b = document.querySelector('.crumb.home'); if (b) b.click(); });
+  await page.waitForTimeout(900);
+  const back = await page.evaluate(() => Array.from(document.querySelectorAll('.bookonefacts .authmetric')).map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  console.log('BACK HOME bookonefacts', JSON.stringify(back));
+  await context.close();
+});
+
+test('ADV9 inert feasibility', async () => {
+  const { context, page } = await openAuthoritativeDesk({ viewport: { width: 2000, height: 963 }, bookDocuments: populatedBookDocuments() });
+  await page.waitForTimeout(500);
+  const r = await page.evaluate(() => {
+    const stage = document.getElementById('stage');
+    const decide = document.getElementById('decideStage');
+    const focusables = Array.from(document.querySelectorAll('button, a[href], input, select, textarea, [tabindex]'))
+      .filter(e => !e.disabled && e.tabIndex >= 0);
+    const inStage = focusables.filter(e => stage.contains(e));
+    const inDecide = focusables.filter(e => decide && decide.contains(e));
+    const neither = focusables.filter(e => !stage.contains(e) && !(decide && decide.contains(e)));
+    return { total: focusables.length, inStage: inStage.length, inDecide: inDecide.length,
+      neither: neither.map(e => String(e.className || e.id || e.tagName).slice(0, 30)).slice(0, 15),
+      decideInsideStage: stage.contains(decide),
+      newIdeaBtnInStage: stage.contains(document.getElementById('threadNewIdea')) };
+  });
+  console.log('INERT', JSON.stringify(r));
+  await context.close();
+});
+
+test('ADV9 book fan ready branch', async () => {
+  const context = await browser.newContext({ viewport: { width: 2000, height: 963 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const docs = populatedBookDocuments();
+  docs.bookRisk.practice.measuredBook = measuredJointBookReceipt();
+  await installBackend(page, { bookDocuments: docs });
+  await page.goto(deskUrl);
+  await waitForDeskBoot(page);
+  await page.waitForSelector('#stage[data-book-authority="ready"] #authBookFan');
+  await page.waitForFunction(() => document.querySelector('#authBookFan')?.textContent.includes('BOOK'));
+  await page.waitForTimeout(400);
+  const r = await page.evaluate(() => {
+    const vis = e => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && b.top < innerHeight && b.bottom > 0; };
+    const hint = document.querySelector('#bookrisk .lenshd .hint');
+    const rows = Array.from(document.querySelectorAll('#authBookFanLegend .bookfanrow'));
+    return { hint: hint ? { t: hint.textContent.trim(), vis: vis(hint), y: Math.round(hint.getBoundingClientRect().y) } : null,
+      legendRows: rows.map(e => ({ t: e.textContent.replace(/\s+/g, ' ').trim().slice(0, 46), vis: vis(e),
+        swatch: !!e.querySelector('i'), swatchBg: e.querySelector('i') ? getComputedStyle(e.querySelector('i')).backgroundColor : null,
+        w: Math.round(e.getBoundingClientRect().width), h: Math.round(e.getBoundingClientRect().height) })) };
+  });
+  console.log('BOOKFAN', JSON.stringify(r, null, 1));
+  await page.screenshot({ path: path.join(M9OUT, 'bookfan-ready.png') });
+  await context.close();
+});

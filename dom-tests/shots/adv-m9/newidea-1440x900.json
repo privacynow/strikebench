@@ -1,0 +1,317 @@
+{
+ "innerH": 900,
+ "dcctop": {
+  "r": {
+   "x": 509,
+   "y": 96,
+   "w": 495,
+   "h": 473,
+   "bottom": 569
+  },
+  "oy": "visible",
+  "ch": 473,
+  "sh": 473,
+  "display": "grid",
+  "rows": "256px 210px"
+ },
+ "band": {
+  "x": 509,
+  "y": 576,
+  "w": 495,
+  "h": 243,
+  "bottom": 819
+ },
+ "tileSample": [],
+ "spilled": [
+  {
+   "cls": "scensum",
+   "t": "Outcome rangeRange−$123 → $777",
+   "r": {
+    "x": 520,
+    "y": 588,
+    "w": 473,
+    "h": 22,
+    "bottom": 610
+   }
+  },
+  {
+   "cls": "e range",
+   "t": "Outcome rangeRange−$123 → $777",
+   "r": {
+    "x": 845,
+    "y": 592,
+    "w": 135,
+    "h": 17,
+    "bottom": 609
+   }
+  },
+  {
+   "cls": "lbl",
+   "t": "Outcome rangeRange",
+   "r": {
+    "x": 845,
+    "y": 592,
+    "w": 46,
+    "h": 16,
+    "bottom": 608
+   }
+  },
+  {
+   "cls": "sumshort",
+   "t": "Range",
+   "r": {
+    "x": 845,
+    "y": 593,
+    "w": 46,
+    "h": 13,
+    "bottom": 606
+   }
+  },
+  {
+   "cls": "v",
+   "t": "−$123 → $777",
+   "r": {
+    "x": 899,
+    "y": 593,
+    "w": 82,
+    "h": 16,
+    "bottom": 609
+   }
+  },
+  {
+   "cls": "neg",
+   "t": "−$123",
+   "r": {
+    "x": 899,
+    "y": 594,
+    "w": 34,
+    "h": 13,
+    "bottom": 607
+   }
+  },
+  {
+   "cls": "pos",
+   "t": "$777",
+   "r": {
+    "x": 953,
+    "y": 594,
+    "w": 27,
+    "h": 13,
+    "bottom": 607
+   }
+  }
+ ],
+ "copy": {
+  "canonicalEngine": true,
+  "coverage": "1 exact Income package priced now\n0 screened now · 6 families in the canonical engine\nPut verticals and calendars are in the supported field; open this receipt to see why each is compared, screened, or assigned to another goal.\nSee full field →",
+  "marketFanHint": [
+   "one market fan across ideas"
+  ],
+  "mcreceipt": [
+   "SIMULATED PATHSEvery idea is judged against this same market fan."
+  ],
+  "threadState": "ON\nAMD\nMOVE\nNew idea\nLANE\nnot chosen",
+  "laneWords": [
+   {
+    "cls": "tk",
+    "r": {
+     "x": 798,
+     "y": 15,
+     "w": 30,
+     "h": 15,
+     "bottom": 30
+    }
+   }
+  ],
+  "fsub": [
+   {
+    "t": "Realized-volatility EV +$15; tested range −$3 to +$34. Market-implied EV −$52.",
+    "cw": 164,
+    "sw": 407,
+    "ov": "hidden",
+    "r": {
+     "x": 52,
+     "y": 280,
+     "w": 164,
+     "h": 13,
+     "bottom": 293
+    }
+   }
+  ],
+  "dbread": [
+   {
+    "t": "Realized-volatility EV +$15; tested range −$3 to +$34. Market-implied EV −$52.",
+    "r": {
+     "x": 1021,
+     "y": 147,
+     "w": 401,
+     "h": 16,
+     "bottom": 163
+    }
+   }
+  ],
+  "legrows": [
+   "BUY CALL − 100 + − 1 + ✕ exp 2026-08-21 bid / ask 5.80 / 6.20 fill: buy at ask 6.00",
+   "SELL CALL − 110 + − 1 + ✕ exp 2026-08-21 bid / ask 1.80 / 2.20 fill: sell at bid 2.00"
+  ],
+  "heldHint": false
+ },
+ "badges": {
+  ".badge": [
+   {
+    "t": "reviewing",
+    "vis": true
+   },
+   {
+    "t": "exp 2026-08-21",
+    "vis": false
+   },
+   {
+    "t": "SIMULATED PATHS",
+    "vis": true
+   }
+  ],
+  ".lifebadge": [
+   {
+    "t": "reviewing",
+    "vis": true
+   }
+  ],
+  ".fvd": [
+   {
+    "t": "✓",
+    "vis": true
+   }
+  ],
+  ".dbfit": [
+   {
+    "t": "coherent",
+    "vis": true
+   }
+  ],
+  ".backendstate": [
+   {
+    "t": "ready · balanced",
+    "vis": true
+   }
+  ],
+  ".declegstate": [
+   {
+    "t": "Engine",
+    "vis": true
+   }
+  ],
+  ".mktsrc": [
+   {
+    "t": "● PRACTICE",
+    "vis": false
+   }
+  ]
+ },
+ "lrm": [
+  {
+   "r": {
+    "x": 252,
+    "y": 340,
+    "w": 18,
+    "h": 20,
+    "bottom": 360
+   },
+   "color": "rgb(91, 101, 119)",
+   "txt": "✕"
+  },
+  {
+   "r": {
+    "x": 255,
+    "y": 392,
+    "w": 18,
+    "h": 20,
+    "bottom": 412
+   },
+   "color": "rgb(91, 101, 119)",
+   "txt": "✕"
+  }
+ ],
+ "mstp": [
+  {
+   "r": {
+    "x": 97,
+    "y": 337,
+    "w": 22,
+    "h": 26,
+    "bottom": 363
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 149,
+    "y": 337,
+    "w": 22,
+    "h": 26,
+    "bottom": 363
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 175,
+    "y": 337,
+    "w": 22,
+    "h": 26,
+    "bottom": 363
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 227,
+    "y": 337,
+    "w": 22,
+    "h": 26,
+    "bottom": 363
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 100,
+    "y": 389,
+    "w": 22,
+    "h": 26,
+    "bottom": 415
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 152,
+    "y": 389,
+    "w": 22,
+    "h": 26,
+    "bottom": 415
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 178,
+    "y": 389,
+    "w": 22,
+    "h": 26,
+    "bottom": 415
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 230,
+    "y": 389,
+    "w": 22,
+    "h": 26,
+    "bottom": 415
+   },
+   "t": "+"
+  }
+ ]
+}

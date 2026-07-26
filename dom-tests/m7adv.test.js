@@ -9837,3 +9837,448 @@ test('ADV-5 forward test + reload durability + home entry label', async () => {
     await page.screenshot({ path: path.join(ADV_DIR, 'adv-afterreload-2560.png') });
   } finally { await context.close(); }
 });
+
+function frozenPlanDocuments() {
+  const docs = populatedBookDocuments();
+  docs.planPortfolio.forEach(row => { row.plan.assumptionsEditable = false; });
+  docs.management.plan.assumptionsEditable = false;
+  return docs;
+}
+
+test('ADV-6 frozen plan: resume + leg touch, empty and ambient workspace', async () => {
+  for (const ambient of [false, true]) {
+    const { context, page, backend } = await advOpenPosition({ width: 2560, height: 1440 }, frozenPlanDocuments());
+    try {
+      const planNow = await page.evaluate(tid => {
+        const p = window.byId[tid];
+        const plan = (p._positionData && p._positionData.plan) || p._plan;
+        return { assumptionsEditable: plan && plan.assumptionsEditable, mutable: window.authPlanMutable(plan), intent: plan && plan.intent, ctx: plan && plan.context };
+      }, BOOK_TRADE_ID);
+      console.log(`ADV-6[ambient=${ambient}] PLAN`, JSON.stringify(planNow));
+      if (ambient) {
+        await page.evaluate(() => {
+          window.WORKSPACE.goal = 'HEDGE'; window.WORKSPACE.view = 'Sharply Lower';
+          window.WORKSPACE.horizonDays = 7; window.WORKSPACE.riskPosture = 'aggressive';
+          window.WORKSPACE.focusedSymbol = 'TSLA';
+        });
+      }
+      await page.evaluate(() => { window.__toasts = []; const orig = window.toast; window.toast = function (m) { window.__toasts.push(m); return orig.apply(this, arguments); }; });
+      const posts0 = backend.count('POST', '/api/plans');
+      await page.locator('[data-auth-position-detail] [data-auth-manage="resume"]').click();
+      await page.waitForTimeout(2500);
+      const after = await page.evaluate(() => ({
+        decide: window.decide ? { sym: window.decide.sym, goal: window.decide.goal, view: window.decide.view, horizon: window.decide.horizon, riskMode: window.decide.riskMode, buildLegs: window.decide.buildLegs, resumePlanId: window.decide.resumePlanId, posId: window.decide.posId, missing: window.decide.missingDeclarations } : null,
+        toasts: window.__toasts,
+        screen: (document.querySelector('#decide') || document.body).textContent.replace(/\s+/g, ' ').trim().slice(0, 220)
+      }));
+      console.log(`ADV-6[ambient=${ambient}] AFTER RESUME`, JSON.stringify(after, null, 1));
+      console.log(`ADV-6[ambient=${ambient}] PLAN POSTS`, backend.count('POST', '/api/plans') - posts0);
+      await page.screenshot({ path: path.join(ADV_DIR, `adv-frozen-resume-ambient${ambient}.png`) });
+    } finally { await context.close(); }
+  }
+});
+
+test('ADV-7 frozen plan: leg touch fork', async () => {
+  const { context, page } = await advOpenPosition({ width: 2560, height: 1440 }, frozenPlanDocuments());
+  try {
+    await page.evaluate(() => { window.__toasts = []; const orig = window.toast; window.toast = function (m) { window.__toasts.push(m); return orig.apply(this, arguments); }; });
+    await page.locator('.authposside [data-leg="strike"][data-li="0"][data-d="1"]').click();
+    await page.waitForTimeout(2500);
+    const after = await page.evaluate(() => ({
+      decide: window.decide ? { sym: window.decide.sym, goal: window.decide.goal, buildLegs: window.decide.buildLegs, missing: window.decide.missingDeclarations } : null,
+      toasts: window.__toasts,
+      screen: (document.querySelector('#decide') || document.body).textContent.replace(/\s+/g, ' ').trim().slice(0, 260)
+    }));
+    console.log('ADV-7 AFTER LEG TOUCH (frozen)', JSON.stringify(after, null, 1));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-frozen-legtouch.png') });
+  } finally { await context.close(); }
+});
+
+test('ADV-8 do the proposed CSS fixes actually fix it', async () => {
+  for (const vp of [{ width: 2560, height: 1440 }, { width: 1440, height: 900 }]) {
+    const { context, page } = await advOpenPosition(vp);
+    try {
+      const ancestors = await page.evaluate(() => {
+        const out = [];
+        let n = document.querySelector('.authpos');
+        while (n && n !== document.documentElement) {
+          const cs = getComputedStyle(n);
+          out.push({ sel: n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + '.' + String(n.className).split(' ').filter(Boolean).slice(0, 2).join('.'), h: Math.round(n.getBoundingClientRect().height), oy: cs.overflowY, pos: cs.position, height: cs.height, display: cs.display });
+          n = n.parentElement;
+        }
+        return out;
+      });
+      console.log(`ADV-8 ${vp.width} ANCESTORS`, JSON.stringify(ancestors, null, 1));
+      const after = await page.evaluate(() => {
+        const style = document.createElement('style');
+        style.textContent = `.authpos{height:auto !important;overflow-y:visible !important;scrollbar-gutter:auto !important}
+          .lv-position .authlist{overflow:hidden !important}
+          .authposchain .authchainrows{min-height:auto !important;flex:0 0 auto !important}`;
+        document.head.appendChild(style);
+        void document.body.offsetHeight;
+        const doc = document.scrollingElement;
+        const ap = document.querySelector('.authpos');
+        const list = document.querySelector('[data-auth-position-detail] .authlist');
+        const rows = document.querySelector('[data-auth-position-detail] .authchainrows');
+        const chain = document.querySelector('[data-auth-position-detail] .authposchain');
+        const scrollers = [];
+        document.querySelectorAll('*').forEach(el => {
+          const over = el.scrollHeight - el.clientHeight;
+          if (over > 4 && el.clientHeight > 40 && /auto|scroll/.test(getComputedStyle(el).overflowY)) scrollers.push({ sel: el.tagName.toLowerCase() + '.' + String(el.className).split(' ').filter(Boolean).slice(0, 2).join('.'), over });
+        });
+        // does anything get clipped now?
+        const clipped = [];
+        document.querySelectorAll('[data-auth-position-detail] *').forEach(el => {
+          if (el.children.length) return;
+          const t = el.textContent.trim();
+          if (!t) return;
+          const r = el.getBoundingClientRect();
+          let n = el.parentElement, hidden = false;
+          while (n && n !== document.body) {
+            const cs = getComputedStyle(n);
+            if (/hidden|clip/.test(cs.overflowY)) {
+              const nr = n.getBoundingClientRect();
+              if (r.bottom > nr.bottom + 1 || r.top < nr.top - 1) { hidden = true; break; }
+            }
+            n = n.parentElement;
+          }
+          if (hidden) clipped.push(t.slice(0, 30));
+        });
+        let overlap = 0;
+        if (chain) {
+          const receipt = Array.from(chain.querySelectorAll('*')).find(el => !el.children.length && /strikes around the current price/.test(el.textContent));
+          if (receipt) {
+            const rr = receipt.getBoundingClientRect();
+            chain.querySelectorAll('.authchainrows *').forEach(el => {
+              if (el.children.length) return;
+              const b = el.getBoundingClientRect();
+              if (b.width && b.height && b.left < rr.right && b.right > rr.left && b.top < rr.bottom && b.bottom > rr.top) overlap++;
+            });
+          }
+        }
+        return {
+          pageOver: doc.scrollHeight - doc.clientHeight,
+          bodyOver: document.body.scrollHeight - document.body.clientHeight,
+          authposOver: ap ? ap.scrollHeight - ap.clientHeight : null,
+          authposH: ap ? Math.round(ap.getBoundingClientRect().height) : null,
+          list: list ? { h: Math.round(list.getBoundingClientRect().height), sh: list.scrollHeight, over: list.scrollHeight - list.clientHeight } : null,
+          rowsVisible: list ? Array.from(list.querySelectorAll('.authlistrow')).map(r => { const b = r.querySelector('b'); const rr = r.getBoundingClientRect(); const lr = list.getBoundingClientRect(); return { k: b.textContent, vis: rr.top >= lr.top - 1 && rr.bottom <= lr.bottom + 1, clip: b.scrollWidth > b.clientWidth + 1 }; }) : null,
+          chainRows: rows ? { h: Math.round(rows.getBoundingClientRect().height), sh: rows.scrollHeight } : null,
+          chainOverlapCount: overlap,
+          scrollers,
+          clippedSample: clipped.slice(0, 12),
+          clippedCount: clipped.length
+        };
+      });
+      console.log(`ADV-8 ${vp.width} AFTER PATCH`, JSON.stringify(after, null, 1));
+      await page.screenshot({ path: path.join(ADV_DIR, `adv-patched-${vp.width}.png`) });
+    } finally { await context.close(); }
+  }
+});
+
+test('ADV-9 where does the scroll go if .authpos stops scrolling', async () => {
+  const { context, page } = await advOpenPosition({ width: 1440, height: 900 });
+  try {
+    const r = await page.evaluate(() => {
+      const ap = document.querySelector('.authpos');
+      ap.style.setProperty('height', 'auto', 'important');
+      ap.style.setProperty('overflow-y', 'visible', 'important');
+      void document.body.offsetHeight;
+      const cs = getComputedStyle(ap);
+      const cdetail = ap.closest('.cdetail');
+      const focus = document.getElementById('focus');
+      const board = document.getElementById('board');
+      const doc = document.scrollingElement;
+      const rect = ap.getBoundingClientRect();
+      const cdr = cdetail.getBoundingClientRect();
+      return {
+        applied: { h: cs.height, oy: cs.overflowY },
+        authposRectH: Math.round(rect.height), authposScrollH: ap.scrollHeight,
+        spillBelowCdetail: Math.round(rect.bottom - cdr.bottom),
+        cdetail: { oy: getComputedStyle(cdetail).overflowY, over: cdetail.scrollHeight - cdetail.clientHeight, h: Math.round(cdr.height) },
+        focus: { oy: getComputedStyle(focus).overflowY, over: focus.scrollHeight - focus.clientHeight },
+        board: { oy: getComputedStyle(board).overflowY, over: board.scrollHeight - board.clientHeight },
+        body: { oy: getComputedStyle(document.body).overflowY, over: document.body.scrollHeight - document.body.clientHeight },
+        page: doc.scrollHeight - doc.clientHeight
+      };
+    });
+    console.log('ADV-9', JSON.stringify(r, null, 1));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-9-noscroll-1440.png') });
+  } finally { await context.close(); }
+});
+
+test('ADV-10 transform / scale sanity on the position card', async () => {
+  const { context, page } = await advOpenPosition({ width: 1440, height: 900 });
+  try {
+    const r = await page.evaluate(() => {
+      const out = [];
+      let n = document.querySelector('.authpos');
+      const count = document.querySelectorAll('.authpos').length;
+      while (n && n !== document.documentElement) {
+        const cs = getComputedStyle(n);
+        out.push({ sel: n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') + '.' + String(n.className).split(' ').filter(Boolean).slice(0, 2).join('.'), rectH: Math.round(n.getBoundingClientRect().height), cssH: cs.height, transform: cs.transform, zoom: cs.zoom });
+        n = n.parentElement;
+      }
+      return { count, chain: out };
+    });
+    console.log('ADV-10', JSON.stringify(r, null, 1));
+  } finally { await context.close(); }
+});
+
+async function advSettle(page) {
+  await page.waitForFunction(() => {
+    const c = document.querySelector('#focus .card.authoritative');
+    if (!c) return false;
+    const t = getComputedStyle(c).transform;
+    return t === 'none' || /matrix\(1, 0, 0, 1, 0, 0\)/.test(t);
+  }, null, { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+}
+
+test('ADV-11 settled layout measurements', async () => {
+  for (const vp of [{ width: 2560, height: 1440 }, { width: 2000, height: 963 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const { context, page } = await advOpenPosition(vp);
+    try {
+      await advSettle(page);
+      const m = await page.evaluate(() => {
+        const card = document.querySelector('#focus .card.authoritative');
+        const out = { transform: getComputedStyle(card).transform };
+        const ap = document.querySelector('.authpos');
+        out.authpos = { over: ap.scrollHeight - ap.clientHeight, clientH: ap.clientHeight, rectH: Math.round(ap.getBoundingClientRect().height) };
+        const list = document.querySelector('[data-auth-position-detail] .authlist');
+        const lr = list.getBoundingClientRect();
+        out.authlist = { rectH: Math.round(lr.height), clientH: list.clientHeight, sh: list.scrollHeight, cw: list.clientWidth, sw: list.scrollWidth, over: list.scrollHeight - list.clientHeight };
+        out.rows = Array.from(list.querySelectorAll('.authlistrow')).map(row => {
+          const b = row.querySelector('b'), rr = row.getBoundingClientRect();
+          return { k: b.textContent, vis: rr.top >= lr.top - 1 && rr.bottom <= lr.bottom + 1, clip: b.scrollWidth > b.clientWidth + 1, bw: b.clientWidth, bsw: b.scrollWidth };
+        });
+        const chain = document.querySelector('[data-auth-position-detail] .authposchain');
+        const rows = chain && chain.querySelector('.authchainrows');
+        out.chainRows = rows ? { rectH: Math.round(rows.getBoundingClientRect().height), clientH: rows.clientHeight, sh: rows.scrollHeight } : null;
+        if (chain) {
+          const receipt = Array.from(chain.querySelectorAll('*')).find(el => !el.children.length && /strikes around the current price/.test(el.textContent));
+          if (receipt) {
+            const rr = receipt.getBoundingClientRect();
+            const hits = [];
+            chain.querySelectorAll('.authchainrows *').forEach(el => {
+              if (el.children.length) return;
+              const b = el.getBoundingClientRect();
+              if (b.width && b.height && b.left < rr.right && b.right > rr.left && b.top < rr.bottom && b.bottom > rr.top) hits.push({ t: el.textContent.trim().slice(0, 20), b: [Math.round(b.left), Math.round(b.top), Math.round(b.right), Math.round(b.bottom)] });
+            });
+            out.chainOverlap = { receipt: [Math.round(rr.left), Math.round(rr.top), Math.round(rr.right), Math.round(rr.bottom)], hits };
+          }
+        }
+        out.sections = Array.from(document.querySelectorAll('[data-auth-position-detail] .eyebrow')).map(e => ({ t: e.textContent.trim(), top: Math.round(e.getBoundingClientRect().top) }));
+        out.legControls = document.querySelectorAll('.authposside [data-leg]').length;
+        return out;
+      });
+      console.log(`ADV-11 ${vp.width}x${vp.height}`, JSON.stringify(m));
+      await page.screenshot({ path: path.join(ADV_DIR, `adv11-${vp.width}x${vp.height}.png`) });
+    } finally { await context.close(); }
+  }
+});
+
+test('ADV-12 settled: apply the proposed CSS fixes and see what happens', async () => {
+  for (const vp of [{ width: 2560, height: 1440 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const { context, page } = await advOpenPosition(vp);
+    try {
+      await advSettle(page);
+      const after = await page.evaluate(() => {
+        const style = document.createElement('style');
+        style.textContent = `.authpos{height:auto;overflow-y:visible;scrollbar-gutter:auto}
+          .lv-position .authlist{overflow:hidden}
+          .authposchain .authchainrows{min-height:auto;flex:0 0 auto}`;
+        style.id = 'advpatch';
+        document.head.appendChild(style);
+        void document.body.offsetHeight;
+        const ap = document.querySelector('.authpos');
+        const cs = getComputedStyle(ap);
+        const cdetail = ap.closest('.cdetail');
+        const list = document.querySelector('[data-auth-position-detail] .authlist');
+        const lr = list.getBoundingClientRect();
+        const rows = document.querySelector('[data-auth-position-detail] .authchainrows');
+        const chain = document.querySelector('[data-auth-position-detail] .authposchain');
+        let overlap = [];
+        if (chain) {
+          const receipt = Array.from(chain.querySelectorAll('*')).find(el => !el.children.length && /strikes around the current price/.test(el.textContent));
+          if (receipt) {
+            const rr = receipt.getBoundingClientRect();
+            chain.querySelectorAll('.authchainrows *').forEach(el => {
+              if (el.children.length) return;
+              const b = el.getBoundingClientRect();
+              if (b.width && b.height && b.left < rr.right && b.right > rr.left && b.top < rr.bottom && b.bottom > rr.top) overlap.push(el.textContent.trim().slice(0, 16));
+            });
+          }
+        }
+        // what is now unreachable: content below the clipping ancestor
+        const cdr = cdetail.getBoundingClientRect();
+        const lost = [];
+        document.querySelectorAll('[data-auth-position-detail] *').forEach(el => {
+          if (el.children.length) return;
+          const t = el.textContent.trim(); if (!t) return;
+          const r = el.getBoundingClientRect();
+          if (r.height && r.top > cdr.bottom) lost.push(t.slice(0, 26));
+        });
+        return {
+          authposCss: { h: cs.height, oy: cs.overflowY },
+          authposOver: ap.scrollHeight - ap.clientHeight,
+          cdetailOver: cdetail.scrollHeight - cdetail.clientHeight,
+          cdetailOverflow: getComputedStyle(cdetail).overflowY,
+          pageOver: document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight,
+          listNow: { h: Math.round(lr.height), sh: list.scrollHeight, over: list.scrollHeight - list.clientHeight, rowsVisible: Array.from(list.querySelectorAll('.authlistrow')).filter(r => { const rr = r.getBoundingClientRect(); return rr.top >= lr.top - 1 && rr.bottom <= lr.bottom + 1; }).length, rowCount: list.querySelectorAll('.authlistrow').length },
+          chainRowsNow: rows ? { h: rows.clientHeight, sh: rows.scrollHeight } : null,
+          chainOverlapNow: overlap,
+          lostBelowCdetail: lost.length, lostSample: lost.slice(0, 8)
+        };
+      });
+      console.log(`ADV-12 ${vp.width}x${vp.height}`, JSON.stringify(after));
+      await page.screenshot({ path: path.join(ADV_DIR, `adv12-patched-${vp.width}x${vp.height}.png`) });
+    } finally { await context.close(); }
+  }
+});
+
+test('ADV-13 chain fix in isolation at 1440', async () => {
+  const { context, page } = await advOpenPosition({ width: 1440, height: 900 });
+  try {
+    await advSettle(page);
+    const read = () => {
+      const chain = document.querySelector('[data-auth-position-detail] .authposchain');
+      const rows = chain.querySelector('.authchainrows');
+      const cr = chain.getBoundingClientRect();
+      const receipt = Array.from(chain.querySelectorAll('*')).find(el => !el.children.length && /strikes around the current price/.test(el.textContent));
+      const rr = receipt.getBoundingClientRect();
+      const overlap = [];
+      chain.querySelectorAll('.authchainrows *').forEach(el => {
+        if (el.children.length) return;
+        const b = el.getBoundingClientRect();
+        if (b.width && b.height && b.left < rr.right && b.right > rr.left && b.top < rr.bottom && b.bottom > rr.top) overlap.push(el.textContent.trim().slice(0, 14));
+      });
+      const clippedInChain = [];
+      chain.querySelectorAll('*').forEach(el => {
+        if (el.children.length) return;
+        const t = el.textContent.trim(); if (!t) return;
+        const b = el.getBoundingClientRect();
+        if (b.bottom > cr.bottom + 1 || b.top < cr.top - 1) clippedInChain.push(t.slice(0, 18));
+      });
+      return { chainH: Math.round(cr.height), chainOverflow: getComputedStyle(chain).overflow, rowsH: rows.clientHeight, rowsSh: rows.scrollHeight, overlap, clippedInChain, receiptBottomVsChain: Math.round(rr.bottom - cr.bottom) };
+    };
+    const before = await page.evaluate(read);
+    const after = await page.evaluate(r => {
+      const s = document.createElement('style');
+      s.textContent = '.authposchain .authchainrows{min-height:auto;flex:0 0 auto}';
+      document.head.appendChild(s);
+      void document.body.offsetHeight;
+      return null;
+    });
+    const post = await page.evaluate(read);
+    console.log('ADV-13 BEFORE', JSON.stringify(before));
+    console.log('ADV-13 AFTER ', JSON.stringify(post));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv13-chainfix-1440.png') });
+  } finally { await context.close(); }
+});
+
+test('ADV-14 scenario checkpoint steps: what does index 0 vs last carry', async () => {
+  const { context, page } = await advOpenPosition({ width: 2560, height: 1440 });
+  try {
+    await advSettle(page);
+    const r = await page.evaluate(tid => {
+      const p = window.byId[tid];
+      const row = window.authPositionFocusedScenario(p);
+      const steps = (row && row.steps) || [];
+      return {
+        pinned: window.pinnedScen[tid],
+        stepCount: steps.length,
+        first: steps[0], last: steps[steps.length - 1],
+        keys: steps.length ? Object.keys(steps[0]) : [],
+        targetIndex: window.authPositionScenarioTargetIndex(p, steps),
+        end: window.authPositionScenarioEnd(p),
+        spot: p.spot, pnl: p.pnl
+      };
+    }, BOOK_TRADE_ID);
+    console.log('ADV-14', JSON.stringify(r, null, 1));
+  } finally { await context.close(); }
+});
+
+test('ADV-15 mobile container structure', async () => {
+  const { context, page } = await advOpenPosition({ width: 390, height: 844 });
+  try {
+    await advSettle(page);
+    const r = await page.evaluate(() => {
+      const detail = document.querySelector('[data-auth-position-detail]');
+      const walk = (el, d) => {
+        if (d > 2) return null;
+        return { cls: String(el.className).split(' ').slice(0, 2).join('.'), disp: getComputedStyle(el).display, kids: Array.from(el.children).map(c => d < 2 ? walk(c, d + 1) : { cls: String(c.className).split(' ').slice(0, 2).join('.'), disp: getComputedStyle(c).display }).filter(Boolean) };
+      };
+      const mgmt = Array.from(detail.querySelectorAll('.eyebrow')).find(e => /Idea & management/.test(e.textContent));
+      const chainOf = el => { const p = []; let n = el; while (n && n !== detail) { p.unshift(String(n.className).split(' ')[0] || n.tagName); n = n.parentElement; } return p.join(' > '); };
+      return { tree: walk(detail, 0), mgmtPath: mgmt ? chainOf(mgmt) : null, sidePath: chainOf(detail.querySelector('.authposside')), payPath: chainOf(detail.querySelector('.authpaypanel') || detail.querySelector('.authpaykey')), scenPath: chainOf(detail.querySelector('.authscenstage')) };
+    });
+    console.log('ADV-15', JSON.stringify(r, null, 1));
+  } finally { await context.close(); }
+});
+
+test('ADV-16 a working fix for the clipped management list', async () => {
+  for (const vp of [{ width: 1440, height: 900 }, { width: 2000, height: 963 }]) {
+    const { context, page } = await advOpenPosition(vp);
+    try {
+      await advSettle(page);
+      const r = await page.evaluate(() => {
+        const s = document.createElement('style');
+        s.textContent = '.lv-position .authlist{flex:0 0 auto;overflow:visible}'
+          + '.lv-position .authlistrow{grid-template-columns:auto minmax(0,1fr)}'
+          + '.lv-position .authlistrow b{overflow:visible;text-overflow:clip;white-space:nowrap}'
+          + '.lv-position .authlistrow span:last-child{white-space:normal;text-align:right}';
+        document.head.appendChild(s);
+        void document.body.offsetHeight;
+        const list = document.querySelector('[data-auth-position-detail] .authlist');
+        const lr = list.getBoundingClientRect();
+        const ap = document.querySelector('.authpos');
+        const panel = list.parentElement;
+        const pr = panel.getBoundingClientRect();
+        return {
+          list: { h: Math.round(lr.height), sh: list.scrollHeight, over: list.scrollHeight - list.clientHeight },
+          rows: Array.from(list.querySelectorAll('.authlistrow')).map(row => { const b = row.querySelector('b'), rr = row.getBoundingClientRect(); return { k: b.textContent, vis: rr.top >= lr.top - 1 && rr.bottom <= lr.bottom + 1, clip: b.scrollWidth > b.clientWidth + 1, insidePanel: rr.bottom <= pr.bottom + 1 }; }),
+          panelOverflow: getComputedStyle(panel).overflow, panelH: Math.round(pr.height), panelSh: panel.scrollHeight,
+          authposOver: ap.scrollHeight - ap.clientHeight
+        };
+      });
+      console.log(`ADV-16 ${vp.width}`, JSON.stringify(r));
+      await page.screenshot({ path: path.join(ADV_DIR, `adv16-listfix-${vp.width}.png`) });
+    } finally { await context.close(); }
+  }
+});
+
+test('ADV-17 authpos with BOTH axes visible: where does the content go', async () => {
+  const { context, page } = await advOpenPosition({ width: 1440, height: 900 });
+  try {
+    await advSettle(page);
+    const r = await page.evaluate(() => {
+      const s = document.createElement('style');
+      s.textContent = '.authpos{height:auto;overflow:visible;scrollbar-gutter:auto}';
+      document.head.appendChild(s);
+      void document.body.offsetHeight;
+      const ap = document.querySelector('.authpos');
+      const cs = getComputedStyle(ap);
+      const cdetail = ap.closest('.cdetail');
+      const cdr = cdetail.getBoundingClientRect();
+      const apr = ap.getBoundingClientRect();
+      const lost = [];
+      document.querySelectorAll('[data-auth-position-detail] *').forEach(el => {
+        if (el.children.length) return;
+        const t = el.textContent.trim(); if (!t) return;
+        const b = el.getBoundingClientRect();
+        if (b.height && b.top > cdr.bottom - 1) lost.push(t.slice(0, 24));
+      });
+      return {
+        computed: { h: cs.height, ox: cs.overflowX, oy: cs.overflowY },
+        authposRect: Math.round(apr.height), authposOver: ap.scrollHeight - ap.clientHeight,
+        cdetail: { h: Math.round(cdr.height), oy: getComputedStyle(cdetail).overflowY, over: cdetail.scrollHeight - cdetail.clientHeight },
+        pageOver: document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight,
+        boardOver: (() => { const b = document.getElementById('board'); return b.scrollHeight - b.clientHeight; })(),
+        lostCount: lost.length, lostSample: lost.slice(0, 10)
+      };
+    });
+    console.log('ADV-17', JSON.stringify(r, null, 1));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv17-visible-1440.png') });
+  } finally { await context.close(); }
+});

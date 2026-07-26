@@ -1,0 +1,797 @@
+[
+ {
+  "cls": "tgl buy",
+  "tag": "BUTTON",
+  "label": "Change leg 1 side",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "tgl callc",
+  "tag": "BUTTON",
+  "label": "Change leg 1 option type",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Previous listed strike",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Next listed strike",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Reduce leg quantity",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Increase leg quantity",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "lrm",
+  "tag": "BUTTON",
+  "label": "Remove leg 1",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "tgl sell",
+  "tag": "BUTTON",
+  "label": "Change leg 2 side",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "tgl callc",
+  "tag": "BUTTON",
+  "label": "Change leg 2 option type",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Previous listed strike",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Next listed strike",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Reduce leg quantity",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Increase leg quantity",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "lrm",
+  "tag": "BUTTON",
+  "label": "Remove leg 2",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "addleg sm",
+  "tag": "BUTTON",
+  "label": "Fork this package and add another listed",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow worst",
+  "tag": "BUTTON",
+  "label": "Market crashCrash-20%pathfast breach · p",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow",
+  "tag": "BUTTON",
+  "label": "Gap downGap down-9%pathopens lower befor",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow",
+  "tag": "BUTTON",
+  "label": "Orderly pullbackPullback-6%pathdrifts to",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow",
+  "tag": "BUTTON",
+  "label": "Choppy / sidewaysChoppy-1%pathwhipsaws n",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow best",
+  "tag": "BUTTON",
+  "label": "Flat / rangeFlat0%pathstays inside the r",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow",
+  "tag": "BUTTON",
+  "label": "Grind higherGrind+6%pathsteady upside dr",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow",
+  "tag": "BUTTON",
+  "label": "Strong rallyRally+13%pathclears the expe",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "srow",
+  "tag": "BUTTON",
+  "label": "Melt-upMelt-up+20%pathaccelerates well b",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1D",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1W",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1M",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill on",
+  "tag": "BUTTON",
+  "label": "3M",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "6M",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "YTD",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1Y",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "All",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Candles",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Line",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "$",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "%",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histchip on",
+  "tag": "BUTTON",
+  "label": "Vol",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histchip",
+  "tag": "BUTTON",
+  "label": "MA",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histchip",
+  "tag": "BUTTON",
+  "label": "±1σ",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "histchip on",
+  "tag": "BUTTON",
+  "label": "Exp ±1σ",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "btn xs",
+  "tag": "BUTTON",
+  "label": "Refresh AMD market data →",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "packagebooknear",
+  "tag": "DIV",
+  "label": "Nearby 2026-08-21 strikes · matches this",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "inspecttab on",
+  "tag": "BUTTON",
+  "label": "Paths63% profit",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "inspecttab",
+  "tag": "BUTTON",
+  "label": "FitCoherent",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "inspecttab",
+  "tag": "BUTTON",
+  "label": "GreeksΘ $9",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "inspecttab",
+  "tag": "BUTTON",
+  "label": "Bookloading",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "P/L",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Price",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "microcta",
+  "tag": "BUTTON",
+  "label": "Close possible paths",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "ticketedit",
+  "tag": "BUTTON",
+  "label": "Edit order controls",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "btn pri place",
+  "tag": "BUTTON",
+  "label": "Review →",
+  "inDecide": true,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "none": true
+ },
+ {
+  "cls": "brandmk",
+  "tag": "BUTTON",
+  "label": "",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "btn pri xs threadnew",
+  "tag": "BUTTON",
+  "label": "＋ New idea",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "● OBSERVED",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "◈ Simulated",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "crumb home",
+  "tag": "BUTTON",
+  "label": "Your book",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "cmdsym",
+  "tag": "BUTTON",
+  "label": "◎ AMD",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "INPUT",
+  "label": "",
+  "inDecide": false,
+  "occludedByDecide": false,
+  "hidden": false
+ },
+ {
+  "cls": "btn",
+  "tag": "BUTTON",
+  "label": "Import a tracked trade",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Broad market 2",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Active names 2",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Income",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Directional",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Acquire",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Hedge",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Exit",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Bearish",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Neutral",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Bullish",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "7 trading days",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "30 trading days",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "45 trading days",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Conservative",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Balanced",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Aggressive",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "INPUT",
+  "label": "",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "btn pri scoutgo",
+  "tag": "BUTTON",
+  "label": "Analyze AMD →",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "btn xs scoutalt",
+  "tag": "BUTTON",
+  "label": "Scan the field",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Clear",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "homeideamatch on",
+  "tag": "BUTTON",
+  "label": "AMDOptionable underlyingStage →",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "btn xs bookfanprimary",
+  "tag": "BUTTON",
+  "label": "Open AAPL →",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "bookfanrow",
+  "tag": "BUTTON",
+  "label": "Open AAPL",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Broad market",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1D",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1W",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1M",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill on",
+  "tag": "BUTTON",
+  "label": "3M",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "6M",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "YTD",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "1Y",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histpill",
+  "tag": "BUTTON",
+  "label": "All",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "Candles",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "Line",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "on",
+  "tag": "BUTTON",
+  "label": "$",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "",
+  "tag": "BUTTON",
+  "label": "%",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histchip on",
+  "tag": "BUTTON",
+  "label": "Vol",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histchip",
+  "tag": "BUTTON",
+  "label": "MA",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histchip",
+  "tag": "BUTTON",
+  "label": "±1σ",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "histchip on",
+  "tag": "BUTTON",
+  "label": "Exp ±1σ",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ },
+ {
+  "cls": "btn xs",
+  "tag": "BUTTON",
+  "label": "Refresh AMD market data →",
+  "inDecide": false,
+  "occludedByDecide": true,
+  "hidden": false
+ }
+]

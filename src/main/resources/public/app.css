@@ -411,7 +411,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .brandmk:hover{filter:brightness(1.15)}
 .thctl{display:flex;align-items:center;gap:9px;flex:none}
 .thsep{width:1px;height:20px;background:var(--line-soft);flex:none}
-.thctx{flex:1;min-width:0;display:flex;align-items:center;gap:13px;overflow:hidden}   /* swaps market-strip ⇄ crumbs+state by zoom */
+.thctx{flex:1;min-width:0;display:flex;align-items:center;gap:13px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}   /* swaps market-strip ⇄ crumbs+state by zoom */
 .thread.zoomed .mktstrip{display:none}
 .thread:not(.zoomed) .crumbs,.thread:not(.zoomed) .tstate{display:none}
 .cmdsym{border:0;background:var(--panel-2);border-radius:6px;color:var(--dim);font-family:var(--mono);
@@ -431,8 +431,11 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .crumb.home:not(.cur):hover .hmk{opacity:1}           /* a zoom-OUT only once it's a real ancestor */
 .sep{color:var(--faint);font-size:var(--f-base);padding:0 1px;user-select:none}
 /* live pulse of wherever you're zoomed — STATE, never navigation (that's what keeps it off the rail) */
-.tstate{flex:1;min-width:0;display:flex;align-items:center;gap:13px;overflow:hidden;
-  font-size:var(--f-sm);color:var(--dim);white-space:nowrap;
+/* A row of live facts with a fade at its edge. The fade is the right affordance — it says there is
+   more — but it was the only thing there: the tail simply could not be reached. It scrolls on its
+   own axis now, so the fade means "keep going" instead of "this is gone". */
+.tstate{flex:1;min-width:0;display:flex;align-items:center;gap:13px;overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:none;font-size:var(--f-sm);color:var(--dim);white-space:nowrap;
   -webkit-mask-image:linear-gradient(90deg,#000 90%,transparent);mask-image:linear-gradient(90deg,#000 90%,transparent)}
 .tstate .tz{display:inline-flex;align-items:baseline;gap:5px;flex:none}
 .tstate .tk{font-size:var(--f-2xs);color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
@@ -739,6 +742,15 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .recede .card>.cface{display:flex;flex-direction:column;gap:5px}
 .recede .card .cstruct,.recede .card .cpeek,.recede .card .cdetail{display:none}
 .recede .card .cshareRow .cplspark{display:none}
+/* The rail is a fixed 172px column. Its rows carry a symbol and a P/L that do not always fit that
+   width, and .card hides its overflow — so the number a reader glances at was cut in half. The row
+   lays out for the width it actually has: the symbol keeps its space, the amount takes what is
+   left and ellipsises with its full value in the title. */
+.recede .card .crow1{flex-wrap:nowrap;gap:6px;min-width:0}
+.recede .card .csym{flex:0 0 auto}
+.recede .card .cpnl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recede .card .cshareRow{min-width:0}
+.recede .card .cshareRow>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recede .card .csym{font-size:var(--f-md)}
 .recede .card .cpnl{font-size:var(--f-sm)}
 .recede .card:hover{border-color:var(--accent-2);background:#0f1c22}
@@ -1456,7 +1468,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authriskviz{flex:1;min-height:150px;width:100%;display:block}.authriskviz text{font-family:var(--mono);font-size:10px;fill:var(--faint)}.authriskviz .riskgrid{stroke:var(--line-soft);stroke-dasharray:2 4}.authriskviz .riskpoint{cursor:pointer}.authriskviz .riskpoint circle{transition:r var(--mo-quick) var(--mo-ease),fill-opacity var(--mo-quick) var(--mo-ease)}.authriskviz .riskpoint:hover circle,.authriskviz .riskpoint:focus circle{r:9px;fill-opacity:.62}.authriskviz .riskpoint:focus{outline:none}
 .authpos{display:flex;flex-direction:column;gap:8px;min-height:0;height:100%;padding-top:8px;border-top:1px solid var(--line-soft);overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
 .authposhero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(340px,.95fr);gap:10px;flex:none;min-height:clamp(225px,26vh,330px)}
-.authpaypanel,.authposside,.authresearchpanel{min-width:0;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:11px;overflow:hidden}
+.authpaypanel,.authposside,.authresearchpanel{min-width:0;min-height:min-content;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:11px}
 .authpaypanel{display:flex;flex-direction:column}.authpayoff{width:100%;flex:1;min-height:150px;display:block}
 .authpaykey{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin-top:7px}.authpaykey span{min-width:0;padding:5px 6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--faint);font-size:var(--f-2xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.authpaykey b{display:block;margin-top:2px;color:var(--text);font-family:var(--mono);font-size:var(--f-xs);overflow:hidden;text-overflow:ellipsis}.authpaykey b.pos{color:var(--profit)}.authpaykey b.neg{color:var(--loss)}
 .authposside{display:flex;flex-direction:column;gap:8px}.authposside .authmetricgrid{grid-template-columns:1fr 1fr}
@@ -1468,7 +1480,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authleglist{display:flex;flex-direction:column;gap:5px;max-height:155px;overflow:auto;padding-right:2px}
 .authleg{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:7px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);font-family:var(--mono);font-size:var(--f-xs);min-width:0}
 .authleg .side{font-weight:800}.authleg .side.buy{color:var(--profit)}.authleg .side.sell{color:var(--loss)}.authleg .contract{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authleg .mark{color:var(--dim);white-space:nowrap}
-.authresearchgrid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,.8fr) minmax(0,1.55fr) minmax(0,1fr) minmax(200px,.65fr);gap:10px;min-height:250px}
+.authresearchgrid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,.8fr) minmax(0,1.55fr) minmax(0,1fr) minmax(200px,.65fr);gap:10px;min-height:250px;align-items:stretch}
 .authresearchpanel{display:flex;flex-direction:column;gap:8px}.authhistory{width:100%;height:105px;display:block}.authhistory .emptyline{stroke:var(--line);stroke-dasharray:3 5}
 .authchainrow[data-chain-k]{transition:background var(--mo-quick) var(--mo-ease)}
 .authchainrow[data-chain-k]:hover{background:var(--row-hover);border-radius:4px}
@@ -1492,8 +1504,8 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
    hidden below two tall analytics blocks. Keep a compact, scroll-contained evidence band visible
    after the mark/payoff hero, then continue into the full scenario workspace. */
 @media(min-width:1101px){
-  .authposhero{order:1}.authresearchgrid{order:2;flex:none;height:clamp(230px,25vh,380px);min-height:230px}.authscenstage{order:3}
-  .authresearchgrid .authresearchpanel{min-height:0}.authresearchgrid .authhistory{height:92px}
+  .authposhero{order:1}.authresearchgrid{order:2;flex:none;min-height:clamp(230px,25vh,380px)}.authscenstage{order:3}
+  .authresearchgrid .authresearchpanel{min-height:min-content}.authresearchgrid .authhistory{height:92px}
   .authposside .authmetricgrid{grid-template-columns:repeat(6,minmax(0,1fr));gap:5px}
   .authposside .authmetric{padding:6px 7px}
   .authposside .authleg{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"side qty mark" "contract contract contract";gap:3px 6px;padding:5px 6px}

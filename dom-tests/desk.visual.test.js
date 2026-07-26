@@ -143,6 +143,26 @@ async function installWorld(page, state) {
   return world;
 }
 
+/**
+ * Open the first held position. The bloom is the densest surface the desk draws — payoff, greeks,
+ * legs, chain, history, news, scenarios and futures in one composition — so it is where a clipped
+ * fact is most likely and least visible. Measuring only Home left it unexamined.
+ */
+async function openPosition(page) {
+  await page.waitForSelector('#book .card[data-id]');
+  const id = await page.getAttribute('#book .card[data-id]', 'data-id');
+  await page.locator(`#book .card[data-id="${id}"]`).click();
+  // Every card carries its own detail container; only the focused one is laid out, so the wait
+  // must name the id that was clicked rather than take whichever matched first.
+  await page.waitForFunction(tradeId => {
+    const view = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+    return view && view.getBoundingClientRect().height > 200
+      && !/Loading this position/.test(view.textContent);
+  }, id);
+  await page.waitForTimeout(400);   // the bloom FLIP settles before anything is measured
+  return id;
+}
+
 /** Boot far enough that Home has composed — a measurement of a skeleton proves nothing. */
 async function bootHome(page) {
   await page.goto(deskUrl);
@@ -285,6 +305,45 @@ for (const viewport of VIEWPORTS) {
         `text is drawn over other text at ${viewport.name}:\n  ${collisions.join('\n  ')}`);
 
       assert.deepEqual(pageErrors, [], `Home emitted page errors at ${viewport.name}: ${pageErrors.join('\n')}`);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`the Position bloom composes without clipping or sideways scroll at ${viewport.name}`, async () => {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(20000);
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    try {
+      await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'idle' });
+      await bootHome(page);
+      await openPosition(page);
+      await page.screenshot({ path: path.join(SHOTS, `position-${viewport.name}.png`) });
+
+      const geometry = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth
+      }));
+      assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1,
+        `the Position bloom scrolls the page sideways at ${viewport.name}: `
+        + `${geometry.scrollWidth}px in ${geometry.clientWidth}px.`);
+
+      const clipped = (await clippedElements(page))
+        .filter(entry => !/authpathviewport|histchart|bookfan|cbig|decpay/.test(entry.selector));
+      assert.deepEqual(clipped, [],
+        `the Position bloom cuts content off at ${viewport.name}:\n`
+        + clipped.map(c => `  ${c.selector} draws ${c.client} around ${c.content} — "${c.text}"`).join('\n'));
+
+      const collisions = await overlappingText(page);
+      assert.deepEqual(collisions, [],
+        `text is drawn over other text on Position at ${viewport.name}:\n  ${collisions.join('\n  ')}`);
+
+      assert.deepEqual(pageErrors, [],
+        `Position emitted page errors at ${viewport.name}: ${pageErrors.join('\n')}`);
     } finally {
       await context.close();
     }

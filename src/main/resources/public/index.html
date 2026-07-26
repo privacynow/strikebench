@@ -471,7 +471,7 @@ function authPositionDollarDelta(data,tradeId){
   }
   return null;
 }
-function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portfolio.heat||{},total=Math.max(0,Number(heat.totalMaxLossCents||0)),loss=Math.max(0,Number(trade.maxLossCents||0));
+function authTradePosition(trade,data){
   var planRow=authPlanForTrade(data,trade),plan=planRow&&planRow.plan||null,pnl=authDollarsFromCents(trade.unrealizedPnlCents),spot=authDollarsFromCents(trade.entryUnderlyingCents),lifecycle=authLifecycleAnalysis(data,String(trade.id));
   /* B2: the held bloom/spectrum interpolates a SERVER terminal-payoff curve (never a leg engine).
      Absent (mixed-expiry) leaves payoffPoints empty so payFor stays honestly null. */
@@ -479,9 +479,12 @@ function authTradePosition(trade,data){var heat=data&&data.portfolio&&data.portf
   /* B6: held greeks in the ONE canonical unit (deltaShares/gammaSharesPerDollar/thetaCentsPerDay/vegaCentsPerPoint). */
   var g=trade.greeks||null;
   return {id:String(trade.id),sym:String(trade.symbol||'').toUpperCase(),struct:authHuman(trade.strategy),spot:spot||0,em:0,pnl:pnl,
-    /* share of the book's defined risk. With no book total there is no share — null, not 0%,
-       which would read as "this line carries no risk". */
-    riskPct:total>0?Math.max(0,Math.min(100,loss/total*100)):null,cap:authDollarsFromCents(trade.maxLossCents),net:authDollarsFromCents(trade.entryNetPremiumCents),
+    /* Share of the book's defined risk, and this line's place in that ranking, come from the heat
+       receipt (audit §15.5). Both depend on every OTHER open trade, so the browser deriving them
+       from whatever rows it held produced a confident "2nd of 4" that a filtered or paged roster
+       made wrong. Absent stays absent — null, never a 0% that reads as "carries no risk". */
+    riskPct:authBookRiskShare(data,trade.id),riskRank:authBookRiskRank(data,trade.id),
+    riskRankOf:authBookRankedCount(data),cap:authDollarsFromCents(trade.maxLossCents),net:authDollarsFromCents(trade.entryNetPremiumCents),
     pop:authNumber(trade.popEntry)==null?null:Number(trade.popEntry)*100,maxLoss:authDollarsFromCents(trade.maxLossCents),maxProfit:authDollarsFromCents(trade.maxProfitCents),
     payoffPoints:payoffPoints,terminalPayoff:tp||null,greeks:g,delta:g?authNumber(g.deltaShares):null,dollarDelta:authPositionDollarDelta(data,trade.id),gamma:g?authNumber(g.gammaSharesPerDollar):null,theta:g?authNumber(g.thetaCentsPerDay):null,vega:g?authNumber(g.vegaCentsPerPoint):null,
     breakevens:(trade.breakevens||[]).map(Number).filter(Number.isFinite),need:false,tone:'ok',attn:String(trade.dataAge||trade.dataProvenance||'backend'),
@@ -493,6 +496,20 @@ function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},ne
   /* faces render once more AFTER the roster order exists, so each card's identity color matches
      its fan line from the very first paint */
   POS.forEach(function(row){var face=cardEl[row.id]&&cardEl[row.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(row);});}
+/* The heat receipt's per-trade ranking, read by id. One lookup helper each so no caller re-derives
+   a share, a rank, or the size of the ranked field. */
+function authHeatRow(data,tradeId){
+  var rows=data&&data.portfolio&&data.portfolio.heat&&data.portfolio.heat.positions;
+  if(!Array.isArray(rows))return null;
+  for(var i=0;i<rows.length;i++)if(String(rows[i].tradeId)===String(tradeId))return rows[i];
+  return null;
+}
+function authBookRiskShare(data,tradeId){var row=authHeatRow(data,tradeId);return row?authNumber(row.riskSharePct):null;}
+function authBookRiskRank(data,tradeId){var row=authHeatRow(data,tradeId);return row?authNumber(row.riskRank):null;}
+function authBookRankedCount(data){
+  var heat=data&&data.portfolio&&data.portfolio.heat;
+  return heat?authNumber(heat.rankedPositions):null;
+}
 function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share=Math.max(0,Math.min(100,Number(p.riskPct||0))),prov=p.provenance||{},lr=authLifecycleRead(p.lifecycle),verdict=lr.verdict,lifeBlocked=authLifecycleBlockedByEvidence(lr);
   /* the dot is the position's CANONICAL identity color — the same color its fan line, legend
      row, and every future surface use. One palette, matched everywhere. */
@@ -573,8 +590,8 @@ function authStageLabel(value){var key=String(value||'').toUpperCase();if(key===
 function authManagementHTML(p,data){var plan=data&&data.plan||p._plan,mg=data&&data.management,rows=[];if(plan)rows.push(['Idea',plan.title||((p.sym||p.symbol||'Position')+' working idea')],['Stage',authStageLabel(plan.furthestStage)]);
   if(mg){if(mg.status)rows.push(['Review',mg.status]);if(mg.note)rows.push(['Note',mg.note]);}
   /* book context — real held-line facts, computed from what the book already knows */
-  var ranked=POS.slice().sort(function(a,b){return (b.riskPct||0)-(a.riskPct||0);}),rank=ranked.findIndex(function(x){return x.id===p.id;})+1;
-  if(p.riskPct!=null&&POS.length)rows.push(['Book share',Math.round(p.riskPct)+'% of book risk'+(rank?' · '+ordinal(rank)+' of '+POS.length:'')]);
+  if(p.riskPct!=null)rows.push(['Book share',Math.round(p.riskPct)+'% of book risk'+
+    (p.riskRank&&p.riskRankOf?' · '+ordinal(p.riskRank)+' of '+p.riskRankOf:'')]);
   var openedAt=(data&&data.tradeDetail&&data.tradeDetail.trade&&data.tradeDetail.trade.openedAt)||p._trade&&p._trade.openedAt;
   if(openedAt)rows.push(['Opened',String(openedAt).slice(0,10)]);
   var expirations=(p.legs||[]).map(function(l){return l.expiration;}).filter(Boolean).sort();
