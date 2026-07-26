@@ -202,6 +202,9 @@ class StrategyEvaluatorTest {
         assertThat(exact.participation()).isEqualTo(proposal.participation());
         assertThat(exact.impliedStance()).isEqualTo(proposal.impliedStance());
         assertThat(exact.coverage()).isEqualTo(proposal.coverage());
+        assertThat(exact.coverage().pricingModel())
+                .startsWith("MODEL_STANCE")
+                .contains("not current executable Greeks");
         assertThat(exact.decisionScore()).isEqualTo(proposal.decisionScore());
 
         StrategyEvaluation refused = evaluator.assessExact(candidate, spec, ctx(), false,

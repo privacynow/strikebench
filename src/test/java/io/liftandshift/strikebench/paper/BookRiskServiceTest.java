@@ -515,6 +515,33 @@ class BookRiskServiceTest {
                 .containsExactly(75.0, 25.0);
     }
 
+    @Test
+    void selectedBookConsumesCanonicalRiskRowsAndWithholdsIncompleteDollarDelta() {
+        seedPracticeTrade("trade-nvda", "NVDA", "CASH_SECURED_PUT", "950", 1_500_000L);
+        seedPracticeTrade("trade-amd", "AMD", "CREDIT_PUT_SPREAD", "160", 500_000L);
+
+        var selected = risk.selectedBook(practice.id(), List.of("trade-amd"));
+
+        assertThat(selected.selectionAvailable())
+                .as(selected.selectionUnavailableReason()).isTrue();
+        assertThat(selected.requestedPositions()).isEqualTo(1);
+        assertThat(selected.matchedPositions()).isEqualTo(1);
+        assertThat(selected.tradeIds()).containsExactly("trade-amd");
+        assertThat(selected.definedMaxLossCents()).isEqualTo(500_000L);
+        assertThat(selected.definedRiskSharePct()).isEqualTo(25.0);
+        assertThat(selected.bookRiskDenominatorCents()).isEqualTo(2_000_000L);
+        // This fixture deliberately omits a complete current Greeks mark. The selected receipt
+        // withholds the whole subset delta rather than summing a partial zero.
+        assertThat(selected.netDollarDeltaCents()).isNull();
+        assertThat(selected.dollarDeltaUnavailableReason())
+                .contains("trade-amd").contains("no partial selected-book delta");
+
+        var stale = risk.selectedBook(practice.id(), List.of("trade-amd", "not-open"));
+        assertThat(stale.selectionAvailable()).isFalse();
+        assertThat(stale.selectionUnavailableReason()).contains("not-open");
+        assertThat(stale.definedMaxLossCents()).isNull();
+    }
+
     /** §3.2: with no book total there is no share and no rank — a stated reason, never a 0%. */
     @Test
     void aBookWithNoRiskTotalWithholdsShareAndRankWithAReason() {

@@ -67,13 +67,13 @@ public final class ScenarioCanvasValuator {
      * <p>The law (program §3.1/§3.2): a client may interpolate VISUAL COORDINATES between two
      * supplied facts, but it must never print an interpolation as a new financial fact. So the desk
      * does not blend two frames; it SELECTS one. Given a scrub position {@code t} in {@code [0,1]}
-     * and the focused package's {@link PositionAnimation#lastLiveFrameIndex()}:
+     * and the focused package's {@link PositionAnimation#terminalFrameIndex()}:
      *
-     * <pre>index = Math.round(t * lastLiveFrameIndex)</pre>
+     * <pre>index = Math.round(t * terminalFrameIndex)</pre>
      *
      * <p>and every value it then prints comes from {@code underlyingSteps[index]} (market facts)
      * and {@code positions[i].steps[index]} (package facts). The two arrays are built from one
-     * shared {@link PathEnsembleService#displayStepIndices(int)} projection, so index {@code k}
+     * shared {@link PathEnsembleService#displayStepIndices(int, int...)} projection, so index {@code k}
      * names the same instant in both — the join is a keyed lookup, never a derivation.
      *
      * <p>Cost: the whole track ships once inside the response the desk already fetches, so a 60fps
@@ -145,25 +145,23 @@ public final class ScenarioCanvasValuator {
     /**
      * Where THIS package's animation ends, as a backend fact.
      *
-     * <p>A scenario timeline ends when the PACKAGE's life ends, not when the ensemble does: a fan
-     * may run 45 sessions while the package expires at 22, and animating the afterlife shows a
-     * frozen position against a still-moving market. The cut used to be re-derived in the browser
-     * by string-comparing session dates against leg expirations. It is stated here instead, from
-     * {@link PathPosition#expiryDay(Leg)} on the same trading calendar that dated the frames.
+     * <p>A cash-only option package resolves at its final option settlement. Explicit stock and
+     * physically settled option exposure remain live through the requested horizon; an option whose
+     * final expiry lies beyond that horizon remains unresolved there. The browser consumes this
+     * boundary directly and never re-derives it from dates or leg shape.
      *
      * @param frameCount          frames available for this package ({@code steps.size()}).
-     * @param lastLiveFrameIndex  highest index the desk may scrub to; {@code -1} when unavailable.
-     * @param lastLiveSessionProgress {@code sessionProgress} of that frame; null when unavailable.
-     * @param packageExpiration   earliest option-leg expiration (ISO date), or null when there is none.
-     * @param boundarySource      {@code EARLIEST_LEG_EXPIRATION} (cut inside the horizon),
-     *                            {@code HORIZON_END} (the package outlives the fan),
-     *                            {@code NO_OPTION_EXPIRATION} (shares only), or {@code NO_FRAMES}.
-     * @param unavailableReason   null when frames exist; otherwise names why none do, so the desk
-     *                            can say so instead of scrubbing an empty track.
+     * @param terminalFrameIndex  exact terminal frame index; {@code -1} when unavailable.
+     * @param terminalSessionProgress {@code sessionProgress} of that frame; null when unavailable.
+     * @param finalOptionExpiration latest option-leg expiration (ISO date), or null for stock-only.
+     * @param boundaryReason      one of the named lifecycle reasons documented by this contract.
+     * @param exposureResolvedAtBoundary whether all package exposure has become terminal cash there.
+     * @param unavailableReason   null when frames exist; otherwise names why none do.
      */
-    public record PositionAnimation(int frameCount, int lastLiveFrameIndex,
-                                    Double lastLiveSessionProgress, String packageExpiration,
-                                    String boundarySource, String unavailableReason) {}
+    public record PositionAnimation(int frameCount, int terminalFrameIndex,
+                                    Double terminalSessionProgress, String finalOptionExpiration,
+                                    String boundaryReason, boolean exposureResolvedAtBoundary,
+                                    String unavailableReason) {}
     public record PositionPath(String key, String label, String lane, String source, boolean proposed,
                                Long entryCostCents, List<PositionDay> days, List<PositionStep> steps,
                                List<PositionStepBand> stepBands,
@@ -176,7 +174,7 @@ public final class ScenarioCanvasValuator {
                             List<Transformation> transformations) {
             this(key, label, lane, source, proposed, entryCostCents, days, List.of(), List.of(),
                     List.of(), legs, transformations,
-                    new PositionAnimation(0, -1, null, null, "NO_FRAMES",
+                    new PositionAnimation(0, -1, null, null, "NO_FRAMES", false,
                             "This package was valued on the daily grid only, without per-step "
                                     + "animation frames."));
         }
@@ -485,8 +483,10 @@ public final class ScenarioCanvasValuator {
             IvSpec iv = (legacyIv == null ? IvSpec.flat(ensemble.spec().volAnnual()) : legacyIv).sane();
             ScenarioCanvasSpec canvas = rawCanvas == null ? ScenarioCanvasSpec.defaults()
                     : rawCanvas.sane(ensemble.spec().horizonDays());
+            int[] displaySteps = PathEnsembleService.displayStepIndices(
+                    ensemble.spec().totalSteps());
             List<UnderlyingStep> bareFrames = underlyingSteps(paths, ensemble, iv, canvas,
-                    representativePath);
+                    representativePath, displaySteps);
             return new Report(representativePath, underlying(paths, ensemble, iv, canvas,
                     representativePath), bareFrames, animationTrack(ensemble, bareFrames),
                     List.of(), List.of(), List.of("No same-symbol positions were available to reprice."));
@@ -509,6 +509,11 @@ public final class ScenarioCanvasValuator {
         double[] stepYears = spec.calendarStepYears(ensemble.anchorDate());
         double[] elapsed = PathValuationKernel.elapsed(stepYears);
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
+        List<PositionBoundary> boundaries = rawPositions.stream()
+                .map(input -> positionBoundary(input, canvas, steps, spd))
+                .toList();
+        int[] displaySteps = PathEnsembleService.displayStepIndices(steps,
+                boundaries.stream().mapToInt(PositionBoundary::terminalStep).toArray());
         double[] legacyPath = iv.path(steps, sum(stepYears) / steps, spd);
         List<LocalDate> sessionDates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
         List<UnderlyingDay> underlying = new ArrayList<>();
@@ -522,14 +527,16 @@ public final class ScenarioCanvasValuator {
                     round4(atm)));
         }
         List<UnderlyingStep> underlyingSteps = underlyingSteps(paths, ensemble, iv, canvas,
-                representativePath);
+                representativePath, displaySteps);
 
         List<PositionPath> positionPaths = new ArrayList<>();
         List<ComparisonRow> comparisons = new ArrayList<>();
         LinkedHashMap<String, long[]> terminalPnl = new LinkedHashMap<>();
-        for (PositionInput input : rawPositions) {
+        for (int inputIndex = 0; inputIndex < rawPositions.size(); inputIndex++) {
+            PositionInput input = rawPositions.get(inputIndex);
             PositionRun run = valuePosition(input, ensemble, canvas, annualRate, elapsed,
-                    legacyPath, sessionDates, representativePath, displayPaths);
+                    legacyPath, sessionDates, representativePath, displayPaths, displaySteps,
+                    boundaries.get(inputIndex));
             positionPaths.add(run.path());
             terminalPnl.put(input.key(), run.terminalPnl());
         }
@@ -562,13 +569,13 @@ public final class ScenarioCanvasValuator {
         if (!displayPaths.isEmpty()) {
             notes.add(displayPaths.size() + " bounded package P/L trajectories retain their source-row identity from the displayed underlying fan.");
         }
-        int displayPointCount = PathEnsembleService.displayStepIndices(steps).length;
+        int displayPointCount = displaySteps.length;
         if (displayPointCount < steps + 1) {
             notes.add("Animation output carries " + displayPointCount + " deterministic checkpoints from "
                     + (steps + 1) + " stored steps. Terminal and daily distributions still use the full ensemble.");
         }
         notes.add("Scenario animation frames are exact valued facts, not a curve to read between: "
-                + "select frame Math.round(t x lastLiveFrameIndex) and display it. Interpolating two "
+                + "select frame Math.round(t x terminalFrameIndex) and display it. Interpolating two "
                 + "frames may position pixels, never state a price, a vol, a P/L or a Greek.");
         notes.add(canvas.dividendBasis());
         if (canvas.template() != null) notes.add(canvas.template().legDayProvenance());
@@ -581,7 +588,8 @@ public final class ScenarioCanvasValuator {
                                       ScenarioCanvasSpec canvas, double annualRate, double[] elapsed,
                                       double[] legacyPath, List<LocalDate> sessionDates,
                                       int representativePath,
-                                      List<DisplayPathSelection> displaySelections) {
+                                      List<DisplayPathSelection> displaySelections,
+                                      int[] displaySteps, PositionBoundary boundary) {
         ScenarioSpec spec = ensemble.spec();
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
         double[][] paths = ensemble.paths();
@@ -635,7 +643,6 @@ public final class ScenarioCanvasValuator {
                     focusValue, focusValue - entry,
                     new Greeks(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
         }
-        int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
         List<PositionStep> focusSteps = new ArrayList<>(displaySteps.length);
         List<PositionStepBand> stepBands = new ArrayList<>(displaySteps.length);
         List<List<DisplayPositionStep>> selectedSteps = new ArrayList<>(displaySelections.size());
@@ -718,7 +725,7 @@ public final class ScenarioCanvasValuator {
                 input.proposed(), input.entryCostCents(), List.copyOf(timeline),
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
                 List.copyOf(legs), List.copyOf(transformationRows),
-                positionAnimation(input, displaySteps, steps, spd)), terminal);
+                positionAnimation(boundary, displaySteps, spd)), terminal);
     }
 
     private static void collectAssignments(JointPositionInput row,
@@ -825,6 +832,9 @@ public final class ScenarioCanvasValuator {
     }
 
     private record PositionRun(PositionPath path, long[] terminalPnl) {}
+    private record PositionBoundary(int terminalStep, LocalDate finalOptionExpiration,
+                                    String boundaryReason,
+                                    boolean exposureResolvedAtBoundary) {}
     private record Pair(double value, int index) {}
     private record Ranked(Pair[] sorted) {
         double valueAt(double p) { return sorted[index(p)].value(); }
@@ -874,14 +884,14 @@ public final class ScenarioCanvasValuator {
     private static List<UnderlyingStep> underlyingSteps(double[][] paths,
                                                         PathEnsembleService.Ensemble ensemble,
                                                         IvSpec iv, ScenarioCanvasSpec canvas,
-                                                        int representativePath) {
+                                                        int representativePath,
+                                                        int[] displaySteps) {
         int steps = ensemble.spec().totalSteps();
         int spd = Math.max(1, ensemble.spec().stepsPerDay());
         int days = ensemble.spec().horizonDays();
         double[] stepYears = ensemble.spec().calendarStepYears(ensemble.anchorDate());
         double[] legacy = iv.path(steps, sum(stepYears) / steps, spd);
         List<LocalDate> dates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
-        int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
         List<UnderlyingStep> out = new ArrayList<>(displaySteps.length);
         double anchorSpot = ensemble.spot();
         Double baselineAtmIv = null;
@@ -909,44 +919,64 @@ public final class ScenarioCanvasValuator {
                 frames.getLast().sessionProgress(), frames.getFirst().atmIv(), "TRACK_FRAME_0");
     }
 
-    /**
-     * Where this package's scrub must stop, from the same trading calendar that dated the frames.
-     * Shares-only packages never expire, so the whole track stays live.
-     */
-    private static PositionAnimation positionAnimation(PositionInput input, int[] displaySteps,
-                                                       int steps, int stepsPerDay) {
+    /** Resolve one package lifecycle before projecting the shared animation grid. */
+    private static PositionBoundary positionBoundary(PositionInput input, ScenarioCanvasSpec canvas,
+                                                     int steps, int stepsPerDay) {
+        boolean hasStock = false;
+        LocalDate latestExpiration = null;
+        long latestExpiryStep = -1;
+        for (Leg leg : input.position().legs()) {
+            if (leg.isStock()) {
+                hasStock = true;
+                continue;
+            }
+            int expiryDay = input.position().expiryDay(leg);
+            long legStep = expiryDay <= 0 ? Math.min(stepsPerDay, steps)
+                    : Math.multiplyExact((long) expiryDay, stepsPerDay);
+            if (latestExpiration == null || leg.expiration().isAfter(latestExpiration)) {
+                latestExpiration = leg.expiration();
+                latestExpiryStep = legStep;
+            }
+        }
+        if (hasStock) {
+            return new PositionBoundary(steps, latestExpiration,
+                    "HORIZON_END_STOCK_EXPOSURE", false);
+        }
+        if (latestExpiration == null) {
+            throw new IllegalArgumentException("canvas package has neither stock nor option exposure");
+        }
+        if (canvas.settlementPolicy() == ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM) {
+            return new PositionBoundary(steps, latestExpiration,
+                    "HORIZON_END_PHYSICAL_EXPOSURE", false);
+        }
+        if (latestExpiryStep > steps) {
+            return new PositionBoundary(steps, latestExpiration,
+                    "HORIZON_END_OPTION_OUTLIVES_TRACK", false);
+        }
+        return new PositionBoundary((int) latestExpiryStep, latestExpiration,
+                "FINAL_CASH_SETTLEMENT", true);
+    }
+
+    /** Serialize the already-resolved lifecycle against the exact shared display grid. */
+    private static PositionAnimation positionAnimation(PositionBoundary boundary, int[] displaySteps,
+                                                       int stepsPerDay) {
         if (displaySteps.length == 0) {
-            return new PositionAnimation(0, -1, null, null, "NO_FRAMES",
+            return new PositionAnimation(0, -1, null,
+                    boundary.finalOptionExpiration() == null ? null
+                            : boundary.finalOptionExpiration().toString(),
+                    "NO_FRAMES", false,
                     "This package produced no per-step animation frames on the stored fan.");
         }
-        LocalDate earliest = null;
-        int expiryStep = Integer.MAX_VALUE;
-        for (Leg leg : input.position().legs()) {
-            if (leg.isStock()) continue;
-            int expiryDay = input.position().expiryDay(leg);
-            int legStep = expiryDay <= 0 ? Math.min(stepsPerDay, steps)
-                    : Math.min(steps, Math.multiplyExact(expiryDay, stepsPerDay));
-            if (earliest == null || legStep < expiryStep
-                    || legStep == expiryStep && leg.expiration().isBefore(earliest)) {
-                expiryStep = legStep;
-                earliest = leg.expiration();
-            }
+        int terminal = Arrays.binarySearch(displaySteps, boundary.terminalStep());
+        if (terminal < 0) {
+            throw new IllegalStateException("shared animation grid omitted required terminal step "
+                    + boundary.terminalStep());
         }
-        int last = displaySteps.length - 1;
-        if (earliest == null) {
-            return new PositionAnimation(displaySteps.length, last,
-                    sessionProgress(displaySteps[last], stepsPerDay), null,
-                    "NO_OPTION_EXPIRATION", null);
-        }
-        if (expiryStep < steps) {
-            last = 0;
-            for (int i = 0; i < displaySteps.length; i++) {
-                if (displaySteps[i] <= expiryStep) last = i; else break;
-            }
-        }
-        return new PositionAnimation(displaySteps.length, last,
-                sessionProgress(displaySteps[last], stepsPerDay), earliest.toString(),
-                expiryStep < steps ? "EARLIEST_LEG_EXPIRATION" : "HORIZON_END", null);
+        return new PositionAnimation(displaySteps.length, terminal,
+                sessionProgress(displaySteps[terminal], stepsPerDay),
+                boundary.finalOptionExpiration() == null ? null
+                        : boundary.finalOptionExpiration().toString(),
+                boundary.boundaryReason(), boundary.exposureResolvedAtBoundary(), null);
     }
 
     private static String date(int day, LocalDate anchor, List<LocalDate> sessions) {

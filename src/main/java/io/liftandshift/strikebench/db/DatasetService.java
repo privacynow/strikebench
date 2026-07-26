@@ -5,6 +5,9 @@ import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +22,6 @@ import java.util.Map;
 public final class DatasetService {
 
     public static final String OBSERVED = "observed";
-    private static final String ACTIVE_KEY_PREFIX = "active_dataset:";
     private static final int KEEP_SYNTHETIC = 25; // retention cap: oldest synthetic runs are pruned
 
     private final Db db;
@@ -33,6 +35,15 @@ public final class DatasetService {
 
     public record DatasetRow(String id, String name, String kind, String symbol, Long seed,
                              String spec, long bars, String createdAt) {}
+    public record SelectionMutation(String activeId, boolean changed) {}
+    public record DeleteMutation(boolean deleted, boolean selectionChanged, String activeId) {}
+    /**
+     * Canonical durable interpretation of one owner's selector. A dangling or foreign id is
+     * repaired to Observed in the caller's transaction; it is never merely hidden in a cache while
+     * another subsystem continues reading the invalid setting.
+     */
+    public record ActiveSelection(String activeId, boolean repaired,
+                                  String previousId, String repairReason) {}
 
     /**
      * OWNERSHIP MODEL: every synthetic dataset belongs to its creator ('local' when auth is off);
@@ -48,38 +59,77 @@ public final class DatasetService {
      * else's read path. Stored per owner under {@code active_dataset:<owner>}.
      */
     public String activeId(String userId) {
-        String k = ACTIVE_KEY_PREFIX + owner(userId);
+        String scopedOwner = owner(userId);
+        String k = SettingsStore.activeDatasetKey(scopedOwner);
         String cached = activeCache.get(k);
         if (cached != null) return cached;
-        String a = SettingsStore.read(db, k).filter(s -> !s.isBlank()).orElse(null);
-        if (a == null) a = OBSERVED;
-        // A dangling id (dataset pruned/deleted) silently means observed, never a ghost world.
-        if (!OBSERVED.equals(a) && !exists(a)) a = OBSERVED;
-        activeCache.put(k, a);
-        return a;
-    }
-
-    private boolean exists(String id) {
-        return db.query("SELECT 1 x FROM dataset WHERE id=?", r -> 1, id).size() > 0;
+        ActiveSelection resolved = db.tx(connection ->
+                resolveActiveOn(connection, scopedOwner, clock.instant()));
+        activeCache.put(k, resolved.activeId());
+        return resolved.activeId();
     }
 
     public void setActive(String id, String userId) {
-        if (!OBSERVED.equals(id) && !ownedBy(id, userId)) {
-            throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such dataset: " + id); // absent OR someone else's — same answer
-        }
-        String k = ACTIVE_KEY_PREFIX + owner(userId);
-        SettingsStore.upsert(db, k, id, clock.instant()); // injected clock preserved
-        activeCache.put(k, id);
+        String scopedOwner = owner(userId);
+        invalidateActiveCache(scopedOwner);
+        SelectionMutation mutation = db.tx(c -> selectOn(c, id, scopedOwner, clock.instant()));
+        invalidateActiveCache(scopedOwner);
         if (events != null) {
             java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
-            data.put("active", id);
-            data.put("user", owner(userId)); // owner-scoped delivery on /api/events
+            data.put("active", mutation.activeId());
+            data.put("user", scopedOwner); // owner-scoped delivery on /api/events
             events.publish("dataset.selected", data);
         }
     }
 
     /** Drops the in-memory active-dataset cache (used after a Data reset wipes the settings rows). */
     public void invalidateActiveCache() { activeCache.clear(); }
+
+    /** Drops only one owner's selector cache; safe after an owner-serialized commit. */
+    public void invalidateActiveCache(String userId) {
+        activeCache.remove(SettingsStore.activeDatasetKey(owner(userId)));
+    }
+
+    /**
+     * Connection-scoped selector mutation. DatasetService remains the persistence/ownership
+     * authority; WorldTransitionService composes this with workspace reconciliation and publishes
+     * only after the caller's transaction commits.
+     */
+    public SelectionMutation selectOn(Connection connection, String id, String userId, Instant now)
+            throws SQLException {
+        String scopedOwner = owner(userId);
+        OwnerScope.lock(connection, scopedOwner);
+        requireOwnedOn(connection, id, scopedOwner);
+        String key = SettingsStore.activeDatasetKey(scopedOwner);
+        String current = SettingsStore.readOn(connection, key)
+                .filter(value -> !value.isBlank()).orElse(OBSERVED);
+        if (current.equals(id)) return new SelectionMutation(id, false);
+        SettingsStore.upsertOn(connection, key, id, now);
+        return new SelectionMutation(id, true);
+    }
+
+    /**
+     * Resolves and, when necessary, repairs the selector while the owner's transition lock is held.
+     * Existence is owner-scoped: another user's valid dataset id is invalid for this caller.
+     */
+    public ActiveSelection resolveActiveOn(Connection connection, String userId, Instant now)
+            throws SQLException {
+        String scopedOwner = owner(userId);
+        OwnerScope.lock(connection, scopedOwner);
+        String key = SettingsStore.activeDatasetKey(scopedOwner);
+        String selected = SettingsStore.readOn(connection, key)
+                .filter(value -> !value.isBlank()).orElse(OBSERVED);
+        if (OBSERVED.equals(selected)) {
+            return new ActiveSelection(OBSERVED, false, null, null);
+        }
+        boolean owned = !Db.queryOn(connection,
+                "SELECT 1 x FROM dataset WHERE id=? AND user_id=? FOR SHARE",
+                row -> 1, selected, scopedOwner).isEmpty();
+        if (owned) return new ActiveSelection(selected, false, null, null);
+        SettingsStore.upsertOn(connection, key, OBSERVED, now);
+        return new ActiveSelection(OBSERVED, true, selected,
+                "ACTIVE_DATASET_UNAVAILABLE_OR_NOT_OWNED");
+    }
 
     /** Human name for a dataset id — the scenario banner must never show a raw ds_… id. */
     public String nameOf(String id) {
@@ -122,22 +172,75 @@ public final class DatasetService {
 
     /** Deletes a synthetic dataset the caller OWNS (bars cascade). 'observed' is untouchable. */
     public void delete(String id, String userId) {
-        if (OBSERVED.equals(id)) throw new IllegalArgumentException("The observed dataset cannot be deleted");
-        if (!ownedBy(id, userId)) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such dataset: " + id);
-        if (id.equals(activeId(userId))) setActive(OBSERVED, userId); // never leave this user pointed at a ghost
-        db.exec("DELETE FROM dataset WHERE id=?", id);
+        String scopedOwner = owner(userId);
+        invalidateActiveCache(scopedOwner);
+        db.tx(connection -> deleteOn(connection, id, scopedOwner, clock.instant()));
+        invalidateActiveCache(scopedOwner);
+    }
+
+    /** Deletes and, when necessary, repoints this owner in the caller's transaction. */
+    public DeleteMutation deleteOn(Connection connection, String id, String userId, Instant now)
+            throws SQLException {
+        if (OBSERVED.equals(id)) {
+            throw new IllegalArgumentException("The observed dataset cannot be deleted");
+        }
+        String scopedOwner = owner(userId);
+        OwnerScope.lock(connection, scopedOwner);
+        requireOwnedOn(connection, id, scopedOwner);
+        String key = SettingsStore.activeDatasetKey(scopedOwner);
+        String active = SettingsStore.readOn(connection, key)
+                .filter(value -> !value.isBlank()).orElse(OBSERVED);
+        boolean selectionChanged = id.equals(active);
+        if (selectionChanged) {
+            SettingsStore.upsertOn(connection, key, OBSERVED, now);
+            active = OBSERVED;
+        }
+        int deleted = Db.execOn(connection,
+                "DELETE FROM dataset WHERE id=? AND user_id=?", id, scopedOwner);
+        if (deleted != 1) {
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                    "no such dataset: " + id);
+        }
+        return new DeleteMutation(true, selectionChanged, active);
     }
 
     /** Retention is PER OWNER — creating your 26th run must never prune someone else's. */
     private void prune(String userId) {
-        // The globally active dataset is always retained: pruning the run the app is analyzing
-        // would silently flip everyone back to observed mid-thought.
-        db.exec("DELETE FROM dataset WHERE id <> 'observed' AND user_id=? AND id <> ? AND id NOT IN "
-              + "(SELECT id FROM dataset WHERE id <> 'observed' AND user_id=? "
-              + " ORDER BY created_at DESC LIMIT ?)", owner(userId), activeId(userId), owner(userId), KEEP_SYNTHETIC);
+        String scopedOwner = owner(userId);
+        invalidateActiveCache(scopedOwner);
+        db.tx(connection -> {
+            OwnerScope.lock(connection, scopedOwner);
+            String active = SettingsStore
+                    .readOn(connection, SettingsStore.activeDatasetKey(scopedOwner))
+                    .filter(value -> !value.isBlank()).orElse(OBSERVED);
+            Db.execOn(connection,
+                    "DELETE FROM dataset WHERE id <> 'observed' AND user_id=? AND id <> ? AND id NOT IN "
+                            + "(SELECT id FROM dataset WHERE id <> 'observed' AND user_id=? "
+                            + " ORDER BY created_at DESC LIMIT ?)",
+                    scopedOwner, active, scopedOwner, KEEP_SYNTHETIC);
+            return null;
+        });
+        invalidateActiveCache(scopedOwner);
+    }
+
+    private static void requireOwnedOn(Connection connection, String id, String owner)
+            throws SQLException {
+        if (OBSERVED.equals(id)) return;
+        boolean owned = !Db.queryOn(connection,
+                "SELECT 1 x FROM dataset WHERE id=? AND user_id=? FOR UPDATE",
+                row -> 1, id, owner).isEmpty();
+        if (!owned) {
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                    "no such dataset: " + id);
+        }
     }
 
     public Map<String, Object> describe(String userId) {
         return Map.of("active", activeId(userId), "datasets", list(userId));
+    }
+
+    /** Description with an already-validated active id supplied by WorldTransitionService. */
+    public Map<String, Object> describe(String userId, String activeId) {
+        return Map.of("active", activeId, "datasets", list(userId));
     }
 }

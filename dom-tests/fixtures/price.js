@@ -33,6 +33,7 @@ function packagePrice(overrides) {
     optionNetPremiumCents: 45000,
     stockCashFlowCents: 0,
     openingFeesCents: 300,
+    estimatedRoundTripFeesCents: 600,
     executableNetCents: 45000,
     restingLimitNetCents: null,
     valuationBasis: 'EXECUTABLE_BOOK',
@@ -55,6 +56,16 @@ function packagePrice(overrides) {
     throw new Error('a priced package must state both its option net premium and its stock cash flow');
   }
   if (o.openingFeesCents != null && o.openingFeesCents < 0) throw new Error('fees cannot be negative');
+  if (o.estimatedRoundTripFeesCents != null && o.estimatedRoundTripFeesCents < 0) {
+    throw new Error('round-trip fees cannot be negative');
+  }
+  if ((o.openingFeesCents == null) !== (o.estimatedRoundTripFeesCents == null)) {
+    throw new Error('an opening price must state both opening and estimated round-trip fees');
+  }
+  if (o.estimatedRoundTripFeesCents != null
+      && o.estimatedRoundTripFeesCents < o.openingFeesCents) {
+    throw new Error('round-trip fees cannot be less than opening fees');
+  }
 
   const gross = o.optionNetPremiumCents + o.stockCashFlowCents;
   const afterFee = o.openingFeesCents == null ? null : gross - o.openingFeesCents;
@@ -64,6 +75,7 @@ function packagePrice(overrides) {
     stockCashFlowCents: o.stockCashFlowCents,
     grossPackageNetCents: gross,
     openingFeesCents: o.openingFeesCents,
+    estimatedRoundTripFeesCents: o.estimatedRoundTripFeesCents,
     afterFeeNetCents: afterFee,
     executableNetCents: o.executableNetCents,
     restingLimitNetCents: o.restingLimitNetCents,
@@ -101,6 +113,7 @@ function unavailablePackagePrice(overrides) {
     stockCashFlowCents: null,
     grossPackageNetCents: null,
     openingFeesCents: null,
+    estimatedRoundTripFeesCents: null,
     afterFeeNetCents: null,
     executableNetCents: null,
     restingLimitNetCents: null,
@@ -126,6 +139,7 @@ function zeroPackagePrice(overrides) {
     optionNetPremiumCents: 0,
     stockCashFlowCents: 0,
     openingFeesCents: 0,
+    estimatedRoundTripFeesCents: 0,
     executableNetCents: 0,
     valuationBasis: 'EXECUTABLE_BOOK',
     source: 'FIXTURE_EVEN_MONEY_ROLL',

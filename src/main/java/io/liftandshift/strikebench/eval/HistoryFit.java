@@ -19,9 +19,12 @@ public final class HistoryFit {
 
     public static List<String> sentences(Candidate c, EvalContext ctx) {
         List<Double> closes = ctx.trailingCloses();
-        int dte = Math.max(1, ctx.daysToExpiry());
+        int dte = ctx.tradingSessionsToExpiry();
         long spotCents = ctx.underlyingCents();
-        if (closes.size() < MIN_CLOSES + dte || spotCents <= 0 || c.breakevens() == null
+        // Historical closes are one observation per trading session. A calendar-day index silently
+        // stretches every weekend/holiday horizon, while Math.max(1, 0DTE) invents a session that
+        // does not exist. A zero or unavailable session horizon has no honest terminal window.
+        if (dte <= 0 || closes.size() < MIN_CLOSES + dte || spotCents <= 0 || c.breakevens() == null
                 || c.breakevens().isEmpty()) {
             return List.of();
         }
@@ -66,8 +69,9 @@ public final class HistoryFit {
                             + "(percentile of delivered moves, either direction). History is not a forecast.",
                     neededPct, terminalMovesPct.size(), dte, 100.0 * reached / terminalMovesPct.size()));
         }
-        if (ctx.atmIv() != null && ctx.atmIv() > 0 && breakevens.size() >= 2) {
-            double expectedMovePct = ctx.atmIv() * Math.sqrt(dte / 365.0) * 100.0;
+        if (ctx.atmIv() != null && ctx.atmIv() > 0 && ctx.hasModelTime()
+                && breakevens.size() >= 2) {
+            double expectedMovePct = ctx.atmIv() * Math.sqrt(ctx.yearsToExpiry()) * 100.0;
             double lower = breakevens.stream().mapToDouble(Double::doubleValue).min().orElse(spot);
             double upper = breakevens.stream().mapToDouble(Double::doubleValue).max().orElse(spot);
             double halfWidthPct = (upper - lower) / 2.0 / spot * 100.0;

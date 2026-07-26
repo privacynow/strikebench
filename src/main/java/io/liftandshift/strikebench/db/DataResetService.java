@@ -29,7 +29,13 @@ public final class DataResetService {
                         "Market history and snapshots", "Generated datasets", "Background data jobs", "Active data selection"), false),
         RESEARCH(List.of("recommendation", "strategy_evaluation", "backtests", "research_note"), List.of(
                 "Saved recommendations", "Evaluations", "Backtests", "Research notes"), false),
-        PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts", "sim_session",
+        PAPER(List.of("trade_marks", "ledger", "positions", "live_orders", "audit", "trades", "accounts",
+                "sim_session WHERE id NOT IN "
+                        + "(SELECT world_id FROM plans WHERE world_id IS NOT NULL "
+                        + "UNION SELECT sim_session_id FROM plan_link WHERE sim_session_id IS NOT NULL "
+                        + "UNION SELECT sim_session_id FROM sim_replay_source "
+                        + "UNION SELECT sim_session_id FROM plan_management_action "
+                        + "WHERE sim_session_id IS NOT NULL)",
                 "settings WHERE k LIKE 'active_world:%'"), List.of(
                 "Practice trades and marks", "Share positions", "Practice orders", "Practice ledger and account",
                 "Simulation practice sessions"), true),

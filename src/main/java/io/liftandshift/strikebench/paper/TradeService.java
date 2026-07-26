@@ -147,6 +147,34 @@ public final class TradeService {
                               Double thetaCentsPerSharePerDay, Double vegaCentsPerSharePerPoint,
                               io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks) {}
 
+    /**
+     * Availability of the four independent current-market facts on a held package. Entry facts
+     * stay on TradeRecord; a missing current quote, executable close, POP input, or Greek input is
+     * named here and is never replaced by an entry value or numeric zero.
+     */
+    public record CurrentMarketAvailability(
+            boolean quoteAvailable, String quoteUnavailableReason,
+            boolean closeAvailable, String closeUnavailableReason,
+            boolean decisionPnlAvailable, String decisionPnlUnavailableReason,
+            boolean popAvailable, String popUnavailableReason,
+            boolean greeksAvailable, String greeksUnavailableReason) {
+        public CurrentMarketAvailability {
+            verifyAvailability("quote", quoteAvailable, quoteUnavailableReason);
+            verifyAvailability("close", closeAvailable, closeUnavailableReason);
+            verifyAvailability("position P/L", decisionPnlAvailable, decisionPnlUnavailableReason);
+            verifyAvailability("probability of profit", popAvailable, popUnavailableReason);
+            verifyAvailability("Greeks", greeksAvailable, greeksUnavailableReason);
+        }
+
+        private static void verifyAvailability(String fact, boolean available, String reason) {
+            boolean reasonPresent = reason != null && !reason.isBlank();
+            if (available == reasonPresent) {
+                throw new IllegalArgumentException("Current " + fact
+                        + " must carry exactly one of a value or an unavailability reason.");
+            }
+        }
+    }
+
     /** Dollar-delta exposure for a lane-aware before/after assessment. */
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
                                       boolean complete, String basis) {
@@ -189,7 +217,35 @@ public final class TradeService {
     public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
                            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
                            io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
-                           List<LegGreekRow> legGreeks) {}
+                           List<LegGreekRow> legGreeks,
+                           CurrentMarketAvailability availability) {
+        /** Historical rows predate component reasons; retain their facts without inventing them. */
+        public MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
+                        Long unrealizedCents, Long decisionUnrealizedCents, Double popNow,
+                        String freshness,
+                        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+                        List<LegGreekRow> legGreeks) {
+            this(tradeId, ts, underlyingCents, closeCostCents, unrealizedCents,
+                    decisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
+                    new CurrentMarketAvailability(
+                            underlyingCents != null,
+                            underlyingCents == null
+                                    ? "This stored mark has no current underlying quote." : null,
+                            closeCostCents != null,
+                            closeCostCents == null
+                                    ? "This stored mark has no executable close receipt." : null,
+                            decisionUnrealizedCents != null,
+                            decisionUnrealizedCents == null
+                                    ? "This stored mark has no complete current position P/L receipt."
+                                    : null,
+                            popNow != null,
+                            popNow == null
+                                    ? "This stored mark has no current probability receipt." : null,
+                            greeks != null,
+                            greeks == null
+                                    ? "This stored mark has no complete current Greeks receipt." : null));
+        }
+    }
 
     /** Worst and best executable-mark excursions recorded while a trade was open. */
     public record Excursion(Long adverseCents, Long favorableCents) {}
@@ -1760,39 +1816,6 @@ public final class TradeService {
                 .mapToLong(Long::longValue).max().orElse(0);
         out.put("concentrationPct", facts.totalMaxLossCents() > 0
                 ? Math.round(100.0 * worstSymbol / facts.totalMaxLossCents()) : 0);
-        // Audit §15.5 / §3.1: each trade's share of defined book risk, and its rank, are BOOK facts
-        // — they depend on every other open trade. There is exactly ONE owner of that rule,
-        // BookRiskService.shareRoster: it names the denominator, shares one rank between positions
-        // carrying identical risk (1, 2, 2, 4), and withholds share and rank WITH A REASON when
-        // there is no book total. Heat does not re-derive any of that; it projects the canonical
-        // roster onto the wire, so this endpoint and the Book receipt can never disagree.
-        BookRiskService.BookShareRoster roster =
-                BookRiskService.shareRoster(accountId, facts.trades(), facts.totalMaxLossCents());
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (BookRiskService.BookShareRow shareRow : roster.rows()) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("tradeId", shareRow.tradeId());
-            row.put("symbol", shareRow.symbol());
-            row.put("strategy", shareRow.strategy());
-            row.put("maxLossCents", shareRow.riskCents());
-            // Null, not zero: with no defined risk in the book there is no share to state.
-            row.put("riskSharePct", shareRow.sharePct());
-            row.put("riskRank", shareRow.rank());
-            row.put("riskRankOf", shareRow.rankOf());
-            row.put("denominatorCents", shareRow.denominatorCents());
-            row.put("denominatorBasis", shareRow.denominatorBasis());
-            row.put("shareUnavailableReason", shareRow.unavailableReason());
-            rows.add(row);
-        }
-        out.put("positions", List.copyOf(rows));
-        // Only positions that actually carry a rank are counted as ranked; an unavailable roster
-        // reports 0 ranked positions and says why, rather than implying an "of N" nobody can use.
-        out.put("rankedPositions", roster.available() ? roster.positions() : 0);
-        out.put("bookShareAvailable", roster.available());
-        out.put("bookShareUnavailableReason", roster.unavailableReason());
-        out.put("bookShareDenominatorCents", roster.denominatorCents());
-        out.put("bookShareDenominatorBasis", roster.denominatorBasis());
-        out.put("bookShareBasis", roster.basis());
         out.put("earlyAssignmentLiquidityCents", facts.theoreticalShortPutObligationCents());
         out.put("physicalAssignmentCashCents", facts.physicalAssignmentCashCents());
         out.put("assignmentReserveReleasedCents", facts.assignmentReserveReleasedCents());
@@ -1807,7 +1830,6 @@ public final class TradeService {
 
     private record PortfolioHeatFacts(int activeTrades, long totalMaxLossCents, long reservedCents,
                                       int shortVolTrades, Map<String, Long> bySymbolMaxLossCents,
-                                      List<TradeRecord> trades,
                                       long theoreticalShortPutObligationCents,
                                       long physicalAssignmentCashCents,
                                       long assignmentReserveReleasedCents,
@@ -1849,7 +1871,7 @@ public final class TradeService {
             }
         }
         return new PortfolioHeatFacts(active.size(), totalMaxLoss, acct.reservedCents(), shortVol,
-                Map.copyOf(bySymbol), List.copyOf(active), earlyAssignmentLiquidity, physicalAssignmentCash,
+                Map.copyOf(bySymbol), earlyAssignmentLiquidity, physicalAssignmentCash,
                 assignmentReserveReleased,
                 acct.buyingPowerCents() - physicalAssignmentCash + assignmentReserveReleased);
     }
@@ -1868,46 +1890,104 @@ public final class TradeService {
         String now = now();
         String world = worldOf(t.accountId());
         Long underlyingCents = marks.underlyingMark(t.symbol(), world).map(Money::toCents).orElse(null);
+        String quoteUnavailableReason = underlyingCents == null
+                ? "No current underlying quote is available for " + t.symbol()
+                    + " in this position's market lane."
+                : null;
 
         long closeValue = 0;
-        boolean complete = true;
-        Freshness worst = Freshness.REALTIME;
-        List<Double> ivs = new ArrayList<>();
-        double dDelta = 0, dGamma = 0, dTheta = 0, dVega = 0;
+        boolean closeComplete = true;
         boolean greeksComplete = true;
+        String closeUnavailableReason = null;
+        String greeksUnavailableReason = null;
+        Freshness worst = underlyingCents == null ? Freshness.MISSING : Freshness.REALTIME;
+        List<Double> ivs = new ArrayList<>();
+        int optionLegs = 0;
+        boolean ivComplete = true;
+        String ivUnavailableReason = null;
+        List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
         List<LegGreekRow> legGreeks = new ArrayList<>();
         long heldContextShares = heldShareContextShares(t);
         for (Leg leg : t.legs()) {
             var mark = marks.legMark(t.symbol(), leg, world).orElse(null);
-            if (mark == null) { complete = false; worst = Freshness.MISSING; break; }
+            if (!leg.isStock()) optionLegs++;
+            if (mark == null) {
+                closeComplete = false;
+                if (closeUnavailableReason == null) {
+                    closeUnavailableReason = "No current market mark is available for "
+                            + legDesc(leg) + ".";
+                }
+                worst = Freshness.MISSING;
+                if (leg.isStock()) {
+                    // A share's delta is structural even when its current price is missing.
+                    var exposure = new GreeksAggregator.LegExposure(true, closeSign(leg),
+                            leg.multiplier(), leg.ratio(), t.qty(), null, null, null, null);
+                    greekExposures.add(exposure);
+                    legGreeks.add(new LegGreekRow(legDesc(leg), null, null, null,
+                            null, null, null, null,
+                            GreeksAggregator.aggregate(List.of(exposure), 0)));
+                } else {
+                    greeksComplete = false;
+                    ivComplete = false;
+                    if (greeksUnavailableReason == null) {
+                        greeksUnavailableReason = "No current Greeks mark is available for "
+                                + legDesc(leg) + ".";
+                    }
+                    if (ivUnavailableReason == null) {
+                        ivUnavailableReason = "No current implied volatility is available for "
+                                + legDesc(leg) + ".";
+                    }
+                }
+                continue;
+            }
             worst = worse(worst, mark.freshness());
-            if (mark.iv() != null) ivs.add(mark.iv());
+            if (!leg.isStock()) {
+                if (mark.iv() != null && mark.iv() > 0) {
+                    ivs.add(mark.iv());
+                } else {
+                    ivComplete = false;
+                    if (ivUnavailableReason == null) {
+                        ivUnavailableReason = "No positive current implied volatility is available for "
+                                + legDesc(leg) + ".";
+                    }
+                }
+                if (mark.delta() == null || mark.gamma() == null
+                        || mark.theta() == null || mark.vega() == null) {
+                    greeksComplete = false;
+                    if (greeksUnavailableReason == null) {
+                        greeksUnavailableReason = "The current market mark for " + legDesc(leg)
+                                + " does not include a complete Delta/Gamma/Theta/Vega set.";
+                    }
+                }
+            }
             // Value the close at the EXECUTABLE side (longs sell the bid, shorts pay the ask) —
             // the same price an unwind would actually get, so "unrealized" never overstates.
             BigDecimal px = mark.executable(leg.action().opposite());
-            if (px == null) { complete = false; worst = Freshness.MISSING; break; }
-            closeValue += closeSign(leg) * Money.centsFromPrice(px, (long) leg.multiplier() * leg.ratio() * t.qty());
-
-            // Position greeks: sign x greek x exact deliverable x ratio x quantity.
-            double mult = closeSign(leg) * leg.multiplier() * (double) leg.ratio() * t.qty();
-            if (mark.delta() == null && !leg.isStock()) {
-                greeksComplete = false;
+            if (px == null) {
+                closeComplete = false;
+                worst = Freshness.MISSING;
+                if (closeUnavailableReason == null) {
+                    closeUnavailableReason = "No executable closing side is available for "
+                            + legDesc(leg) + ".";
+                }
             } else {
-                dDelta += (mark.delta() == null ? 0 : mark.delta()) * mult;
-                dGamma += (mark.gamma() == null ? 0 : mark.gamma()) * mult;
-                dTheta += (mark.theta() == null ? 0 : mark.theta()) * mult;
-                dVega += (mark.vega() == null ? 0 : mark.vega()) * mult;
+                closeValue += closeSign(leg) * Money.centsFromPrice(
+                        px, (long) leg.multiplier() * leg.ratio() * t.qty());
             }
+
+            var exposure = new GreeksAggregator.LegExposure(leg.isStock(), closeSign(leg),
+                    leg.multiplier(), leg.ratio(), t.qty(), mark.delta(), mark.gamma(),
+                    mark.theta(), mark.vega());
+            greekExposures.add(exposure);
             legGreeks.add(new LegGreekRow(legDesc(leg),
                     mark.bid() == null ? null : mark.bid().toPlainString(),
                     mark.ask() == null ? null : mark.ask().toPlainString(),
                     mark.iv(), mark.delta(), mark.gamma(),
                     mark.theta() == null ? null : round2(mark.theta() * 100.0),
                     mark.vega() == null ? null : round2(mark.vega() * 100.0),
-                    legGreeksView(mark, leg.isStock(), mult)));
+                    GreeksAggregator.aggregate(List.of(exposure), 0)));
         }
-        if (complete && heldContextShares > 0) {
-            dDelta += heldContextShares;
+        if (heldContextShares > 0) {
             legGreeks.add(new LegGreekRow(heldContextShares + " held shares", null, null, null,
                     1.0, 0.0, 0.0, 0.0,
                     new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
@@ -1917,32 +1997,60 @@ public final class TradeService {
         // greeks used to be skipped while the remaining legs were still published as the position's
         // delta/gamma/theta/vega — a fabricated exposure that read as complete. Same rule the idea
         // path already applies in packageGreeks. Units are canonical: theta/vega in CENTS.
-        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks = complete && greeksComplete
-                ? new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
-                        round2(dDelta), round4(dGamma), round2(dTheta * 100.0), round2(dVega * 100.0))
-                : null;
-        Long closeCost = complete ? closeValue : null;
+        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks = greeksComplete
+                ? GreeksAggregator.aggregate(greekExposures, heldContextShares) : null;
+        if (greeks == null && greeksUnavailableReason == null) {
+            greeksComplete = false;
+            greeksUnavailableReason = "This position has no complete current Greeks receipt.";
+        }
+        Long closeCost = closeComplete ? closeValue : null;
         // Opening fees already left cash and belong in today's P/L. The only omitted cost is the
         // FUTURE close fee, which the UI labels explicitly as not yet included.
-        Long unrealized = complete ? closeValue + t.entryNetPremiumCents() - t.feesOpenCents() : null;
+        Long unrealized = closeComplete
+                ? closeValue + t.entryNetPremiumCents() - t.feesOpenCents() : null;
         Long decisionUnrealized = unrealized;
-        if (decisionUnrealized != null && underlyingCents != null && heldContextShares > 0
-                && t.entryUnderlyingCents() > 0) {
-            decisionUnrealized += (underlyingCents - t.entryUnderlyingCents()) * heldContextShares;
+        String decisionPnlUnavailableReason = closeUnavailableReason;
+        if (heldContextShares > 0) {
+            if (decisionUnrealized != null && underlyingCents != null
+                    && t.entryUnderlyingCents() > 0) {
+                decisionUnrealized +=
+                        (underlyingCents - t.entryUnderlyingCents()) * heldContextShares;
+            } else {
+                decisionUnrealized = null;
+                if (decisionPnlUnavailableReason == null) {
+                    decisionPnlUnavailableReason = underlyingCents == null
+                            ? "Current position P/L includes held shares, but no current underlying "
+                                + "quote is available."
+                            : "Current position P/L includes held shares, but their recorded entry "
+                                + "anchor is unavailable.";
+                }
+            }
         }
         boolean mixedExp = t.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         Double popNow = null;
-        if (complete && underlyingCents != null && !mixedExp) {
+        String popUnavailableReason = null;
+        if (optionLegs == 0) {
+            popUnavailableReason = "A share-only position has no option probability-of-profit receipt.";
+        } else if (underlyingCents == null) {
+            popUnavailableReason = quoteUnavailableReason;
+        } else if (mixedExp) {
+            popUnavailableReason = "A mixed-expiration package requires supplied-path valuation; "
+                    + "no single-expiration probability was substituted.";
+        } else if (!ivComplete) {
+            popUnavailableReason = ivUnavailableReason;
+        } else if (heldContextShares > 0 && t.entryUnderlyingCents() <= 0) {
+            popUnavailableReason = "The held-share payoff has no recorded entry-price anchor, so "
+                    + "current probability of profit is unavailable.";
+        } else {
             List<Leg> curveLegs = new ArrayList<>(t.legs());
             long sharesPerUnit = t.qty() > 0 ? heldContextShares / t.qty() : 0;
             if (sharesPerUnit > 0) {
                 // Held-share trades were risk-shaped from the ENTRY spot. Resetting the stock
                 // basis to today's mark erases the move already earned/lost and makes POP jump
                 // even when the package itself did not change.
-                long entrySpot = t.entryUnderlyingCents() > 0 ? t.entryUnderlyingCents() : underlyingCents;
                 curveLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(sharesPerUnit),
-                        BigDecimal.valueOf(entrySpot, 2)));
+                        BigDecimal.valueOf(t.entryUnderlyingCents(), 2)));
             }
             // The package fill is authoritative. A net limit/fill need not equal the sum of the
             // executable leg marks stored in legs_json, and held-share stock context is not an
@@ -1951,39 +2059,46 @@ public final class TradeService {
             long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
             long entryAdjustment = t.entryNetPremiumCents() - tradedLegEntry;
             PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty(), entryAdjustment);
-            double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
+            double ivAvg = ivs.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
             io.liftandshift.strikebench.market.OptionTime.Measure mtte =
-                    io.liftandshift.strikebench.market.OptionTime.nearest(t.legs(), todayFor(world));
+                    io.liftandshift.strikebench.market.OptionTime.nearest(t.legs(), nowFor(world));
             List<BigDecimal> shortStrikes = t.legs().stream()
                     .filter(l -> !l.isStock() && l.action() == LegAction.SELL)
                     .map(Leg::strike).filter(java.util.Objects::nonNull).distinct().toList();
-            popNow = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                    curve, underlyingCents / 100.0, ivAvg, mtte.years(),
-                    marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world), shortStrikes)
-                    .probabilityMap().pAnyProfit();
+            if (mtte.hasModelTime()) {
+                try {
+                    popNow = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                            curve, underlyingCents / 100.0, ivAvg, mtte.years(),
+                            marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world),
+                            shortStrikes).probabilityMap().pAnyProfit();
+                } catch (RuntimeException e) {
+                    popUnavailableReason = e.getMessage() == null || e.getMessage().isBlank()
+                            ? "The current probability model could not value this exact package."
+                            : e.getMessage();
+                }
+            } else {
+                popUnavailableReason = "This package has no live option model clock ("
+                        + mtte.state() + "), so current probability of profit is unavailable.";
+            }
         }
-        return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized, decisionUnrealized, popNow, worst.name(),
-                greeks, complete ? legGreeks : List.of());
+        if (popNow == null && popUnavailableReason == null) {
+            popUnavailableReason =
+                    "The current probability model did not return a value for this exact package.";
+        }
+        CurrentMarketAvailability availability = new CurrentMarketAvailability(
+                underlyingCents != null, quoteUnavailableReason,
+                closeCost != null, closeCost == null ? closeUnavailableReason : null,
+                decisionUnrealized != null,
+                decisionUnrealized == null ? decisionPnlUnavailableReason : null,
+                popNow != null, popNow == null ? popUnavailableReason : null,
+                greeks != null, greeks == null ? greeksUnavailableReason : null);
+        return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized,
+                decisionUnrealized, popNow, worst.name(), greeks,
+                List.copyOf(legGreeks), availability);
     }
 
     private static Double round2(double v) { return Math.round(v * 100.0) / 100.0; }
     private static Double round4(double v) { return Math.round(v * 10000.0) / 10000.0; }
-
-    /**
-     * One leg's greeks in the canonical view: the SAME four names and units the position publishes,
-     * already scaled by sign x deliverable x ratio x quantity. Null — never a zeroed strip — when an
-     * option leg's mark carried no delta, which is exactly the leg that made the position figure
-     * unavailable (§3.2).
-     */
-    private static io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks legGreeksView(
-            MarksSource.LegMark mark, boolean stock, double mult) {
-        if (mark.delta() == null && !stock) return null;
-        return new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
-                round2((mark.delta() == null ? 0 : mark.delta()) * mult),
-                round4((mark.gamma() == null ? 0 : mark.gamma()) * mult),
-                round2((mark.theta() == null ? 0 : mark.theta()) * mult * 100.0),
-                round2((mark.vega() == null ? 0 : mark.vega()) * mult * 100.0));
-    }
 
     /** Liquidation view of all ACTIVE trades: what unwinding everything now would pay
      *  (executable sides, BEFORE close fees). Sums computeMark per trade; incomplete marks
@@ -2653,7 +2768,7 @@ public final class TradeService {
         LocalDate laneToday = java.time.LocalDate.ofInstant(nowInstant,
                 io.liftandshift.strikebench.market.MarketHours.EASTERN);
         io.liftandshift.strikebench.market.OptionTime.Measure tte =
-                io.liftandshift.strikebench.market.OptionTime.nearest(filled, laneToday);
+                io.liftandshift.strikebench.market.OptionTime.nearest(filled, nowInstant);
         int rateDays = (int) Math.max(1, tte.calendarDays());
         double rfr = marks.riskFreeRate(rateDays, world);
         io.liftandshift.strikebench.model.DataEvidence rateEvidence =
@@ -2722,7 +2837,7 @@ public final class TradeService {
         List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
 
         double spot = underlying.doubleValue();
-        double t = tte.years();
+        Double t = tte.years();
         if (ivs.isEmpty()) {
             warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
         }
@@ -2763,7 +2878,9 @@ public final class TradeService {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
             Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
                     io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
-                    snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
+                    snapshotLegs, req.qty(),
+                    shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
+                    entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
                     feeSchedule.roundTripCents(), null, null, null, worst,
                     marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
@@ -2781,10 +2898,11 @@ public final class TradeService {
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
         long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
 
-        var riskNeutral = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                riskCurve, spot, ivAvg, t, rfr, shortStrikes);
-        Double pop = riskNeutral.probabilityMap().pAnyProfit();
-        Long ev = riskNeutral.expectedValueCents();
+        var riskNeutral = t == null ? null
+                : io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                        riskCurve, spot, ivAvg, t, rfr, shortStrikes);
+        Double pop = riskNeutral == null ? null : riskNeutral.probabilityMap().pAnyProfit();
+        Long ev = riskNeutral == null ? null : riskNeutral.expectedValueCents();
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());
@@ -2807,7 +2925,9 @@ public final class TradeService {
 
         Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
                 io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
-                snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
+                snapshotLegs, req.qty(),
+                shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
+                entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
                 feeSchedule.roundTripCents(), maxLoss, maxProfit, ev, worst,
                 marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
@@ -2915,39 +3035,47 @@ public final class TradeService {
         return session == null ? null : (session.p84() - session.p16()) / 2;
     }
 
-    private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg, double t,
+    private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg, Double t,
                                                io.liftandshift.strikebench.market.OptionTime.Measure tte,
                                                LocalDate nearestExpiry,
                                                List<BigDecimal> shortStrikes,
                                                List<Map<String, Object>> snaps, int qty,
+                                               long heldShareContextShares,
                                                long entryNet, long optionEntryNet,
                                                long executableNet, Long packageMid,
                                                Long proposedNet, long roundTripFees, Long maxLoss, Long maxProfit,
                                                Long ev, Freshness freshness, Long sourceAsOf, double rfr,
                                                io.liftandshift.strikebench.model.DataEvidence rateEvidence) {
         Map<String, Object> out = new LinkedHashMap<>();
-        var riskNeutral = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
-                .analyze(curve, spot, ivAvg, t, rfr, shortStrikes);
-        var map = riskNeutral.probabilityMap();
+        var riskNeutral = t == null ? null
+                : io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
+                        .analyze(curve, spot, ivAvg, t, rfr, shortStrikes);
+        var map = riskNeutral == null ? null : riskNeutral.probabilityMap();
         Map<String, Object> prob = new LinkedHashMap<>();
-        prob.put("pAnyProfit", map.pAnyProfit());
-        prob.put("pMaxProfit", map.pMaxProfit());
-        prob.put("pMaxLoss", map.pMaxLoss());
-        prob.put("pPartial", map.pPartial());
-        prob.put("cvar95Cents", map.cvar95Cents());
-        prob.put("stressLossCents", map.stressLossCents());
-        prob.put("touches", map.touches().stream().map(x -> Map.of(
-                "strike", x.strike().stripTrailingZeros().toPlainString(),
-                "probability", x.probability())).toList());
-        prob.put("basis", map.basis());
+        if (map == null) {
+            prob.put("unavailableReason", "This package has no live option model clock ("
+                    + tte.state() + "); no probability or expected value was inferred.");
+        } else {
+            prob.put("pAnyProfit", map.pAnyProfit());
+            prob.put("pMaxProfit", map.pMaxProfit());
+            prob.put("pMaxLoss", map.pMaxLoss());
+            prob.put("pPartial", map.pPartial());
+            prob.put("cvar95Cents", map.cvar95Cents());
+            prob.put("stressLossCents", map.stressLossCents());
+            prob.put("touches", map.touches().stream().map(x -> Map.of(
+                    "strike", x.strike().stripTrailingZeros().toPlainString(),
+                    "probability", x.probability())).toList());
+            prob.put("basis", map.basis());
+        }
         prob.put("timeBasis", tte.basis());
         out.put("probabilityMap", prob);
 
         // EV sensitivity: the same integral at ±20% of the vol input — one falsely precise number
         // never travels alone.
-        List<Map<String, Object>> sens = riskNeutral.sensitivity().stream()
-                .map(x -> Map.<String, Object>of("ivScale", x.ivScale(), "evCents", x.evCents()))
-                .toList();
+        List<Map<String, Object>> sens = riskNeutral == null ? List.of()
+                : riskNeutral.sensitivity().stream()
+                    .map(x -> Map.<String, Object>of("ivScale", x.ivScale(), "evCents", x.evCents()))
+                    .toList();
         out.put("evSensitivity", sens);
 
         // Execution QUALITY, not price. The package net, the executable net, the resting limit, the
@@ -2980,7 +3108,10 @@ public final class TradeService {
         out.put("time", tte);
         // B6: package greeks in the ONE canonical unit (deltaShares, gammaSharesPerDollar,
         // thetaCentsPerDay, vegaCentsPerPoint), aggregated from the same per-leg marks already priced.
-        var packageGreeks = packageGreeks(snaps, qty);
+        double heldDeltaShares = snaps.stream().anyMatch(snap ->
+                "STOCK".equalsIgnoreCase(String.valueOf(snap.get("type"))))
+                ? 0 : heldShareContextShares;
+        var packageGreeks = packageGreeks(snaps, qty, heldDeltaShares);
         if (packageGreeks != null) out.put("greeks", packageGreeks);
         // The ±1σ expected move to the nearest expiry, CONSUMED from the one owner of that fact:
         // SimulationEngine.MarketImpliedRange, the same computation the /expected-move endpoint and
@@ -2993,12 +3124,17 @@ public final class TradeService {
         // 'shorts inside the expected move' is VISIBLE, not prose.
         Map<String, Object> em = new LinkedHashMap<>();
         int emCalendarDays = (int) Math.max(1, tte.calendarDays());
-        var emRange = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                spot, ivAvg, tte.sessions(), nearestExpiry == null ? null : nearestExpiry.toString(),
-                emCalendarDays, rfr);
+        var emRange = tte.hasModelTime() && nearestExpiry != null
+                ? io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                        spot, ivAvg, tte.sessions(), nearestExpiry.toString(),
+                        emCalendarDays, rfr)
+                : null;
         if (emRange == null) {
-            em.put("unavailableReason", "This package has no positive implied volatility and spot to"
-                    + " scale a market-implied range from, so no expected move is stated.");
+            em.put("unavailableReason", tte.hasModelTime()
+                    ? "This package has no positive implied volatility and spot to scale a"
+                        + " market-implied range from, so no expected move is stated."
+                    : "This package has no live option model clock (" + tte.state()
+                        + "), so no expected move is stated.");
         } else {
             em.put("lowCents", Math.round(emRange.p16() * 100));
             em.put("highCents", Math.round(emRange.p84() * 100));
@@ -3010,7 +3146,7 @@ public final class TradeService {
         // R3: three clocks, separately — the data's own stamp, and when WE judged it. (fetchedAt
         // collapses into sourceAsOf for feeds without a distinct source stamp.)
         out.put("sourceAsOfEpochMs", sourceAsOf);
-        out.put("evaluatedAtEpochMs", clock.millis());
+        out.put("evaluatedAtEpochMs", tte.asOf() == null ? null : tte.asOf().toEpochMilli());
         out.put("freshness", freshness.name());
         out.put("rate", Map.of(
                 "annual", rfr,
@@ -3020,17 +3156,21 @@ public final class TradeService {
 
         // The assembled verdict: worst-triggered tier wins; the reason names the single biggest problem.
         String verdict = "favorable"; String reason = "Model odds, payoff and execution costs look reasonable together.";
-        double pAny = map.pAnyProfit();
+        double pAny = map == null ? Double.NaN : map.pAnyProfit();
         Object concessionPct = exec.get("concessionPctOfMid");
         boolean expensive = concessionPct instanceof Double d && Math.abs(d) > 0.10;
         // EV is a terminal payoff expectation. Judge it against the same estimated round-trip
         // commissions used by EconomicAssessment and the ticket acknowledgment, not merely the
         // opening commission. Otherwise Builder, Ideas and Decide show three different numbers
         // for the same package.
-        long evAfterFees = (ev == null ? 0 : ev) - roundTripFees;
+        Long evAfterFees = ev == null ? null : Math.subtractExact(ev, roundTripFees);
         if (curve.maxLossUnbounded()) {
             verdict = "unfavorable"; reason = "Risk is UNDEFINED — the stress loss below is a scenario, not a cap.";
-        } else if (ev != null && evAfterFees < 0 && pAny < 0.45) {
+        } else if (evAfterFees == null || map == null) {
+            verdict = "mixed";
+            reason = "Expected value is unavailable from the captured package evidence; no $0"
+                    + " expectation was substituted.";
+        } else if (evAfterFees < 0 && pAny < 0.45) {
             verdict = "unfavorable";
             reason = "Negative expected value (" + Money.fmt(evAfterFees) + " after fees) with the odds against it ("
                     + Math.round(pAny * 100) + "% chance of any profit, " + Math.round(map.pMaxLoss() * 100)
@@ -3046,7 +3186,7 @@ public final class TradeService {
             verdict = "mixed";
             reason = "Only " + tte.sessions() + " trading session" + (tte.sessions() == 1 ? "" : "s")
                     + " remain — gamma and pin risk dominate; the plan matters more than the entry.";
-        } else if (ev != null && evAfterFees < 0) {
+        } else if (evAfterFees < 0) {
             verdict = "mixed";
             reason = "Expected value is slightly negative after fees (" + Money.fmt(evAfterFees) + ") at the market's own volatility.";
         }
@@ -3062,38 +3202,39 @@ public final class TradeService {
      * position it becomes report greeks identically. Never a re-pricing; null when any option leg
      * lacks a mark, so the strip stays honestly absent rather than understated.
      */
-    private static io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks packageGreeks(
-            List<Map<String, Object>> snaps, int qty) {
-        if (snaps == null || snaps.isEmpty()) return null;
-        double dDelta = 0, dGamma = 0, dTheta = 0, dVega = 0;
-        boolean any = false;
+    static io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks packageGreeks(
+            List<Map<String, Object>> snaps, int qty, double heldDeltaShares) {
+        if (snaps == null || snaps.isEmpty() || qty < 1) return null;
+        List<GreeksAggregator.LegExposure> exposures = new ArrayList<>();
         for (Map<String, Object> snap : snaps) {
             String type = String.valueOf(snap.get("type"));
-            if ("STOCK".equalsIgnoreCase(type)) continue; // stock delta rides the held-share context, not the option strip
-            Double delta = asDouble(snap.get("delta"));
-            if (delta == null) return null; // an option leg without a mark makes the package greek incomplete
-            int sign = "SELL".equalsIgnoreCase(String.valueOf(snap.get("action"))) ? -1 : 1;
-            double mult = sign * asInt(snap.get("multiplier"), 100) * (double) asInt(snap.get("ratio"), 1) * qty;
-            dDelta += delta * mult;
-            Double gamma = asDouble(snap.get("gamma"));
-            Double theta = asDouble(snap.get("theta"));
-            Double vega = asDouble(snap.get("vega"));
-            dGamma += (gamma == null ? 0 : gamma) * mult;
-            dTheta += (theta == null ? 0 : theta) * mult;
-            dVega += (vega == null ? 0 : vega) * mult;
-            any = true;
+            String action = String.valueOf(snap.get("action"));
+            if (!"BUY".equalsIgnoreCase(action) && !"SELL".equalsIgnoreCase(action)) return null;
+            int sign = "SELL".equalsIgnoreCase(action) ? -1 : 1;
+            boolean stock = "STOCK".equalsIgnoreCase(type);
+            Integer multiplier = requiredPositiveInt(snap.get("multiplier"));
+            Integer ratio = requiredPositiveInt(snap.get("ratio"));
+            if (multiplier == null || ratio == null) return null;
+            exposures.add(new GreeksAggregator.LegExposure(stock, sign,
+                    multiplier, ratio, qty,
+                    asDouble(snap.get("delta")), asDouble(snap.get("gamma")),
+                    asDouble(snap.get("theta")), asDouble(snap.get("vega"))));
         }
-        if (!any) return null;
-        return new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
-                round2(dDelta), round4(dGamma), round2(dTheta * 100.0), round2(dVega * 100.0));
+        return GreeksAggregator.aggregate(exposures, heldDeltaShares);
     }
 
     private static Double asDouble(Object v) {
         return v instanceof Number n ? n.doubleValue() : null;
     }
 
-    private static int asInt(Object v, int fallback) {
-        return v instanceof Number n ? n.intValue() : fallback;
+    private static Integer requiredPositiveInt(Object value) {
+        if (!(value instanceof Number number)) return null;
+        double exact = number.doubleValue();
+        if (!Double.isFinite(exact) || exact < 1 || exact > Integer.MAX_VALUE
+                || exact != Math.rint(exact)) {
+            return null;
+        }
+        return (int) exact;
     }
 
     // ---- Shared helpers ----
@@ -3769,10 +3910,6 @@ public final class TradeService {
 
     private LocalDate todayFor(String worldId) {
         return LocalDate.ofInstant(nowFor(worldId), io.liftandshift.strikebench.market.MarketHours.EASTERN);
-    }
-
-    private double yearsToNearestExpiry(List<Leg> legs) {
-        return io.liftandshift.strikebench.market.OptionTime.nearest(legs, LocalDate.now(clock)).years();
     }
 
     private TradeRecord requireStatusForUpdate(Connection c, String tradeId, String expected) throws SQLException {

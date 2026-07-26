@@ -272,13 +272,17 @@ public final class ApiServer {
         server.pathEnsembles = new io.liftandshift.strikebench.sim.PathEnsembleService(market, clock);
         server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(
                 market, datasetSvc, db, clock, server.pathEnsembles, marketDataMaintenance);
-        server.worldTransitions = new WorldTransitionService(cfg, clock, db, datasetSvc, market,
-                server.simSessions, server.events,
-                (world, owner) -> server.universeViews.describe(worldParam(world), owner),
-                server.startedAt);
         // Workspace continuity + the event bus: services announce, /api/events streams to the browser.
         server.workspaceSvc = new io.liftandshift.strikebench.db.WorkspaceService(db, clock);
         server.workspaceSvc.setEvents(server.events);
+        server.worldTransitions = new WorldTransitionService(cfg, clock, db, datasetSvc, market,
+                server.simSessions, server.events, server.workspaceSvc,
+                (world, owner) -> server.universeViews.describe(worldParam(world), owner),
+                (world, owner) -> new io.liftandshift.strikebench.db.WorkspaceContext.ActiveMarket(
+                        world,
+                        io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly()).name(),
+                        server.accountForWorld(world, owner).id()),
+                server.startedAt);
         server.planSvc = new io.liftandshift.strikebench.plan.PlanService(db, clock);
         server.planSvc.setEvents(server.events);
         server.planEvidence = new io.liftandshift.strikebench.plan.PlanEvidenceService(db,
@@ -397,14 +401,15 @@ public final class ApiServer {
                 evaluations, this::activeWorld, this::analysisCtx);
         dataJobs.setDataChangedHook(sparklineController::invalidate);
         coreController = new CoreController(cfg, clock, market, marketEngine, universe,
-                universeViews, datasets, workspaceSvc, accounts, auth, cboe, sparklineController,
+                universeViews, datasets, workspaceSvc, worldTransitions, accounts, auth, cboe,
+                sparklineController,
                 simSessions, events, this::ownerId, this::activeWorld, this::cachedActiveWorldFor,
                 this::currentAccount, this::requireAdmin, () -> !jarChangedHint().isEmpty(), startedAt);
         DataController dataController = new DataController(cfg, clock, db, market, eventCalendar, marketEngine,
                 universe, dataJobs, dataCoverage, dataReset, marketDataMaintenance,
                 dataConnectors, dataSyncState,
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
-                this::activeWorld, this::isAdmin, this::requireAdmin,
+                this::isAdmin, this::requireAdmin,
                 sparklineController::invalidate, outcomeController::generateDataset);
         ResearchController researchController = new ResearchController(cfg, db, clock, market, eventCalendar,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
@@ -713,10 +718,14 @@ public final class ApiServer {
      * never visible from a sim session and vice versa, so neither can pollute the other.
      */
     private Account currentAccount(Context ctx) {
-        String w = activeWorld(ctx);
-        if ("demo".equals(w)) return accounts.getOrCreateDemoForUser(auth.currentUserId(ctx));
-        if (!"observed".equals(w)) return accounts.getOrCreateForWorld(w, "Simulation account");
-        return accounts.getOrCreateDefaultForUser(auth.currentUserId(ctx));
+        return accountForWorld(activeWorld(ctx), ownerId(ctx));
+    }
+
+    /** The existing account owner, resolved for an explicit target world before it is committed. */
+    private Account accountForWorld(String world, String owner) {
+        if ("demo".equals(world)) return accounts.getOrCreateDemoForUser(owner);
+        if (!"observed".equals(world)) return accounts.getOrCreateForWorld(world, "Simulation account");
+        return accounts.getOrCreateDefaultForUser(owner);
     }
 
     /** The canonical persistence owner id for the current user. */
@@ -752,7 +761,12 @@ public final class ApiServer {
 
 
     private io.liftandshift.strikebench.db.AnalysisContext analysisCtx(Context ctx) {
-        return resolveAnalysisContext(datasets, ownerId(ctx));
+        String owner = ownerId(ctx);
+        // WorldTransitionService is the one durable identity reader. In particular, it repairs a
+        // dangling/foreign dataset selector and reconciles the workspace in the same owner-scoped
+        // commit before any engine receives the analysis context.
+        return new io.liftandshift.strikebench.db.AnalysisContext(
+                owner, worldTransitions.activeMarket(owner).datasetId());
     }
 
     static io.liftandshift.strikebench.db.AnalysisContext resolveAnalysisContext(

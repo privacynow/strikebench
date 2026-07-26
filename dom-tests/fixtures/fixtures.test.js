@@ -68,12 +68,14 @@ function assertAbsent(payload, key, why) {
 test('PackagePriceReceipt fixtures carry every declared component, nulls included', () => {
   const declared = assertShape(golden.goldenPrice(),
     'paper/PackagePriceReceipt.java', 'PackagePriceReceipt', { exact: true });
-  assert.equal(declared.length, 16, 'the §7.2 receipt is fourteen names plus feeSide and reason');
+  assert.equal(declared.length, 17,
+    'the package receipt includes the captured round-trip fee beside feeSide and reason');
   // The unpriced receipt is the state §3.2 exists for: same shape, every amount an explicit null.
   const unavailable = price.unavailablePackagePrice({ reason: 'no two-sided book' });
   assertShape(unavailable, 'paper/PackagePriceReceipt.java', 'PackagePriceReceipt', { exact: true });
   for (const key of ['optionNetPremiumCents', 'stockCashFlowCents', 'grossPackageNetCents',
-    'openingFeesCents', 'afterFeeNetCents', 'executableNetCents']) {
+    'openingFeesCents', 'estimatedRoundTripFeesCents', 'afterFeeNetCents',
+    'executableNetCents']) {
     assert.equal(unavailable[key], null, `${key} must be an explicit null, never a substituted 0`);
   }
   assert.equal(unavailable.valuationBasis, 'UNAVAILABLE');
@@ -328,10 +330,18 @@ test('portfolio documents match their wire contracts', () => {
     assertShape(row.greeks, 'sim/ScenarioCanvasValuator.java', 'Greeks'));
   documents.sharePositions.forEach(row =>
     assertShape(row, 'paper/PositionsService.java', 'PositionView'));
-  // Portfolio heat is assembled as a Map, so the method body is its contract.
+  // The HTTP document is the raw TradeService heat prefix plus PortfolioController's canonical
+  // BookRiskService roster and temporary compatibility projection. The conditional selectedBook
+  // key is absent when no selectedTradeIds query was supplied.
   const heatKeys = mapPutKeys('paper/TradeService.java', 'portfolioHeat', 'out');
-  assert.deepEqual(Object.keys(documents.heat), heatKeys,
-    'the heat fixture must write the same keys, in the same order, as TradeService.portfolioHeat');
+  const edgeKeys = mapPutKeys('api/PortfolioController.java', 'portfolioHeat', 'out')
+    .filter(key => key !== 'selectedBook');
+  assert.deepEqual(Object.keys(documents.heat), heatKeys.concat(edgeKeys),
+    'the heat fixture must match the HTTP composition without recreating share/rank math');
+  assertShape(documents.heat.shareRoster,
+    'paper/BookRiskService.java', 'BookShareRoster');
+  documents.heat.shareRoster.rows.forEach(row =>
+    assertShape(row, 'paper/BookRiskService.java', 'BookShareRow'));
 });
 
 test('the plan portfolio envelope matches PlanDecisionController.plansPortfolio', () => {

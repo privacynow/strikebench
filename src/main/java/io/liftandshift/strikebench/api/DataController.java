@@ -71,7 +71,6 @@ final class DataController {
     private final WorldTransitionService worldTransitions;
     private final AuditLog audit;
     private final Function<Context, String> ownerId;
-    private final Function<Context, String> activeWorld;
     private final Predicate<Context> isAdmin;
     private final Consumer<Context> requireAdmin;
     private final Runnable invalidateHistoricalViews;
@@ -87,7 +86,6 @@ final class DataController {
                    CboeProvider cboe, SimulationSessions simSessions,
                    WorldTransitionService worldTransitions, AuditLog audit,
                    Function<Context, String> ownerId,
-                   Function<Context, String> activeWorld,
                    Predicate<Context> isAdmin,
                    Consumer<Context> requireAdmin,
                    Runnable invalidateHistoricalViews,
@@ -111,7 +109,6 @@ final class DataController {
         this.worldTransitions = worldTransitions;
         this.audit = audit;
         this.ownerId = ownerId;
-        this.activeWorld = activeWorld;
         this.isAdmin = isAdmin;
         this.requireAdmin = requireAdmin;
         this.invalidateHistoricalViews = invalidateHistoricalViews;
@@ -124,7 +121,11 @@ final class DataController {
                 this::syncStatus, this::planSync, this::updateSyncSchedule,
                 this::importUnderlying, this::importEvent, this::listJobs, this::getJob,
                 this::startJob, this::cancelJob, this::retryJob, this::reset,
-                ctx -> ctx.json(datasets.describe(ownerId.apply(ctx))), this::activateDataset,
+                ctx -> {
+                    String owner = ownerId.apply(ctx);
+                    ctx.json(datasets.describe(
+                            owner, worldTransitions.activeMarket(owner).datasetId()));
+                }, this::activateDataset,
                 this::deleteDataset, generateDataset));
     }
 
@@ -138,7 +139,7 @@ final class DataController {
         try { jobs = dataJobs.recent(ownerId.apply(ctx), isAdmin.test(ctx), 8); }
         catch (Exception e) { jobs = List.of(); }
         ctx.json(new ApiResponses.DataOverview<>(engineStatus, coverage, jobs, cfg.fixturesOnly(),
-                MarketLane.of(activeWorld.apply(ctx), cfg.fixturesOnly()).name(),
+                worldTransitions.activeMarket(ownerId.apply(ctx)).lane(),
                 MarketHours.isRegularSession(clock.instant()), DataJobService.KINDS,
                 isAdmin.test(ctx)));
     }
@@ -344,21 +345,13 @@ final class DataController {
         ActiveDatasetRequest body = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, ActiveDatasetRequest.class));
         String owner = ownerId.apply(ctx);
-        String activeMarket = activeWorld.apply(ctx);
-        if (!DatasetService.OBSERVED.equals(body.id())
-                && io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(activeMarket)) {
-            throw new IllegalStateException("You are inside a simulated market session — return to the "
-                    + "baseline market before activating a scenario dataset (they are separate worlds).");
-        }
-        marketDataMaintenance.write(() -> datasets.setActive(body.id(), owner));
-        String nowActive = datasets.activeId(owner);
-        ctx.json(new ApiResponses.DatasetActivation(true, nowActive,
-                !DatasetService.OBSERVED.equals(nowActive)));
+        ctx.json(marketDataMaintenance.write(
+                () -> worldTransitions.activateDataset(body.id(), owner)));
     }
 
     private void deleteDataset(Context ctx) {
-        marketDataMaintenance.write(() -> datasets.delete(ctx.pathParam("id"), ownerId.apply(ctx)));
-        ctx.json(new ApiResponses.Ok(true));
+        ctx.json(marketDataMaintenance.write(() -> worldTransitions.deleteDataset(
+                ctx.pathParam("id"), ownerId.apply(ctx))));
     }
 
     private void reset(Context ctx) {
@@ -371,15 +364,29 @@ final class DataController {
             return;
         }
         DataResetService.Tier tier = DataResetService.parseTier(body.tier());
+        List<String> affectedOwners =
+                tier == DataResetService.Tier.MARKET_DATA
+                        || tier == DataResetService.Tier.PAPER
+                        || tier == DataResetService.Tier.EVERYTHING
+                        ? worldTransitions.affectedOwners(ownerId.apply(ctx)) : List.of();
         var result = dataReset.reset(tier);
+        List<String> identityWarnings = List.of();
         if (tier == DataResetService.Tier.PAPER || tier == DataResetService.Tier.EVERYTHING) {
             simSessions.clearResident();
-            worldTransitions.resetAfterDataReset(ownerId.apply(ctx));
+            identityWarnings = worldTransitions.resetAfterDataReset(affectedOwners);
+        } else if (tier == DataResetService.Tier.MARKET_DATA) {
+            identityWarnings = worldTransitions.resetDatasetsAfterDataReset(affectedOwners);
         } else {
             datasets.invalidateActiveCache();
             market.invalidateAll();
         }
         invalidateHistoricalViews.run();
+        if (!identityWarnings.isEmpty()) {
+            List<String> warnings = new ArrayList<>(result.warnings());
+            warnings.addAll(identityWarnings);
+            result = new DataResetService.ResetResult(result.tier(), result.areasCleared(),
+                    result.reseededAccount(), "DEGRADED", warnings);
+        }
         try {
             audit.log(null, null, "DATA_RESET", "WARN",
                     Map.of("tier", result.tier(), "areas", result.areasCleared(),

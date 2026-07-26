@@ -1,10 +1,12 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.util.EventBus;
+import io.liftandshift.strikebench.market.MarketLane;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
@@ -66,6 +68,12 @@ public final class WorkspaceService {
         }
     }
 
+    /**
+     * A workspace reconciliation performed inside a caller-owned transaction. The caller publishes
+     * the event only after that transaction commits.
+     */
+    public record TransactionCommit(ContextState state, boolean wrote) {}
+
     /** Anonymous (auth off) sessions share the single local workspace. */
     private static String key(String userId) { return OwnerScope.id(userId); }
 
@@ -78,16 +86,60 @@ public final class WorkspaceService {
     }
 
     /**
+     * Reconciles an existing workspace row on the caller's connection. This is the seam used by
+     * the active-world owner so selectors and context become visible in one database commit.
+     * An undeclared workspace remains undeclared; this method never creates a row merely because
+     * the user changed markets.
+     */
+    public TransactionCommit reconcileOn(Connection connection, String userId,
+                                         WorkspaceContext.ActiveMarket market, Instant committedAt)
+            throws SQLException {
+        String owner = OwnerScope.lock(connection, key(userId));
+        guardActiveMarketOn(connection, owner, market);
+        return reconcileLocked(connection, owner, market,
+                OffsetDateTime.ofInstant(committedAt, ZoneOffset.UTC));
+    }
+
+    /** Publishes a transaction-scoped reconciliation after its owning transaction has committed. */
+    public void announceCommitted(String userId, TransactionCommit committed) {
+        if (committed != null && committed.wrote()) {
+            announce(key(userId), committed.state());
+        }
+    }
+
+    /**
      * Full replace: the request declares every client-owned field, so anything it omits becomes
      * undeclared. Server facts stay server-stamped. This is also the repair path — a stored blob
      * this build cannot read is replaced rather than merged onto.
      */
     public ContextState replace(String userId, WorkspaceContext requested,
                                 WorkspaceContext.ActiveMarket market) {
+        return replaceChecked(userId, requested, market, null, null);
+    }
+
+    /**
+     * Full replace with the same optimistic revision contract as PATCH. The HTTP repair path
+     * supplies {@code expectedRev}; the compatibility overload above remains available to trusted
+     * in-process callers that already serialize their work.
+     */
+    public ContextState replace(String userId, WorkspaceContext requested,
+                                WorkspaceContext.ActiveMarket market, Long expectedRev) {
+        return replaceChecked(userId, requested, market, expectedRev, requested.generation());
+    }
+
+    private ContextState replaceChecked(String userId, WorkspaceContext requested,
+                                        WorkspaceContext.ActiveMarket market, Long expectedRev,
+                                        Long expectedGeneration) {
         if (requested == null) throw new IllegalArgumentException("a workspace context body is required");
-        guardWorld(requested.world(), market);
-        return commit(userId, market, true,
-                (stored, base, rev) -> base.replacedWith(requested).validated());
+        guardMarketIdentity(requested.world(), requested.datasetId(), requested.marketLane(),
+                requested.accountId(), market);
+        return commit(userId, market, true, (stored, base, rev) -> {
+            guardRevision(expectedRev, rev);
+            if (expectedGeneration != null) {
+                guardGeneration(expectedGeneration, storedGeneration(stored));
+            }
+            return base.replacedWith(requested).validated();
+        });
     }
 
     /**
@@ -98,9 +150,13 @@ public final class WorkspaceService {
     public ContextState patch(String userId, WorkspaceContext.Patch patch,
                               WorkspaceContext.ActiveMarket market) {
         if (patch == null) throw new IllegalArgumentException("a workspace patch body is required");
-        guardWorld(patch.world(), market);
+        guardMarketIdentity(patch.world(), patch.expectedDatasetId(), patch.expectedMarketLane(),
+                patch.expectedAccountId(), market);
         return commit(userId, market, true, (stored, base, rev) -> {
             guardRevision(patch.expectedRev(), rev);
+            if (patch.expectedGeneration() != null) {
+                guardGeneration(patch.expectedGeneration(), storedGeneration(stored));
+            }
             if (stored != null && stored.unreadable() != null) {
                 throw new IllegalStateException(stored.unreadable().reason()
                         + ". Send a complete workspace context (PUT /api/workspace) to replace it;"
@@ -118,12 +174,35 @@ public final class WorkspaceService {
         }
     }
 
-    /** A write that names another world is a stale publication from a previous context generation. */
-    private static void guardWorld(String declaredWorld, WorkspaceContext.ActiveMarket market) {
-        if (declaredWorld == null || declaredWorld.isBlank()) return;
-        if (market == null || !declaredWorld.trim().equals(market.world())) {
-            throw new IllegalStateException("this write was made against market '" + declaredWorld.trim()
-                    + "' but the active market is '" + (market == null ? "unknown" : market.world())
+    private static long storedGeneration(WorkspaceContext.Stored stored) {
+        return stored != null && stored.readable() ? stored.context().generation() : 0L;
+    }
+
+    private static void guardGeneration(long expected, long actual) {
+        if (expected != actual) {
+            throw new IllegalStateException("the workspace moved to context generation " + actual
+                    + " (this write expected " + expected + "); re-read it before writing again");
+        }
+    }
+
+    /** A write that names another market identity is stale even when its world token still matches. */
+    private static void guardMarketIdentity(String world, String datasetId, String lane,
+                                            String accountId, WorkspaceContext.ActiveMarket market) {
+        if (market == null) {
+            throw new IllegalStateException(
+                    "the active market identity is unavailable; re-read the workspace before writing");
+        }
+        guardIdentityPart("market", world, market.world());
+        guardIdentityPart("dataset", datasetId, market.datasetId());
+        guardIdentityPart("market lane", lane, market.lane());
+        guardIdentityPart("account", accountId, market.accountId());
+    }
+
+    private static void guardIdentityPart(String label, String declared, String active) {
+        if (declared == null || declared.isBlank()) return;
+        if (!declared.trim().equals(active)) {
+            throw new IllegalStateException("this write was made against " + label + " '"
+                    + declared.trim() + "' but the active " + label + " is '" + active
                     + "'; re-read the workspace context before writing");
         }
     }
@@ -148,6 +227,8 @@ public final class WorkspaceService {
         String owner = key(userId);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         Committed committed = db.tx(c -> {
+            OwnerScope.lock(c, owner);
+            guardActiveMarketOn(c, owner, market);
             Optional<Workspace> row = lock(c, owner);
             WorkspaceContext.Stored stored = row.map(r -> WorkspaceContext.read(r.stateJson())).orElse(null);
             boolean readable = stored != null && stored.readable();
@@ -186,6 +267,77 @@ public final class WorkspaceService {
         return committed.state();
     }
 
+    private static TransactionCommit reconcileLocked(Connection c, String owner,
+                                                      WorkspaceContext.ActiveMarket market,
+                                                      OffsetDateTime now) throws SQLException {
+        Optional<Workspace> row = lock(c, owner);
+        if (row.isEmpty()) {
+            return new TransactionCommit(ContextState.nothingStored(), false);
+        }
+        Workspace existing = row.orElseThrow();
+        WorkspaceContext.Stored stored = WorkspaceContext.read(existing.stateJson());
+        if (!stored.readable()) {
+            return new TransactionCommit(new ContextState(existing.rev(), existing.updatedAt(),
+                    null, null, stored.unreadable()), false);
+        }
+        WorkspaceContext.WorldCommit moved = stored.context().inWorld(market);
+        if (moved.transition() == null && moved.context().equals(stored.context())) {
+            return new TransactionCommit(new ContextState(existing.rev(), existing.updatedAt(),
+                    moved.context(), null, null), false);
+        }
+        Workspace saved = write(c, owner, moved.context(), now);
+        return new TransactionCommit(new ContextState(saved.rev(), saved.updatedAt(),
+                moved.context(), moved.transition(), null), true);
+    }
+
+    /**
+     * A controller may have resolved its market immediately before a concurrent transition. The
+     * owner lock serializes both paths; this durable check then rejects the stale publication
+     * instead of moving the workspace back into the market the user just left.
+     */
+    private static void guardActiveMarketOn(Connection c, String owner,
+                                            WorkspaceContext.ActiveMarket market) throws SQLException {
+        if (market == null || market.world() == null || market.world().isBlank()
+                || market.datasetId() == null || market.datasetId().isBlank()
+                || market.lane() == null || market.lane().isBlank()
+                || market.accountId() == null || market.accountId().isBlank()) {
+            throw new IllegalArgumentException(
+                    "the caller's active market world, dataset, lane, and account are required");
+        }
+        Optional<String> selectedWorld = SettingsStore
+                .readOn(c, SettingsStore.activeWorldKey(owner))
+                .filter(value -> !value.isBlank());
+        if (selectedWorld.isPresent() && !selectedWorld.orElseThrow().equals(market.world())) {
+            throw new IllegalStateException("the workspace market moved to '"
+                    + selectedWorld.orElseThrow()
+                    + "' while this request still targeted '" + market.world()
+                    + "'; re-read the workspace context before writing");
+        }
+        String world = selectedWorld.orElse(market.world());
+        String selectedDataset = SettingsStore.readOn(c, SettingsStore.activeDatasetKey(owner))
+                .filter(value -> !value.isBlank()).orElse(DatasetService.OBSERVED);
+        if (!selectedDataset.equals(market.datasetId())) {
+            throw new IllegalStateException("the workspace dataset moved to '" + selectedDataset
+                    + "' while this request still targeted '" + market.datasetId()
+                    + "'; re-read the workspace context before writing");
+        }
+        String expectedLane;
+        if (MarketLane.isSimulatedWorld(world)) {
+            expectedLane = MarketLane.SIMULATED.name();
+        } else if (!DatasetService.OBSERVED.equals(selectedDataset)) {
+            expectedLane = MarketLane.SCENARIO.name();
+        } else if ("demo".equals(world)) {
+            expectedLane = MarketLane.DEMO.name();
+        } else {
+            expectedLane = MarketLane.OBSERVED.name();
+        }
+        if (!expectedLane.equals(market.lane())) {
+            throw new IllegalStateException("the active market lane '" + market.lane()
+                    + "' does not match world '" + world + "' and dataset '"
+                    + selectedDataset + "'; re-read the workspace context before writing");
+        }
+    }
+
     private static Optional<Workspace> lock(Connection c, String owner) throws SQLException {
         List<Workspace> rows = Db.queryOn(c,
                 "SELECT state::text s, rev, updated_at::text ua FROM workspace WHERE user_id=? FOR UPDATE",
@@ -220,7 +372,9 @@ public final class WorkspaceService {
         data.put("rev", state.rev());
         data.put("user", owner);
         data.put("world", state.context().world());
+        data.put("datasetId", state.context().datasetId());
         data.put("marketLane", state.context().marketLane());
+        data.put("accountId", state.context().accountId());
         data.put("generation", state.context().generation());
         if (state.transition() != null) data.put("cleared", state.transition().cleared());
         events.publish("workspace.updated", data);
@@ -247,7 +401,7 @@ public final class WorkspaceService {
         String k = key(userId);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         long rev = db.tx(c -> {
-            OwnerScope.ensure(c, k);
+            OwnerScope.lock(c, k);
             Db.execOn(c, "INSERT INTO workspace (user_id, state, rev, updated_at) VALUES (?, ?::jsonb, 1, ?) "
                   + "ON CONFLICT (user_id) DO UPDATE SET state=excluded.state, rev=workspace.rev+1, "
                   + "updated_at=excluded.updated_at", k, stateJson, now);

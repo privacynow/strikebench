@@ -49,10 +49,13 @@ class HistoryFitTest {
     }
 
     private EvalContext ctx(List<Double> closes) {
-        return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 21, 0.30, 0.25,
+        var time = io.liftandshift.strikebench.market.OptionTime.ofRecordedUnits(21, 30);
+        return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), time, 0.30, 0.25,
                 List.of(0.22, 0.30, 0.38), 10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
-                        io.liftandshift.strikebench.model.Freshness.EOD), null, null, null, closes);
+                        io.liftandshift.strikebench.model.Freshness.EOD), null, null, null, closes,
+                io.liftandshift.strikebench.model.DataEvidence.of("stored history",
+                        io.liftandshift.strikebench.model.Freshness.EOD));
     }
 
     @Test void definedRangeStructuresGetContainmentAndExpectedMoveCoverage() {
@@ -93,5 +96,32 @@ class HistoryFitTest {
     @Test void thinHistoryYieldsNothingRatherThanAGuess() {
         assertThat(HistoryFit.sentences(condor(), ctx(chopCloses(40)))).isEmpty();
         assertThat(HistoryFit.sentences(condor(), ctx(List.of()))).isEmpty();
+    }
+
+    @Test void zeroOrUnavailableTradingSessionHorizonNeverIndexesCalendarDays() {
+        var zero = io.liftandshift.strikebench.market.OptionTime.ofRecordedUnits(0, 1);
+        var sessionsOnly = io.liftandshift.strikebench.market.OptionTime.ofRecordedUnits(5, null);
+        EvalContext zeroContext = new EvalContext("AAPL", 25_200L,
+                java.time.LocalDate.parse("2026-07-22"), zero, 0.30, 0.25, List.of(),
+                10_000_000L, true, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                        io.liftandshift.strikebench.model.Freshness.EOD),
+                null, null, null, chopCloses(250),
+                io.liftandshift.strikebench.model.DataEvidence.of("stored history",
+                        io.liftandshift.strikebench.model.Freshness.EOD));
+        EvalContext sessionsOnlyContext = new EvalContext("AAPL", 25_200L,
+                java.time.LocalDate.parse("2026-07-22"), sessionsOnly, 0.30, 0.25, List.of(),
+                10_000_000L, true, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                        io.liftandshift.strikebench.model.Freshness.EOD),
+                null, null, null, chopCloses(250),
+                io.liftandshift.strikebench.model.DataEvidence.of("stored history",
+                        io.liftandshift.strikebench.model.Freshness.EOD));
+
+        assertThat(HistoryFit.sentences(condor(), zeroContext)).isEmpty();
+        assertThat(sessionsOnlyContext.calendarDaysToExpiry()).isEqualTo(-1);
+        assertThat(sessionsOnlyContext.yearsToExpiry()).isNull();
+        assertThat(HistoryFit.sentences(condor(), sessionsOnlyContext))
+                .allMatch(line -> line.contains("5-session windows"));
     }
 }

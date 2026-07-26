@@ -768,9 +768,13 @@ final class OutcomeController {
         long desiredNet = position.entryCostCents() == null ? -entry.entryCents() : -position.entryCostCents();
         long adjustment = desiredNet - baseCurve.entryNetPremiumCents();
         var curve = PayoffCurve.of(entry.pricedLegs(), qty, adjustment);
-        java.time.LocalDate today = market.laneToday(worldParam(activeWorld.apply(ctx)), clock);
-        var time = io.liftandshift.strikebench.market.OptionTime.nearest(entry.pricedLegs(), today);
         String outcomeWorld = worldParam(activeWorld.apply(ctx));
+        var time = io.liftandshift.strikebench.market.OptionTime.nearest(entry.pricedLegs(),
+                market.laneNow(outcomeWorld, clock));
+        if (!time.hasModelTime()) {
+            throw new IllegalArgumentException("risk-neutral evaluation has no live option-time"
+                    + " fraction: " + time.state());
+        }
         double rate = market.riskFreeRateQuote((int) Math.max(1, time.calendarDays()), outcomeWorld).annualRate();
         var shorts = entry.pricedLegs().stream()
                 .filter(l -> !l.isStock() && l.action() == io.liftandshift.strikebench.model.LegAction.SELL)

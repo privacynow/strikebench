@@ -80,7 +80,8 @@ final class TrackedPackageAnalysisService {
             evaluationReceipt = TradeController.unavailableRiskEvaluation(
                     preview, "The held Practice package");
         }
-        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation);
+        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation,
+                evaluations.optionTime(request.legs(), world));
         var currentMark = safeCurrentMark(tradeId);
         var opening = trade.legs().stream().map(leg ->
                 new HeldPositionEconomicsService.OpeningLeg(leg.action(),
@@ -146,7 +147,8 @@ final class TrackedPackageAnalysisService {
                 ? analysisLane(EvidenceLevel.fromEvidence(preview.evidence()))
                 : analysisLane(evaluation.evidence().perDimension().get("pricing"));
         var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
-        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation);
+        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation,
+                evaluations.optionTime(request.legs(), null));
         var actionProjections = bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary);
         var capacity = AccountObjectiveService.capacityContext(objectiveRevision,
                 lifecycleReceipt.positionFingerprint());

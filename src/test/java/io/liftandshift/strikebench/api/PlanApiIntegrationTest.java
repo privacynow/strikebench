@@ -667,6 +667,18 @@ class PlanApiIntegrationTest {
                 .isEqualTo(fan.at("/preview/canvas/displayPathSourceIndices"));
         assertThat(fan.at("/preview/sampleFocusIndex").asInt()).isBetween(0,
                 fan.at("/preview/sampleSourcePathIndices").size() - 1);
+        assertThat(fan.at("/preview/displayProjectionReceipt/version").asText())
+                .isEqualTo(io.liftandshift.strikebench.sim.SimulationEngine
+                        .PREVIEW_PROJECTION_VERSION);
+        assertThat(fan.at("/preview/displayProjectionReceipt/displaySteps"))
+                .hasSize(fan.at("/preview/canvas/underlyingSteps").size());
+        for (int frame = 0; frame < fan.at("/preview/canvas/underlyingSteps").size(); frame++) {
+            int sourceStep = fan.at("/preview/canvas/underlyingSteps/" + frame + "/step").asInt();
+            assertThat(fan.at("/preview/displayProjectionReceipt/displaySteps/" + frame).asInt())
+                    .isEqualTo(sourceStep);
+            assertThat(fan.at("/preview/stepBands/" + frame + "/step").asInt())
+                    .isEqualTo(sourceStep);
+        }
         assertThat(fan.at("/preview/canvas/positions/0/displayPaths"))
                 .hasSize(fan.at("/preview/canvas/displayPathCount").asInt());
         assertThat(fan.at("/preview/canvas/positions/0/legs/0/days")).hasSize(2);
@@ -1009,7 +1021,7 @@ class PlanApiIntegrationTest {
             assertThat(animation.at("/paths/totalPathCount").asInt()).isEqualTo(24);
             assertThat(animation.at("/paths/paths")).hasSize(5);
             assertThat(animation.at("/receipt/contractVersion").asText())
-                    .isEqualTo("scenario-animation-1");
+                    .isEqualTo("scenario-animation-2");
             assertThat(animation.at("/receipt/focusPositionKey").asText()).isEqualTo(positionKey);
             assertThat(animation.at("/receipt/selectedCandidateId").isMissingNode()).isTrue();
             String initialPackageFingerprint = animation.at("/receipt/focusedPackageFingerprint").asText();
@@ -1479,7 +1491,7 @@ class PlanApiIntegrationTest {
         assertThat(animation.at("/ensemble/id").asText()).isEqualTo(guidedEnsembleId);
         assertThat(animation.at("/ensemble/fingerprint").asText())
                 .isEqualTo(guided.at("/ensemble/fingerprint").asText());
-        assertThat(animation.at("/receipt/contractVersion").asText()).isEqualTo("scenario-animation-1");
+        assertThat(animation.at("/receipt/contractVersion").asText()).isEqualTo("scenario-animation-2");
         assertThat(animation.at("/receipt/pathModelVersion").asText()).isNotBlank();
         assertThat(animation.at("/receipt/worldId").asText()).isEqualTo("demo");
         assertThat(animation.at("/receipt/datasetId").asText()).isEqualTo("observed");
@@ -1497,6 +1509,18 @@ class PlanApiIntegrationTest {
                 .isEqualTo(animation.at("/paths/paths/0/prices/10").asDouble());
         assertThat(animation.at("/checkpoints/underlyingSteps"))
                 .hasSize(animation.at("/paths/paths/0/prices").size());
+        assertThat(animation.at("/paths/receipt/displaySteps"))
+                .hasSize(animation.at("/checkpoints/underlyingSteps").size());
+        for (int frame = 0; frame < animation.at("/checkpoints/underlyingSteps").size(); frame++) {
+            int sourceStep = animation.at("/checkpoints/underlyingSteps/" + frame + "/step").asInt();
+            assertThat(animation.at("/paths/receipt/displaySteps/" + frame).asInt())
+                    .isEqualTo(sourceStep);
+            assertThat(animation.at("/paths/bands/" + frame + "/step").asInt())
+                    .isEqualTo(sourceStep);
+            assertThat(animation.at("/paths/bands/" + frame + "/sessionProgress").asDouble())
+                    .isEqualTo(animation.at(
+                        "/checkpoints/underlyingSteps/" + frame + "/sessionProgress").asDouble());
+        }
         assertThat(animation.at("/checkpoints/underlyingSteps/10/focusPrice").asDouble())
                 .isEqualTo(animation.at("/paths/paths/0/prices/10").asDouble());
         // LEAK 4 wire contract: the scrub selects a served frame, so every readout value rides the
@@ -1522,14 +1546,18 @@ class PlanApiIntegrationTest {
         assertThat(animation.at("/checkpoints/underlyingSteps/10").has("ivShiftPoints")).isTrue();
         JsonNode life = animation.at("/checkpoints/positions/0/animation");
         assertThat(life.path("frameCount").asInt()).isEqualTo(track.path("frameCount").asInt());
-        assertThat(life.path("lastLiveFrameIndex").asInt())
+        assertThat(life.path("terminalFrameIndex").asInt())
                 .isBetween(0, track.path("frameCount").asInt() - 1);
-        assertThat(life.path("boundarySource").asText())
-                .isIn("EARLIEST_LEG_EXPIRATION", "HORIZON_END", "NO_OPTION_EXPIRATION");
+        assertThat(life.path("boundaryReason").asText())
+                .isIn("FINAL_CASH_SETTLEMENT", "HORIZON_END_OPTION_OUTLIVES_TRACK",
+                        "HORIZON_END_STOCK_EXPOSURE", "HORIZON_END_PHYSICAL_EXPOSURE");
+        assertThat(life.has("exposureResolvedAtBoundary")).isTrue();
+        assertThat(life.hasNonNull("finalOptionExpiration")).isTrue();
+        assertThat(life).hasSize(6);
         // Json.MAPPER is NON_NULL, so an available track carries no unavailableReason key at all;
         // the desk reads absent-or-null as "available".
         assertThat(life.hasNonNull("unavailableReason")).isFalse();
-        assertThat(life.hasNonNull("lastLiveSessionProgress")).isTrue();
+        assertThat(life.hasNonNull("terminalSessionProgress")).isTrue();
         assertThat(animation.at("/checkpoints/positions").toString())
                 .contains("PROPOSED:" + candidate.get("id").asText());
         assertThat(animation.at("/checkpoints/positions/0/days/0").has("focusValueCents")).isTrue();
@@ -1549,6 +1577,8 @@ class PlanApiIntegrationTest {
         assertThat(animation.at("/checkpoints/modelReceipt/selectedCandidateId").asText())
                 .isEqualTo(candidate.get("id").asText());
         assertThat(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText()).hasSize(64);
+        assertThat(animation.at("/checkpoints/modelReceipt/valuationContractVersion").asText())
+                .isEqualTo("scenario-animation-valuation-2");
         assertThat(animation.at("/receipt/valuationFingerprint").asText())
                 .isEqualTo(animation.at("/checkpoints/modelReceipt/valuationFingerprint").asText());
         assertThat(animation.at("/receipt/conditioningPathWaypoints")).hasSize(1);

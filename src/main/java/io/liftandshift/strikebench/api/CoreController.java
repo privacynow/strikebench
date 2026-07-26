@@ -19,6 +19,7 @@ import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
+import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +46,7 @@ final class CoreController implements AutoCloseable {
     private final MarketUniverseView universeView;
     private final DatasetService datasets;
     private final WorkspaceService workspace;
+    private final WorldTransitionService worldTransitions;
     private final AccountService accounts;
     private final AuthService auth;
     private final CboeProvider cboe;
@@ -59,7 +61,8 @@ final class CoreController implements AutoCloseable {
 
     CoreController(AppConfig cfg, Clock clock, MarketDataService market, MarketDataEngine engine,
                    UniverseService universe, MarketUniverseView universeView, DatasetService datasets,
-                   WorkspaceService workspace, AccountService accounts, AuthService auth,
+                   WorkspaceService workspace, WorldTransitionService worldTransitions,
+                   AccountService accounts, AuthService auth,
                    CboeProvider cboe, SparklineController sparklines,
                    SimulationSessions sessions, io.liftandshift.strikebench.util.EventBus events,
                    Function<Context, String> ownerId, Function<Context, String> activeWorld,
@@ -74,6 +77,7 @@ final class CoreController implements AutoCloseable {
         this.universeView = universeView;
         this.datasets = datasets;
         this.workspace = workspace;
+        this.worldTransitions = worldTransitions;
         this.accounts = accounts;
         this.auth = auth;
         this.cboe = cboe;
@@ -114,24 +118,12 @@ final class CoreController implements AutoCloseable {
         }
     }
 
-    private String activeDataset(String owner) {
-        return datasets == null ? DatasetService.OBSERVED : datasets.activeId(owner);
-    }
-
-    /**
-     * THE lane the caller is in. One definition, shared by /api/config and the workspace context,
-     * so the header's mode and the workspace's mode cannot drift into two dialects.
-     */
-    private String laneFor(String activeDataset, String world) {
-        return !DatasetService.OBSERVED.equals(activeDataset) && "observed".equals(world)
-                ? "SCENARIO" : MarketLane.of(world, cfg.fixturesOnly()).name();
-    }
-
     private void config(Context ctx) {
         String owner = ownerId.apply(ctx);
-        String active = activeDataset(owner);
-        String world = activeWorld.apply(ctx);
-        String lane = laneFor(active, world);
+        WorkspaceContext.ActiveMarket identity = worldTransitions.activeMarket(owner);
+        String active = identity.datasetId();
+        String world = identity.world();
+        String lane = identity.lane();
         ctx.json(new ApiResponses.Config<>(cfg.port(), cfg.fixturesOnly(),
                 MarketHours.isRegularSession(clock.instant()), auth.enabled(),
                 cfg.feePerContractCents(), cfg.feePerOrderCents(), cfg.defaultStartingCashCents(),
@@ -233,31 +225,49 @@ final class CoreController implements AutoCloseable {
      * against.
      */
     private WorkspaceContext.ActiveMarket activeMarket(Context ctx) {
-        String world = activeWorld.apply(ctx);
-        return new WorkspaceContext.ActiveMarket(world,
-                laneFor(activeDataset(ownerId.apply(ctx)), world),
-                currentAccount.apply(ctx).id());
+        return worldTransitions.activeMarket(ownerId.apply(ctx));
     }
 
     private void workspaceGet(Context ctx) {
         if (workspace == null) {
             ctx.json(new ApiResponses.Workspace(0, null, WorkspaceContext.CURRENT_VERSION,
-                    null, null, null, null, null,
+                    null, null, null, null, null, null,
                     new WorkspaceContext.Unreadable(null, WorkspaceContext.CURRENT_VERSION,
                             "the workspace store is unavailable in this build; nothing was restored")));
             return;
         }
-        WorkspaceContext.ActiveMarket market = activeMarket(ctx);
-        workspaceReceipt(ctx, workspace.context(ownerId.apply(ctx), market), market);
+        ctx.json(worldTransitions.current(ownerId.apply(ctx)).workspace());
     }
 
     /** Full replace. Every client-owned field the body omits becomes undeclared. */
     private void workspacePut(Context ctx) {
         if (requireWorkspaceStore(ctx)) return;
-        WorkspaceContext requested = ApiRequest.requireBody(
-                ApiRequest.bodyOrNull(ctx, WorkspaceContext.class));
+        if (ctx.body() == null || ctx.body().isBlank() || "null".equals(ctx.body().trim())) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        var node = Json.parse(ctx.body());
+        if (!node.isObject()) throw new IllegalArgumentException("workspace body must be an object");
+        if (node.has("version") && node.get("version").isIntegralNumber()
+                && node.get("version").intValue() != WorkspaceContext.CURRENT_VERSION) {
+            throw new IllegalArgumentException("this build reads workspace context version "
+                    + WorkspaceContext.CURRENT_VERSION + ", not " + node.get("version").intValue());
+        }
+        if (!node.has("expectedRev") || !node.get("expectedRev").isIntegralNumber()) {
+            throw new IllegalArgumentException(
+                    "expectedRev is required for a full workspace replacement");
+        }
+        for (String field : List.of(
+                "generation", "world", "datasetId", "marketLane", "accountId")) {
+            if (!node.hasNonNull(field)) {
+                throw new IllegalArgumentException(field
+                        + " is required as the workspace replacement's market-identity guard");
+            }
+        }
+        WorkspaceContext requested = Json.read(ctx.body(), WorkspaceContext.class);
+        long expectedRev = node.get("expectedRev").longValue();
         WorkspaceContext.ActiveMarket market = activeMarket(ctx);
-        workspaceReceipt(ctx, workspace.replace(ownerId.apply(ctx), requested, market), market);
+        workspaceReceipt(ctx, workspace.replace(
+                ownerId.apply(ctx), requested, market, expectedRev), market);
     }
 
     /**
@@ -266,8 +276,30 @@ final class CoreController implements AutoCloseable {
      */
     private void workspacePatch(Context ctx) {
         if (requireWorkspaceStore(ctx)) return;
-        WorkspaceContext.Patch patch = ApiRequest.requireBody(
-                ApiRequest.bodyOrNull(ctx, WorkspaceContext.Patch.class));
+        if (ctx.body() == null || ctx.body().isBlank() || "null".equals(ctx.body().trim())) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        var node = Json.parse(ctx.body());
+        if (!node.isObject()) throw new IllegalArgumentException("workspace body must be an object");
+        if (node.has("version") && node.get("version").isIntegralNumber()
+                && node.get("version").intValue() != WorkspaceContext.CURRENT_VERSION) {
+            throw new IllegalArgumentException("this build reads workspace context version "
+                    + WorkspaceContext.CURRENT_VERSION + ", not " + node.get("version").intValue());
+        }
+        for (String field : List.of(
+                "expectedRev", "expectedGeneration", "world", "expectedDatasetId",
+                "expectedMarketLane", "expectedAccountId")) {
+            if (!node.hasNonNull(field)) {
+                throw new IllegalArgumentException(field
+                        + " is required as the workspace patch's optimistic market-identity guard");
+            }
+        }
+        if (!node.get("expectedRev").isIntegralNumber()
+                || !node.get("expectedGeneration").isIntegralNumber()) {
+            throw new IllegalArgumentException(
+                    "expectedRev and expectedGeneration must be integral numbers");
+        }
+        WorkspaceContext.Patch patch = Json.read(ctx.body(), WorkspaceContext.Patch.class);
         WorkspaceContext.ActiveMarket market = activeMarket(ctx);
         workspaceReceipt(ctx, workspace.patch(ownerId.apply(ctx), patch, market), market);
     }
@@ -280,13 +312,7 @@ final class CoreController implements AutoCloseable {
 
     private static void workspaceReceipt(Context ctx, WorkspaceService.ContextState state,
                                          WorkspaceContext.ActiveMarket market) {
-        WorkspaceContext context = state.context();
-        ctx.json(new ApiResponses.Workspace(state.rev(), state.updatedAt(),
-                WorkspaceContext.CURRENT_VERSION,
-                context == null ? market.world() : context.world(),
-                context == null ? market.lane() : context.marketLane(),
-                context == null ? market.accountId() : context.accountId(),
-                context, state.transition(), state.unreadable()));
+        ctx.json(ApiResponses.Workspace.from(state, market));
     }
 
     private void account(Context ctx) {

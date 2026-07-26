@@ -14,7 +14,8 @@ public final class CapitalProfiler {
         if (c.maxProfitCents() != null && economic > 0) {
             roc = 100.0 * c.maxProfitCents() / economic;
         }
-        Double annRoc = (roc != null && ctx.daysToExpiry() > 0) ? roc * 365.0 / ctx.daysToExpiry() : null;
+        Double annRoc = (roc != null && ctx.hasModelTime())
+                ? roc / ctx.yearsToExpiry() : null;
 
         String basis = c.combinedMaxLossCents() != null
                 ? "economic exposure includes the held or needed shares valued at today's price"
@@ -23,7 +24,9 @@ public final class CapitalProfiler {
                 "%s theoretical max profit divided by %s economic exposure = %.2f%% over %d calendar days;"
                         + " ~%.2f%% annualized if repeatable. Repeating the fill, volatility edge, and outcome is not assumed.",
                 io.liftandshift.strikebench.util.Money.fmt(c.maxProfitCents()),
-                io.liftandshift.strikebench.util.Money.fmt(economic), roc, ctx.daysToExpiry(), annRoc);
-        return new CapitalProfile(incremental, economic, roc, annRoc, ctx.daysToExpiry(), basis, annualization);
+                io.liftandshift.strikebench.util.Money.fmt(economic), roc,
+                ctx.calendarDaysToExpiry(), annRoc);
+        return new CapitalProfile(incremental, economic, roc, annRoc,
+                ctx.calendarDaysToExpiry(), basis, annualization);
     }
 }

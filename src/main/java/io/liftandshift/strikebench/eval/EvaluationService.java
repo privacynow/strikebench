@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -21,7 +22,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -64,6 +64,12 @@ public final class EvaluationService {
 
     /** The canonical calendar shared with Research, trade guardrails, alerts, and Scout. */
     public EventService eventCalendar() { return events; }
+
+    /** Exact lane clock for held-position lifecycle composition, including Practice simulations. */
+    public OptionTime.Measure optionTime(List<io.liftandshift.strikebench.model.Leg> legs,
+                                         String worldId) {
+        return OptionTime.nearest(legs, market.laneNow(worldId, clock));
+    }
 
     /** Records that an evaluation was surfaced (the calibration sample); requires it to be persisted. */
     public String recordSurfaced(String evaluationId, String userId) {
@@ -167,7 +173,7 @@ public final class EvaluationService {
         EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId,
                 portfolioExposure, declared);
         StrategySpec spec = new StrategySpec(symbol, candidate.strategy(), candidate.intent(),
-                ctx.daysToExpiry() + "d", null, null, "exact-position");
+                ctx.calendarDaysToExpiry() + "d", null, null, "exact-position");
         return evaluator.assessExact(candidate, spec, ctx, mechanicallyEligible, mechanicalFailures,
                 roundTripFeesCents);
     }
@@ -278,11 +284,29 @@ public final class EvaluationService {
         // the candidates — a sim world's numbers never blend with observed ones (review P0).
         Instant laneNow = market.laneNow(worldId, clock);
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
-        long underlyingCents = market.quote(symbol, worldId)
-                .map(q -> q.mark() == null ? 0L : Money.toCents(q.mark())).orElse(0L);
+        var quote = market.quote(symbol, worldId).orElseThrow(() ->
+                new io.liftandshift.strikebench.util.DataUnavailableException(
+                        "Evaluation is unavailable because " + symbol
+                                + " has no quote in the selected market."));
+        if (quote.mark() == null) {
+            throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                    "Evaluation is unavailable because " + symbol + " has no usable underlying mark"
+                            + " (basis " + quote.markBasis() + ", source " + quote.source() + ").");
+        }
+        long underlyingCents = Money.toCents(quote.mark());
 
         LocalDate frontExp = frontExpiration(candidates);
-        int dte = frontExp != null ? Math.max(0, (int) ChronoUnit.DAYS.between(today, frontExp)) : 30;
+        if (frontExp == null) {
+            throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                    "Evaluation is unavailable because the exact option package has no parseable"
+                            + " expiration. Stock-only orders use the share-order analysis owner.");
+        }
+        OptionTime.Measure timeToExpiry = OptionTime.toExpiry(laneNow, frontExp);
+        if (timeToExpiry.state() == OptionTime.State.EXPIRED) {
+            throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                    "Evaluation is unavailable because the exact option package expired at the"
+                            + " selected market lane's final bell (" + frontExp + ").");
+        }
 
         Double atmIv = atmIv(symbol, underlyingCents, frontExp, worldId);
         // One lane-specific history artifact owns realized volatility, regime framing,
@@ -297,18 +321,20 @@ public final class EvaluationService {
         // Neither a simulated world nor a synthetic scenario dataset may borrow observed IV rank.
         boolean open = worldId != null || MarketHours.isRegularSession(laneNow);
 
-        var rate = market.riskFreeRateQuote(Math.max(1, dte), worldId);
+        var rate = market.riskFreeRateQuote(
+                Math.max(1, Math.toIntExact(timeToExpiry.calendarDays())), worldId);
 
         // Regime is a framing lens over the SAME lane's history: vol profile from this
         // context's own inputs, trend/drawdown from this lane's candles (folded Phase 10.3).
-        EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol,
+        EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, timeToExpiry,
+                atmIv, realizedVol,
                 ivHistory, buyingPowerCents, open, rate.annualRate(), rate.evidence(),
                 portfolioExposure, declared, null, List.of(),
                 historySeries.evidence());
         VolatilityProfile volProfile = new VolatilityProfiler().profile(preRegime);
         List<Candle> regimeCandles = historySeries.candles();
         LocalDate eventThrough = lastExpiration(candidates);
-        if (eventThrough == null) eventThrough = today.plusDays(Math.max(1, dte));
+        if (eventThrough == null) eventThrough = frontExp;
         EventService.EarningsProximity event = eventProximity(symbol, eventThrough, worldId);
         RegimeSnapshot regime = RegimeProfiler.profile(regimeCandles, volProfile,
                 event.available() ? event.likelyBefore() : null, event.note(),
@@ -316,7 +342,7 @@ public final class EvaluationService {
         List<Double> trailingCloses = regimeCandles == null ? List.of() : regimeCandles.stream()
                 .map(candle -> candle.close() == null ? null : candle.close().doubleValue())
                 .filter(java.util.Objects::nonNull).toList();
-        return new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol, ivHistory,
+        return new EvalContext(symbol, underlyingCents, today, timeToExpiry, atmIv, realizedVol, ivHistory,
                 buyingPowerCents, open, rate.annualRate(), rate.evidence(),
                 portfolioExposure, declared, regime, trailingCloses,
                 historySeries.evidence());
@@ -336,31 +362,37 @@ public final class EvaluationService {
     }
 
     private static LocalDate frontExpiration(List<Candidate> candidates) {
-        LocalDate min = null;
-        for (Candidate c : candidates) {
-            for (LegView l : c.legs()) {
-                if (l.expiration() == null) continue;
-                try {
-                    LocalDate d = LocalDate.parse(l.expiration());
-                    if (min == null || d.isBefore(min)) min = d;
-                } catch (RuntimeException ignored) { /* skip unparseable */ }
-            }
-        }
-        return min;
+        return expirationEdge(candidates, true);
     }
 
     private static LocalDate lastExpiration(List<Candidate> candidates) {
-        LocalDate max = null;
+        return expirationEdge(candidates, false);
+    }
+
+    private static LocalDate expirationEdge(List<Candidate> candidates, boolean front) {
+        LocalDate edge = null;
         for (Candidate c : candidates) {
             for (LegView l : c.legs()) {
-                if (l.expiration() == null) continue;
+                if ("STOCK".equalsIgnoreCase(l.type())) continue;
+                if (l.expiration() == null || l.expiration().isBlank()) {
+                    throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                            "Evaluation is unavailable because " + l.action() + " " + l.type()
+                                    + " " + l.strike() + " has no expiration.");
+                }
                 try {
                     LocalDate d = LocalDate.parse(l.expiration());
-                    if (max == null || d.isAfter(max)) max = d;
-                } catch (RuntimeException ignored) { /* skip unparseable */ }
+                    if (edge == null || front && d.isBefore(edge) || !front && d.isAfter(edge)) {
+                        edge = d;
+                    }
+                } catch (RuntimeException invalid) {
+                    throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                            "Evaluation is unavailable because " + l.action() + " " + l.type()
+                                    + " " + l.strike() + " has an invalid expiration '"
+                                    + l.expiration() + "'.", invalid);
+                }
             }
         }
-        return max;
+        return edge;
     }
 
     /**

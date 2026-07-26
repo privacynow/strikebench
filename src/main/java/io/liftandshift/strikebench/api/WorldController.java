@@ -126,15 +126,19 @@ final class WorldController {
                 ctx -> {
                     String id = ctx.pathParam("id");
                     String owner = ownerId.apply(ctx);
-                    boolean wasActive = id.equals(activeWorld.apply(ctx));
                     var rehearsalFinish = planRehearsals.finishHook(owner, id);
+                    var marketFinish = worldTransitions.prepareFinish(id, owner);
                     simSessions.finish(id, owner, (connection, worldId, world) -> {
+                        // Market identity owns the outer owner lock. Keep the finish lock order the
+                        // same as entry (owner -> session) so a concurrent switch cannot deadlock
+                        // or let a stale controller-side "was active" snapshot win.
+                        marketFinish.beforeFinish(connection);
                         if (rehearsalFinish != null) {
                             rehearsalFinish.beforeFinish(connection, worldId, world);
                         }
                         planService.closeFinishedWorldPlansOn(connection, owner, worldId);
                     });
-                    ctx.json(worldTransitions.afterFinish(wasActive, owner));
+                    ctx.json(marketFinish.afterCommit());
                 },
                 this::simMarketReport));
     }

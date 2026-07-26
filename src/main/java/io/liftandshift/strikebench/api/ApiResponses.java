@@ -15,6 +15,10 @@ import java.util.List;
 
 /** Named wire contracts shared by small API envelopes. Domain services own richer response records. */
 public final class ApiResponses {
+    public static final String SCENARIO_ANIMATION_CONTRACT_VERSION = "scenario-animation-2";
+    public static final String SCENARIO_ANIMATION_VALUATION_CONTRACT_VERSION =
+            "scenario-animation-valuation-2";
+
     public record ErrorBody(String error, String detail) {}
     public record ErrorOnly(String error) {}
     public record AuthErrorBody(String error, String detail, String loginUrl) {}
@@ -139,10 +143,24 @@ public final class ApiResponses {
      * cleared; {@code unreadable} states why a stored context was refused instead of half-read.
      */
     public record Workspace(long rev, String updatedAt, int supportedVersion, String world,
-                            String marketLane, String accountId,
+                            String datasetId, String marketLane, String accountId,
                             io.liftandshift.strikebench.db.WorkspaceContext context,
                             io.liftandshift.strikebench.db.WorkspaceContext.Transition transition,
-                            io.liftandshift.strikebench.db.WorkspaceContext.Unreadable unreadable) {}
+                            io.liftandshift.strikebench.db.WorkspaceContext.Unreadable unreadable) {
+        /** One serializer for both /api/workspace and the atomic /api/world transition receipt. */
+        public static Workspace from(
+                io.liftandshift.strikebench.db.WorkspaceService.ContextState state,
+                io.liftandshift.strikebench.db.WorkspaceContext.ActiveMarket market) {
+            var context = state.context();
+            return new Workspace(state.rev(), state.updatedAt(),
+                    io.liftandshift.strikebench.db.WorkspaceContext.CURRENT_VERSION,
+                    context == null ? market.world() : context.world(),
+                    context == null ? market.datasetId() : context.datasetId(),
+                    context == null ? market.lane() : context.marketLane(),
+                    context == null ? market.accountId() : context.accountId(),
+                    context, state.transition(), state.unreadable());
+        }
+    }
     public record Plans<T>(T plans, String market, String world) {}
     public record PlanSymbolError(String error, String detail, String market) {}
     public record PlanStrategy<T, U>(T plan, U strategy) {}
@@ -272,7 +290,6 @@ public final class ApiResponses {
                                      int estimatedRequests, U plans, String limitation,
                                      String dateNote) {}
     public record Jobs<T>(T jobs) {}
-    public record DatasetActivation(boolean ok, String active, boolean scenarioMode) {}
     public record Account<T>(T account) {}
     public record AccountLedger<T, U>(T account, U ledger) {}
     public record Expirations<T>(String symbol, String asOfDate, T expirations) {}
@@ -445,8 +462,14 @@ public final class ApiResponses {
     public record Guardrails(String level, List<String> blockReasons, List<String> warnings) {}
     public record RiskAcknowledgment(String id, String label) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record CapitalUse(String fundingClass, String capitalBasis,
+                             Long capCents, Long usedCents, Long remainingCents,
+                             Long overageCents, Boolean withinCap,
+                             String basis, String unavailableReason) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record AccountFit(Double pctOfNlv, Double pctOfCashBp, Double pctOfMarginBp,
-                             Double pctOfRiskCapital, Boolean overRiskCapital) {}
+                             Double pctOfRiskCapital, Boolean overRiskCapital,
+                             CapitalUse selectedCapital) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record TradePreviewResponse(TradePreview preview, EvaluationReceipt evaluation,
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
@@ -493,10 +516,10 @@ public final class ApiResponses {
      * drawn line can never come from different engines. The browser may still interpolate the
      * polyline to place pixels; it may not originate this figure (§3.1).
      *
-     * <p>{@code spotBasis} says where the price came from ({@code LIVE_MARK} or
-     * {@code RECORDED_ENTRY}) and {@code withinServedCurve} says whether the served polyline even
-     * reaches that price. When there is no answer, {@code unavailableReason} states why — never a
-     * substituted 0 (§3.2).
+     * <p>{@code spotBasis} names the current-price receipt used (for example {@code LIVE_MARK} or
+     * {@code PREVIOUS_CLOSE}) and {@code withinServedCurve} says whether the served polyline even
+     * reaches that price. A recorded entry is never substituted for a missing current price.
+     * When there is no answer, {@code unavailableReason} states why — never a substituted 0 (§3.2).
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record HeldSpotPnl(Long terminalPnlAtCurrentSpotCents, Long spotCents, String spotBasis,
@@ -512,8 +535,14 @@ public final class ApiResponses {
      * second copy on this envelope ({@code payoff}, a {@code price}/{@code profitCents} list) is
      * deleted: the browser used to consume one and then overwrite it with the other.
      */
-    public record TradeDetail<T, U, V, W>(T trade, U current, V marksHistory, W audit,
-                                           PracticePositionAnalysis analysis) {}
+    public record TradeDetail<T, U, V, W>(
+            T trade,
+            U current,
+            QuoteView quote,
+            String currentUnavailableReason,
+            V marksHistory,
+            W audit,
+            PracticePositionAnalysis analysis) {}
     public record OptionLifecycleProjection(String action, int legIndex, String contract,
                                             String expiration, long settlementUnderlyingCents,
                                             String settlementPriceBasis,

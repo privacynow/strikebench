@@ -30,7 +30,7 @@ public record ScenarioCanvasSpec(
         List<IvNode> ivNodes,
         TemplateReceipt template) {
 
-    public static final String MODEL_VERSION = "scenario-canvas-1";
+    public static final String MODEL_VERSION = "scenario-canvas-2";
 
     public ScenarioCanvasSpec {
         calendar = calendar == null || calendar.isBlank() ? "NYSE" : calendar.trim().toUpperCase();

@@ -245,7 +245,7 @@ class ScenarioCanvasTest {
         assertThat(track.horizonSessions()).isEqualTo(frames.getLast().sessionProgress());
         assertThat(track.baselineAtmIv()).isEqualTo(frames.getFirst().atmIv());
         assertThat(track.baselineAtmIvSource()).isEqualTo("TRACK_FRAME_0");
-        assertThat(report.notes()).anyMatch(note -> note.contains("Math.round(t x lastLiveFrameIndex)"));
+        assertThat(report.notes()).anyMatch(note -> note.contains("Math.round(t x terminalFrameIndex)"));
     }
 
     /**
@@ -253,67 +253,113 @@ class ScenarioCanvasTest {
      * string-comparing session dates against leg expirations, which decided how far the scrub could
      * go — and therefore which frame's P/L it printed.
      */
-    @Test void eachPackageStatesWhereItsAnimationEndsInsteadOfLettingTheDeskGuess() {
+    @Test void eachPackageStatesItsEconomicTerminalBoundaryWithoutLettingTheDeskGuess() {
         LocalDate anchor = LocalDate.of(2026, 7, 2);
         var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
-                6, 1, 0, .30, 0, 0, 0, 6, null, 142, 3);
-        double[][] paths = {
-                {100, 101, 102, 103, 104, 105, 106},
-                {100, 100, 101, 100, 102, 101, 103},
-                {100,  98, 102,  97, 103,  99, 105}
-        };
+                6, 4, 0, .30, 0, 0, 0, 6, null, 142, 3);
+        double[][] paths = new double[3][spec.totalSteps() + 1];
+        for (int step = 0; step <= spec.totalSteps(); step++) {
+            paths[0][step] = 100 + step;
+            paths[1][step] = 100 + step * .5;
+            paths[2][step] = 100 - step * .1;
+        }
         var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
                 new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
                 100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
         LocalDate frontExpiry = MarketHours.tradingDateAfter(anchor, 3);
-        var expiresInsideHorizon = new PathPosition(anchor, List.of(
+        LocalDate finalExpiry = MarketHours.tradingDateAfter(anchor, 5);
+        var cashCalendar = new PathPosition(anchor, List.of(
                 Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), frontExpiry, 1,
                         BigDecimal.ZERO),
                 Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("110"),
-                        MarketHours.tradingDateAfter(anchor, 5), 1, BigDecimal.ZERO)));
+                        finalExpiry, 1, BigDecimal.ZERO)));
         var outlivesHorizon = new PathPosition(anchor, List.of(Leg.option(LegAction.BUY,
                 OptionType.CALL, new BigDecimal("100"), MarketHours.tradingDateAfter(anchor, 30),
                 1, BigDecimal.ZERO)));
         var sharesOnly = new PathPosition(anchor, List.of(
                 Leg.stockShares(LegAction.BUY, 100, new BigDecimal("100"))));
+        var sharesAndOption = new PathPosition(anchor, List.of(
+                Leg.stockShares(LegAction.BUY, 100, new BigDecimal("100")),
+                Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), anchor, 1,
+                        BigDecimal.ZERO)));
+        var zeroDteCash = new PathPosition(anchor, List.of(Leg.option(LegAction.SELL,
+                OptionType.PUT, new BigDecimal("95"), anchor, 1, BigDecimal.ZERO)));
 
         var report = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.30),
                 ScenarioCanvasSpec.defaults(), .04, List.of(
-                        new ScenarioCanvasValuator.PositionInput("front", "Front diagonal", "REAL",
-                                "TRACKED_STRUCTURE", expiresInsideHorizon, 1, 500L, false),
+                        new ScenarioCanvasValuator.PositionInput("calendar", "Cash calendar", "REAL",
+                                "TRACKED_STRUCTURE", cashCalendar, 1, 500L, false),
                         new ScenarioCanvasValuator.PositionInput("long", "Long dated", "PLAN",
                                 "PROPOSAL", outlivesHorizon, 1, 900L, true),
                         new ScenarioCanvasValuator.PositionInput("STOCK:MU", "Buy and hold",
-                                "BASELINE", "STOCK_BASELINE", sharesOnly, 1, 10_000L, false)),
+                                "BASELINE", "STOCK_BASELINE", sharesOnly, 1, 10_000L, false),
+                        new ScenarioCanvasValuator.PositionInput("covered", "Stock plus put", "REAL",
+                                "TRACKED_STRUCTURE", sharesAndOption, 1, 10_000L, false),
+                        new ScenarioCanvasValuator.PositionInput("zero", "Zero DTE cash put", "REAL",
+                                "TRACKED_STRUCTURE", zeroDteCash, 1, 100L, false)),
                 2, List.of());
 
         var byKey = report.positions().stream().collect(java.util.stream.Collectors
                 .toMap(ScenarioCanvasValuator.PositionPath::key, path -> path.animation()));
 
-        // The earliest option leg expires 3 sessions out, so the scrub stops on frame 3 of 7.
-        var front = byKey.get("front");
-        assertThat(front.frameCount()).isEqualTo(7);
-        assertThat(front.lastLiveFrameIndex()).isEqualTo(3);
-        assertThat(front.lastLiveSessionProgress()).isEqualTo(3.0);
-        assertThat(front.packageExpiration()).isEqualTo(frontExpiry.toString());
-        assertThat(front.boundarySource()).isEqualTo("EARLIEST_LEG_EXPIRATION");
-        assertThat(front.unavailableReason()).isNull();
-        assertThat(report.underlyingSteps().get(front.lastLiveFrameIndex()).sessionDate())
-                .isEqualTo(frontExpiry.toString());
+        // Cash-settled multi-expiry packages resolve only when their FINAL option settles.
+        var calendar = byKey.get("calendar");
+        assertThat(calendar.frameCount()).isEqualTo(25);
+        assertThat(calendar.terminalFrameIndex()).isEqualTo(20);
+        assertThat(calendar.terminalSessionProgress()).isEqualTo(5.0);
+        assertThat(calendar.finalOptionExpiration()).isEqualTo(finalExpiry.toString());
+        assertThat(calendar.boundaryReason()).isEqualTo("FINAL_CASH_SETTLEMENT");
+        assertThat(calendar.exposureResolvedAtBoundary()).isTrue();
+        assertThat(calendar.unavailableReason()).isNull();
+        assertThat(report.underlyingSteps().get(calendar.terminalFrameIndex()).sessionDate())
+                .isEqualTo(finalExpiry.toString());
 
-        // A package that outlives the fan keeps the whole track, and says why.
+        // A cash option that outlives the fan remains unresolved at the horizon.
         var longDated = byKey.get("long");
-        assertThat(longDated.lastLiveFrameIndex()).isEqualTo(6);
-        assertThat(longDated.boundarySource()).isEqualTo("HORIZON_END");
-        assertThat(longDated.packageExpiration())
+        assertThat(longDated.terminalFrameIndex()).isEqualTo(24);
+        assertThat(longDated.boundaryReason())
+                .isEqualTo("HORIZON_END_OPTION_OUTLIVES_TRACK");
+        assertThat(longDated.exposureResolvedAtBoundary()).isFalse();
+        assertThat(longDated.finalOptionExpiration())
                 .isEqualTo(MarketHours.tradingDateAfter(anchor, 30).toString());
 
-        // Shares never expire; the absence of an expiration is named, not faked as day zero.
+        // Explicit shares keep the position live through the horizon, alone or beside an option.
         var stock = byKey.get("STOCK:MU");
-        assertThat(stock.lastLiveFrameIndex()).isEqualTo(6);
-        assertThat(stock.boundarySource()).isEqualTo("NO_OPTION_EXPIRATION");
-        assertThat(stock.packageExpiration()).isNull();
+        assertThat(stock.terminalFrameIndex()).isEqualTo(24);
+        assertThat(stock.boundaryReason()).isEqualTo("HORIZON_END_STOCK_EXPOSURE");
+        assertThat(stock.exposureResolvedAtBoundary()).isFalse();
+        assertThat(stock.finalOptionExpiration()).isNull();
         assertThat(stock.unavailableReason()).isNull();
+
+        var covered = byKey.get("covered");
+        assertThat(covered.terminalFrameIndex()).isEqualTo(24);
+        assertThat(covered.boundaryReason()).isEqualTo("HORIZON_END_STOCK_EXPOSURE");
+        assertThat(covered.finalOptionExpiration()).isEqualTo(anchor.toString());
+        assertThat(covered.exposureResolvedAtBoundary()).isFalse();
+
+        // A cash-settled 0DTE option resolves at the current session's first closing frame.
+        var zero = byKey.get("zero");
+        assertThat(zero.terminalFrameIndex()).isEqualTo(4);
+        assertThat(zero.terminalSessionProgress()).isEqualTo(1.0);
+        assertThat(zero.finalOptionExpiration()).isEqualTo(anchor.toString());
+        assertThat(zero.boundaryReason()).isEqualTo("FINAL_CASH_SETTLEMENT");
+        assertThat(zero.exposureResolvedAtBoundary()).isTrue();
+
+        var physicalCanvas = new ScenarioCanvasSpec("NYSE", null, "no dividend", 0, 0,
+                ScenarioCanvasSpec.SurfaceDynamics.STICKY_MONEYNESS,
+                ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM,
+                ScenarioCanvasSpec.ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
+        var physicalReport = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.30),
+                physicalCanvas, .04, List.of(
+                        new ScenarioCanvasValuator.PositionInput("physical", "Physical call", "REAL",
+                                "TRACKED_STRUCTURE", new PathPosition(anchor, List.of(
+                                Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"),
+                                        frontExpiry, 1, BigDecimal.ZERO))), 1, 500L, false)));
+        var physical = physicalReport.positions().getFirst().animation();
+        assertThat(physical.terminalFrameIndex()).isEqualTo(24);
+        assertThat(physical.finalOptionExpiration()).isEqualTo(frontExpiry.toString());
+        assertThat(physical.boundaryReason()).isEqualTo("HORIZON_END_PHYSICAL_EXPOSURE");
+        assertThat(physical.exposureResolvedAtBoundary()).isFalse();
     }
 
     @Test void storedEnsembleAnchorDrivesBothCanvasDistributionAndDailyValuationClock() {
@@ -375,6 +421,19 @@ class ScenarioCanvasTest {
         assertThat(horizon.deltaShares()).isBetween(40.0, 70.0);
     }
 
+    @Test void dailyOnlyPositionNamesItsUnavailableAnimationWithoutInventingABoundary() {
+        var path = new ScenarioCanvasValuator.PositionPath("daily", "Daily only", "REAL",
+                "TRACKED_STRUCTURE", false, null, List.of(), List.of(), List.of());
+
+        assertThat(path.animation().frameCount()).isZero();
+        assertThat(path.animation().terminalFrameIndex()).isEqualTo(-1);
+        assertThat(path.animation().terminalSessionProgress()).isNull();
+        assertThat(path.animation().finalOptionExpiration()).isNull();
+        assertThat(path.animation().boundaryReason()).isEqualTo("NO_FRAMES");
+        assertThat(path.animation().exposureResolvedAtBoundary()).isFalse();
+        assertThat(path.animation().unavailableReason()).contains("daily grid only");
+    }
+
     @Test void maximumResolutionCanvasBoundsOnlyItsWireCheckpoints() {
         LocalDate anchor = LocalDate.of(2026, 7, 1);
         var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
@@ -389,15 +448,76 @@ class ScenarioCanvasTest {
         var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
                 new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
                 100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
+        int expiryDay = 333;
+        int exactExpiryStep = expiryDay * spec.stepsPerDay();
+        var option = new PathPosition(anchor, List.of(Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), MarketHours.tradingDateAfter(anchor, expiryDay), 1,
+                BigDecimal.ZERO)));
 
         var report = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.25),
-                ScenarioCanvasSpec.defaults(), .04, List.of());
+                ScenarioCanvasSpec.defaults(), .04, List.of(
+                        new ScenarioCanvasValuator.PositionInput("call", "Long call", "PLAN",
+                                "PROPOSAL", option, 1, 0L, true)));
 
         assertThat(report.underlying()).hasSize(757); // full daily bands remain authoritative
         assertThat(report.underlyingSteps())
                 .hasSize(PathEnsembleService.MAX_DISPLAY_POINTS_PER_SERIES);
         assertThat(report.underlyingSteps().getFirst().step()).isZero();
         assertThat(report.underlyingSteps().getLast().step()).isEqualTo(steps);
+        assertThat(report.underlyingSteps())
+                .extracting(ScenarioCanvasValuator.UnderlyingStep::step)
+                .contains(exactExpiryStep);
+        assertThat(report.positions().getFirst().steps())
+                .extracting(ScenarioCanvasValuator.PositionStep::step)
+                .containsExactlyElementsOf(report.underlyingSteps().stream()
+                        .map(ScenarioCanvasValuator.UnderlyingStep::step).toList());
+        var animation = report.positions().getFirst().animation();
+        assertThat(report.underlyingSteps().get(animation.terminalFrameIndex()).step())
+                .isEqualTo(exactExpiryStep);
+        assertThat(animation.terminalSessionProgress()).isEqualTo((double) expiryDay);
+        assertThat(animation.boundaryReason()).isEqualTo("FINAL_CASH_SETTLEMENT");
+        assertThat(animation.exposureResolvedAtBoundary()).isTrue();
+
+        int[] sharedDisplaySteps = report.underlyingSteps().stream()
+                .mapToInt(ScenarioCanvasValuator.UnderlyingStep::step).toArray();
+        var pathProjection = new PathEnsembleService(null, Clock.systemUTC())
+                .displayPaths(ensemble, null, 8, sharedDisplaySteps);
+        assertThat(pathProjection.receipt().displaySteps())
+                .containsExactlyElementsOf(report.underlyingSteps().stream()
+                        .map(ScenarioCanvasValuator.UnderlyingStep::step).toList());
+        assertThat(pathProjection.bands().get(animation.terminalFrameIndex()).step())
+                .isEqualTo(exactExpiryStep);
+        assertThat(pathProjection.bands().get(animation.terminalFrameIndex()).sessionProgress())
+                .isEqualTo(animation.terminalSessionProgress());
+        var focusedPricePath = pathProjection.paths().stream()
+                .filter(path -> path.sourcePathIndex() == report.focusSourcePathIndex())
+                .findFirst().orElseThrow();
+        assertThat(focusedPricePath.prices()[animation.terminalFrameIndex()])
+                .isEqualTo(report.underlyingSteps().get(animation.terminalFrameIndex()).focusPrice());
+
+        var stored = new io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble(
+                "pen_shared_grid", "shared-grid-fingerprint", "PARAMETRIC", 1, null, "CURRENT",
+                ensemble, IvSpec.flat(.25), ScenarioCanvasSpec.defaults(), .04,
+                23_400.0 / spec.stepsPerDay(), "test", "MODELED",
+                Instant.parse("2026-07-01T16:00:00Z").toString());
+        var preview = new SimulationEngine(null, null, null, Clock.systemUTC(), null)
+                .previewFromStored(stored, List.of(), null, .04);
+        var previewProjection = SimulationEngine.projectPreview(ensemble,
+                preview.sampleSourcePathIndices(), preview.sampleFocusIndex(), sharedDisplaySteps);
+        assertThat(previewProjection.receipt().displaySteps())
+                .containsExactlyElementsOf(report.underlyingSteps().stream()
+                        .map(ScenarioCanvasValuator.UnderlyingStep::step).toList());
+        assertThat(previewProjection.stepBands().get(animation.terminalFrameIndex()).step())
+                .isEqualTo(exactExpiryStep);
+        assertThat(previewProjection.stepBands().get(animation.terminalFrameIndex()).sessionProgress())
+                .isEqualTo(animation.terminalSessionProgress());
+        int previewFocusSource = previewProjection.sampleSourcePathIndices()
+                .get(previewProjection.sampleFocusIndex());
+        assertThat(previewFocusSource).isEqualTo(report.focusSourcePathIndex());
+        assertThat(previewProjection.samples().get(previewProjection.sampleFocusIndex())
+                .get(animation.terminalFrameIndex()))
+                .isEqualTo(io.liftandshift.strikebench.util.Numbers.round2(
+                        report.underlyingSteps().get(animation.terminalFrameIndex()).focusPrice()));
     }
 
     @Test void symbolScopeSharesTheProcessBudgetAndRefusesPathologicalWork() {

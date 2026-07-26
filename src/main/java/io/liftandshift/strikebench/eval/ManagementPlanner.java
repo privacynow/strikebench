@@ -29,8 +29,10 @@ public final class ManagementPlanner {
         // while the take-profit and stop lines carry no trigger and say why.
         Long optionNet = c.price().optionNetPremiumCents();
         boolean hasShort = c.assignmentProb() != null; // engine sets this only when there are short legs
-        OptionTime.Measure time = ProtocolEvaluator.timeTo(
-                ctx == null ? null : ctx.asOfDate(), nearestExpiry(c));
+        OptionTime.Measure time = ctx == null ? null
+                : ctx.timeToExpiry().asOf() == null
+                ? ProtocolEvaluator.timeTo(ctx.asOfDate(), nearestExpiry(c))
+                : ProtocolEvaluator.timeTo(ctx.timeToExpiry().asOf(), nearestExpiry(c));
         ProtocolEvaluator.Plan plan = optionNet == null
                 ? ProtocolEvaluator.unpricedPlan(policy, c.price().unavailableReason(), time, hasShort)
                 : ProtocolEvaluator.plan(policy, optionNet, time, hasShort);

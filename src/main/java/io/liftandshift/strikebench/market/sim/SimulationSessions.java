@@ -389,16 +389,31 @@ public final class SimulationSessions {
 
     public void finish(String worldId, String userId, FinishHook hook) {
         SimulatedWorld w = require(worldId, userId);
+        boolean wasRunning = w.running();
         w.pause();
         Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), false);
-        db.tx(c -> {
-            Db.execOn(c, "UPDATE sim_session SET state=?::jsonb,status='FINISHED', "
-                            + "finished_at=now() WHERE id=?",
-                    Json.write(cp), worldId);
-            persistEvents(c, worldId, w.eventLog());
-            if (hook != null) hook.beforeFinish(c, worldId, w);
-            return null;
-        });
+        try {
+            db.tx(c -> {
+                // The hook takes the same owner-scoped transition lock used by entry before this
+                // row is terminal. That gives finish and enter one lock order (owner -> session)
+                // and makes selector/workspace rollback with a failed terminal update.
+                if (hook != null) hook.beforeFinish(c, worldId, w);
+                int finished = Db.execOn(c, "UPDATE sim_session SET state=?::jsonb,status='FINISHED', "
+                                + "finished_at=now() WHERE id=? AND user_id=? AND status<>'FINISHED'",
+                        Json.write(cp), worldId, owner(userId));
+                if (finished != 1) {
+                    throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                            "no unfinished simulated session: " + worldId);
+                }
+                persistEvents(c, worldId, w.eventLog());
+                return null;
+            });
+        } catch (RuntimeException | Error failure) {
+            // The durable transaction rolled back. Restore the resident control state too; a
+            // failed finish must not silently pause a world whose database row is still RUNNING.
+            if (wasRunning) w.start();
+            throw failure;
+        }
         preparingWorlds.remove(worldId);
         evict(worldId);
     }
@@ -439,10 +454,26 @@ public final class SimulationSessions {
 
     /** A world cannot be entered or mutated until its promised symbols and calibration are final. */
     public void ensureReady(String worldId, String userId) {
-        var rows = db.query("SELECT status FROM sim_session WHERE id=? AND user_id=?",
+        db.tx(connection -> {
+            ensureReadyOn(connection, worldId, userId);
+            return null;
+        });
+    }
+
+    /**
+     * Transaction-scoped readiness gate. The row lock serializes entry with finish so a session
+     * cannot become terminal after validation but before its selector is committed.
+     */
+    public void ensureReadyOn(java.sql.Connection connection, String worldId, String userId)
+            throws java.sql.SQLException {
+        var rows = Db.queryOn(connection,
+                "SELECT status FROM sim_session WHERE id=? AND user_id=? FOR UPDATE",
                 r -> r.str("status"), worldId, owner(userId));
         if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
-        String status = rows.getFirst();
+        requireReadyStatus(rows.getFirst());
+    }
+
+    private static void requireReadyStatus(String status) {
         if ("PREPARING".equals(status)) {
             throw new IllegalStateException("This simulated market is still preparing its symbols and volatility. Wait for READY before entering or starting it.");
         }

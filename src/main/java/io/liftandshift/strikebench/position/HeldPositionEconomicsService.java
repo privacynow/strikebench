@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.market.ExecutablePrice;
 import io.liftandshift.strikebench.market.EventService;
+import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
@@ -21,7 +22,6 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,7 +38,6 @@ public final class HeldPositionEconomicsService {
             "Would you open the exact position you still own today, ignoring sunk campaign cash?";
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
 
-    private final Clock clock;
     private final EventService events;
 
     public HeldPositionEconomicsService(Clock clock) {
@@ -46,7 +45,6 @@ public final class HeldPositionEconomicsService {
     }
 
     public HeldPositionEconomicsService(Clock clock, EventService events) {
-        this.clock = clock == null ? Clock.systemUTC() : clock;
         this.events = events;
     }
 
@@ -82,11 +80,37 @@ public final class HeldPositionEconomicsService {
 
     public PositionLifecycleReceipt compose(TradeService.OpenRequest request, TradePreview preview,
                                             StrategyEvaluation evaluation) {
+        Object supplied = preview == null || preview.analytics() == null
+                ? null : preview.analytics().get("time");
+        OptionTime.Measure time = supplied instanceof OptionTime.Measure measured ? measured : null;
+        if (time == null && preview != null && preview.analytics() != null
+                && preview.analytics().get("evaluatedAtEpochMs") instanceof Number stamp) {
+            time = OptionTime.nearest(request == null ? null : request.legs(),
+                    java.time.Instant.ofEpochMilli(stamp.longValue()));
+        }
+        if (time == null) {
+            throw new IllegalArgumentException(
+                    "held-position analysis requires the preview's lane-aware option-time receipt");
+        }
+        return compose(request, preview, evaluation, time);
+    }
+
+    /**
+     * Composes against the exact market-lane clock that priced the preview. No wall-clock read is
+     * permitted here: a Practice simulation may be months away from today, and using the host clock
+     * would corrupt annualization, event crossings, calendar days, and management sessions together.
+     */
+    public PositionLifecycleReceipt compose(TradeService.OpenRequest request, TradePreview preview,
+                                            StrategyEvaluation evaluation,
+                                            OptionTime.Measure time) {
         if (request == null || preview == null) {
             throw new IllegalArgumentException("request and exact preview are required");
         }
         if (request.qty() < 1 || request.legs() == null || request.legs().isEmpty()) {
             throw new IllegalArgumentException("a held position requires positive exact package geometry");
+        }
+        if (time == null || time.asOf() == null) {
+            throw new IllegalArgumentException("held-position analysis requires a lane timestamp");
         }
 
         PositionLifecycleReceipt.CloseQuote close = closeQuote(request, preview);
@@ -100,13 +124,14 @@ public final class HeldPositionEconomicsService {
         }
         if (!close.executable()) currentLimitations.add(close.unavailableReason());
 
-        int days = singleExpirationDays(request.legs());
+        Long calendarDays = time.calendarDays() < 0 ? null : time.calendarDays();
+        Integer sessions = time.hasManagementClock() ? time.sessions() : null;
         long grossRemaining = close.executable()
                 ? Math.max(0, Math.negateExact(close.price().optionNetPremiumCents())) : 0;
         Long modeledCollateral = preview.reserveCents();
-        Double grossAnnualized = days > 0 && modeledCollateral != null
+        Double grossAnnualized = time.hasModelTime() && modeledCollateral != null
                 && modeledCollateral > 0 && grossRemaining > 0
-                ? round4(100.0 * grossRemaining / modeledCollateral * 365.0 / days) : null;
+                ? round4(100.0 * grossRemaining / modeledCollateral / time.years()) : null;
         List<String> carryLimitations = new ArrayList<>();
         if (singleExpiration(request.legs()) == null) {
             carryLimitations.add("A mixed-expiration package has no single honest annualized remaining-premium clock.");
@@ -142,7 +167,7 @@ public final class HeldPositionEconomicsService {
                         "Theoretical encumbrance removed by a full close; this is not a broker buying-power claim.");
 
         List<PositionLifecycleReceipt.AssignmentLeg> assignmentLegs = assignmentLegs(request, preview);
-        EventFacts eventFacts = eventFacts(request);
+        EventFacts eventFacts = eventFacts(request, time);
         List<String> assignmentLimitations = new ArrayList<>();
         assignmentLimitations.add("Tax-lot and campaign-adjusted bases require a linked tracked structure or campaign.");
         assignmentLimitations.add("Book impacts remain unavailable until the read-only Book action projection is composed.");
@@ -157,7 +182,7 @@ public final class HeldPositionEconomicsService {
         String stanceRef = evaluation == null
                 ? "evaluation:UNAVAILABLE"
                 : PositionLifecycleReceipt.STANCE_REF;
-        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        OffsetDateTime now = OffsetDateTime.ofInstant(time.asOf(), ZoneOffset.UTC);
         return new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION,
                 request.symbol().trim().toUpperCase(Locale.ROOT), positionFingerprint,
                 PositionLifecycleReceipt.History.unavailable(
@@ -174,8 +199,9 @@ public final class HeldPositionEconomicsService {
                         currentLimitations),
                 new PositionLifecycleReceipt.CarryCollateral(
                         close.executable() ? grossRemaining : null,
-                        grossAnnualized, days < 0 ? null : days,
-                        singleExpirationSessions(request.legs()), collateral,
+                        grossAnnualized,
+                        calendarDays == null ? null : Math.toIntExact(calendarDays),
+                        sessions, collateral,
                         AuthorityFacts.RateFact.unavailable(
                                 "No broker-reported settlement-fund rate/income receipt is linked to this analysis."),
                         encumbrance, release, sharesReleased,
@@ -209,7 +235,7 @@ public final class HeldPositionEconomicsService {
     private record EventFacts(List<PositionLifecycleReceipt.EventCrossing> crossings,
                               String status, List<String> limitations, List<String> sourceRefs) {}
 
-    private EventFacts eventFacts(TradeService.OpenRequest request) {
+    private EventFacts eventFacts(TradeService.OpenRequest request, OptionTime.Measure time) {
         if (events == null) {
             return new EventFacts(List.of(), "UNAVAILABLE",
                     List.of("Canonical EventService evidence was not supplied to this composer."), List.of());
@@ -225,7 +251,7 @@ public final class HeldPositionEconomicsService {
         if (!event.available()) {
             return new EventFacts(List.of(), event.status().name(), List.of(event.note()), refs);
         }
-        LocalDate today = LocalDate.ofInstant(clock.instant(), MARKET_ZONE);
+        LocalDate today = LocalDate.ofInstant(time.asOf(), MARKET_ZONE);
         LocalDate lastExpiration = request.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).max(LocalDate::compareTo).orElse(null);
         boolean crosses = lastExpiration != null
@@ -472,23 +498,6 @@ public final class HeldPositionEconomicsService {
                             + "executable premium; tracked tax and campaign bases remain separate."));
         }
         return List.copyOf(out);
-    }
-
-    private int singleExpirationDays(List<Leg> legs) {
-        LocalDate expiration = singleExpiration(legs);
-        if (expiration == null) return -1;
-        LocalDate today = LocalDate.ofInstant(clock.instant(), MARKET_ZONE);
-        return Math.toIntExact(Math.max(0, ChronoUnit.DAYS.between(today, expiration)));
-    }
-
-    /**
-     * The policy clock for this package: trading sessions to the single expiry, from the ONE
-     * measured receipt (MarketHours owns the calendar). Null when there is no single live expiry.
-     */
-    private Integer singleExpirationSessions(List<Leg> legs) {
-        var time = io.liftandshift.strikebench.paper.ProtocolEvaluator.timeTo(
-                LocalDate.ofInstant(clock.instant(), MARKET_ZONE), singleExpiration(legs));
-        return time == null ? null : time.sessions();
     }
 
     private static LocalDate singleExpiration(List<Leg> legs) {

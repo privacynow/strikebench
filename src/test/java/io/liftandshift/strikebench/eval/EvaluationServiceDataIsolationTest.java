@@ -21,6 +21,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.liftandshift.strikebench.support.TestPrices;
 
 class EvaluationServiceDataIsolationTest {
@@ -108,6 +109,49 @@ class EvaluationServiceDataIsolationTest {
                 .isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
         assertThat(evaluation.assessment().economics().observedEvidence()).isFalse();
         assertThat(evaluation.assessment().economics().actionableFavorable()).isFalse();
+    }
+
+    @Test
+    void evaluationRefusesAMissingUnderlyingInsteadOfSubstitutingZero() {
+        db = TestDb.fresh();
+        Clock laneClock = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneOffset.UTC);
+        MarketDataService emptyMarket = new MarketDataService(
+                List.<MarketDataProvider>of(), List.<NewsFilingsProvider>of(),
+                List.<RatesProvider>of(), new StoredCandleStore(db));
+
+        assertThatThrownBy(() -> new EvaluationService(emptyMarket, db, laneClock).evaluate(
+                "AAPL", "INCOME", "NEUTRAL", "month", "balanced",
+                List.of(highPremiumPut(LocalDate.parse("2026-08-21"))),
+                10_000_000L, null, false, AnalysisContext.OBSERVED, null, null))
+                .isInstanceOf(io.liftandshift.strikebench.util.DataUnavailableException.class)
+                .hasMessageContaining("no quote")
+                .hasMessageNotContaining("$0");
+    }
+
+    @Test
+    void evaluationRefusesAnUndatedOptionInsteadOfInventingThirtyDays() {
+        db = TestDb.fresh();
+        Clock laneClock = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneOffset.UTC);
+        MarketDataService market = new MarketDataService(
+                List.<MarketDataProvider>of(new ObservedFixtureProvider(laneClock)),
+                List.<NewsFilingsProvider>of(), List.<RatesProvider>of(),
+                new StoredCandleStore(db));
+        Candidate undated = new Candidate("CASH_SECURED_PUT", "Cash-secured put",
+                "acquisition_income", "SELL 240P",
+                List.of(new LegView("SELL", "PUT", "240", null, 1, "10.00", 100, "OPEN")),
+                1, TestPrices.withFees(1, 100_000L, 100_000L, 65L), 100_000L, 2_300_000L,
+                List.of("230.00"), 0.75, 90_000L, 0.90, "DELAYED", List.of(), 0.8,
+                "Income below spot", "Keep the premium", "Assignment below breakeven",
+                "A sharp selloff", "Collect premium or acquire shares", "INCOME",
+                List.of("INCOME", "ACQUIRE"), 0.20, 30.0, "230.00",
+                "Collect premium or acquire at $230", false, null, null);
+
+        assertThatThrownBy(() -> new EvaluationService(market, db, laneClock).evaluate(
+                "AAPL", "INCOME", "NEUTRAL", "month", "balanced", List.of(undated),
+                10_000_000L, null, false, AnalysisContext.OBSERVED, null, null))
+                .isInstanceOf(io.liftandshift.strikebench.util.DataUnavailableException.class)
+                .hasMessageContaining("has no expiration")
+                .hasMessageNotContaining("30");
     }
 
     private static Candidate highPremiumPut(LocalDate expiration) {

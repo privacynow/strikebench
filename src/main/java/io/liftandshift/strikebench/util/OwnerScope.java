@@ -30,4 +30,19 @@ public final class OwnerScope {
                 owner, LOCAL.equals(owner) ? "Local user" : owner);
         return owner;
     }
+
+    /**
+     * Transaction mutex for mutations whose rows may not exist yet.
+     *
+     * <p>The workspace and active-world selectors are both optional rows. Row-locking either table
+     * alone therefore cannot serialize the first write with a concurrent world transition. The
+     * durable owner row always exists after {@link #ensure}; locking it gives both owners one
+     * stable lock before either touches its optional row.
+     */
+    public static String lock(Connection connection, String raw) throws SQLException {
+        String owner = ensure(connection, raw);
+        Db.queryOn(connection, "SELECT id FROM users WHERE id=? FOR UPDATE",
+                row -> row.str("id"), owner);
+        return owner;
+    }
 }

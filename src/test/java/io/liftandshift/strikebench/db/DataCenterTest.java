@@ -183,6 +183,28 @@ class DataCenterTest {
     }
 
     @Test
+    void resetPaperPreservesSimulationEvidenceReferencedByAPlan() {
+        Ctx c = wire();
+        c.accounts().getOrCreateDefault();
+        db.exec("INSERT INTO sim_session(id,name,user_id,config,status) VALUES (?,?,?,?::jsonb,?)",
+                "world-plan-evidence", "Plan evidence", "local", "{}", "FINISHED");
+        db.exec("INSERT INTO sim_session(id,name,user_id,config,status) VALUES (?,?,?,?::jsonb,?)",
+                "world-disposable", "Disposable practice world", "local", "{}", "FINISHED");
+        db.exec("""
+                INSERT INTO plans(id,user_id,symbol,intent,market_kind,world_id,status)
+                VALUES (?,?,?,?,?,?,?)
+                """, "plan_kept", "local", "SPY", "INCOME", "SIMULATED",
+                "world-plan-evidence", "ACTIVE");
+
+        c.reset().reset(DataResetService.Tier.PAPER);
+
+        assertThat(db.query("SELECT id FROM plans WHERE id='plan_kept'",
+                r -> r.str("id"))).containsExactly("plan_kept");
+        assertThat(db.query("SELECT id FROM sim_session ORDER BY id",
+                r -> r.str("id"))).containsExactly("world-plan-evidence");
+    }
+
+    @Test
     void resetEverythingWipesAndReseedsAFundedAccount() {
         Ctx c = wire();
         c.accounts().getOrCreateDefault();

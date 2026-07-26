@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.util.Json;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -310,6 +311,14 @@ public final class ProtocolEvaluator {
         return OptionTime.toExpiry(today, nearestExpiry);
     }
 
+    /** Lane-instant variant that can distinguish live 0DTE from an expired same-day contract. */
+    public static OptionTime.Measure timeTo(Instant laneNow, LocalDate nearestExpiry) {
+        if (laneNow == null || nearestExpiry == null) return null;
+        OptionTime.Measure time = OptionTime.toExpiry(laneNow, nearestExpiry);
+        return time.state() == OptionTime.State.EXPIRED
+                || time.state() == OptionTime.State.NO_OPTION ? null : time;
+    }
+
     /** Same, from a leg list: the nearest option expiry decides. */
     public static OptionTime.Measure timeTo(List<Leg> legs, LocalDate today) {
         LocalDate nearest = legs == null ? null : legs.stream().filter(leg -> !leg.isStock())
@@ -320,7 +329,7 @@ public final class ProtocolEvaluator {
 
     /** The regime this package is in, on the policy's own session boundaries. */
     public static Regime regime(Policy policy, OptionTime.Measure time) {
-        if (time == null) return Regime.STANDARD;
+        if (time == null || !time.hasManagementClock()) return Regime.STANDARD;
         if (time.sessions() <= policy.nearExpirySessions()) return Regime.NEAR_EXPIRY;
         if (time.sessions() <= policy.timeRuleSessions()) return Regime.SHORT_DATED;
         return Regime.STANDARD;
@@ -397,7 +406,8 @@ public final class ProtocolEvaluator {
      * A null measure asks for the frozen line at the policy threshold rather than an observation.
      */
     private static Rule timeRule(Policy policy, Side side, OptionTime.Measure time, String print) {
-        boolean nearExpiry = time != null && time.sessions() <= policy.nearExpirySessions();
+        boolean nearExpiry = time != null && time.hasManagementClock()
+                && time.sessions() <= policy.nearExpirySessions();
         boolean credit = side == Side.CREDIT;
         int threshold = nearExpiry ? policy.nearExpirySessions() : policy.timeRuleSessions();
         // An unpriced package still has a calendar, so the time rule stands; only its credit-vs-debit
@@ -414,7 +424,8 @@ public final class ProtocolEvaluator {
         // exactly as a measured-flat one does.
         return new Rule(policy.policyId(), print, nearExpiry || !credit ? TIME_EXIT : ROLL,
                 null, threshold,
-                sessionsPhrase(time == null ? threshold : time.sessions()) + " to expiry — " + what);
+                sessionsPhrase(time == null || !time.hasManagementClock()
+                        ? threshold : time.sessions()) + " to expiry — " + what);
     }
 
     /**
@@ -461,7 +472,8 @@ public final class ProtocolEvaluator {
                 notes.add("If price TOUCHES a short strike, close that side immediately; do not hold and hope.");
                 notes.add("Do not carry a near-the-money short strike into the final hour — pin and "
                         + "assignment mechanics take over.");
-                if (time != null && time.calendarDays() - time.sessions() >= 2) {
+                if (time != null && time.calendarDays() >= 0 && time.hasManagementClock()
+                        && time.calendarDays() - time.sessions() >= 2) {
                     notes.add("A weekend/holiday gap sits inside this trade — the market can reopen "
                             + "through your strikes with no chance to react.");
                 }
@@ -481,7 +493,8 @@ public final class ProtocolEvaluator {
                     + " Heuristics, not predictions.";
         }
         return new Plan(id, policy.version(), print, regime, side,
-                time == null ? null : time.sessions(), time == null ? null : time.calendarDays(),
+                time == null || !time.hasManagementClock() ? null : time.sessions(),
+                time == null || time.calendarDays() < 0 ? null : time.calendarDays(),
                 time == null ? "no live option expiry" : time.basis(), rules, notes, basis);
     }
 
@@ -503,7 +516,8 @@ public final class ProtocolEvaluator {
             else if (pnl >= target.triggerPnlCents()) out.add(fired(target, ATTENTION));
         }
         OptionTime.Measure time = in.timeToExpiry();
-        if (time != null && time.sessions() <= policy.timeRuleSessions()) {
+        if (time != null && time.hasManagementClock()
+                && time.sessions() <= policy.timeRuleSessions()) {
             Rule rule = timeRule(policy, side(in.optionNetPremiumCents()), time, print);
             out.add(new Trigger(rule.policyId(), rule.policyFingerprint(), rule.rule(), INFO, null,
                     time.sessions(), rule.summary()));

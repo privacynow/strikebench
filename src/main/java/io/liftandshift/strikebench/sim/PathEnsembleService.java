@@ -59,9 +59,14 @@ public final class PathEnsembleService {
                                           int waypointCount, int explicitToleranceCount,
                                           int withinToleranceCount, int selectedWithinToleranceCount,
                                           int sourcePointCount, int returnedPointCount,
+                                          List<Integer> displaySteps,
                                           int focusSourcePathIndex,
                                           double focusTerminalQuantile,
-                                          double focusWaypointDistance) {}
+                                          double focusWaypointDistance) {
+        public DisplaySelectionReceipt {
+            displaySteps = displaySteps == null ? List.of() : List.copyOf(displaySteps);
+        }
+    }
 
     /** Step-resolution quantiles over the selected neighborhood, in trading-session units. */
     public record DisplayBand(int step, double sessionProgress,
@@ -106,7 +111,7 @@ public final class PathEnsembleService {
      * full authority; only the evenly spaced rendering checkpoints are projected.
      */
     public static final int MAX_DISPLAY_POINTS_PER_SERIES = 1_025;
-    public static final String DISPLAY_SELECTION_VERSION = "ensemble-display-selection-2";
+    public static final String DISPLAY_SELECTION_VERSION = "ensemble-display-selection-3";
     public static final String JOINT_MODEL_VERSION = PathGenerator.JOINT_MODEL_VERSION;
     public static final int MIN_JOINT_RETURN_SESSIONS = 30;
 
@@ -253,18 +258,38 @@ public final class PathEnsembleService {
      * nearest-path projection for animation.
      */
     public DisplayProjection displayPaths(Ensemble ensemble, ScenarioSpec authoredScenario, int requested) {
+        return displayPaths(ensemble, authoredScenario, requested, null);
+    }
+
+    /**
+     * Project selected source rows on an exact, already-resolved display grid. This is the seam
+     * used when a Scenario Canvas has inserted package-lifecycle boundaries into the shared grid.
+     */
+    public DisplayProjection displayPaths(Ensemble ensemble, ScenarioSpec authoredScenario, int requested,
+                                          int[] exactDisplaySteps) {
         if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
         ScenarioSpec scenario = authoredScenario == null ? null : authoredScenario.sane();
         List<DisplayWaypoint> waypoints = scenario == null ? List.of() : scenario.waypoints().stream()
                 .map(pin -> new DisplayWaypoint(pin.dayIndex(), pin.priceRatio(), pin.tolerance()))
                 .toList();
-        return displayPathsAtProgress(ensemble, waypoints, requested);
+        return displayPathsAtProgress(ensemble, waypoints, requested, exactDisplaySteps);
     }
 
     /** Condition a display projection at exact points on the stored intraday session grid. */
     public DisplayProjection displayPathsAtProgress(Ensemble ensemble,
                                                      List<DisplayWaypoint> rawWaypoints,
                                                      int requested) {
+        return displayPathsAtProgress(ensemble, rawWaypoints, requested, null);
+    }
+
+    /**
+     * Condition and project on one exact source-step grid. Selection and band-neighborhood rules
+     * are identical to the ordinary projection; only the serialized source-step identities differ.
+     */
+    public DisplayProjection displayPathsAtProgress(Ensemble ensemble,
+                                                     List<DisplayWaypoint> rawWaypoints,
+                                                     int requested,
+                                                     int[] exactDisplaySteps) {
         if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
         int limit = Math.clamp(requested <= 0 ? 8 : requested, 1, MAX_DISPLAY_PATHS);
         double[][] source = ensemble.paths();
@@ -289,7 +314,9 @@ public final class PathEnsembleService {
         }
         if (ranked.isEmpty()) throw new IllegalArgumentException("ensemble has no displayable paths");
         int sourceSteps = ranked.stream().mapToInt(path -> path.prices.length).min().orElse(1) - 1;
-        int[] displaySteps = displayStepIndices(sourceSteps);
+        int[] displaySteps = exactDisplaySteps == null
+                ? displayStepIndices(sourceSteps)
+                : exactDisplayStepIndices(sourceSteps, exactDisplaySteps);
         List<RankedPath> terminalRanked = new ArrayList<>(ranked);
         terminalRanked.sort(Comparator.comparingDouble(RankedPath::terminal).thenComparingInt(RankedPath::index));
         for (int i = 0; i < terminalRanked.size(); i++) {
@@ -360,6 +387,7 @@ public final class PathEnsembleService {
                 chosen.size(), ranked.size(), waypoints.size(),
                 explicitToleranceCount, withinToleranceCount, selectedWithinToleranceCount,
                 sourceSteps + 1, displaySteps.length,
+                Arrays.stream(displaySteps).boxed().toList(),
                 focus.sourcePathIndex(),
                 focus.terminalQuantile(), focus.waypointDistance());
         String sampling = displaySteps.length < sourceSteps + 1
@@ -393,16 +421,86 @@ public final class PathEnsembleService {
         return List.copyOf(bands);
     }
 
-    /** Deterministic source-step projection shared by every serialized path/canvas view. */
-    static int[] displayStepIndices(int totalSteps) {
+    /**
+     * Deterministic source-step projection shared by every serialized path/canvas view.
+     *
+     * <p>Callers may name source steps that carry semantic boundaries (for example, an exact
+     * package-settlement frame). Those steps replace their nearest non-mandatory uniform sample
+     * rather than being appended, so the wire bound remains absolute and every named boundary is
+     * retained exactly.
+     */
+    static int[] displayStepIndices(int totalSteps, int... mandatorySteps) {
         int steps = Math.max(0, totalSteps);
         int pointCount = Math.min(steps + 1, MAX_DISPLAY_POINTS_PER_SERIES);
-        int[] indices = new int[pointCount];
-        if (pointCount == 1) return indices;
-        for (int slot = 0; slot < pointCount; slot++) {
-            indices[slot] = (int) ((long) slot * steps / (pointCount - 1));
+        if (pointCount == steps + 1) {
+            int[] all = new int[pointCount];
+            for (int step = 0; step < pointCount; step++) all[step] = step;
+            return all;
         }
-        return indices;
+        java.util.TreeSet<Integer> mandatory = new java.util.TreeSet<>();
+        mandatory.add(0);
+        mandatory.add(steps);
+        if (mandatorySteps != null) {
+            for (int step : mandatorySteps) mandatory.add(Math.clamp(step, 0, steps));
+        }
+        if (mandatory.size() > pointCount) {
+            throw new IllegalArgumentException("mandatory display steps exceed the "
+                    + MAX_DISPLAY_POINTS_PER_SERIES + "-point wire bound");
+        }
+        java.util.TreeSet<Integer> selected = new java.util.TreeSet<>();
+        for (int slot = 0; slot < pointCount; slot++) {
+            selected.add((int) ((long) slot * steps / (pointCount - 1)));
+        }
+        for (int required : mandatory) {
+            if (selected.contains(required)) continue;
+            Integer replace = null;
+            long nearestDistance = Long.MAX_VALUE;
+            for (int candidate : selected) {
+                if (mandatory.contains(candidate)) continue;
+                long distance = Math.abs((long) candidate - required);
+                if (distance < nearestDistance
+                        || distance == nearestDistance && (replace == null || candidate < replace)) {
+                    nearestDistance = distance;
+                    replace = candidate;
+                }
+            }
+            if (replace == null) {
+                throw new IllegalStateException("no replaceable display step remains for mandatory boundary "
+                        + required);
+            }
+            selected.remove(replace);
+            selected.add(required);
+        }
+        return selected.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    /**
+     * Validate and defensively copy a fully resolved wire grid. Exact grids are not resampled:
+     * index {@code i} must identify the same source step on every price, band, and valued position.
+     */
+    public static int[] exactDisplayStepIndices(int totalSteps, int[] rawSteps) {
+        int steps = Math.max(0, totalSteps);
+        if (rawSteps == null || rawSteps.length == 0) {
+            throw new IllegalArgumentException("an exact display grid is required");
+        }
+        if (rawSteps.length > MAX_DISPLAY_POINTS_PER_SERIES) {
+            throw new IllegalArgumentException("exact display grid exceeds the "
+                    + MAX_DISPLAY_POINTS_PER_SERIES + "-point wire bound");
+        }
+        int[] exact = rawSteps.clone();
+        if (exact[0] != 0 || exact[exact.length - 1] != steps) {
+            throw new IllegalArgumentException("exact display grid must retain source endpoints 0 and " + steps);
+        }
+        for (int i = 0; i < exact.length; i++) {
+            if (exact[i] < 0 || exact[i] > steps) {
+                throw new IllegalArgumentException("exact display step " + exact[i]
+                        + " lies outside source range 0.." + steps);
+            }
+            if (i > 0 && exact[i] <= exact[i - 1]) {
+                throw new IllegalArgumentException("exact display steps must be strictly increasing");
+            }
+        }
+        return exact;
     }
 
     private static double[] displayPrices(double[] source, int[] displaySteps) {

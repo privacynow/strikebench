@@ -274,7 +274,7 @@ public record EconomicAssessment(
         long perPackageFloor = 1_000L * Math.max(1, c == null ? 1 : c.qty());
         long payoffFloor = Math.round(scale * 0.03);
         long exposure = Math.max(loss, risk == null ? 0 : Math.max(0, risk.tailLossCents()));
-        int days = ctx == null ? 0 : Math.max(0, ctx.daysToExpiry());
+        int days = ctx == null ? 0 : Math.max(0, ctx.calendarDaysToExpiry());
         double exposureRate = 0.0005 + 0.01 * days / 365.0;
         long exposureFloor = (long) Math.ceil(exposure * exposureRate);
         return Math.max(perPackageFloor, Math.max(payoffFloor, exposureFloor));
@@ -308,7 +308,7 @@ public record EconomicAssessment(
     private static RealisticRange realisticRange(Candidate c, EvalContext ctx, Long pointAfterCosts,
                                                    long fees) {
         if (pointAfterCosts == null || c == null || ctx == null || ctx.realizedVol30() == null
-                || ctx.realizedVol30() <= 0 || ctx.daysToExpiry() <= 0
+                || ctx.realizedVol30() <= 0 || !ctx.hasModelTime()
                 || ctx.trailingCloses() == null || ctx.trailingCloses().size() < 20) {
             return null;
         }
@@ -322,7 +322,7 @@ public record EconomicAssessment(
         try {
             var curve = RiskProfiler.payoffCurve(c, ctx);
             if (curve == null) return null; // unpriced package: no entry, so no sensitivity range
-            double years = ctx.daysToExpiry() / 365.0;
+            double years = ctx.yearsToExpiry();
             long atLow = curve.expectedValueCents(ctx.underlyingCents() / 100.0, lowVol, years, 0) - fees;
             long atHigh = curve.expectedValueCents(ctx.underlyingCents() / 100.0, highVol, years, 0) - fees;
             long low = Math.min(pointAfterCosts, Math.min(atLow, atHigh));

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -104,6 +105,34 @@ class ApiIntegrationTest {
                 .header("Content-Type", "application/json")
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(body)).build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String guardedWorkspaceBody(String body, boolean partial) throws Exception {
+        JsonNode receipt = Json.parse(get("/api/workspace").body());
+        ObjectNode guarded = (ObjectNode) Json.parse(body);
+        JsonNode context = receipt.get("context");
+        guarded.put("expectedRev", receipt.get("rev").asLong());
+        guarded.put(partial ? "expectedGeneration" : "generation",
+                context == null ? 0L : context.get("generation").asLong());
+        if (!guarded.has("world")) guarded.put("world", receipt.get("world").asText());
+        if (partial) {
+            guarded.put("expectedDatasetId", receipt.get("datasetId").asText());
+            guarded.put("expectedMarketLane", receipt.get("marketLane").asText());
+            guarded.put("expectedAccountId", receipt.get("accountId").asText());
+        } else {
+            guarded.put("datasetId", receipt.get("datasetId").asText());
+            guarded.put("marketLane", receipt.get("marketLane").asText());
+            guarded.put("accountId", receipt.get("accountId").asText());
+        }
+        return guarded.toString();
+    }
+
+    private static HttpResponse<String> putWorkspace(String body) throws Exception {
+        return put("/api/workspace", guardedWorkspaceBody(body, false));
+    }
+
+    private static HttpResponse<String> patchWorkspace(String body) throws Exception {
+        return patch("/api/workspace", guardedWorkspaceBody(body, true));
     }
 
     private static HttpResponse<String> delete(String path) throws Exception {
@@ -422,7 +451,7 @@ class ApiIntegrationTest {
         JsonNode rowSpotPnl = list.at("/trades/0/spotPnl");
         assertThat(rowSpotPnl.has("terminalPnlAtCurrentSpotCents")).isTrue();
         assertThat(rowSpotPnl.get("spotCents").asLong()).isPositive();
-        assertThat(rowSpotPnl.get("spotBasis").asText()).isIn("LIVE_MARK", "RECORDED_ENTRY");
+        assertThat(rowSpotPnl.get("spotBasis").asText()).isEqualTo("LIVE_MARK");
         assertThat(rowSpotPnl.has("unavailableReason")).isFalse();
         JsonNode beforeLifecycleRead = Json.parse(get("/api/account").body());
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
@@ -433,8 +462,17 @@ class ApiIntegrationTest {
         assertThat(detail.at("/trade/terminalPayoff/points").size()).isGreaterThan(30);
         assertThat(detail.at("/trade/terminalPayoff/schemaVersion").asText())
                 .isEqualTo("risk-terminal-payoff-1");
+        assertThat(detail.at("/quote/priced").asBoolean()).isTrue();
+        assertThat(detail.at("/quote/displayPrice").asText()).isNotBlank();
+        assertThat(detail.at("/quote/markBasis").asText()).isNotBlank();
+        assertThat(detail.at("/trade/spotPnl/spotCents").asLong())
+                .isEqualTo(new BigDecimal(detail.at("/quote/displayPrice").asText())
+                        .movePointRight(2).longValueExact());
         assertOnlyCanonicalGreeks(detail);
         assertThat(detail.at("/current/popNow").asDouble()).isBetween(0.0, 1.0);
+        assertThat(detail.at("/current/availability/quoteAvailable").asBoolean()).isTrue();
+        assertThat(detail.at("/current/availability/popAvailable").asBoolean()).isTrue();
+        assertThat(detail.at("/current/availability/greeksAvailable").asBoolean()).isTrue();
         assertThat(detail.at("/analysis/lifecycle/history/available").asBoolean()).isTrue();
         assertThat(detail.at("/analysis/lifecycle/currentChoice/freshEyesQuestion").asText())
                 .contains("Would you open the exact position");
@@ -451,6 +489,20 @@ class ApiIntegrationTest {
                 .isEqualTo(beforeLifecycleRead.at("/account/cashCents").asLong());
         assertThat(afterLifecycleRead.at("/account/reservedCents").asLong())
                 .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
+
+        // The heat endpoint projects the ONE BookRiskService roster for compatibility and lets a
+        // caller ask the same owner for exact selected-book totals. It never re-ranks in the
+        // controller or expects the browser to add max loss / dollar delta.
+        JsonNode heat = Json.parse(get("/api/portfolio/heat?selectedTradeIds=" + tradeId).body());
+        assertThat(heat.at("/shareRoster/rows/0/tradeId").asText()).isEqualTo(tradeId);
+        assertThat(heat.at("/positions/0/riskRank").asInt())
+                .isEqualTo(heat.at("/shareRoster/rows/0/rank").asInt());
+        assertThat(heat.at("/positions/0/riskSharePct").asDouble())
+                .isEqualTo(heat.at("/shareRoster/rows/0/sharePct").asDouble());
+        assertThat(heat.at("/selectedBook/selectionAvailable").asBoolean()).isTrue();
+        assertThat(heat.at("/selectedBook/definedMaxLossCents").asLong()).isEqualTo(maxLoss);
+        assertThat(heat.at("/selectedBook/tradeIds/0").asText()).isEqualTo(tradeId);
+        assertThat(heat.at("/selectedBook/netDollarDeltaCents").isNumber()).isTrue();
 
         // Refresh writes a mark
         assertThat(post("/api/trades/" + tradeId + "/refresh", "{}").statusCode()).isEqualTo(200);
@@ -1251,7 +1303,7 @@ class ApiIntegrationTest {
         assertThat(empty.get("marketLane").asText()).isEqualTo("DEMO");
 
         // PUT declares the whole context. Server facts are stamped, never taken from the body.
-        HttpResponse<String> put1 = put("/api/workspace", """
+        HttpResponse<String> put1 = putWorkspace("""
                 {"version":1,"goal":"INCOME","view":"NEUTRAL","horizonDays":45,"riskPosture":"BALANCED",
                  "scopeType":"SYMBOL","focusedSymbol":"AAPL","routeState":"#/idea/AAPL"}""");
         assertThat(put1.statusCode()).isEqualTo(200);
@@ -1263,7 +1315,7 @@ class ApiIntegrationTest {
 
         // PATCH changes ONLY what it names. This is the Import Trade path: it must not destroy
         // goal, view, horizon, risk or the world (audit §6).
-        HttpResponse<String> patched = patch("/api/workspace",
+        HttpResponse<String> patched = patchWorkspace(
                 "{\"version\":1,\"routeState\":\"#/import\"}");
         assertThat(patched.statusCode()).isEqualTo(200);
         JsonNode context = Json.parse(patched.body()).get("context");
@@ -1287,7 +1339,7 @@ class ApiIntegrationTest {
         assertThat(Json.parse(put("/api/workspace", "{\"version\":2}").body()).get("detail").asText())
                 .contains("this build reads workspace context version 1");
         // A stale publication from another market is refused rather than half-applied.
-        assertThat(patch("/api/workspace", "{\"version\":1,\"world\":\"observed\"}").statusCode())
+        assertThat(patchWorkspace("{\"version\":1,\"world\":\"observed\"}").statusCode())
                 .isEqualTo(409);
         // Payload storage is still refused — the workspace is declarations and ids.
         assertThat(put("/api/workspace", "{\"big\":\"" + "x".repeat(140 * 1024) + "\"}").statusCode()).isEqualTo(400);
@@ -1295,11 +1347,11 @@ class ApiIntegrationTest {
         // The event bus announced both writes; /api/events replays from Last-Event-ID.
         assertThat(server.events.since(0)).anyMatch(e -> e.type().equals("workspace.updated"));
 
-        // Dataset switches publish dataset.selected (the scenario banner listens for this).
+        // Re-selecting the already-active dataset is idempotent: it must not manufacture a
+        // second revision/event that another tab could mistake for a real context change.
         long before = server.events.since(0).size();
         put("/api/datasets/active", "{\"id\":\"observed\"}");
-        assertThat(server.events.since(0).stream().skip(before))
-                .anyMatch(e -> e.type().equals("dataset.selected") && "observed".equals(e.data().get("active")));
+        assertThat(server.events.since(0).stream().skip(before)).isEmpty();
 
         // SSE endpoint speaks event-stream and replays from the precise event boundary.
         long workspaceSeq = server.events.since(0).stream()
@@ -1352,6 +1404,19 @@ class ApiIntegrationTest {
         assertThat(fit.has("pctOfNlv")).isTrue();
         assertThat(fit.has("pctOfCashBp")).isTrue();
         assertThat(fit.has("pctOfRiskCapital")).isTrue();
+        JsonNode selectedCapital = fit.get("selectedCapital");
+        assertThat(selectedCapital.get("fundingClass").asText()).isEqualTo("DEFINED_RISK");
+        assertThat(selectedCapital.get("capitalBasis").asText()).isEqualTo("MAXIMUM_LOSS");
+        assertThat(selectedCapital.get("usedCents").asLong())
+                .isEqualTo(body.at("/preview/maxLossCents").asLong());
+        long cap = selectedCapital.get("capCents").asLong();
+        long used = selectedCapital.get("usedCents").asLong();
+        assertThat(selectedCapital.get("remainingCents").asLong())
+                .isEqualTo(Math.max(0L, cap - used));
+        assertThat(selectedCapital.get("overageCents").asLong())
+                .isEqualTo(Math.max(0L, used - cap));
+        assertThat(selectedCapital.get("withinCap").asBoolean()).isEqualTo(used <= cap);
+        assertThat(selectedCapital.get("basis").asText()).contains("shared");
         // The analytics contract rides along on every preview.
         var analytics = body.get("preview").get("analytics");
         assertThat(analytics.has("probabilityMap")).isTrue();
@@ -1367,6 +1432,7 @@ class ApiIntegrationTest {
         assertThat(h.has("physicalAssignmentCashCents")).isTrue();
         assertThat(h.has("assignmentReserveReleasedCents")).isTrue();
         assertThat(h.has("postPhysicalAssignmentBuyingPowerCents")).isTrue();
+        assertThat(h.has("shareRoster")).isTrue();
     }
 
     @Test
@@ -1642,7 +1708,10 @@ class ApiIntegrationTest {
         assertThat(w.get("universe").get("lane").asText()).isEqualTo("DEMO");
         assertThat(w.get("revision").asLong()).isPositive();
         assertThat(w.get("epoch").asText()).isNotBlank();
-        assertThat(Json.parse(get("/api/world").body()).get("epoch").asText()).isEqualTo(w.get("epoch").asText());
+        assertThat(w.get("workspace").get("world").asText()).isEqualTo("demo");
+        JsonNode currentWorld = Json.parse(get("/api/world").body());
+        assertThat(currentWorld.get("epoch").asText()).isEqualTo(w.get("epoch").asText());
+        assertThat(currentWorld.get("workspace").get("world").asText()).isEqualTo("demo");
     }
 
     @Test
@@ -1816,6 +1885,13 @@ class ApiIntegrationTest {
 
         JsonNode preview = Json.parse(post("/api/trades/preview", cashSecuredPut).body());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
+        assertThat(preview.at("/identity/fundingClass").asText()).isEqualTo("CASH_COLLATERAL");
+        assertThat(preview.at("/identity/capitalBasis").asText())
+                .isEqualTo("STRIKE_CASH_COLLATERAL");
+        assertThat(preview.at("/accountFit/selectedCapital/usedCents").asLong())
+                .isEqualTo(preview.at("/preview/reserveCents").asLong());
+        assertThat(preview.at("/accountFit/selectedCapital/capCents").asLong())
+                .isEqualTo(preview.at("/preview/buyingPowerBeforeCents").asLong());
         JsonNode capitalAck = java.util.stream.StreamSupport.stream(
                         preview.withArray("requiredAcks").spliterator(), false)
                 .filter(ack -> "ack-capital".equals(ack.path("id").asText()))
@@ -2214,7 +2290,7 @@ class ApiIntegrationTest {
     void oneWorkspaceContextSurvivesAWorldChangeWithoutHeaderBodyDisagreement() throws Exception {
         // A declared desk in the baseline market.
         assertThat(put("/api/world", "{\"world\":\"demo\"}").statusCode()).isEqualTo(200);
-        assertThat(put("/api/workspace", """
+        assertThat(putWorkspace("""
                 {"version":1,"goal":"INCOME","view":"NEUTRAL","horizonDays":45,"riskPosture":"BALANCED",
                  "scopeType":"SYMBOL","focusedSymbol":"AAPL","focusedSubject":"PACKAGE",
                  "focusedEvaluationId":"eval_demo_row","routeState":"#/idea/AAPL"}""")
@@ -2225,11 +2301,15 @@ class ApiIntegrationTest {
                 """).body());
         String world = created.get("worldId").asText();
         assertThat(post("/api/sim/market/" + world + "/start", "{}").statusCode()).isEqualTo(200);
-        assertThat(put("/api/world", "{\"world\":\"" + world + "\"}").statusCode()).isEqualTo(200);
+        HttpResponse<String> transition = put("/api/world", "{\"world\":\"" + world + "\"}");
+        assertThat(transition.statusCode()).isEqualTo(200);
 
-        // The first touch of the workspace in the new market commits the whole transition.
-        JsonNode moved = Json.parse(get("/api/workspace").body());
+        // PUT /api/world returns the workspace committed in the SAME transaction as the selectors.
+        // The browser never has to read new-world header state beside old-world focus.
+        JsonNode entered = Json.parse(transition.body());
+        JsonNode moved = entered.get("workspace");
         JsonNode context = moved.get("context");
+        assertThat(entered.get("world").asText()).isEqualTo(world);
         assertThat(context.get("world").asText()).isEqualTo(world);
         assertThat(context.get("marketLane").asText()).isEqualTo("SIMULATED");
         // Header and body are ONE payload and cannot disagree.
@@ -2246,7 +2326,8 @@ class ApiIntegrationTest {
         assertThat(moved.get("transition").get("toWorld").asText()).isEqualTo(world);
         assertThat(moved.get("transition").get("cleared").toString()).contains("focusedSymbol");
 
-        // Re-reading is idempotent: one transition, one revision, no second clear.
+        // Re-reading is idempotent: the transition was not deferred to GET, so there is no second
+        // revision or generation and no second clear.
         JsonNode again = Json.parse(get("/api/workspace").body());
         assertThat(again.has("transition")).isFalse();
         assertThat(again.get("rev").asLong()).isEqualTo(moved.get("rev").asLong());

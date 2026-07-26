@@ -158,7 +158,7 @@ final class DiscoveryController {
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
             io.liftandshift.strikebench.eval.EconomicReadiness.Tally readinessTally =
                     io.liftandshift.strikebench.eval.EconomicReadiness.tally();
-            LocalDate laneToday = market.laneToday(worldParam(world), clock);
+            java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
             for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
@@ -168,7 +168,7 @@ final class DiscoveryController {
                                         e.candidate().strategy()))));
                 // B5: the exact trading-sessions/calendar-days-to-expiry receipt (MarketHours via
                 // OptionTime) rides each candidate, so the desk shows real sessions, never a client count.
-                attachCandidateTime(m, laneToday);
+                attachCandidateTime(m, laneNow);
                 var endorsement = e.evidence() == null ? null
                         : e.evidence().claims().get("endorsement");
                 readinessTally.add(e.assessment().economics(),
@@ -251,16 +251,17 @@ final class DiscoveryController {
      */
     void attachCandidateTimes(com.fasterxml.jackson.databind.JsonNode result, String world) {
         if (result == null || !result.path("candidates").isArray()) return;
-        LocalDate laneToday = market.laneToday(worldParam(world), clock);
+        java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
         for (com.fasterxml.jackson.databind.JsonNode candidate : result.path("candidates")) {
             if (candidate instanceof com.fasterxml.jackson.databind.node.ObjectNode node) {
-                attachCandidateTime(node, laneToday);
+                attachCandidateTime(node, laneNow);
             }
         }
     }
 
     /** The candidate node's exact time-to-expiry via the one shared OptionTime/MarketHours convention. */
-    static void attachCandidateTime(com.fasterxml.jackson.databind.node.ObjectNode candidate, LocalDate laneToday) {
+    static void attachCandidateTime(com.fasterxml.jackson.databind.node.ObjectNode candidate,
+                                    java.time.Instant laneNow) {
         LocalDate frontExpiration = null;
         for (com.fasterxml.jackson.databind.JsonNode leg : candidate.path("legs")) {
             if ("STOCK".equalsIgnoreCase(leg.path("type").asText())) continue;
@@ -272,7 +273,7 @@ final class DiscoveryController {
             } catch (RuntimeException ignored) { /* a malformed expiration contributes no session count */ }
         }
         candidate.set("time", Json.MAPPER.valueToTree(
-                io.liftandshift.strikebench.market.OptionTime.toExpiry(laneToday, frontExpiration)));
+                io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, frontExpiration)));
     }
 
     private void addBuyAndHoldBaseline(RecommendationEngine.Result result, String world,

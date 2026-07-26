@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.eval;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.position.ParticipationProfile;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
@@ -11,7 +12,6 @@ import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +32,7 @@ final class StanceProfiler {
         double sigma = modelVol(ctx);
         double deltaShares = 0, gammaSharesPerDollar = 0, thetaDollarsPerYear = 0, vegaDollarsPerOne = 0;
         int duration = 0;
+        double durationYears = 0;
         long equivalentShares = 0;
         LocalDate dominantExpiry = null;
         for (Leg leg : legs) {
@@ -42,10 +43,19 @@ final class StanceProfiler {
                 deltaShares += sign * units;
                 continue;
             }
-            int dte = Math.max(0, (int) ChronoUnit.DAYS.between(ctx.asOfDate(), leg.expiration()));
-            duration = Math.max(duration, dte);
+            OptionTime.Measure legTime = ctx.timeToExpiry().asOf() == null
+                    ? OptionTime.toExpiry(ctx.asOfDate(), leg.expiration())
+                    : OptionTime.toExpiry(ctx.timeToExpiry().asOf(), leg.expiration());
+            if (!legTime.hasModelTime()) {
+                throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                        "Modeled stance is unavailable because " + leg.expiration()
+                                + " has no live option-time fraction (" + legTime.state() + ").");
+            }
+            int calendarDays = Math.toIntExact(legTime.calendarDays());
+            duration = Math.max(duration, calendarDays);
+            durationYears = Math.max(durationYears, legTime.years());
             if (dominantExpiry == null || leg.expiration().isAfter(dominantExpiry)) dominantExpiry = leg.expiration();
-            double t = dte / 365.0;
+            double t = legTime.years();
             boolean call = leg.type() == OptionType.CALL;
             double strike = leg.strike().doubleValue();
             deltaShares += sign * units * BlackScholes.delta(call, spot, strike, t,
@@ -66,7 +76,7 @@ final class StanceProfiler {
 
         int expirations = (int) legs.stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count();
-        double move = Math.max(0.01, sigma * Math.sqrt(Math.max(1, duration) / 365.0));
+        double move = Math.max(0.01, sigma * Math.sqrt(durationYears));
         Long down1 = null, down2 = null, up1 = null, up2 = null;
         PayoffCurve curve = null;
         // Greeks above are GEOMETRY — strikes, expiries and vol — so they survive a package the
@@ -186,7 +196,9 @@ final class StanceProfiler {
         if (multiExpiration) limits.add("Terminal participation and sigma-tail losses require path valuation for multiple expirations.");
         limits.add("Option valuation uses European Black-Scholes with q=0 and an intrinsic floor; early assignment is a heuristic warning, not a predicted event.");
         return new DataCoverageReceipt(inputs,
-                "European Black-Scholes, q=0, market IV when available; payoff curve uses exact contract geometry",
+                "MODEL_STANCE · European Black-Scholes, q=0, market IV when available;"
+                        + " modeled geometry, not current executable Greeks;"
+                        + " payoff curve uses exact contract geometry",
                 limits);
     }
 

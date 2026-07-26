@@ -201,6 +201,28 @@ public final class SimulationEngine {
         }
     }
 
+    /** Exact wire projection of already-selected source rows; no paths or financial facts are regenerated. */
+    public record PreviewProjection(List<PreviewStepBand> stepBands, List<List<Double>> samples,
+                                    List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
+                                    PreviewProjectionReceipt receipt) {
+        public PreviewProjection {
+            stepBands = stepBands == null ? List.of() : List.copyOf(stepBands);
+            samples = samples == null ? List.of() : samples.stream().map(List::copyOf).toList();
+            sampleSourcePathIndices = sampleSourcePathIndices == null
+                    ? List.of() : List.copyOf(sampleSourcePathIndices);
+        }
+    }
+
+    /** Receipt binding every serialized preview point to its immutable source-matrix step. */
+    public record PreviewProjectionReceipt(String version, int sourcePointCount,
+                                           int returnedPointCount, List<Integer> displaySteps) {
+        public PreviewProjectionReceipt {
+            displaySteps = displaySteps == null ? List.of() : List.copyOf(displaySteps);
+        }
+    }
+
+    public static final String PREVIEW_PROJECTION_VERSION = "preview-display-projection-1";
+
     public record PreviewRun(PathEnsembleService.Ensemble ensemble, Preview preview) {}
 
     /**
@@ -305,37 +327,7 @@ public final class SimulationEngine {
             bands.add(new PreviewBand(day, round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.90))));
         }
         int[] displaySteps = PathEnsembleService.displayStepIndices(spec.totalSteps());
-        List<PreviewStepBand> stepBands = new ArrayList<>(displaySteps.length);
-        for (int step : displaySteps) {
-            for (int p = 0; p < paths.length; p++) tmp[p] = paths[p][step];
-            double[] sorted = tmp.clone();
-            java.util.Arrays.sort(sorted);
-            stepBands.add(new PreviewStepBand(step, (double) step / spd,
-                    round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.25)),
-                    round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.75)),
-                    round2(Quantiles.of(sorted, 0.90))));
-        }
-        // Representative futures retain the stored rows and full-matrix terminal ranking. Only
-        // their wire representation is deterministically sampled at the same source steps as the
-        // quantile bands, keeping the response bounded without creating browser-side prices.
-        List<List<Double>> samples = new ArrayList<>();
-        Integer[] terminalOrder = new Integer[paths.length];
-        for (int p = 0; p < paths.length; p++) terminalOrder[p] = p;
-        java.util.Arrays.sort(terminalOrder, java.util.Comparator
-                .comparingDouble((Integer p) -> paths[p][paths[p].length - 1])
-                .thenComparingInt(Integer::intValue));
-        int sampleCount = Math.min(48, paths.length);
-        int sampleFocusIndex = sampleCount == 0 ? -1 : sampleCount / 2;
-        List<Integer> sampleSourcePathIndices = new ArrayList<>(sampleCount);
-        for (int slot = 0; slot < sampleCount; slot++) {
-            int at = sampleCount == 1 || slot == sampleFocusIndex ? (paths.length - 1) / 2
-                    : (int) Math.round((double) slot * (paths.length - 1) / (sampleCount - 1));
-            int p = terminalOrder[at];
-            sampleSourcePathIndices.add(p);
-            List<Double> sp = new ArrayList<>();
-            for (int step : displaySteps) sp.add(round2(paths[p][step]));
-            samples.add(sp);
-        }
+        PreviewProjection projection = projectPreview(ensemble, List.of(), -1, displaySteps);
         PreviewBand end = bands.getLast();
         MarketImpliedRange marketRange = marketImpliedRange(
                 ensemble.spot(), spec.horizonDays(), marketVol, riskFreeRate);
@@ -349,9 +341,81 @@ public final class SimulationEngine {
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
         return new Preview(receipt.symbol(), round2(ensemble.spot()), paths.length, days, ensemble.modelVersion(),
-                bands, stepBands, samples, List.copyOf(sampleSourcePathIndices), sampleFocusIndex,
+                bands, projection.stepBands(), projection.samples(),
+                projection.sampleSourcePathIndices(), projection.sampleFocusIndex(),
                 end.p10(), end.p50(), end.p90(), decisionMap, marketRange,
                 receipt, notes);
+    }
+
+    /**
+     * Reproject the already-selected preview rows and full-matrix bands on an exact source-step
+     * grid. An empty selection requests the canonical terminal-quantile rows used by
+     * {@link #assemble}; a non-empty selection is preserved byte-for-byte by source identity.
+     */
+    public static PreviewProjection projectPreview(PathEnsembleService.Ensemble ensemble,
+                                                    List<Integer> selectedSourcePathIndices,
+                                                    int selectedFocusIndex,
+                                                    int[] exactDisplaySteps) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        double[][] paths = ensemble.paths();
+        int totalSteps = paths[0].length - 1;
+        int[] displaySteps = PathEnsembleService.exactDisplayStepIndices(
+                totalSteps, exactDisplaySteps);
+        List<Integer> selected = selectedSourcePathIndices == null
+                ? List.of() : List.copyOf(selectedSourcePathIndices);
+        int focusIndex = selectedFocusIndex;
+        if (selected.isEmpty()) {
+            Integer[] terminalOrder = new Integer[paths.length];
+            for (int p = 0; p < paths.length; p++) terminalOrder[p] = p;
+            java.util.Arrays.sort(terminalOrder, java.util.Comparator
+                    .comparingDouble((Integer p) -> paths[p][paths[p].length - 1])
+                    .thenComparingInt(Integer::intValue));
+            int sampleCount = Math.min(48, paths.length);
+            focusIndex = sampleCount == 0 ? -1 : sampleCount / 2;
+            List<Integer> canonical = new ArrayList<>(sampleCount);
+            for (int slot = 0; slot < sampleCount; slot++) {
+                int at = sampleCount == 1 || slot == focusIndex ? (paths.length - 1) / 2
+                        : (int) Math.round((double) slot * (paths.length - 1)
+                            / (sampleCount - 1));
+                canonical.add(terminalOrder[at]);
+            }
+            selected = List.copyOf(canonical);
+        }
+        if (focusIndex < 0 || focusIndex >= selected.size()) {
+            throw new IllegalArgumentException("preview focus index must name a selected source path");
+        }
+        for (int sourcePathIndex : selected) {
+            if (sourcePathIndex < 0 || sourcePathIndex >= paths.length) {
+                throw new IllegalArgumentException("preview source path index " + sourcePathIndex
+                        + " lies outside the stored ensemble");
+            }
+            if (paths[sourcePathIndex].length <= totalSteps) {
+                throw new IllegalArgumentException("preview source path is shorter than the shared grid");
+            }
+        }
+
+        int spd = Math.max(1, ensemble.spec().stepsPerDay());
+        double[] values = new double[paths.length];
+        List<PreviewStepBand> stepBands = new ArrayList<>(displaySteps.length);
+        for (int step : displaySteps) {
+            for (int p = 0; p < paths.length; p++) values[p] = paths[p][step];
+            double[] sorted = values.clone();
+            java.util.Arrays.sort(sorted);
+            stepBands.add(new PreviewStepBand(step, (double) step / spd,
+                    round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.25)),
+                    round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.75)),
+                    round2(Quantiles.of(sorted, 0.90))));
+        }
+        List<List<Double>> samples = new ArrayList<>(selected.size());
+        for (int sourcePathIndex : selected) {
+            List<Double> sample = new ArrayList<>(displaySteps.length);
+            for (int step : displaySteps) sample.add(round2(paths[sourcePathIndex][step]));
+            samples.add(List.copyOf(sample));
+        }
+        List<Integer> stepReceipt = java.util.Arrays.stream(displaySteps).boxed().toList();
+        return new PreviewProjection(stepBands, samples, selected, focusIndex,
+                new PreviewProjectionReceipt(PREVIEW_PROJECTION_VERSION, totalSteps + 1,
+                        displaySteps.length, stepReceipt));
     }
 
     private static io.liftandshift.strikebench.market.MarketLane lane(String world) {

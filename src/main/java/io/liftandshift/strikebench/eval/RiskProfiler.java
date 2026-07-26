@@ -73,9 +73,10 @@ public final class RiskProfiler {
             // The SAME risk-neutral lognormal that owns pop — used only to weight each checkpoint
             // by its probability mass (Voronoi bins over MOVES). Null when no ATM IV / degenerate.
             io.liftandshift.strikebench.pricing.LognormalTerminal term =
-                    (ctx.atmIv() != null && ctx.atmIv() > 0 && spotD > 0 && ctx.daysToExpiry() > 0)
+                    (ctx.atmIv() != null && ctx.atmIv() > 0 && spotD > 0
+                            && ctx.hasModelTime())
                             ? io.liftandshift.strikebench.pricing.LognormalTerminal.of(
-                                    spotD, ctx.atmIv(), ctx.daysToExpiry() / 365.0, ctx.riskFreeRate())
+                                    spotD, ctx.atmIv(), ctx.yearsToExpiry(), ctx.riskFreeRate())
                             : null;
             for (int i = 0; i < MOVES.length; i++) {
                 double m = MOVES[i];
@@ -110,8 +111,9 @@ public final class RiskProfiler {
                     ? null : Universes.allocationSectorLabel(ctx.symbol());
             double ivRankPct = ctx.regime() != null && ctx.regime().ivRankPct() != null
                     ? ctx.regime().ivRankPct() : 55.0;
-            double expectedMovePct = ctx.atmIv() != null && ctx.atmIv() > 0 && ctx.daysToExpiry() > 0
-                    ? ctx.atmIv() * Math.sqrt(ctx.daysToExpiry() / 365.0) * 100.0 : 0.0;
+            double expectedMovePct = ctx.atmIv() != null && ctx.atmIv() > 0
+                    && ctx.hasModelTime()
+                    ? ctx.atmIv() * Math.sqrt(ctx.yearsToExpiry()) * 100.0 : 0.0;
             boolean eventSoon = ctx.regime() != null && Boolean.TRUE.equals(ctx.regime().eventSoon());
             jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel, ivRankPct, expectedMovePct,
                     eventSoon, null, !points.isEmpty(), pc.maxLossUnbounded(), maxLoss,
@@ -142,10 +144,10 @@ public final class RiskProfiler {
             basisNote = "Both EV lanes are unavailable because this package has no entry price: " + unpriced;
         } else if (distinctExpirations <= 1
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
-                && ctx.daysToExpiry() > 0 && c.legs() != null && !c.legs().isEmpty()) {
+                && ctx.hasModelTime() && c.legs() != null && !c.legs().isEmpty()) {
             try {
                 PayoffCurve ppc = payoffCurve(c, ctx);
-                double t = ctx.daysToExpiry() / 365.0;
+                double t = ctx.yearsToExpiry();
                 evHistVol = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
                 basisNote += "; history EV = realized-vol " + Math.round(ctx.realizedVol30() * 100)
                         + "% zero-drift scenario (not a physical-measure forecast). Both are pre-commission.";
@@ -153,8 +155,45 @@ public final class RiskProfiler {
         } else if (distinctExpirations > 1) {
             basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
-        return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss, TAIL_MOVE,
-                scenarios, terminalPayoff, evHistVol, basisNote, jumpTail);
+        RiskProfile.WorstScenario worstScenario = worstScenario(scenarios, maxLoss);
+        return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss,
+                TAIL_MOVE, scenarios, terminalPayoff, evHistVol, basisNote, jumpTail,
+                worstScenario);
+    }
+
+    static RiskProfile.WorstScenario worstScenario(
+            List<RiskProfile.Scenario> scenarios, long maximumLossCents) {
+        if (scenarios == null || scenarios.isEmpty()) {
+            return new RiskProfile.WorstScenario(false, null, null, null,
+                    maximumLossCents > 0 ? maximumLossCents : null,
+                    maximumLossCents > 0 ? "EXACT_MAXIMUM_LOSS" : null,
+                    null, null,
+                    "Worst of the named scenario checkpoints, compared with the exact maximum "
+                            + "loss for this package.",
+                    "No named scenario checkpoint was priced for this package.");
+        }
+        RiskProfile.Scenario worst = scenarios.stream()
+                .min(java.util.Comparator.comparingLong(RiskProfile.Scenario::pnlCents))
+                .orElseThrow();
+        long loss = Math.max(0L, -worst.pnlCents());
+        if (maximumLossCents <= 0) {
+            return new RiskProfile.WorstScenario(false, worst.underlyingMovePct(),
+                    worst.pnlCents(), loss, null, null, null, null,
+                    "Worst of the named scenario checkpoints.",
+                    "The package has no positive exact maximum-loss denominator, so scenario "
+                            + "severity cannot be measured.");
+        }
+        double sharePct = loss * 100.0 / maximumLossCents;
+        RiskProfile.ScenarioSeverity severity = sharePct >= 90.0
+                ? RiskProfile.ScenarioSeverity.SEVERE
+                : sharePct >= 50.0
+                    ? RiskProfile.ScenarioSeverity.MATERIAL
+                    : RiskProfile.ScenarioSeverity.CONTAINED;
+        return new RiskProfile.WorstScenario(true, worst.underlyingMovePct(), worst.pnlCents(),
+                loss, maximumLossCents, "EXACT_MAXIMUM_LOSS",
+                io.liftandshift.strikebench.util.Numbers.round2(sharePct), severity,
+                "Worst of the named scenario checkpoints, compared with the exact maximum "
+                        + "loss for this package.", null);
     }
 
     private static RiskProfile.TerminalPayoff unavailableTerminalPayoff(String reason) {

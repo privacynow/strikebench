@@ -92,7 +92,7 @@ class PaperCoreTest {
         Map<String, LegMark> exact = new java.util.HashMap<>();
         @Override public Optional<BigDecimal> underlyingMark(String symbol) {
             scalarUnderlyingCalls.incrementAndGet();
-            return Optional.of(underlying);
+            return Optional.ofNullable(underlying);
         }
         @Override public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(
                 String symbol, String worldId) {
@@ -1476,6 +1476,9 @@ class PaperCoreTest {
         // The package is still fully PRICED — only the greeks are unavailable.
         assertThat(view.closeCostCents()).isNotNull();
         assertThat(view.greeks()).isNull(); // never +60 share-deltas from the marked leg alone
+        assertThat(view.availability().greeksAvailable()).isFalse();
+        assertThat(view.availability().greeksUnavailableReason())
+                .contains("does not include a complete Delta/Gamma/Theta/Vega set");
         assertThat(view.legGreeks()).hasSize(2);
         assertThat(view.legGreeks().getFirst().greeks()).isNotNull();
         assertThat(view.legGreeks().getLast().greeks()).isNull();
@@ -1488,6 +1491,58 @@ class PaperCoreTest {
         assertThat(book.positions()).hasSize(1);
         assertThat(book.positions().getFirst().greeks()).isNull();
         assertThat(book.dollarDeltaComplete()).isFalse();
+    }
+
+    @Test
+    void missingCurrentQuoteWithholdsPopAndNeverSubstitutesTheEntrySpot() {
+        Account acct = accounts.getOrCreateDefault();
+        marks.exact.put("PUT100", new MarksSource.LegMark(
+                new BigDecimal("3.00"), new BigDecimal("3.00"), new BigDecimal("3.00"),
+                0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        marks.exact.put("PUT95", new MarksSource.LegMark(
+                new BigDecimal("1.20"), new BigDecimal("1.20"), new BigDecimal("1.20"),
+                0.25, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        TradeRecord trade = trades.create(creditPutSpread(acct.id(), 1));
+
+        marks.underlying = null;
+        TradeService.MarkView current = trades.currentMark(trade.id());
+
+        assertThat(current.underlyingCents()).isNull();
+        assertThat(current.popNow()).isNull();
+        assertThat(current.availability().quoteAvailable()).isFalse();
+        assertThat(current.availability().quoteUnavailableReason()).contains("No current");
+        assertThat(current.availability().popAvailable()).isFalse();
+        assertThat(current.availability().popUnavailableReason()).contains("No current");
+        // The option package can still be closed from its own two-sided books; independent facts
+        // stay available instead of the whole receipt collapsing.
+        assertThat(current.closeCostCents()).isNotNull();
+        assertThat(current.availability().closeAvailable()).isTrue();
+        assertThat(current.greeks()).isNotNull();
+    }
+
+    @Test
+    void missingCurrentIvWithholdsPopInsteadOfUsingTheThirtyPercentPlaceholder() {
+        Account acct = accounts.getOrCreateDefault();
+        marks.exact.put("PUT100", new MarksSource.LegMark(
+                new BigDecimal("3.00"), new BigDecimal("3.00"), new BigDecimal("3.00"),
+                0.25, Freshness.FIXTURE, -0.30, 0.02, -0.05, 0.10,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        marks.exact.put("PUT95", new MarksSource.LegMark(
+                new BigDecimal("1.20"), new BigDecimal("1.20"), new BigDecimal("1.20"),
+                null, Freshness.FIXTURE, -0.10, 0.01, -0.02, 0.05,
+                io.liftandshift.strikebench.model.DataEvidence.of(null, Freshness.FIXTURE)));
+        TradeRecord trade = trades.create(creditPutSpread(acct.id(), 1));
+
+        TradeService.MarkView current = trades.currentMark(trade.id());
+
+        assertThat(current.popNow()).isNull();
+        assertThat(current.availability().popAvailable()).isFalse();
+        assertThat(current.availability().popUnavailableReason())
+                .contains("No positive current implied volatility");
+        assertThat(current.closeCostCents()).isNotNull();
+        assertThat(current.greeks()).isNotNull();
     }
 
     /**
@@ -2163,26 +2218,16 @@ class PaperCoreTest {
      * confident, wrong "2nd of 4".
      */
     @Test
-    void portfolioHeatRanksEachTradeByItsShareOfDefinedBookRisk() {
+    void portfolioHeatPublishesRawTotalsWithoutASecondBookShareShape() {
         Account acct = accounts.getOrCreateDefault();
         trades.create(creditPutSpread(acct.id(), 1));
         trades.create(creditPutSpread(acct.id(), 3));
 
         Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> rows = (List<Map<String, Object>>) heat.get("positions");
-        long total = (Long) heat.get("totalMaxLossCents");
-
-        assertThat(rows).hasSize(2);
-        assertThat(rows).extracting(row -> row.get("riskRank")).containsExactly(1, 2);
-        assertThat((Long) rows.get(0).get("maxLossCents"))
-                .as("rank 1 is the largest defined loss in the book")
-                .isGreaterThanOrEqualTo((Long) rows.get(1).get("maxLossCents"));
-        double shareSum = rows.stream().mapToDouble(row -> (Double) row.get("riskSharePct")).sum();
-        assertThat(shareSum).as("the shares of one book total 100%").isCloseTo(100.0, within(1e-6));
-        assertThat((Double) rows.get(0).get("riskSharePct"))
-                .isCloseTo(100.0 * (Long) rows.get(0).get("maxLossCents") / total, within(1e-9));
-        assertThat(heat.get("rankedPositions")).isEqualTo(2);
+        assertThat((Long) heat.get("totalMaxLossCents")).isPositive();
+        assertThat(heat).doesNotContainKeys("positions", "rankedPositions",
+                "bookShareAvailable", "bookShareUnavailableReason",
+                "bookShareDenominatorCents", "bookShareDenominatorBasis", "bookShareBasis");
     }
 
     /**
@@ -2192,37 +2237,24 @@ class PaperCoreTest {
      * canonical roster, so the same two positions can never rank differently by endpoint.
      */
     @Test
-    void portfolioHeatSharesOneRankBetweenEqualRiskPositionsExactlyAsTheBookRoster() {
+    void canonicalBookShareRuleSharesOneRankBetweenEqualRiskPositions() {
         Account acct = accounts.getOrCreateDefault();
         trades.create(creditPutSpread(acct.id(), 1));
         trades.create(creditPutSpread(acct.id(), 1));
 
         Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> rows = (List<Map<String, Object>>) heat.get("positions");
-
-        assertThat(rows).hasSize(2);
-        assertThat((Long) rows.get(0).get("maxLossCents"))
-                .as("the two positions carry identical defined risk")
-                .isEqualTo((Long) rows.get(1).get("maxLossCents"));
-        assertThat(rows).extracting(row -> row.get("riskRank"))
-                .as("equal risk is one rank, never 1 and 2 by list order")
-                .containsExactly(1, 1);
-        assertThat(rows).extracting(row -> row.get("riskRankOf")).containsExactly(2, 2);
-
-        // and the same rows the canonical Book receipt would state, field for field
         var canonical = BookRiskService.shareRoster(acct.id(),
                 trades.list(acct.id(), TradeRecord.ACTIVE, 0, 100).trades(),
                 (Long) heat.get("totalMaxLossCents"));
-        assertThat(rows).extracting(row -> row.get("tradeId"))
-                .containsExactlyElementsOf(canonical.rows().stream()
-                        .map(BookRiskService.BookShareRow::tradeId).toList());
-        assertThat(rows).extracting(row -> row.get("riskRank"))
-                .containsExactlyElementsOf(canonical.rows().stream()
-                        .map(row -> (Object) row.rank()).toList());
-        assertThat(rows).extracting(row -> row.get("riskSharePct"))
-                .containsExactlyElementsOf(canonical.rows().stream()
-                        .map(row -> (Object) row.sharePct()).toList());
+        assertThat(canonical.rows()).hasSize(2);
+        assertThat(canonical.rows().get(0).riskCents())
+                .as("the two positions carry identical defined risk")
+                .isEqualTo(canonical.rows().get(1).riskCents());
+        assertThat(canonical.rows()).extracting(BookRiskService.BookShareRow::rank)
+                .as("equal risk is one rank, never 1 and 2 by list order")
+                .containsExactly(1, 1);
+        assertThat(canonical.rows()).extracting(BookRiskService.BookShareRow::rankOf)
+                .containsExactly(2, 2);
     }
 
     /** An empty book has no share to state, so it states none rather than a confident zero. */
@@ -2230,8 +2262,7 @@ class PaperCoreTest {
     void portfolioHeatStatesNoRiskShareWhenTheBookDefinesNoRisk() {
         Account acct = accounts.getOrCreateDefault();
         Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        assertThat((List<?>) heat.get("positions")).isEmpty();
-        assertThat(heat.get("rankedPositions")).isEqualTo(0);
+        assertThat(heat).doesNotContainKeys("positions", "rankedPositions");
     }
 
     @Test

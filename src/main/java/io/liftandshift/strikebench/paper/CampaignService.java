@@ -985,7 +985,7 @@ public final class CampaignService {
             ProtocolEvaluator.Policy policy = managementPolicy;
             List<ProtocolEvaluator.Rule> rules = ProtocolEvaluator.rules(policy, decision.entryCents());
             Map<String, Seen> seen = new LinkedHashMap<>();
-            var entryTime = ProtocolEvaluator.timeTo(marketDate(decision.at()), decision.nearestExpiry());
+            var entryTime = ProtocolEvaluator.timeTo(decision.at().toInstant(), decision.nearestExpiry());
             // A package OPENED inside the time window was never "still holding past the line" — the
             // rule is NOT_APPLICABLE for it, otherwise a 14-DTE credit spread can never be adherent
             // and a final review scores it OVERRIDDEN for a rule it could not have obeyed.
@@ -1000,7 +1000,7 @@ public final class CampaignService {
             for (int i = 0; i < actions.size(); i++) {
                 Action action = actions.get(i);
                 if ("MARK".equals(action.kind())) hasRecordedMark = true;
-                var time = ProtocolEvaluator.timeTo(marketDate(action.at()), decision.nearestExpiry());
+                var time = ProtocolEvaluator.timeTo(action.at().toInstant(), decision.nearestExpiry());
                 for (ProtocolEvaluator.Trigger trigger : ProtocolEvaluator.evaluate(policy,
                         new ProtocolEvaluator.Inputs(decision.entryCents(), action.unrealizedCents(), time))) {
                     if (openedInsideTimeWindow && trigger.triggerSessionsToExpiry() != null) continue;

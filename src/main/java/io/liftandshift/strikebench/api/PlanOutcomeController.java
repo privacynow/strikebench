@@ -218,6 +218,13 @@ final class PlanOutcomeController {
                     ? "The selected package could not be repriced on this stored ensemble; inspect the named canvas refusal."
                     : "The focused position could not be repriced on this stored ensemble; inspect the named canvas refusal.");
         }
+        int[] sharedDisplaySteps = canvasDisplaySteps(checkpoints, stored.ensemble().spec().totalSteps());
+        var alignedProjection = inlinePathWaypoints.isEmpty()
+                ? pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit, sharedDisplaySteps)
+                : pathEnsembles.displayPathsAtProgress(
+                    stored.ensemble(), inlinePathWaypoints, limit, sharedDisplaySteps);
+        requireSameDisplaySelection(projection, alignedProjection);
+        projection = alignedProjection;
         String valuationFingerprint = checkpoints.at("/modelReceipt/valuationFingerprint").asText();
         JsonNode focusedPackageNode = checkpoints.at("/modelReceipt/focusedPackageProvenance");
         ApiResponses.FocusedPackageProvenance focusedPackageProvenance =
@@ -228,7 +235,8 @@ final class PlanOutcomeController {
         String focusedPackageFingerprint = checkpoints.at("/modelReceipt/focusedPackageFingerprint")
                 .asText(null);
         var receipt = new ApiResponses.ScenarioAnimationReceipt(
-                "scenario-animation-1", stored.id(), stored.fingerprint(), stored.basis(),
+                ApiResponses.SCENARIO_ANIMATION_CONTRACT_VERSION,
+                stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().modelVersion(), stored.ensemble().scope().symbol(),
                 stored.ensemble().scope().worldId(), stored.ensemble().scope().analysis().datasetId(),
                 stored.contextRev(), stored.state(), stored.ensemble().spot(),
@@ -315,7 +323,8 @@ final class PlanOutcomeController {
         preview.put("planEnsembleFingerprint", stored.fingerprint());
         if (preview.path("receipt") instanceof ObjectNode receipt) receipt.put("fingerprint", stored.fingerprint());
         decorateScenarioCanvas(preview, run.ensemble());
-        decorateCanvasValuation(ctx, preview, plan, stored);
+        ObjectNode canvasJson = decorateCanvasValuation(ctx, preview, plan, stored);
+        alignPreviewProjection(preview, stored.ensemble(), canvasJson);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                         run.ensemble().waypointFill().name()), preview));
@@ -341,7 +350,8 @@ final class PlanOutcomeController {
             receipt.put("fingerprint", stored.fingerprint());
         }
         decorateScenarioCanvas(preview, stored.ensemble());
-        decorateCanvasValuation(ctx, preview, plan, stored);
+        ObjectNode canvasJson = decorateCanvasValuation(ctx, preview, plan, stored);
+        alignPreviewProjection(preview, stored.ensemble(), canvasJson);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                         stored.ensemble().waypointFill().name()), preview));
@@ -365,7 +375,8 @@ final class PlanOutcomeController {
         preview.put("planEnsembleId", stored.id());
         preview.put("planEnsembleFingerprint", stored.fingerprint());
         decorateScenarioCanvas(preview, stored.ensemble());
-        decorateCanvasValuation(ctx, preview, plan, stored);
+        ObjectNode canvasJson = decorateCanvasValuation(ctx, preview, plan, stored);
+        alignPreviewProjection(preview, stored.ensemble(), canvasJson);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                         stored.ensemble().waypointFill().name()), preview));
@@ -827,12 +838,19 @@ final class PlanOutcomeController {
      * baseline all consume the exact stored ensemble. Refused packages stay named instead of
      * disappearing or contaminating the rest of the comparison.
      */
-    private void decorateCanvasValuation(Context ctx, ObjectNode preview,
+    private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
             io.liftandshift.strikebench.plan.Plan.View plan,
             io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored) {
-        var projection = pathEnsembles.displayPaths(stored.ensemble(), null, 48);
-        decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null,
-                canvasDisplaySelections(projection), projection.selection());
+        List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection> selections =
+                canvasDisplaySelections(preview);
+        String displayPathRule = "TERMINAL_QUANTILES";
+        if (selections.isEmpty()) {
+            var projection = pathEnsembles.displayPaths(stored.ensemble(), null, 48);
+            selections = canvasDisplaySelections(projection);
+            displayPathRule = projection.selection();
+        }
+        return decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null,
+                selections, displayPathRule);
     }
 
     private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
@@ -990,6 +1008,10 @@ final class PlanOutcomeController {
         receipt.put("positionScopeAttempted", inputs.size());
         receipt.put("displayPathRule", displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
         receipt.put("displayPathCount", displayPathSelections == null ? 0 : displayPathSelections.size());
+        int[] sharedDisplaySteps = canvasDisplaySteps(
+                canvasJson, stored.ensemble().spec().totalSteps(), false);
+        receipt.set("displaySteps", Json.MAPPER.valueToTree(
+                java.util.Arrays.stream(sharedDisplaySteps).boxed().toList()));
         int actualFocusPath = canvasJson.path("focusSourcePathIndex").asInt(
                 focusSourcePathIndex == null ? -1 : focusSourcePathIndex);
         receipt.put("focusSourcePathIndex", actualFocusPath);
@@ -1005,7 +1027,8 @@ final class PlanOutcomeController {
             receipt.put("selectedCandidateFingerprint", sha256(candidate));
         }
         ObjectNode valuationIdentity = Json.MAPPER.createObjectNode();
-        valuationIdentity.put("contractVersion", "scenario-animation-valuation-1");
+        valuationIdentity.put("contractVersion",
+                ApiResponses.SCENARIO_ANIMATION_VALUATION_CONTRACT_VERSION);
         valuationIdentity.put("ensembleFingerprint", stored.fingerprint());
         valuationIdentity.put("canvasModelVersion",
                 io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
@@ -1019,6 +1042,8 @@ final class PlanOutcomeController {
                 displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
         valuationIdentity.set("displayPathSelections", Json.MAPPER.valueToTree(
                 displayPathSelections == null ? List.of() : displayPathSelections));
+        valuationIdentity.set("displaySteps", Json.MAPPER.valueToTree(
+                java.util.Arrays.stream(sharedDisplaySteps).boxed().toList()));
         if (focusPositionKey != null) valuationIdentity.put("focusPositionKey", focusPositionKey);
         if (focusedPackageIdentity != null) {
             valuationIdentity.set("focusedPackage", Json.MAPPER.valueToTree(focusedPackageIdentity));
@@ -1027,7 +1052,8 @@ final class PlanOutcomeController {
             valuationIdentity.put("selectedCandidateId", selectedCandidateId);
             valuationIdentity.put("selectedCandidateFingerprint", sha256(candidate));
         }
-        receipt.put("valuationContractVersion", "scenario-animation-valuation-1");
+        receipt.put("valuationContractVersion",
+                ApiResponses.SCENARIO_ANIMATION_VALUATION_CONTRACT_VERSION);
         receipt.put("valuationFingerprint", sha256(valuationIdentity));
         preview.set("canvas", canvasJson);
         preview.set("canvasModel", Json.MAPPER.valueToTree(canvas));
@@ -1042,6 +1068,88 @@ final class PlanOutcomeController {
                 .map(path -> new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection(
                         path.sourcePathIndex(), path.role()))
                 .toList();
+    }
+
+    private static List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection>
+            canvasDisplaySelections(ObjectNode preview) {
+        if (preview == null || !preview.path("sampleSourcePathIndices").isArray()) return List.of();
+        int focusIndex = preview.path("sampleFocusIndex").asInt(-1);
+        List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection> selections =
+                new ArrayList<>();
+        int index = 0;
+        for (JsonNode sourcePathIndex : preview.path("sampleSourcePathIndices")) {
+            selections.add(new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection(
+                    sourcePathIndex.asInt(-1), index == focusIndex ? "FOCUS" : "CONTEXT"));
+            index++;
+        }
+        return List.copyOf(selections);
+    }
+
+    private void alignPreviewProjection(
+            ObjectNode preview,
+            io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble ensemble,
+            ObjectNode canvasJson) {
+        int[] displaySteps = canvasDisplaySteps(canvasJson, ensemble.spec().totalSteps(), false);
+        if (displaySteps.length == 0) return;
+        List<Integer> selectedSourcePathIndices = new ArrayList<>();
+        for (JsonNode sourcePathIndex : preview.path("sampleSourcePathIndices")) {
+            selectedSourcePathIndices.add(sourcePathIndex.asInt());
+        }
+        int sampleFocusIndex = preview.path("sampleFocusIndex").asInt(-1);
+        var projection = io.liftandshift.strikebench.sim.SimulationEngine.projectPreview(
+                ensemble, selectedSourcePathIndices, sampleFocusIndex, displaySteps);
+        List<Integer> canvasSourcePathIndices = new ArrayList<>();
+        for (JsonNode sourcePathIndex : canvasJson.path("displayPathSourceIndices")) {
+            canvasSourcePathIndices.add(sourcePathIndex.asInt());
+        }
+        if (!projection.sampleSourcePathIndices().equals(canvasSourcePathIndices)
+                || projection.sampleSourcePathIndices().get(projection.sampleFocusIndex())
+                    != canvasJson.path("focusSourcePathIndex").asInt(-1)) {
+            throw new IllegalStateException(
+                    "Plan preview and Scenario Canvas selected different source paths; fan publication was refused.");
+        }
+        preview.set("stepBands", Json.MAPPER.valueToTree(projection.stepBands()));
+        preview.set("samples", Json.MAPPER.valueToTree(projection.samples()));
+        preview.set("sampleSourcePathIndices",
+                Json.MAPPER.valueToTree(projection.sampleSourcePathIndices()));
+        preview.put("sampleFocusIndex", projection.sampleFocusIndex());
+        preview.set("displayProjectionReceipt", Json.MAPPER.valueToTree(projection.receipt()));
+    }
+
+    private static int[] canvasDisplaySteps(ObjectNode canvasJson, int totalSteps) {
+        return canvasDisplaySteps(canvasJson, totalSteps, true);
+    }
+
+    private static int[] canvasDisplaySteps(ObjectNode canvasJson, int totalSteps, boolean required) {
+        JsonNode underlyingSteps = canvasJson == null ? null : canvasJson.path("underlyingSteps");
+        if (underlyingSteps == null || !underlyingSteps.isArray() || underlyingSteps.isEmpty()) {
+            if (required) {
+                throw new IllegalStateException(
+                        "Scenario Canvas did not publish the source-step grid required for animation.");
+            }
+            return new int[0];
+        }
+        int[] steps = new int[underlyingSteps.size()];
+        for (int index = 0; index < underlyingSteps.size(); index++) {
+            steps[index] = underlyingSteps.get(index).path("step").asInt(-1);
+        }
+        return io.liftandshift.strikebench.sim.PathEnsembleService
+                .exactDisplayStepIndices(totalSteps, steps);
+    }
+
+    private static void requireSameDisplaySelection(
+            io.liftandshift.strikebench.sim.PathEnsembleService.DisplayProjection before,
+            io.liftandshift.strikebench.sim.PathEnsembleService.DisplayProjection after) {
+        List<String> beforeRows = before.paths().stream()
+                .map(path -> path.sourcePathIndex() + ":" + path.role()).toList();
+        List<String> afterRows = after.paths().stream()
+                .map(path -> path.sourcePathIndex() + ":" + path.role()).toList();
+        if (!beforeRows.equals(afterRows)
+                || before.receipt().focusSourcePathIndex()
+                    != after.receipt().focusSourcePathIndex()) {
+            throw new IllegalStateException(
+                    "Shared-grid projection changed the selected source paths; animation was refused.");
+        }
     }
 
     private static void addCanvasPosition(

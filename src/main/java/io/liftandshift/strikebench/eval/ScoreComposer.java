@@ -154,7 +154,9 @@ public final class ScoreComposer {
         double tailMult = 1.0 - 0.35 * tailRatio;                 // a full-tail structure loses a third
         // Near-expiry positions concentrate gamma and remove the time to be wrong — the same
         // numbers three sessions from expiry are a different (worse) trade.
-        double dteMult = ctx.daysToExpiry() <= 3 ? 0.8 : ctx.daysToExpiry() <= 7 ? 0.9 : 1.0;
+        int urgencySessions = ctx.tradingSessionsToExpiry() >= 0
+                ? ctx.tradingSessionsToExpiry() : ctx.calendarDaysToExpiry();
+        double dteMult = urgencySessions <= 3 ? 0.8 : urgencySessions <= 7 ? 0.9 : 1.0;
         double riskAdjusted = gatePassed ? clamp(normalized * evidenceMult * tailMult * dteMult, 0, 100) : 0.0;
 
         return new ScoreBreakdown(gatePassed, gateFailures, round(normalized), round(riskAdjusted), comps);

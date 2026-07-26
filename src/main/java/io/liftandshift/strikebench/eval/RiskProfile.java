@@ -23,10 +23,20 @@ public record RiskProfile(
         // The SEPARATE real-world / tail lane: a Merton jump-mixture (body + calibrated down-gap) that
         // owns the tail-aware POP, expected shortfall and calm/base/tense gap dial. It sits ALONGSIDE
         // the risk-neutral lognormal `pop` above, never replacing it. Null when unavailable/not computed.
-        io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail
+        io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail,
+        WorstScenario worstScenario
 ) {
     public RiskProfile {
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
+    }
+
+    /** Compatibility constructor for callers that have not yet attached a named-story severity. */
+    public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
+                       long tailLossCents, double tailMovePct, List<Scenario> scenarios,
+                       TerminalPayoff terminalPayoff, Long evHistVolCents, String evBasisNote,
+                       io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail) {
+        this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
+                scenarios, terminalPayoff, evHistVolCents, evBasisNote, jumpTail, null);
     }
 
     /** Compatibility constructor for callers that produce presentation checkpoints but no tail lane. */
@@ -34,7 +44,7 @@ public record RiskProfile(
                        long tailLossCents, double tailMovePct, List<Scenario> scenarios,
                        TerminalPayoff terminalPayoff, Long evHistVolCents, String evBasisNote) {
         this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, terminalPayoff, evHistVolCents, evBasisNote, null);
+                scenarios, terminalPayoff, evHistVolCents, evBasisNote, null, null);
     }
 
     /** Compatibility constructor for callers that do not produce presentation checkpoints. */
@@ -42,7 +52,7 @@ public record RiskProfile(
                        long tailLossCents, double tailMovePct, List<Scenario> scenarios,
                        Long evHistVolCents, String evBasisNote) {
         this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, null, evHistVolCents, evBasisNote, null);
+                scenarios, null, evHistVolCents, evBasisNote, null, null);
     }
 
     /**
@@ -51,6 +61,29 @@ public record RiskProfile(
      * multi-expiry, so the client shows the bar without a probability rather than inventing one.
      */
     public record Scenario(double underlyingMovePct, long pnlCents, Double prob) {}
+
+    public enum ScenarioSeverity {
+        CONTAINED,
+        MATERIAL,
+        SEVERE
+    }
+
+    /**
+     * The loss severity of the worst NAMED scenario checkpoint. It is deliberately separate from
+     * the tail envelope: this answers how much of the exact maximum loss is consumed by the most
+     * adverse story tile, so every surface can render the same severity without recomputing it.
+     */
+    public record WorstScenario(
+            boolean severityAvailable,
+            Double underlyingMovePct,
+            Long pnlCents,
+            Long lossCents,
+            Long comparisonLossCents,
+            String comparisonBasis,
+            Double lossSharePct,
+            ScenarioSeverity severity,
+            String basis,
+            String unavailableReason) {}
 
     /** A bounded exact payoff polyline; clients may interpolate between these piecewise-linear points. */
     public record PayoffPoint(BigDecimal price, long profitCents) {}

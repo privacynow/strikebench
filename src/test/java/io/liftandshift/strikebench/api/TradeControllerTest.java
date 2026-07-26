@@ -54,14 +54,15 @@ class TradeControllerTest {
                 "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
                 null, null, null, null);
 
-        // No mark at all: the receipt still answers, and NAMES the recorded entry as its basis.
+        // No current mark: the entry remains the curve anchor, but it is never substituted as
+        // today's quote.
         var atEntry = TradeController.heldSpotPnl(trade, null);
-        assertThat(atEntry.spotBasis()).isEqualTo("RECORDED_ENTRY");
-        assertThat(atEntry.spotCents()).isEqualTo(10_000L);
-        assertThat(atEntry.unavailableReason()).isNull();
-        assertThat(atEntry.withinServedCurve()).isTrue();
-        assertThat(atEntry.terminalPnlAtCurrentSpotCents())
-                .isEqualTo(curveValueAt(trade, new BigDecimal("100.00")));
+        assertThat(atEntry.spotBasis()).isNull();
+        assertThat(atEntry.spotCents()).isNull();
+        assertThat(atEntry.terminalPnlAtCurrentSpotCents()).isNull();
+        assertThat(atEntry.unavailableReason())
+                .contains("No current underlying quote")
+                .contains("entry price was not substituted");
 
         // With a live mark the figure moves to the live spot — and still equals the served curve.
         var mark = new TradeService.MarkView("tr_holds", "2026-07-16T12:00:00Z", 10_500L,
@@ -72,8 +73,6 @@ class TradeControllerTest {
         assertThat(atMark.freshness()).isEqualTo("REALTIME");
         assertThat(atMark.terminalPnlAtCurrentSpotCents())
                 .isEqualTo(curveValueAt(trade, new BigDecimal("105.00")));
-        assertThat(atMark.terminalPnlAtCurrentSpotCents())
-                .isNotEqualTo(atEntry.terminalPnlAtCurrentSpotCents());
 
         // A package that has run far past the served window still gets an exact answer, flagged as
         // outside the drawn curve — where the browser's own interpolation had to say "unavailable".

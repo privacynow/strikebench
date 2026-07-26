@@ -310,9 +310,9 @@ function bookShareRoster(trades, denominatorCents) {
 }
 
 /**
- * Portfolio heat. This payload is assembled as a `Map<String, Object>` in
- * `TradeService.portfolioHeat`, not as a record, so the method body is its contract — every key it
- * writes is written here, in the same order.
+ * Portfolio heat HTTP document. TradeService supplies the raw heat prefix; PortfolioController
+ * attaches BookRiskService's one canonical share roster and then projects that receipt onto the
+ * temporary flat compatibility keys. The fixture mirrors the wire, not a second share calculator.
  */
 function portfolioHeat(trades, summary) {
   const rows = trades || [];
@@ -328,6 +328,27 @@ function portfolioHeat(trades, summary) {
     .reduce((legTotal, leg) => legTotal
       + Math.round(Number(leg.strike) * 100) * leg.ratio * leg.multiplier * trade.qty, 0), 0);
   const shareRoster = bookShareRoster(rows, totalMaxLossCents);
+  const rosterReceipt = {
+    available: shareRoster.available,
+    unavailableReason: shareRoster.unavailableReason,
+    accountId: 'acct-practice',
+    positions: shareRoster.positions.length,
+    denominatorCents: shareRoster.available ? totalMaxLossCents : null,
+    denominatorBasis: SHARE_DENOMINATOR_BASIS,
+    rows: shareRoster.positions.map(row => ({
+      tradeId: row.tradeId,
+      symbol: row.symbol,
+      strategy: row.strategy,
+      riskCents: row.maxLossCents,
+      denominatorCents: row.denominatorCents,
+      denominatorBasis: row.denominatorBasis,
+      sharePct: row.riskSharePct,
+      rank: row.riskRank,
+      rankOf: row.riskRankOf,
+      unavailableReason: row.shareUnavailableReason
+    })),
+    basis: 'Each open position’s share of this account’s defined book risk.'
+  };
   return {
     activeTrades: rows.length,
     totalMaxLossCents: totalMaxLossCents,
@@ -336,6 +357,12 @@ function portfolioHeat(trades, summary) {
     bySymbolMaxLossCents: bySymbol,
     concentrationPct: totalMaxLossCents > 0
       ? Math.round(100 * worstSymbol / totalMaxLossCents) : 0,
+    earlyAssignmentLiquidityCents: shortPutObligationCents,
+    physicalAssignmentCashCents: shortPutObligationCents,
+    assignmentReserveReleasedCents: totalMaxLossCents,
+    postPhysicalAssignmentBuyingPowerCents: summary
+      ? summary.buyingPowerCents - shortPutObligationCents : 0,
+    shareRoster: rosterReceipt,
     /* Each trade's share of defined book risk and its rank — book facts, because both depend on
        every other open trade (audit §15.5). ONE owner states the rule (BookRiskService.shareRoster),
        and heat projects it; this fixture mirrors that projection rather than re-deriving it. */
@@ -346,12 +373,7 @@ function portfolioHeat(trades, summary) {
     bookShareDenominatorCents: totalMaxLossCents,
     bookShareDenominatorBasis: SHARE_DENOMINATOR_BASIS,
     bookShareBasis: 'Each open position\'s share of this account\'s defined book risk: that '
-      + 'position\'s own maximum loss divided by the one declared denominator, in percent.',
-    earlyAssignmentLiquidityCents: shortPutObligationCents,
-    physicalAssignmentCashCents: shortPutObligationCents,
-    assignmentReserveReleasedCents: totalMaxLossCents,
-    postPhysicalAssignmentBuyingPowerCents: summary
-      ? summary.buyingPowerCents - shortPutObligationCents : 0
+      + 'position\'s own maximum loss divided by the one declared denominator, in percent.'
   };
 }
 

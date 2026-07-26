@@ -25,6 +25,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -191,6 +192,34 @@ public final class BookRiskService {
                                   List<BookShareRow> rows, String basis) {
         public BookShareRoster {
             rows = rows == null ? List.of() : List.copyOf(rows);
+        }
+    }
+
+    /**
+     * Exact totals for a user-selected subset of the Practice book. Maximum loss consumes the
+     * canonical share roster's numerators; risk share consumes its already-computed percentages;
+     * dollar delta consumes TradeService's one current-mark aggregation. The browser selects IDs
+     * and renders this receipt — it never adds financial values itself.
+     */
+    public record SelectedBookReceipt(
+            boolean selectionAvailable,
+            String selectionUnavailableReason,
+            String accountId,
+            int requestedPositions,
+            int matchedPositions,
+            List<String> tradeIds,
+            List<BookShareRow> positions,
+            Long definedMaxLossCents,
+            Double definedRiskSharePct,
+            String riskShareUnavailableReason,
+            Long netDollarDeltaCents,
+            String dollarDeltaUnavailableReason,
+            Long bookRiskDenominatorCents,
+            String bookRiskDenominatorBasis,
+            String basis) {
+        public SelectedBookReceipt {
+            tradeIds = tradeIds == null ? List.of() : List.copyOf(tradeIds);
+            positions = positions == null ? List.of() : List.copyOf(positions);
         }
     }
 
@@ -990,6 +1019,73 @@ public final class BookRiskService {
                             + "defined-risk total is unknown."));
         }
         return shareRoster(accountId, active, denominator);
+    }
+
+    public SelectedBookReceipt selectedBook(String accountId, Collection<String> selectedTradeIds) {
+        LinkedHashSet<String> requested = new LinkedHashSet<>();
+        if (selectedTradeIds != null) {
+            for (String id : selectedTradeIds) {
+                if (id != null && !id.isBlank()) requested.add(id.trim());
+            }
+        }
+        String basis = "A selected Practice-book subset. Defined maximum loss and risk share "
+                + "consume the canonical Book share roster; net dollar delta consumes the one "
+                + "current-mark dollar-delta book. No cross-symbol share delta is summed.";
+        if (requested.isEmpty()) {
+            return new SelectedBookReceipt(false,
+                    "Choose at least one open Practice position to measure a selected book.",
+                    accountId, 0, 0, List.of(), List.of(), null, null,
+                    "No selected positions were supplied.", null,
+                    "No selected positions were supplied.", null,
+                    SHARE_DENOMINATOR_BASIS, basis);
+        }
+
+        BookShareRoster roster = bookShareRoster(accountId);
+        Map<String, BookShareRow> byId = new LinkedHashMap<>();
+        for (BookShareRow row : roster.rows()) byId.put(row.tradeId(), row);
+        List<String> missing = requested.stream().filter(id -> !byId.containsKey(id)).toList();
+        List<BookShareRow> selected = requested.stream().map(byId::get)
+                .filter(java.util.Objects::nonNull).toList();
+        if (!missing.isEmpty()) {
+            return new SelectedBookReceipt(false,
+                    "The selection includes positions that are not open in this Practice account: "
+                            + String.join(", ", missing) + ".",
+                    accountId, requested.size(), selected.size(), List.copyOf(requested), selected,
+                    null, null, roster.unavailableReason(), null,
+                    "Dollar delta was withheld because the selected-position identity is stale.",
+                    roster.denominatorCents(), roster.denominatorBasis(), basis);
+        }
+
+        long maxLoss = 0L;
+        for (BookShareRow row : selected) {
+            maxLoss = Math.addExact(maxLoss, row.riskCents());
+        }
+        Double riskShare = null;
+        String riskShareReason = null;
+        if (roster.available() && selected.stream().allMatch(row -> row.sharePct() != null)) {
+            riskShare = selected.stream().mapToDouble(BookShareRow::sharePct).sum();
+        } else {
+            riskShareReason = roster.unavailableReason() == null
+                    ? "One or more selected positions has no canonical Book-share receipt."
+                    : roster.unavailableReason();
+        }
+
+        TradeService.DollarDeltaBook deltaBook = trades.portfolioDollarDeltaBook(accountId);
+        long delta = 0L;
+        String deltaReason = null;
+        for (String id : requested) {
+            Long value = deltaBook.tradeNetCents().get(id);
+            if (value == null) {
+                deltaReason = "Current dollar delta is unavailable for selected position " + id
+                        + "; no partial selected-book delta was published.";
+                break;
+            }
+            delta = Math.addExact(delta, value);
+        }
+        return new SelectedBookReceipt(true, null, accountId, requested.size(), selected.size(),
+                List.copyOf(requested), selected, maxLoss, riskShare, riskShareReason,
+                deltaReason == null ? delta : null, deltaReason,
+                roster.denominatorCents(), roster.denominatorBasis(), basis);
     }
 
     /**

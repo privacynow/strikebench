@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Optional;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 /** Small typed boundary for process-wide operational settings — the one home for the settings SQL. */
 public final class SettingsStore {
@@ -40,6 +41,21 @@ public final class SettingsStore {
     public static Optional<String> read(Db db, String key) {
         var values = db.query(SELECT_V_SQL, r -> r.str("v"), key);
         return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
+    }
+
+    /** Connection-scoped read; participates in the caller's selector/workspace transaction. */
+    public static Optional<String> readOn(Connection c, String key) throws SQLException {
+        var values = Db.queryOn(c, SELECT_V_SQL, r -> r.str("v"), key);
+        return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
+    }
+
+    /** Canonical owner-scoped setting names shared by the dataset, world, and workspace owners. */
+    public static String activeWorldKey(String rawOwner) {
+        return "active_world:" + OwnerScope.id(rawOwner);
+    }
+
+    public static String activeDatasetKey(String rawOwner) {
+        return "active_dataset:" + OwnerScope.id(rawOwner);
     }
 
     /** Pooled/autocommit upsert with a CALLER-SUPPLIED timestamp (sim or JVM clock, never now()). */

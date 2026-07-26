@@ -50,9 +50,33 @@ public final class StrategyCatalog {
             boolean blockedByDefault,
             boolean composite) {}
 
+    /**
+     * How the exact package consumes capital. This is structural classification only: the priced
+     * preview remains the authority for the actual cents required.
+     */
+    public enum FundingClass {
+        NONE,
+        DEFINED_RISK,
+        CASH_COLLATERAL,
+        SHARE_BACKED,
+        UNDEFINED_RISK,
+        UNCLASSIFIED
+    }
+
+    /** The financial fact that a capital-use receipt must use as its numerator. */
+    public enum CapitalBasis {
+        NONE,
+        MAXIMUM_LOSS,
+        STRIKE_CASH_COLLATERAL,
+        COMBINED_POSITION_MAXIMUM_LOSS,
+        UNBOUNDED,
+        EXACT_PACKAGE_ASSESSMENT
+    }
+
     /** Exact-leg identity from this catalog. It classifies structure only; it never prices or ranks. */
     public record PositionIdentity(String family, String template, String label, String summary,
-                                   boolean definedRisk, boolean blockedByDefault, boolean custom) {}
+                                   boolean definedRisk, boolean blockedByDefault, boolean custom,
+                                   FundingClass fundingClass, CapitalBasis capitalBasis) {}
 
     private record Copy(String family, String key, String display, String category,
                         String summary, String shape, boolean blocked, boolean composite) {}
@@ -86,7 +110,8 @@ public final class StrategyCatalog {
     /** One server-owned classifier for the editor, transformations, receipts, and read models. */
     public static PositionIdentity identify(PositionPackage position) {
         if (position == null) return new PositionIdentity(null, null, "Cash / no position",
-                "No open legs remain after this action.", true, false, true);
+                "No open legs remain after this action.", true, false, true,
+                FundingClass.NONE, CapitalBasis.NONE);
         List<PositionPackage.Leg> stocks = position.legs().stream().filter(StrategyCatalog::stock).toList();
         List<PositionPackage.Leg> options = position.legs().stream().filter(l -> !stock(l)).toList();
 
@@ -95,7 +120,9 @@ public final class StrategyCatalog {
             return customIdentity(buy(stock) ? "Long shares" : "Short shares",
                     buy(stock)
                             ? "The position now consists only of owned shares."
-                            : "The position now consists only of short shares.", false);
+                            : "The position now consists only of short shares.", false,
+                    FundingClass.SHARE_BACKED,
+                    CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
         }
         if (stocks.size() == 1 && buy(stocks.getFirst())) {
             long shares = units(stocks.getFirst());
@@ -140,14 +167,17 @@ public final class StrategyCatalog {
             }
         }
         if (!stocks.isEmpty()) return customIdentity("Custom stock-and-option position",
-                "The exact shares and option legs are analyzed without inventing a standard catalog name.", false);
+                "The exact shares and option legs are analyzed without inventing a standard catalog name.", false,
+                FundingClass.SHARE_BACKED,
+                CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
         if (options.size() == 1) {
             PositionPackage.Leg leg = options.getFirst();
             if (buy(leg)) return identity(call(leg) ? StrategyFamily.LONG_CALL : StrategyFamily.LONG_PUT);
             if (call(leg)) return identity(StrategyFamily.NAKED_CALL);
             return new PositionIdentity(null, null, "Short put",
                     "Cash and protective context determine whether this is cash-secured or naked; the exact assessment names that distinction.",
-                    true, false, true);
+                    true, false, true, FundingClass.UNCLASSIFIED,
+                    CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
         }
         if (options.size() == 2) {
             PositionPackage.Leg a = options.get(0), b = options.get(1);
@@ -220,7 +250,8 @@ public final class StrategyCatalog {
             }
         }
         return customIdentity("Custom structure",
-                "The exact legs still receive the same payoff, risk, and outcomes analysis; no catalog name is being invented.", false);
+                "The exact legs still receive the same payoff, risk, and outcomes analysis; no catalog name is being invented.", false,
+                FundingClass.UNCLASSIFIED, CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
     }
 
     /** Adapter from the platform's existing exact-leg model into the shared package contract. */
@@ -244,19 +275,58 @@ public final class StrategyCatalog {
 
     private static PositionIdentity identity(StrategyFamily family) {
         FamilyEntry meta = family(family);
+        FundingClass fundingClass;
+        CapitalBasis capitalBasis;
+        if (family == StrategyFamily.CASH_SECURED_PUT) {
+            fundingClass = FundingClass.CASH_COLLATERAL;
+            capitalBasis = CapitalBasis.STRIKE_CASH_COLLATERAL;
+        } else if (meta.needsStock()) {
+            fundingClass = FundingClass.SHARE_BACKED;
+            capitalBasis = CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS;
+        } else if (!meta.definedRisk()) {
+            fundingClass = FundingClass.UNDEFINED_RISK;
+            capitalBasis = CapitalBasis.UNBOUNDED;
+        } else {
+            fundingClass = FundingClass.DEFINED_RISK;
+            capitalBasis = CapitalBasis.MAXIMUM_LOSS;
+        }
         return new PositionIdentity(family.name(), null, meta.display(), meta.summary(),
-                meta.definedRisk(), meta.blockedByDefault(), false);
+                meta.definedRisk(), meta.blockedByDefault(), false, fundingClass, capitalBasis);
     }
 
     private static PositionIdentity templateIdentity(String key, boolean definedRisk) {
         TemplateEntry meta = TEMPLATES.stream().filter(template -> key.equals(template.key()))
                 .findFirst().orElseThrow(() -> new IllegalStateException("Missing catalog template " + key));
+        StrategyFamily family = null;
+        if (meta.family() != null && !"CUSTOM".equals(meta.family())) {
+            try {
+                family = StrategyFamily.valueOf(meta.family());
+            } catch (IllegalArgumentException ignored) {
+                // A catalog template can be exact without claiming a family.
+            }
+        }
+        if (family != null) {
+            PositionIdentity familyIdentity = identity(family);
+            return new PositionIdentity(null, key, meta.display(), meta.summary(), definedRisk,
+                    meta.blockedByDefault(), true, familyIdentity.fundingClass(),
+                    familyIdentity.capitalBasis());
+        }
         return new PositionIdentity(null, key, meta.display(), meta.summary(), definedRisk,
-                meta.blockedByDefault(), true);
+                meta.blockedByDefault(), true,
+                definedRisk ? FundingClass.DEFINED_RISK : FundingClass.UNDEFINED_RISK,
+                definedRisk ? CapitalBasis.MAXIMUM_LOSS : CapitalBasis.UNBOUNDED);
     }
 
     private static PositionIdentity customIdentity(String label, String summary, boolean definedRisk) {
-        return new PositionIdentity(null, null, label, summary, definedRisk, false, true);
+        return customIdentity(label, summary, definedRisk, FundingClass.UNCLASSIFIED,
+                CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
+    }
+
+    private static PositionIdentity customIdentity(String label, String summary, boolean definedRisk,
+                                                   FundingClass fundingClass,
+                                                   CapitalBasis capitalBasis) {
+        return new PositionIdentity(null, null, label, summary, definedRisk, false, true,
+                fundingClass, capitalBasis);
     }
 
     private static PositionPackage.Leg find(List<PositionPackage.Leg> legs, String action, String type) {

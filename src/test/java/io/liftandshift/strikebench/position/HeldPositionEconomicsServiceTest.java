@@ -7,6 +7,8 @@ import io.liftandshift.strikebench.eval.FourOutputAssessment;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.market.ProviderPoliteness;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Freshness;
@@ -21,6 +23,8 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZonedDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -71,8 +75,8 @@ class HeldPositionEconomicsServiceTest {
             // Both units on the ONE receipt: MarketHours counts the sessions the policy thresholds
             // are stated in; calendar days stay beside them for the annualized carry rate only.
             assertThat(carry.tradingSessionsRemaining()).isEqualTo(
-                    io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(
-                            java.time.LocalDate.parse("2026-07-08"), java.time.LocalDate.parse("2026-07-24")));
+                    MarketHours.tradingDaysBetween(
+                            LocalDate.parse("2031-07-22"), EXPIRATION));
             assertThat(carry.grossAnnualizedRemainingPremiumPct()).isEqualTo(6.0833);
             assertThat(carry.collateral().cents()).isEqualTo(1_800_000L);
             assertThat(carry.collateral().authority()).isEqualTo(PositionDomain.FactAuthority.MODEL_DERIVED);
@@ -154,6 +158,61 @@ class HeldPositionEconomicsServiceTest {
         assertThat(receipt.carryCollateral().grossAnnualizedRemainingPremiumPct()).isNull();
         assertThat(receipt.carryCollateral().limitations())
                 .anyMatch(note -> note.contains("no model-derived cash reserve denominator"));
+    }
+
+    @Test void lifecycleUsesThePreviewLaneInstantRatherThanTheServiceWallClock() {
+        Clock unrelatedHostClock = Clock.fixed(
+                Instant.parse("2020-01-02T12:00:00Z"), ZoneOffset.UTC);
+        var service = new HeldPositionEconomicsService(unrelatedHostClock);
+        var request = request(Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO));
+
+        PositionLifecycleReceipt receipt = service.compose(request,
+                preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L), evaluation());
+
+        assertThat(receipt.evidence().observedAt().toInstant())
+                .isEqualTo(Instant.ofEpochMilli(1_942_488_100_000L));
+        assertThat(receipt.carryCollateral().calendarDaysRemaining()).isEqualTo(16);
+        assertThat(receipt.carryCollateral().tradingSessionsRemaining())
+                .isEqualTo(MarketHours.tradingDaysBetween(
+                        LocalDate.parse("2031-07-22"), EXPIRATION));
+    }
+
+    @Test void liveZeroDteUsesTheSingleExplicitModelFractionForAnnualization() {
+        var service = new HeldPositionEconomicsService(CLOCK);
+        var request = request(Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO));
+        Instant beforeFinalBell = ZonedDateTime.of(
+                EXPIRATION, LocalTime.of(15, 0), MarketHours.EASTERN).toInstant();
+        OptionTime.Measure time = OptionTime.toExpiry(beforeFinalBell, EXPIRATION);
+
+        PositionLifecycleReceipt receipt = service.compose(request,
+                preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L),
+                evaluation(), time);
+
+        assertThat(time.state()).isEqualTo(OptionTime.State.LIVE_0DTE);
+        assertThat(receipt.carryCollateral().calendarDaysRemaining()).isZero();
+        assertThat(receipt.carryCollateral().tradingSessionsRemaining()).isZero();
+        assertThat(receipt.carryCollateral().grossAnnualizedRemainingPremiumPct())
+                .isEqualTo(194.6667);
+    }
+
+    @Test void expiredOptionHasNoModelRateOrManagementClock() {
+        var service = new HeldPositionEconomicsService(CLOCK);
+        var request = request(Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO));
+        Instant finalBell = ZonedDateTime.of(
+                EXPIRATION, LocalTime.of(16, 0), MarketHours.EASTERN).toInstant();
+        OptionTime.Measure time = OptionTime.toExpiry(finalBell, EXPIRATION);
+
+        PositionLifecycleReceipt receipt = service.compose(request,
+                preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L),
+                evaluation(), time);
+
+        assertThat(time.state()).isEqualTo(OptionTime.State.EXPIRED);
+        assertThat(receipt.carryCollateral().grossAnnualizedRemainingPremiumPct()).isNull();
+        assertThat(receipt.carryCollateral().calendarDaysRemaining()).isZero();
+        assertThat(receipt.carryCollateral().tradingSessionsRemaining()).isNull();
     }
 
     @Test void positionIdentityIgnoresChangingQuotesWhileSnapshotIdentityDoesNot() {

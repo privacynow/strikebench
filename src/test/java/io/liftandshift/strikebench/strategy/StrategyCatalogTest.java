@@ -58,6 +58,32 @@ class StrategyCatalogTest {
     }
 
     @Test
+    void fundingClassificationNamesTheCapitalFactWithoutPricingItAgain() {
+        var cash = StrategyCatalog.identify(StrategyFamily.CASH_SECURED_PUT);
+        assertThat(cash.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.CASH_COLLATERAL);
+        assertThat(cash.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.STRIKE_CASH_COLLATERAL);
+
+        var shares = StrategyCatalog.identify(StrategyFamily.COVERED_CALL);
+        assertThat(shares.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.SHARE_BACKED);
+        assertThat(shares.capitalBasis()).isEqualTo(
+                StrategyCatalog.CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
+
+        var spread = StrategyCatalog.identify(StrategyFamily.CREDIT_PUT_SPREAD);
+        assertThat(spread.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.DEFINED_RISK);
+        assertThat(spread.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.MAXIMUM_LOSS);
+
+        var naked = StrategyCatalog.identify(StrategyFamily.NAKED_CALL);
+        assertThat(naked.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNDEFINED_RISK);
+        assertThat(naked.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.UNBOUNDED);
+
+        // Exact legs alone cannot distinguish secured from unsecured for one short put.
+        var shortPut = StrategyCatalog.identify(pkg(put(0, "SELL", "100", NEAR, 1)));
+        assertThat(shortPut.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNCLASSIFIED);
+        assertThat(shortPut.capitalBasis()).isEqualTo(
+                StrategyCatalog.CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
+    }
+
+    @Test
     void concreteTemplatesAreUniqueAndNeverInventAnEngineFamily() {
         var keys = new HashSet<String>();
         Set<String> families = new HashSet<>();

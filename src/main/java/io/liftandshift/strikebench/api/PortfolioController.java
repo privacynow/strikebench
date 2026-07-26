@@ -21,7 +21,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.Year;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 /** HTTP controller for paper-book risk and tracked-account accounting. */
@@ -63,7 +65,7 @@ final class PortfolioController {
     void register(JavalinConfig config) {
         PortfolioRoutes.register(config, new PortfolioRoutes.Handlers(
                 this::summary,
-                ctx -> ctx.json(trades.portfolioHeat(currentAccount.apply(ctx).id())),
+                this::portfolioHeat,
                 ctx -> ctx.json(AccountRiskContext.load(db, ownerId.apply(ctx))),
                 this::updateRiskContext,
                 this::riskBudget,
@@ -97,6 +99,49 @@ final class PortfolioController {
                 this::exportWorkbook,
                 this::importTemplate,
                 this::importCsv));
+    }
+
+    /**
+     * HTTP compatibility edge for the historic heat shape. TradeService owns the raw account heat;
+     * BookRiskService owns the only share/rank calculation. This adapter copies the canonical
+     * receipt into the old flat row names for callers that have not migrated yet — it performs no
+     * division, sorting, or ranking of its own.
+     */
+    private void portfolioHeat(Context ctx) {
+        String accountId = currentAccount.apply(ctx).id();
+        Map<String, Object> out = new LinkedHashMap<>(trades.portfolioHeat(accountId));
+        BookRiskService.BookShareRoster roster = bookRisk.bookShareRoster(accountId);
+        out.put("shareRoster", roster);
+
+        List<Map<String, Object>> compatibilityRows = new ArrayList<>();
+        for (BookRiskService.BookShareRow row : roster.rows()) {
+            Map<String, Object> projected = new LinkedHashMap<>();
+            projected.put("tradeId", row.tradeId());
+            projected.put("symbol", row.symbol());
+            projected.put("strategy", row.strategy());
+            projected.put("maxLossCents", row.riskCents());
+            projected.put("riskSharePct", row.sharePct());
+            projected.put("riskRank", row.rank());
+            projected.put("riskRankOf", row.rankOf());
+            projected.put("denominatorCents", row.denominatorCents());
+            projected.put("denominatorBasis", row.denominatorBasis());
+            projected.put("shareUnavailableReason", row.unavailableReason());
+            compatibilityRows.add(java.util.Collections.unmodifiableMap(projected));
+        }
+        out.put("positions", List.copyOf(compatibilityRows));
+        out.put("rankedPositions", roster.available() ? roster.positions() : 0);
+        out.put("bookShareAvailable", roster.available());
+        out.put("bookShareUnavailableReason", roster.unavailableReason());
+        out.put("bookShareDenominatorCents", roster.denominatorCents());
+        out.put("bookShareDenominatorBasis", roster.denominatorBasis());
+        out.put("bookShareBasis", roster.basis());
+        String selected = ctx.queryParam("selectedTradeIds");
+        if (selected != null) {
+            List<String> ids = java.util.Arrays.stream(selected.split(","))
+                    .map(String::trim).filter(value -> !value.isEmpty()).toList();
+            out.put("selectedBook", bookRisk.selectedBook(accountId, ids));
+        }
+        ctx.json(out);
     }
 
     private void updateRiskContext(Context ctx) {

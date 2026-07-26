@@ -60,7 +60,8 @@ class WorkspaceServiceTest {
                  "targetCents":18500,"shareQuantity":200,
                  "routeState":"#/idea/NVDA",
                  "returnFocus":{"subject":"BOOK","routeState":"#/home","scopeType":"SECTOR",
-                                "sectorKey":"SEMICONDUCTORS"}}""");
+                                "sectorKey":"SEMICONDUCTORS","targetCents":18000,
+                                "shareQuantity":300}}""");
     }
 
     @Test
@@ -89,7 +90,10 @@ class WorkspaceServiceTest {
         assertThat(c.targetCents()).isEqualTo(18500L);
         assertThat(c.shareQuantity()).isEqualTo(200L);
         assertThat(c.returnFocus().sectorKey()).isEqualTo("SEMICONDUCTORS");
+        assertThat(c.returnFocus().targetCents()).isEqualTo(18000L);
+        assertThat(c.returnFocus().shareQuantity()).isEqualTo(300L);
         assertThat(c.world()).isEqualTo("observed");
+        assertThat(c.datasetId()).isEqualTo(DatasetService.OBSERVED);
         assertThat(c.marketLane()).isEqualTo("OBSERVED");
         assertThat(c.accountId()).isEqualTo("acct_practice");
         assertThat(c.generation()).isEqualTo(declared.context().generation());
@@ -189,7 +193,7 @@ class WorkspaceServiceTest {
         // revision, and the old market's focus is not in the row beside the new world.
         String stored = ws.get("user-a").orElseThrow().stateJson();
         assertThat(stored).doesNotContain("NVDA").doesNotContain("SEMICONDUCTORS")
-                .doesNotContain("observed").contains("demo");
+                .contains("\"world\": \"demo\"").contains("\"datasetId\": \"observed\"");
         assertThat(Json.canonical(WorkspaceContext.read(stored).context()))
                 .isEqualTo(Json.canonical(c));
         assertThat(after.rev()).isEqualTo(before.rev() + 1);
@@ -199,6 +203,105 @@ class WorkspaceServiceTest {
         assertThat(again.transition()).isNull();
         assertThat(again.rev()).isEqualTo(after.rev());
         assertThat(again.context().generation()).isEqualTo(c.generation());
+    }
+
+    @Test
+    void datasetAndAccountArePartOfTheMarketIdentityAndClearOwnedFocus() {
+        WorkspaceService ws = service();
+        var original = ws.patch("user-a", declaredDesk(), OBSERVED);
+        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,now())",
+                SettingsStore.activeDatasetKey("user-a"), "ds_scenario_a");
+
+        var datasetMoved = ws.context("user-a",
+                new WorkspaceContext.ActiveMarket(
+                        "observed", "ds_scenario_a", "SCENARIO", "acct_practice"));
+        assertThat(datasetMoved.context().generation())
+                .isEqualTo(original.context().generation() + 1);
+        assertThat(datasetMoved.context().datasetId()).isEqualTo("ds_scenario_a");
+        assertThat(datasetMoved.context().focusedSymbol()).isNull();
+        assertThat(datasetMoved.context().routeState()).isNull();
+        assertThat(datasetMoved.context().goal()).isEqualTo("INCOME");
+
+        var redeclared = ws.patch("user-a", patch("""
+                {"version":1,"scopeType":"SYMBOL","focusedSymbol":"AMD",
+                 "focusedSubject":"POSITION","focusedPositionId":"tr_amd",
+                 "routeState":"#/position/tr_amd"}"""),
+                new WorkspaceContext.ActiveMarket(
+                        "observed", "ds_scenario_a", "SCENARIO", "acct_practice"));
+        var accountMoved = ws.context("user-a",
+                new WorkspaceContext.ActiveMarket(
+                        "observed", "ds_scenario_a", "SCENARIO", "acct_other"));
+        assertThat(accountMoved.context().generation())
+                .isEqualTo(redeclared.context().generation() + 1);
+        assertThat(accountMoved.context().accountId()).isEqualTo("acct_other");
+        assertThat(accountMoved.context().focusedPositionId()).isNull();
+        assertThat(accountMoved.context().focusedSymbol()).isNull();
+        assertThat(accountMoved.context().goal()).isEqualTo("INCOME");
+    }
+
+    @Test
+    void staleDatasetIdentityCannotPublishIntoTheCurrentWorkspace() {
+        WorkspaceService ws = service();
+        ws.patch("user-a", declaredDesk(), OBSERVED);
+        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,now())",
+                SettingsStore.activeDatasetKey("user-a"), "ds_new");
+
+        assertThatThrownBy(() -> ws.patch("user-a",
+                patch("{\"version\":1,\"focusedSymbol\":\"AMD\"}"), OBSERVED))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("dataset moved to 'ds_new'")
+                .hasMessageContaining("targeted 'observed'");
+        assertThatThrownBy(() -> ws.context("user-a",
+                new WorkspaceContext.ActiveMarket(
+                        "observed", "ds_new", "OBSERVED", "acct_practice")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("does not match world 'observed' and dataset 'ds_new'");
+        assertThat(ws.get("user-a").orElseThrow().stateJson()).contains("NVDA");
+    }
+
+    @Test
+    void staleIdentityIsRejectedEvenWhenBothMarketsHaveNoWorkspaceRowAtRevisionZero() {
+        WorkspaceService ws = service();
+        WorkspaceContext.ActiveMarket scenario = new WorkspaceContext.ActiveMarket(
+                "observed", "ds_new", "SCENARIO", "acct_practice");
+        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,now())",
+                SettingsStore.activeDatasetKey("user-a"), "ds_new");
+
+        assertThatThrownBy(() -> ws.patch("user-a", patch("""
+                {"version":1,"world":"observed","expectedRev":0,
+                 "expectedDatasetId":"observed","expectedMarketLane":"OBSERVED",
+                 "expectedAccountId":"acct_practice","expectedGeneration":0,
+                 "focusedSymbol":"AMD"}
+                """), scenario))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("made against dataset 'observed'")
+                .hasMessageContaining("active dataset is 'ds_new'");
+
+        assertThat(ws.get("user-a")).isEmpty();
+    }
+
+    @Test
+    void returnFocusAcquisitionValuesAreValidatedAndOldReceiptsStayReadable() {
+        WorkspaceService ws = service();
+        var stored = ws.patch("user-a", patch("""
+                {"version":1,"returnFocus":{"subject":"MARKET","symbol":"AMD",
+                 "scopeType":"SYMBOL","targetCents":45000,"shareQuantity":500,
+                 "routeState":"#/home"}}"""), OBSERVED);
+        assertThat(stored.context().returnFocus().targetCents()).isEqualTo(45000L);
+        assertThat(stored.context().returnFocus().shareQuantity()).isEqualTo(500L);
+
+        assertThatThrownBy(() -> ws.patch("user-a", patch("""
+                {"version":1,"returnFocus":{"targetCents":0}}"""), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("returnFocus.targetCents must be positive");
+
+        WorkspaceContext.Stored old = WorkspaceContext.read("""
+                {"version":1,"generation":1,"world":"observed","marketLane":"OBSERVED",
+                 "accountId":"acct_practice",
+                 "returnFocus":{"subject":"BOOK","routeState":"#/home"}}""");
+        assertThat(old.readable()).isTrue();
+        assertThat(old.context().returnFocus().targetCents()).isNull();
+        assertThat(old.context().returnFocus().shareQuantity()).isNull();
     }
 
     /**
