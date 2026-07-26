@@ -4,7 +4,7 @@
  *
  *   contracts — fast, deterministic, source-served with mocked APIs. No database, no jar.
  *   journeys  — the packaged jar, a fresh database/server/browser per shard, retried once.
- *   visual    — the viewport/geometry matrix (§16.4). Scaffolded: no test file exists yet.
+ *   visual    — the viewport/geometry matrix (§16.4).
  *
  * CI calls the lanes, never individual files. Lane membership is resolved here from a suffix
  * convention instead of a list kept in .github, because a hand-kept list is precisely what
@@ -35,13 +35,13 @@ function die(message) {
 }
 
 /**
- * Every *.test.js under dom-tests, wherever it sits, grouped into exactly one lane.
+ * Every tracked *.test.js under dom-tests, wherever it sits, grouped into exactly one lane.
  *
  * Auto-discovery is deliberate — a hand-kept list is what rotted — but it has one hazard: anything
  * dropped in here named *.test.js joins the gate, so a throwaway probe written while diagnosing a
- * surface decides whether the build is green. The line is COMMITTED versus not: a suite the team
+ * surface decides whether the build is green. The line is TRACKED versus not: a suite the team
  * relies on is in git; a probe someone is writing right now is not. Untracked suites are skipped
- * and announced by name, so nothing is silently ignored and nothing uncommitted can gate a build.
+ * and announced by name, so nothing is silently ignored and nothing untracked can gate a build.
  */
 function trackedTestFiles() {
   try {
@@ -98,33 +98,157 @@ function tapCount(tap, name) {
   return match ? Number(match[1]) : null;
 }
 
-/** Run one file in its own process, streaming TAP so a hung suite is still visible in CI logs. */
-function runShard(file, env) {
+/** Run one file/pattern in its own process; completion is announced and full TAP is preserved. */
+function runShard(shard, env) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', file], {
+    const args = ['--test', '--test-reporter=tap', ...(shard.nodeArgs || []), shard.file];
+    process.stdout.write(`# starting ${shard.label || shard.file}\n`);
+    const child = spawn(process.execPath, args, {
       cwd: HERE, env, stdio: ['ignore', 'pipe', 'inherit']
     });
     let tap = '';
-    child.stdout.on('data', chunk => { tap += chunk; process.stdout.write(chunk); });
-    child.on('error', error => resolve({ file, code: 1, tap: `# ${error.message}\n` }));
-    child.on('close', code => resolve({ file, code, tap }));
+    child.stdout.on('data', chunk => { tap += chunk; });
+    child.on('error', error => resolve({ ...shard, code: 1, tap: `# ${error.message}\n` }));
+    child.on('close', code => {
+      process.stdout.write(`# completed ${shard.label || shard.file} (exit ${code})\n`);
+      resolve({ ...shard, code, tap });
+    });
   });
 }
 
 function score(shard) {
-  const tests = tapCount(shard.tap, 'tests');
+  const rawTests = tapCount(shard.tap, 'tests');
+  const reportedPass = tapCount(shard.tap, 'pass');
   const reportedFail = tapCount(shard.tap, 'fail');
+  const rawSkipped = tapCount(shard.tap, 'skipped');
+  const reportedCancelled = tapCount(shard.tap, 'cancelled');
+  const reportedTodo = tapCount(shard.tap, 'todo');
+  // Node releases differ here: some omit name-pattern nonmatches from their summary, while others
+  // report them as skipped. Removing only the explicit pattern-mismatch skips makes both behaviors
+  // describe tests actually assigned to this shard while preserving intentional product skips.
+  const patternMismatches = shard.expectedTests == null
+    ? 0
+    : (shard.tap.match(/# SKIP test name does not match pattern/g) || []).length;
+  const tests = rawTests == null ? null : rawTests - patternMismatches;
+  const assignmentMismatch = shard.expectedTests != null
+    && tests !== shard.expectedTests;
+  const summaryMissing = rawTests == null
+    || reportedPass == null
+    || reportedFail == null
+    || rawSkipped == null
+    || reportedCancelled == null
+    || reportedTodo == null;
+  const summaryMismatch = !summaryMissing
+    && reportedPass + reportedFail + rawSkipped + reportedCancelled + reportedTodo !== rawTests;
+  const incomplete = tests === 0
+    || (reportedCancelled ?? 0) > 0
+    || (reportedTodo ?? 0) > 0;
+  const infrastructureFailure = shard.code !== 0
+    || summaryMissing
+    || summaryMismatch
+    || assignmentMismatch
+    || incomplete;
   return {
     ...shard,
     tests: tests ?? 0,
-    pass: tapCount(shard.tap, 'pass') ?? 0,
+    pass: reportedPass ?? 0,
     // A shard that died before printing a summary, or exited non-zero despite claiming zero test
     // failures, counts as one infrastructure failure. The lane report is release evidence; it
     // must not publish a green aggregate for a process that did not complete successfully.
-    fail: reportedFail == null ? 1 : Math.max(reportedFail, shard.code === 0 ? 0 : 1),
-    skipped: tapCount(shard.tap, 'skipped') ?? 0,
-    ok: shard.code === 0 && tests !== null && reportedFail === 0
+    fail: reportedFail == null ? 1 : Math.max(reportedFail, infrastructureFailure ? 1 : 0),
+    skipped: Math.max(0, (rawSkipped ?? 0) - patternMismatches),
+    ok: !infrastructureFailure && reportedFail === 0
   };
+}
+
+function regexLiteral(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extracts the static top-level Node test names from a source suite. The Desk contract deliberately
+ * uses this plain form for every test. If that contract changes, refusing to shard is safer than
+ * silently omitting a dynamically registered test.
+ */
+function staticTestNames(file) {
+  const source = fs.readFileSync(path.join(HERE, file), 'utf8');
+  const names = [];
+  for (const line of source.split(/\r?\n/)) {
+    const match = line.match(/^test\(\s*'((?:\\'|[^'])*)'/);
+    if (match) names.push(match[1].replace(/\\'/g, "'"));
+  }
+  return names;
+}
+
+function hasDynamicTestRegistration(file) {
+  const source = fs.readFileSync(path.join(HERE, file), 'utf8');
+  return source.split(/\r?\n/).some(line =>
+    /^\s*test(?:\.|\s*\()/.test(line) && !/^test\(\s*'((?:\\'|[^'])*)'/.test(line));
+}
+
+/**
+ * The Desk contract had 100+ contracts in one process. They opened independent pages, but inherited
+ * one browser/server and made a neighbouring timeout look like product failure. Partitioning the
+ * registered tests gives every shard a fresh process, browser and source server without copying the
+ * 2,600-line canonical fixture/router into parallel test files.
+ */
+function expandContractShards(files) {
+  const result = [];
+  const desired = Math.max(1, Number.parseInt(process.env.DESK_CONTRACT_SHARDS || '8', 10) || 8);
+  for (const file of files) {
+    if (path.basename(file) !== 'desk-backend.test.js') {
+      result.push({ file, label: file });
+      continue;
+    }
+    const names = staticTestNames(file);
+    if (names.length < 2) die(`${file} no longer exposes static top-level tests; refusing to publish partial coverage`);
+    if (new Set(names).size !== names.length) {
+      die(`${file} contains duplicate test names; name-pattern sharding would execute them more than once`);
+    }
+    const count = Math.min(desired, names.length);
+    const buckets = Array.from({ length: count }, () => []);
+    // Round-robin is stable and balances long late-file tests with the older short contracts.
+    names.forEach((name, index) => buckets[index % count].push(name));
+    buckets.forEach((bucket, index) => {
+      const pattern = `^(?:${bucket.map(regexLiteral).join('|')})$`;
+      result.push({
+        file,
+        label: `${file} [${index + 1}/${count}]`,
+        nodeArgs: ['--test-name-pattern', pattern],
+        expectedTests: bucket.length
+      });
+    });
+    // Template-generated or otherwise dynamic tests cannot be enumerated from source without
+    // executing the module. A negative-pattern shard is exhaustive by construction: every
+    // registered name not assigned above runs here, so the viewport loop at the end of the Desk
+    // suite (and future dynamic registrations) cannot disappear between the static buckets.
+    if (hasDynamicTestRegistration(file)) {
+      const known = names.map(regexLiteral).join('|');
+      result.push({
+        file,
+        label: `${file} [dynamic registrations]`,
+        nodeArgs: ['--test-name-pattern', `^(?!(?:${known})$).+$`]
+      });
+    }
+  }
+  return result;
+}
+
+async function runPool(specs, env, concurrency) {
+  const results = new Array(specs.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const index = cursor++;
+      if (index >= specs.length) return;
+      results[index] = score(await runShard(specs[index], env));
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, concurrency), specs.length) },
+    () => worker()
+  ));
+  return results;
 }
 
 function newestUnder(dir) {
@@ -158,15 +282,32 @@ function requirePackagedJar() {
   process.stdout.write(`# packaged artifact ${rel(JAR)} (${jar.size} bytes, built ${jar.mtime.toISOString()})\n`);
 }
 
-/** The exact source these results describe, so a stale report cannot be published as this commit. */
-function sourceSha() {
+/**
+ * The exact source these results describe. Tests are useful in a dirty checkout, but such a run
+ * must say that it did not exercise the committed tree; the release matrix will refuse to publish
+ * it as branch-tip evidence.
+ */
+function sourceIdentity() {
   try {
-    return require('node:child_process')
-      .execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+    const childProcess = require('node:child_process');
+    const sha = childProcess
+      .execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+    const trackedStatus = childProcess.execFileSync('git', [
+      'status', '--porcelain=v1', '--untracked-files=no', '--',
+      'src/main', 'pom.xml', 'dom-tests', '.github/workflows', 'scripts'
+    ], { cwd: ROOT, encoding: 'utf8' }).trim();
+    // Untracked browser probes are intentionally excluded from discovery above, and screenshot
+    // evidence is not source. Untracked application files are different: Maven can compile/package
+    // them, so a jar containing one cannot truthfully be called the committed branch tip.
+    const untrackedApplication = childProcess.execFileSync('git', [
+      'ls-files', '--others', '--exclude-standard', '--', 'src/main'
+    ], { cwd: ROOT, encoding: 'utf8' }).trim();
+    return { sha, dirty: trackedStatus.length > 0 || untrackedApplication.length > 0 };
   } catch (error) {
-    return null;
+    return { sha: null, dirty: true };
   }
 }
+const SOURCE = sourceIdentity();
 
 function publish(lane, shards, note) {
   const totals = shards.reduce((sum, shard) => ({
@@ -178,8 +319,8 @@ function publish(lane, shards, note) {
 
   fs.mkdirSync(TARGET, { recursive: true });
   const report = path.join(TARGET, `dom-${lane}.tap`);
-  const sha = sourceSha();
-  const header = `# lane ${lane}\n${sha ? `# source ${sha}\n` : ''}`
+  const header = `# lane ${lane}\n${SOURCE.sha ? `# source ${SOURCE.sha}\n` : ''}`
+    + `# lane-source-dirty ${SOURCE.dirty ? 1 : 0}\n`
     + `# generated ${new Date().toISOString()}\n`
     // These are the ONE machine-readable lane totals. Raw TAP for every attempt remains below
     // for diagnosis, but the release matrix consumes only this aggregate. Otherwise a journey
@@ -197,7 +338,7 @@ function publish(lane, shards, note) {
         `${shard.file} (${shard.firstAttemptFail} failed on the first attempt)`).join(', ')}\n`
     : '';
   fs.writeFileSync(report, header + retryNote
-    + (shards.map(shard => `# shard ${shard.file}\n${shard.tap}`).join('\n')
+    + (shards.map(shard => `# shard ${shard.label || shard.file}\n${shard.tap}`).join('\n')
       || `1..0\n# tests 0\n# pass 0\n# fail 0\n# skipped 0\n# ${note}\n`));
 
   const headline = `${lane}: ${totals.tests} tests, ${totals.fail} failing`
@@ -206,7 +347,7 @@ function publish(lane, shards, note) {
 
   if (process.env.GITHUB_STEP_SUMMARY) {
     const rows = shards.length
-      ? shards.map(shard => `| \`${shard.file}\`${shard.retried
+      ? shards.map(shard => `| \`${shard.label || shard.file}\`${shard.retried
         ? ` (retried — ${shard.firstAttemptFail} failed first)` : ''} | ${shard.tests} `
         + `| ${shard.pass} | ${shard.fail} | ${shard.skipped} |`)
       : [`| _none_ | 0 | 0 | 0 | 0 |`];
@@ -261,10 +402,11 @@ async function main() {
     // Sequential shards: each one boots its own jar on a fixed port with its own fresh database,
     // so overlapping them would collide. Retry once — journeys only, per §16.2.
     for (const file of files) {
-      const first = score(await runShard(file, env));
+      const spec = { file, label: file };
+      const first = score(await runShard(spec, env));
       if (first.ok) { shards.push(first); continue; }
       process.stdout.write(`# retrying ${file} once (journey lane only)\n`);
-      const second = score(await runShard(file, env));
+      const second = score(await runShard(spec, env));
       // The retry decides pass/fail, but the FIRST attempt's TAP is kept in the report. Replacing
       // it lost the only record of what actually failed, so a journey that fails then passes read
       // as a clean run and its diagnostics were gone — the opposite of what a retry is for.
@@ -280,12 +422,24 @@ async function main() {
     // One process per file here too, so a lane's report names the file that failed and a
     // crashed suite cannot take its neighbours' results down with it. No retry: these lanes
     // mock every API and must be deterministic — a rerun that changes the answer is a defect.
-    shards = [];
-    for (const file of files) shards.push(score(await runShard(file, env)));
+    const specs = lane === 'contracts' ? expandContractShards(files)
+      : files.map(file => ({ file, label: file }));
+    // Two browsers fit the two-core shared runner without turning 8-second product waits into CPU
+    // roulette. Local machines may opt higher; isolation, not maximum fan-out, is the contract.
+    const concurrency = Number.parseInt(process.env.BROWSER_LANE_CONCURRENCY || '2', 10) || 2;
+    shards = await runPool(specs, env, concurrency);
   }
 
   const totals = publish(lane, shards);
   if (totals.fail || shards.some(shard => !shard.ok)) process.exit(1);
 }
 
-main().catch(error => die(error.stack || String(error)));
+if (require.main === module) {
+  main().catch(error => die(error.stack || String(error)));
+}
+
+module.exports = {
+  expandContractShards,
+  score,
+  staticTestNames
+};

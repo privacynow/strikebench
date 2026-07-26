@@ -15,11 +15,22 @@ function attribute(tag, name) {
   return match ? Number(match[1]) : 0;
 }
 
-function junitResult() {
-  const dir = path.join(target, 'surefire-reports');
+export function junitResult(expectedSha, dir = path.join(target, 'surefire-reports')) {
   const files = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter(name => /^TEST-.*\.xml$/.test(name)) : [];
   if (!files.length) throw new Error('No Surefire XML reports found; run mvn test first.');
+  const sourceFile = path.join(dir, 'source.sha');
+  if (!fs.existsSync(sourceFile)) {
+    throw new Error('Surefire evidence carries no source SHA. Run a clean full suite and write '
+      + '`git rev-parse HEAD` to target/surefire-reports/source.sha before publishing it.');
+  }
+  const source = fs.readFileSync(sourceFile, 'utf8').trim();
+  if (!/^[0-9a-f]{40}$/.test(source)) {
+    throw new Error(`Surefire source marker is not a full commit SHA: ${JSON.stringify(source)}`);
+  }
+  if (source !== expectedSha) {
+    throw new Error(`Surefire evidence was produced from source ${source}, but HEAD is ${expectedSha}.`);
+  }
   /*
    * Surefire writes one XML per test class and never removes an old one. A directory holding
    * reports from two different runs — a focused `-Dtest=…` followed by a full run, or a class that
@@ -59,40 +70,75 @@ function laneMetric(text, name) {
  * target/ from a previous checkout is stamped with the current HEAD and published as this
  * commit's evidence.
  */
-function tapSha(text) {
-  const match = text.match(/(?:^|\n)#\s*source\s+([0-9a-f]{7,40})/);
-  return match ? match[1] : null;
+function laneName(text) {
+  const matches = [...text.matchAll(/(?:^|\n)#\s*lane\s+([a-z-]+)\s*$/gm)];
+  if (matches.length !== 1) {
+    throw new Error(`Lane report must carry exactly one lane identity; found ${matches.length}`);
+  }
+  return matches[0][1];
 }
 
-export function parseLaneReport(text, expectedSha, { required = true, file = 'browser lane' } = {}) {
+function tapSha(text) {
+  const matches = [...text.matchAll(/(?:^|\n)#\s*source\s+([0-9a-f]{40})\s*$/gm)];
+  if (matches.length !== 1) {
+    throw new Error(`Lane report must carry exactly one full source SHA; found ${matches.length}`);
+  }
+  return matches[0][1];
+}
+
+export function parseLaneReport(text, expectedSha, {
+  file = 'browser lane',
+  expectedLane = null
+} = {}) {
   const result = {
+    lane: laneName(text),
     tests: laneMetric(text, 'tests'),
+    pass: laneMetric(text, 'pass'),
     failures: laneMetric(text, 'fail'),
     skipped: laneMetric(text, 'skipped'),
     shards: laneMetric(text, 'shards'),
     sha: tapSha(text),
+    sourceDirty: laneMetric(text, 'source-dirty'),
     retried: laneMetric(text, 'retried')
   };
-  // A required lane that ran nothing is not a passing lane. It used to publish "0 tests, 0
-  // failures" and count as green, which is the most expensive kind of false evidence.
-  if (required && result.tests === 0) {
-    throw new Error(`${file} reports zero tests. A required lane cannot be green on nothing.`);
+  if (expectedLane && result.lane !== expectedLane) {
+    throw new Error(`${file} claims lane ${result.lane}, but ${expectedLane} evidence was required.`);
   }
-  if (result.sha && result.sha !== expectedSha) {
+  // A lane that ran nothing is not a passing lane. It used to publish "0 tests, 0
+  // failures" and count as green, which is the most expensive kind of false evidence.
+  if (result.tests === 0 || result.shards === 0) {
+    throw new Error(`${file} reports ${result.tests} tests across ${result.shards} shards. `
+      + 'A browser lane cannot be green on nothing.');
+  }
+  if (result.sha !== expectedSha) {
     throw new Error(`${file} was produced from source ${result.sha}, but HEAD is ${expectedSha}. `
       + 'Re-run that lane against this commit rather than publishing a stale report.');
   }
-  if (required && !result.sha) {
-    throw new Error(`${file} carries no source SHA. Re-run it with a lane runner that stamps one, `
-      + 'so a report from another checkout cannot be published as this commit\'s evidence.');
+  if (result.sourceDirty !== 0) {
+    throw new Error(`${file} was produced from a dirty source tree. Commit or restore the source, `
+      + 'then rerun the lane so the evidence describes the exact branch tip.');
+  }
+  if (result.retried > result.shards) {
+    throw new Error(`${file} reports ${result.retried} retries for only ${result.shards} shards.`);
+  }
+  if (expectedLane && expectedLane !== 'journeys' && result.retried !== 0) {
+    throw new Error(`${file} reports a retry in deterministic ${expectedLane} evidence.`);
+  }
+  if (result.pass > result.tests || result.skipped > result.tests) {
+    throw new Error(`${file} carries impossible totals: ${result.tests} tests, ${result.pass} pass, `
+      + `${result.skipped} skipped.`);
+  }
+  if (result.failures === 0 && result.pass + result.skipped !== result.tests) {
+    throw new Error(`${file} claims green but accounts for only ${result.pass} pass + `
+      + `${result.skipped} skipped out of ${result.tests} tests.`);
   }
   return result;
 }
 
-function browserResult(file, expectedSha, { required = true } = {}) {
+function browserResult(file, expectedSha, expectedLane) {
   const report = path.join(target, file);
   if (!fs.existsSync(report)) throw new Error(`Missing ${file}; run its browser lane first.`);
-  return parseLaneReport(fs.readFileSync(report, 'utf8'), expectedSha, { required, file });
+  return parseLaneReport(fs.readFileSync(report, 'utf8'), expectedSha, { expectedLane, file });
 }
 
 function main() {
@@ -100,22 +146,24 @@ function main() {
      audit/seeded/bookrisk/adoption/learn) went with workspace.html in 8654824; demanding their TAPs
      made this report unproducible, which is why CI stopped generating release evidence at all. The
      three lanes below are the ones dom-tests/lane.js writes. */
-  const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const rows = liveOnly
-    ? [['Live-provider capture', browserResult('dom-live.tap', sha)]]
+    ? [['Live-provider capture', browserResult('dom-live.tap', sha, 'live')]]
     : [
-        ['JUnit', junitResult()],
-        ['Browser contracts (deterministic, mocked APIs)', browserResult('dom-contracts.tap', sha)],
-        ['Browser journeys (packaged jar, fresh database)', browserResult('dom-journeys.tap', sha)],
-        ['Visual/geometry matrix', browserResult('dom-visual.tap', sha)]
+        ['JUnit', junitResult(sha)],
+        ['Browser contracts (deterministic, mocked APIs)',
+          browserResult('dom-contracts.tap', sha, 'contracts')],
+        ['Browser journeys (packaged jar, fresh database)',
+          browserResult('dom-journeys.tap', sha, 'journeys')],
+        ['Visual/geometry matrix', browserResult('dom-visual.tap', sha, 'visual')]
       ];
   if (!liveOnly && fs.existsSync(path.join(target, 'dom-live.tap'))) {
-    rows.push(['Live-provider browser', browserResult('dom-live.tap', sha, { required: false })]);
+    rows.push(['Live-provider browser', browserResult('dom-live.tap', sha, 'live')]);
   }
   const failed = rows.reduce((sum, [, result]) => sum + result.failures, 0);
   const retried = rows.reduce((sum, [, result]) => sum + (result.retried || 0), 0);
   const lines = [
-    `## StrikeBench release matrix (${sha})`,
+    `## StrikeBench release matrix (${sha.slice(0, 12)})`,
     '',
     '| Suite | Shards | Tests | Skipped | Failures | Retried shards |',
     '|---|---:|---:|---:|---:|---:|',
