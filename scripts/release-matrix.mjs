@@ -20,6 +20,21 @@ function junitResult() {
   const files = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter(name => /^TEST-.*\.xml$/.test(name)) : [];
   if (!files.length) throw new Error('No Surefire XML reports found; run mvn test first.');
+  /*
+   * Surefire writes one XML per test class and never removes an old one. A directory holding
+   * reports from two different runs — a focused `-Dtest=…` followed by a full run, or a class that
+   * was renamed — sums into a total that never existed: this published 1,220 for a suite that had
+   * just run 1,216. Reports must come from ONE run, which means their timestamps cluster.
+   */
+  const stamped = files.map(name => ({ name, at: fs.statSync(path.join(dir, name)).mtimeMs }));
+  const newest = Math.max(...stamped.map(entry => entry.at));
+  const stale = stamped.filter(entry => newest - entry.at > 10 * 60 * 1000);
+  if (stale.length) {
+    throw new Error(`${stale.length} Surefire report(s) predate the newest by more than ten `
+      + `minutes (${stale.slice(0, 4).map(entry => entry.name).join(', ')}`
+      + `${stale.length > 4 ? ', …' : ''}). They are from an earlier run and would be summed into a `
+      + 'total that never executed. Delete target/surefire-reports and run the full suite.');
+  }
   return files.reduce((total, name) => {
     const xml = fs.readFileSync(path.join(dir, name), 'utf8');
     const tag = xml.match(/<testsuite\b[^>]*>/)?.[0];
