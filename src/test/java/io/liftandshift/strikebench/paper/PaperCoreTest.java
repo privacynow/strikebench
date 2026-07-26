@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 class PaperCoreTest {
 
@@ -2086,6 +2087,44 @@ class PaperCoreTest {
         assertThat((Long) heat.get("assignmentReserveReleasedCents")).isEqualTo(1_000_000L);
         assertThat((Long) heat.get("postPhysicalAssignmentBuyingPowerCents")).isEqualTo(buyingPowerBefore);
         assertThat(heat).doesNotContainKeys("assignmentCashCents", "postAssignmentBuyingPowerCents");
+    }
+
+    /**
+     * Audit §15.5. A trade's share of defined book risk and its rank depend on every other open
+     * trade, so they are BOOK facts. The desk used to divide maxLoss by the heat total itself and
+     * rank by sorting whatever rows it was holding — a filtered or paged roster then stated a
+     * confident, wrong "2nd of 4".
+     */
+    @Test
+    void portfolioHeatRanksEachTradeByItsShareOfDefinedBookRisk() {
+        Account acct = accounts.getOrCreateDefault();
+        trades.create(creditPutSpread(acct.id(), 1));
+        trades.create(creditPutSpread(acct.id(), 3));
+
+        Map<String, Object> heat = trades.portfolioHeat(acct.id());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) heat.get("positions");
+        long total = (Long) heat.get("totalMaxLossCents");
+
+        assertThat(rows).hasSize(2);
+        assertThat(rows).extracting(row -> row.get("riskRank")).containsExactly(1, 2);
+        assertThat((Long) rows.get(0).get("maxLossCents"))
+                .as("rank 1 is the largest defined loss in the book")
+                .isGreaterThanOrEqualTo((Long) rows.get(1).get("maxLossCents"));
+        double shareSum = rows.stream().mapToDouble(row -> (Double) row.get("riskSharePct")).sum();
+        assertThat(shareSum).as("the shares of one book total 100%").isCloseTo(100.0, within(1e-6));
+        assertThat((Double) rows.get(0).get("riskSharePct"))
+                .isCloseTo(100.0 * (Long) rows.get(0).get("maxLossCents") / total, within(1e-9));
+        assertThat(heat.get("rankedPositions")).isEqualTo(2);
+    }
+
+    /** An empty book has no share to state, so it states none rather than a confident zero. */
+    @Test
+    void portfolioHeatStatesNoRiskShareWhenTheBookDefinesNoRisk() {
+        Account acct = accounts.getOrCreateDefault();
+        Map<String, Object> heat = trades.portfolioHeat(acct.id());
+        assertThat((List<?>) heat.get("positions")).isEmpty();
+        assertThat(heat.get("rankedPositions")).isEqualTo(0);
     }
 
     @Test

@@ -1702,6 +1702,28 @@ public final class TradeService {
                 .mapToLong(Long::longValue).max().orElse(0);
         out.put("concentrationPct", facts.totalMaxLossCents() > 0
                 ? Math.round(100.0 * worstSymbol / facts.totalMaxLossCents()) : 0);
+        // Audit §15.5: each trade's share of defined book risk, and its rank, are BOOK facts — they
+        // depend on every other open trade. The browser derived both: it divided maxLoss by the
+        // heat total, and it ranked by sorting whatever rows it happened to be holding, so a
+        // filtered or paged roster produced a confident, wrong "2nd of 4".
+        List<Map<String, Object>> rows = new ArrayList<>();
+        List<TradeRecord> ranked = new ArrayList<>(facts.trades());
+        ranked.sort(java.util.Comparator.comparingLong(TradeRecord::maxLossCents).reversed()
+                .thenComparing(TradeRecord::id));
+        for (int index = 0; index < ranked.size(); index++) {
+            TradeRecord trade = ranked.get(index);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("tradeId", trade.id());
+            row.put("symbol", trade.symbol());
+            row.put("maxLossCents", trade.maxLossCents());
+            // Null, not zero: with no defined risk in the book there is no share to state.
+            row.put("riskSharePct", facts.totalMaxLossCents() > 0
+                    ? 100.0 * trade.maxLossCents() / facts.totalMaxLossCents() : null);
+            row.put("riskRank", index + 1);
+            rows.add(row);
+        }
+        out.put("positions", List.copyOf(rows));
+        out.put("rankedPositions", rows.size());
         out.put("earlyAssignmentLiquidityCents", facts.theoreticalShortPutObligationCents());
         out.put("physicalAssignmentCashCents", facts.physicalAssignmentCashCents());
         out.put("assignmentReserveReleasedCents", facts.assignmentReserveReleasedCents());
@@ -1716,6 +1738,7 @@ public final class TradeService {
 
     private record PortfolioHeatFacts(int activeTrades, long totalMaxLossCents, long reservedCents,
                                       int shortVolTrades, Map<String, Long> bySymbolMaxLossCents,
+                                      List<TradeRecord> trades,
                                       long theoreticalShortPutObligationCents,
                                       long physicalAssignmentCashCents,
                                       long assignmentReserveReleasedCents,
@@ -1757,7 +1780,7 @@ public final class TradeService {
             }
         }
         return new PortfolioHeatFacts(active.size(), totalMaxLoss, acct.reservedCents(), shortVol,
-                Map.copyOf(bySymbol), earlyAssignmentLiquidity, physicalAssignmentCash,
+                Map.copyOf(bySymbol), List.copyOf(active), earlyAssignmentLiquidity, physicalAssignmentCash,
                 assignmentReserveReleased,
                 acct.buyingPowerCents() - physicalAssignmentCash + assignmentReserveReleased);
     }
