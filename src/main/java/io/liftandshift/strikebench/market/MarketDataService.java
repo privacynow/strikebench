@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -62,10 +63,18 @@ public final class MarketDataService {
     private static final Duration EMPTY_HISTORY_TTL = Duration.ofSeconds(15);
     private static final Duration EMPTY_NEWS_TTL = Duration.ofSeconds(30);
     private static final Duration MODELED_RATE_TTL = Duration.ofMinutes(5);
+    /*
+     * The one in-memory owner of the last-known Quote for a symbol.  This cache deliberately does
+     * not expire a usable observation: age is an evidence fact handled by gateQuote(), while
+     * MarketDataEngine schedules acquisition.  Expiring the value here used to create a second
+     * "current quote" store in MarketDataEngine merely so stale-while-refresh had something left
+     * to serve.
+     */
     private final Cache<Symbol, Optional<Quote>> quoteCache = Caffeine.newBuilder()
-            .expireAfter(MarketDataService.<Symbol, Quote>optionalExpiry(
-                    Duration.ofSeconds(15), EMPTY_QUOTE_TTL))
             .maximumSize(500).build();
+    /** Acquisition bookkeeping only; never a second value/freshness store. */
+    private final Map<Symbol, Long> quoteAttemptEpochMs = new ConcurrentHashMap<>();
+    private static final long DIRECT_QUOTE_RETRY_MS = Duration.ofSeconds(15).toMillis();
     private record ChainKey(Symbol symbol, LocalDate expiration) {}
     private final Cache<ChainKey, Optional<OptionChain>> chainCache = Caffeine.newBuilder()
             .expireAfter(MarketDataService.<ChainKey, OptionChain>optionalExpiry(
@@ -117,6 +126,7 @@ public final class MarketDataService {
     private final AtomicLong cacheGeneration = new AtomicLong();
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
+    private final Clock clock;
     // Per-symbol earliest-available boundary learned from provider range-absence (PRE_HISTORY). A
     // backfill orchestrator reads this to persist a durable clamp; not a substitute for it.
     // Keyed by the typed HistoricalAbsenceKey(provider, symbol) — a provider-scoped boundary so one
@@ -129,7 +139,7 @@ public final class MarketDataService {
     public MarketDataService(List<MarketDataProvider> providers,
                              List<NewsFilingsProvider> newsProviders,
                              List<RatesProvider> ratesProviders) {
-        this(providers, newsProviders, ratesProviders, null);
+        this(providers, newsProviders, ratesProviders, null, Clock.systemUTC());
     }
 
     /** With a {@link io.liftandshift.strikebench.market.ports.CandleStore}: persisted daily bars are
@@ -138,7 +148,21 @@ public final class MarketDataService {
                              List<NewsFilingsProvider> newsProviders,
                              List<RatesProvider> ratesProviders,
                              io.liftandshift.strikebench.market.ports.CandleStore candleStore) {
+        this(providers, newsProviders, ratesProviders, candleStore, Clock.systemUTC());
+    }
+
+    /**
+     * Production constructor.  All evidence-age decisions use the application's injected clock;
+     * tests and simulated sessions therefore cannot disagree with the engine because one layer
+     * called {@code System.currentTimeMillis()}.
+     */
+    public MarketDataService(List<MarketDataProvider> providers,
+                             List<NewsFilingsProvider> newsProviders,
+                             List<RatesProvider> ratesProviders,
+                             io.liftandshift.strikebench.market.ports.CandleStore candleStore,
+                             Clock clock) {
         this.candleStore = candleStore;
+        this.clock = java.util.Objects.requireNonNull(clock, "clock");
         this.providers = List.copyOf(providers);
         this.newsProviders = List.copyOf(newsProviders);
         this.ratesProviders = List.copyOf(ratesProviders);
@@ -172,6 +196,21 @@ public final class MarketDataService {
     /** Shares the engine's durable observed quote mirror; never mounted in Demo-only builds. */
     public void setQuoteSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
         this.quoteSnapshotStore = store;
+        if (store == null) return;
+        /*
+         * Restore directly into the canonical cache.  MarketDataEngine tracks refresh work, not a
+         * second copy of the prices.  Persisted observations are forced STALE by the store/read
+         * contract before they enter memory.
+         */
+        try {
+            for (io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot snapshot
+                    : store.loadAll()) {
+                Quote quote = snapshot.toStaleQuote();
+                if (quote.mark() != null) quoteCache.put(Symbol.of(quote.symbol()), Optional.of(quote));
+            }
+        } catch (RuntimeException e) {
+            log.debug("Last-known quote restore failed", e);
+        }
     }
 
     /**
@@ -210,7 +249,12 @@ public final class MarketDataService {
 
     @SuppressWarnings("unchecked")
     private <K, V> V cached(Cache<K, V> cache, K key, String domain, Supplier<V> loader) {
-        V hit = cache.getIfPresent(key);
+        return cached(cache, key, domain, true, loader);
+    }
+
+    private <K, V> V cached(Cache<K, V> cache, K key, String domain,
+                            boolean acceptCachedValue, Supplier<V> loader) {
+        V hit = acceptCachedValue ? cache.getIfPresent(key) : null;
         if (hit != null) return hit;
         long generation = cacheGeneration.get();
         FlightKey flightKey = new FlightKey(domain, generation, key);
@@ -239,6 +283,7 @@ public final class MarketDataService {
     public void invalidateAll() {
         cacheGeneration.incrementAndGet();
         quoteCache.invalidateAll();
+        quoteAttemptEpochMs.clear();
         chainCache.invalidateAll();
         expirationsCache.invalidateAll();
         candlesCache.invalidateAll();
@@ -389,6 +434,39 @@ public final class MarketDataService {
         return observedWorld(worldId) ? quote(symbol) : Optional.empty();
     }
 
+    /**
+     * Memory-only current observed quote.  This is the price store MarketDataEngine peeks while
+     * composing frames and simulated-world anchors; it never contacts a provider.
+     */
+    public Optional<Quote> peekQuote(String symbol) {
+        Symbol key = Symbol.optional(symbol);
+        if (key == null) return Optional.empty();
+        Optional<Quote> cached = quoteCache.getIfPresent(key);
+        return cached == null ? Optional.empty() : eligibleObserved(cached);
+    }
+
+    /** All restored/materialized observed quotes, without provider I/O. */
+    List<Quote> cachedQuotes() {
+        return quoteCache.asMap().values().stream()
+                .flatMap(Optional::stream)
+                .map(this::gateQuote)
+                .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()))
+                .toList();
+    }
+
+    /**
+     * Force one governed provider acquisition while retaining the previous quote when the provider
+     * cannot improve it. Concurrent refreshes join MarketDataService's existing single-flight.
+     * MarketDataEngine schedules this operation but does not own another price cache.
+     */
+    public Optional<Quote> refreshQuote(String symbol) {
+        Symbol key = Symbol.of(symbol);
+        Optional<Quote> previous = quoteCache.getIfPresent(key);
+        Optional<Quote> loaded = cached(quoteCache, key, "quote", false,
+                () -> acquireQuote(key, previous));
+        return eligibleObserved(loaded);
+    }
+
     public List<LocalDate> expirations(String symbol, String worldId) {
         if ("demo".equals(worldId)) {
             return demoProvider == null ? List.of() : demoProvider.expirations(Symbol.normalize(symbol));
@@ -518,20 +596,60 @@ public final class MarketDataService {
 
     public Optional<Quote> quote(String symbol) {
         Symbol key = Symbol.of(symbol);
-        String sym = key.value();
-        Optional<Quote> loaded = cached(quoteCache, key, "quote", () -> {
-            Quote q = firstNonEmpty(Domain.QUOTES, p -> p.quote(sym).orElse(null));
-            if (q == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
-                try { q = quoteSnapshotStore.load(sym)
+        Optional<Quote> loaded = cached(quoteCache, key, "quote",
+                () -> acquireQuote(key, Optional.empty()));
+        Optional<Quote> eligible = eligibleObserved(loaded);
+        Quote quote = eligible.orElse(null);
+        long sinceAttempt = clock.millis() - quoteAttemptEpochMs.getOrDefault(key, 0L);
+        /*
+         * A direct service consumer is not allowed to strand a stale value merely because the
+         * symbol is outside the warm engine's tracked set. The canonical age gate triggers one
+         * governed attempt per retry window; the last observation remains visible and STALE if
+         * acquisition cannot improve it.
+         */
+        if ((quote == null && sinceAttempt >= EMPTY_QUOTE_TTL.toMillis())
+                || (quote != null && quote.markFreshness() == Freshness.STALE
+                && observedEvidence(quote.evidence())
+                && sinceAttempt >= DIRECT_QUOTE_RETRY_MS)) {
+            return refreshQuote(key.value());
+        }
+        return eligible;
+    }
+
+    private Optional<Quote> acquireQuote(Symbol key, Optional<Quote> previous) {
+        String symbol = key.value();
+        quoteAttemptEpochMs.put(key, clock.millis());
+        Quote quote = firstNonEmpty(Domain.QUOTES, provider -> provider.quote(symbol).orElse(null));
+        if (quote == null && previous != null && previous.isPresent()) {
+            // Preserve the last observation, but a failed refresh cannot keep claiming live age.
+            quote = staleQuote(previous.get());
+        }
+        if (quote == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
+            try {
+                quote = quoteSnapshotStore.load(symbol)
                         .map(io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot::toStaleQuote)
-                        .orElse(null); }
-                catch (RuntimeException e) { log.debug("Last-known quote lookup failed for {}", sym, e); }
+                        .orElse(null);
+            } catch (RuntimeException e) {
+                log.debug("Last-known quote lookup failed for {}", symbol, e);
             }
-            return Optional.ofNullable(q);
-        });
-        Quote q = loaded.orElse(null);
-        return Optional.ofNullable(q).map(this::gateQuote)
-                .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
+        }
+        if (quote != null && quote.mark() != null
+                && !fixtureOnlyChain && observedEvidence(quote.evidence())
+                && quoteSnapshotStore != null) {
+            try {
+                quoteSnapshotStore.save(
+                        io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot.of(
+                                quote, clock.millis(), false, null));
+            } catch (RuntimeException e) {
+                log.debug("Last-known quote persistence failed for {}", symbol, e);
+            }
+        }
+        return Optional.ofNullable(quote);
+    }
+
+    private Optional<Quote> eligibleObserved(Optional<Quote> value) {
+        return value.map(this::gateQuote)
+                .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()));
     }
 
     public List<LocalDate> expirations(String symbol) {
@@ -916,10 +1034,15 @@ public final class MarketDataService {
 
     private Quote gateQuote(Quote q) {
         if (q.freshness().isObservedLive() && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
-            return new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
-                    q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), q.source(), Freshness.STALE);
+            return staleQuote(q);
         }
         return q;
+    }
+
+    private static Quote staleQuote(Quote q) {
+        return new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
+                q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), q.source(),
+                Freshness.STALE);
     }
 
     private OptionChain gateChain(OptionChain c) {
@@ -930,8 +1053,8 @@ public final class MarketDataService {
         return c;
     }
 
-    private static long ageMs(long asOfEpochMs) {
-        return System.currentTimeMillis() - asOfEpochMs;
+    private long ageMs(long asOfEpochMs) {
+        return clock.millis() - asOfEpochMs;
     }
 
     // ---- Status bookkeeping ----

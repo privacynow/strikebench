@@ -9,7 +9,8 @@ import java.util.List;
  * Intent-flow fields: assignmentProb is the modeled chance the short legs finish in the
  * money (risk-neutral, at each leg's own IV; early assignment not modeled). For ACQUIRE
  * and EXIT intents assignment IS the goal, so present it as the chance of success there.
- * annualizedYieldPct is premium income over capital at risk, annualized by days to expiry.
+ * annualizedYieldPct is premium income over capital at risk, annualized through the candidate's
+ * canonical {@code OptionTime.Measure} calendar-time fraction.
  * usesHeldShares candidates carry option legs only; the trade layer locks sharesNeeded
  * held shares as coverage, so maxLossCents is the trade's INCREMENTAL cash risk while
  * combinedMaxLossCents is the worst case including the locked shares from today's price.
@@ -48,7 +49,6 @@ public record Candidate(
         Integer sharesNeeded,         // held shares this trade would lock, when usesHeldShares
         Long combinedMaxLossCents,    // worst case incl. locked shares from today's price, when usesHeldShares
         // The sole market-implied probability/EV authority for this exact priced package.
-        // The legacy top-level wire projections are derived accessors below; no second values are stored.
         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
 ) {
     /**
@@ -73,21 +73,4 @@ public record Candidate(
         }
     }
 
-    /**
-     * Source-compatible wire projection. The value is never stored independently: it can only be
-     * read from the fingerprinted market-implied evaluation receipt.
-     */
-    @com.fasterxml.jackson.annotation.JsonProperty("pop")
-    public Double pop() {
-        return marketImpliedRisk.pop();
-    }
-
-    /**
-     * Source-compatible wire projection. The value is never stored independently: it can only be
-     * read from the fingerprinted market-implied evaluation receipt.
-     */
-    @com.fasterxml.jackson.annotation.JsonProperty("expectedValueCents")
-    public Long expectedValueCents() {
-        return marketImpliedRisk.expectedValueCents();
-    }
 }

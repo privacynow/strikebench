@@ -127,14 +127,9 @@ public final class SnapshotService {
             if (observedQuote != null) {
                 BigDecimal close = observedQuote.last() != null ? observedQuote.last() : observedQuote.mark();
                 if (close != null) {
-                    Db.execOn(c,
-                            "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed) "
-                          + "VALUES (?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
-                          + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, "
-                          + "volume=excluded.volume, observed=excluded.observed",
-                            sym, asof, null, observedQuote.dayHigh(), observedQuote.dayLow(), close,
-                            observedQuote.volume(), SOURCE, true);
+                    io.liftandshift.strikebench.db.ObservedCandleWriter.upsertObservedClose(
+                            c, sym, asof, observedQuote.dayHigh(), observedQuote.dayLow(), close,
+                            observedQuote.volume(), SOURCE);
                     u++;
                 }
             }

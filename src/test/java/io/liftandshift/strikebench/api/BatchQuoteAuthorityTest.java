@@ -80,25 +80,30 @@ class BatchQuoteAuthorityTest {
         assertThat(batchRow.get("priced").asBoolean()).isTrue();
         assertThat(batchRow.get("markBasis").asText()).isIn("MID", "LAST", "PREVIOUS_CLOSE");
 
+        JsonNode researchQuote = research.get("quote");
         assertThat(batchRow.get("displayPrice").decimalValue())
                 .as("display price")
-                .isEqualByComparingTo(research.get("displayPrice").decimalValue());
+                .isEqualByComparingTo(researchQuote.get("displayPrice").decimalValue());
         assertThat(batchRow.get("displayChangePct").asDouble())
                 .as("day change")
-                .isEqualTo(research.get("displayChangePct").asDouble());
+                .isEqualTo(researchQuote.get("displayChangePct").asDouble());
         assertThat(batchRow.get("markBasis").asText())
-                .as("basis").isEqualTo(research.get("markBasis").asText());
+                .as("basis").isEqualTo(researchQuote.get("markBasis").asText());
         assertThat(batchRow.get("priceIsPreviousClose").asBoolean())
-                .isEqualTo(research.get("priceIsPreviousClose").asBoolean());
+                .isEqualTo(researchQuote.get("priceIsPreviousClose").asBoolean());
         assertThat(batchRow.get("freshness").asText())
-                .as("freshness").isEqualTo(research.get("freshness").asText());
+                .as("freshness").isEqualTo(researchQuote.get("freshness").asText());
         assertThat(batchRow.get("source").asText())
                 .as("source").isEqualTo(research.at("/quote/source").asText());
         assertThat(batchRow.get("asOf").asLong())
                 .as("as-of").isEqualTo(research.at("/quote/asOf").asLong());
 
         // The research document's quote slot IS the batch row: one type, not two that agree today.
-        assertThat(research.get("quote")).isEqualTo(batchRow);
+        assertThat(researchQuote).isEqualTo(batchRow);
+        assertThat(research.has("displayPrice")).isFalse();
+        assertThat(research.has("displayChangePct")).isFalse();
+        assertThat(research.has("markBasis")).isFalse();
+        assertThat(research.has("freshness")).isFalse();
     }
 
     @Test

@@ -3,6 +3,9 @@ package io.liftandshift.strikebench.paper;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -205,7 +208,7 @@ class PaperCoreTest {
         assertThat(liveTrades.preview(creditPutSpread(observed.id(), 1)).ok()).isFalse();
 
         marks.freshness = Freshness.STALE;
-        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("cboe", Freshness.STALE);
+        marks.evidenceOverride = DataEvidence.of("cboe", Freshness.STALE);
         TradePreview stale = liveTrades.preview(creditPutSpread(observed.id(), 1));
         assertThat(stale.ok()).isFalse();
         assertThat(stale.blockReasons()).anySatisfy(r -> assertThat(r).contains("STALE"));
@@ -230,13 +233,15 @@ class PaperCoreTest {
         assertThat(atMine.price().openingFeesCents()).isEqualTo(200L); // fee override respected
         assertThat(atMine.warnings()).anySatisfy(w -> assertThat(w).contains("entered leg price"));
 
-        // The analytics contract every Review consumer shares.
-        assertThat(atMine.analytics()).containsKeys("probabilityMap", "evSensitivity", "executionQuality",
-                "managementPlan", "verdict", "verdictReason");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> prob = (Map<String, Object>) atMine.analytics().get("probabilityMap");
-        assertThat((Double) prob.get("pAnyProfit")).isBetween(0.0, 1.0);
-        assertThat((String) prob.get("basis")).containsIgnoringCase("risk-neutral");
+        // Probability and EV publish through the one fingerprinted receipt. Analytics keeps only
+        // distinct policy and execution-quality owners.
+        assertThat(atMine.analytics()).containsKeys("executionQuality",
+                "managementPlan", "verdict", "verdictReason")
+                .doesNotContainKeys("probabilityMap", "evSensitivity", "marketImpliedRisk");
+        assertThat(atMine.marketImpliedRisk().probabilityMap().pAnyProfit())
+                .isBetween(0.0, 1.0);
+        assertThat(atMine.marketImpliedRisk().probabilityMap().basis())
+                .containsIgnoringCase("risk-neutral");
         @SuppressWarnings("unchecked")
         Map<String, Object> exec = (Map<String, Object>) atMine.analytics().get("executionQuality");
         // Zero-spread stub book: mid == executable, so the concession vs mid is exactly the give-up.
@@ -263,7 +268,8 @@ class PaperCoreTest {
         TradeRecord opened = trades.create(mine);
         assertThat(trades.currentMark(opened.id()).popNow())
                 .as("an unchanged market must not drop the package-level fill adjustment after entry")
-                .isCloseTo(atMine.popEntry(), org.assertj.core.data.Offset.offset(1e-9));
+                .isCloseTo(atMine.marketImpliedRisk().pop(),
+                        org.assertj.core.data.Offset.offset(1e-9));
     }
 
     @Test
@@ -328,15 +334,9 @@ class PaperCoreTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot carry");
     }
 
-    /**
-     * §3.3 — a package the ANALYZE lane priced at the MIDPOINT says so. The lane genuinely falls
-     * back to {@code mark.mid()} when a leg has no tradeable side, but the receipt called that
-     * MODELED, which reads as "a model produced this" and left ValuationBasis.MID_MARKET assigned
-     * nowhere in the product. A midpoint is nobody's fill, and the reader is entitled to know that
-     * is what they are looking at rather than being told a model made it up.
-     */
+    /** A one-sided quote's display mark is not falsely described as a two-sided midpoint. */
     @Test
-    void anAnalysisPackagePricedAtTheMidpointSaysMidMarketNotModeled() {
+    void anAnalysisPackagePricedFromAOneSidedDisplayMarkSaysModeledNotMidMarket() {
         Account acct = accounts.getOrCreateDefault();
         // No bid at all on the short leg: closing/opening that side has no executable price.
         marks.exact.put("PUT100", new MarksSource.LegMark(null, new BigDecimal("3.20"),
@@ -351,13 +351,13 @@ class PaperCoreTest {
 
         assertThat(preview.ok()).isTrue();
         assertThat(preview.price().valuationBasis())
-                .isEqualTo(PackagePriceReceipt.ValuationBasis.MID_MARKET);
-        // …and a midpoint is still not executable: no fill claim rides along with the label.
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.MODELED);
+        // A display mark is still not executable: no fill claim rides along with the label.
         assertThat(preview.price().executability())
                 .isEqualTo(OrderInstruction.Executability.UNAVAILABLE);
         assertThat(preview.price().executableNetCents()).isNull();
         assertThat(preview.warnings()).anySatisfy(message ->
-                assertThat(message).contains("labeled midpoint"));
+                assertThat(message).contains("analysis inputs").contains("not executable"));
     }
 
     @Test
@@ -385,10 +385,11 @@ class PaperCoreTest {
         assertThat(tracked.cashBeforeCents()).isEqualTo(1_000_00L);
         assertThat(tracked.evidence().source()).contains("tracked-account");
         assertThat(tracked.warnings()).anySatisfy(message ->
-                assertThat(message).contains("ANALYZE").contains("not a fill claim"));
+                assertThat(message).contains("more favorable").contains("cannot claim it filled"));
 
         marks.freshness = Freshness.STALE;
-        marks.evidenceOverride = io.liftandshift.strikebench.model.DataEvidence.of("cboe", Freshness.STALE);
+        marks.evidenceOverride = new DataEvidence(
+                DataProvenance.DEMO, DataAge.STALE, "test-demo");
         assertThat(trades.analyze(mixed).ok()).isTrue();
         TradePreview executablePreview = trades.preview(mixed);
         assertThat(executablePreview.ok()).isFalse();
@@ -752,9 +753,8 @@ class PaperCoreTest {
         assertThat(plan.rules().stream().map(ProtocolEvaluator.Rule::summary).toList())
                 .noneMatch(summary -> summary.contains("21"));
         // Time basis: sessions/252, disclosed.
-        @SuppressWarnings("unchecked")
-        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
-        assertThat((String) prob.get("timeBasis")).contains("trading sessions");
+        assertThat(p.marketImpliedRisk().time().basis())
+                .contains("trading sessions");
     }
 
     // ==================== GOLDEN REGRESSION PORTFOLIO (the release gate) ====================
@@ -787,11 +787,10 @@ class PaperCoreTest {
         assertThat(p.ok()).isTrue();
         assertThat(p.price().grossPackageNetCents()).isEqualTo(330_00); // judged at MY price
         // The full map, present and coherent: ATM shorts at 2 sessions = max loss is a REAL risk.
-        @SuppressWarnings("unchecked")
-        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
-        assertThat((Double) prob.get("pMaxLoss")).isGreaterThan(0.0);
-        assertThat((Double) prob.get("pAnyProfit")).isBetween(0.01, 0.99);
-        assertThat((String) prob.get("timeBasis")).contains("trading sessions");
+        var probability = p.marketImpliedRisk().probabilityMap();
+        assertThat(probability.pMaxLoss()).isGreaterThan(0.0);
+        assertThat(probability.pAnyProfit()).isBetween(0.01, 0.99);
+        assertThat(p.marketImpliedRisk().time().basis()).contains("trading sessions");
         // Near-expiry regime: gamma warning + a plan that NEVER says roll-at-21-DTE.
         assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Near-expiry gamma"));
         assertThat(p.warnings()).anySatisfy(w -> assertThat(w).contains("Pin/assignment risk"));
@@ -819,15 +818,14 @@ class PaperCoreTest {
         TradePreview p = trades.preview(straddle);
         assertThat(p.ok()).isTrue();
         assertThat(p.maxProfitCents()).isNull(); // uncapped upside
-        @SuppressWarnings("unchecked")
-        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
+        var probability = p.marketImpliedRisk().probabilityMap();
         // Uncapped structures never register a max-profit plateau. And with EXACT knot-derived
         // regions, a straddle's max loss — attained only at the single pin point — honestly has
         // probability ZERO of exact attainment (the old plateau sampling fabricated a small mass).
-        assertThat((Double) prob.get("pMaxProfit")).isZero();
-        assertThat((Double) prob.get("pMaxLoss")).isZero();
-        assertThat((Double) prob.get("pPartial")).isGreaterThan(0.0); // losses live in the partial band
-        assertThat((Long) prob.get("cvar95Cents")).isLessThan(0);
+        assertThat(probability.pMaxProfit()).isZero();
+        assertThat(probability.pMaxLoss()).isZero();
+        assertThat(probability.pPartial()).isGreaterThan(0.0); // losses live in the partial band
+        assertThat(probability.cvar95Cents()).isLessThan(0);
     }
 
     @org.junit.jupiter.api.Test
@@ -845,7 +843,9 @@ class PaperCoreTest {
             TradePreview p = trades.preview(req);
             assertThat(p.ok()).as(req.strategy()).isTrue();
             assertThat(p.analytics()).as(req.strategy())
-                    .containsKeys("probabilityMap", "evSensitivity", "executionQuality", "managementPlan", "verdict");
+                    .containsKeys("executionQuality", "managementPlan", "verdict")
+                    .doesNotContainKeys("probabilityMap", "evSensitivity", "marketImpliedRisk");
+            assertThat(p.marketImpliedRisk().available()).as(req.strategy()).isTrue();
         }
     }
 
@@ -1108,7 +1108,7 @@ class PaperCoreTest {
         assertThat(p.price().grossPackageNetCents()).isEqualTo(18000);
         assertThat(p.buyingPowerAfterCents()).isEqualTo(START - 32130);
         assertThat(p.breakevens()).containsExactly("98.2000");
-        assertThat(p.popEntry()).isBetween(0.0, 1.0);
+        assertThat(p.marketImpliedRisk().pop()).isBetween(0.0, 1.0);
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
         assertThat(db.query("SELECT id FROM trades", r -> r.str("id"))).isEmpty();
     }
@@ -1451,8 +1451,6 @@ class PaperCoreTest {
         TradeService.LegGreekRow shortLeg = view.legGreeks().getFirst();
         assertThat(shortLeg.leg()).isNotBlank();
         assertThat(shortLeg.bid()).isEqualTo("3.00");
-        assertThat(shortLeg.deltaPerShare()).isEqualTo(-0.30);
-        assertThat(shortLeg.thetaCentsPerSharePerDay()).isEqualTo(-5.0); // -0.05 $/day -> -5 cents
         assertThat(shortLeg.greeks().deltaShares()).isEqualTo(60.0);     // SELL(-1)*(-0.30)*100*2
         assertThat(shortLeg.greeks().thetaCentsPerDay()).isEqualTo(1_000.0);
         // The legs sum to the position figure — one unit, no conversion anywhere downstream.
@@ -1533,7 +1531,6 @@ class PaperCoreTest {
         assertThat(view.legGreeks()).hasSize(2);
         assertThat(view.legGreeks().getFirst().greeks()).isNotNull();
         assertThat(view.legGreeks().getLast().greeks()).isNull();
-        assertThat(view.legGreeks().getLast().deltaPerShare()).isNull();
 
         // The book discloses the gap instead of adding a partial position into its totals.
         TradeService.BookGreeks book = trades.portfolioGreeks(acct.id());
@@ -1745,7 +1742,7 @@ class PaperCoreTest {
         assertThat(preview.ok()).as(String.join("; ", preview.blockReasons())).isTrue();
         assertThat(preview.reserveCents()).isZero();          // no NEW cash at risk
         assertThat(preview.maxLossCents()).isZero();          // incremental risk of the order itself
-        assertThat(preview.popEntry()).isNotNull();           // combined-with-shares model
+        assertThat(preview.marketImpliedRisk().pop()).isNotNull(); // combined-with-shares model
         assertThat(preview.breakevens()).isNotEmpty();        // ~ share cost minus the premium
 
         TradeRecord t = trades.create(coveredCallOnHeldShares(acct.id()));
@@ -2434,7 +2431,6 @@ class PaperCoreTest {
         assertThat(combined.greeks().deltaShares()).isEqualTo(50.0); // 100 held shares - 50 put delta
         assertThat(combined.legGreeks()).anySatisfy(row -> {
             assertThat(row.leg()).isEqualTo("100 held shares");
-            assertThat(row.deltaPerShare()).isEqualTo(1.0);
             assertThat(row.greeks().deltaShares()).isEqualTo(100.0); // the lot, in the canonical unit
         });
 

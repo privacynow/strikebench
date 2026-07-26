@@ -44,8 +44,10 @@ public final class ScoreComposer {
 
         // ---- NORMALIZE: weighted named components ----
         List<ScoreBreakdown.Component> comps = new ArrayList<>();
-        double pop = c.pop() != null ? clamp01(c.pop()) : 0.5;
-        comps.add(comp("Probability of profit", 0.10, pop, c.pop() == null ? "model-dependent — assumed neutral" : "lognormal model"));
+        Double receiptPop = c.marketImpliedRisk().pop();
+        double pop = receiptPop != null ? clamp01(receiptPop) : 0.5;
+        comps.add(comp("Probability of profit", 0.10, pop,
+                receiptPop == null ? "model-dependent — assumed neutral" : "lognormal model"));
 
         double rr;
         String rrNote;

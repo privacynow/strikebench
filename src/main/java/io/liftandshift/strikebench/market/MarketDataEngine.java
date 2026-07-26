@@ -41,24 +41,54 @@ public final class MarketDataEngine {
 
     private static final Logger log = LoggerFactory.getLogger(MarketDataEngine.class);
 
-    /** A symbol's last-known quote state, plus engine bookkeeping (refresh time, in-flight, error). */
-    public record MarketSnapshot(String symbol, String description, BigDecimal last, BigDecimal bid,
-                                 BigDecimal ask, BigDecimal prevClose, boolean optionable,
-                                 Freshness freshness, String source, long asOfEpochMs,
-                                 long lastRefreshEpochMs, boolean refreshing, String error) {
+    /**
+     * A transport/storage view over the canonical {@link Quote}, plus refresh bookkeeping.
+     * MarketDataService owns the Quote value; the engine owns only when/how it is refreshed.
+     */
+    public record MarketSnapshot(Quote quote, long lastRefreshEpochMs,
+                                 boolean refreshing, String error) {
+        public MarketSnapshot {
+            if (quote == null) throw new IllegalArgumentException("market snapshot needs a quote");
+        }
+
+        /** Compatibility constructor for durable rows and provider-focused tests. */
+        public MarketSnapshot(String symbol, String description, BigDecimal last, BigDecimal bid,
+                              BigDecimal ask, BigDecimal prevClose, boolean optionable,
+                              Freshness freshness, String source, long asOfEpochMs,
+                              long lastRefreshEpochMs, boolean refreshing, String error) {
+            this(new Quote(symbol, description, last, bid, ask, prevClose,
+                    null, null, null, optionable, asOfEpochMs, source, freshness),
+                    lastRefreshEpochMs, refreshing, error);
+        }
+
+        public static MarketSnapshot of(Quote quote, long lastRefreshEpochMs,
+                                        boolean refreshing, String error) {
+            return new MarketSnapshot(quote, lastRefreshEpochMs, refreshing, error);
+        }
+
+        public String symbol() { return quote.symbol(); }
+        public String description() { return quote.description(); }
+        public BigDecimal last() { return quote.last(); }
+        public BigDecimal bid() { return quote.bid(); }
+        public BigDecimal ask() { return quote.ask(); }
+        public BigDecimal prevClose() { return quote.prevClose(); }
+        public boolean optionable() { return quote.optionable(); }
+        public Freshness freshness() { return quote.freshness(); }
+        public String source() { return quote.source(); }
+        public long asOfEpochMs() { return quote.asOfEpochMs(); }
 
         /** Live/marks path — preserves the snapshot's own freshness tier. */
-        public Quote toQuote() {
-            return new Quote(symbol, description, last, bid, ask, prevClose,
-                    null, null, null, optionable, asOfEpochMs, source, freshness);
-        }
+        public Quote toQuote() { return quote; }
 
         /** Durable last-known-quote fallback — forces STALE so it can never present as live. */
         public Quote toStaleQuote() {
-            return new Quote(symbol, description, last, bid, ask, prevClose,
-                    null, null, null, optionable, asOfEpochMs, source, Freshness.STALE);
+            return new Quote(symbol(), description(), last(), bid(), ask(), prevClose(),
+                    quote.dayHigh(), quote.dayLow(), quote.volume(), optionable(), asOfEpochMs(),
+                    source(), Freshness.STALE);
         }
     }
+
+    private record RefreshState(long lastRefreshEpochMs, boolean refreshing, String error) {}
 
     /** Operational status for the Data Center: what's warm, what's stale, what's in flight, latency. */
     public record EngineStatus(boolean enabled, boolean running, boolean marketOpen, int refreshInterval,
@@ -72,9 +102,7 @@ public final class MarketDataEngine {
     private final UniverseService universe;
     private final AppConfig cfg;
     private final Clock clock;
-    private io.liftandshift.strikebench.market.ports.SnapshotStore snapshotStore; // persist/boot last-known quotes (nullable)
-
-    private final Map<Symbol, MarketSnapshot> snapshots = new ConcurrentHashMap<>();
+    private final Map<Symbol, RefreshState> refreshState = new ConcurrentHashMap<>();
     private final Map<Symbol, Long> lastAccess = new ConcurrentHashMap<>();   // for LRU eviction of tracked symbols
     private final Map<Symbol, java.util.concurrent.CompletableFuture<Void>> inFlight = new ConcurrentHashMap<>(); // singleflight: callers JOIN the in-flight refresh
     private final AtomicLong refreshCount = new AtomicLong();
@@ -113,7 +141,7 @@ public final class MarketDataEngine {
 
     /** Inject the persistence store so the engine boots stale-first and mirrors eligible refreshes. */
     public void setSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
-        this.snapshotStore = store;
+        market.setQuoteSnapshotStore(store);
     }
 
     // ---- Lifecycle ----
@@ -127,22 +155,15 @@ public final class MarketDataEngine {
         running = true;
         // Boot STALE-FIRST: seed memory from persisted last-known quotes so the tape/tiles paint
         // instantly (labeled stale), instead of waiting on a heavy/throttled provider to warm.
-        if (snapshotStore != null) {
-            try {
-                int seeded = 0;
-                for (MarketSnapshot s : snapshotStore.loadAll()) {
-                    if (s.last() != null) {
-                        Symbol symbol = Symbol.of(s.symbol());
-                        snapshots.put(symbol, s);
-                        track(symbol);
-                        seeded++;
-                    }
-                }
-                if (seeded > 0) log.info("market engine restored {} last-known quotes from the local snapshot cache", seeded);
-            } catch (Exception e) {
-                log.warn("Last-known market quotes could not be restored; sources will refresh them");
-                log.debug("Last-known quote restore detail", e);
-            }
+        int seeded = 0;
+        for (Quote quote : market.cachedQuotes()) {
+            Symbol symbol = Symbol.of(quote.symbol());
+            refreshState.put(symbol, new RefreshState(quote.asOfEpochMs(), false, null));
+            track(symbol);
+            seeded++;
+        }
+        if (seeded > 0) {
+            log.info("market engine restored {} last-known quotes from the canonical quote cache", seeded);
         }
         if (!cfg.engineEnabled()) {
             log.info("market engine: serving path on, background refresh DISABLED (ENGINE_ENABLED=false)");
@@ -238,18 +259,18 @@ public final class MarketDataEngine {
      *  anchor resolver's background tier reads this so a cold sector can never cause a burst. */
     public java.util.Optional<MarketSnapshot> peek(String symbol) {
         Symbol key = Symbol.optional(symbol);
-        return key == null ? Optional.empty() : Optional.ofNullable(snapshots.get(key));
+        return key == null ? Optional.empty() : snapshot(key);
     }
 
     public List<MarketSnapshot> quotes(List<String> symbols) {
         List<Symbol> requested = symbols == null ? List.of() : symbols.stream()
-                .map(Symbol::optional).filter(java.util.Objects::nonNull).toList();
+                .map(Symbol::optional).filter(java.util.Objects::nonNull).distinct().toList();
         List<Symbol> missing = new ArrayList<>();
         for (Symbol s : requested) {
             track(s);
-            MarketSnapshot snap = snapshots.get(s);
-            if (snap == null) missing.add(s);
-            else if (isStale(snap)) refreshAsync(s); // serve stale, refresh behind
+            Quote quote = market.peekQuote(s.value()).orElse(null);
+            if (quote == null) missing.add(s);
+            else if (refreshDue(s)) refreshAsync(s); // serve current cached evidence, refresh behind
         }
         // Fill the truly-cold symbols in parallel so a first request is complete without becoming a
         // sequential download chain (the original /api/quotes cold-start waterfall).
@@ -257,8 +278,7 @@ public final class MarketDataEngine {
 
         List<MarketSnapshot> out = new ArrayList<>();
         for (Symbol symbol : requested) {
-            MarketSnapshot snap = snapshots.get(symbol);
-            if (hasUsablePrice(snap)) out.add(snap);
+            snapshot(symbol).filter(MarketDataEngine::hasUsablePrice).ifPresent(out::add);
         }
         return out;
     }
@@ -278,19 +298,20 @@ public final class MarketDataEngine {
      */
     public String unavailableReason(String symbol) {
         Symbol s = Symbol.of(symbol);
-        MarketSnapshot snap = snapshots.get(s);
-        if (snap == null) {
+        Quote quote = market.peekQuote(s.value()).orElse(null);
+        RefreshState state = refreshState.get(s);
+        if (quote == null && state == null) {
             return "the market engine holds no snapshot for " + s
                     + " — no configured provider returned data for that symbol";
         }
-        if (snap.error() != null && !snap.error().isBlank()) {
-            return "the last " + s + " refresh failed: " + snap.error();
+        if (state != null && state.error() != null && !state.error().isBlank()) {
+            return "the last " + s + " refresh failed: " + state.error();
         }
-        if (snap.refreshing()) {
+        if (state != null && state.refreshing()) {
             return s + " is being fetched now — no last trade, two-sided book or previous close"
                     + " has arrived yet";
         }
-        return "the " + s + " snapshot from " + snap.source()
+        return "the " + s + " snapshot from " + (quote == null ? "the configured sources" : quote.source())
                 + " carries no last trade, no two-sided book and no previous close";
     }
 
@@ -299,10 +320,34 @@ public final class MarketDataEngine {
         Symbol s = Symbol.optional(symbol);
         if (s == null) return Optional.empty();
         track(s);
-        MarketSnapshot snap = snapshots.get(s);
-        if (snap == null) { fetchBlocking(List.of(s)); return Optional.ofNullable(snapshots.get(s)); }
-        if (isStale(snap)) refreshAsync(s);
-        return Optional.of(snap);
+        if (market.peekQuote(s.value()).isEmpty()) fetchBlocking(List.of(s));
+        else if (refreshDue(s)) refreshAsync(s);
+        return snapshot(s);
+    }
+
+    /** One public current-quote authority for every exchange lane. */
+    public Optional<Quote> currentQuote(String symbol, String worldId) {
+        if (worldId == null || worldId.isBlank() || "observed".equalsIgnoreCase(worldId)) {
+            return quote(symbol).map(MarketSnapshot::toQuote);
+        }
+        return market.quote(symbol, worldId);
+    }
+
+    /** Memory-only counterpart used by request paths that promise not to acquire provider data. */
+    public Optional<Quote> peekCurrentQuote(String symbol, String worldId) {
+        if (worldId == null || worldId.isBlank() || "observed".equalsIgnoreCase(worldId)) {
+            return peek(symbol).map(MarketSnapshot::toQuote);
+        }
+        return market.quote(symbol, worldId);
+    }
+
+    private Optional<MarketSnapshot> snapshot(Symbol symbol) {
+        return market.peekQuote(symbol.value()).map(quote -> {
+            RefreshState state = refreshState.get(symbol);
+            long refreshedAt = state == null ? quote.asOfEpochMs() : state.lastRefreshEpochMs();
+            return MarketSnapshot.of(quote, refreshedAt,
+                    state != null && state.refreshing(), state == null ? null : state.error());
+        });
     }
 
     // ---- Refresh internals ----
@@ -316,8 +361,8 @@ public final class MarketDataEngine {
             int interval = currentIntervalSeconds();
             long now = clock.millis();
             for (Symbol s : new ArrayList<>(lastAccess.keySet())) {
-                MarketSnapshot snap = snapshots.get(s);
-                long age = snap == null ? Long.MAX_VALUE : now - snap.lastRefreshEpochMs();
+                RefreshState state = refreshState.get(s);
+                long age = state == null ? Long.MAX_VALUE : now - state.lastRefreshEpochMs();
                 if (age >= interval * 1000L) refreshAsync(s);
             }
             evictOverflow();
@@ -394,8 +439,9 @@ public final class MarketDataEngine {
         track(key);
         try {
             refreshFuture(key, P_JOB).get(Math.max(1000, timeoutMs), TimeUnit.MILLISECONDS);
-            MarketSnapshot snap = snapshots.get(key);
-            return snap != null && snap.last() != null && snap.error() == null;
+            RefreshState state = refreshState.get(key);
+            return market.peekQuote(key.value()).map(Quote::mark).orElse(null) != null
+                    && state != null && state.error() == null;
         } catch (Exception e) {
             return false;
         }
@@ -431,7 +477,7 @@ public final class MarketDataEngine {
     private void doRefresh(Symbol symbol) {
         long t0 = clock.millis();
         try {
-            Optional<Quote> q = market.quote(symbol.value());
+            Optional<Quote> q = market.refreshQuote(symbol.value());
             long t1 = clock.millis();
             refreshCount.incrementAndGet();
             refreshLatencyTotalMs.addAndGet(Math.max(0, t1 - t0));
@@ -440,52 +486,32 @@ public final class MarketDataEngine {
                 putError(symbol, "no quote from any provider");
                 return;
             }
-            Quote v = q.get();
-            commit(symbol, new MarketSnapshot(v.symbol(), v.description(), v.last(), v.bid(), v.ask(),
-                    v.prevClose(), v.optionable(), v.markFreshness(), v.source(), v.asOfEpochMs(), t1, false, null));
+            if (lastAccess.containsKey(symbol)) {
+                refreshState.put(symbol, new RefreshState(t1, false, null));
+            } else {
+                refreshState.remove(symbol);
+            }
         } catch (Exception e) {
             putError(symbol, MarketDataService.publicProviderFailure(e));
             log.debug("Market refresh failure detail for " + symbol, e);
         }
     }
 
-    /** Write a snapshot only if the symbol is still tracked — a refresh finishing after eviction must
-     *  not re-orphan the symbol (present in snapshots, absent from lastAccess). */
-    private void commit(Symbol symbol, MarketSnapshot snap) {
-        if (lastAccess.containsKey(symbol)) snapshots.put(symbol, snap);
-        else snapshots.remove(symbol);
-        // Mirror eligible observed quotes to the durable snapshot cache (best-effort) so the next
-        // boot is stale-first. The store itself rejects Demo/Simulated/Modeled evidence.
-        if (snapshotStore != null && snap.last() != null && snap.error() == null) {
-            try { snapshotStore.save(snap); } catch (Exception e) { /* persistence is best-effort */ }
-        }
-    }
-
     private void putError(Symbol symbol, String error) {
-        MarketSnapshot prev = snapshots.get(symbol);
         long now = clock.millis();
-        if (prev != null) {
-            // A failed refresh means we could NOT confirm this quote is still current. Keep the
-            // last-known numbers but degrade freshness to STALE — otherwise an aging, unconfirmed quote
-            // keeps presenting as LIVE/DELAYED indefinitely. The next SUCCESSFUL refresh restores the
-            // true tier via commit(). (Matches lastKnownFrom(), which also forces STALE for unconfirmed
-            // last-known data so it can never read as live.)
-            commit(symbol, new MarketSnapshot(prev.symbol(), prev.description(), prev.last(), prev.bid(),
-                    prev.ask(), prev.prevClose(), prev.optionable(), Freshness.STALE, prev.source(),
-                    prev.asOfEpochMs(), now, false, error));
+        if (lastAccess.containsKey(symbol)) {
+            refreshState.put(symbol, new RefreshState(now, false, error));
         } else {
-            commit(symbol, new MarketSnapshot(symbol.value(), null, null, null, null, null, false,
-                    Freshness.MISSING, null, 0L, now, false, error));
+            refreshState.remove(symbol);
         }
     }
 
     private void markRefreshing(Symbol symbol, boolean refreshing) {
-        MarketSnapshot s = snapshots.get(symbol);
-        if (s == null) return;
-        if (s.refreshing() == refreshing) return;
-        snapshots.put(symbol, new MarketSnapshot(s.symbol(), s.description(), s.last(), s.bid(), s.ask(),
-                s.prevClose(), s.optionable(), s.freshness(), s.source(), s.asOfEpochMs(),
-                s.lastRefreshEpochMs(), refreshing, s.error()));
+        refreshState.compute(symbol, (ignored, state) -> {
+            long last = state == null ? 0L : state.lastRefreshEpochMs();
+            String error = state == null ? null : state.error();
+            return new RefreshState(last, refreshing, error);
+        });
     }
 
     // ---- Tracking / eviction ----
@@ -509,7 +535,7 @@ public final class MarketDataEngine {
             Symbol s = e.getKey();
             if (keep.contains(s)) continue;
             lastAccess.remove(s);
-            snapshots.remove(s);
+            refreshState.remove(s);
         }
     }
 
@@ -523,16 +549,17 @@ public final class MarketDataEngine {
         List<Symbol> tracked = new ArrayList<>(lastAccess.keySet());
         tracked.sort(Comparator.naturalOrder());
         for (Symbol s : tracked) {
-            MarketSnapshot snap = snapshots.get(s);
-            boolean w = snap != null && snap.last() != null;
+            Quote quote = market.peekQuote(s.value()).orElse(null);
+            RefreshState state = refreshState.get(s);
+            boolean w = quote != null && quote.mark() != null;
             if (w) warmed++;
-            if (snap != null && isStale(snap)) stale++;
-            if (snap != null && snap.error() != null) errors++;
-            syms.add(new SymbolStatus(s.value(), w, snap != null && snap.refreshing(),
-                    snap == null ? "MISSING" : snap.freshness().name(),
-                    snap == null ? null : snap.source(),
-                    snap == null ? -1 : now - snap.lastRefreshEpochMs(),
-                    snap == null ? null : snap.error()));
+            if (refreshDue(s)) stale++;
+            if (state != null && state.error() != null) errors++;
+            syms.add(new SymbolStatus(s.value(), w, state != null && state.refreshing(),
+                    quote == null ? "MISSING" : quote.markFreshness().name(),
+                    quote == null ? null : quote.source(),
+                    state == null ? -1 : now - state.lastRefreshEpochMs(),
+                    state == null ? null : state.error()));
         }
         long avg = refreshCount.get() == 0 ? 0 : refreshLatencyTotalMs.get() / refreshCount.get();
         return new EngineStatus(cfg.engineEnabled(), running, MarketHours.isRegularSession(clock.instant()),
@@ -547,8 +574,14 @@ public final class MarketDataEngine {
                 : Math.max(5, cfg.engineQuoteRefreshClosedSeconds());
     }
 
-    private boolean isStale(MarketSnapshot snap) {
-        return clock.millis() - snap.lastRefreshEpochMs() >= currentIntervalSeconds() * 1000L;
+    /**
+     * Operational refresh cadence, deliberately not called "freshness": quote trust/age is owned
+     * by MarketDataService and carried on Quote. This only answers whether the warmer should run.
+     */
+    private boolean refreshDue(Symbol symbol) {
+        RefreshState state = refreshState.get(symbol);
+        return state == null
+                || clock.millis() - state.lastRefreshEpochMs() >= currentIntervalSeconds() * 1000L;
     }
 
     private static java.util.concurrent.ThreadFactory daemon(String name) {

@@ -12,8 +12,11 @@ import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.Symbol;
-import io.liftandshift.strikebench.pricing.BlackScholes;
+import io.liftandshift.strikebench.paper.ExecutablePackagePricer;
+import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
+import io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer;
 import io.liftandshift.strikebench.strategy.Guardrails;
 import io.liftandshift.strikebench.strategy.IronCondorQuality;
 import io.liftandshift.strikebench.strategy.StrategyBuilder;
@@ -627,31 +630,26 @@ public final class RecommendationEngine {
                                   double riskFreeRate, java.time.Instant laneNow,
                                   io.liftandshift.strikebench.market.MarketLane lane,
                                   CandidateProbe probe) {
-        // Re-price legs at the EXECUTABLE side (buys pay the ask, sells receive the bid) so
-        // the numbers a learner sees here match what a fill would actually cost. Structures
-        // whose legs have no executable side are not real opportunities.
-        List<io.liftandshift.strikebench.model.Leg> executableLegs = new ArrayList<>(built.legs().size());
+        // One captured book and one price owner. ANALYSIS retains honest EOD/model-mark ideas,
+        // but the returned receipt withdraws every executable claim unless every leg's evidence
+        // and bid/ask side are executable in this lane.
+        List<ExecutablePackagePricer.LegBook> priceInputs = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
-            io.liftandshift.strikebench.model.Leg leg = built.legs().get(i);
+            Leg leg = built.legs().get(i);
             if (leg.isStock()) {
-                BigDecimal side = io.liftandshift.strikebench.market.ExecutablePrice.forAction(
-                        underlyingQuote.bid(), underlyingQuote.ask(), leg.action());
-                if (side == null) {
-                    return candidateFailure(probe, "The stock leg has no executable two-sided quote");
-                }
-                executableLegs.add(Leg.stock(leg.action(), leg.ratio(), side));
-                continue;
+                priceInputs.add(ExecutablePackagePricer.LegBook.from(leg, underlyingQuote));
+            } else {
+                OptionQuote quote = i < built.quotes().size() ? built.quotes().get(i) : null;
+                priceInputs.add(ExecutablePackagePricer.LegBook.from(leg, quote));
             }
-            OptionQuote q = built.quotes().get(i);
-            BigDecimal side = io.liftandshift.strikebench.market.ExecutablePrice.forAction(
-                    q.bid(), q.ask(), leg.action());
-            if (side == null) {
-                return candidateFailure(probe, "An option leg has no executable two-sided quote");
-            }
-            executableLegs.add(new io.liftandshift.strikebench.model.Leg(leg.action(), leg.type(), leg.strike(),
-                    leg.expiration(), leg.ratio(), side, leg.multiplier()));
         }
-        built = new StrategyBuilder.Built(executableLegs, built.quotes(), built.label());
+        ExecutablePackagePricer.Book pricedBook = ExecutablePackagePricer.price(
+                priceInputs, lane, ExecutablePackagePricer.Policy.ANALYSIS);
+        if (!pricedBook.priced()) {
+            return candidateFailure(probe, pricedBook.unavailableReason());
+        }
+        built = new StrategyBuilder.Built(pricedBook.pricedLegs(), built.quotes(), built.label());
+        freshness = pricedBook.freshness();
         PayoffCurve unitCurve = PayoffCurve.of(built.legs(), 1);
         long unitEntryNet = unitCurve.entryNetPremiumCents();
         boolean multiExp = family.multiExpiration();
@@ -762,53 +760,36 @@ public final class RecommendationEngine {
         Long maxProfit = unitMaxProfit == null ? null : unitMaxProfit * qty;
         Long combinedMaxLoss = unitCombinedMaxLoss == null ? null : unitCombinedMaxLoss * qty;
 
-        List<Leg> optionLegs = built.legs().stream().filter(l -> !l.isStock()).toList();
-        long optionNetCents = io.liftandshift.strikebench.paper.ProtocolEvaluator
-                .optionEntryBasisCents(built.legs(), qty, entryNet);
-        long optionContracts = Fees.optionContracts(optionLegs, qty);
+        long optionContracts = Fees.optionContracts(built.legs(), qty);
         Fees.Schedule feeSchedule = Fees.schedule(optionContracts,
                 feePerContractCents, feePerOrderCents);
         long openingFees = feeSchedule.openingCents();
         List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
         List<LegView> legViews = new ArrayList<>(built.legs().size());
-        List<io.liftandshift.strikebench.model.DataEvidence> priceEvidence =
-                new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
             OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
             legViews.add(LegView.of(built.legs().get(i), quoteReceipt));
-            priceEvidence.add(built.legs().get(i).isStock() || quoteReceipt == null
-                    ? underlyingQuote.evidence() : quoteReceipt.evidence());
         }
-        var packageEvidence = io.liftandshift.strikebench.model.DataEvidence.aggregate(priceEvidence);
-        boolean executableBook = !priceEvidence.isEmpty()
-                && priceEvidence.stream().allMatch(e -> e.executableIn(lane));
-        var valuationBasis = io.liftandshift.strikebench.paper.PackagePriceReceipt
-                .markBasis(executableBook, false);
-        var executability = io.liftandshift.strikebench.paper.OrderInstruction.market()
-                .executability(entryNet, executableBook);
-        if (!executableBook) {
+        if (!pricedBook.executable()) {
+            var packageEvidence = pricedBook.evidence();
             candidateWarnings.add("These prices come from " + packageEvidence.provenance() + " "
                     + packageEvidence.age() + " marks (" + packageEvidence.source() + "), which are not "
                     + "an executable book in the " + lane + " market. The package can be studied at this "
                     + "price; it cannot be traded at it until the market quotes it again.");
         }
-        Long scannedAt = io.liftandshift.strikebench.paper.PackagePriceReceipt.observedAtOf(
-                legViews.stream().map(LegView::quoteAsOfEpochMs).toList());
-        var price = io.liftandshift.strikebench.paper.PackagePriceReceipt.of(qty, entryNet, optionNetCents,
-                io.liftandshift.strikebench.paper.ProtocolEvaluator.stockEntryBasisCents(built.legs(), qty),
-                openingFees, feeSchedule.roundTripCents(),
-                io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
-                executableBook ? entryNet : null,
-                io.liftandshift.strikebench.paper.OrderInstruction.market(),
-                executability, valuationBasis,
-                io.liftandshift.strikebench.paper.PackagePriceReceipt.sourceOf(
-                        legViews.stream().map(LegView::quoteSource).toList()),
-                freshness.name(), scannedAt,
-                io.liftandshift.strikebench.paper.PackagePriceReceipt.fingerprintOf(built.legs(), qty,
-                        entryNet, valuationBasis, scannedAt));
+        PackagePriceReceipt price = pricedBook.receipt(qty, feeSchedule,
+                PackagePriceReceipt.FeeSide.OPENING, OrderInstruction.market());
+        if (price.grossPackageNetCents() != entryNet) {
+            throw new IllegalStateException("candidate payoff and package-price receipt disagree");
+        }
+        long optionNetCents = price.optionNetPremiumCents();
 
         List<String> breakevens;
         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk;
+        List<Double> capturedIvs = built.quotes().stream()
+                .map(quote -> quote == null ? null : quote.iv()).toList();
+        io.liftandshift.strikebench.market.OptionTime.Measure packageTime =
+                io.liftandshift.strikebench.market.OptionTime.nearest(built.legs(), laneNow);
         boolean ivMissing = built.quotes().stream().filter(Objects::nonNull)
                 .map(OptionQuote::iv).noneMatch(Objects::nonNull);
         if (multiExp) {
@@ -829,7 +810,7 @@ public final class RecommendationEngine {
                     .map(Leg::strike).filter(Objects::nonNull).distinct().toList();
             marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
                     curve, price, Money.toCents(spot), ivAvg,
-                    io.liftandshift.strikebench.market.OptionTime.nearest(built.legs(), laneNow),
+                    packageTime,
                     riskFreeRate, shorts);
         }
         Double pop = marketImpliedRisk.pop();
@@ -838,12 +819,9 @@ public final class RecommendationEngine {
         boolean zeroDte = built.legs().stream().anyMatch(l -> !l.isStock() && l.expiration().equals(today));
 
         // ---- Intent metrics (assignment, income yield, effective share price) ----
-        double ivFallback = built.quotes().stream().filter(Objects::nonNull).map(OptionQuote::iv)
-                .filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0.30);
-        Double assignProb = assignmentProbability(built.legs(), built.quotes(), spot, today, ivFallback,
-                riskFreeRate);
-        int minDte = (int) built.legs().stream().filter(l -> !l.isStock())
-                .mapToLong(l -> ChronoUnit.DAYS.between(today, l.expiration())).min().orElse(7);
+        Double assignProb = RiskNeutralAnalyzer.assignmentProbability(
+                built.legs(), capturedIvs, Money.toCents(spot), laneNow, riskFreeRate);
+        int minDte = Math.toIntExact(Math.max(0, packageTime.calendarDays()));
         BigDecimal shortCallStrike = built.legs().stream()
                 .filter(l -> !l.isStock() && l.action() == LegAction.SELL && l.type() == OptionType.CALL)
                 .map(Leg::strike).findFirst().orElse(null);
@@ -877,8 +855,9 @@ public final class RecommendationEngine {
         }
         Double annualYieldPct = null;
         if (yieldCollateral != null && yieldCollateral > 0) {
-            annualYieldPct = round2(100.0 * (netOptionIncomeCents / (double) yieldCollateral)
-                    * (365.0 / Math.max(minDte, 1)));
+            Double annualized = packageTime.annualizedSimplePercent(
+                    netOptionIncomeCents, yieldCollateral);
+            annualYieldPct = annualized == null ? null : round2(annualized);
         }
         // Effective share prices are strike +/- NET option premium per share after opening fees —
         // a buy-write's stock purchase must not leak into it (it made "effective sell $10/sh" nonsense once).
@@ -980,82 +959,6 @@ public final class RecommendationEngine {
         return null;
     }
 
-    /**
-     * Modeled chance that at least one short leg finishes in the money at ITS expiration —
-     * risk-neutral N(d2)/N(-d2) at each leg's own IV and the lane's rate (q=0 assumption),
-     * with no early-assignment model. At one expiration, nested same-side strikes collapse to the
-     * outer event (lowest call / highest put); put and call tails are disjoint unless they overlap.
-     * Different expirations are summed and capped, making the multi-expiration result a conservative
-     * upper bound rather than a false claim of joint-path precision.
-     */
-    private static Double assignmentProbability(List<Leg> legs, List<OptionQuote> quotes,
-                                                BigDecimal spot, LocalDate today, double ivFallback,
-                                                double riskFreeRate) {
-        List<Double> ivs = new ArrayList<>();
-        for (int i = 0; i < legs.size(); i++) {
-            OptionQuote q = quotes != null && i < quotes.size() ? quotes.get(i) : null;
-            ivs.add(q == null ? null : q.iv());
-        }
-        return assignmentProbabilityFromIvs(legs, ivs, spot, today, ivFallback, riskFreeRate);
-    }
-
-    /**
-     * N(d2)/N(-d2) over the UNION of short-ITM regions at each expiration -- shared with the
-     * trade-preview path so the builder shows the same number the engine would.
-     * {@code ivsAligned} is index-aligned with {@code legs} (null entries fall back).
-     */
-    public static Double assignmentProbabilityFromIvs(List<Leg> legs, List<Double> ivsAligned,
-                                                      BigDecimal spot, LocalDate today, double ivFallback,
-                                                      double riskFreeRate) {
-        if (spot == null || spot.signum() <= 0) return null;
-        java.util.Map<LocalDate, Integer> lowestCall = new java.util.LinkedHashMap<>();
-        java.util.Map<LocalDate, Integer> highestPut = new java.util.LinkedHashMap<>();
-        for (int i = 0; i < legs.size(); i++) {
-            Leg l = legs.get(i);
-            if (l.isStock() || l.action() != LegAction.SELL) continue;
-            java.util.Map<LocalDate, Integer> target = l.type() == OptionType.CALL ? lowestCall : highestPut;
-            Integer prior = target.get(l.expiration());
-            if (prior == null || (l.type() == OptionType.CALL
-                    ? l.strike().compareTo(legs.get(prior).strike()) < 0
-                    : l.strike().compareTo(legs.get(prior).strike()) > 0)) {
-                target.put(l.expiration(), i);
-            }
-        }
-        java.util.Set<LocalDate> expirations = new java.util.LinkedHashSet<>(lowestCall.keySet());
-        expirations.addAll(highestPut.keySet());
-        if (expirations.isEmpty()) return null;
-
-        double total = 0;
-        for (LocalDate expiration : expirations) {
-            Integer ci = lowestCall.get(expiration);
-            Integer pi = highestPut.get(expiration);
-            if (ci != null && pi != null
-                    && legs.get(pi).strike().compareTo(legs.get(ci).strike()) >= 0) {
-                total += 1.0; // S<put OR S>call covers the whole line when the regions overlap
-                continue;
-            }
-            if (ci != null) total += finishItmProbability(legs.get(ci), alignedIv(ivsAligned, ci),
-                    spot, today, ivFallback, riskFreeRate);
-            if (pi != null) total += finishItmProbability(legs.get(pi), alignedIv(ivsAligned, pi),
-                    spot, today, ivFallback, riskFreeRate);
-        }
-        return Math.min(1.0, total);
-    }
-
-    private static Double alignedIv(List<Double> ivs, int index) {
-        return ivs != null && index < ivs.size() ? ivs.get(index) : null;
-    }
-
-    private static double finishItmProbability(Leg leg, Double iv, BigDecimal spot, LocalDate today,
-                                               double ivFallback, double riskFreeRate) {
-        double sigma = iv != null && iv > 0 ? iv : ivFallback;
-        double t = Math.max(ChronoUnit.DAYS.between(today, leg.expiration()), 0.5) / 365.0;
-        double d1 = BlackScholes.d1(spot.doubleValue(), leg.strike().doubleValue(), t,
-                riskFreeRate, 0, sigma);
-        double d2 = d1 - sigma * Math.sqrt(t);
-        return leg.type() == OptionType.CALL ? BlackScholes.normCdf(d2) : BlackScholes.normCdf(-d2);
-    }
-
     /** Human framing of the candidate against the user's goal, holdings and target price. */
     private static String intentNote(StrategyIntent intent, StrategyFamily family, Holdings holdings,
                                      BigDecimal spot, int qty, long netOptionPremium, int minDte,
@@ -1149,8 +1052,9 @@ public final class RecommendationEngine {
     /** Returns a human-readable reason when the candidate fails a hard filter, else null. */
     private static String failsFilter(Candidate c, Filters f) {
         if (f.minPop() != null) {
-            if (c.pop() == null) return String.format("No modeled POP available, but you require at least %.0f%%", f.minPop() * 100);
-            if (c.pop() < f.minPop()) return String.format("Modeled POP %.0f%% is below your minimum %.0f%%", c.pop() * 100, f.minPop() * 100);
+            Double pop = c.marketImpliedRisk().pop();
+            if (pop == null) return String.format("No modeled POP available, but you require at least %.0f%%", f.minPop() * 100);
+            if (pop < f.minPop()) return String.format("Modeled POP %.0f%% is below your minimum %.0f%%", pop * 100, f.minPop() * 100);
         }
         if (f.maxAssignmentProb() != null && c.assignmentProb() != null && c.assignmentProb() > f.maxAssignmentProb()) {
             return String.format("Assignment probability %.0f%% exceeds your cap of %.0f%%", c.assignmentProb() * 100, f.maxAssignmentProb() * 100);

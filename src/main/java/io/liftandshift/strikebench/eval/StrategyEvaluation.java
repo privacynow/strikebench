@@ -73,8 +73,14 @@ public record StrategyEvaluation(
     private static double round(double value) { return Math.round(value * 1000.0) / 1000.0; }
 
     public EvidenceLevel evidenceLevel() { return evidence == null ? EvidenceLevel.UNKNOWN : evidence.rollup(); }
-    public Long evCents() { return risk == null ? null : risk.expectedValueCents(); }
-    public Double pop() { return risk == null ? null : risk.pop(); }
+    public Long evCents() {
+        return risk == null || risk.marketImpliedRisk() == null
+                ? null : risk.marketImpliedRisk().expectedValueCents();
+    }
+    public Double pop() {
+        return risk == null || risk.marketImpliedRisk() == null
+                ? null : risk.marketImpliedRisk().pop();
+    }
     public Long maxLossCents() { return risk == null ? null : risk.maxLossCents(); }
     public long tailLossCents() { return risk == null ? 0 : risk.tailLossCents(); }
     public Double roc() { return capital == null ? null : capital.returnOnCapitalPct(); }

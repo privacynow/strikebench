@@ -90,9 +90,6 @@ public final class HistoricalOptionsIngest {
 
     private static int[] writeRows(Connection c, List<String[]> rows, Map<String, Integer> col,
                                    String source, List<String> problems) throws java.sql.SQLException {
-        String undSql = "INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1) "
-                + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET close=excluded.close, observed=1";
-
         int opt = 0, skipped = 0, rowNumber = 1;
         Map<String, BigDecimal> underlyings = new HashMap<>(); // symbol|date -> underlying close
         try (PreparedStatement ps = c.prepareStatement(OptionBarWriter.UPSERT_SQL)) {
@@ -135,14 +132,11 @@ public final class HistoricalOptionsIngest {
         }
 
         int und = 0;
-        try (PreparedStatement ps = c.prepareStatement(undSql)) {
-            for (Map.Entry<String, BigDecimal> e : underlyings.entrySet()) {
-                String[] parts = e.getKey().split("\\|");
-                ps.setObject(1, parts[0]); ps.setObject(2, LocalDate.parse(parts[1]));
-                ps.setObject(3, e.getValue()); ps.setObject(4, source);
-                ps.addBatch(); und++;
-            }
-            ps.executeBatch();
+        for (Map.Entry<String, BigDecimal> entry : underlyings.entrySet()) {
+            String[] parts = entry.getKey().split("\\|");
+            ObservedCandleWriter.upsertObservedClose(c, parts[0], LocalDate.parse(parts[1]),
+                    null, null, entry.getValue(), null, source);
+            und++;
         }
         return new int[]{opt, und, skipped};
     }

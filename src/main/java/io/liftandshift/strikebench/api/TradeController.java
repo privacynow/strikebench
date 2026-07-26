@@ -15,7 +15,6 @@ import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.SnapshotService;
-import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
@@ -191,12 +190,12 @@ final class TradeController {
                                 mark.decisionUnrealizedCents() == null
                                         ? mark.unrealizedCents() : mark.decisionUnrealizedCents());
                     }
-                    // B2 + B6 + B13: the held bloom/spectrum, greeks strip and tail lane read a server
-                    // receipt off the roster row itself, so activeTrades never falls back to a client
-                    // leg engine or the deleted client Merton tail.
+                    // The held bloom/spectrum and Greeks strip read exact server receipts off the
+                    // roster row. Full tail analysis remains owned by the lifecycle evaluation;
+                    // this compact row never substitutes fallback IV or event assumptions.
                     row = row.withHeldReceipts(heldTerminalPayoff(trade),
                             mark == null ? null : mark.greeks(),
-                            heldJumpTail(trade), heldScenarios(trade), heldSpotPnl(trade, mark));
+                            heldScenarios(trade), heldSpotPnl(trade, mark));
                 } catch (Exception ignored) {
                     // A missing live mark leaves these optional list values unavailable.
                 }
@@ -642,7 +641,6 @@ final class TradeController {
         TradeView view = TradeView.of(trade).withHeldReceipts(
                 heldTerminalPayoff(trade),
                 current == null ? null : current.greeks(),
-                active ? heldJumpTail(trade) : null,
                 active ? heldScenarios(trade) : List.of(),
                 // "If price holds" is a question about a package still exposed to the market. A
                 // closed line has a REALIZED result; publishing a hypothetical beside it would
@@ -885,15 +883,6 @@ final class TradeController {
                     usesHeldShares, sharesNeeded, combinedMaxLossCents, marketImpliedRisk);
         }
 
-        @com.fasterxml.jackson.annotation.JsonProperty("pop")
-        Double pop() {
-            return marketImpliedRisk == null ? null : marketImpliedRisk.pop();
-        }
-
-        @com.fasterxml.jackson.annotation.JsonProperty("expectedValueCents")
-        Long expectedValueCents() {
-            return marketImpliedRisk == null ? null : marketImpliedRisk.expectedValueCents();
-        }
     }
 
     static Long exactRoundTripFees(
@@ -988,8 +977,10 @@ final class TradeController {
         // after-cost loss it had not costed (§3.2).
         Long ackRoundTrip = preview.price() == null ? null
                 : preview.price().estimatedRoundTripFeesCents();
-        Long afterCosts = preview.expectedValueCents() == null || ackRoundTrip == null ? null
-                : preview.expectedValueCents() - ackRoundTrip;
+        Long marketEv = preview.marketImpliedRisk() == null
+                ? null : preview.marketImpliedRisk().expectedValueCents();
+        Long afterCosts = marketEv == null || ackRoundTrip == null ? null
+                : marketEv - ackRoundTrip;
         if (afterCosts != null && afterCosts < 0) {
             out.add(new ApiResponses.RiskAcknowledgment("ack-ev",
                     "The model expects this trade to LOSE "
@@ -1171,36 +1162,6 @@ final class TradeController {
                 !points.isEmpty(), trade.entryUnderlyingCents(), curve.profitAtCents(spot), expiration,
                 "EXPIRATION_INTRINSIC", "RECORDED_TRADE_NET", false, points,
                 points.isEmpty() ? "No positive underlying anchor is recorded for this trade." : null);
-    }
-
-    /**
-     * B13: the real-world / tail lane (Merton jump-mixture) for a HELD line, so the roster's
-     * {@code trade.popEntry} can read a tail-aware POP and the desk gap dial reads a backend receipt.
-     * The sector prior comes from the symbol; IV-rank and expected move use the desk's documented
-     * fallbacks (55, 6%) here, because this list row carries no live IV — the position-detail analysis
-     * (via the evaluator's {@code evaluation.risk.jumpTail}) carries the full-fidelity tail.
-     */
-    static io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail heldJumpTail(TradeRecord trade) {
-        boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
-                .map(Leg::expiration).distinct().count() > 1;
-        if (mixedExpirations) {
-            return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(0.0, null, 55.0, 0.0,
-                    false, null, false, false, 0L, null,
-                    "A mixed-expiration package requires supplied-path valuation; no single-expiration jump-mixture tail was substituted.");
-        }
-        BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
-        double spotD = spot.doubleValue();
-        if (spotD <= 0) {
-            return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(0.0, null, 55.0, 0.0,
-                    false, null, false, false, 0L, null,
-                    "No positive underlying anchor is recorded for this trade.");
-        }
-        PayoffCurve curve = TradeService.heldPayoffCurve(trade);
-        String sectorLabel = trade.symbol() == null || trade.symbol().isBlank()
-                ? null : Universes.allocationSectorLabel(trade.symbol());
-        return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(spotD, sectorLabel, 55.0,
-                0.0, false, null, true, curve.maxLossUnbounded(), curve.maxLossCents(),
-                s -> curve.profitAtCents(BigDecimal.valueOf(s)), null);
     }
 
     private static Double percentage(long numerator, Long denominator) {

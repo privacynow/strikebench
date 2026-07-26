@@ -32,17 +32,16 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * THE §3.3 test. One package, three surfaces — the candidate rail, the preview, and the order dock —
- * and one shared §7.2 receipt, so the amounts on screen can be reconciled instead of merely
- * compared. Before this receipt existed the rail printed an option-only net struck at scan time
- * while the dock printed a stock-inclusive net struck live, with no quantity and no basis on either
- * object to explain the gap: exactly the state program.md §3.3 names financially untrustworthy.
+ * THE §3.3 test. One package, the candidate rail, ticket, order dock, and outcome engine — all
+ * priced by one current-book owner and published through one shared §7.2 receipt. Before this
+ * receipt existed the rail printed an option-only net struck at scan time while the dock printed a
+ * stock-inclusive net struck live, with no quantity and no basis on either object to explain the
+ * gap: exactly the state program.md §3.3 names financially untrustworthy.
  *
  * <p>A buy-write is the deliberate subject: it is the structure where the option-only net and the
  * whole-package net are furthest apart (a credit and a large debit), so a surface that confuses
@@ -64,6 +63,8 @@ class PackagePriceReconciliationTest {
     private RecommendationEngine scanner;
     private TradeService fixtureTrades;
     private String fixtureAccountId;
+    private MarketDataService fixtureMarket;
+    private OutcomeController outcomes;
 
     /** Underlying $100 with a real two-sided book; the short call trades 2.40 / 2.60. */
     private static final class BookMarks implements MarksSource {
@@ -101,11 +102,13 @@ class PackagePriceReconciliationTest {
         // reprices against, and the SAME fee schedule ApiServer gives both in production. Any gap
         // between the two receipts is then a property of the engines, not of two different worlds.
         FixtureProvider fixture = new FixtureProvider(CLOCK);
-        MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
-        scanner = new RecommendationEngine(market, CLOCK)
+        fixtureMarket = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
+        scanner = new RecommendationEngine(fixtureMarket, CLOCK)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents());
-        fixtureTrades = new TradeService(db, cfg, new MarketDataMarks(market), audit, CLOCK);
+        fixtureTrades = new TradeService(db, cfg, new MarketDataMarks(fixtureMarket), audit, CLOCK);
         fixtureAccountId = accountId;
+        outcomes = new OutcomeController(cfg, CLOCK, fixtureMarket,
+                null, null, null, null, null, null, null, null);
     }
 
     @AfterEach
@@ -129,7 +132,7 @@ class PackagePriceReconciliationTest {
      * {@code PlanDecisionController.orderDock} both hand back {@code preview.price()} verbatim, and
      * this test exists only to keep them doing so — if either ever re-derives a price, it lands
      * here. The real §3.3 question, two INDEPENDENTLY priced receipts for the same package, is
-     * {@link #aScannedCandidateAndTheLivePreviewOfTheSamePackageReconcileFromTheirOwnReceipts}.
+     * {@link #aScannedCandidateTicketAndOutcomeUseOneStockInclusivePackagePrice}.
      */
     @Test
     void theExactTicketAndTheOrderDockRepublishThePreviewsOwnReceiptRatherThanDerivingOne() {
@@ -146,22 +149,20 @@ class PackagePriceReconciliationTest {
     }
 
     /**
-     * THE §3.3 test: two receipts for the SAME package, built by two engines that never see each
-     * other's numbers — the scan-time {@link RecommendationEngine} candidate rail and the live
-     * {@link TradeService} preview dock — reading the same market data.
+     * THE §3.3 test: three consumers price the SAME package from the same captured market evidence:
+     * the {@link RecommendationEngine} candidate rail, {@link TradeService} preview dock, and
+     * {@link OutcomeController} path evaluator.
      *
      * <p>A buy-write is the deliberate subject: it is the structure where the option-only net and
      * the whole-package net are furthest apart (a credit and a large debit), so a surface that
      * confuses them is caught here rather than by a customer.</p>
      *
-     * <p>The law under test is not "the two agree". They legitimately need not: the rail was priced
-     * when the scan ran and the dock when the ticket was opened. The law is that every difference
-     * is EXPRESSIBLE from the receipts themselves — same basis and same observation stamp means the
-     * same amounts and the same fingerprint; differing amounts mean a differing fingerprint — so no
-     * screen can print a number another screen contradicts without the pair saying why.</p>
+     * <p>With an unchanged captured book, agreement is now an identity—not a reconciliation
+     * convention. A later quote can still produce a later fingerprint, but no consumer owns a
+     * separate bid/ask, stock-mark, multiplier, fee, or rounding policy.</p>
      */
     @Test
-    void aScannedCandidateAndTheLivePreviewOfTheSamePackageReconcileFromTheirOwnReceipts() {
+    void aScannedCandidateTicketAndOutcomeUseOneStockInclusivePackagePrice() {
         Candidate scanned = scannedBuyWrite();
         PackagePriceReceipt rail = scanned.price();
 
@@ -172,8 +173,21 @@ class PackagePriceReconciliationTest {
                 OrderInstruction.market()));
         assertThat(preview.ok()).as("blocked: %s", preview.blockReasons()).isTrue();
         PackagePriceReceipt dock = preview.price();
+        List<String> exactExpirations = sameLegs.stream()
+                .map(leg -> leg.isStock() ? "" : leg.expiration().toString()).toList();
+        OutcomeController.MarketEntry outcome = outcomes.marketEntry(SCAN_SYMBOL,
+                new io.liftandshift.strikebench.sim.PathPosition(
+                        LocalDate.ofInstant(CLOCK.instant(),
+                                io.liftandshift.strikebench.market.MarketHours.EASTERN),
+                        sameLegs),
+                scanned.qty(), null, null, exactExpirations);
+        assertThat(outcome).as("the exact outcome package must be priceable").isNotNull();
+        PackagePriceReceipt path = outcome.price();
 
-        // The same size, stated on both — the rail used to print a qty-scaled net with no quantity.
+        // Same captured book, same exact package, same canonical owner: all three surfaces now
+        // publish the identical receipt rather than merely carrying enough labels to explain a gap.
+        assertThat(dock).isEqualTo(rail);
+        assertThat(path).isEqualTo(rail);
         assertThat(dock.quantity()).isEqualTo(rail.quantity()).isEqualTo(scanned.qty());
 
         // The same option-only net for the same legs: the one amount that must NOT move between a
@@ -202,25 +216,7 @@ class PackagePriceReconciliationTest {
         assertThat(rail.feeSide()).isEqualTo(dock.feeSide())
                 .isEqualTo(PackagePriceReceipt.FeeSide.OPENING);
 
-        // …and THE law: every difference is explained by the receipts, never silent.
-        boolean struckAlike = rail.valuationBasis() == dock.valuationBasis()
-                && Objects.equals(rail.observedAt(), dock.observedAt());
-        if (struckAlike) {
-            assertThat(dock.grossPackageNetCents()).isEqualTo(rail.grossPackageNetCents());
-            assertThat(dock.fingerprint()).isEqualTo(rail.fingerprint());
-        } else {
-            assertThat(dock.fingerprint()).as("differently struck prices must not share an identity")
-                    .isNotEqualTo(rail.fingerprint());
-        }
-        if (!Objects.equals(rail.grossPackageNetCents(), dock.grossPackageNetCents())) {
-            assertThat(dock.fingerprint()).isNotEqualTo(rail.fingerprint());
-            assertThat(rail.valuationBasis() != dock.valuationBasis()
-                    || !Objects.equals(rail.observedAt(), dock.observedAt()))
-                    .as("a different package net must be attributable to basis or observation time")
-                    .isTrue();
-        }
-        // Both name a real basis and a real observation stamp: without those two fields the gap
-        // above would be unattributable, which is the state §3.3 calls financially untrustworthy.
+        // Every surface names the same real basis and observation stamp.
         assertThat(rail.valuationBasis()).isNotEqualTo(PackagePriceReceipt.ValuationBasis.UNAVAILABLE);
         assertThat(dock.valuationBasis()).isNotEqualTo(PackagePriceReceipt.ValuationBasis.UNAVAILABLE);
         assertThat(rail.observedAt()).isNotNull();

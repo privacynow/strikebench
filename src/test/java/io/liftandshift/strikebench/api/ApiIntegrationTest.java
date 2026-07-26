@@ -241,7 +241,7 @@ class ApiIntegrationTest {
         assertThat(nopeBody.at("/quote/markBasis").asText()).isEqualTo("UNAVAILABLE");
         assertThat(nopeBody.path("quote").path("displayPrice").isMissingNode()
                 || nopeBody.path("quote").path("displayPrice").isNull()).isTrue();
-        assertThat(nopeBody.get("quoteUnavailableReason").asText()).contains("NOPE");
+        assertThat(nopeBody.at("/quote/quoteUnavailableReason").asText()).contains("NOPE");
         assertThat(nopeBody.at("/evidence/inputs/quote/provenance").asText()).isEqualTo("MISSING");
         assertThat(nopeBody.get("planEligible").asBoolean()).isFalse();
     }
@@ -580,7 +580,7 @@ class ApiIntegrationTest {
         assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
         JsonNode legRow = detail.at("/current/legGreeks/0");
         assertThat(legRow.at("/greeks/deltaShares").asDouble()).isGreaterThan(0);
-        assertThat(legRow.has("thetaCentsPerSharePerDay")).isTrue();
+        assertThat(legRow.has("thetaCentsPerSharePerDay")).isFalse();
         JsonNode canonical = detail.at("/trade/greeks");
         assertThat(canonical.get("deltaShares").asDouble())
                 .isEqualTo(detail.at("/current/greeks/deltaShares").asDouble());
@@ -682,7 +682,8 @@ class ApiIntegrationTest {
         // with the quote slot marked unavailable, so the desk renders per-slot receipts.
         HttpResponse<String> unknownResearch = get("/api/research/NOPE");
         assertThat(unknownResearch.statusCode()).isEqualTo(200);
-        assertThat(Json.parse(unknownResearch.body()).get("quoteUnavailableReason").asText()).contains("NOPE");
+        assertThat(Json.parse(unknownResearch.body())
+                .at("/quote/quoteUnavailableReason").asText()).contains("NOPE");
         // handler-written 404 bodies still survive (not clobbered by the generic mapper):
         // chains only exist for listed expirations — nothing fabricated
         assertThat(get("/api/research/AAPL/chain?expiration=2026-07-09").statusCode()).isEqualTo(404);
@@ -927,7 +928,7 @@ class ApiIntegrationTest {
         assertThat(aaplQuote.get("markBasis").asText()).isIn("MID", "LAST", "PREVIOUS_CLOSE");
         assertThat(aaplQuote.get("displayPrice").decimalValue())
                 .isEqualByComparingTo(Json.parse(get("/api/research/AAPL").body())
-                        .get("displayPrice").decimalValue());
+                        .at("/quote/displayPrice").decimalValue());
         JsonNode unknown = java.util.stream.StreamSupport.stream(quotes.spliterator(), false)
                 .filter(q -> "ZZZZ".equals(q.get("symbol").asText())).findFirst().orElseThrow();
         assertThat(unknown.get("priced").asBoolean()).isFalse();
@@ -1089,20 +1090,23 @@ class ApiIntegrationTest {
         assertThat(marketRisk.get("priceFingerprint").asText())
                 .isEqualTo(p.at("/price/fingerprint").asText());
         assertThat(marketRisk.get("fingerprint").asText())
-                .isEqualTo(p.at("/analytics/marketImpliedRisk/fingerprint").asText())
                 .isEqualTo(evaluation.at("/risk/marketImpliedRisk/fingerprint").asText());
+        assertThat(p.at("/analytics").has("marketImpliedRisk")).isFalse();
+        assertThat(p.at("/analytics").has("probabilityMap")).isFalse();
+        assertThat(p.at("/analytics").has("evSensitivity")).isFalse();
         assertThat(marketRisk.get("underlyingCents").asLong())
                 .isEqualTo(p.get("underlyingCents").asLong());
         assertThat(marketRisk.get("marketIv").isNumber()).isTrue();
         assertThat(marketRisk.get("riskFreeRate").isNumber()).isTrue();
         assertThat(marketRisk.at("/time/years").isNumber()).isTrue();
-        assertThat(p.get("popEntry").asDouble())
+        assertThat(p.has("popEntry")).isFalse();
+        assertThat(p.has("expectedValueCents")).isFalse();
+        assertThat(evaluation.at("/risk").has("pop")).isFalse();
+        assertThat(evaluation.at("/risk").has("expectedValueCents")).isFalse();
+        assertThat(evaluation.at("/risk/marketImpliedRisk/probabilityMap/pAnyProfit").asDouble())
                 .isEqualTo(marketRisk.at("/probabilityMap/pAnyProfit").asDouble());
-        assertThat(p.get("expectedValueCents").asLong())
+        assertThat(evaluation.at("/risk/marketImpliedRisk/expectedValueCents").asLong())
                 .isEqualTo(marketRisk.get("expectedValueCents").asLong());
-        assertThat(evaluation.at("/risk/pop").asDouble()).isEqualTo(p.get("popEntry").asDouble());
-        assertThat(evaluation.at("/risk/expectedValueCents").asLong())
-                .isEqualTo(p.get("expectedValueCents").asLong());
         assertThat(evaluation.at("/risk/scenarios").size())
                 .isEqualTo(marketRisk.at("/scenarioMasses").size());
         JsonNode economics = evaluation.at("/assessment/economics");
@@ -1431,9 +1435,12 @@ class ApiIntegrationTest {
                 .isEqualTo(Math.max(0L, used - cap));
         assertThat(selectedCapital.get("withinCap").asBoolean()).isEqualTo(used <= cap);
         assertThat(selectedCapital.get("basis").asText()).contains("shared");
-        // The analytics contract rides along on every preview.
+        // Typed market-implied risk is the one probability/EV owner; analytics carries only
+        // distinct execution and policy receipts.
         var analytics = body.get("preview").get("analytics");
-        assertThat(analytics.has("probabilityMap")).isTrue();
+        assertThat(analytics.has("probabilityMap")).isFalse();
+        assertThat(analytics.has("evSensitivity")).isFalse();
+        assertThat(body.at("/preview/marketImpliedRisk/probabilityMap").isObject()).isTrue();
         assertThat(analytics.has("executionQuality")).isTrue();
         assertThat(analytics.get("managementPlan").get("rules").size()).isGreaterThan(0);
 
@@ -1500,7 +1507,9 @@ class ApiIntegrationTest {
             var rj = envelope.get("result");
             assertThat(rj.get("pathSource").asText()).isEqualTo("HISTORICAL_ANALOGS");
             assertThat(rj.get("paths").asInt()).isEqualTo(sj.get("analogPaths").size());
-            assertThat(rj.at("/entryPrice/grossPackageNetCents").asLong()).isEqualTo(-12345L);
+            assertThat(rj.at("/price/grossPackageNetCents").asLong()).isEqualTo(-12345L);
+            assertThat(rj.has("entryPrice")).isFalse();
+            assertThat(rj.has("roundTripFeesCents")).isFalse();
             assertThat(rj.has("entryCostCents")).isFalse();
             assertThat(rj.get("notes").toString()).contains("held position's recorded fill");
             // This server is FIXTURES_ONLY: the study ran on demo candles, and the note must say
@@ -1546,18 +1555,22 @@ class ApiIntegrationTest {
         assertThat(exactResult.statusCode())
                 .withFailMessage("exact PARAMETRIC evaluation failed: %s", exactResult.body())
                 .isEqualTo(200);
-        assertThat(Json.parse(exactResult.body()).at("/result/roundTripFeesCents").longValue())
+        assertThat(Json.parse(exactResult.body())
+                .at("/result/price/estimatedRoundTripFeesCents").longValue())
                 .isEqualTo(130L);
+        assertThat(Json.parse(exactResult.body()).at("/result").has("roundTripFeesCents"))
+                .isFalse();
         var riskNeutral = post("/api/evaluate",
                 exact.replace("\"basis\":\"PARAMETRIC\"", "\"basis\":\"RISK_NEUTRAL\""));
         assertThat(riskNeutral.statusCode())
                 .withFailMessage("exact RISK_NEUTRAL evaluation failed: %s", riskNeutral.body())
                 .isEqualTo(200);
         JsonNode riskNeutralResult = Json.parse(riskNeutral.body()).path("result");
-        assertThat(riskNeutralResult.at("/entryPrice/grossPackageNetCents").longValue())
+        assertThat(riskNeutralResult.at("/price/grossPackageNetCents").longValue())
                 .isEqualTo(-1_000L);
-        assertThat(riskNeutralResult.at("/entryPrice/estimatedRoundTripFeesCents").longValue())
+        assertThat(riskNeutralResult.at("/price/estimatedRoundTripFeesCents").longValue())
                 .isEqualTo(130L);
+        assertThat(riskNeutralResult.has("entryPrice")).isFalse();
         assertThat(riskNeutralResult.has("entryCostCents"))
                 .as("risk-neutral output does not republish an inverse-sign loose price")
                 .isFalse();
@@ -1617,6 +1630,23 @@ class ApiIntegrationTest {
         String aapl = j.get("spotBasis").get("AAPL").asText();
         assertThat(aapl).containsIgnoringCase("demo");
         assertThat(aapl).doesNotContain("real market");
+        JsonNode quoteRow = Json.parse(get("/api/quotes?symbols=AAPL").body())
+                .at("/quotes/0");
+        JsonNode aaplAnchor = null;
+        for (JsonNode anchor : j.get("anchors")) {
+            if ("AAPL".equals(anchor.path("symbol").asText())) {
+                aaplAnchor = anchor;
+                break;
+            }
+        }
+        assertThat(aaplAnchor).as("AAPL anchor receipt").isNotNull();
+        assertThat(aaplAnchor.get("price").decimalValue())
+                .as("world uses the canonical QuoteView display price, not raw last")
+                .isEqualByComparingTo(quoteRow.get("displayPrice").decimalValue());
+        assertThat(aaplAnchor.get("markBasis").asText())
+                .isEqualTo(quoteRow.get("markBasis").asText());
+        assertThat(aaplAnchor.get("sourceAsOf").asLong())
+                .isEqualTo(quoteRow.get("asOf").asLong());
         assertThat(j.get("spotBasis").get("ZZZFAKE").asText()).contains("made-up");
         // Calibration ran for the known symbol and names its basis (HV30 / chain ATM IV).
         assertThat(j.has("calibration")).isTrue();
@@ -2037,7 +2067,8 @@ class ApiIntegrationTest {
         JsonNode analyzed = Json.parse(analyzedResponse.body());
         assertThat(analyzed.get("marketLane").asText()).isEqualTo("DEMO");
         assertThat(analyzed.get("note").asText()).contains("demo evidence").contains("never changes tracked lots");
-        assertThat(analyzed.at("/evaluation/participation/localParticipationBps").isNumber()).isTrue();
+        assertThat(analyzed.at("/evaluation/participation/localParticipationBps").isNumber())
+                .as(analyzed.toPrettyString()).isTrue();
         assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/lane").asText()).isEqualTo("REAL");
         assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/practice").isMissingNode()).isTrue();
         assertThat(analyzed.at("/evaluation/assessment/portfolioImpacts/real/grossExposureBeforeCents").asLong())

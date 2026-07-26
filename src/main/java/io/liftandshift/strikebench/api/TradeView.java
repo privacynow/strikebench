@@ -53,12 +53,6 @@ public record TradeView(
         // thetaCentsPerDay, vegaCentsPerPoint) — the same contract ideas and the canvas report.
         @JsonInclude(JsonInclude.Include.NON_NULL)
         GreeksView greeks,
-        // B13: the real-world / tail lane (Merton jump-mixture) for the held line, so trade.popEntry
-        // can read a tail-aware POP and the desk gap dial reads a backend receipt. The full-fidelity
-        // tail (live IV / IV-rank / DTE) rides the position-detail analysis; this roster row uses the
-        // desk's documented fallbacks (IV-rank 55, expected move 6%) over the recorded entry curve.
-        @JsonInclude(JsonInclude.Include.NON_NULL)
-        io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail,
         // One priced checkpoint per NAMED story move, the same shape and move set an idea candidate
         // carries. Held lines had no per-move receipt at all, so the desk priced the stories itself.
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
@@ -83,7 +77,7 @@ public record TradeView(
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
                 t.intent(), t.sharesLocked(), orderInstruction, t.dataProvenance(),
-                t.dataAge(), t.dataSource(), null, null, null, null, null, null, null);
+                t.dataAge(), t.dataSource(), null, null, null, null, null, null);
     }
 
     public TradeView withUnrealized(Long unrealized, Long decisionUnrealized) {
@@ -92,18 +86,18 @@ public record TradeView(
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
-                dataSource, unrealized, decisionUnrealized, terminalPayoff, greeks, jumpTail,
+                dataSource, unrealized, decisionUnrealized, terminalPayoff, greeks,
                 scenarios, spotPnl);
     }
 
     /**
      * Attach the held-line display receipts: the ONE terminal-payoff curve, the ONE canonical greeks
-     * view, the tail lane, the named-story checkpoints, and the engine's own "if price holds" P/L
-     * read off that same curve.
+     * view, the named-story checkpoints, and the engine's own "if price holds" P/L read off that
+     * same curve. Tail analysis is deliberately absent here: the exact lifecycle evaluation owns
+     * it, and a roster row must not manufacture a second tail from fallback IV/event assumptions.
      */
     public TradeView withHeldReceipts(io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff,
                                       GreeksView heldGreeks,
-                                      io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail heldJumpTail,
                                       java.util.List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> heldScenarios,
                                       ApiResponses.HeldSpotPnl heldSpotPnl) {
         return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
@@ -111,7 +105,7 @@ public record TradeView(
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
-                dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents, payoff, heldGreeks, heldJumpTail,
+                dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents, payoff, heldGreeks,
                 heldScenarios, heldSpotPnl);
     }
 }

@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.paper.ExecutablePackagePricer;
 import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
@@ -127,6 +128,7 @@ final class OutcomeController {
             iv = io.liftandshift.strikebench.sim.IvSpec.flat(atm != null ? atm : spec.sane().volAnnual());
         }
         List<io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem> items = new ArrayList<>();
+        Map<String, PackagePriceReceipt> pricesByKey = new LinkedHashMap<>();
         List<Map<String, Object>> refusedEarly = new ArrayList<>();
         for (CompareStructure st : b.structures()) {
             if (st.position() == null) {
@@ -167,6 +169,7 @@ final class OutcomeController {
                     entryPrice == null ? null : entryPrice.payoffEntryCostCents(),
                     entryPrice == null ? null : outcomeEntryNote(entryPrice, me),
                     roundTripFees));
+            pricesByKey.put(st.key(), entryPrice);
         }
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
@@ -178,7 +181,9 @@ final class OutcomeController {
         var evStudy = comparison.ensemble().study();
         List<Map<String, Object>> refused = new ArrayList<>(refusedEarly);
         report.refused().forEach(x -> refused.add(Map.of("key", x.key(), "reason", x.reason())));
-        // R9: fees ride each outcome so the ranking can be judged NET of round-trip commissions.
+        // The complete package-price receipt rides each outcome. A modeled fallback has no
+        // captured price, so its fee is explicitly labeled modeled instead of being published as
+        // a second loose fact beside a receipt.
         List<Map<String, Object>> feeAware = new ArrayList<>();
         for (var oc : report.results()) {
             // ONE fee convention product-wide (ledger rule): OPTION contracts only, ratio-aware —
@@ -189,8 +194,11 @@ final class OutcomeController {
                             "comparison result has no matching captured fee receipt: " + oc.key()));
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("key", oc.key());
-            m.put("result", oc.result());
-            m.put("roundTripFeesCents", fees);
+            ObjectNode result = (ObjectNode) Json.MAPPER.valueToTree(oc.result());
+            PackagePriceReceipt price = pricesByKey.get(oc.key());
+            publishOutcomeEntry(result, price);
+            if (price == null) result.put("modeledRoundTripFeesCents", fees);
+            m.put("result", result);
             feeAware.add(m);
         }
         Map<String, Object> outCmp = new LinkedHashMap<>();
@@ -283,7 +291,7 @@ final class OutcomeController {
     private static void publishOutcomeEntry(ObjectNode outcome, PackagePriceReceipt price) {
         JsonNode modeled = outcome.remove("entryCostCents");
         if (price != null) {
-            outcome.set("entryPrice", Json.MAPPER.valueToTree(price));
+            outcome.set("price", Json.MAPPER.valueToTree(price));
         } else if (modeled != null && modeled.isNumber()) {
             outcome.set("modeledEntryCostCents", modeled);
         }
@@ -447,7 +455,7 @@ final class OutcomeController {
             // The interpretation is DIFFERENT and must say so: conditional history, not a model.
             var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(eresult);
             publishOutcomeEntry(out, entryPrice);
-            out.put("roundTripFeesCents", roundTripFees);
+            if (entryPrice == null) out.put("modeledRoundTripFeesCents", roundTripFees);
             out.put("pathSource", pathBasis.name());
             out.put("pathModelVersion", pathModelVersion);
             out.put("ivStart", iv.sane().startIv());
@@ -473,7 +481,7 @@ final class OutcomeController {
         }
         var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(evaluated.result());
         publishOutcomeEntry(out, entryPrice);
-        out.put("roundTripFeesCents", roundTripFees);
+        if (entryPrice == null) out.put("modeledRoundTripFeesCents", roundTripFees);
         out.put("pathModelVersion", pathModelVersion);
         out.put("ivStart", iv.sane().startIv());
         out.put("ivLongRun", iv.sane().longRunIv());
@@ -481,10 +489,10 @@ final class OutcomeController {
         return out;
     }
 
-    private record MarketEntry(PackagePriceReceipt price, Double atmIv, Double averageIv,
-                               String source, String freshness,
-                               io.liftandshift.strikebench.sim.PathPosition resolvedPosition,
-                               List<String> snaps) {
+    record MarketEntry(PackagePriceReceipt price, Double atmIv, Double averageIv,
+                       String source, String freshness,
+                       io.liftandshift.strikebench.sim.PathPosition resolvedPosition,
+                       List<String> snaps) {
         List<Leg> pricedLegs() { return resolvedPosition == null ? List.of() : resolvedPosition.legs(); }
     }
 
@@ -527,20 +535,14 @@ final class OutcomeController {
         }
     }
 
-    private MarketEntry marketEntry(String symbol, io.liftandshift.strikebench.sim.PathPosition position,
-                                    int qty, String worldId, EntryBook book, List<String> contractExpirations) {
+    MarketEntry marketEntry(String symbol, io.liftandshift.strikebench.sim.PathPosition position,
+                            int qty, String worldId, EntryBook book, List<String> contractExpirations) {
         List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
         if (exps.isEmpty()) return null;
         java.time.LocalDate today = market.laneToday(worldId, clock);
-        // Build the canonical package-cash convention directly: credits/sales are positive,
-        // debits/purchases are negative. The sole conversion into payoff-cost convention lives
-        // on PackagePriceReceipt.payoffEntryCostCents().
-        double packageNetPerUnit = 0;
         Double atmIv = null;
-        String source = null;
-        String freshness = null;
         java.math.BigDecimal spotBd = null;
-        List<Leg> resolved = new ArrayList<>();
+        List<ExecutablePackagePricer.LegBook> priceInputs = new ArrayList<>();
         List<Double> marketIvs = new ArrayList<>();
         List<String> snaps = new ArrayList<>();
         for (int legIndex = 0; legIndex < position.legs().size(); legIndex++) {
@@ -548,12 +550,9 @@ final class OutcomeController {
             int multiplier = leg.multiplier();
             if (leg.isStock()) {
                 var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
-                if (q == null || q.mark() == null) return null;
-                double cashSign = leg.action() == io.liftandshift.strikebench.model.LegAction.SELL ? 1 : -1;
-                packageNetPerUnit += cashSign * Math.max(1, leg.ratio())
-                        * multiplier * q.mark().doubleValue();
-                resolved.add(new Leg(leg.action(), null, null, null,
-                        Math.max(1, leg.ratio()), q.mark(), multiplier));
+                priceInputs.add(ExecutablePackagePricer.LegBook.from(
+                        new Leg(leg.action(), null, null, null,
+                                Math.max(1, leg.ratio()), BigDecimal.ZERO, multiplier), q));
                 continue;
             }
             String exactRaw = contractExpirations != null ? contractExpirations.get(legIndex) : null;
@@ -585,11 +584,6 @@ final class OutcomeController {
                     : Math.abs(quote.strike().doubleValue() - leg.strike().doubleValue());
             if (quote == null || (exactContract ? strikeGap > 1e-9
                     : strikeGap > Math.max(2.5, leg.strike().doubleValue() * 0.03))) return null;
-            boolean buy = leg.action() == io.liftandshift.strikebench.model.LegAction.BUY;
-            java.math.BigDecimal px = buy ? quote.ask() : quote.bid(); // executable sides
-            if (px == null || px.signum() <= 0) return null;
-            if (source == null) source = chain.source();
-            if (freshness == null && chain.freshness() != null) freshness = chain.freshness().name();
             if (quote.iv() != null && quote.iv() > 0.01) marketIvs.add(quote.iv());
             // ATM IV = the quote closest to spot (first leg's chain is fine for a default).
             if (atmIv == null && spotBd != null) {
@@ -599,15 +593,14 @@ final class OutcomeController {
                         .min(java.util.Comparator.comparingDouble(o -> Math.abs(o.strike().subtract(spotF).doubleValue())))
                         .map(io.liftandshift.strikebench.model.OptionQuote::iv).orElse(null);
             }
-            packageNetPerUnit += (buy ? -1 : 1) * Math.max(1, leg.ratio())
-                    * multiplier * px.doubleValue();
             // THE SIMULATED LEG IS THE PRICED LEG: exact listed strike + that expiration's
             // trading-day horizon. Anything that moved is named in the snap note.
             double listedStrike = quote.strike().doubleValue();
             int listedDays = io.liftandshift.strikebench.market.MarketHours
                     .tradingDaysBetween(today, exp);
-            resolved.add(Leg.option(leg.action(), leg.type(),
-                    quote.strike(), exp, Math.max(1, leg.ratio()), px, multiplier));
+            Leg resolved = Leg.option(leg.action(), leg.type(),
+                    quote.strike(), exp, Math.max(1, leg.ratio()), BigDecimal.ZERO, multiplier);
+            priceInputs.add(ExecutablePackagePricer.LegBook.from(resolved, quote));
             if (Math.abs(listedStrike - leg.strike().doubleValue()) > 1e-9
                     || Math.abs(listedDays - position.expiryDay(leg)) > 1) {
                 snaps.add(leg.type() + " " + trimNum(leg.strike().doubleValue())
@@ -616,21 +609,16 @@ final class OutcomeController {
         }
         Double averageIv = marketIvs.isEmpty() ? null
                 : marketIvs.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
-        long packageNetCents = Math.round(packageNetPerUnit * qty * 100);
+        ExecutablePackagePricer.Book pricedBook = ExecutablePackagePricer.price(priceInputs,
+                market.lane(worldId), ExecutablePackagePricer.Policy.EXECUTABLE_ONLY);
+        if (!pricedBook.priced() || !pricedBook.executable()) return null;
         var feeSchedule = io.liftandshift.strikebench.util.Fees.schedule(
-                io.liftandshift.strikebench.util.Fees.optionContracts(resolved, qty),
+                io.liftandshift.strikebench.util.Fees.optionContracts(pricedBook.pricedLegs(), qty),
                 cfg.feePerContractCents(), cfg.feePerOrderCents());
-        String priceSource = source == null ? "live" : source;
-        PackagePriceReceipt price = PackagePriceReceipt.ofLegs(resolved, qty, packageNetCents,
-                feeSchedule.openingCents(), feeSchedule.roundTripCents(),
-                PackagePriceReceipt.FeeSide.OPENING, packageNetCents, OrderInstruction.market(),
-                OrderInstruction.Executability.IMMEDIATE,
-                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
-                priceSource, freshness, null,
-                PackagePriceReceipt.fingerprintOf(resolved, qty, packageNetCents,
-                        PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, null));
-        return new MarketEntry(price, atmIv, averageIv, priceSource, freshness,
-                new io.liftandshift.strikebench.sim.PathPosition(today, resolved), snaps);
+        PackagePriceReceipt price = pricedBook.receipt(qty, feeSchedule,
+                PackagePriceReceipt.FeeSide.OPENING, OrderInstruction.market());
+        return new MarketEntry(price, atmIv, averageIv, price.source(), price.freshness(),
+                new io.liftandshift.strikebench.sim.PathPosition(today, pricedBook.pricedLegs()), snaps);
     }
 
 
@@ -784,8 +772,8 @@ final class OutcomeController {
         out.put("results", results);
         out.put("refused", refused);
         out.put("snapshotAt", book.snapshotAt);
-        out.put("cashBaseline", Map.of("key", "CASH", "expectedValueCents", 0L,
-                "maxLossCents", 0L, "note", "Doing nothing has no modeled market risk or execution cost."));
+        out.put("cashBaseline",
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineReceipt.cash());
         out.put("fairness", "one captured quote/chain book and one risk-neutral convention for every listed package");
         return out;
     }
@@ -841,23 +829,15 @@ final class OutcomeController {
                 () -> scenarioRoundTripFees(pathPosition, qty));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("marketImpliedRisk", analyzed);
-        out.put("probabilityMap", analyzed.probabilityMap());
-        out.put("expectedValueCents", analyzed.expectedValueCents());
-        out.put("expectedValueAfterFeesCents", analyzed.expectedValueCents() - roundTripFees);
-        out.put("evSensitivity", analyzed.sensitivity());
-        out.put("entryPrice", entryPrice);
-        out.put("roundTripFeesCents", roundTripFees);
-        out.put("marketIv", iv);
-        out.put("riskFreeRate", rate);
-        out.put("time", time);
+        out.put("marketImpliedEvAfterCostsCents",
+                Math.subtractExact(analyzed.expectedValueCents(), roundTripFees));
+        out.put("price", entryPrice);
         out.put("theoreticalMaxProfitCents", curve.maxProfitUnbounded() ? null : curve.maxProfitCents());
         out.put("theoreticalMaxLossCents", curve.maxLossUnbounded() ? null : curve.maxLossCents());
         out.put("maxProfitUnbounded", curve.maxProfitUnbounded());
         out.put("maxLossUnbounded", curve.maxLossUnbounded());
         out.put("breakevens", curve.breakevens());
         out.put("payoff", curve.chartPoints(underlying.mark()));
-        out.put("source", entry.source());
-        out.put("freshness", entry.freshness());
         out.put("snapshotAt", book.snapshotAt);
         return out;
     }

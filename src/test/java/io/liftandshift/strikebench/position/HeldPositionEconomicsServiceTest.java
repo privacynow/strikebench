@@ -18,6 +18,9 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.pricing.ProbabilityMap;
+import io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer;
+import io.liftandshift.strikebench.support.TestMarketRiskReceipts;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -119,12 +122,14 @@ class HeldPositionEconomicsServiceTest {
         TradePreview priced = preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L);
         TradePreview unavailable = new TradePreview(false, List.of("Maximum loss is undefined."),
                 priced.warnings(), null, priced.maxProfitCents(), priced.breakevens(),
-                priced.popEntry(), priced.expectedValueCents(), null,
+                null,
                 priced.cashBeforeCents(), priced.cashAfterCents(), priced.reservedBeforeCents(),
                 priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
                 priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
                 priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
-                priced.analytics(), priced.price());
+                priced.analytics(), priced.price(),
+                RiskNeutralAnalyzer.Receipt.unavailable(
+                        "Maximum loss and market-implied evaluation are unavailable."));
 
         PositionLifecycleReceipt receipt = service.compose(request, unavailable, null);
 
@@ -309,12 +314,14 @@ class HeldPositionEconomicsServiceTest {
         TradePreview priced = preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L);
         TradePreview noCommission = new TradePreview(priced.ok(), priced.blockReasons(),
                 priced.warnings(), priced.maxLossCents(), priced.maxProfitCents(), priced.breakevens(),
-                priced.popEntry(), priced.expectedValueCents(), priced.reserveCents(),
+                priced.reserveCents(),
                 priced.cashBeforeCents(), priced.cashAfterCents(), priced.reservedBeforeCents(),
                 priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
                 priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
                 priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
-                priced.analytics(), TestPrices.optionOnly(1, 4_700L));
+                priced.analytics(), TestPrices.optionOnly(1, 4_700L),
+                RiskNeutralAnalyzer.Receipt.unavailable(
+                        "A commission-free fixture has no matching package-price evaluation."));
         assertThat(noCommission.price().openingFeesCents()).isNull();
 
         PositionLifecycleReceipt receipt = service.compose(request, noCommission, evaluation());
@@ -344,16 +351,29 @@ class HeldPositionEconomicsServiceTest {
         leg.put("freshness", "DELAYED");
         leg.put("provenance", "OBSERVED");
         Map<String, Object> analytics = new LinkedHashMap<>();
-        analytics.put("probabilityMap", Map.of("cvar95Cents", -180_000L));
         analytics.put("sourceAsOfEpochMs", 1_942_488_000_000L);
         analytics.put("evaluatedAtEpochMs", 1_942_488_100_000L);
+        var price = TestPrices.withFees(1, entryNet, entryNet, 65L);
         return new TradePreview(true, List.of(), List.of(),
-                1_800_000L, entryNet, List.of("179.53"), .90, -100L, reserve,
+                1_800_000L, entryNet, List.of("179.53"), reserve,
                 100_000_000L, 100_000_000L + entryNet - 65,
                 0, reserve, 100_000_000L, 100_000_000L + entryNet - 65 - reserve,
                 "DELAYED", DataEvidence.of("observed test book", Freshness.DELAYED),
                 21_000L, .10, List.of(leg), List.of(), analytics,
-                TestPrices.withFees(1, entryNet, entryNet, 65L));
+                price, lifecycleRisk(price));
+    }
+
+    private static RiskNeutralAnalyzer.Receipt lifecycleRisk(
+            io.liftandshift.strikebench.paper.PackagePriceReceipt price) {
+        RiskNeutralAnalyzer.Receipt seed =
+                TestMarketRiskReceipts.receipt(price, .90, -100L);
+        var probability = new ProbabilityMap.Result(.90, 0, .05, .05,
+                -180_000L, -180_000L, List.of(), "typed lifecycle fixture");
+        return new RiskNeutralAnalyzer.Receipt(
+                seed.schemaVersion(), seed.modelVersion(), true, null,
+                seed.fingerprint(), seed.priceFingerprint(), seed.underlyingCents(),
+                seed.marketIv(), seed.riskFreeRate(), seed.time(), probability,
+                seed.expectedValueCents(), seed.sensitivity(), seed.scenarioMasses());
     }
 
     private static StrategyEvaluation evaluation() {

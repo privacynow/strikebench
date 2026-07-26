@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.util.EventBus;
 import io.liftandshift.strikebench.util.Money;
+import io.liftandshift.strikebench.util.Fees;
 import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.math.BigDecimal;
@@ -91,6 +92,7 @@ public final class AlertCenterService implements AutoCloseable {
     private final EarningsSource earnings;
     private final EventBus events;
     private final long feePerContractCents;
+    private final long feePerOrderCents;
     private final Map<String, String> lastFingerprint = new ConcurrentHashMap<>();
     private final java.util.Set<String> knownOwners = ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> pendingOwners = ConcurrentHashMap.newKeySet();
@@ -108,7 +110,8 @@ public final class AlertCenterService implements AutoCloseable {
     }
 
     public AlertCenterService(Db db, Clock clock, TradeService trades, MarksSource marks,
-                              EarningsSource earnings, EventBus events, long feePerContractCents) {
+                              EarningsSource earnings, EventBus events,
+                              long feePerContractCents, long feePerOrderCents) {
         this.db = db;
         this.clock = clock;
         this.trades = trades;
@@ -116,6 +119,7 @@ public final class AlertCenterService implements AutoCloseable {
         this.earnings = earnings;
         this.events = events;
         this.feePerContractCents = Math.max(0, feePerContractCents);
+        this.feePerOrderCents = Math.max(0, feePerOrderCents);
         this.refreshes = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "alert-center-refresh");
             thread.setDaemon(true);
@@ -418,21 +422,30 @@ public final class AlertCenterService implements AutoCloseable {
                 if (itm && midCents != null) {
                     long intrinsicPerShare = leg.type() == OptionType.CALL
                             ? spotCents - strikeCents : strikeCents - spotCents;
-                    long extrinsicPerContract = (midCents - intrinsicPerShare) * leg.multiplier();
-                    if (extrinsicPerContract <= feePerContractCents) {
+                    long contractCount = Math.multiplyExact((long) leg.ratio(), qty);
+                    long extrinsicPerContract = Math.max(0,
+                            (midCents - intrinsicPerShare) * leg.multiplier());
+                    long totalExtrinsic = Math.multiplyExact(extrinsicPerContract, contractCount);
+                    long closingFee = Fees.schedule(contractCount,
+                            feePerContractCents, feePerOrderCents).closingCents();
+                    if (totalExtrinsic <= closingFee) {
                         String kind = leg.type() == OptionType.CALL ? "call" : "put";
                         out.add(alert(ref, "ASSIGNMENT", ATTENTION,
                                 ref.symbol() + ": your short " + Money.fmt(strikeCents) + " " + kind
                                         + " could be assigned early — its remaining time value is below trading fees.",
-                                "Heuristic: an in-the-money short option whose extrinsic (time) value ("
-                                        + Money.fmt(Math.max(0, extrinsicPerContract)) + " per contract) is at or "
-                                        + "below the trading fee gives its owner little reason to keep waiting. "
+                                "Heuristic: this in-the-money short leg has "
+                                        + Money.fmt(totalExtrinsic) + " of total extrinsic (time) value across "
+                                        + contractCount + " contract" + (contractCount == 1 ? "" : "s")
+                                        + ", at or below its exact " + Money.fmt(closingFee)
+                                        + " closing commission. That gives its owner little economic reason to wait. "
                                         + EX_DIVIDEND_NOTE,
                                 Map.of("strikeCents", strikeCents, "optionType", leg.type().name(),
-                                        "extrinsicPerContractCents", Math.max(0, extrinsicPerContract),
+                                        "extrinsicPerContractCents", extrinsicPerContract,
+                                        "totalExtrinsicCents", totalExtrinsic,
+                                        "closingFeeCents", closingFee,
                                         "sessionsToExpiry", legSessions, "heuristic", true,
                                         "optionNetPremiumCents", optionNetPremiumCents,
-                                        "quantity", (long) leg.ratio() * qty,
+                                        "quantity", contractCount,
                                         "multiplier", leg.multiplier())));
                     }
                 }

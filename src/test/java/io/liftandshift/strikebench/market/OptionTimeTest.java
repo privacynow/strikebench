@@ -69,4 +69,22 @@ class OptionTimeTest {
         assertThat(restored.years()).isNull();
         assertThat(restored.basis()).contains("calendar days and model years unavailable");
     }
+
+    @Test
+    void oneDisclosedCalendarClockAnnualizesCandidateLifecycleAndCapitalFacts() {
+        OptionTime.Measure time = OptionTime.toExpiry(
+                Instant.parse("2026-07-02T16:00:00Z"), LocalDate.of(2026, 7, 6));
+
+        assertThat(time.calendarDays()).isEqualTo(4);
+        assertThat(time.sessions()).isEqualTo(1);
+        assertThat(time.annualizedSimplePercent(100, 10_000))
+                .isEqualTo(91.25);
+        assertThat(time.annualizedPeriodPercent(1.0))
+                .isEqualTo(91.25);
+
+        OptionTime.Measure expired = OptionTime.toExpiry(
+                Instant.parse("2026-07-24T20:00:00Z"), FRIDAY);
+        assertThat(expired.annualizedSimplePercent(100, 10_000)).isNull();
+        assertThat(expired.annualizedPeriodPercent(1.0)).isNull();
+    }
 }

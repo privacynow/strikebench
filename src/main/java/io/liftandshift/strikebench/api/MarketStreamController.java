@@ -107,7 +107,7 @@ final class MarketStreamController implements AutoCloseable {
                     .orElse(List.of());
         }
         for (String symbol : symbols) {
-            market.quote(symbol, world)
+            engine.currentQuote(symbol, world)
                     .ifPresent(quote -> rows.add(ApiResponses.QuoteView.of(quote, false)));
         }
         return rows;

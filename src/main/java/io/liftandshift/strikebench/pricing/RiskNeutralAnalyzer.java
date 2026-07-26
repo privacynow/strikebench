@@ -1,6 +1,9 @@
 package io.liftandshift.strikebench.pricing;
 
 import io.liftandshift.strikebench.market.OptionTime;
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.util.Json;
@@ -8,6 +11,8 @@ import io.liftandshift.strikebench.util.Json;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -19,6 +24,93 @@ public final class RiskNeutralAnalyzer {
 
     public record Sensitivity(double ivScale, long evCents) {}
     public record ScenarioMass(ScenarioStory story, double underlyingMovePct, double probability) {}
+
+    /**
+     * Chance that at least one short leg finishes in the money, using each selected short leg's
+     * captured IV and its exact lane-aware option clock.
+     *
+     * <p>This lives with the market-implied risk owner—not Recommendation or Trade—so proposal and
+     * exact-ticket paths cannot use different CDF, time, or missing-IV policies. A missing selected
+     * short-leg IV makes the fact unavailable; a silent 30% substitute is not evidence.</p>
+     */
+    public static Double assignmentProbability(
+            List<Leg> legs, List<Double> ivsAligned, long underlyingCents,
+            Instant laneNow, double riskFreeRate) {
+        if (legs == null || underlyingCents <= 0 || laneNow == null
+                || !Double.isFinite(riskFreeRate)) return null;
+        java.util.Map<LocalDate, Integer> lowestCall = new LinkedHashMap<>();
+        java.util.Map<LocalDate, Integer> highestPut = new LinkedHashMap<>();
+        for (int i = 0; i < legs.size(); i++) {
+            Leg leg = legs.get(i);
+            if (leg == null || leg.isStock() || leg.action() != LegAction.SELL
+                    || leg.expiration() == null || leg.strike() == null) continue;
+            java.util.Map<LocalDate, Integer> target =
+                    leg.type() == OptionType.CALL ? lowestCall : highestPut;
+            Integer prior = target.get(leg.expiration());
+            if (prior == null || (leg.type() == OptionType.CALL
+                    ? leg.strike().compareTo(legs.get(prior).strike()) < 0
+                    : leg.strike().compareTo(legs.get(prior).strike()) > 0)) {
+                target.put(leg.expiration(), i);
+            }
+        }
+        java.util.Set<LocalDate> expirations = new java.util.LinkedHashSet<>(lowestCall.keySet());
+        expirations.addAll(highestPut.keySet());
+        if (expirations.isEmpty()) return null;
+        for (Integer index : lowestCall.values()) {
+            if (!validIv(alignedIv(ivsAligned, index))) return null;
+        }
+        for (Integer index : highestPut.values()) {
+            if (!validIv(alignedIv(ivsAligned, index))) return null;
+        }
+
+        double spot = underlyingCents / 100.0;
+        double total = 0;
+        for (LocalDate expiration : expirations) {
+            OptionTime.Measure time = OptionTime.toExpiry(laneNow, expiration);
+            if (!time.hasModelTime()) return null;
+            Integer callIndex = lowestCall.get(expiration);
+            Integer putIndex = highestPut.get(expiration);
+            if (callIndex != null && putIndex != null
+                    && legs.get(putIndex).strike().compareTo(legs.get(callIndex).strike()) >= 0) {
+                total += 1.0;
+                continue;
+            }
+            if (callIndex != null) {
+                Double probability = finishItmProbability(
+                        legs.get(callIndex), alignedIv(ivsAligned, callIndex),
+                        spot, time, riskFreeRate);
+                if (probability == null) return null;
+                total += probability;
+            }
+            if (putIndex != null) {
+                Double probability = finishItmProbability(
+                        legs.get(putIndex), alignedIv(ivsAligned, putIndex),
+                        spot, time, riskFreeRate);
+                if (probability == null) return null;
+                total += probability;
+            }
+        }
+        return Math.min(1.0, total);
+    }
+
+    private static Double alignedIv(List<Double> ivs, int index) {
+        return ivs != null && index >= 0 && index < ivs.size() ? ivs.get(index) : null;
+    }
+
+    private static boolean validIv(Double iv) {
+        return iv != null && Double.isFinite(iv) && iv > 0;
+    }
+
+    private static Double finishItmProbability(
+            Leg leg, Double iv, double spot, OptionTime.Measure time, double riskFreeRate) {
+        if (!validIv(iv)) return null;
+        double t = time.years();
+        double d1 = BlackScholes.d1(spot, leg.strike().doubleValue(), t,
+                riskFreeRate, 0, iv);
+        double d2 = d1 - iv * Math.sqrt(t);
+        return leg.type() == OptionType.CALL ? BlackScholes.normCdf(d2)
+                : BlackScholes.normCdf(-d2);
+    }
 
     /**
      * A typed risk-neutral baseline, distinct from an option-package evaluation because buy and

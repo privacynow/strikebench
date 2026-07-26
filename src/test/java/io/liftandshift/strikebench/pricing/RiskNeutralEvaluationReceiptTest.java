@@ -53,14 +53,14 @@ class RiskNeutralEvaluationReceiptTest {
         assertThat(fixture.receipt().riskFreeRate()).isEqualTo(RATE);
         assertThat(fixture.receipt().time()).isEqualTo(fixture.time());
 
-        assertThat(candidate.pop()).isEqualTo(fixture.receipt().pop());
-        assertThat(candidate.expectedValueCents())
+        assertThat(candidate.marketImpliedRisk().pop()).isEqualTo(fixture.receipt().pop());
+        assertThat(candidate.marketImpliedRisk().expectedValueCents())
                 .isEqualTo(fixture.receipt().expectedValueCents());
-        assertThat(preview.popEntry()).isEqualTo(fixture.receipt().pop());
-        assertThat(preview.expectedValueCents())
+        assertThat(preview.marketImpliedRisk().pop()).isEqualTo(fixture.receipt().pop());
+        assertThat(preview.marketImpliedRisk().expectedValueCents())
                 .isEqualTo(fixture.receipt().expectedValueCents());
-        assertThat(risk.pop()).isEqualTo(fixture.receipt().pop());
-        assertThat(risk.expectedValueCents())
+        assertThat(risk.marketImpliedRisk().pop()).isEqualTo(fixture.receipt().pop());
+        assertThat(risk.marketImpliedRisk().expectedValueCents())
                 .isEqualTo(fixture.receipt().expectedValueCents());
 
         Map<io.liftandshift.strikebench.model.ScenarioStory, Double> captured =
@@ -83,6 +83,34 @@ class RiskNeutralEvaluationReceiptTest {
         assertThat(java.util.Arrays.stream(RiskProfile.class.getRecordComponents())
                 .map(java.lang.reflect.RecordComponent::getName))
                 .doesNotContain("pop", "expectedValueCents");
+        assertThat(java.util.Arrays.stream(TradePreview.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName))
+                .doesNotContain("popEntry", "expectedValueCents");
+    }
+
+    @Test
+    void wirePublishesOneTypedMarketImpliedReceiptAndNoLooseAliases() {
+        Fixture fixture = fixture(IV, RATE, SPOT_CENTS, AS_OF,
+                TestPrices.optionOnly(20_000L));
+        var candidateWire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(
+                candidate(fixture, fixture.receipt()));
+        var previewWire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(
+                preview(fixture, fixture.receipt()));
+        var riskWire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(
+                new RiskProfiler().profile(candidate(fixture, fixture.receipt()), context(fixture)));
+
+        assertThat(candidateWire.has("marketImpliedRisk")).isTrue();
+        assertThat(candidateWire.has("pop")).isFalse();
+        assertThat(candidateWire.has("expectedValueCents")).isFalse();
+        assertThat(previewWire.has("marketImpliedRisk")).isTrue();
+        assertThat(previewWire.has("popEntry")).isFalse();
+        assertThat(previewWire.has("expectedValueCents")).isFalse();
+        assertThat(previewWire.at("/analytics").has("marketImpliedRisk")).isFalse();
+        assertThat(previewWire.at("/analytics").has("probabilityMap")).isFalse();
+        assertThat(previewWire.at("/analytics").has("evSensitivity")).isFalse();
+        assertThat(riskWire.has("marketImpliedRisk")).isTrue();
+        assertThat(riskWire.has("pop")).isFalse();
+        assertThat(riskWire.has("expectedValueCents")).isFalse();
     }
 
     @Test
@@ -110,8 +138,8 @@ class RiskNeutralEvaluationReceiptTest {
         RiskProfile risk = new RiskProfiler().profile(unavailable, context(fixture));
 
         assertThat(unavailable.marketImpliedRisk().available()).isFalse();
-        assertThat(risk.pop()).isNull();
-        assertThat(risk.expectedValueCents()).isNull();
+        assertThat(risk.marketImpliedRisk().pop()).isNull();
+        assertThat(risk.marketImpliedRisk().expectedValueCents()).isNull();
         assertThat(risk.scenarios()).allSatisfy(s -> assertThat(s.prob()).isNull());
 
         Fixture otherPrice = fixture(IV, RATE, SPOT_CENTS, AS_OF,
@@ -173,10 +201,10 @@ class RiskNeutralEvaluationReceiptTest {
     private static TradePreview preview(Fixture fixture,
                                         RiskNeutralAnalyzer.Receipt receipt) {
         return new TradePreview(true, List.of(), List.of(), 980_000L, 20_000L,
-                List.of("98"), receipt.pop(), receipt.expectedValueCents(), 980_000L,
+                List.of("98"), 980_000L,
                 10_000_000L, 10_019_935L, 0L, 980_000L, 10_000_000L, 9_039_935L,
                 "DELAYED", DataEvidence.of("fixture", Freshness.DELAYED), SPOT_CENTS,
-                0.5, List.of(), List.of(), Map.of("marketImpliedRisk", receipt),
+                0.5, List.of(), List.of(), Map.of(),
                 fixture.price(), receipt);
     }
 

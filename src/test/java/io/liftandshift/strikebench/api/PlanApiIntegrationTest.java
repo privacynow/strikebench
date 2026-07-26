@@ -863,7 +863,8 @@ class PlanApiIntegrationTest {
 
         JsonNode market = json(post("/api/plans/" + id + "/outcomes/run",
                 "{\"expectedVersion\":" + version + ",\"basis\":\"RISK_NEUTRAL\"}"));
-        assertThat(market.at("/outcome/result/probabilityMap/pAnyProfit").isNumber()).isTrue();
+        assertThat(market.at("/outcome/result/marketImpliedRisk/probabilityMap/pAnyProfit")
+                .isNumber()).isTrue();
 
         JsonNode latest = json(get("/api/plans/" + id + "/outcomes/latest"));
         assertThat(latest.get("outcomes")).hasSize(2);

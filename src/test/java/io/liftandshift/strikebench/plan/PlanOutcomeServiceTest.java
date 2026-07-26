@@ -414,8 +414,9 @@ class PlanOutcomeServiceTest {
                 "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z");
         Account account = new Account("acct-decision", "Decision account", "DEMO", 10_000_000L,
                 10_000_000L, 0L, false, "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z", null);
+        var decisionPrice = TestPrices.withFees(1, -30_000L, -30_000L, 65L);
         TradePreview preview = new TradePreview(true, List.of(), List.of(),
-                30_000L, 70_000L, List.of("253"), 0.45, -900L, 0L,
+                30_000L, 70_000L, List.of("253"), 0L,
                 10_000_000L, 9_969_935L, 0L, 0L, 10_000_000L, 9_969_935L,
                 "FIXTURE", DataEvidence.of("fixture", Freshness.FIXTURE), 25_000L, null,
                 List.of(Map.ofEntries(Map.entry("action", "BUY"), Map.entry("type", "CALL"),
@@ -423,9 +424,9 @@ class PlanOutcomeServiceTest {
                         Map.entry("ratio", 1), Map.entry("multiplier", 100), Map.entry("bid", "6.9123"),
                         Map.entry("ask", "7.0456"), Map.entry("mid", "6.97895"),
                         Map.entry("fill", "7.0456"), Map.entry("iv", 0.3))), List.of(),
-                Map.of("probabilityMap", Map.of("pMaxProfit", 0.2, "pMaxLoss", 0.3,
-                        "cvar95Cents", -28_000L)),
-                TestPrices.withFees(1, -30_000L, -30_000L, 65L));
+                Map.of(), decisionPrice,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
+                        decisionPrice, .45, -900L));
         EconomicAssessment economics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED,
                 "LEARN_FROM", "Mixed", "Costs matter", -1_420L, 480L, 520L,
                 -4.7, false, List.of("Generated evidence"));

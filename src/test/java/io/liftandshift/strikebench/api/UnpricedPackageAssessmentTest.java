@@ -88,13 +88,13 @@ class UnpricedPackageAssessmentTest {
             return Optional.of(1_785_000_000_000L);
         }
         @Override public Optional<DataEvidence> underlyingEvidence(String symbol, String worldId) {
-            return Optional.of(DataEvidence.of("test-book", Freshness.DELAYED));
+            return Optional.of(DataEvidence.of("test-demo", Freshness.FIXTURE));
         }
         @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
             return Optional.of(new LegMark(new BigDecimal("1.00"), new BigDecimal("1.10"),
-                    new BigDecimal("1.05"), 0.30, Freshness.DELAYED,
+                    new BigDecimal("1.05"), 0.30, Freshness.FIXTURE,
                     null, null, null, null,
-                    DataEvidence.of("test-book", Freshness.DELAYED), 1_785_000_000_000L));
+                    DataEvidence.of("test-demo", Freshness.FIXTURE), 1_785_000_000_000L));
         }
     }
 
@@ -166,14 +166,14 @@ class UnpricedPackageAssessmentTest {
 
         assertThat(preview.ok()).isFalse();
         assertThat(preview.blockReasons()).anySatisfy(reason ->
-                assertThat(reason).contains("No market or model mark"));
+                assertThat(reason).contains("No current quote evidence"));
 
         PackagePriceReceipt price = preview.price();
         assertThat(price.priced()).isFalse();
         assertThat(price.grossPackageNetCents()).isNull();
         assertThat(price.optionNetPremiumCents()).isNull();
         assertThat(price.valuationBasis()).isEqualTo(PackagePriceReceipt.ValuationBasis.UNAVAILABLE);
-        assertThat(price.unavailableReason()).contains("No market or model mark");
+        assertThat(price.unavailableReason()).contains("No current quote evidence");
     }
 
     /**
@@ -201,7 +201,7 @@ class UnpricedPackageAssessmentTest {
         assertThat(receipt.assessment().economics().verdict())
                 .isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
         assertThat(receipt.assessment().economics().marketEvAfterCostsCents()).isNull();
-        assertThat(receipt.unavailableReason()).contains("No market or model mark");
+        assertThat(receipt.unavailableReason()).contains("No current quote evidence");
 
         var node = TradeController.exactPreviewNode(request, preview);
         assertThat(node.path("maxLossCents").isNull()).isTrue();
@@ -229,7 +229,7 @@ class UnpricedPackageAssessmentTest {
         // The one authority states the absence, with its reason, in the one place.
         assertThat(wire.at("/price/grossPackageNetCents").isNull()).isTrue();
         assertThat(wire.at("/price/openingFeesCents").isNull()).isTrue();
-        assertThat(wire.at("/price/unavailableReason").asText()).contains("No market or model mark");
+        assertThat(wire.at("/price/unavailableReason").asText()).contains("No current quote evidence");
         assertThat(preview.price().estimatedRoundTripFeesCents()).isNull();
     }
 
@@ -254,7 +254,7 @@ class UnpricedPackageAssessmentTest {
         assertThat(economics.reasons()).contains(EconomicAssessment.UNKNOWN_FEES_REASON);
         // The refusal is still complete: the mechanical failures are carried, not replaced.
         assertThat(economics.reasons())
-                .anySatisfy(reason -> assertThat(reason).contains("No market or model mark"));
+                .anySatisfy(reason -> assertThat(reason).contains("No current quote evidence"));
 
         // And it stays null all the way onto the wire, rather than serializing as a free round trip.
         var wire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(receipt);
@@ -328,7 +328,7 @@ class UnpricedPackageAssessmentTest {
                                 || ProtocolEvaluator.STOP_LOSS.equals(r.rule()))
                 .allSatisfy(rule -> {
                     assertThat(rule.triggerPnlCents()).isNull();
-                    assertThat(rule.summary()).contains("No market or model mark");
+                    assertThat(rule.summary()).contains("No current quote evidence");
                 });
     }
 
@@ -402,7 +402,7 @@ class UnpricedPackageAssessmentTest {
                 TradeController.unavailableRiskEvaluation(preview, "The exact package");
 
         assertThat(receipt.available()).isFalse();
-        assertThat(receipt.unavailableReason()).contains("No market or model mark");
+        assertThat(receipt.unavailableReason()).contains("No current quote evidence");
         assertThat(receipt.decisionScore()).isNull();
         assertThat(receipt.viable()).isNull();
         assertThat(receipt.management()).isNull();

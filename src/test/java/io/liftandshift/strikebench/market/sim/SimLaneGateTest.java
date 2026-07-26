@@ -112,10 +112,9 @@ class SimLaneGateTest {
         assertThat(p.ok()).as("a weekend sim trade must preview clean: %s", p.blockReasons()).isTrue();
         // The lane's clock is the SIM clock: no 'market is closed / leftovers' warning on Saturday.
         assertThat(p.warnings()).noneMatch(x -> x.contains("Market is closed"));
-        // Analytics DTE runs on the sim calendar, not the JVM's.
-        @SuppressWarnings("unchecked")
-        Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
-        assertThat(String.valueOf(prob.get("timeBasis"))).contains("calendar days");
+        // The typed market-implied receipt owns the option clock and runs on the sim calendar,
+        // not the JVM's.
+        assertThat(p.marketImpliedRisk().time().basis()).contains("calendar days");
 
         var t = trades.create(openRequest(sim.id(), "ACME", "CREDIT_PUT_SPREAD", 1,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, shortK, exp, 1, BigDecimal.ZERO),

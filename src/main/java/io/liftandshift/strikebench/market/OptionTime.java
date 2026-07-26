@@ -67,6 +67,25 @@ public final class OptionTime {
         public boolean live() {
             return state == State.LIVE || state == State.LIVE_0DTE;
         }
+
+        /**
+         * Simple annualized percentage for an option-period cash fact over a positive denominator.
+         *
+         * <p>This is the one carry/return clock: listed-option IV, candidate premium carry,
+         * lifecycle remaining carry, and theoretical return-on-capital all use this receipt's
+         * disclosed calendar-time fraction. Trading sessions remain a management-urgency fact and
+         * never silently replace the market's annualization convention.</p>
+         */
+        public Double annualizedSimplePercent(long periodCents, long denominatorCents) {
+            if (!hasModelTime() || denominatorCents <= 0) return null;
+            return 100.0 * periodCents / denominatorCents / years;
+        }
+
+        /** Annualizes an already-computed period percentage through the same option-time clock. */
+        public Double annualizedPeriodPercent(Double periodPercent) {
+            if (!hasModelTime() || periodPercent == null || !Double.isFinite(periodPercent)) return null;
+            return periodPercent / years;
+        }
     }
 
     public static Measure nearest(List<Leg> legs, LocalDate today) {

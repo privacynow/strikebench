@@ -368,11 +368,16 @@ class EvaluateIntegrationTest {
         assertThat(response.statusCode()).isEqualTo(200);
         JsonNode envelope = Json.MAPPER.readTree(response.body());
         assertThat(envelope.get("basis").asText()).isEqualTo("RISK_NEUTRAL");
-        assertThat(envelope.at("/result/probabilityMap/pAnyProfit").asDouble()).isBetween(0.0, 1.0);
-        assertThat(envelope.at("/result/marketIv").asDouble()).isPositive();
-        assertThat(envelope.at("/result/time/basis").asText()).contains("chain-IV convention");
-        assertThat(envelope.at("/result/source").asText()).containsIgnoringCase("fixture");
-        assertThat(envelope.at("/result/evSensitivity").size()).isEqualTo(3);
+        assertThat(envelope.at("/result/marketImpliedRisk/probabilityMap/pAnyProfit").asDouble())
+                .isBetween(0.0, 1.0);
+        assertThat(envelope.at("/result/marketImpliedRisk/marketIv").asDouble()).isPositive();
+        assertThat(envelope.at("/result/marketImpliedRisk/time/basis").asText())
+                .contains("chain-IV convention");
+        assertThat(envelope.at("/result/price/source").asText()).containsIgnoringCase("fixture");
+        assertThat(envelope.at("/result/marketImpliedRisk/sensitivity").size()).isEqualTo(3);
+        assertThat(envelope.at("/result").has("probabilityMap")).isFalse();
+        assertThat(envelope.at("/result").has("evSensitivity")).isFalse();
+        assertThat(envelope.at("/result").has("entryPrice")).isFalse();
 
         String compare = body.replace("\"operation\":\"POSITION\"", "\"operation\":\"COMPARE\"")
                 .replace("\"position\":{", "\"positions\":[{")
@@ -400,8 +405,12 @@ class EvaluateIntegrationTest {
         HttpResponse<String> response = post("/api/evaluate", body);
         assertThat(response.statusCode()).isEqualTo(200);
         JsonNode item = Json.MAPPER.readTree(response.body()).at("/result/results/0");
-        assertThat(item.path("roundTripFeesCents").isIntegralNumber()).isTrue();
-        assertThat(item.path("roundTripFeesCents").asLong()).isPositive();
+        assertThat(item.at("/result/price/estimatedRoundTripFeesCents")
+                .isIntegralNumber()).isTrue();
+        assertThat(item.at("/result/price/estimatedRoundTripFeesCents").asLong()).isPositive();
+        assertThat(item.has("roundTripFeesCents")).isFalse();
+        assertThat(item.at("/result").has("roundTripFeesCents")).isFalse();
+        assertThat(item.at("/result").has("entryPrice")).isFalse();
         assertThat(item.has("feesCents")).isFalse();
     }
 
@@ -441,8 +450,8 @@ class EvaluateIntegrationTest {
         for (JsonNode item : envelope.at("/result/evaluations")) {
             JsonNode candidate = item.get("candidate");
             if (!candidate.path("usesHeldShares").asBoolean(false)
-                    && item.at("/risk/expectedValueCents").isNumber()
-                    && item.at("/risk/pop").isNumber()) {
+                    && item.at("/risk/marketImpliedRisk/expectedValueCents").isNumber()
+                    && item.at("/risk/marketImpliedRisk/probabilityMap/pAnyProfit").isNumber()) {
                 evaluation = item;
                 break;
             }
@@ -466,19 +475,23 @@ class EvaluateIntegrationTest {
         assertThat(previewResponse.statusCode()).isEqualTo(200);
         JsonNode preview = Json.MAPPER.readTree(previewResponse.body()).get("preview");
 
-        assertThat(preview.get("popEntry"))
+        assertThat(preview.at("/marketImpliedRisk/probabilityMap/pAnyProfit"))
                 .as("candidate=%s preview=%s", candidate, preview)
                 .isNotNull();
-        assertThat(preview.get("popEntry").asDouble())
+        assertThat(preview.at("/marketImpliedRisk/probabilityMap/pAnyProfit").asDouble())
                 .as("candidate=%s preview=%s", candidate, preview)
-                .isCloseTo(evaluation.at("/risk/pop").asDouble(), org.assertj.core.data.Offset.offset(1e-9));
-        assertThat(preview.get("expectedValueCents").asLong())
-                .isEqualTo(evaluation.at("/risk/expectedValueCents").asLong());
+                .isCloseTo(evaluation.at(
+                                "/risk/marketImpliedRisk/probabilityMap/pAnyProfit").asDouble(),
+                        org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(preview.at("/marketImpliedRisk/expectedValueCents").asLong())
+                .isEqualTo(evaluation.at("/risk/marketImpliedRisk/expectedValueCents").asLong());
+        assertThat(preview.has("popEntry")).isFalse();
+        assertThat(preview.has("expectedValueCents")).isFalse();
         if (candidate.path("assignmentProb").isNumber()) {
             assertThat(preview.get("assignmentProb").asDouble())
                     .isCloseTo(candidate.get("assignmentProb").asDouble(), org.assertj.core.data.Offset.offset(1e-9));
         }
-        assertThat(preview.at("/analytics/probabilityMap/basis").asText())
+        assertThat(preview.at("/marketImpliedRisk/probabilityMap/basis").asText())
                 .containsIgnoringCase("risk-neutral").containsIgnoringCase("q=0");
         assertThat(evaluation.at("/explanation/assumptions/0").asText())
                 .containsIgnoringCase("present-valued").containsIgnoringCase("q=0");

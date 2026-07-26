@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.paper;
 
+import io.liftandshift.strikebench.model.GreeksView;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -85,6 +86,22 @@ class GreeksAggregatorTest {
 
         assertThat(buyWrite.deltaShares()).isEqualTo(75.0);
         assertThat(coveredByHeldShares.deltaShares()).isEqualTo(75.0);
+    }
+
+    @Test
+    void oneOwnerConvertsCanonicalGreeksToDollarExposure() {
+        GreeksView greeks = GreeksAggregator.aggregate(List.of(
+                new GreeksAggregator.LegExposure(false, -1, 100, 2, 3,
+                        0.40, 0.02, -0.15, 0.25),
+                new GreeksAggregator.LegExposure(true, 1, 1, 100, 1,
+                        null, null, null, null)), 25);
+
+        assertThat(greeks).isEqualTo(new GreeksView(
+                -115.0, -12.0, 9_000.0, -15_000.0));
+        assertThat(GreeksAggregator.dollarDeltaCents(greeks, 20_000))
+                .isEqualTo(-2_300_000L);
+        assertThat(GreeksAggregator.gammaDollarDeltaCentsForPercentMove(
+                greeks, 20_000, 1.0)).isEqualTo(-480_000L);
     }
 
     private static Map<String, Object> optionSnapshot() {

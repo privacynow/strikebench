@@ -220,25 +220,25 @@ final class WorldController {
         // Observed engine while the UI says Demo both delays creation and anchors to the wrong
         // market. Only an Observed source can require governed background provider work.
         boolean localData = cfg.fixturesOnly() || !"observed".equals(sourceWorld);
-        java.util.Map<String, io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot> snaps
-                = new java.util.HashMap<>();
+        java.util.Map<String, ApiResponses.QuoteView> quoteReceipts = new java.util.HashMap<>();
         if (localData) {
             // The active generated lane is already resident. Read it directly and never wait on
             // the unrelated Observed provider chain under a Demo/simulated Create button.
             for (String sym : all.keySet()) {
                 if (spots.containsKey(sym)) continue;
-                market.quote(sym, sourceWorld).ifPresent(quote ->
-                        snaps.put(sym, snapshotOf(quote)));
+                marketEngine.currentQuote(sym, sourceWorld).ifPresent(quote ->
+                        quoteReceipts.put(sym, ApiResponses.QuoteView.of(quote, false)));
             }
         } else {
             // Live: MEMORY ONLY on the request path — zero provider calls under the button.
             for (String sym : all.keySet()) {
                 if (spots.containsKey(sym)) continue;
-                marketEngine.peek(sym).ifPresent(snap -> snaps.put(snap.symbol(), snap));
+                marketEngine.peekCurrentQuote(sym, sourceWorld).ifPresent(quote ->
+                        quoteReceipts.put(sym, ApiResponses.QuoteView.of(quote, false)));
             }
         }
         long nowMs = clock.millis();
-        java.time.LocalDate today = java.time.LocalDate.now(clock);
+        java.time.LocalDate today = market.laneToday(sourceWorld, clock);
         for (String sym : new ArrayList<>(all.keySet())) {
             boolean isActive = active.containsKey(sym);
             Map<String, Object> a = new LinkedHashMap<>();
@@ -252,20 +252,22 @@ final class WorldController {
                 anchors.add(a);
                 continue;
             }
-            var snap = snaps.get(sym);
-            var mark = snap == null || snap.last() == null ? null : snap.last();
+            ApiResponses.QuoteView quote = quoteReceipts.get(sym);
+            var mark = quote == null ? null : quote.displayPrice();
             if (mark != null && mark.signum() > 0) {
                 spots.put(sym, mark.doubleValue());
-                String basis = anchorBasis(snap.freshness(), sourceWorld, "");
+                String basis = anchorBasis(quote, sourceWorld, "");
                 spotBasis.put(sym, basis);
                 a.put("price", mark.doubleValue());
-                a.put("source", snap.source());
-                a.put("freshness", snap.freshness().name());
-                a.put("sourceAsOf", snap.asOfEpochMs());
-                a.put("ageSeconds", Math.max(0, (nowMs - snap.asOfEpochMs()) / 1000));
-                a.put("bid", snap.bid() == null ? null : snap.bid().toPlainString());
-                a.put("ask", snap.ask() == null ? null : snap.ask().toPlainString());
-                a.put("prevClose", snap.prevClose() == null ? null : snap.prevClose().toPlainString());
+                a.put("source", quote.source());
+                a.put("freshness", quote.freshness());
+                a.put("sourceAsOf", quote.asOf());
+                a.put("ageSeconds", quote.asOf() == null ? null
+                        : Math.max(0, (nowMs - quote.asOf()) / 1000));
+                a.put("markBasis", quote.markBasis());
+                a.put("bid", quote.bid() == null ? null : quote.bid().toPlainString());
+                a.put("ask", quote.ask() == null ? null : quote.ask().toPlainString());
+                a.put("prevClose", quote.prevClose() == null ? null : quote.prevClose().toPlainString());
                 a.put("basis", basis);
                 anchors.add(a);
             } else if (!localData && isActive && curated.contains(sym)) {
@@ -362,28 +364,19 @@ final class WorldController {
         ctx.status(201).json(resp);
     }
 
-    private io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot snapshotOf(
-            io.liftandshift.strikebench.model.Quote quote) {
-        return new io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot(
-                quote.symbol(), quote.description(), quote.mark(), quote.bid(), quote.ask(),
-                quote.prevClose(), quote.optionable(), quote.markFreshness(), quote.source(),
-                quote.asOfEpochMs(), clock.millis(), false, null);
-    }
-
-    private static String anchorBasis(io.liftandshift.strikebench.model.Freshness freshness,
+    private static String anchorBasis(ApiResponses.QuoteView quote,
                                       String sourceWorld, String suffix) {
-        String base;
-        if (freshness == io.liftandshift.strikebench.model.Freshness.REALTIME
-                || freshness == io.liftandshift.strikebench.model.Freshness.DELAYED
-                || freshness == io.liftandshift.strikebench.model.Freshness.EOD
-                || freshness == io.liftandshift.strikebench.model.Freshness.STALE) {
-            base = "anchored to the real market's last " + freshness.name().toLowerCase() + " price";
-        } else if (freshness == io.liftandshift.strikebench.model.Freshness.SIMULATED
-                || (sourceWorld != null && io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(sourceWorld))) {
-            base = "anchored to the active simulated market's generated price";
-        } else {
-            base = "anchored to a built-in DEMO quote — not a live price";
-        }
+        String lane = sourceWorld == null || sourceWorld.isBlank() || "observed".equals(sourceWorld)
+                ? "Observed market"
+                : "demo".equals(sourceWorld) ? "Demo market" : "simulated market " + sourceWorld;
+        String priceBasis = quote.markBasis() == null
+                ? "unavailable price basis"
+                : quote.markBasis().toLowerCase(Locale.ROOT).replace('_', ' ');
+        String source = quote.source() == null || quote.source().isBlank()
+                ? "source unavailable" : quote.source();
+        String freshness = quote.freshness() == null
+                ? "freshness unavailable" : quote.freshness();
+        String base = lane + " " + priceBasis + " from " + source + " · " + freshness;
         return base + (suffix == null ? "" : suffix);
     }
 
@@ -455,21 +448,29 @@ final class WorldController {
             long nowMs = clock.millis();
             if (!pending.isEmpty()) {
                 for (var snap : marketEngine.quotes(pending)) { // governed: priorities + politeness apply
-                    var mark = snap.last();
+                    ApiResponses.QuoteView quote =
+                            ApiResponses.QuoteView.of(snap.toQuote(), snap.refreshing());
+                    var mark = quote.displayPrice();
                     if (mark == null || mark.signum() <= 0) continue;
-                    String sym = snap.symbol();
+                    String sym = quote.symbol();
                     all.put(sym, active.getOrDefault(sym, 1.0));
                     spots.put(sym, mark.doubleValue());
-                    String basis = anchorBasis(snap.freshness(), "observed", " (resolved in background)");
+                    String basis = anchorBasis(quote, "observed", " (resolved in background)");
                     spotBasis.put(sym, basis);
                     Map<String, Object> a = new LinkedHashMap<>();
                     a.put("symbol", sym);
                     a.put("tier", "active");
                     a.put("price", mark.doubleValue());
-                    a.put("source", snap.source());
-                    a.put("freshness", snap.freshness().name());
-                    a.put("sourceAsOf", snap.asOfEpochMs());
-                    a.put("ageSeconds", Math.max(0, (nowMs - snap.asOfEpochMs()) / 1000));
+                    a.put("source", quote.source());
+                    a.put("freshness", quote.freshness());
+                    a.put("sourceAsOf", quote.asOf());
+                    a.put("ageSeconds", quote.asOf() == null ? null
+                            : Math.max(0, (nowMs - quote.asOf()) / 1000));
+                    a.put("markBasis", quote.markBasis());
+                    a.put("bid", quote.bid() == null ? null : quote.bid().toPlainString());
+                    a.put("ask", quote.ask() == null ? null : quote.ask().toPlainString());
+                    a.put("prevClose", quote.prevClose() == null
+                            ? null : quote.prevClose().toPlainString());
                     a.put("basis", basis);
                     anchors.removeIf(x -> sym.equals(x.get("symbol")));
                     anchors.add(a);

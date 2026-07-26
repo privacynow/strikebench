@@ -438,7 +438,7 @@ class EconomicAssessmentTest {
         RiskProfile profiled = new RiskProfiler().profile(calendar, ctx());
         EconomicAssessment a = EconomicAssessment.assess(calendar, profiled, observed(), pass(), ctx());
 
-        assertThat(profiled.expectedValueCents()).isNull();
+        assertThat(profiled.marketImpliedRisk().expectedValueCents()).isNull();
         assertThat(profiled.evHistVolCents()).isNull();
         assertThat(profiled.scenarios()).as("a time spread has no false single-expiration grid").isEmpty();
         assertThat(profiled.terminalPayoff().available()).isFalse();
@@ -473,7 +473,8 @@ class EconomicAssessmentTest {
     @Test void realizedVolLaneUsesTheExactPackagePrice() {
         Candidate base = candidate(0.50);
         var repricedReceipt = TestMarketRiskReceipts.receipt(
-                TestPrices.optionOnly(base.qty(), -15_000), base.pop(), base.expectedValueCents());
+                TestPrices.optionOnly(base.qty(), -15_000), base.marketImpliedRisk().pop(),
+                base.marketImpliedRisk().expectedValueCents());
         Candidate repriced = new Candidate(base.strategy(), base.displayName(), base.structureGroup(), base.label(),
                 base.legs(), base.qty(), TestPrices.optionOnly(base.qty(), -15_000), base.maxProfitCents(), 15_000, base.breakevens(),
                 base.liquidityScore(), base.freshness(), base.warnings(),

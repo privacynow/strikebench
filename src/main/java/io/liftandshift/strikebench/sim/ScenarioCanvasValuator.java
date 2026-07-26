@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Symbol;
+import io.liftandshift.strikebench.paper.GreeksAggregator;
 import io.liftandshift.strikebench.util.Money;
 import io.liftandshift.strikebench.util.Quantiles;
 
@@ -614,26 +615,25 @@ public final class ScenarioCanvasValuator {
             long[] sorted = values.clone(); Arrays.sort(sorted);
             long focusValue = values[representativePath];
             if (day == days) for (int p = 0; p < paths.length; p++) terminal[p] = values[p] - entry;
-            double dd = 0, gg = 0, tt = 0, vv = 0;
+            List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
             double[] median = paths[representativePath];
             for (int legNo = 0; legNo < input.position().legs().size(); legNo++) {
                 Leg leg = input.position().legs().get(legNo);
                 PathValuationKernel.LegPoint point = PathValuationKernel.legPoint(input.position(), leg,
                         median, step, steps, spd, elapsed, legacyPath, canvas, annualRate,
                         resolvedTransformations[representativePath][legNo]);
-                double q = input.qty();
-                dd += point.deltaShares() * q; gg += point.gammaSharesPerDollar() * q;
-                tt += point.thetaDollarsPerDay() * q; vv += point.vegaDollarsPerPoint() * q;
-                legDays.get(legNo).add(new LegDay(day, Money.toCents(point.valueDollars() * q),
-                        Money.toCents(point.optionPrice()), new GreeksView(round4(point.deltaShares() * q),
-                        round4(point.gammaSharesPerDollar() * q), Money.toCents(point.thetaDollarsPerDay() * q),
-                        Money.toCents(point.vegaDollarsPerPoint() * q)), point.state()));
+                var exposure = canvasGreekExposure(point, input.qty());
+                greekExposures.add(exposure);
+                legDays.get(legNo).add(new LegDay(day,
+                        Money.toCents(point.valueDollars() * input.qty()),
+                        Money.toCents(point.optionPrice()),
+                        GreeksAggregator.aggregate(List.of(exposure), 0), point.state()));
             }
             timeline.add(new PositionDay(day, date(day, ensemble.anchorDate(), sessionDates),
                     Quantiles.of(sorted, 0.10), Quantiles.of(sorted, 0.50), Quantiles.of(sorted, 0.90),
                     Quantiles.of(sorted, 0.10) - entry, Quantiles.of(sorted, 0.50) - entry, Quantiles.of(sorted, 0.90) - entry,
                     focusValue, focusValue - entry,
-                    new GreeksView(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
+                    GreeksAggregator.aggregate(greekExposures, 0)));
         }
         List<PositionStep> focusSteps = new ArrayList<>(displaySteps.length);
         List<PositionStepBand> stepBands = new ArrayList<>(displaySteps.length);
@@ -661,26 +661,23 @@ public final class ScenarioCanvasValuator {
             long focusValue = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
                     paths[representativePath], step, steps, spd, elapsed, legacyPath, canvas,
                     annualRate, resolvedTransformations[representativePath]) * input.qty());
-            double dd = 0, gg = 0, tt = 0, vv = 0;
+            List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
             for (int legNo = 0; legNo < input.position().legs().size(); legNo++) {
                 Leg leg = input.position().legs().get(legNo);
                 PathValuationKernel.LegPoint point = PathValuationKernel.legPoint(input.position(), leg,
                         paths[representativePath], step, steps, spd, elapsed, legacyPath, canvas,
                         annualRate, resolvedTransformations[representativePath][legNo]);
-                double q = input.qty();
-                dd += point.deltaShares() * q; gg += point.gammaSharesPerDollar() * q;
-                tt += point.thetaDollarsPerDay() * q; vv += point.vegaDollarsPerPoint() * q;
+                var exposure = canvasGreekExposure(point, input.qty());
+                greekExposures.add(exposure);
                 legSteps.get(legNo).add(new LegStep(step, progress,
-                        Money.toCents(point.valueDollars() * q), Money.toCents(point.optionPrice()),
-                        new GreeksView(round4(point.deltaShares() * q),
-                                round4(point.gammaSharesPerDollar() * q),
-                                Money.toCents(point.thetaDollarsPerDay() * q),
-                                Money.toCents(point.vegaDollarsPerPoint() * q)), point.state()));
+                        Money.toCents(point.valueDollars() * input.qty()),
+                        Money.toCents(point.optionPrice()),
+                        GreeksAggregator.aggregate(List.of(exposure), 0), point.state()));
             }
             focusSteps.add(new PositionStep(step, progress,
                     dateForStep(step, spd, days, ensemble.anchorDate(), sessionDates),
                     focusValue, focusValue - entry,
-                    new GreeksView(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
+                    GreeksAggregator.aggregate(greekExposures, 0)));
         }
         List<DisplayPositionPath> valuedDisplayPaths = new ArrayList<>(displaySelections.size());
         for (int i = 0; i < displaySelections.size(); i++) {
@@ -718,6 +715,18 @@ public final class ScenarioCanvasValuator {
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
                 List.copyOf(legs), List.copyOf(transformationRows),
                 positionAnimation(boundary, displaySteps, spd)), terminal);
+    }
+
+    /**
+     * A canvas point is already signed and deliverable-scaled for one package. Quantity is the
+     * only remaining scale; the canonical owner performs it and the dollars-to-cents conversion
+     * for both the leg and whole-position Greek receipts.
+     */
+    private static GreeksAggregator.LegExposure canvasGreekExposure(
+            PathValuationKernel.LegPoint point, int quantity) {
+        return new GreeksAggregator.LegExposure(false, 1, 1, 1, quantity,
+                point.deltaShares(), point.gammaSharesPerDollar(),
+                point.thetaDollarsPerDay(), point.vegaDollarsPerPoint());
     }
 
     private static void collectAssignments(JointPositionInput row,

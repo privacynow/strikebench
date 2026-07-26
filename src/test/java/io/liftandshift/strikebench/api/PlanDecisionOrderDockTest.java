@@ -97,11 +97,13 @@ class PlanDecisionOrderDockTest {
         // fixture can no longer state one net beside the receipt's other one.
         Long risk = price.priced() ? 0L : null;
         return new TradePreview(ok, ok ? List.of() : List.of("Execution is unavailable."), List.of(),
-                risk, null, List.of(), null, null, risk,
+                risk, null, List.of(), risk,
                 100_000, 100_000, 0, 0, 100_000, 100_000,
                 // A preview with no price has no spot either; underlyingCents is nullable precisely
                 // so this fixture cannot claim the underlying trades at $0.00 (§3.2).
                 "MISSING", null, price.grossPackageNetCents() == null ? null : 12_345L,
-                null, List.of(), List.of(), Map.of(), price);
+                null, List.of(), List.of(), Map.of(), price,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "This order-dock fixture does not model market-implied risk."));
     }
 }

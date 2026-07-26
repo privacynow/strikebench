@@ -4,6 +4,9 @@ import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradePreview;
+import io.liftandshift.strikebench.pricing.ProbabilityMap;
+import io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer;
+import io.liftandshift.strikebench.support.TestMarketRiskReceipts;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -48,17 +51,10 @@ class PlanDecisionServiceParsingTest {
                 "2026-07-26T00:00:00Z", null, "2026-07-26T00:00:00Z",
                 null, 0L, null, "OBSERVED", "DELAYED", "cboe");
 
-        Map<String, Object> reviewedAnalytics = Map.of(
-                "probabilityMap", Map.of("pMaxLoss", .5),
-                "evaluatedAtEpochMs", 1_000L);
-        TradePreview reviewedFacts = preview(reviewed, reviewedAnalytics);
-        TradePreview movedPricePreview = preview(movedBook, reviewedAnalytics);
-        TradePreview movedRiskPreview = preview(reviewed, Map.of(
-                "probabilityMap", Map.of("pMaxLoss", .7),
-                "evaluatedAtEpochMs", 2_000L));
-        TradePreview sameFactsLater = preview(reviewed, Map.of(
-                "probabilityMap", Map.of("pMaxLoss", .5),
-                "evaluatedAtEpochMs", 9_000L));
+        TradePreview reviewedFacts = preview(reviewed, risk(reviewed, .5), 1_000L);
+        TradePreview movedPricePreview = preview(movedBook, risk(movedBook, .5), 1_000L);
+        TradePreview movedRiskPreview = preview(reviewed, risk(reviewed, .7), 2_000L);
+        TradePreview sameFactsLater = preview(reviewed, risk(reviewed, .5), 9_000L);
 
         assertThatThrownBy(() -> PlanDecisionService.frozenPreview(
                 reviewedFacts, trade, movedPricePreview))
@@ -72,10 +68,27 @@ class PlanDecisionServiceParsingTest {
                 .isSameAs(sameFactsLater);
     }
 
-    private static TradePreview preview(PackagePriceReceipt price, Map<String, Object> analytics) {
+    private static TradePreview preview(PackagePriceReceipt price,
+                                        RiskNeutralAnalyzer.Receipt marketRisk,
+                                        long evaluatedAtEpochMs) {
         return new TradePreview(true, List.of(), List.of(), 50_000L, 10_000L, List.of(),
-                .5, 1_000L, 0L, 1_000_000L, 1_009_870L, 0L, 0L,
+                0L, 1_000_000L, 1_009_870L, 0L, 0L,
                 1_000_000L, 1_009_870L, "DELAYED", null, 20_000L, null,
-                List.of(), List.of(), analytics, price);
+                List.of(), List.of(), Map.of("evaluatedAtEpochMs", evaluatedAtEpochMs),
+                price, marketRisk);
+    }
+
+    private static RiskNeutralAnalyzer.Receipt risk(PackagePriceReceipt price,
+                                                     double pMaxLoss) {
+        RiskNeutralAnalyzer.Receipt seed =
+                TestMarketRiskReceipts.receipt(price, .5, 1_000L);
+        var probability = new ProbabilityMap.Result(.2, .1, pMaxLoss,
+                Math.max(0, .7 - pMaxLoss), -10_000L, -20_000L, List.of(),
+                "typed decision fixture");
+        return new RiskNeutralAnalyzer.Receipt(
+                seed.schemaVersion(), seed.modelVersion(), true, null,
+                seed.fingerprint(), seed.priceFingerprint(), seed.underlyingCents(),
+                seed.marketIv(), seed.riskFreeRate(), seed.time(), probability,
+                seed.expectedValueCents(), seed.sensitivity(), seed.scenarioMasses());
     }
 }

@@ -25,7 +25,8 @@ public final class ExecutablePrice {
         return bid.add(ask).divide(BigDecimal.valueOf(2), Money.PRICE_SCALE, RoundingMode.HALF_UP);
     }
 
-    private static boolean crossed(BigDecimal bid, BigDecimal ask) {
+    /** Whether the two positive sides form an impossible crossed book. */
+    public static boolean crossed(BigDecimal bid, BigDecimal ask) {
         return bid != null && ask != null && bid.signum() > 0 && ask.signum() > 0
                 && bid.compareTo(ask) > 0;
     }

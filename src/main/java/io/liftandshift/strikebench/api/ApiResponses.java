@@ -303,21 +303,11 @@ public final class ApiResponses {
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
     /**
-     * The single-symbol research document. Its {@code quote} slot IS a {@link QuoteView} — the same
-     * row, field for field, that {@code /api/quotes} serves for that symbol — and its top-level
-     * display fields are copied from it. Home and Research therefore cannot disagree about one
-     * symbol's price, because there is only one decision to disagree with.
+     * The single-symbol research document. Quote facts exist only inside {@link #quote}; legacy
+     * top-level copies of price/change/basis/freshness were removed so a consumer cannot route to a
+     * stale alias while the canonical QuoteView says something else.
      */
-    public record ResearchDetail<T, U, V, W>(String symbol, T quote, BigDecimal displayPrice,
-                                              /* Change of displayPrice against the previous close, in
-                                                 percent — the backend owns this arithmetic so no
-                                                 surface recomputes it. Null when unknowable. */
-                                              Double displayChangePct,
-                                              /* WHICH input displayPrice quotes: MID, LAST,
-                                                 PREVIOUS_CLOSE or UNAVAILABLE (Quote.MarkBasis). */
-                                              String markBasis,
-                                              String quoteUnavailableReason,
-                                              boolean priceIsPreviousClose, String marketLane,
+    public record ResearchDetail<U, V, W>(String symbol, QuoteView quote, String marketLane,
                                               boolean optionable, Double ivAtm,
                                               boolean ivRankAvailable, Double ivRankPct,
                                               Double ivPercentilePct, int ivHistoryDays,
@@ -329,7 +319,7 @@ public final class ApiResponses {
                                               String historyPriceBasis, U evidence,
                                               V expirations, boolean planEligible,
                                               String planEligibility, W benchmarks,
-                                              String freshness, String asOfDate,
+                                              String asOfDate,
                                               Regime regime) {}
     /** The lane's trailing regime as one wire object; headline pre-composed server-side. */
     public record Regime(String trend, Double trendReturnPct, Integer trendSessions,

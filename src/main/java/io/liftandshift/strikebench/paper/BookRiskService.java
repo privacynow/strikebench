@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.market.EtfLookThroughService;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.GreeksView;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
@@ -386,18 +387,25 @@ public final class BookRiskService {
             // for absent gamma/vega and still called the whole book complete.
             if (mark == null || mark.delta() == null || mark.gamma() == null
                     || mark.theta() == null || mark.vega() == null || spot == null) continue;
+            int sign = "SHORT".equals(lot.side()) ? -1 : 1;
+            GreeksView canonical = GreeksAggregator.aggregate(List.of(
+                    new GreeksAggregator.LegExposure(false, sign, lot.multiplier(), 1,
+                            lot.remainingQuantity(), mark.delta(), mark.gamma(),
+                            mark.theta(), mark.vega())), 0);
+            Long lotDollarDeltaCents = GreeksAggregator.dollarDeltaCents(canonical, spot);
+            Long lotGammaCents = GreeksAggregator.gammaDollarDeltaCentsForPercentMove(
+                    canonical, spot, 1.0);
+            if (canonical == null || lotDollarDeltaCents == null || lotGammaCents == null) continue;
             marked++;
-            double units = signedUnits(lot);
-            double spotDollars = spot / 100.0;
-            double lotDollarDelta = mark.delta() * units * spot; // cents
+            double lotDollarDelta = lotDollarDeltaCents;
             Double beta = betas.beta(lot.symbol());
             if (beta != null) weightedSymbols.add(lot.symbol());
             else unweightedSymbols.add(lot.symbol());
             dollarDelta += lotDollarDelta;
             betaDollarDelta += lotDollarDelta * (beta == null ? 1.0 : beta);
-            thetaPerDay += mark.theta() * units * 100.0; // $/day -> cents/day
-            vegaPerPoint += mark.vega() * units * 100.0; // $/pt -> cents/pt
-            gammaPer1Pct += mark.gamma() * units * 0.01 * spotDollars * spot;
+            thetaPerDay += canonical.thetaCentsPerDay();
+            vegaPerPoint += canonical.vegaCentsPerPoint();
+            gammaPer1Pct += lotGammaCents;
         }
         int unmarked = optionLots - marked;
         boolean complete = optionLots > 0 && unmarked == 0;
@@ -566,7 +574,9 @@ public final class BookRiskService {
                 if (spot != null) {
                     notional = Math.multiplyExact(
                             Math.multiplyExact(lot.remainingQuantity(), (long) lot.multiplier()), spot);
-                    theme.delta()[0] += signedUnits(lot) * spot; // signed shares × spot
+                    Long dollarDelta = GreeksAggregator.dollarDeltaCents(signedUnits(lot), spot);
+                    if (dollarDelta == null) theme.deltaComplete()[0] = false;
+                    else theme.delta()[0] += dollarDelta;
                 } else {
                     notional = lot.economicRemainingOpenAmountCents();
                     theme.basisValued()[0]++;
@@ -580,10 +590,13 @@ public final class BookRiskService {
                         Math.multiplyExact(lot.remainingQuantity(), (long) lot.multiplier()));
                 MarksSource.LegMark mark = optionMarks.get(optionKey(lot));
                 Long spot = spots.get(lot.symbol());
-                if (mark == null || mark.delta() == null || spot == null) {
+                Long dollarDelta = mark == null || mark.delta() == null || spot == null
+                        ? null : GreeksAggregator.dollarDeltaCents(
+                                mark.delta() * signedUnits(lot), spot);
+                if (dollarDelta == null) {
                     theme.deltaComplete()[0] = false;
                 } else {
-                    theme.delta()[0] += mark.delta() * signedUnits(lot) * spot;
+                    theme.delta()[0] += dollarDelta;
                 }
                 boolean call = "CALL".equals(lot.optionType());
                 boolean shortSide = "SHORT".equals(lot.side());
@@ -702,7 +715,11 @@ public final class BookRiskService {
                 }
                 if (spot == null) sides.deltaComplete()[0] = false;
                 else {
-                    double d = signedUnits(lot) * spot; // signed shares × spot, in cents
+                    Long d = GreeksAggregator.dollarDeltaCents(signedUnits(lot), spot);
+                    if (d == null) {
+                        sides.deltaComplete()[0] = false;
+                        continue;
+                    }
                     sides.delta()[0] += d;
                     sides.grossDelta()[0] += Math.abs(d);
                 }
@@ -715,10 +732,12 @@ public final class BookRiskService {
                 sides.shortCalls().merge(lot.symbol(), lot.remainingQuantity(), Math::addExact);
             }
             MarksSource.LegMark mark = optionMarks.get(optionKey(lot));
-            if (mark == null || mark.delta() == null || spot == null) {
+            Long d = mark == null || mark.delta() == null || spot == null
+                    ? null : GreeksAggregator.dollarDeltaCents(
+                            mark.delta() * signedUnits(lot), spot);
+            if (d == null) {
                 sides.deltaComplete()[0] = false;
             } else {
-                double d = mark.delta() * signedUnits(lot) * spot;
                 sides.delta()[0] += d;
                 sides.grossDelta()[0] += Math.abs(d);
             }

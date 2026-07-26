@@ -14,8 +14,7 @@ public final class CapitalProfiler {
         if (c.maxProfitCents() != null && economic > 0) {
             roc = 100.0 * c.maxProfitCents() / economic;
         }
-        Double annRoc = (roc != null && ctx.hasModelTime())
-                ? roc / ctx.yearsToExpiry() : null;
+        Double annRoc = ctx.timeToExpiry().annualizedPeriodPercent(roc);
 
         String basis = c.combinedMaxLossCents() != null
                 ? "economic exposure includes the held or needed shares valued at today's price"

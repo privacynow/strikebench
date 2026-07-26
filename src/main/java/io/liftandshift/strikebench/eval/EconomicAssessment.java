@@ -110,8 +110,9 @@ public record EconomicAssessment(
     private static EconomicAssessment assess(Candidate c, RiskProfile risk, EvidenceProfile evidence,
                                               EvalContext ctx, boolean mechanicallyEligible,
                                               List<String> mechanicalFailures, long fees) {
-        Long marketNet = risk == null || risk.expectedValueCents() == null
-                ? null : risk.expectedValueCents() - fees;
+        Long marketEv = risk == null || risk.marketImpliedRisk() == null
+                ? null : risk.marketImpliedRisk().expectedValueCents();
+        Long marketNet = marketEv == null ? null : marketEv - fees;
         Long realizedNet = risk == null || risk.evHistVolCents() == null
                 ? null : risk.evHistVolCents() - fees;
         long maxLoss = risk == null ? 0 : Math.max(0, risk.maxLossCents());
@@ -153,7 +154,9 @@ public record EconomicAssessment(
         boolean realizedNegative = realizedNet != null && realizedNet < -material;
         boolean negativeSensitivityCrossesZero = realizedNegative
                 && realisticHigh != null && realisticHigh >= 0;
-        boolean lowProbability = risk != null && risk.pop() != null && risk.pop() < 0.30;
+        Double riskNeutralPop = risk == null || risk.marketImpliedRisk() == null
+                ? null : risk.marketImpliedRisk().pop();
+        boolean lowProbability = riskNeutralPop != null && riskNeutralPop < 0.30;
 
         if (marketNet != null) reasons.add("Market-implied EV after estimated round-trip fees: "
                 + Money.fmt(marketNet) + ". " + marketRole());

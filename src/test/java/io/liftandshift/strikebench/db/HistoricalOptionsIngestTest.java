@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.BufferedReader;
 import java.io.StringReader;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -75,5 +77,34 @@ class HistoricalOptionsIngestTest {
         var r = ingest("date,symbol,bid,ask\n2026-06-01,AAPL,1,2", "vendor");
         assertThat(r.optionRows()).isZero();
         assertThat(r.problems()).anyMatch(p -> p.contains("missing required column"));
+    }
+
+    @Test void onePartialBarWriterPreservesExistingOhlcWhileRefreshingTheClose() {
+        db = TestDb.fresh();
+        db.tx(connection -> {
+            ObservedCandleWriter.upsertObservedBar(connection, "AAPL",
+                    LocalDate.of(2026, 6, 1), new BigDecimal("100"),
+                    new BigDecimal("110"), new BigDecimal("95"), new BigDecimal("105"),
+                    12_000L, "vendor", false, 70, "OHLCV");
+            ObservedCandleWriter.upsertObservedClose(connection, "AAPL",
+                    LocalDate.of(2026, 6, 1), null, null, new BigDecimal("106"),
+                    null, "vendor");
+            return null;
+        });
+
+        record StoredBar(BigDecimal open, BigDecimal high, BigDecimal low, BigDecimal close,
+                         long volume, String kind, boolean observed) {}
+        StoredBar row = db.query("SELECT open,high,low,close,volume,bar_kind,observed "
+                        + "FROM underlying_bar WHERE symbol='AAPL' AND source='vendor'",
+                result -> new StoredBar(result.bd("open"), result.bd("high"), result.bd("low"),
+                        result.bd("close"), result.lng("volume"), result.str("bar_kind"),
+                        result.bool("observed"))).getFirst();
+        assertThat(row.open()).isEqualByComparingTo("100");
+        assertThat(row.high()).isEqualByComparingTo("110");
+        assertThat(row.low()).isEqualByComparingTo("95");
+        assertThat(row.close()).isEqualByComparingTo("106");
+        assertThat(row.volume()).isEqualTo(12_000L);
+        assertThat(row.kind()).isEqualTo("OHLCV");
+        assertThat(row.observed()).isTrue();
     }
 }

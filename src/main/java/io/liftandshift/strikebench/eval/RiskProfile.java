@@ -33,18 +33,6 @@ public record RiskProfile(
         }
     }
 
-    /** The legacy wire projection is derived directly from the sole market-implied authority. */
-    @com.fasterxml.jackson.annotation.JsonProperty("pop")
-    public Double pop() {
-        return marketImpliedRisk.pop();
-    }
-
-    /** The legacy wire projection is derived directly from the sole market-implied authority. */
-    @com.fasterxml.jackson.annotation.JsonProperty("expectedValueCents")
-    public Long expectedValueCents() {
-        return marketImpliedRisk.expectedValueCents();
-    }
-
     /**
      * Compact boundary for policy composers that do not publish a terminal curve, jump-tail lane,
      * or named worst-scenario receipt. Market-implied values still arrive only as the typed receipt.
@@ -59,7 +47,8 @@ public record RiskProfile(
 
     /**
      * One point on the payoff-vs-underlying grid. {@code prob} is the risk-neutral lognormal mass in
-     * the Voronoi bin around this move (same distribution as {@link #pop()}); null when no ATM IV /
+     * the Voronoi bin around this move (same distribution as
+     * {@link #marketImpliedRisk()} {@code .pop()}); null when no ATM IV /
      * multi-expiry, so the client shows the bar without a probability rather than inventing one.
      */
     public record Scenario(io.liftandshift.strikebench.model.ScenarioStory story,

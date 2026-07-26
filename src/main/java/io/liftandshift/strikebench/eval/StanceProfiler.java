@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.market.OptionTime;
+import io.liftandshift.strikebench.paper.GreeksAggregator;
 import io.liftandshift.strikebench.position.ParticipationProfile;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
@@ -30,18 +31,19 @@ final class StanceProfiler {
         List<Leg> legs = RiskProfiler.combinedLegs(candidate, ctx);
         double spot = ctx.underlyingCents() / 100.0;
         double sigma = modelVol(ctx);
-        double deltaShares = 0, gammaSharesPerDollar = 0;
-        double thetaDollarsPerDay = 0, vegaDollarsPerPoint = 0;
+        List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
         int duration = 0;
         double durationYears = 0;
         long equivalentShares = 0;
         LocalDate dominantExpiry = null;
         for (Leg leg : legs) {
-            double sign = leg.action() == LegAction.BUY ? 1.0 : -1.0;
+            int sign = leg.action() == LegAction.BUY ? 1 : -1;
             long units = Math.multiplyExact((long) leg.ratio() * Math.max(1, candidate.qty()), leg.multiplier());
             equivalentShares = Math.max(equivalentShares, units);
             if (leg.isStock()) {
-                deltaShares += sign * units;
+                greekExposures.add(new GreeksAggregator.LegExposure(true, sign,
+                        leg.multiplier(), leg.ratio(), Math.max(1, candidate.qty()),
+                        null, null, null, null));
                 continue;
             }
             OptionTime.Measure legTime = ctx.timeToExpiry().asOf() == null
@@ -59,21 +61,27 @@ final class StanceProfiler {
             double t = legTime.years();
             boolean call = leg.type() == OptionType.CALL;
             double strike = leg.strike().doubleValue();
-            deltaShares += sign * units * BlackScholes.delta(call, spot, strike, t,
-                    ctx.riskFreeRate(), 0, sigma);
-            gammaSharesPerDollar += sign * units * BlackScholes.gamma(spot, strike, t,
-                    ctx.riskFreeRate(), 0, sigma);
-            thetaDollarsPerDay += sign * units * BlackScholes.thetaPerDay(call, spot, strike, t,
-                    ctx.riskFreeRate(), 0, sigma);
-            vegaDollarsPerPoint += sign * units * BlackScholes.vegaPerVolPoint(spot, strike, t,
-                    ctx.riskFreeRate(), 0, sigma);
+            greekExposures.add(new GreeksAggregator.LegExposure(false, sign,
+                    leg.multiplier(), leg.ratio(), Math.max(1, candidate.qty()),
+                    BlackScholes.delta(call, spot, strike, t, ctx.riskFreeRate(), 0, sigma),
+                    BlackScholes.gamma(spot, strike, t, ctx.riskFreeRate(), 0, sigma),
+                    BlackScholes.thetaPerDay(call, spot, strike, t, ctx.riskFreeRate(), 0, sigma),
+                    BlackScholes.vegaPerVolPoint(spot, strike, t, ctx.riskFreeRate(), 0, sigma)));
         }
         if (equivalentShares <= 0) throw new IllegalArgumentException("stance needs positive deliverable units");
 
-        long dollarDelta = Money.toCents(deltaShares * spot);
-        long gammaDollarDelta = Money.toCents(gammaSharesPerDollar * (spot * 0.01) * spot);
-        long theta = Money.toCents(thetaDollarsPerDay);
-        long vega = Money.toCents(vegaDollarsPerPoint);
+        var greeks = GreeksAggregator.aggregate(greekExposures, 0);
+        if (greeks == null) throw new IllegalStateException("modeled stance produced no Greek receipt");
+        Long dollarDeltaValue = GreeksAggregator.dollarDeltaCents(greeks, ctx.underlyingCents());
+        Long gammaDollarDeltaValue = GreeksAggregator.gammaDollarDeltaCentsForPercentMove(
+                greeks, ctx.underlyingCents(), 1.0);
+        if (dollarDeltaValue == null || gammaDollarDeltaValue == null) {
+            throw new IllegalStateException("modeled stance Greek conversion overflowed");
+        }
+        long dollarDelta = dollarDeltaValue;
+        long gammaDollarDelta = gammaDollarDeltaValue;
+        long theta = Math.round(greeks.thetaCentsPerDay());
+        long vega = Math.round(greeks.vegaCentsPerPoint());
 
         int expirations = (int) legs.stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count();

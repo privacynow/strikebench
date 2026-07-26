@@ -60,7 +60,7 @@ class AlertCenterServiceTest {
         books = new PortfolioAccountingService(db, CLOCK, marks);
         events = new EventBus();
         alerts = new AlertCenterService(db, CLOCK, trades, marks, symbol -> earnings, events,
-                cfg.feePerContractCents());
+                cfg.feePerContractCents(), cfg.feePerOrderCents());
         account = accounts.getOrCreateDefault();
     }
 
@@ -165,7 +165,7 @@ class AlertCenterServiceTest {
         Clock phoenixClock = Clock.fixed(Instant.parse("2026-07-09T04:30:00Z"),
                 ZoneId.of("America/Phoenix"));
         try (AlertCenterService boundary = new AlertCenterService(db, phoenixClock, trades, marks,
-                symbol -> earnings, events, 65)) {
+                symbol -> earnings, events, 65, 0)) {
             AlertCenterService.Alert expiry = ofKind(boundary.compute("local"), "EXPIRY").getFirst();
             assertThat(expiry.headline()).contains("expires today").contains("before the close");
             assertThat(expiry.meta()).containsEntry("expiration", easternThursday.toString())
@@ -185,7 +185,7 @@ class AlertCenterServiceTest {
         Instant simNow = Instant.parse("2026-07-10T15:30:00Z"); // Friday 11:30 ET
         MarksSource laneMarks = laneClockMarks(Map.of("sim-alert-clock", simNow));
         try (AlertCenterService simulated = new AlertCenterService(db, CLOCK, trades, laneMarks,
-                symbol -> earnings, events, 65)) {
+                symbol -> earnings, events, 65, 0)) {
             AlertCenterService.Alert expiry = ofKind(simulated.compute("local"), "EXPIRY").stream()
                     .filter(row -> trade.id().equals(row.tradeId())).findFirst().orElseThrow();
             assertThat(expiry.headline()).contains("expires today").contains("before the close");
@@ -199,7 +199,7 @@ class AlertCenterServiceTest {
         Clock afterBell = Clock.fixed(Instant.parse("2026-07-08T20:00:00Z"),
                 ZoneId.of("America/Phoenix")); // exactly 16:00 ET
         try (AlertCenterService closed = new AlertCenterService(db, afterBell, trades, marks,
-                symbol -> earnings, events, 65)) {
+                symbol -> earnings, events, 65, 0)) {
             AlertCenterService.AlertSet set = closed.compute("local");
             AlertCenterService.Alert expiry = ofKind(set, "EXPIRY").stream()
                     .filter(row -> trade.id().equals(row.tradeId())).findFirst().orElseThrow();
@@ -266,6 +266,34 @@ class AlertCenterServiceTest {
         assertThat(a.detail()).contains("Heuristic").contains("extrinsic")
                 .contains("Ex-dividend dates: unavailable");
         assertThat(a.meta().get("heuristic")).isEqualTo(true);
+        assertThat(a.meta()).containsEntry("totalExtrinsicCents", 0L)
+                .containsEntry("closingFeeCents", 65L)
+                .containsEntry("quantity", 1L);
+    }
+
+    @Test
+    void earlyAssignmentComparesWholeLegExtrinsicToTheCanonicalClosingSchedule() {
+        // Two contracts retain $1 each of time value. Per-contract-only arithmetic would compare
+        // $1.00 with $0.65 and suppress the alert; the exact close is 2 × $0.65 + $2.00/order =
+        // $3.30, so paying that commission to recover $2.00 of time value is the named heuristic.
+        positions.buy(account.id(), "AAPL", 200);
+        trades.create(new TradeService.OpenRequest(account.id(), "AAPL", "COVERED_CALL", 2,
+                List.of(call(LegAction.SELL, "100", "2.50", LocalDate.of(2026, 7, 10))),
+                "neutral", "month", "balanced", "EXIT", true, null, null, "PROPOSED",
+                io.liftandshift.strikebench.paper.OrderInstruction.market()));
+        marks.underlying = new BigDecimal("130.00");
+        marks.mids.put("CALL100", new BigDecimal("30.01"));
+
+        try (AlertCenterService exactFees = new AlertCenterService(db, CLOCK, trades, marks,
+                symbol -> earnings, events, 65, 200)) {
+            AlertCenterService.Alert alert = ofKind(exactFees.compute("local"), "ASSIGNMENT").getFirst();
+            assertThat(alert.meta()).containsEntry("extrinsicPerContractCents", 100L)
+                    .containsEntry("totalExtrinsicCents", 200L)
+                    .containsEntry("closingFeeCents", 330L)
+                    .containsEntry("quantity", 2L);
+            assertThat(alert.detail()).contains("$2.00 of total extrinsic")
+                    .contains("2 contracts").contains("$3.30 closing commission");
+        }
     }
 
     @Test

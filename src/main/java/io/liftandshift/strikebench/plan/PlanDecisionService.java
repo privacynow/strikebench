@@ -230,9 +230,11 @@ public final class PlanDecisionService {
         long decisionSeq = Db.queryOn(connection,
                 "SELECT COALESCE(MAX(decision_seq),0)+1 seq FROM plan_decision WHERE plan_id=?",
                 row -> row.lng("seq"), input.plan().id()).getFirst();
-        Number pMaxProfit = nestedNumber(preview.analytics(), "probabilityMap", "pMaxProfit");
-        Number pMaxLoss = nestedNumber(preview.analytics(), "probabilityMap", "pMaxLoss");
-        Number cvar = nestedNumber(preview.analytics(), "probabilityMap", "cvar95Cents");
+        var marketRisk = preview.marketImpliedRisk();
+        var probability = marketRisk == null ? null : marketRisk.probabilityMap();
+        Number pMaxProfit = probability == null ? null : probability.pMaxProfit();
+        Number pMaxLoss = probability == null ? null : probability.pMaxLoss();
+        Number cvar = probability == null ? null : probability.cvar95Cents();
         // §3.1: the frozen decision records the ONE §7.2 receipt that was reviewed. There is no
         // primitive package-net twin: that older column converted an unpriced preview into $0 and
         // gave campaign review a second price authority.
@@ -266,7 +268,10 @@ public final class PlanDecisionService {
                 risk == null ? null : risk.riskCapitalCents(),
                 frozenMaxLossCents,
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
-                trade == null ? preview.popEntry() : trade.popEntry(), pMaxProfit, pMaxLoss,
+                trade == null
+                        ? (marketRisk == null ? null : marketRisk.pop())
+                        : trade.popEntry(),
+                pMaxProfit, pMaxLoss,
                 economics.marketEvAfterCostsCents(), economics.realizedVolEvAfterCostsCents(), cvar,
                 economics.verdict().name(), preview.evidence().provenance().name(), MODEL_VERSION, references.studyKey(),
                 reviewHorizonSessions, now);
@@ -459,13 +464,11 @@ public final class PlanDecisionService {
         Map<String, Object> analytics = p.analytics() == null ? Map.of() : p.analytics();
         return new DecisionFacts(
                 p.ok(), p.blockReasons(), p.warnings(), p.maxLossCents(), p.maxProfitCents(),
-                p.breakevens(), p.popEntry(), p.expectedValueCents(), p.reserveCents(),
+                p.breakevens(), p.marketImpliedRisk(), p.reserveCents(),
                 p.cashBeforeCents(), p.cashAfterCents(), p.reservedBeforeCents(),
                 p.reservedAfterCents(), p.buyingPowerBeforeCents(), p.buyingPowerAfterCents(),
                 p.freshness(), p.evidence(), p.underlyingCents(), p.assignmentProb(),
                 p.legs(), p.payoff(), p.price(),
-                analytics.get("probabilityMap"),
-                analytics.get("evSensitivity"),
                 analytics.get("executionQuality"),
                 analytics.get("managementPlan"),
                 analytics.get("time"),
@@ -486,8 +489,7 @@ public final class PlanDecisionService {
             Long maxLossCents,
             Long maxProfitCents,
             List<String> breakevens,
-            Double popEntry,
-            Long expectedValueCents,
+            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
             Long reserveCents,
             long cashBeforeCents,
             long cashAfterCents,
@@ -502,8 +504,6 @@ public final class PlanDecisionService {
             List<Map<String, Object>> legs,
             List<Map<String, Object>> payoff,
             PackagePriceReceipt price,
-            Object probabilityMap,
-            Object evSensitivity,
             Object executionQuality,
             Object managementPlan,
             Object time,

@@ -58,6 +58,7 @@ class MigrationImmutabilityTest {
         pinned.put("V13__scout_row_identity_and_adoption.sql", -909760999);
         pinned.put("V14__nullable_captured_comparison_fees.sql", -373313129);
         pinned.put("V15__trade_order_limit_authority.sql", -256711359);
+        pinned.put("V16__position_lifecycle_evidence_state.sql", 322262752);
         return pinned;
     }
 

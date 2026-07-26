@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -48,8 +49,9 @@ class AutoRecommenderTest {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         RecommendationEngine engine = new RecommendationEngine(market, CLOCK);
         EvaluationService evaluations = new EvaluationService(market, db, CLOCK);
-        auto = new AutoRecommender(new SignalEngine(market, CLOCK), engine, evaluations, cfg);
-        opportunityScanner = new OpportunityScanner(engine, evaluations);
+        OpportunityScanKernel scanKernel = new OpportunityScanKernel();
+        auto = new AutoRecommender(new SignalEngine(market, CLOCK), engine, evaluations, cfg, scanKernel);
+        opportunityScanner = new OpportunityScanner(engine, evaluations, scanKernel);
     }
 
     private static AutoRecommender.AutoRequest req(List<String> horizons, Long targetProfit, Boolean allow0dte) {
@@ -69,6 +71,35 @@ class AutoRecommenderTest {
         for (var evaluation : result.ranked()) {
             assertThat(evaluation.decisionScore()).isLessThanOrEqualTo(previous);
             previous = evaluation.decisionScore();
+        }
+    }
+
+    @Test
+    void sharedTraversalLeavesEachScanPolicyInChargeOfItsOwnRanking() {
+        List<String> universe = List.of("QQQ", "AAPL", "SPY");
+        AutoRecommender.AutoResult scout = auto.run(new AutoRecommender.AutoRequest(
+                universe, List.of("month"), 3, null, null, null, null,
+                "balanced", false, List.of("INCOME"), null, null), BP);
+        assertThat(scout.picks()).isNotEmpty();
+        for (int i = 1; i < scout.picks().size(); i++) {
+            AutoRecommender.Pick previous = scout.picks().get(i - 1);
+            AutoRecommender.Pick current = scout.picks().get(i);
+            assertThat(previous.opportunityScore()).isGreaterThanOrEqualTo(current.opportunityScore());
+            if (previous.opportunityScore() == current.opportunityScore()) {
+                assertThat(previous.symbol().compareTo(current.symbol())).isLessThanOrEqualTo(0);
+            }
+        }
+
+        OpportunityScanner.ScanResult portfolio = opportunityScanner.scan(
+                universe, "INCOME", "neutral", "month", "balanced",
+                BP, "local", 3, null, null);
+        assertThat(portfolio.ranked()).isNotEmpty();
+        assertThat(portfolio.ranked()).extracting(
+                        io.liftandshift.strikebench.eval.StrategyEvaluation::symbol)
+                .doesNotHaveDuplicates();
+        for (int i = 1; i < portfolio.ranked().size(); i++) {
+            assertThat(portfolio.ranked().get(i - 1).decisionScore())
+                    .isGreaterThanOrEqualTo(portfolio.ranked().get(i).decisionScore());
         }
     }
 
@@ -369,6 +400,29 @@ class AutoRecommenderTest {
                 .filter(c -> c.strategy().equals("COVERED_CALL")).findFirst().orElseThrow();
         assertThat(cc.usesHeldShares()).isTrue();
         assertThat(cc.qty()).isEqualTo(2); // both free lots covered
+    }
+
+    @Test
+    void heldIntentUsesTheSameKernelTraversalAndProgressDenominator() {
+        List<AutoRecommender.Progress> frames = new ArrayList<>();
+        List<AutoRecommender.HoldingInfo> holdings =
+                List.of(new AutoRecommender.HoldingInfo("AAPL", 200, 20_000L));
+        AutoRecommender.AutoRequest request = new AutoRecommender.AutoRequest(
+                List.of("SPY", "QQQ"), List.of("month"), 3,
+                null, null, null, null, "balanced", false,
+                List.of("EXIT"), null, null);
+
+        auto.runWithFrontier(request, BP, holdings, null,
+                evaluations -> practiceContext(List.of("AAPL")), frames::add);
+
+        List<AutoRecommender.Progress> signals = frames.stream()
+                .filter(frame -> "SIGNALS".equals(frame.phase())).toList();
+        assertThat(signals).singleElement().satisfies(frame -> {
+            assertThat(frame.symbol()).isEqualTo("AAPL");
+            assertThat(frame.phaseCompleted()).isEqualTo(1);
+            assertThat(frame.phaseTotal()).isEqualTo(1);
+            assertThat(frame.counts().universeConsidered()).isEqualTo(1);
+        });
     }
 
     @Test

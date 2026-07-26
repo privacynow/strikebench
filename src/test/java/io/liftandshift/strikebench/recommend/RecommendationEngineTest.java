@@ -346,10 +346,10 @@ class RecommendationEngineTest {
                 io.liftandshift.strikebench.model.OptionType.CALL, new BigDecimal("110"), expiration, 1,
                 BigDecimal.ONE);
 
-        Double one = RecommendationEngine.assignmentProbabilityFromIvs(
-                List.of(call100), List.of(0.30), new BigDecimal("100"), TODAY, 0.30, 0.04);
-        Double nested = RecommendationEngine.assignmentProbabilityFromIvs(
-                List.of(call100, call110), List.of(0.30, 0.30), new BigDecimal("100"), TODAY, 0.30, 0.04);
+        Double one = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.assignmentProbability(
+                List.of(call100), List.of(0.30), 10_000L, CLOCK.instant(), 0.04);
+        Double nested = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.assignmentProbability(
+                List.of(call100, call110), List.of(0.30, 0.30), 10_000L, CLOCK.instant(), 0.04);
 
         assertThat(nested).isEqualTo(one);
     }
@@ -435,10 +435,10 @@ class RecommendationEngineTest {
         double strike = Double.parseDouble(csp.legs().getFirst().strike());
         long openingFees = 600;
         long netPremium = csp.price().grossPackageNetCents() - openingFees;
-        int dte = (int) java.time.temporal.ChronoUnit.DAYS.between(TODAY,
-                LocalDate.parse(csp.legs().getFirst().expiration()));
-        double expectedYield = Math.round(100.0 * (netPremium / (strike * 100.0 * 100.0))
-                * (365.0 / Math.max(1, dte)) * 100.0) / 100.0;
+        var time = io.liftandshift.strikebench.market.OptionTime.toExpiry(
+                CLOCK.instant(), LocalDate.parse(csp.legs().getFirst().expiration()));
+        double expectedYield = Math.round(time.annualizedSimplePercent(
+                netPremium, Math.round(strike * 100.0 * 100.0)) * 100.0) / 100.0;
         assertThat(csp.annualizedYieldPct()).isEqualTo(expectedYield);
         assertThat(Double.parseDouble(csp.effectivePrice()))
                 .isCloseTo(strike - netPremium / 10_000.0, org.assertj.core.data.Offset.offset(0.011));

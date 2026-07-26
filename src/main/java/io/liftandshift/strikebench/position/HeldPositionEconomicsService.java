@@ -130,9 +130,9 @@ public final class HeldPositionEconomicsService {
         long grossRemaining = close.executable()
                 ? Math.max(0, Math.negateExact(close.price().optionNetPremiumCents())) : 0;
         Long modeledCollateral = preview.reserveCents();
-        Double grossAnnualized = time.hasModelTime() && modeledCollateral != null
-                && modeledCollateral > 0 && grossRemaining > 0
-                ? round4(100.0 * grossRemaining / modeledCollateral / time.years()) : null;
+        Double grossAnnualized = modeledCollateral != null && grossRemaining > 0
+                ? time.annualizedSimplePercent(grossRemaining, modeledCollateral) : null;
+        if (grossAnnualized != null) grossAnnualized = round4(grossAnnualized);
         List<String> carryLimitations = new ArrayList<>();
         if (singleExpiration(request.legs()) == null) {
             carryLimitations.add("A mixed-expiration package has no single honest annualized remaining-premium clock.");
@@ -469,11 +469,12 @@ public final class HeldPositionEconomicsService {
     }
 
     private static Long expectedShortfall(TradePreview preview) {
-        Object probability = preview.analytics() == null ? null : preview.analytics().get("probabilityMap");
-        if (!(probability instanceof Map<?, ?> map) || !(map.get("cvar95Cents") instanceof Number cvar)) {
+        var risk = preview.marketImpliedRisk();
+        var probability = risk == null ? null : risk.probabilityMap();
+        if (probability == null) {
             return null;
         }
-        long pnl = cvar.longValue();
+        long pnl = probability.cvar95Cents();
         return pnl < 0 ? Math.negateExact(pnl) : 0L;
     }
 

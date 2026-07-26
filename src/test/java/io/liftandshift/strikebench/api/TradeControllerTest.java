@@ -43,13 +43,13 @@ class TradeControllerTest {
                 Map.entry("freshness", "DELAYED"));
         var preview = new io.liftandshift.strikebench.paper.TradePreview(
                 true, List.of(), List.of(), 980_000L, 20_000L, List.of("98"),
-                marketRisk.pop(), marketRisk.expectedValueCents(), 980_000L,
+                980_000L,
                 10_000_000L, 10_019_935L, 0L, 980_000L,
                 10_000_000L, 9_039_935L, "DELAYED",
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "fixture", io.liftandshift.strikebench.model.Freshness.DELAYED),
                 10_000L, 0.5, List.of(markedLeg), List.of(),
-                Map.of("marketImpliedRisk", marketRisk), price, marketRisk);
+                Map.of(), price, marketRisk);
 
         var candidate = TradeController.exactPreviewCandidate(request, preview);
 
@@ -58,8 +58,8 @@ class TradeControllerTest {
                 .isEqualTo(marketRisk.fingerprint());
         assertThat(candidate.marketImpliedRisk().priceFingerprint())
                 .isEqualTo(price.fingerprint());
-        assertThat(candidate.pop()).isEqualTo(marketRisk.pop());
-        assertThat(candidate.expectedValueCents())
+        assertThat(candidate.marketImpliedRisk().pop()).isEqualTo(marketRisk.pop());
+        assertThat(candidate.marketImpliedRisk().expectedValueCents())
                 .isEqualTo(marketRisk.expectedValueCents());
     }
 

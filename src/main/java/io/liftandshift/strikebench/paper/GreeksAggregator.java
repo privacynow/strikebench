@@ -11,12 +11,12 @@ import java.util.List;
  * delta shares, gamma shares per $1, theta cents per day, and vega cents per volatility point.
  * An option leg missing any component makes the package unavailable; missing is never zero.</p>
  */
-final class GreeksAggregator {
+public final class GreeksAggregator {
     private GreeksAggregator() {}
 
-    record LegExposure(boolean stock, int sign, int multiplier, int ratio, int quantity,
-                       Double delta, Double gamma, Double theta, Double vega) {
-        LegExposure {
+    public record LegExposure(boolean stock, int sign, int multiplier, int ratio, long quantity,
+                              Double delta, Double gamma, Double theta, Double vega) {
+        public LegExposure {
             if (sign != -1 && sign != 1) throw new IllegalArgumentException("Greek sign must be -1 or 1");
             if (multiplier < 1 || ratio < 1 || quantity < 1) {
                 throw new IllegalArgumentException("Greek deliverable units must be positive");
@@ -28,7 +28,7 @@ final class GreeksAggregator {
         }
     }
 
-    static GreeksView aggregate(List<LegExposure> legs, double additionalDeltaShares) {
+    public static GreeksView aggregate(List<LegExposure> legs, double additionalDeltaShares) {
         if ((legs == null || legs.isEmpty()) && additionalDeltaShares == 0) return null;
         double delta = additionalDeltaShares;
         double gamma = 0;
@@ -56,13 +56,42 @@ final class GreeksAggregator {
             any = true;
         }
         if (!any) return null;
-        return new GreeksView(
-                round(delta, 2), round(gamma, 4),
-                round(theta * 100.0, 2), round(vega * 100.0, 2));
+        // Preserve calculator precision in the authoritative receipt. Rounding belongs at the
+        // presentation boundary; rounding share delta here before converting it to dollar delta
+        // changes a real exposure fact (not merely its display).
+        return new GreeksView(delta, gamma, theta * 100.0, vega * 100.0);
     }
 
-    private static double round(double value, int scale) {
-        double factor = Math.pow(10, scale);
-        return Math.round(value * factor) / factor;
+    /** Additive dollar-delta exposure, in cents, at the same captured underlying price. */
+    public static Long dollarDeltaCents(GreeksView greeks, long underlyingCents) {
+        return greeks == null ? null : dollarDeltaCents(greeks.deltaShares(), underlyingCents);
+    }
+
+    /**
+     * Dollar-delta conversion for a consumer that owns an honest delta-only receipt rather than a
+     * complete Delta/Gamma/Theta/Vega set.
+     */
+    public static Long dollarDeltaCents(double deltaShares, long underlyingCents) {
+        if (!Double.isFinite(deltaShares) || underlyingCents <= 0) return null;
+        return roundLong(deltaShares * underlyingCents);
+    }
+
+    /**
+     * Change in dollar delta, in cents, for a stated percentage underlying move.
+     *
+     * <p>The conversion lives beside the one Greek aggregation owner so tracked Book, Practice,
+     * and modeled stance cannot each invent a different shares-per-dollar to cents convention.</p>
+     */
+    public static Long gammaDollarDeltaCentsForPercentMove(
+            GreeksView greeks, long underlyingCents, double movePct) {
+        if (greeks == null || underlyingCents <= 0 || !Double.isFinite(movePct)) return null;
+        double underlyingDollars = underlyingCents / 100.0;
+        double dollarMove = underlyingDollars * movePct / 100.0;
+        return roundLong(greeks.gammaSharesPerDollar() * dollarMove * underlyingCents);
+    }
+
+    private static Long roundLong(double value) {
+        if (!Double.isFinite(value) || value > Long.MAX_VALUE || value < Long.MIN_VALUE) return null;
+        return Math.round(value);
     }
 }

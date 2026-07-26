@@ -7,7 +7,6 @@ import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
-import io.liftandshift.strikebench.util.BoundedFanout;
 import io.liftandshift.strikebench.util.Money;
 
 import java.time.LocalDate;
@@ -204,13 +203,20 @@ public final class AutoRecommender {
     private final RecommendationEngine engine;
     private final AppConfig cfg;
     private final EvaluationService evaluations;
+    private final OpportunityScanKernel scanKernel;
 
     public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
                            AppConfig cfg) {
+        this(signals, engine, evaluations, cfg, new OpportunityScanKernel());
+    }
+
+    public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
+                           AppConfig cfg, OpportunityScanKernel scanKernel) {
         this.signals = signals;
         this.engine = engine;
         this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
         this.cfg = cfg;
+        this.scanKernel = java.util.Objects.requireNonNull(scanKernel, "scanKernel");
     }
 
     public AutoResult run(AutoRequest req, long buyingPowerCents) {
@@ -262,13 +268,26 @@ public final class AutoRecommender {
                                    ProgressListener progressListener) {
         DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
-        List<String> universe = req.universe() != null && !req.universe().isEmpty()
-                ? Symbol.list(req.universe())
-                : cfg.autoUniverse();
         List<String> horizons = normalizeHorizons(req.horizons(), allow0dte);
         int maxPicks = req.maxPicks() == null ? DEFAULT_MAX_PICKS : Math.clamp(req.maxPicks(), 1, 10);
         double minConfidence = req.minConfidence() == null ? MIN_SIGNAL_CONFIDENCE : Math.clamp(req.minConfidence(), 0, 1);
         List<StrategyIntent> intents = normalizeIntents(req.intents());
+        List<HoldingInfo> heldPositions = holdings == null ? List.of() : holdings;
+        boolean scansMarketField = intents.stream()
+                .anyMatch(intent -> intent != StrategyIntent.EXIT && intent != StrategyIntent.HEDGE);
+        boolean scansHeldField = intents.stream()
+                .anyMatch(intent -> intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE);
+        List<String> traversalSymbols = new ArrayList<>();
+        if (scansMarketField) {
+            traversalSymbols.addAll(req.universe() != null && !req.universe().isEmpty()
+                    ? req.universe() : cfg.autoUniverse());
+        }
+        if (scansHeldField) {
+            heldPositions.stream().filter(holding -> holding.freeShares() >= 100)
+                    .map(HoldingInfo::symbol).forEach(traversalSymbols::add);
+        }
+        OpportunityScanKernel.Universe scanUniverse = scanKernel.prepare(traversalSymbols);
+        List<String> universe = scanUniverse.symbols();
         ScanTally tally = new ScanTally();
         ProgressEmitter progress = new ProgressEmitter(progressListener);
         progress.emit(new Progress("STARTING", 0, universe.size(), tally.counts(), null, null,
@@ -284,48 +303,39 @@ public final class AutoRecommender {
         // 1. Signals for the whole universe, scanned concurrently — live providers are
         // network-bound and per-symbol independent (the service layer is thread-safe).
         List<SignalEngine.Signals> eligibleSignals = new ArrayList<>();
-        java.util.Map<String, SignalEngine.Signals> bySymbol = new java.util.concurrent.ConcurrentHashMap<>();
-        java.util.concurrent.atomic.AtomicInteger signalCompleted = new java.util.concurrent.atomic.AtomicInteger();
-        // UNBOUNDED on purpose. This signal fan-out has never carried a per-batch concurrency cap:
-        // live provider load is throttled downstream by ProviderPoliteness, and imposing a bound
-        // here would change live provider pressure (risking the recorded Cboe 429/1015 incident).
-        // The ordered return is intentionally DISCARDED — bySymbol (a ConcurrentHashMap written
-        // concurrently inside the closure) is the artifact the eligibility screen and the EXIT/HEDGE
-        // held-symbol lookup read afterward, and they need random access by symbol, not positional.
-        BoundedFanout.<String, SignalEngine.Signals>map(universe, BoundedFanout.UNBOUNDED,
-                symbol -> {
-                    SignalEngine.Signals analyzed = null;
-                    try {
-                        analyzed = signals.analyze(symbol, worldId).orElse(null);
-                        if (analyzed != null) bySymbol.put(symbol, analyzed);
-                        return analyzed;
-                    } finally {
-                        Pick preview = null;
-                        if (analyzed != null && analyzed.optionable()
-                                && analyzed.confidence() >= minConfidence) {
-                            StrategyIntent primaryIntent = intents.get(0);
-                            OpportunityContext opportunity =
-                                    opportunityContext(analyzed, primaryIntent);
-                            preview = new Pick(analyzed.symbol(), analyzed,
-                                    opportunity.score(), List.of(), primaryIntent.name(),
-                                    opportunity, null);
-                        }
-                        Pick completedPreview = preview;
-                        // The two counts advance on the SAME predicate the eligibility screen below
-                        // applies, so "considered" and "eligible" can never disagree with it. The
-                        // tiny tally+delivery critical section is intentional: signal work remains
-                        // parallel, but callbacks cannot overtake each other and publish 3 then 2.
-                        progress.updateAndEmit(() -> {
-                            int completed = signalCompleted.incrementAndGet();
-                            tally.considered(completed);
-                            if (completedPreview != null) tally.evidenceEligible();
-                        }, () -> new Progress("SIGNALS", signalCompleted.get(), universe.size(),
-                                tally.counts(), symbol, completedPreview, completedPreview == null
-                                    ? "Reading price, volatility, event, and liquidity evidence."
-                                    : "Evidence is ready; exact package pricing follows after the field is ranked."));
-                    }
-                },
-                (symbol, failure) -> null);
+        OpportunityScanKernel.Traversal<SignalEngine.Signals> signalTraversal =
+                scanKernel.traverse(scanUniverse, OpportunityScanKernel.Policy.EVIDENCE_FIELD,
+                        symbol -> signals.analyze(symbol, worldId).orElse(null),
+                        completion -> {
+                            SignalEngine.Signals analyzed = completion.value();
+                            Pick preview = null;
+                            if (analyzed != null && analyzed.optionable()
+                                    && analyzed.confidence() >= minConfidence) {
+                                StrategyIntent primaryIntent = intents.get(0);
+                                OpportunityContext opportunity =
+                                        opportunityContext(analyzed, primaryIntent);
+                                preview = new Pick(analyzed.symbol(), analyzed,
+                                        opportunity.score(), List.of(), primaryIntent.name(),
+                                        opportunity, null);
+                            }
+                            Pick completedPreview = preview;
+                            // The kernel serializes completions from parallel symbol work. The
+                            // eligibility count uses the same predicate as the screen below.
+                            progress.updateAndEmit(() -> {
+                                tally.considered(completion.completed());
+                                if (completedPreview != null) tally.evidenceEligible();
+                            }, () -> new Progress("SIGNALS", completion.completed(),
+                                    completion.total(), tally.counts(), completion.symbol(),
+                                    completedPreview, completedPreview == null
+                                        ? "Reading price, volatility, event, and liquidity evidence."
+                                        : "Evidence is ready; exact package pricing follows after the field is ranked."));
+                        });
+        java.util.Map<String, SignalEngine.Signals> bySymbol = new java.util.LinkedHashMap<>();
+        for (OpportunityScanKernel.Item<SignalEngine.Signals> item : signalTraversal.items()) {
+            if (item.succeeded() && item.value() != null) {
+                bySymbol.put(item.symbol(), item.value());
+            }
+        }
         for (String symbol : universe) {
             SignalEngine.Signals s = bySymbol.get(symbol);
             if (s == null) { skipped.add(symbol + ": no market data"); continue; }
@@ -340,7 +350,7 @@ public final class AutoRecommender {
         long[] riskBudget = {0};
         List<Pick> picks = new ArrayList<>();
         java.util.Map<String, HoldingInfo> heldBySymbol = new java.util.HashMap<>();
-        for (HoldingInfo h : holdings) heldBySymbol.put(h.symbol(), h);
+        for (HoldingInfo h : heldPositions) heldBySymbol.put(h.symbol(), h);
         java.util.concurrent.atomic.AtomicInteger ideasCompleted = new java.util.concurrent.atomic.AtomicInteger();
         int ideasTotal = Math.max(1, maxPicks * intents.size());
 
@@ -355,7 +365,7 @@ public final class AutoRecommender {
             if (intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE) {
                 // Hold-based intents scan YOUR SHARES, not the universe: the question is
                 // "which holding should I harvest or protect", not "which ticker looks good".
-                List<HoldingInfo> eligible = holdings.stream()
+                List<HoldingInfo> eligible = heldPositions.stream()
                         .filter(h -> h.freeShares() >= 100)
                         .limit(maxPicks).toList();
                 if (eligible.isEmpty()) {
@@ -367,7 +377,6 @@ public final class AutoRecommender {
                 for (HoldingInfo h : eligible) {
                     String sym = h.symbol();
                     SignalEngine.Signals s = bySymbol.get(sym);
-                    if (s == null) s = signals.analyze(sym, worldId).orElse(null);
                     if (s == null || !s.optionable()) {
                         skipped.add(sym + ": held, but no listed options to write against");
                         continue;

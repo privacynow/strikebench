@@ -12,7 +12,7 @@ public record CapitalProfile(
         long incrementalCents,
         long economicCents,
         Double returnOnCapitalPct,   // best-case return on economic exposure, null if uncapped/unknown
-        Double annualizedRocPct,     // returnOnCapitalPct scaled by 365/DTE — LABELED, never primary
+        Double annualizedRocPct,     // ROC scaled by canonical OptionTime model years; labeled, never primary
         int daysToExpiry,
         String basis,                // human note on what economic exposure represents
         String annualizationNote

@@ -125,21 +125,25 @@ class PlanDecisionNullableRiskTest {
         PackagePriceReceipt price = PackagePriceReceipt.unavailable(
                 1, PackagePriceReceipt.FeeSide.OPENING, "risk unavailable");
         return new TradePreview(false, List.of("Maximum loss is unavailable."), List.of(),
-                null, null, List.of(), null, null, null,
+                null, null, List.of(), null,
                 10_000_000L, 10_000_000L, 0L, 0L,
                 10_000_000L, 10_000_000L, "MISSING",
                 DataEvidence.of("fixture", Freshness.FIXTURE), 10_000L, null,
-                List.of(), List.of(), Map.of(), price);
+                List.of(), List.of(), Map.of(), price,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "Maximum loss and market-implied risk are unavailable."));
     }
 
     private static TradePreview zeroRiskPreview() {
+        var price = TestPrices.withFees(1, 0L, 0L, 65L);
         return new TradePreview(true, List.of(), List.of(),
-                0L, 0L, List.of(), .5, 0L, 0L,
+                0L, 0L, List.of(), 0L,
                 10_000_000L, 9_999_935L, 0L, 0L,
                 10_000_000L, 9_999_935L, "FIXTURE",
                 DataEvidence.of("fixture", Freshness.FIXTURE), 10_000L, null,
-                List.of(), List.of(), Map.of(),
-                TestPrices.withFees(1, 0L, 0L, 65L));
+                List.of(), List.of(), Map.of(), price,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
+                        price, .5, 0L));
     }
 
     private static EconomicAssessment economics() {

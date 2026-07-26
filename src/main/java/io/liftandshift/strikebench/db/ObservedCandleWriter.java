@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Locale;
 
 /** One validated write path for observed daily bars, shared by backfill and read-through caching. */
-final class ObservedCandleWriter {
+public final class ObservedCandleWriter {
 
     record Result(int written, int rejected) {}
 
@@ -83,6 +83,40 @@ final class ObservedCandleWriter {
                             + "volume=excluded.volume,observed=1,adjusted=excluded.adjusted,"
                             + "quality_rank=excluded.quality_rank,bar_kind=excluded.bar_kind,created_at=now()",
                     symbol, date, open, high, low, close, volume, source, adjusted, qualityRank, barKind);
+        } catch (java.sql.SQLException e) {
+            throw new Db.DbException(e);
+        }
+    }
+
+    /**
+     * The one observed close-snapshot write. SnapshotService and HistoricalOptionsIngest both
+     * capture a trustworthy close without a complete OHLC bar; they must not maintain separate
+     * conflict clauses or promote that partial observation to OHLCV. Optional high/low/volume
+     * context is retained when supplied and never erases a value already stored for the same
+     * source/date.
+     */
+    public static void upsertObservedClose(Connection connection, String symbol, LocalDate date,
+            java.math.BigDecimal high, java.math.BigDecimal low, java.math.BigDecimal close,
+            Long volume, String source) {
+        String sym = normalizeSymbol(symbol);
+        String src = normalizeSource(source);
+        if (date == null || close == null || close.signum() <= 0 || src.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "observed close snapshots require symbol, date, positive close, and source");
+        }
+        try {
+            Db.execOn(connection, "INSERT INTO underlying_bar "
+                            + "(symbol,d,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind) "
+                            + "VALUES (?,?,?,?,?,?,?,1,0,?,'CLOSE_ONLY') "
+                            + "ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
+                            + "high=COALESCE(excluded.high,underlying_bar.high),"
+                            + "low=COALESCE(excluded.low,underlying_bar.low),"
+                            + "close=excluded.close,"
+                            + "volume=COALESCE(excluded.volume,underlying_bar.volume),"
+                            + "observed=1,quality_rank=excluded.quality_rank,"
+                            + "bar_kind=CASE WHEN underlying_bar.open IS NULL THEN 'CLOSE_ONLY' "
+                            + "ELSE underlying_bar.bar_kind END,created_at=now()",
+                    sym, date, high, low, close, volume, src, quality(src));
         } catch (java.sql.SQLException e) {
             throw new Db.DbException(e);
         }

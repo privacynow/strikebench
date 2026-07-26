@@ -14,8 +14,6 @@ public record TradePreview(
         Long maxLossCents,
         Long maxProfitCents,           // null = unbounded upside OR model-dependent for multi-expiration structures
         List<String> breakevens,
-        Double popEntry,
-        Long expectedValueCents,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
         Long reserveCents,             // gross reserve held (future liability not already paid)
         long cashBeforeCents,
@@ -38,7 +36,7 @@ public record TradePreview(
         Double assignmentProb,         // chance ANY short strike finishes ITM; null if no shorts
         List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
         List<Map<String, Object>> payoff,  // expiration P/L samples {price, profitCents}; empty for multi-expiration
-        Map<String, Object> analytics,     // probabilityMap / evSensitivity / managementPlan / verdict
+        Map<String, Object> analytics,     // managementPlan / verdict / execution-quality receipts
         // THE canonical package-price receipt (§7.2) — and now the ONLY package price this preview
         // publishes. It carries the option-only net, the stock cash flow, the gross package net, the
         // commission, the after-fee net, the executable vs resting distinction, the valuation basis,
@@ -70,17 +68,9 @@ public record TradePreview(
             throw new IllegalArgumentException(
                     "an executable preview requires maximum-loss and reserve receipts");
         }
-        Object analyticsRisk = analytics == null ? null : analytics.get("marketImpliedRisk");
         if (marketImpliedRisk == null) {
             marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
                     "No fingerprinted market-implied evaluation was captured for this preview.");
-        }
-        if (analyticsRisk instanceof
-                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt analyticsReceipt
-                && !java.util.Objects.equals(
-                        analyticsReceipt.fingerprint(), marketImpliedRisk.fingerprint())) {
-            throw new IllegalArgumentException(
-                    "preview and analytics carry different market-implied evaluation receipts");
         }
         if (marketImpliedRisk.available()) {
             if (price == null || !java.util.Objects.equals(
@@ -88,36 +78,7 @@ public record TradePreview(
                 throw new IllegalArgumentException(
                         "preview market-implied evaluation does not match its package-price fingerprint");
             }
-            if (!java.util.Objects.equals(popEntry, marketImpliedRisk.pop())
-                    || !java.util.Objects.equals(expectedValueCents,
-                            marketImpliedRisk.expectedValueCents())) {
-                throw new IllegalArgumentException(
-                        "preview POP/EV projections do not match the fingerprinted evaluation");
-            }
         }
-    }
-
-    /**
-     * Source-compatible boundary for persisted/test previews that predate the typed receipt.
-     * Their loose POP/EV values are not promoted without the exact original model inputs.
-     */
-    public TradePreview(
-            boolean ok, List<String> blockReasons, List<String> warnings,
-            Long maxLossCents, Long maxProfitCents, List<String> breakevens,
-            Double popEntry, Long expectedValueCents, Long reserveCents,
-            long cashBeforeCents, long cashAfterCents, long reservedBeforeCents,
-            long reservedAfterCents, long buyingPowerBeforeCents, long buyingPowerAfterCents,
-            String freshness, io.liftandshift.strikebench.model.DataEvidence evidence,
-            Long underlyingCents, Double assignmentProb, List<Map<String, Object>> legs,
-            List<Map<String, Object>> payoff, Map<String, Object> analytics,
-            PackagePriceReceipt price) {
-        this(ok, blockReasons, warnings, maxLossCents, maxProfitCents, breakevens, popEntry,
-                expectedValueCents, reserveCents, cashBeforeCents, cashAfterCents,
-                reservedBeforeCents, reservedAfterCents, buyingPowerBeforeCents,
-                buyingPowerAfterCents, freshness, evidence, underlyingCents, assignmentProb, legs,
-                payoff, analytics, price,
-                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
-                        "This preview predates the fingerprinted market-implied evaluation receipt."));
     }
 
     /** True only when the package has a complete finite-risk receipt. */

@@ -189,7 +189,7 @@ final class CoreController implements AutoCloseable {
                     rows.add(ApiResponses.QuoteView.unavailable(request.display(), request.invalidReason()));
                     continue;
                 }
-                rows.add(market.quote(request.canonical(), world)
+                rows.add(engine.currentQuote(request.canonical(), world)
                         .map(quote -> ApiResponses.QuoteView.of(quote, false))
                         .orElseGet(() -> ApiResponses.QuoteView.unavailable(request.canonical(),
                                 worldUnavailableReason(request.canonical(), world, lane))));

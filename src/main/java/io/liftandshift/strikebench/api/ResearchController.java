@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.CandleCoverage;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -69,6 +70,7 @@ final class ResearchController {
     private final AppConfig cfg;
     private final Clock clock;
     private final MarketDataService market;
+    private final MarketDataEngine currentQuotes;
     private final EventService events;
     private final EvaluationService evaluations;
     private final ResearchQuestionEngine questions;
@@ -80,6 +82,7 @@ final class ResearchController {
     private final PlanEligibility planEligibility;
 
     ResearchController(AppConfig cfg, Db db, Clock clock, MarketDataService market,
+                       MarketDataEngine currentQuotes,
                        EventService events,
                        EvaluationService evaluations,
                        Function<Context, String> ownerId,
@@ -89,6 +92,7 @@ final class ResearchController {
         this.cfg = cfg;
         this.clock = clock;
         this.market = market;
+        this.currentQuotes = java.util.Objects.requireNonNull(currentQuotes, "current quote authority");
         this.events = java.util.Objects.requireNonNull(events, "events");
         this.evaluations = evaluations;
         this.questions = new ResearchQuestionEngine(market, clock);
@@ -156,7 +160,7 @@ final class ResearchController {
         // #10-backend: a missing or lane-mismatched quote no longer 404/409s the WHOLE bundle. The
         // quote is one input among several — mark it unavailable+reason and keep computing history,
         // options, benchmarks and regime, so each data slot reports its own state independently.
-        Quote current = market.quote(symbol, world).orElse(null);
+        Quote current = currentQuotes.currentQuote(symbol, world).orElse(null);
         String quoteUnavailableReason = null;
         if (current == null) {
             quoteUnavailableReason = "No " + lane.name().toLowerCase(Locale.ROOT)
@@ -184,7 +188,7 @@ final class ResearchController {
                 List<ApiResponses.Benchmark<BigDecimal, DataEvidence>> benchmarks = new ArrayList<>();
                 for (String benchmark : List.of("SPY", "QQQ")) {
                     if (benchmark.equals(symbol)) continue;
-                    market.quote(benchmark, world)
+                    currentQuotes.currentQuote(benchmark, world)
                             .filter(value -> value.evidence().usableIn(requiredEvidence))
                             .ifPresent(value -> benchmarks.add(new ApiResponses.Benchmark<>(
                                     value.symbol(), value.mark(), value.markFreshness().name(),
@@ -262,11 +266,7 @@ final class ResearchController {
             ApiResponses.QuoteView quoteView = current == null
                     ? ApiResponses.QuoteView.unavailable(symbol, quoteUnavailableReason)
                     : ApiResponses.QuoteView.of(current, false);
-            ctx.json(new ApiResponses.ResearchDetail<>(symbol, quoteView,
-                    quoteView.displayPrice(),
-                    quoteView.displayChangePct(), quoteView.markBasis(),
-                    quoteView.quoteUnavailableReason(),
-                    quoteView.priceIsPreviousClose(), lane.name(),
+            ctx.json(new ApiResponses.ResearchDetail<>(symbol, quoteView, lane.name(),
                     current != null && current.optionable(), option.atmIv(),
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
                     volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
@@ -277,7 +277,7 @@ final class ResearchController {
                     demoHistory, candles.barBasis(), candles.priceBasis(), evidence,
                     option.expirations().stream().map(LocalDate::toString).toList(),
                     eligibility.eligible(), eligibility.detail(), benchmarkFuture.get(),
-                    quoteView.freshness(), today.toString(), regime));
+                    today.toString(), regime));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
@@ -292,7 +292,7 @@ final class ResearchController {
     private void expectedMove(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
-        Optional<Quote> quote = market.quote(symbol, world);
+        Optional<Quote> quote = currentQuotes.currentQuote(symbol, world);
         if (quote.isEmpty() || quote.get().mark() == null) {
             ctx.json(ExpectedMove.unavailable(symbol, "no authoritative quote")); return;
         }

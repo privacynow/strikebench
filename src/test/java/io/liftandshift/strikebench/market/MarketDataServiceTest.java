@@ -12,9 +12,11 @@ import io.liftandshift.strikebench.support.ObservedFixtureProvider;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,6 +32,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MarketDataServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
+
+    private static final class MutableClock extends Clock {
+        private Instant instant;
+        MutableClock(Instant instant) { this.instant = instant; }
+        void advance(Duration duration) { instant = instant.plus(duration); }
+        @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return this; }
+        @Override public Instant instant() { return instant; }
+    }
 
     @Test
     void laneTodayResolvesTheObservedTradingDateInEasternRegardlessOfTheHostClockZone() {
@@ -141,6 +152,48 @@ class MarketDataServiceTest {
         assertThat(p.quoteCalls.get()).isEqualTo(1);
         assertThat(svc.quote("SPY")).isPresent();
         assertThat(p.quoteCalls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void directQuoteReadRefreshesAgedEvidenceAndDowngradesTheCanonicalCachedValueOnFailure() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-07-08T15:30:00Z"));
+        AtomicInteger calls = new AtomicInteger();
+        MarketDataProvider provider = new MarketDataProvider() {
+            @Override public String name() { return "observed-test"; }
+            @Override public Set<Domain> domains() { return Set.of(Domain.QUOTES); }
+            @Override public List<SymbolMatch> lookup(String q) { return List.of(); }
+            @Override public Optional<Quote> quote(String symbol) {
+                if (calls.incrementAndGet() > 1) return Optional.empty();
+                return Optional.of(new Quote(symbol, "Observed", new java.math.BigDecimal("100"),
+                        new java.math.BigDecimal("99"), new java.math.BigDecimal("101"),
+                        new java.math.BigDecimal("98"), null, null, null, true, clock.millis(),
+                        name(), io.liftandshift.strikebench.model.Freshness.DELAYED));
+            }
+            @Override public List<LocalDate> expirations(String symbol) { return List.of(); }
+            @Override public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
+                return Optional.empty();
+            }
+            @Override public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
+                return List.of();
+            }
+        };
+        MarketDataService service =
+                new MarketDataService(List.of(provider), List.of(), List.of(), null, clock);
+
+        assertThat(service.quote("AAPL").orElseThrow().freshness())
+                .isEqualTo(io.liftandshift.strikebench.model.Freshness.DELAYED);
+        assertThat(calls).hasValue(1);
+
+        clock.advance(Duration.ofMinutes(11));
+        Quote stale = service.quote("AAPL").orElseThrow();
+        assertThat(calls).hasValue(2);
+        assertThat(stale.freshness()).isEqualTo(io.liftandshift.strikebench.model.Freshness.STALE);
+        assertThat(service.peekQuote("AAPL").orElseThrow().freshness())
+                .isEqualTo(io.liftandshift.strikebench.model.Freshness.STALE);
+
+        // The retry gate is operational bookkeeping, not a second quote cache.
+        assertThat(service.quote("AAPL")).isPresent();
+        assertThat(calls).hasValue(2);
     }
 
     @Test

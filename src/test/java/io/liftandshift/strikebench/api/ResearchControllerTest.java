@@ -9,6 +9,8 @@ import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketDataEngine;
+import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.model.Candle;
@@ -84,7 +86,10 @@ class ResearchControllerTest {
 
         EventService events = new EventService(market, db, CLOCK);
         EvaluationService evaluations = new EvaluationService(market, db, CLOCK);
-        ResearchController research = new ResearchController(cfg, db, CLOCK, market, events, evaluations,
+        MarketDataEngine currentQuotes =
+                new MarketDataEngine(market, new UniverseService(db, cfg, CLOCK), cfg, CLOCK);
+        ResearchController research = new ResearchController(cfg, db, CLOCK, market, currentQuotes,
+                events, evaluations,
                 ctx -> "test-user",
                 ctx -> "demo",
                 ctx -> AnalysisContext.OBSERVED,
@@ -122,9 +127,9 @@ class ResearchControllerTest {
         assertThat(body.at("/quote/quoteUnavailableReason").asText()).contains("AAPL");
         JsonNode slotPrice = body.path("quote").path("displayPrice");
         assertThat(slotPrice.isNull() || slotPrice.isMissingNode()).isTrue();
-        assertThat(body.path("displayPrice").isNull()).isTrue();
-        assertThat(body.get("markBasis").asText()).isEqualTo("UNAVAILABLE");
-        assertThat(body.get("quoteUnavailableReason").asText()).contains("AAPL");
+        assertThat(body.has("displayPrice")).isFalse();
+        assertThat(body.has("markBasis")).isFalse();
+        assertThat(body.has("quoteUnavailableReason")).isFalse();
         assertThat(body.at("/evidence/inputs/quote/provenance").asText()).isEqualTo("MISSING");
 
         // History slot: still computed from the same fixtures, independent of the quote.
@@ -137,7 +142,8 @@ class ResearchControllerTest {
 
         // The plan-build affordance honestly reports it cannot proceed without a quote.
         assertThat(body.get("planEligible").asBoolean()).isFalse();
-        assertThat(body.get("freshness").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(body.has("freshness")).isFalse();
+        assertThat(body.at("/quote/freshness").asText()).isEqualTo("UNAVAILABLE");
     }
 
     /**

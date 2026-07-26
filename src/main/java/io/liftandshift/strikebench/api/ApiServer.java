@@ -200,7 +200,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.db.DatasetService datasetSvc = new io.liftandshift.strikebench.db.DatasetService(db, clock);
         var marketDataMaintenance = new io.liftandshift.strikebench.db.MarketDataMaintenanceGate();
         MarketDataService market = new MarketDataService(providers, newsProviders, ratesProviders,
-                new io.liftandshift.strikebench.db.StoredCandleStore(db, marketDataMaintenance));
+                new io.liftandshift.strikebench.db.StoredCandleStore(db, marketDataMaintenance), clock);
         market.setDemoSources(fixture, fixture, fixture);
         // Warm option chains: a scan reads the last-known observed option_bar chain when the live
         // provider is exhausted/rate-limited/absent, instead of an empty "no listed options".
@@ -247,7 +247,7 @@ public final class ApiServer {
         // evaluator, no second math — and announces material changes on the existing event bus.
         server.alertCenter = new io.liftandshift.strikebench.paper.AlertCenterService(db, clock,
                 trades, marksSource, server.eventCalendar::earnings, server.events,
-                cfg.feePerContractCents());
+                cfg.feePerContractCents(), cfg.feePerOrderCents());
         audit.setAccountChangedHook(server.alertCenter::invalidateAccount);
         server.portfolioBooks.setOwnerChangedHook(server.alertCenter::invalidateOwner);
         server.simSessions.attachDb(db);
@@ -267,7 +267,6 @@ public final class ApiServer {
         var settingsStore = new io.liftandshift.strikebench.db.SettingsStore(db);
         var quoteSnapshots = new io.liftandshift.strikebench.db.MarketSnapshotStore(db, marketDataMaintenance);
         market.setQuoteSnapshotStore(quoteSnapshots);
-        server.marketEngine.setSnapshotStore(quoteSnapshots);
         server.datasets = datasetSvc;
         server.pathEnsembles = new io.liftandshift.strikebench.sim.PathEnsembleService(market, clock);
         server.simEngine = new io.liftandshift.strikebench.sim.SimulationEngine(
@@ -411,7 +410,8 @@ public final class ApiServer {
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::isAdmin, this::requireAdmin,
                 sparklineController::invalidate, outcomeController::generateDataset);
-        ResearchController researchController = new ResearchController(cfg, db, clock, market, eventCalendar,
+        ResearchController researchController = new ResearchController(cfg, db, clock, market, marketEngine,
+                eventCalendar,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 planController::planSymbolEligibility);
         ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);

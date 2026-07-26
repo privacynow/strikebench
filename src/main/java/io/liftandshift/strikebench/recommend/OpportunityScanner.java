@@ -3,20 +3,16 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
-import io.liftandshift.strikebench.model.Symbol;
-import io.liftandshift.strikebench.util.BoundedFanout;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Cross-symbol opportunity orchestration. Candidate construction and DecisionPolicy evaluation
- * remain separate services; this class only owns bounded provider concurrency, per-symbol failure
- * isolation, and the final competition across each symbol's best viable idea.
+ * remain separate services; {@link OpportunityScanKernel} owns traversal and failure isolation,
+ * while this class owns the exact-evaluation competition and one-per-symbol allocation policy.
  */
 public final class OpportunityScanner {
-    private static final int CONCURRENCY = 8;
-
     public record ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned,
                              List<CompensationView.CompensationEntry> compensation, String compensationBasis,
                              RedeploymentFrontier.Result frontier) {
@@ -36,10 +32,17 @@ public final class OpportunityScanner {
 
     private final RecommendationEngine engine;
     private final EvaluationService evaluations;
+    private final OpportunityScanKernel scanKernel;
 
     public OpportunityScanner(RecommendationEngine engine, EvaluationService evaluations) {
+        this(engine, evaluations, new OpportunityScanKernel());
+    }
+
+    public OpportunityScanner(RecommendationEngine engine, EvaluationService evaluations,
+                              OpportunityScanKernel scanKernel) {
         this.engine = java.util.Objects.requireNonNull(engine, "engine");
         this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
+        this.scanKernel = java.util.Objects.requireNonNull(scanKernel, "scanKernel");
     }
 
     /** Candidates and evaluation context always share {@code worldId}; null means Observed. */
@@ -74,11 +77,12 @@ public final class OpportunityScanner {
                                     String worldId, Long maxLossCents,
                                     java.util.function.Function<List<StrategyEvaluation>,
                                             RedeploymentFrontier.Context> contextFactory) {
-        List<String> normalized = Symbol.list(symbols);
-        if (normalized.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
+        OpportunityScanKernel.Universe universe = scanKernel.prepare(symbols);
+        if (universe.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
 
         record PerSymbol(List<StrategyEvaluation> viable, String note) {}
-        List<PerSymbol> results = BoundedFanout.map(normalized, CONCURRENCY,
+        OpportunityScanKernel.Traversal<PerSymbol> traversal = scanKernel.traverse(
+                universe, OpportunityScanKernel.Policy.EXACT_PACKAGE_FIELD,
                 symbol -> {
                     var request = new RecommendationEngine.Request(symbol, thesis, horizon, riskMode,
                             maxLossCents, null, null, null, false, false, intent, null, null);
@@ -107,14 +111,18 @@ public final class OpportunityScanner {
                                 + " priced, none passed the viability screen");
                     }
                     return new PerSymbol(viable, null);
-                },
-                (symbol, failure) -> new PerSymbol(List.of(), symbol + ": analysis unavailable right now"));
+                });
 
         // Deduplicated on the full result identity (symbol + family + exact package + expiration +
         // declarations), never on symbol alone.
         java.util.LinkedHashMap<String, StrategyEvaluation> retained = new java.util.LinkedHashMap<>();
         List<String> notes = new ArrayList<>();
-        for (PerSymbol result : results) {
+        for (OpportunityScanKernel.Item<PerSymbol> item : traversal.items()) {
+            if (!item.succeeded()) {
+                notes.add(item.symbol() + ": analysis unavailable right now");
+                continue;
+            }
+            PerSymbol result = item.value();
             if (result == null) continue;
             for (StrategyEvaluation evaluation : result.viable()) {
                 retained.putIfAbsent(ResultIdentity.of(evaluation).key(), evaluation);
@@ -134,7 +142,7 @@ public final class OpportunityScanner {
         evaluations.persist(surfaced, userId, worldId);
         RedeploymentFrontier.BookLayer book =
                 RedeploymentFrontier.composeBookLayer(surfaced, evaluations, worldId, contextFactory);
-        return new ScanResult(ranked, notes, normalized.size(), book.compensation(),
+        return new ScanResult(ranked, notes, universe.size(), book.compensation(),
                 book.compensationBasis(), book.frontier());
     }
 
