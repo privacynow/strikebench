@@ -80,9 +80,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: evidence-contracts
-          path: |
-            target/dom-contracts.tap
-            dom-tests/shots
+          path: target/dom-contracts.tap
+          retention-days: 14
+
+      - name: Preserve contract screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-contracts
+          path: dom-tests/shots
+          if-no-files-found: ignore
           retention-days: 14
 
   # Lane (b): the browser drives the artifact we ship. Each shard boots its own jar against its
@@ -136,16 +143,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: evidence-journeys
-          path: |
-            target/dom-journeys.tap
-            dom-tests/shots
+          path: target/dom-journeys.tap
+          retention-days: 14
+
+      - name: Preserve journey screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-journeys
+          path: dom-tests/shots
+          if-no-files-found: ignore
           retention-days: 14
 
   # Lane (c): the §16.4 viewport matrix. Ten viewports (including 2000x963, where a height-only
   # media rule used to delete facts) times the §16.3 content states, asserting no sideways page
   # scroll, no clipped box, no text drawn over text, no fact a taller window shows and a shorter
-  # one hides, and a real hit target under every offered action. The lane still reports NOT
-  # IMPLEMENTED if its test file ever disappears — zero tests is not evidence of a clean layout.
+  # one hides, and a real hit target under every offered action. A missing test file fails the lane:
+  # zero tests is not evidence of a clean layout.
   browser-visual:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -173,9 +187,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: evidence-visual
-          path: |
-            target/dom-visual.tap
-            dom-tests/shots
+          path: target/dom-visual.tap
+          retention-days: 14
+
+      - name: Preserve visual screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-visual
+          path: dom-tests/shots
+          if-no-files-found: ignore
           retention-days: 14
 
   # Release evidence for the exact branch tip. The aggregator used to demand a TAP per SPA-era
@@ -191,12 +212,28 @@ jobs:
         with:
           node-version: '22'
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
+          name: evidence-backend
+          path: target/surefire-reports
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: evidence-contracts
           path: target
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: evidence-journeys
+          path: target
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: evidence-visual
+          path: target
       - name: Summarize
         run: |
-          node scripts/release-matrix.mjs | tee target/release-matrix.md
+          node scripts/release-matrix.mjs
           cat target/release-matrix.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()

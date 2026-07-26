@@ -20,7 +20,7 @@ const HERE = __dirname;
 const ROOT = path.resolve(HERE, '..');
 const TARGET = path.join(ROOT, 'target');
 const JAR = process.env.JAR ? path.resolve(process.env.JAR) : path.join(TARGET, 'strikebench.jar');
-const WEB_SOURCES = path.join(ROOT, 'src', 'main', 'resources', 'public');
+const APP_SOURCES = path.join(ROOT, 'src', 'main');
 const LANES = ['contracts', 'journeys', 'visual'];
 
 function rel(file) {
@@ -113,15 +113,17 @@ function runShard(file, env) {
 
 function score(shard) {
   const tests = tapCount(shard.tap, 'tests');
-  const fail = tapCount(shard.tap, 'fail');
+  const reportedFail = tapCount(shard.tap, 'fail');
   return {
     ...shard,
     tests: tests ?? 0,
     pass: tapCount(shard.tap, 'pass') ?? 0,
-    // A shard that died before printing a summary counts as one failure: silence is not a pass.
-    fail: fail ?? 1,
+    // A shard that died before printing a summary, or exited non-zero despite claiming zero test
+    // failures, counts as one infrastructure failure. The lane report is release evidence; it
+    // must not publish a green aggregate for a process that did not complete successfully.
+    fail: reportedFail == null ? 1 : Math.max(reportedFail, shard.code === 0 ? 0 : 1),
     skipped: tapCount(shard.tap, 'skipped') ?? 0,
-    ok: shard.code === 0 && tests !== null && fail === 0
+    ok: shard.code === 0 && tests !== null && reportedFail === 0
   };
 }
 
@@ -145,7 +147,10 @@ function requirePackagedJar() {
       + `      build it first: ${build}`);
   }
   const jar = fs.statSync(JAR);
-  const newest = newestUnder(WEB_SOURCES);
+  // The browser drives the packaged application, not just its static files. A backend-only edit
+  // can change every receipt the desk consumes, so Java, migrations and public resources all
+  // participate in the freshness check.
+  const newest = newestUnder(APP_SOURCES);
   if (newest.time > jar.mtimeMs) {
     die(`${rel(newest.file)} is newer than ${rel(JAR)}. The journey lane would report on a jar that\n`
       + `      predates the desk it is verifying. Rebuild: ${build}`);
@@ -175,7 +180,17 @@ function publish(lane, shards, note) {
   const report = path.join(TARGET, `dom-${lane}.tap`);
   const sha = sourceSha();
   const header = `# lane ${lane}\n${sha ? `# source ${sha}\n` : ''}`
-    + `# generated ${new Date().toISOString()}\n`;
+    + `# generated ${new Date().toISOString()}\n`
+    // These are the ONE machine-readable lane totals. Raw TAP for every attempt remains below
+    // for diagnosis, but the release matrix consumes only this aggregate. Otherwise a journey
+    // that fails once and passes its permitted retry is counted twice—and the preserved failed
+    // first attempt incorrectly makes the final matrix red.
+    + `# lane-shards ${shards.length}\n`
+    + `# lane-tests ${totals.tests}\n`
+    + `# lane-pass ${totals.pass}\n`
+    + `# lane-fail ${totals.fail}\n`
+    + `# lane-skipped ${totals.skipped}\n`
+    + `# lane-retried ${shards.filter(shard => shard.retried).length}\n`;
   const retried = shards.filter(shard => shard.retried);
   const retryNote = retried.length
     ? `# retried ${retried.length} shard(s): ${retried.map(shard =>
