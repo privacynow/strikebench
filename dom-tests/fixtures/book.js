@@ -267,6 +267,48 @@ function portfolioSummary(trades, shares) {
   };
 }
 
+const SHARE_DENOMINATOR_BASIS = 'Book defined risk: the sum of every ACTIVE position\'s maximum '
+  + 'loss in this account, read from the canonical portfolio-heat receipt (totalMaxLossCents).';
+
+/**
+ * The canonical share/rank rule, mirrored from `BookRiskService.shareRoster` — the ONE backend owner
+ * of the fact, which `TradeService.portfolioHeat` projects onto this wire shape. Largest defined risk
+ * first (symbol then id breaking ties); positions carrying identical risk SHARE one rank (1, 2, 2, 4);
+ * with no book total both share and rank are withheld with a reason, never stated as 0%.
+ */
+function bookShareRoster(trades, denominatorCents) {
+  const ranked = (trades || []).slice().sort((a, b) => (b.maxLossCents - a.maxLossCents)
+    || String(a.symbol).localeCompare(String(b.symbol)) || String(a.id).localeCompare(String(b.id)));
+  let unavailableReason = null;
+  if (!ranked.length) {
+    unavailableReason = 'This account holds no open positions, so there is no book risk to take a '
+      + 'share of.';
+  } else if (!(denominatorCents > 0)) {
+    unavailableReason = 'This book\'s defined risk totals $0.00 across ' + ranked.length
+      + ' open position' + (ranked.length === 1 ? '' : 's')
+      + ', so no position has a measurable share of it.';
+  }
+  let rank = 0;
+  let previousRisk = 0;
+  const positions = ranked.map((trade, index) => {
+    if (index === 0 || trade.maxLossCents !== previousRisk) rank = index + 1;
+    previousRisk = trade.maxLossCents;
+    return {
+      tradeId: trade.id,
+      symbol: trade.symbol,
+      strategy: trade.strategy,
+      maxLossCents: trade.maxLossCents,
+      riskSharePct: unavailableReason ? null : 100 * trade.maxLossCents / denominatorCents,
+      riskRank: unavailableReason ? null : rank,
+      riskRankOf: unavailableReason ? null : ranked.length,
+      denominatorCents: denominatorCents,
+      denominatorBasis: SHARE_DENOMINATOR_BASIS,
+      shareUnavailableReason: unavailableReason
+    };
+  });
+  return { available: unavailableReason === null, unavailableReason: unavailableReason, positions };
+}
+
 /**
  * Portfolio heat. This payload is assembled as a `Map<String, Object>` in
  * `TradeService.portfolioHeat`, not as a record, so the method body is its contract — every key it
@@ -285,6 +327,7 @@ function portfolioHeat(trades, summary) {
     .filter(leg => leg.type === 'PUT' && leg.action === 'SELL')
     .reduce((legTotal, leg) => legTotal
       + Math.round(Number(leg.strike) * 100) * leg.ratio * leg.multiplier * trade.qty, 0), 0);
+  const shareRoster = bookShareRoster(rows, totalMaxLossCents);
   return {
     activeTrades: rows.length,
     totalMaxLossCents: totalMaxLossCents,
@@ -294,18 +337,16 @@ function portfolioHeat(trades, summary) {
     concentrationPct: totalMaxLossCents > 0
       ? Math.round(100 * worstSymbol / totalMaxLossCents) : 0,
     /* Each trade's share of defined book risk and its rank — book facts, because both depend on
-       every other open trade (audit §15.5). Ranked by defined loss, id breaking ties, exactly as
-       TradeService.portfolioHeat does, so a surface reading this fixture reads the real ordering. */
-    positions: rows.slice()
-      .sort((a, b) => (b.maxLossCents - a.maxLossCents) || a.id.localeCompare(b.id))
-      .map((trade, index) => ({
-        tradeId: trade.id,
-        symbol: trade.symbol,
-        maxLossCents: trade.maxLossCents,
-        riskSharePct: totalMaxLossCents > 0 ? 100 * trade.maxLossCents / totalMaxLossCents : null,
-        riskRank: index + 1
-      })),
-    rankedPositions: rows.length,
+       every other open trade (audit §15.5). ONE owner states the rule (BookRiskService.shareRoster),
+       and heat projects it; this fixture mirrors that projection rather than re-deriving it. */
+    positions: shareRoster.positions,
+    rankedPositions: shareRoster.available ? shareRoster.positions.length : 0,
+    bookShareAvailable: shareRoster.available,
+    bookShareUnavailableReason: shareRoster.unavailableReason,
+    bookShareDenominatorCents: totalMaxLossCents,
+    bookShareDenominatorBasis: SHARE_DENOMINATOR_BASIS,
+    bookShareBasis: 'Each open position\'s share of this account\'s defined book risk: that '
+      + 'position\'s own maximum loss divided by the one declared denominator, in percent.',
     earlyAssignmentLiquidityCents: shortPutObligationCents,
     physicalAssignmentCashCents: shortPutObligationCents,
     assignmentReserveReleasedCents: totalMaxLossCents,

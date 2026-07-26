@@ -329,8 +329,8 @@ class PositionTransformationApiTest {
         JsonNode accountAfter = Json.parse(get("/api/account").body()).get("account");
         long expectedCash = accountBefore.get("cashCents").asLong()
                 + preview.get("closingCashCents").asLong() - preview.get("closingFeesCents").asLong()
-                + preview.at("/after/preview/entryNetPremiumCents").asLong()
-                - preview.at("/after/preview/feesOpenCents").asLong();
+                + preview.at("/after/preview/price/grossPackageNetCents").asLong()
+                - preview.at("/after/preview/price/openingFeesCents").asLong();
         assertThat(accountAfter.get("cashCents").asLong()).isEqualTo(expectedCash);
         assertThat(accountAfter.get("reservedCents").asLong())
                 .isEqualTo(accountBefore.get("reservedCents").asLong() - oldReserve

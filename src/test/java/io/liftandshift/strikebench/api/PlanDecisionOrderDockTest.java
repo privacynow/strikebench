@@ -84,11 +84,14 @@ class PlanDecisionOrderDockTest {
     }
 
     private static TradePreview preview(boolean ok, PackagePriceReceipt price) {
+        // The two legacy package-price primitives are gone: `price` IS the preview's price, so a
+        // fixture can no longer state one net beside the receipt's other one.
         return new TradePreview(ok, ok ? List.of() : List.of("Execution is unavailable."), List.of(),
-                price.grossPackageNetCents() == null ? 0 : price.grossPackageNetCents(),
-                price.openingFeesCents() == null ? 0 : price.openingFeesCents(),
                 0, null, List.of(), null, null, 0,
                 100_000, 100_000, 0, 0, 100_000, 100_000,
-                "MISSING", null, 0, null, List.of(), List.of(), Map.of(), price);
+                // A preview with no price has no spot either; underlyingCents is nullable precisely
+                // so this fixture cannot claim the underlying trades at $0.00 (§3.2).
+                "MISSING", null, price.grossPackageNetCents() == null ? null : 12_345L,
+                null, List.of(), List.of(), Map.of(), price);
     }
 }

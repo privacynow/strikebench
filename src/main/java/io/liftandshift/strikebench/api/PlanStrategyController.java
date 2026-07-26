@@ -280,7 +280,9 @@ final class PlanStrategyController {
         var preview = trades.analyze(request);
         Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
         ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
-        long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
+        // §3.1/§3.2: the ONE round-trip commission off the package's own §7.2 receipt; null when
+        // the package could not be priced, so no EV is published "after costs" it never paid.
+        Long roundTripFees = preview.price() == null ? null : preview.price().roundTripFeesCents();
         ApiResponses.EvaluationReceipt evaluation;
         try {
             evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(

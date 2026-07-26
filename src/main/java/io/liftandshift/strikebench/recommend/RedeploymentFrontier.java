@@ -356,7 +356,9 @@ public final class RedeploymentFrontier {
                                                      LaneImpact destination,
                                                      RedeploymentSource source) {
         EconomicAssessment economics = economics(evaluation);
-        Long openingFees = economics == null ? null
+        // §3.2: an assessment whose package states no commission publishes a null round trip, so the
+        // implied opening half stays null rather than unboxing into a free replacement.
+        Long openingFees = economics == null || economics.estimatedRoundTripFeesCents() == null ? null
                 : divideHalf(economics.estimatedRoundTripFeesCents());
         Long capital = evaluation.capitalIncrementalCents();
         Long additional = source.capitalReleasedCents() == null || capital == null ? null

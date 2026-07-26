@@ -183,8 +183,8 @@ final class PositionTransformationController {
                     adjustment.exactAfterRequest(), true, atomicArtifacts, expectedPosition(prepared),
                     new TradeService.ExpectedAdjustment(adjustment.closingCashCents(),
                             adjustment.openingCashCents(), adjustment.closingFeesCents(),
-                            adjustment.openingFeesCents(), adjustment.survivor().preview().entryNetPremiumCents(),
-                            adjustment.survivor().preview().feesOpenCents(), adjustment.reserveAfterCents(),
+                            adjustment.openingFeesCents(), reviewedPrice(adjustment.survivor().preview()).grossPackageNetCents(),
+                            reviewedPrice(adjustment.survivor().preview()).openingFeesCents(), adjustment.reserveAfterCents(),
                             adjustment.survivor().preview().maxLossCents(),
                             adjustment.survivor().preview().maxProfitCents(), adjustment.sharesLockedAfter(),
                             TradeService.exactPositionFingerprint(adjustment.exactAfterRequest())));
@@ -210,7 +210,8 @@ final class PositionTransformationController {
             var afterPreview = prepared.after().preview();
             TradeService.RollResult result = trades.roll(request.sourceId(), approvedAfter, true,
                     atomicArtifacts, prepared.unwind().closingCashCents(), prepared.unwind().closingFeesCents(),
-                    new TradeService.ExpectedOpen(afterPreview.entryNetPremiumCents(), afterPreview.feesOpenCents(),
+                    new TradeService.ExpectedOpen(reviewedPrice(afterPreview).grossPackageNetCents(),
+                            reviewedPrice(afterPreview).openingFeesCents(),
                             afterPreview.reserveCents(), afterPreview.maxLossCents(), afterPreview.maxProfitCents()));
             responseTrade = result.replacementTrade();
             resolvedTrade = result.closedTrade();
@@ -242,6 +243,31 @@ final class PositionTransformationController {
                         PositionTransformation.MODEL_VERSION, prepared.before().position(),
                         prepared.after() == null ? null : prepared.after().position(),
                         prepared.preview(), realized));
+    }
+
+    /**
+     * §3.1/§3.2: the approval token's expected package net and commission come from the reviewed
+     * preview's ONE §7.2 receipt. They used to be read off {@code TradePreview.entryNetPremiumCents}
+     * and {@code feesOpenCents}, which on a preview that could not be priced were 0 and 0 — an
+     * approval asserting "I reviewed a costless package with no commission", which the apply-time
+     * comparison in TradeService would then match against whatever the blocked plan recomputed. A
+     * transformation that cannot state what it costs is not approvable.
+     */
+    private static io.liftandshift.strikebench.paper.PackagePriceReceipt reviewedPrice(
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        var price = preview == null ? null : preview.price();
+        if (price == null || price.grossPackageNetCents() == null || price.openingFeesCents() == null) {
+            List<String> reasons = new ArrayList<>();
+            if (preview != null && preview.blockReasons() != null) reasons.addAll(preview.blockReasons());
+            if (price != null && price.unavailableReason() != null) reasons.add(price.unavailableReason());
+            reasons.add("The reviewed replacement position has no priced package and stated commission,"
+                    + " so it cannot be approved for execution.");
+            // A refusal, not a malformed request: same 422 lane every other unfundable transformation
+            // already answers on.
+            throw new io.liftandshift.strikebench.paper.TradeRejectedException(
+                    reasons.stream().distinct().toList());
+        }
+        return price;
     }
 
     private static TradeService.ExpectedPositionState expectedPosition(Prepared prepared) {

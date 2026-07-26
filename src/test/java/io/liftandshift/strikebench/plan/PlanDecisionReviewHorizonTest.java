@@ -94,7 +94,7 @@ class PlanDecisionReviewHorizonTest {
     }
 
     private static TradePreview preview() {
-        return new TradePreview(true, List.of(), List.of(), -30_000L, 65L,
+        return new TradePreview(true, List.of(), List.of(),
                 30_000L, 70_000L, List.of("253"), 0.45, -900L, 0L,
                 10_000_000L, 9_969_935L, 0L, 0L, 10_000_000L, 9_969_935L,
                 "FIXTURE", DataEvidence.of("fixture", Freshness.FIXTURE), 25_000L, null,

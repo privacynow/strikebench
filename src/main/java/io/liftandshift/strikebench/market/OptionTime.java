@@ -13,9 +13,18 @@ public final class OptionTime {
     public record Measure(int sessions, long calendarDays, double years, String basis) {}
 
     public static Measure nearest(List<Leg> legs, LocalDate today) {
-        LocalDate expiry = legs.stream().filter(l -> !l.isStock()).map(Leg::expiration)
+        return toExpiry(today, nearestExpiry(legs));
+    }
+
+    /**
+     * THE nearest option expiry in a package, or null when it holds no dated option leg. Exposed
+     * because callers that must NAME the expiry (the market-implied range's own basis line) were
+     * otherwise re-deriving this same min-of-expirations beside {@link #nearest}.
+     */
+    public static LocalDate nearestExpiry(List<Leg> legs) {
+        if (legs == null) return null;
+        return legs.stream().filter(l -> !l.isStock()).map(Leg::expiration)
                 .filter(java.util.Objects::nonNull).min(LocalDate::compareTo).orElse(null);
-        return toExpiry(today, expiry);
     }
 
     public static Measure toExpiry(LocalDate today, LocalDate expiry) {

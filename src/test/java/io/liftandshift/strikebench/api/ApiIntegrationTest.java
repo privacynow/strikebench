@@ -380,7 +380,9 @@ class ApiIntegrationTest {
         assertThat(previewRes.statusCode()).isEqualTo(200);
         JsonNode preview = Json.parse(previewRes.body());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
-        assertThat(preview.at("/preview/entryNetPremiumCents").asLong()).isPositive(); // credit
+        // §3.1: the preview's ONE package price. `/preview/entryNetPremiumCents` was a second
+        // publication of this same number and is gone.
+        assertThat(preview.at("/preview/price/grossPackageNetCents").asLong()).isPositive(); // credit
         JsonNode before = Json.parse(get("/api/account").body());
         assertThat(before.at("/account/hasTraded").asBoolean()).isFalse();
 

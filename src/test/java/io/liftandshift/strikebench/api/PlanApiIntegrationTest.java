@@ -1499,6 +1499,37 @@ class PlanApiIntegrationTest {
                 .hasSize(animation.at("/paths/paths/0/prices").size());
         assertThat(animation.at("/checkpoints/underlyingSteps/10/focusPrice").asDouble())
                 .isEqualTo(animation.at("/paths/paths/0/prices/10").asDouble());
+        // LEAK 4 wire contract: the scrub selects a served frame, so every readout value rides the
+        // frame itself. No client re-derives the percent move, the vol shift or the life boundary.
+        JsonNode track = animation.at("/checkpoints/animation");
+        assertThat(track.path("frameRule").asText()).isEqualTo("SELECT_NEAREST_FRAME_NO_INTERPOLATION");
+        assertThat(track.path("frameSource").asText()).isEqualTo("underlyingSteps");
+        assertThat(track.path("positionFrameSource").asText()).isEqualTo("positions[].steps");
+        assertThat(track.path("frameCount").asInt())
+                .isEqualTo(animation.at("/checkpoints/underlyingSteps").size())
+                .isEqualTo(animation.at("/checkpoints/positions/0/steps").size());
+        assertThat(track.path("stepsPerDay").asInt()).isPositive();
+        assertThat(track.path("anchorSpot").asDouble())
+                .isEqualTo(animation.at("/receipt/anchorSpot").asDouble());
+        assertThat(track.path("baselineAtmIvSource").asText()).isEqualTo("TRACK_FRAME_0");
+        assertThat(track.path("baselineAtmIv").asDouble())
+                .isEqualTo(animation.at("/checkpoints/underlyingSteps/0/atmIv").asDouble());
+        assertThat(animation.at("/checkpoints/underlyingSteps/0/moveFromSpotPct").asDouble())
+                .isEqualTo(0.0);
+        assertThat(animation.at("/checkpoints/underlyingSteps/0/ivShiftPoints").asDouble())
+                .isEqualTo(0.0);
+        assertThat(animation.at("/checkpoints/underlyingSteps/10").has("moveFromSpotPct")).isTrue();
+        assertThat(animation.at("/checkpoints/underlyingSteps/10").has("ivShiftPoints")).isTrue();
+        JsonNode life = animation.at("/checkpoints/positions/0/animation");
+        assertThat(life.path("frameCount").asInt()).isEqualTo(track.path("frameCount").asInt());
+        assertThat(life.path("lastLiveFrameIndex").asInt())
+                .isBetween(0, track.path("frameCount").asInt() - 1);
+        assertThat(life.path("boundarySource").asText())
+                .isIn("EARLIEST_LEG_EXPIRATION", "HORIZON_END", "NO_OPTION_EXPIRATION");
+        // Json.MAPPER is NON_NULL, so an available track carries no unavailableReason key at all;
+        // the desk reads absent-or-null as "available".
+        assertThat(life.hasNonNull("unavailableReason")).isFalse();
+        assertThat(life.hasNonNull("lastLiveSessionProgress")).isTrue();
         assertThat(animation.at("/checkpoints/positions").toString())
                 .contains("PROPOSED:" + candidate.get("id").asText());
         assertThat(animation.at("/checkpoints/positions/0/days/0").has("focusValueCents")).isTrue();
@@ -1707,8 +1738,11 @@ class PlanApiIntegrationTest {
         assertThat(preview.at("/selected/id").asText()).isEqualTo(candidate.get("id").asText());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
         assertThat(preview.at("/order/price/grossPackageNetCents").isNumber()).isTrue();
-        assertThat(preview.at("/preview/entryNetPremiumCents").asLong())
+        // The preview and the order dock quote ONE receipt, so this is now the same node rather
+        // than two amounts that happened to agree.
+        assertThat(preview.at("/preview/price/grossPackageNetCents").asLong())
                 .isEqualTo(preview.at("/order/price/grossPackageNetCents").asLong());
+        assertThat(preview.at("/preview/entryNetPremiumCents").isMissingNode()).isTrue();
         assertThat(preview.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
         assertThat(preview.at("/order/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
         assertThat(preview.at("/order/price/executability").asText()).isEqualTo("IMMEDIATE");
@@ -1720,7 +1754,7 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
                         + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet - 1000) + "}}"));
         assertThat(marketableLimit.at("/order/price/executability").asText()).isEqualTo("IMMEDIATE");
-        assertThat(marketableLimit.at("/preview/entryNetPremiumCents").asLong()).isEqualTo(naturalNet);
+        assertThat(marketableLimit.at("/preview/price/grossPackageNetCents").asLong()).isEqualTo(naturalNet);
         assertThat(marketableLimit.at("/order/orderInstruction/limitNetCents").asLong())
                 .isEqualTo(naturalNet - 1000);
 

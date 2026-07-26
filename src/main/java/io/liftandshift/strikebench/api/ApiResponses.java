@@ -397,9 +397,14 @@ public final class ApiResponses {
             node.set("evaluation", io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(of(evaluation)));
         }
 
+        /**
+         * @param estimatedRoundTripFeesCents the §7.2 receipt's own round-trip commission, or NULL
+         *        when the package states none. §3.2: an unknown commission stays null here rather
+         *        than being clamped to 0, which advertised an unpriced package as free to trade.
+         */
         public static EvaluationReceipt unavailable(String reason, boolean mechanicallyEligible,
                                                     List<String> mechanicalReasons,
-                                                    long estimatedRoundTripFeesCents) {
+                                                    Long estimatedRoundTripFeesCents) {
             if (reason == null || reason.isBlank()) {
                 throw new IllegalArgumentException("an unavailable evaluation requires a reason");
             }
@@ -410,7 +415,9 @@ public final class ApiResponses {
                     io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
                     mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
                     mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
-                    reason, null, null, Math.max(0, estimatedRoundTripFeesCents), null, false, reasons);
+                    reason, null, null,
+                    estimatedRoundTripFeesCents == null ? null : Math.max(0, estimatedRoundTripFeesCents),
+                    null, false, reasons);
             var assessment = new io.liftandshift.strikebench.eval.FourOutputAssessment(
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.MechanicalAssessment(
                             mechanicallyEligible, mechanicalReasons),

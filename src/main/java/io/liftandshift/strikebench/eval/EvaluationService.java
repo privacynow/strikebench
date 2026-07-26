@@ -161,7 +161,7 @@ public final class EvaluationService {
     public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                           boolean mechanicallyEligible, List<String> mechanicalFailures,
-                                          long roundTripFeesCents,
+                                          Long roundTripFeesCents,
                                           PortfolioExposureContext portfolioExposure) {
         return assessExact(symbol, candidate, buyingPowerCents, actx, worldId, mechanicallyEligible,
                 mechanicalFailures, roundTripFeesCents, portfolioExposure, null);
@@ -171,7 +171,7 @@ public final class EvaluationService {
     public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                           boolean mechanicallyEligible, List<String> mechanicalFailures,
-                                          long roundTripFeesCents,
+                                          Long roundTripFeesCents,
                                           PortfolioExposureContext portfolioExposure,
                                           DeclaredObjective declared) {
         EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId,

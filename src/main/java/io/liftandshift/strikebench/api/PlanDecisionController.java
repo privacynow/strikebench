@@ -265,7 +265,10 @@ final class PlanDecisionController {
         var marketPreview = tradeController.previewPayload(ctx, marketOrder).preview();
         // Older Plan clients echoed the preview's natural net in proposedNetCents. Preserve that
         // round trip as MARKET without turning the server's former second-pass default into LIMIT.
-        return body.proposedNetCents() == marketPreview.entryNetPremiumCents() ? marketBody : body;
+        // Compared against the ONE §7.2 receipt the market preview published, not a parallel
+        // primitive: an unpriced market preview must not match a client's stated net by both being 0.
+        Long marketNet = marketPreview.price() == null ? null : marketPreview.price().grossPackageNetCents();
+        return java.util.Objects.equals(body.proposedNetCents(), marketNet) ? marketBody : body;
     }
 
     /**
@@ -398,8 +401,20 @@ final class PlanDecisionController {
         double rate = metrics.path("riskFreeRateAnnual").asDouble(Double.NaN);
         if (!Double.isFinite(rate)) throw new IllegalStateException("The frozen decision has no pricing-rate snapshot.");
         long packageEnd = modeledRejectedPackageValue(decision.withArray("legs"), dueBar.close(), dueDate, rate, qty);
+        // §3.2: both of these are now recorded only when the frozen decision's §7.2 receipt actually
+        // stated them, so an absent value must refuse the review the way the underlying anchor and
+        // the rate snapshot above already do. `asLong(0)` would price the not-taken package as a
+        // costless entry and report the difference as a real missed P/L.
+        if (!decision.hasNonNull("proposedNetCents")) {
+            throw new IllegalStateException("The frozen decision recorded no package price, so the"
+                    + " not-taken outcome cannot be valued.");
+        }
         long entry = decision.path("proposedNetCents").asLong();
-        long fees = metrics.path("feesOpenCents").asLong(0);
+        if (!metrics.hasNonNull("feesOpenCents")) {
+            throw new IllegalStateException("The frozen decision recorded no commission, so the"
+                    + " not-taken outcome cannot be valued after costs.");
+        }
+        long fees = metrics.path("feesOpenCents").asLong();
         long rejectedPnl = entry + packageEnd - Math.multiplyExact(fees, 2L);
         ObjectNode management = planManagement.recordCashReview(root.ownerId(ctx), plan.id(), body.expectedVersion(),
                 new PlanManagementService.CashReview(startUnderlying, endUnderlying, stockPnl, entry, packageEnd,

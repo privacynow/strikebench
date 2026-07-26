@@ -187,7 +187,7 @@ class StrategyEvaluatorTest {
         StrategySpec spec = new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL",
                 "month", "bullish", "balanced", "decision");
         StrategyEvaluation proposal = evaluator.evaluate(candidate, spec, ctx());
-        StrategyEvaluation exact = evaluator.assessExact(candidate, spec, ctx(), true, List.of(), 260);
+        StrategyEvaluation exact = evaluator.assessExact(candidate, spec, ctx(), true, List.of(), 260L);
 
         assertThat(exact.capital()).isEqualTo(proposal.capital());
         assertThat(exact.volatility()).isEqualTo(proposal.volatility());
@@ -203,7 +203,7 @@ class StrategyEvaluatorTest {
         assertThat(exact.decisionScore()).isEqualTo(proposal.decisionScore());
 
         StrategyEvaluation refused = evaluator.assessExact(candidate, spec, ctx(), false,
-                List.of("executable quote unavailable"), 260);
+                List.of("executable quote unavailable"), 260L);
         assertThat(refused.viable()).isFalse();
         assertThat(refused.decisionScore()).isZero();
         assertThat(refused.score().gateFailures()).contains("executable quote unavailable");
@@ -214,7 +214,7 @@ class StrategyEvaluatorTest {
         EvalContext noBuyingPower = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 ctx().ivHistory(), 100L, true, 65, 0, 0.04, ctx().rateEvidence(), null);
         StrategyEvaluation accountRefusal = evaluator.assessExact(candidate, spec, noBuyingPower,
-                true, List.of(), 260);
+                true, List.of(), 260L);
         assertThat(accountRefusal.assessment().economics().reasons())
                 .anyMatch(reason -> reason.contains("buying power"));
     }
@@ -439,9 +439,9 @@ class StrategyEvaluatorTest {
         var scoreHigh = new ScoreBreakdown(true, List.of(), 90, 90, List.of());
         var scoreLow = new ScoreBreakdown(true, List.of(), 40, 40, List.of());
         var unavailable = new EconomicAssessment(EconomicAssessment.Verdict.UNAVAILABLE, "MECHANICS_ONLY",
-                "Economics unavailable", "No economic basis", null, null, 0, null, true, List.of());
+                "Economics unavailable", "No economic basis", null, null, 0L, null, true, List.of());
         var unfavorable = new EconomicAssessment(EconomicAssessment.Verdict.UNFAVORABLE, "LEARN_FROM",
-                "Unfavorable", "Known adverse economics", -100L, -100L, 0, -1.0, true, List.of());
+                "Unfavorable", "Known adverse economics", -100L, -100L, 0L, -1.0, true, List.of());
         var unknownEval = evaluationForRanking("unknown", scoreLow, unavailable);
         var adverseEval = evaluationForRanking("adverse", scoreHigh, unfavorable);
 
@@ -456,9 +456,9 @@ class StrategyEvaluatorTest {
     @Test void declaredObjectiveCoherenceTiltsWithinButNeverAcrossEconomicTiers() {
         var score = new ScoreBreakdown(true, List.of(), 80, 80, List.of());
         var mixedEconomics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED, "COMPARE_CAREFULLY",
-                "Mixed", "Same economics", 10L, 10L, 0, 1.0, true, List.of());
+                "Mixed", "Same economics", 10L, 10L, 0L, 1.0, true, List.of());
         var unfavorableEconomics = new EconomicAssessment(EconomicAssessment.Verdict.UNFAVORABLE, "LEARN_FROM",
-                "Unfavorable", "Known adverse economics", -10L, -10L, 0, -1.0, true, List.of());
+                "Unfavorable", "Known adverse economics", -10L, -10L, 0L, -1.0, true, List.of());
 
         var coherent = evaluationForRanking("coherent", score, mixedEconomics,
                 FourOutputAssessment.Coherence.COHERENT);

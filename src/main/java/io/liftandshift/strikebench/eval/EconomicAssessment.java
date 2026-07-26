@@ -19,7 +19,10 @@ public record EconomicAssessment(
         String summary,
         Long marketEvAfterCostsCents,
         Long realizedVolEvAfterCostsCents,
-        long estimatedRoundTripFeesCents,
+        // §3.2: null when the exact package's §7.2 receipt states no commission. Every EV field
+        // beside it is then null too — a round-trip cost that is not known must never be published
+        // as a free one, because "EV after costs" would silently become "EV before costs".
+        Long estimatedRoundTripFeesCents,
         Double marketEvPctOfRisk,
         Long realisticEvLowAfterCostsCents,
         Long realisticEvHighAfterCostsCents,
@@ -47,7 +50,7 @@ public record EconomicAssessment(
     /** Compatibility shape for persisted fixtures and callers that predate the scoped EV receipt. */
     public EconomicAssessment(Verdict verdict, String placement, String label, String summary,
                               Long marketEvAfterCostsCents, Long realizedVolEvAfterCostsCents,
-                              long estimatedRoundTripFeesCents, Double marketEvPctOfRisk,
+                              Long estimatedRoundTripFeesCents, Double marketEvPctOfRisk,
                               boolean observedEvidence, List<String> reasons) {
         this(verdict, placement, label, summary, marketEvAfterCostsCents,
                 realizedVolEvAfterCostsCents, estimatedRoundTripFeesCents, marketEvPctOfRisk,
@@ -65,11 +68,38 @@ public record EconomicAssessment(
                 score == null ? List.of() : score.gateFailures(), roundTripFees(c, ctx));
     }
 
-    /** Exact-ticket assessment: mechanical eligibility comes from the trade preview and fees are
-     * the preview's actual override/default, not a reconstructed ranking assumption. */
+    /**
+     * The one reason an exact assessment refuses to state economics: the package's own §7.2 receipt
+     * carries no commission, so nothing here can be reported "after costs".
+     */
+    public static final String UNKNOWN_FEES_REASON =
+            "This package's price receipt states no commission, so no expected value can be reported"
+                    + " after costs. Nothing here is netted against a $0 round trip.";
+
+    /**
+     * Exact-ticket assessment: mechanical eligibility comes from the trade preview and the fees are
+     * the package-price receipt's own commission
+     * ({@code PackagePriceReceipt.roundTripFeesCents()}), not a reconstructed ranking assumption.
+     *
+     * <p>§3.2: {@code roundTripFeesCents} is null when that receipt states no commission — an
+     * unpriced or refused package. Callers used to hand this a substituted 0 read off
+     * {@code TradePreview.feesOpenCents}, which published the package's GROSS expectation under the
+     * name {@code marketEvAfterCostsCents}. There is no EV lane to state in that case, so this
+     * states the absence and its reason instead.</p>
+     */
     public static EconomicAssessment assessExact(Candidate c, RiskProfile risk, EvidenceProfile evidence,
                                                   EvalContext ctx, boolean mechanicallyEligible,
-                                                  List<String> mechanicalFailures, long roundTripFeesCents) {
+                                                  List<String> mechanicalFailures, Long roundTripFeesCents) {
+        if (roundTripFeesCents == null) {
+            List<String> reasons = new ArrayList<>();
+            if (mechanicalFailures != null) reasons.addAll(mechanicalFailures);
+            reasons.add(UNKNOWN_FEES_REASON);
+            return new EconomicAssessment(Verdict.UNAVAILABLE,
+                    mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
+                    mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
+                    UNKNOWN_FEES_REASON, null, null, null, null,
+                    evidence != null && evidence.observedFor("endorsement"), reasons);
+        }
         return assess(c, risk, evidence, ctx, mechanicallyEligible, mechanicalFailures,
                 Math.max(0, roundTripFeesCents));
     }

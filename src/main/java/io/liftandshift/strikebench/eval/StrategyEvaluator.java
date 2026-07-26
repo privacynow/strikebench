@@ -59,7 +59,7 @@ public final class StrategyEvaluator {
      */
     public StrategyEvaluation assessExact(Candidate c, StrategySpec spec, EvalContext ctx,
                                           boolean mechanicallyEligible,
-                                          List<String> mechanicalFailures, long roundTripFeesCents) {
+                                          List<String> mechanicalFailures, Long roundTripFeesCents) {
         CapitalProfile cap = capital.profile(c, ctx);
         VolatilityProfile vol = volatility.profile(ctx);
         RiskProfile rsk = risk.profile(c, ctx);

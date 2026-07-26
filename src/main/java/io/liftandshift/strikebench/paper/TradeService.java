@@ -350,7 +350,7 @@ public final class TradeService {
                     + " but only " + Money.fmt(buyingPowerBefore) + " is available");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
-                p.entryNet, p.fees, p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
+                p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
                 cashBeforeCents, blocks.isEmpty() ? cashAfter : cashBeforeCents,
                 reservedBeforeCents, blocks.isEmpty() ? reservedAfter : reservedBeforeCents,
                 buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
@@ -384,7 +384,7 @@ public final class TradeService {
                     + ". Analysis remains visible, but the account cannot fund it as entered.");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
-                p.entryNet, p.fees, p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
+                p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
                 acct.cashCents(), blocks.isEmpty() ? cashAfter : acct.cashCents(),
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
@@ -867,7 +867,7 @@ public final class TradeService {
                     + ". Analysis remains visible, but the account cannot fund it as entered.");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
-                p.entryNet, p.fees, p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
+                p.maxLoss, p.maxProfit, p.breakevens, p.pop, p.ev, p.reserve,
                 trackedCashCents, blocks.isEmpty() ? cashAfter : trackedCashCents,
                 0, blocks.isEmpty() ? reservedAfter : 0,
                 trackedCashCents, blocks.isEmpty() ? cashAfter - reservedAfter : trackedCashCents,
@@ -933,6 +933,13 @@ public final class TradeService {
                 throw new TradeRejectedException(List.of("Needs " + needed + " free shares of "
                         + symbol + " but only " + Math.max(0, free) + " are free"));
             }
+        }
+        // entry_underlying_cents is the anchor every later P/L, review benchmark and settlement
+        // fallback measures against. open() already rejects a blocked plan, so this is unreachable
+        // today — it exists so a future path cannot persist "unknown spot" as 0 and have every
+        // downstream number silently measure from a $0.00 stock (§3.2).
+        if (p.underlyingCents() == null) {
+            throw new TradeRejectedException(List.of("No underlying price is available to anchor this position's entry"));
         }
         String now = now();
         long cash = acct.cashCents(), reserved = acct.reservedCents();
@@ -1702,28 +1709,39 @@ public final class TradeService {
                 .mapToLong(Long::longValue).max().orElse(0);
         out.put("concentrationPct", facts.totalMaxLossCents() > 0
                 ? Math.round(100.0 * worstSymbol / facts.totalMaxLossCents()) : 0);
-        // Audit §15.5: each trade's share of defined book risk, and its rank, are BOOK facts — they
-        // depend on every other open trade. The browser derived both: it divided maxLoss by the
-        // heat total, and it ranked by sorting whatever rows it happened to be holding, so a
-        // filtered or paged roster produced a confident, wrong "2nd of 4".
+        // Audit §15.5 / §3.1: each trade's share of defined book risk, and its rank, are BOOK facts
+        // — they depend on every other open trade. There is exactly ONE owner of that rule,
+        // BookRiskService.shareRoster: it names the denominator, shares one rank between positions
+        // carrying identical risk (1, 2, 2, 4), and withholds share and rank WITH A REASON when
+        // there is no book total. Heat does not re-derive any of that; it projects the canonical
+        // roster onto the wire, so this endpoint and the Book receipt can never disagree.
+        BookRiskService.BookShareRoster roster =
+                BookRiskService.shareRoster(accountId, facts.trades(), facts.totalMaxLossCents());
         List<Map<String, Object>> rows = new ArrayList<>();
-        List<TradeRecord> ranked = new ArrayList<>(facts.trades());
-        ranked.sort(java.util.Comparator.comparingLong(TradeRecord::maxLossCents).reversed()
-                .thenComparing(TradeRecord::id));
-        for (int index = 0; index < ranked.size(); index++) {
-            TradeRecord trade = ranked.get(index);
+        for (BookRiskService.BookShareRow shareRow : roster.rows()) {
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("tradeId", trade.id());
-            row.put("symbol", trade.symbol());
-            row.put("maxLossCents", trade.maxLossCents());
+            row.put("tradeId", shareRow.tradeId());
+            row.put("symbol", shareRow.symbol());
+            row.put("strategy", shareRow.strategy());
+            row.put("maxLossCents", shareRow.riskCents());
             // Null, not zero: with no defined risk in the book there is no share to state.
-            row.put("riskSharePct", facts.totalMaxLossCents() > 0
-                    ? 100.0 * trade.maxLossCents() / facts.totalMaxLossCents() : null);
-            row.put("riskRank", index + 1);
+            row.put("riskSharePct", shareRow.sharePct());
+            row.put("riskRank", shareRow.rank());
+            row.put("riskRankOf", shareRow.rankOf());
+            row.put("denominatorCents", shareRow.denominatorCents());
+            row.put("denominatorBasis", shareRow.denominatorBasis());
+            row.put("shareUnavailableReason", shareRow.unavailableReason());
             rows.add(row);
         }
         out.put("positions", List.copyOf(rows));
-        out.put("rankedPositions", rows.size());
+        // Only positions that actually carry a rank are counted as ranked; an unavailable roster
+        // reports 0 ranked positions and says why, rather than implying an "of N" nobody can use.
+        out.put("rankedPositions", roster.available() ? roster.positions() : 0);
+        out.put("bookShareAvailable", roster.available());
+        out.put("bookShareUnavailableReason", roster.unavailableReason());
+        out.put("bookShareDenominatorCents", roster.denominatorCents());
+        out.put("bookShareDenominatorBasis", roster.denominatorBasis());
+        out.put("bookShareBasis", roster.basis());
         out.put("earlyAssignmentLiquidityCents", facts.theoreticalShortPutObligationCents());
         out.put("physicalAssignmentCashCents", facts.physicalAssignmentCashCents());
         out.put("assignmentReserveReleasedCents", facts.assignmentReserveReleasedCents());
@@ -2131,14 +2149,18 @@ public final class TradeService {
 
     // ---- Plan computation ----
 
+    // underlyingCents is a NULLABLE Long, not a primitive: a plan refused before a lane-owned
+    // underlying mark existed has no spot, and 0 would be a $0.00 stock (§3.2/§3.3). Every priced
+    // path below passes Money.toCents(underlying) on a non-null underlying; only the pre-pricing
+    // refusals pass null, and their reason is already in `blocks`.
     private record Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
-                        Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+                        Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
                         long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
                         List<Map<String, Object>> payoff, Map<String, Object> analytics,
                         PackagePriceReceipt price) {
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
-             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+             Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
              List<Map<String, Object>> payoff, PackagePriceReceipt price) {
@@ -2148,7 +2170,7 @@ public final class TradeService {
         }
 
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
-             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+             Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
@@ -2156,7 +2178,7 @@ public final class TradeService {
         }
 
         Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
-             Long maxProfit, List<String> breakevens, Double pop, Long ev, long underlyingCents,
+             Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens, pop, ev,
@@ -2190,7 +2212,8 @@ public final class TradeService {
         else if (req.qty() > 100 && !analysisOnly) blocks.add("Quantity exceeds the 100-contract practice cap");
         if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
         if (!blocks.isEmpty()) {
-            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+            // Refused before any market was consulted: there is no spot to report, so report none.
+            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, null,
                     Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
         }
@@ -2221,7 +2244,10 @@ public final class TradeService {
             }
         }
         if (!blocks.isEmpty()) {
-            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+            // A dead leg or a non-executable lane refuses the package even when the spot IS known;
+            // report the spot we actually have and null only when there truly is none.
+            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null,
+                    underlying == null ? null : Money.toCents(underlying),
                     Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
         }
@@ -2374,7 +2400,9 @@ public final class TradeService {
             snapshotLegs.add(snap);
         }
         if (!blocks.isEmpty()) {
-            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, 0,
+            // Leg-level refusal. `underlying` is non-null here (the null case returned above), so
+            // the spot is a fact we have and must report rather than flatten to 0.
+            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
         }
@@ -2619,8 +2647,14 @@ public final class TradeService {
                     + (tte.sessions() == 1 ? "s" : "") + " to the nearest expiration ("
                     + tte.calendarDays() + " calendar days" + weekend
                     + ") — small moves swing the P/L hard and there is little time to be wrong");
-            double emOneSession = spot * ivAvg * Math.sqrt(1.0 / 252.0);
-            for (java.math.BigDecimal k : shortStrikes) {
+            // §3.1: the one-session expected move comes from the ONE owner of that fact, the
+            // canonical risk-neutral range — not from a local spot·iv·√(1/252) linearization that
+            // happened to sit next to it. Null when IV/spot cannot support a range, and then this
+            // warning simply is not made rather than being made against a zero-width move.
+            Double emOneSession = oneSessionExpectedMove(spot, ivAvg,
+                    io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled),
+                    (int) Math.max(1, tte.calendarDays()), rfr);
+            for (java.math.BigDecimal k : emOneSession == null ? List.<java.math.BigDecimal>of() : shortStrikes) {
                 if (Math.abs(k.doubleValue() - spot) <= emOneSession) {
                     warnings.add("Pin/assignment risk: short strike " + k.stripTrailingZeros().toPlainString()
                             + " sits INSIDE the one-session expected move (~" + Money.fmt(Math.round(emOneSession * 100))
@@ -2632,7 +2666,8 @@ public final class TradeService {
 
         if (riskCurve.maxLossUnbounded()) {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
-            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
+            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
+                    io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
                     snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
                     0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
@@ -2675,7 +2710,8 @@ public final class TradeService {
         if (shareContext) snapshot.put("heldShareContextShares",
                 Math.multiplyExact(contextSharesPerUnit, req.qty()));
 
-        Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte, shortStrikes,
+        Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
+                io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
                 snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
                 fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
@@ -2771,8 +2807,21 @@ public final class TradeService {
      * labeled), EV sensitivity to the vol input, execution quality vs the books, a DTE-aware
      * management plan, and a server-computed verdict — so Beginner and Expert read the SAME truth.
      */
+    /**
+     * §3.1: ONE one-session expected move, half the width of the canonical risk-neutral range over a
+     * single session. Null when {@link io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange}
+     * cannot state a range at all, so callers omit the claim instead of asserting a zero move.
+     */
+    private static Double oneSessionExpectedMove(double spot, double ivAvg, LocalDate expiry,
+                                                 int calendarDays, double rfr) {
+        var session = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                spot, ivAvg, 1, expiry == null ? null : expiry.toString(), calendarDays, rfr);
+        return session == null ? null : (session.p84() - session.p16()) / 2;
+    }
+
     private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg, double t,
                                                io.liftandshift.strikebench.market.OptionTime.Measure tte,
+                                               LocalDate nearestExpiry,
                                                List<BigDecimal> shortStrikes,
                                                List<Map<String, Object>> snaps, int qty,
                                                long entryNet, long optionEntryNet,
@@ -2837,18 +2886,30 @@ public final class TradeService {
         // thetaCentsPerDay, vegaCentsPerPoint), aggregated from the same per-leg marks already priced.
         var packageGreeks = packageGreeks(snaps, qty);
         if (packageGreeks != null) out.put("greeks", packageGreeks);
-        // The ±1σ expected move to the nearest expiry — THE ONE canonical risk-neutral terminal
-        // (LognormalTerminal session-clocked + the shared 0.994 width, exactly as
-        // SimulationEngine.MarketImpliedRange and the /expected-move endpoint compute it), not a
-        // second exp(±iv·√t) band. The UI draws it on the payoff chart so 'shorts inside the
-        // expected move' is VISIBLE, not prose.
-        var emTerm = io.liftandshift.strikebench.pricing.LognormalTerminal.of(
-                spot, ivAvg, Math.max(1, tte.sessions()) / 252.0, rfr);
-        double emWidth = emTerm.sd() * 0.994457883209753;
+        // The ±1σ expected move to the nearest expiry, CONSUMED from the one owner of that fact:
+        // SimulationEngine.MarketImpliedRange, the same computation the /expected-move endpoint and
+        // the ensemble decision map publish. This block used to re-run LognormalTerminal with the
+        // shared 0.994 width inline and state a THIRD formula for the one-session move
+        // (spot·iv·√(1/252)), so the trade preview and the market receipt were two owners of one
+        // number. Aligning two formulas by hand is not the same as having one author (§3.1), and the
+        // inline version also turned an invalid IV into a zero-width band pinned to spot instead of
+        // saying the move could not be stated (§3.2). The UI draws this on the payoff chart so
+        // 'shorts inside the expected move' is VISIBLE, not prose.
         Map<String, Object> em = new LinkedHashMap<>();
-        em.put("lowCents", Math.round(Math.exp(emTerm.mu() - emWidth) * 100));
-        em.put("highCents", Math.round(Math.exp(emTerm.mu() + emWidth) * 100));
-        em.put("oneSessionCents", Math.round(spot * ivAvg * Math.sqrt(1.0 / 252.0) * 100));
+        int emCalendarDays = (int) Math.max(1, tte.calendarDays());
+        var emRange = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                spot, ivAvg, tte.sessions(), nearestExpiry == null ? null : nearestExpiry.toString(),
+                emCalendarDays, rfr);
+        if (emRange == null) {
+            em.put("unavailableReason", "This package has no positive implied volatility and spot to"
+                    + " scale a market-implied range from, so no expected move is stated.");
+        } else {
+            em.put("lowCents", Math.round(emRange.p16() * 100));
+            em.put("highCents", Math.round(emRange.p84() * 100));
+            Double emSession = oneSessionExpectedMove(spot, ivAvg, nearestExpiry, emCalendarDays, rfr);
+            if (emSession != null) em.put("oneSessionCents", Math.round(emSession * 100));
+            em.put("basis", emRange.basis());
+        }
         out.put("expectedMove", em);
         // R3: three clocks, separately — the data's own stamp, and when WE judged it. (fetchedAt
         // collapses into sourceAsOf for feeds without a distinct source stamp.)

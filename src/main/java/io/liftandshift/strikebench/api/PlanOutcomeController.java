@@ -925,6 +925,9 @@ final class PlanOutcomeController {
             canvasJson = Json.MAPPER.createObjectNode();
             canvasJson.putArray("underlying");
             canvasJson.putArray("underlyingSteps");
+            // No frames were valued, so there is no animation contract to publish. The desk must
+            // say the story is not valued rather than scrub an absent track (§3.3).
+            canvasJson.putNull("animation");
             canvasJson.putArray("positions");
             canvasJson.putArray("comparison");
             canvasJson.putArray("notes").add("The stored fan remains available, but its same-symbol "

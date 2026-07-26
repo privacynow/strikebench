@@ -79,6 +79,12 @@ class UnpricedPackageAssessmentTest {
         @Override public Optional<LegMark> legMark(String symbol, Leg leg) { return Optional.empty(); }
     }
 
+    /** Nothing is quoted — not even the stock. The spot itself is the absent financial fact. */
+    private static final class NoMarksAtAll implements MarksSource {
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) { return Optional.empty(); }
+        @Override public Optional<LegMark> legMark(String symbol, Leg leg) { return Optional.empty(); }
+    }
+
     @BeforeEach
     void setUp() {
         db = TestDb.fresh();
@@ -86,6 +92,11 @@ class UnpricedPackageAssessmentTest {
         AuditLog audit = new AuditLog(db, CLOCK);
         trades = new TradeService(db, cfg, new NoOptionMarks(), audit, CLOCK);
         accountId = new AccountService(db, cfg, audit, CLOCK).getOrCreateDefault().id();
+    }
+
+    private TradeService unquotedMarket() {
+        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
+        return new TradeService(db, cfg, new NoMarksAtAll(), new AuditLog(db, CLOCK), CLOCK);
     }
 
     @AfterEach
@@ -214,6 +225,61 @@ class UnpricedPackageAssessmentTest {
     }
 
     /**
+     * §3.1 (review P0 #7): the preview publishes ONE package price. It used to carry the canonical
+     * receipt AND two primitive twins, {@code entryNetPremiumCents} and {@code feesOpenCents}. On a
+     * priced package the three agreed; on THIS refused one the receipt said "no price, and here is
+     * why" while the twins said 0 and 0 — a substituted zero (§3.2) sitting on the wire under the
+     * names a surface was most likely to read. The published shape is what pins it.
+     */
+    @Test
+    void aRefusedPreviewPublishesExactlyOnePackagePriceAndNoZeroTwins() {
+        TradePreview preview = trades.analyze(creditPutSpread());
+        assertThat(preview.ok()).isFalse();
+
+        var wire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(preview);
+        assertThat(wire.has("entryNetPremiumCents")).isFalse();
+        assertThat(wire.has("feesOpenCents")).isFalse();
+
+        // The one authority states the absence, with its reason, in the one place.
+        assertThat(wire.at("/price/grossPackageNetCents").isNull()).isTrue();
+        assertThat(wire.at("/price/openingFeesCents").isNull()).isTrue();
+        assertThat(wire.at("/price/unavailableReason").asText()).contains("No market or model mark");
+        assertThat(preview.price().roundTripFeesCents()).isNull();
+    }
+
+    /**
+     * §3.2: with no commission on the receipt there is no "after costs" to state. Every consumer of
+     * the round trip — ticket review, the Plan builder, tracked and Practice analysis — derived it as
+     * {@code preview.feesOpenCents() * 2}, which on this package was 0, so the assessment published
+     * the package's GROSS expectation under the name {@code marketEvAfterCostsCents} and a $0.00
+     * round-trip cost beside it.
+     */
+    @Test
+    void anUnknownCommissionRefusesToStateAnyExpectedValueAfterCosts() {
+        TradeService.OpenRequest request = creditPutSpread();
+        TradePreview preview = trades.analyze(request);
+        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
+
+        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate, spec(), ctx(),
+                preview.ok(), preview.blockReasons(), preview.price().roundTripFeesCents());
+        EconomicAssessment economics = evaluation.assessment().economics();
+
+        assertThat(economics.verdict()).isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
+        assertThat(economics.estimatedRoundTripFeesCents()).isNull();
+        assertThat(economics.marketEvAfterCostsCents()).isNull();
+        assertThat(economics.realizedVolEvAfterCostsCents()).isNull();
+        assertThat(economics.reasons()).contains(EconomicAssessment.UNKNOWN_FEES_REASON);
+        // The refusal is still complete: the mechanical failures are carried, not replaced.
+        assertThat(economics.reasons())
+                .anySatisfy(reason -> assertThat(reason).contains("No market or model mark"));
+
+        // And it stays null all the way onto the wire, rather than serializing as a free round trip.
+        var wire = io.liftandshift.strikebench.util.Json.MAPPER
+                .valueToTree(ApiResponses.EvaluationReceipt.of(evaluation));
+        assertThat(wire.at("/assessment/economics/estimatedRoundTripFeesCents").isNumber()).isFalse();
+    }
+
+    /**
      * The reviewer's exact reproduction, pinned: feed the unpriced receipt straight to the
      * management planner. It used to throw NPE on {@code optionNetPremiumCents().longValue()}.
      */
@@ -256,6 +322,46 @@ class UnpricedPackageAssessmentTest {
                 .anySatisfy(failure -> assertThat(failure).contains("already expired"));
         assertThat(evaluation.ivContext().entrySide()).isEqualTo(IvContext.EntrySide.UNAVAILABLE);
         assertThat(evaluation.risk().terminalPayoff().available()).isFalse();
+    }
+
+    /**
+     * §3.2 for the SPOT, the last primitive financial quantity on this record. When no lane owns an
+     * underlying mark there is no spot, and the preview must say so: {@code underlyingCents} was a
+     * primitive {@code long} that returned 0, which a surface cannot distinguish from a stock that
+     * genuinely trades at $0.00 — and 0 is not merely wrong, it is the divisor and the anchor every
+     * later percent-move, review benchmark and share-count derives from.
+     */
+    @Test
+    void anUnquotedUnderlyingReportsNoSpotRatherThanAZeroDollarStock() {
+        TradePreview preview = unquotedMarket().analyze(creditPutSpread());
+
+        assertThat(preview.ok()).isFalse();
+        assertThat(preview.underlyingCents()).isNull();
+        // ABSENT WITH A REASON: blockReasons is this record's reason channel, and it names the
+        // symbol whose price is missing rather than leaving the null unexplained.
+        assertThat(preview.blockReasons()).anySatisfy(reason ->
+                assertThat(reason).contains("No current price for AAPL"));
+
+        // On the WIRE, not just in Java: the shared mapper is NON_NULL by default, so without the
+        // per-property ALWAYS the key would vanish and the browser would read `undefined`.
+        assertThat(io.liftandshift.strikebench.util.Json.write(preview))
+                .contains("\"underlyingCents\":null");
+    }
+
+    /**
+     * The other half of the contract, and the reason this is not a blanket "null on any refusal":
+     * a refusal that happens WITH a quoted underlying must still publish the spot it can prove.
+     * Nulling a known fact is the same §3.2 violation pointed the other way.
+     */
+    @Test
+    void aRefusalThatStillKnowsTheSpotPublishesIt() {
+        TradePreview expired = trades.analyze(expiredLeg());
+        assertThat(expired.ok()).isFalse();
+        assertThat(expired.underlyingCents()).isEqualTo(10_000L);
+
+        TradePreview unmarkedLegs = trades.analyze(creditPutSpread());
+        assertThat(unmarkedLegs.ok()).isFalse();
+        assertThat(unmarkedLegs.underlyingCents()).isEqualTo(10_000L);
     }
 
     /** The API surface the desk actually calls must degrade the same way — no 500, no blank lane. */

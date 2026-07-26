@@ -49,6 +49,17 @@ final class TrackedPackageAnalysisService {
     }
 
     /**
+     * §3.1/§3.2: the ONE round-trip commission for an exact package, read off the package's own §7.2
+     * receipt. Both analysis lanes wrote {@code Math.multiplyExact(preview.feesOpenCents(), 2L)} for
+     * themselves against a primitive that was 0 on any package the preview refused to price, so a
+     * tracked or Practice position with no price still published an "EV after costs" equal to its
+     * gross EV. Null now, and the assessment says so.
+     */
+    private static Long roundTripFees(io.liftandshift.strikebench.paper.TradePreview preview) {
+        return preview == null || preview.price() == null ? null : preview.price().roundTripFeesCents();
+    }
+
+    /**
      * The Practice lane enters the same lifecycle fact composer and policy layer as tracked
      * packages, while retaining Practice's own canonical pricing, balances, and transformations.
      * Unlike a tracked analysis it is not persisted into tracked-account decision tables.
@@ -66,7 +77,7 @@ final class TrackedPackageAnalysisService {
         String world = "DEMO".equals(account.type()) ? "demo" : account.worldId();
         var evaluation = evaluations.assessExact(request.symbol(), candidate, availableAfterClose,
                 AnalysisContext.OBSERVED, world, preview.ok(), preview.blockReasons(),
-                Math.multiplyExact(preview.feesOpenCents(), 2L), exposure);
+                roundTripFees(preview), exposure);
         var lifecycleReceipt = lifecycle.compose(request, preview, evaluation);
         var currentMark = safeCurrentMark(tradeId);
         var opening = trade.legs().stream().map(leg ->
@@ -113,7 +124,7 @@ final class TrackedPackageAnalysisService {
                 .toContext(PositionDomain.ExecutionLane.REAL);
         var evaluation = evaluations.assessExact(request.symbol(), candidate, summary.bookCashCents(),
                 AnalysisContext.OBSERVED, null, preview.ok(), preview.blockReasons(),
-                Math.multiplyExact(preview.feesOpenCents(), 2L), exposure,
+                roundTripFees(preview), exposure,
                 declaredAccountObjective(objectiveRevision));
         String lane = analysisLane(evaluation.evidence().perDimension().get("pricing"));
         var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());

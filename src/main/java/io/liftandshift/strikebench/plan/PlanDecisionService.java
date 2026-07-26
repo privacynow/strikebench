@@ -227,7 +227,14 @@ public final class PlanDecisionService {
         Number pMaxProfit = nestedNumber(preview.analytics(), "probabilityMap", "pMaxProfit");
         Number pMaxLoss = nestedNumber(preview.analytics(), "probabilityMap", "pMaxLoss");
         Number cvar = nestedNumber(preview.analytics(), "probabilityMap", "cvar95Cents");
-        Long actualEntry = trade == null ? preview.entryNetPremiumCents() : trade.entryNetPremiumCents();
+        // §3.1: the frozen decision records the package net from the ONE §7.2 receipt when no trade
+        // was created, and from the persisted trade when one was. `preview.entryNetPremiumCents()`
+        // was the receipt's grossPackageNetCents restated as a primitive, so a decision recorded
+        // against an unpriced preview froze proposed_net_cents = 0 instead of NULL (§3.2) — a
+        // reviewable receipt claiming the user proposed a costless package.
+        Long actualEntry = trade == null
+                ? (preview.price() == null ? null : preview.price().grossPackageNetCents())
+                : trade.entryNetPremiumCents();
         Integer qty = switch (action) {
             case "TRADE" -> trade == null ? null : trade.qty();
             case "BROKER" -> input.requestedQty();
@@ -268,7 +275,8 @@ public final class PlanDecisionService {
                     "INSERT INTO plan_decision_ack(decision_id,ack_key,ack_at) VALUES(?,?,?)", id, key, now);
         }
         metric(connection, id, "entryNetPremiumCents", actualEntry, true);
-        metric(connection, id, "feesOpenCents", preview.feesOpenCents(), true);
+        metric(connection, id, "feesOpenCents",
+                preview.price() == null ? null : preview.price().openingFeesCents(), true);
         metric(connection, id, "reserveCents", preview.reserveCents(), true);
         metric(connection, id, "buyingPowerAfterCents", preview.buyingPowerAfterCents(), true);
         metric(connection, id, "underlyingCents", preview.underlyingCents(), true);

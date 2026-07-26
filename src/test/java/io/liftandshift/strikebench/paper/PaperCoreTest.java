@@ -213,7 +213,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         // Executable credit for the 100/95 put spread in the stub book: 3.00 - 1.20 = 1.80/sh = $180.
         TradePreview atMarket = trades.preview(creditPutSpread(acct.id(), 1));
-        assertThat(atMarket.entryNetPremiumCents()).isEqualTo(180_00);
+        assertThat(atMarket.price().grossPackageNetCents()).isEqualTo(180_00);
         assertThat(atMarket.maxLossCents()).isEqualTo(500_00 - 180_00);
 
         // The SAME package at YOUR price ($1.60 credit — a worse fill): max loss, breakevens and
@@ -222,9 +222,9 @@ class PaperCoreTest {
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced", null, null, 160_00L, 200L, "IMPORT");
         TradePreview atMine = trades.preview(mine);
-        assertThat(atMine.entryNetPremiumCents()).isEqualTo(160_00);
+        assertThat(atMine.price().grossPackageNetCents()).isEqualTo(160_00);
         assertThat(atMine.maxLossCents()).isEqualTo(500_00 - 160_00);
-        assertThat(atMine.feesOpenCents()).isEqualTo(200L); // fee override respected
+        assertThat(atMine.price().openingFeesCents()).isEqualTo(200L); // fee override respected
         assertThat(atMine.warnings()).anySatisfy(w -> assertThat(w).contains("YOUR net price"));
 
         // The analytics contract every Review consumer shares.
@@ -273,7 +273,7 @@ class PaperCoreTest {
                 "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
                 null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.market());
         TradePreview marketPreview = trades.preview(market);
-        assertThat(marketPreview.entryNetPremiumCents())
+        assertThat(marketPreview.price().grossPackageNetCents())
                 .as("MARKET ignores entered proposal prices and fills the natural package")
                 .isEqualTo(180_00L);
         assertThat(marketPreview.price().executability())
@@ -288,7 +288,7 @@ class PaperCoreTest {
                 null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(160_00L));
         TradePreview improved = trades.preview(marketableLimit);
         assertThat(improved.ok()).isTrue();
-        assertThat(improved.entryNetPremiumCents())
+        assertThat(improved.price().grossPackageNetCents())
                 .as("a marketable limit receives the better natural executable price")
                 .isEqualTo(180_00L);
         assertThat(improved.price().restingLimitNetCents()).isEqualTo(160_00L);
@@ -303,7 +303,7 @@ class PaperCoreTest {
                 null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(200_00L));
         TradePreview resting = trades.preview(restingLimit);
         assertThat(resting.ok()).isFalse();
-        assertThat(resting.entryNetPremiumCents()).isEqualTo(200_00L);
+        assertThat(resting.price().grossPackageNetCents()).isEqualTo(200_00L);
         assertThat(resting.blockReasons()).anySatisfy(reason ->
                 assertThat(reason).contains("RESTING").contains("not presently executable"));
         assertThat(resting.price().executability())
@@ -368,7 +368,7 @@ class PaperCoreTest {
 
         TradePreview preview = trades.analyze(mixed);
         assertThat(preview.ok()).isTrue();
-        assertThat(preview.entryNetPremiumCents()).isEqualTo(305_00L);
+        assertThat(preview.price().grossPackageNetCents()).isEqualTo(305_00L);
         assertThat(preview.legs()).extracting(row -> row.get("fillBasis"))
                 .containsExactly("USER_PROPOSED", "EXECUTABLE_BOOK");
         assertThat(preview.warnings()).anySatisfy(message ->
@@ -614,8 +614,8 @@ class PaperCoreTest {
 
         TradeService.RollResult rolled = trades.roll(opened.id(), replacement, true, null,
                 close.closingCashCents(), close.closingFeesCents(),
-                new TradeService.ExpectedOpen(replacementPreview.entryNetPremiumCents(),
-                        replacementPreview.feesOpenCents(), replacementPreview.reserveCents(),
+                new TradeService.ExpectedOpen(replacementPreview.price().grossPackageNetCents(),
+                        replacementPreview.price().openingFeesCents(), replacementPreview.reserveCents(),
                         replacementPreview.maxLossCents(), replacementPreview.maxProfitCents()));
 
         assertThat(rolled.actionRealizedClosingCents()).isEqualTo(close.actionRealizedPnlCents());
@@ -645,8 +645,8 @@ class PaperCoreTest {
                 (connection, closed, after, actionRealized, realizedToDate) -> {
                     throw new java.sql.SQLException("roll receipt failed");
                 }, close.closingCashCents(), close.closingFeesCents(),
-                new TradeService.ExpectedOpen(afterPreview.entryNetPremiumCents(),
-                        afterPreview.feesOpenCents(), afterPreview.reserveCents(),
+                new TradeService.ExpectedOpen(afterPreview.price().grossPackageNetCents(),
+                        afterPreview.price().openingFeesCents(), afterPreview.reserveCents(),
                         afterPreview.maxLossCents(), afterPreview.maxProfitCents())))
                 .hasMessageContaining("roll receipt failed");
 
@@ -700,7 +700,7 @@ class PaperCoreTest {
                 "bullish", "month", "balanced", null, null, 200_00L, null, "TICKET");
 
         TradePreview preview = trades.preview(resting);
-        assertThat(preview.entryNetPremiumCents()).isEqualTo(200_00L); // analysis remains useful
+        assertThat(preview.price().grossPackageNetCents()).isEqualTo(200_00L); // analysis remains useful
         assertThat(preview.ok()).isFalse();
         assertThat(preview.blockReasons()).anySatisfy(r -> assertThat(r)
                 .contains("resting limit orders").contains("cannot claim this paper order filled"));
@@ -764,7 +764,7 @@ class PaperCoreTest {
                 "neutral", "week", "balanced", null, null, 330_00L, 200L, "IMPORT");
         TradePreview p = trades.preview(condor);
         assertThat(p.ok()).isTrue();
-        assertThat(p.entryNetPremiumCents()).isEqualTo(330_00); // judged at MY price
+        assertThat(p.price().grossPackageNetCents()).isEqualTo(330_00); // judged at MY price
         // The full map, present and coherent: ATM shorts at 2 sessions = max loss is a REAL risk.
         @SuppressWarnings("unchecked")
         Map<String, Object> prob = (Map<String, Object>) p.analytics().get("probabilityMap");
@@ -858,8 +858,8 @@ class PaperCoreTest {
     private static TradeService.ExpectedAdjustment expectedAdjustment(TradeService.AdjustmentAssessment preview) {
         return new TradeService.ExpectedAdjustment(preview.closingCashCents(), preview.openingCashCents(),
                 preview.closingFeesCents(), preview.openingFeesCents(),
-                preview.survivor().preview().entryNetPremiumCents(),
-                preview.survivor().preview().feesOpenCents(), preview.reserveAfterCents(),
+                preview.survivor().preview().price().grossPackageNetCents(),
+                preview.survivor().preview().price().openingFeesCents(), preview.reserveAfterCents(),
                 preview.survivor().preview().maxLossCents(),
                 preview.survivor().preview().maxProfitCents(), preview.sharesLockedAfter(),
                 TradeService.exactPositionFingerprint(preview.exactAfterRequest()));
@@ -1084,7 +1084,7 @@ class PaperCoreTest {
         Account acct = accounts.getOrCreateDefault();
         TradePreview p = trades.preview(creditPutSpread(acct.id(), 1));
         assertThat(p.ok()).isTrue();
-        assertThat(p.entryNetPremiumCents()).isEqualTo(18000);
+        assertThat(p.price().grossPackageNetCents()).isEqualTo(18000);
         assertThat(p.buyingPowerAfterCents()).isEqualTo(START - 32130);
         assertThat(p.breakevens()).containsExactly("98.2000");
         assertThat(p.popEntry()).isBetween(0.0, 1.0);
@@ -1783,6 +1783,47 @@ class PaperCoreTest {
         assertLedgerInvariants(acct.id());
     }
 
+    /**
+     * §3.1: the preview's expected-move band IS the canonical market-implied range, not a second
+     * lognormal computed beside it. The two used to be aligned by hand in two places
+     * ({@code SimulationEngine.MarketImpliedRange} and this analytics block), which is a coincidence
+     * a future edit can break rather than a single author. Rebuilding the range from the preview's
+     * OWN published inputs and demanding equality is what makes the ownership checkable.
+     */
+    @Test
+    void theExpectedMoveBandIsTheCanonicalMarketImpliedRangeAndNotASecondLognormal() {
+        Account acct = accounts.getOrCreateDefault();
+        // One option leg, so the preview's ivAvg is exactly this leg's published IV.
+        TradePreview p = trades.preview(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced"));
+        assertThat(p.ok()).isTrue();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> em = (Map<String, Object>) p.analytics().get("expectedMove");
+        double spot = p.underlyingCents() / 100.0;
+        double iv = ((Number) p.legs().getFirst().get("iv")).doubleValue();
+        var time = (io.liftandshift.strikebench.market.OptionTime.Measure) p.analytics().get("time");
+        @SuppressWarnings("unchecked")
+        double rate = ((Number) ((Map<String, Object>) p.analytics().get("rate")).get("annual")).doubleValue();
+
+        var canonical = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                spot, iv, time.sessions(), EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
+        assertThat(canonical).isNotNull();
+
+        assertThat(em.get("lowCents")).isEqualTo(Math.round(canonical.p16() * 100));
+        assertThat(em.get("highCents")).isEqualTo(Math.round(canonical.p84() * 100));
+        // The band names the basis the ONE owner states, so a reader can see which computation it is.
+        assertThat(em.get("basis")).isEqualTo(canonical.basis());
+        assertThat((String) em.get("basis")).contains("Risk-neutral lognormal range from ATM IV");
+        assertThat(em).doesNotContainKey("unavailableReason");
+
+        // The one-session move is the same owner over one session, not spot·iv·√(1/252).
+        var oneSession = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                spot, iv, 1, EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
+        assertThat(em.get("oneSessionCents"))
+                .isEqualTo(Math.round((oneSession.p84() - oneSession.p16()) / 2 * 100));
+    }
+
     @Test
     void cashSecuredPutAssignmentBuysSharesAtTheStrike() {
         Account acct = accounts.getOrCreateDefault();
@@ -2116,6 +2157,46 @@ class PaperCoreTest {
         assertThat((Double) rows.get(0).get("riskSharePct"))
                 .isCloseTo(100.0 * (Long) rows.get(0).get("maxLossCents") / total, within(1e-9));
         assertThat(heat.get("rankedPositions")).isEqualTo(2);
+    }
+
+    /**
+     * §3.1 — ONE authority for share and rank. The heat endpoint used to run its own ranking with
+     * {@code index + 1}, so two positions carrying identical defined risk were reported as 1st and
+     * 2nd here while the canonical Book roster shared the rank (1, 1). Heat now projects the
+     * canonical roster, so the same two positions can never rank differently by endpoint.
+     */
+    @Test
+    void portfolioHeatSharesOneRankBetweenEqualRiskPositionsExactlyAsTheBookRoster() {
+        Account acct = accounts.getOrCreateDefault();
+        trades.create(creditPutSpread(acct.id(), 1));
+        trades.create(creditPutSpread(acct.id(), 1));
+
+        Map<String, Object> heat = trades.portfolioHeat(acct.id());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) heat.get("positions");
+
+        assertThat(rows).hasSize(2);
+        assertThat((Long) rows.get(0).get("maxLossCents"))
+                .as("the two positions carry identical defined risk")
+                .isEqualTo((Long) rows.get(1).get("maxLossCents"));
+        assertThat(rows).extracting(row -> row.get("riskRank"))
+                .as("equal risk is one rank, never 1 and 2 by list order")
+                .containsExactly(1, 1);
+        assertThat(rows).extracting(row -> row.get("riskRankOf")).containsExactly(2, 2);
+
+        // and the same rows the canonical Book receipt would state, field for field
+        var canonical = BookRiskService.shareRoster(acct.id(),
+                trades.list(acct.id(), TradeRecord.ACTIVE, 0, 100).trades(),
+                (Long) heat.get("totalMaxLossCents"));
+        assertThat(rows).extracting(row -> row.get("tradeId"))
+                .containsExactlyElementsOf(canonical.rows().stream()
+                        .map(BookRiskService.BookShareRow::tradeId).toList());
+        assertThat(rows).extracting(row -> row.get("riskRank"))
+                .containsExactlyElementsOf(canonical.rows().stream()
+                        .map(row -> (Object) row.rank()).toList());
+        assertThat(rows).extracting(row -> row.get("riskSharePct"))
+                .containsExactlyElementsOf(canonical.rows().stream()
+                        .map(row -> (Object) row.sharePct()).toList());
     }
 
     /** An empty book has no share to state, so it states none rather than a confident zero. */

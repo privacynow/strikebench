@@ -275,7 +275,10 @@ final class TradeController {
             String excludedTradeId) {
         Candidate exact = exactPreviewCandidate(request, preview);
         ApiResponses.EvaluationReceipt evaluation;
-        long roundTripFees = Math.multiplyExact(preview.feesOpenCents(), 2L);
+        // §3.1: the round-trip commission is the §7.2 receipt's own doubling, not a fourth copy of
+        // `feesOpenCents * 2` — and §3.2: null when the package states no commission, so the
+        // assessment reports "no EV after costs" instead of netting the gross EV against $0.
+        Long roundTripFees = preview.price() == null ? null : preview.price().roundTripFeesCents();
         try {
             evaluation = ApiResponses.EvaluationReceipt.of(exactAssessment.assess(
                     request.symbol(), exact, preview.buyingPowerBeforeCents(),
@@ -789,8 +792,12 @@ final class TradeController {
             long effectiveRiskBudgetCents) {
         List<ApiResponses.RiskAcknowledgment> out = new ArrayList<>();
         if (preview == null || preview.analytics() == null) return out;
-        Long afterCosts = preview.expectedValueCents() == null ? null
-                : preview.expectedValueCents() - Math.multiplyExact(preview.feesOpenCents(), 2L);
+        // The EV-is-negative acknowledgment is only offered when BOTH the expectation and the
+        // round-trip commission are known; a $0 substituted commission made this ack claim an
+        // after-cost loss it had not costed (§3.2).
+        Long ackRoundTrip = preview.price() == null ? null : preview.price().roundTripFeesCents();
+        Long afterCosts = preview.expectedValueCents() == null || ackRoundTrip == null ? null
+                : preview.expectedValueCents() - ackRoundTrip;
         if (afterCosts != null && afterCosts < 0) {
             out.add(new ApiResponses.RiskAcknowledgment("ack-ev",
                     "The model expects this trade to LOSE "

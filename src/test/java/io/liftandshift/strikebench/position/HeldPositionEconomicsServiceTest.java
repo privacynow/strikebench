@@ -185,6 +185,40 @@ class HeldPositionEconomicsServiceTest {
                 null, null, "TEST", "PROPOSED");
     }
 
+    /**
+     * §3.1/§3.2 regression: the CLOSING commission is read off the exact preview's own §7.2 receipt.
+     * When that receipt states no commission — every refused or unpriced package — the close is not
+     * quotable, because a close quote that silently omits the commission understates the cost of
+     * getting out by exactly the commission. This used to read the parallel
+     * {@code TradePreview.feesOpenCents} primitive, which was 0 in precisely that case, and
+     * published a confident "executable" close at a $0.00 commission.
+     */
+    @Test void aPreviewWithNoStatedCommissionCannotQuoteACloseAtAll() {
+        var service = new HeldPositionEconomicsService(CLOCK);
+        var request = request(Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO));
+        TradePreview priced = preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L);
+        TradePreview noCommission = new TradePreview(priced.ok(), priced.blockReasons(),
+                priced.warnings(), priced.maxLossCents(), priced.maxProfitCents(), priced.breakevens(),
+                priced.popEntry(), priced.expectedValueCents(), priced.reserveCents(),
+                priced.cashBeforeCents(), priced.cashAfterCents(), priced.reservedBeforeCents(),
+                priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
+                priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
+                priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
+                priced.analytics(), TestPrices.optionOnly(1, 4_700L));
+        assertThat(noCommission.price().openingFeesCents()).isNull();
+
+        PositionLifecycleReceipt receipt = service.compose(request, noCommission, evaluation());
+
+        assertThat(receipt.currentChoice().close().executable()).isFalse();
+        assertThat(receipt.currentChoice().close().unavailableReason())
+                .contains("states no commission");
+        assertThat(receipt.currentChoice().close().price().grossPackageNetCents()).isNull();
+        // And the hold-vs-close lane refuses with it rather than shifting EV by 0 - 0 = 0.
+        assertThat(receipt.currentChoice().holdVsClose().available()).isFalse();
+        assertThat(receipt.currentChoice().holdVsClose().marketEvAfterCostsCents()).isNull();
+    }
+
     private static TradePreview preview(String bid, String ask, String mid,
                                         long entryNet, long reserve) {
         Map<String, Object> leg = new LinkedHashMap<>();
@@ -204,7 +238,7 @@ class HeldPositionEconomicsServiceTest {
         analytics.put("probabilityMap", Map.of("cvar95Cents", -180_000L));
         analytics.put("sourceAsOfEpochMs", 1_942_488_000_000L);
         analytics.put("evaluatedAtEpochMs", 1_942_488_100_000L);
-        return new TradePreview(true, List.of(), List.of(), entryNet, 65,
+        return new TradePreview(true, List.of(), List.of(),
                 1_800_000L, entryNet, List.of("179.53"), .90, -100L, reserve,
                 100_000_000L, 100_000_000L + entryNet - 65,
                 0, reserve, 100_000_000L, 100_000_000L + entryNet - 65 - reserve,

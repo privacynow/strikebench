@@ -182,6 +182,140 @@ class ScenarioCanvasTest {
                 .isEqualTo(position.legs().getFirst().steps().get(2).greeks());
     }
 
+    /**
+     * LEAK 4: the desk used to compute the scenario readout's percent move and vol shift itself,
+     * from a spot and an IV baseline it picked, and print the result as a financial fact. Every
+     * frame now states both against anchors the track names, so the browser has nothing left to
+     * derive.
+     */
+    @Test void everyAnimationFrameStatesItsOwnMoveAndVolShiftAgainstNamedAnchors() {
+        LocalDate anchor = LocalDate.of(2026, 7, 2);
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                6, 1, 0, .30, 0, 0, 0, 6, null, 142, 3);
+        double[][] paths = {
+                {100, 101, 102, 103, 104, 105, 106},
+                {100, 100, 101, 100, 102, 101, 103},
+                {100,  98, 102,  97, 103,  99, 105}
+        };
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
+        // A rising ATM term structure, so a vol shift of zero would be a real failure and not an
+        // accident of a flat surface.
+        var canvas = new ScenarioCanvasSpec("NYSE", null, "no dividend", 0, 0,
+                ScenarioCanvasSpec.SurfaceDynamics.STICKY_MONEYNESS,
+                ScenarioCanvasSpec.SettlementPolicy.CASH_INTRINSIC,
+                ScenarioCanvasSpec.ExercisePolicy.EXPIRATION_ONLY,
+                List.of(new ScenarioCanvasSpec.IvNode(0, .20),
+                        new ScenarioCanvasSpec.IvNode(6, .40)), null).sane(6);
+        var call = new PathPosition(anchor, List.of(Leg.option(LegAction.BUY, OptionType.CALL,
+                new BigDecimal("100"), MarketHours.tradingDateAfter(anchor, 10), 1,
+                BigDecimal.ZERO)));
+
+        var report = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.30), canvas, .04,
+                List.of(new ScenarioCanvasValuator.PositionInput("call", "One call", "PLAN",
+                        "PROPOSAL", call, 1, 900L, true)), 2, List.of());
+
+        var frames = report.underlyingSteps();
+        assertThat(frames).hasSize(7);
+        // Percent move is measured from the ensemble anchor spot, so frame 0 is exactly flat.
+        assertThat(frames)
+                .extracting(ScenarioCanvasValuator.UnderlyingStep::moveFromSpotPct)
+                .containsExactly(0.0, -2.0, 2.0, -3.0, 3.0, -1.0, 5.0);
+        // Vol shift is measured in vol POINTS from frame 0's ATM vol, and it actually moves.
+        assertThat(frames.getFirst().ivShiftPoints()).isEqualTo(0.0);
+        assertThat(frames.get(3).ivShiftPoints()).isCloseTo(10.0,
+                org.assertj.core.data.Offset.offset(.01));
+        assertThat(frames.getLast().ivShiftPoints()).isCloseTo(20.0,
+                org.assertj.core.data.Offset.offset(.01));
+        assertThat(frames)
+                .extracting(ScenarioCanvasValuator.UnderlyingStep::ivShiftPoints)
+                .isSorted();
+
+        var track = report.animation();
+        assertThat(track).isNotNull();
+        assertThat(track.frameRule()).isEqualTo("SELECT_NEAREST_FRAME_NO_INTERPOLATION");
+        assertThat(track.frameSource()).isEqualTo("underlyingSteps");
+        assertThat(track.positionFrameSource()).isEqualTo("positions[].steps");
+        assertThat(track.frameCount()).isEqualTo(frames.size());
+        assertThat(track.frameCount()).isEqualTo(report.positions().getFirst().steps().size());
+        assertThat(track.sourceStepCount()).isEqualTo(6);
+        assertThat(track.stepsPerDay()).isEqualTo(1);
+        assertThat(track.anchorSpot()).isEqualTo(100.0);
+        assertThat(track.horizonSessions()).isEqualTo(frames.getLast().sessionProgress());
+        assertThat(track.baselineAtmIv()).isEqualTo(frames.getFirst().atmIv());
+        assertThat(track.baselineAtmIvSource()).isEqualTo("TRACK_FRAME_0");
+        assertThat(report.notes()).anyMatch(note -> note.contains("Math.round(t x lastLiveFrameIndex)"));
+    }
+
+    /**
+     * LEAK 4: the package's life boundary is a backend fact. The desk used to re-derive it by
+     * string-comparing session dates against leg expirations, which decided how far the scrub could
+     * go — and therefore which frame's P/L it printed.
+     */
+    @Test void eachPackageStatesWhereItsAnimationEndsInsteadOfLettingTheDeskGuess() {
+        LocalDate anchor = LocalDate.of(2026, 7, 2);
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                6, 1, 0, .30, 0, 0, 0, 6, null, 142, 3);
+        double[][] paths = {
+                {100, 101, 102, 103, 104, 105, 106},
+                {100, 100, 101, 100, 102, 101, 103},
+                {100,  98, 102,  97, 103,  99, 105}
+        };
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
+        LocalDate frontExpiry = MarketHours.tradingDateAfter(anchor, 3);
+        var expiresInsideHorizon = new PathPosition(anchor, List.of(
+                Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"), frontExpiry, 1,
+                        BigDecimal.ZERO),
+                Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("110"),
+                        MarketHours.tradingDateAfter(anchor, 5), 1, BigDecimal.ZERO)));
+        var outlivesHorizon = new PathPosition(anchor, List.of(Leg.option(LegAction.BUY,
+                OptionType.CALL, new BigDecimal("100"), MarketHours.tradingDateAfter(anchor, 30),
+                1, BigDecimal.ZERO)));
+        var sharesOnly = new PathPosition(anchor, List.of(
+                Leg.stockShares(LegAction.BUY, 100, new BigDecimal("100"))));
+
+        var report = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.30),
+                ScenarioCanvasSpec.defaults(), .04, List.of(
+                        new ScenarioCanvasValuator.PositionInput("front", "Front diagonal", "REAL",
+                                "TRACKED_STRUCTURE", expiresInsideHorizon, 1, 500L, false),
+                        new ScenarioCanvasValuator.PositionInput("long", "Long dated", "PLAN",
+                                "PROPOSAL", outlivesHorizon, 1, 900L, true),
+                        new ScenarioCanvasValuator.PositionInput("STOCK:MU", "Buy and hold",
+                                "BASELINE", "STOCK_BASELINE", sharesOnly, 1, 10_000L, false)),
+                2, List.of());
+
+        var byKey = report.positions().stream().collect(java.util.stream.Collectors
+                .toMap(ScenarioCanvasValuator.PositionPath::key, path -> path.animation()));
+
+        // The earliest option leg expires 3 sessions out, so the scrub stops on frame 3 of 7.
+        var front = byKey.get("front");
+        assertThat(front.frameCount()).isEqualTo(7);
+        assertThat(front.lastLiveFrameIndex()).isEqualTo(3);
+        assertThat(front.lastLiveSessionProgress()).isEqualTo(3.0);
+        assertThat(front.packageExpiration()).isEqualTo(frontExpiry.toString());
+        assertThat(front.boundarySource()).isEqualTo("EARLIEST_LEG_EXPIRATION");
+        assertThat(front.unavailableReason()).isNull();
+        assertThat(report.underlyingSteps().get(front.lastLiveFrameIndex()).sessionDate())
+                .isEqualTo(frontExpiry.toString());
+
+        // A package that outlives the fan keeps the whole track, and says why.
+        var longDated = byKey.get("long");
+        assertThat(longDated.lastLiveFrameIndex()).isEqualTo(6);
+        assertThat(longDated.boundarySource()).isEqualTo("HORIZON_END");
+        assertThat(longDated.packageExpiration())
+                .isEqualTo(MarketHours.tradingDateAfter(anchor, 30).toString());
+
+        // Shares never expire; the absence of an expiration is named, not faked as day zero.
+        var stock = byKey.get("STOCK:MU");
+        assertThat(stock.lastLiveFrameIndex()).isEqualTo(6);
+        assertThat(stock.boundarySource()).isEqualTo("NO_OPTION_EXPIRATION");
+        assertThat(stock.packageExpiration()).isNull();
+        assertThat(stock.unavailableReason()).isNull();
+    }
+
     @Test void storedEnsembleAnchorDrivesBothCanvasDistributionAndDailyValuationClock() {
         LocalDate ensembleAnchor = LocalDate.of(2026, 7, 1);
         LocalDate positionAsOf = LocalDate.of(2026, 7, 6);

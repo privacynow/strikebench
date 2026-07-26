@@ -30,7 +30,7 @@ class PortfolioOptimizerTest {
                                     EconomicAssessment.Verdict verdict, boolean observed) {
         var economics = new EconomicAssessment(verdict,
                 verdict == EconomicAssessment.Verdict.FAVORABLE ? "WORTH_INVESTIGATING" : "LEARN_FROM",
-                verdict.name(), "test economics", marketEv, historyEv, 0, null, observed, List.of());
+                verdict.name(), "test economics", marketEv, historyEv, 0L, null, observed, List.of());
         return new StrategyEvaluation("id-" + symbol + "-" + (int) score,
                 new StrategySpec(symbol, family, null, null, null, null, null),
                 null,

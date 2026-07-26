@@ -400,7 +400,7 @@ class PlanOutcomeServiceTest {
                 "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z");
         Account account = new Account("acct-decision", "Decision account", "DEMO", 10_000_000L,
                 10_000_000L, 0L, false, "2026-07-12T16:00:00Z", "2026-07-12T16:00:00Z", null);
-        TradePreview preview = new TradePreview(true, List.of(), List.of(), -30_000L, 65L,
+        TradePreview preview = new TradePreview(true, List.of(), List.of(),
                 30_000L, 70_000L, List.of("253"), 0.45, -900L, 0L,
                 10_000_000L, 9_969_935L, 0L, 0L, 10_000_000L, 9_969_935L,
                 "FIXTURE", DataEvidence.of("fixture", Freshness.FIXTURE), 25_000L, null,

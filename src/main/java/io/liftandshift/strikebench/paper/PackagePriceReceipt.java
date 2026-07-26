@@ -168,6 +168,21 @@ public record PackagePriceReceipt(
     }
 
     /**
+     * THE estimated round-trip commission for this package: twice the ONE commission this receipt
+     * states. Every surface that nets an expected value against costs — ticket review, the Plan
+     * builder, tracked-package analysis — used to write
+     * {@code Math.multiplyExact(preview.feesOpenCents(), 2L)} for itself: four copies of one
+     * doubling, reading a field that was a substituted 0 whenever the package could not be priced.
+     *
+     * <p>Null when {@link #openingFeesCents} is unknown. A caller must then say the cost is
+     * unavailable rather than net an EV against a substituted zero, which publishes the package's
+     * GROSS expectation as if the round trip were free (§3.2).</p>
+     */
+    public Long roundTripFeesCents() {
+        return openingFeesCents == null ? null : Math.multiplyExact(openingFeesCents, 2L);
+    }
+
+    /**
      * §3.2 fallthrough guard: no price at all, with the reason attached. Quantity is still stated
      * because the reader still needs to know what size was being priced.
      */

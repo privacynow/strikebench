@@ -1431,7 +1431,20 @@
     var maxLossCents = candidate.maxLossCents == null ? null : Number(candidate.maxLossCents);
     var combinedMaxLossCents = candidate.combinedMaxLossCents == null
       ? null : Number(candidate.combinedMaxLossCents);
+    // §3.1/§3.2: capital has THREE possible authorities on the wire and the bridge used to pick one
+    // silently, so a rail cell labelled "Capital" could actually be carrying the package's max loss
+    // — a different financial fact — with nothing on the model saying which. Name the authority, and
+    // when there is none, publish the REASON beside the null instead of an unexplained absence that
+    // the next renderer coerces to $0.
     var displayCapital = incremental != null ? incremental : economic != null ? economic : maxLossCents;
+    var capBasis = incremental != null ? 'CAPITAL_INCREMENTAL'
+      : economic != null ? 'CAPITAL_ECONOMIC'
+      : maxLossCents != null ? 'PACKAGE_MAX_LOSS' : null;
+    var capUnavailableReason = displayCapital != null ? null
+      : candidate.evaluation && candidate.evaluation.capital
+        ? 'This package’s capital receipt states neither incremental nor economic capital, so the '
+          + 'capital it would tie up is not available.'
+        : 'No capital receipt accompanied this package, so the capital it would tie up is not available.';
     var realisticEv = economics.realizedVolEvAfterCostsCents == null
       ? null : Number(economics.realizedVolEvAfterCostsCents);
     var realisticLow = economics.realisticEvLowAfterCostsCents == null
@@ -1470,6 +1483,10 @@
       bestUpside: candidate.bestUpside || null,
       biggestRisk: candidate.biggestRisk || null,
       cap: displayCapital == null ? null : displayCapital / 100,
+      // Which receipt `cap` actually came from, and — when it came from none — why. A surface that
+      // prints `cap` must print this reason instead when `cap` is null; it may never print $0 (§3.2).
+      capAuthority: capBasis,
+      capUnavailableReason: capUnavailableReason,
       capitalIncremental: incremental == null ? null : incremental / 100,
       capitalEconomic: economic == null ? null : economic / 100,
       capitalBasis: capital.basis || null,

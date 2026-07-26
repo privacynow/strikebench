@@ -45,11 +45,55 @@ public final class ScenarioCanvasValuator {
     public record UnderlyingDay(int day, String sessionDate, double p10, double p50, double p90,
                                 double focusPrice, double atmIv) {}
     /**
-     * One focus-path point on the ensemble's stored simulation grid. {@code sessionProgress} is
-     * {@code step / stepsPerDay}; {@code sessionDate} names the session containing that point.
+     * One focus-path point on the ensemble's stored simulation grid, and one ANIMATION FRAME of the
+     * desk's scenario scrub. {@code sessionProgress} is {@code step / stepsPerDay};
+     * {@code sessionDate} names the session containing that point.
+     *
+     * <p>{@code moveFromSpotPct} and {@code ivShiftPoints} exist so that no client has to derive
+     * them: the desk used to compute "SPX → 5,830 (−2%) · IV +3" from a spot and a baseline it
+     * chose itself, which made the browser the author of three displayed financial facts. Both are
+     * stated here against the anchors named in {@link AnimationTrack} — percent move against
+     * {@code anchorSpot} (frame 0 is exactly {@code 0.0} because {@code paths[*][0] == spot}), and
+     * vol points against {@code baselineAtmIv}. They are never absent when the frame exists,
+     * because both are exact functions of {@code focusPrice}/{@code atmIv} on this same frame.
      */
     public record UnderlyingStep(int step, double sessionProgress, String sessionDate,
-                                 double focusPrice, double atmIv) {}
+                                 double focusPrice, double atmIv,
+                                 double moveFromSpotPct, double ivShiftPoints) {}
+    /**
+     * THE animation contract for one canvas: the desk scrubs a continuous handle, and this names
+     * the exact discrete frames it is allowed to display.
+     *
+     * <p>The law (program §3.1/§3.2): a client may interpolate VISUAL COORDINATES between two
+     * supplied facts, but it must never print an interpolation as a new financial fact. So the desk
+     * does not blend two frames; it SELECTS one. Given a scrub position {@code t} in {@code [0,1]}
+     * and the focused package's {@link PositionAnimation#lastLiveFrameIndex()}:
+     *
+     * <pre>index = Math.round(t * lastLiveFrameIndex)</pre>
+     *
+     * <p>and every value it then prints comes from {@code underlyingSteps[index]} (market facts)
+     * and {@code positions[i].steps[index]} (package facts). The two arrays are built from one
+     * shared {@link PathEnsembleService#displayStepIndices(int)} projection, so index {@code k}
+     * names the same instant in both — the join is a keyed lookup, never a derivation.
+     *
+     * <p>Cost: the whole track ships once inside the response the desk already fetches, so a 60fps
+     * scrub is {@code frameCount} pre-valued facts and zero extra backend calls.
+     *
+     * @param frameRule          {@code "SELECT_NEAREST_FRAME_NO_INTERPOLATION"} — the indexing law above.
+     * @param frameSource        the array carrying the market side of each frame ({@code "underlyingSteps"}).
+     * @param positionFrameSource the array carrying each package's side ({@code "positions[].steps"}).
+     * @param frameCount         frames in the track; indices run {@code 0..frameCount-1}.
+     * @param sourceStepCount    stored simulation steps behind those frames ({@code totalSteps}).
+     * @param stepsPerDay        simulation steps per session, so {@code sessionProgress = step / stepsPerDay}.
+     * @param anchorSpot         the underlying price {@code moveFromSpotPct} is measured from.
+     * @param horizonSessions    {@code sessionProgress} of the last frame.
+     * @param baselineAtmIv      the annualized ATM vol {@code ivShiftPoints} is measured from.
+     * @param baselineAtmIvSource why that baseline is the right one ({@code "TRACK_FRAME_0"}).
+     */
+    public record AnimationTrack(String frameRule, String frameSource, String positionFrameSource,
+                                 int frameCount, int sourceStepCount, int stepsPerDay,
+                                 double anchorSpot, double horizonSessions,
+                                 double baselineAtmIv, String baselineAtmIvSource) {}
     /**
      * THE greeks view — the single shape every backend surface serializes and every client reads:
      * a held position, one of its legs, an idea candidate, a package preview and this canvas. The
@@ -98,17 +142,43 @@ public final class ScenarioCanvasValuator {
     }
     public record Transformation(int day, String sessionDate, int legNo, String leg,
                                  String settlementPolicy, String exercisePolicy, String note) {}
+    /**
+     * Where THIS package's animation ends, as a backend fact.
+     *
+     * <p>A scenario timeline ends when the PACKAGE's life ends, not when the ensemble does: a fan
+     * may run 45 sessions while the package expires at 22, and animating the afterlife shows a
+     * frozen position against a still-moving market. The cut used to be re-derived in the browser
+     * by string-comparing session dates against leg expirations. It is stated here instead, from
+     * {@link PathPosition#expiryDay(Leg)} on the same trading calendar that dated the frames.
+     *
+     * @param frameCount          frames available for this package ({@code steps.size()}).
+     * @param lastLiveFrameIndex  highest index the desk may scrub to; {@code -1} when unavailable.
+     * @param lastLiveSessionProgress {@code sessionProgress} of that frame; null when unavailable.
+     * @param packageExpiration   earliest option-leg expiration (ISO date), or null when there is none.
+     * @param boundarySource      {@code EARLIEST_LEG_EXPIRATION} (cut inside the horizon),
+     *                            {@code HORIZON_END} (the package outlives the fan),
+     *                            {@code NO_OPTION_EXPIRATION} (shares only), or {@code NO_FRAMES}.
+     * @param unavailableReason   null when frames exist; otherwise names why none do, so the desk
+     *                            can say so instead of scrubbing an empty track.
+     */
+    public record PositionAnimation(int frameCount, int lastLiveFrameIndex,
+                                    Double lastLiveSessionProgress, String packageExpiration,
+                                    String boundarySource, String unavailableReason) {}
     public record PositionPath(String key, String label, String lane, String source, boolean proposed,
                                Long entryCostCents, List<PositionDay> days, List<PositionStep> steps,
                                List<PositionStepBand> stepBands,
                                List<DisplayPositionPath> displayPaths,
                                List<LegPath> legs,
-                               List<Transformation> transformations) {
+                               List<Transformation> transformations,
+                               PositionAnimation animation) {
         public PositionPath(String key, String label, String lane, String source, boolean proposed,
                             Long entryCostCents, List<PositionDay> days, List<LegPath> legs,
                             List<Transformation> transformations) {
             this(key, label, lane, source, proposed, entryCostCents, days, List.of(), List.of(),
-                    List.of(), legs, transformations);
+                    List.of(), legs, transformations,
+                    new PositionAnimation(0, -1, null, null, "NO_FRAMES",
+                            "This package was valued on the daily grid only, without per-step "
+                                    + "animation frames."));
         }
     }
     public record ComparisonRow(String key, String label, String lane, boolean proposed,
@@ -116,13 +186,13 @@ public final class ScenarioCanvasValuator {
                                 long horizonP95Cents, long expectedHorizonCents,
                                 double chanceOfGainPct, Long versusStockP50Cents) {}
     public record Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
-                         List<UnderlyingStep> underlyingSteps,
+                         List<UnderlyingStep> underlyingSteps, AnimationTrack animation,
                          List<PositionPath> positions, List<ComparisonRow> comparison,
                          List<String> notes) {
         public Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
                       List<PositionPath> positions, List<ComparisonRow> comparison,
                       List<String> notes) {
-            this(focusSourcePathIndex, underlying, List.of(), positions, comparison, notes);
+            this(focusSourcePathIndex, underlying, List.of(), null, positions, comparison, notes);
         }
     }
 
@@ -415,9 +485,10 @@ public final class ScenarioCanvasValuator {
             IvSpec iv = (legacyIv == null ? IvSpec.flat(ensemble.spec().volAnnual()) : legacyIv).sane();
             ScenarioCanvasSpec canvas = rawCanvas == null ? ScenarioCanvasSpec.defaults()
                     : rawCanvas.sane(ensemble.spec().horizonDays());
+            List<UnderlyingStep> bareFrames = underlyingSteps(paths, ensemble, iv, canvas,
+                    representativePath);
             return new Report(representativePath, underlying(paths, ensemble, iv, canvas,
-                    representativePath), underlyingSteps(paths, ensemble, iv, canvas,
-                    representativePath),
+                    representativePath), bareFrames, animationTrack(ensemble, bareFrames),
                     List.of(), List.of(), List.of("No same-symbol positions were available to reprice."));
         }
         if (rawPositions.size() > 32) throw new IllegalArgumentException("at most 32 positions can share one canvas");
@@ -496,9 +567,13 @@ public final class ScenarioCanvasValuator {
             notes.add("Animation output carries " + displayPointCount + " deterministic checkpoints from "
                     + (steps + 1) + " stored steps. Terminal and daily distributions still use the full ensemble.");
         }
+        notes.add("Scenario animation frames are exact valued facts, not a curve to read between: "
+                + "select frame Math.round(t x lastLiveFrameIndex) and display it. Interpolating two "
+                + "frames may position pixels, never state a price, a vol, a P/L or a Greek.");
         notes.add(canvas.dividendBasis());
         if (canvas.template() != null) notes.add(canvas.template().legDayProvenance());
         return new Report(representativePath, List.copyOf(underlying), underlyingSteps,
+                animationTrack(ensemble, underlyingSteps),
                 List.copyOf(positionPaths), List.copyOf(comparisons), List.copyOf(notes));
     }
 
@@ -642,7 +717,8 @@ public final class ScenarioCanvasValuator {
         return new PositionRun(new PositionPath(input.key(), input.label(), input.lane(), input.source(),
                 input.proposed(), input.entryCostCents(), List.copyOf(timeline),
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
-                List.copyOf(legs), List.copyOf(transformationRows)), terminal);
+                List.copyOf(legs), List.copyOf(transformationRows),
+                positionAnimation(input, displaySteps, steps, spd)), terminal);
     }
 
     private static void collectAssignments(JointPositionInput row,
@@ -807,14 +883,70 @@ public final class ScenarioCanvasValuator {
         List<LocalDate> dates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
         int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
         List<UnderlyingStep> out = new ArrayList<>(displaySteps.length);
+        double anchorSpot = ensemble.spot();
+        Double baselineAtmIv = null;
         for (int step : displaySteps) {
             int valuationDay = Math.min(days, step / spd);
+            double atmIv = round4(canvas.atmIv(valuationDay, days, legacy[step]));
+            if (baselineAtmIv == null) baselineAtmIv = atmIv;
+            double price = paths[representativePath][step];
             out.add(new UnderlyingStep(step, sessionProgress(step, spd),
                     dateForStep(step, spd, days, ensemble.anchorDate(), dates),
-                    paths[representativePath][step],
-                    round4(canvas.atmIv(valuationDay, days, legacy[step]))));
+                    price, atmIv,
+                    anchorSpot > 0 ? round4((price / anchorSpot - 1) * 100) : 0,
+                    round4((atmIv - baselineAtmIv) * 100)));
         }
         return List.copyOf(out);
+    }
+
+    /** The animation contract for a built frame list; null when there are no frames to scrub. */
+    private static AnimationTrack animationTrack(PathEnsembleService.Ensemble ensemble,
+                                                 List<UnderlyingStep> frames) {
+        if (frames.isEmpty()) return null;
+        return new AnimationTrack("SELECT_NEAREST_FRAME_NO_INTERPOLATION", "underlyingSteps",
+                "positions[].steps", frames.size(), ensemble.spec().totalSteps(),
+                Math.max(1, ensemble.spec().stepsPerDay()), ensemble.spot(),
+                frames.getLast().sessionProgress(), frames.getFirst().atmIv(), "TRACK_FRAME_0");
+    }
+
+    /**
+     * Where this package's scrub must stop, from the same trading calendar that dated the frames.
+     * Shares-only packages never expire, so the whole track stays live.
+     */
+    private static PositionAnimation positionAnimation(PositionInput input, int[] displaySteps,
+                                                       int steps, int stepsPerDay) {
+        if (displaySteps.length == 0) {
+            return new PositionAnimation(0, -1, null, null, "NO_FRAMES",
+                    "This package produced no per-step animation frames on the stored fan.");
+        }
+        LocalDate earliest = null;
+        int expiryStep = Integer.MAX_VALUE;
+        for (Leg leg : input.position().legs()) {
+            if (leg.isStock()) continue;
+            int expiryDay = input.position().expiryDay(leg);
+            int legStep = expiryDay <= 0 ? Math.min(stepsPerDay, steps)
+                    : Math.min(steps, Math.multiplyExact(expiryDay, stepsPerDay));
+            if (earliest == null || legStep < expiryStep
+                    || legStep == expiryStep && leg.expiration().isBefore(earliest)) {
+                expiryStep = legStep;
+                earliest = leg.expiration();
+            }
+        }
+        int last = displaySteps.length - 1;
+        if (earliest == null) {
+            return new PositionAnimation(displaySteps.length, last,
+                    sessionProgress(displaySteps[last], stepsPerDay), null,
+                    "NO_OPTION_EXPIRATION", null);
+        }
+        if (expiryStep < steps) {
+            last = 0;
+            for (int i = 0; i < displaySteps.length; i++) {
+                if (displaySteps[i] <= expiryStep) last = i; else break;
+            }
+        }
+        return new PositionAnimation(displaySteps.length, last,
+                sessionProgress(displaySteps[last], stepsPerDay), earliest.toString(),
+                expiryStep < steps ? "EARLIEST_LEG_EXPIRATION" : "HORIZON_END", null);
     }
 
     private static String date(int day, LocalDate anchor, List<LocalDate> sessions) {

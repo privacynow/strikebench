@@ -325,7 +325,16 @@ public final class HeldPositionEconomicsService {
         // side and the receipt now says so rather than borrowing a field named for the opening.
         // No local clamp: the receipt owns the "fees are never negative" rule and now enforces it
         // instead of two producers quietly rewriting the commission they were handed.
-        long fees = preview.feesOpenCents();
+        //
+        // The commission is read from the exact preview's own §7.2 receipt, not from a parallel
+        // `feesOpenCents` primitive that was 0 on every package the preview refused to price. A
+        // closing quote whose commission is unknown is not a quote (§3.2) — it would understate the
+        // cost of getting out by exactly the commission — so it states the absence instead.
+        Long fees = preview.price() == null ? null : preview.price().openingFeesCents();
+        if (fees == null) {
+            return unavailableClose(request.qty(), "The exact package price states no commission, so"
+                    + " the cost of closing this position cannot be quoted.");
+        }
         var price = PackagePriceReceipt.of(request.qty(), executableCash, optionExecutableCash,
                 stockExecutableCash, fees,
                 PackagePriceReceipt.FeeSide.CLOSING, executableCash, null,
@@ -370,7 +379,18 @@ public final class HeldPositionEconomicsService {
                     "The canonical evaluation has no EconomicAssessment.",
                     "Hold-vs-close is a cash-leg transform of the canonical fresh-eyes economics.");
         }
-        long immediateOpenNet = Math.subtractExact(preview.entryNetPremiumCents(), preview.feesOpenCents());
+        // The fresh executable opening cash LESS the opening fee is exactly the §7.2 receipt's own
+        // afterFeeNetCents, which the receipt already enforces as gross − commission. Restating it
+        // here as `entryNetPremiumCents − feesOpenCents` made this the second author of that
+        // subtraction, and on a refused package it silently evaluated to 0 − 0 = 0, turning a
+        // missing opening price into a hold-vs-close EV shift of zero (§3.1/§3.2).
+        Long immediateOpenNet = preview.price() == null ? null : preview.price().afterFeeNetCents();
+        if (immediateOpenNet == null) {
+            return PositionLifecycleReceipt.ForwardEconomics.unavailable(
+                    "The exact package price states no after-fee opening net.",
+                    "Hold-vs-close substitutes the fresh opening cash for the closing cash; without a"
+                            + " priced opening leg there is nothing to substitute.");
+        }
         long substitution = Math.subtractExact(Math.negateExact(immediateOpenNet),
                 close.price().afterFeeNetCents());
         Long market = shifted(freshEyes.marketEvAfterCostsCents(), substitution);

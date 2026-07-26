@@ -260,13 +260,22 @@ class PackagePriceReconciliationTest {
 
         // The fee identity, on the fee that is actually charged rather than an override defaulting
         // to zero. Fees ride the OPENING side and the receipt says so.
-        assertThat(price.openingFeesCents()).isEqualTo(preview.feesOpenCents()).isPositive();
+        assertThat(price.openingFeesCents()).isPositive();
         assertThat(price.afterFeeNetCents())
                 .isEqualTo(price.grossPackageNetCents() - price.openingFeesCents());
         assertThat(price.feeSide()).isEqualTo(PackagePriceReceipt.FeeSide.OPENING);
 
-        // The legacy top-level fields on the preview are the SAME two amounts, not a second opinion.
-        assertThat(preview.entryNetPremiumCents()).isEqualTo(price.grossPackageNetCents());
+        // §3.1: the receipt is the preview's ONLY package price. This assertion used to prove the
+        // legacy `entryNetPremiumCents`/`feesOpenCents` primitives AGREED with the receipt, which is
+        // a weaker property than having one author — they agreed on a priced package and diverged
+        // (0 vs null) on every refused one. Those fields are gone, and the published shape is what
+        // pins it: a surface reading this payload has exactly one net and one commission to read.
+        var wire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(preview);
+        assertThat(wire.has("entryNetPremiumCents")).isFalse();
+        assertThat(wire.has("feesOpenCents")).isFalse();
+        assertThat(wire.at("/price/grossPackageNetCents").asLong())
+                .isEqualTo(price.grossPackageNetCents());
+        assertThat(wire.at("/price/openingFeesCents").asLong()).isEqualTo(price.openingFeesCents());
     }
 
     @Test
