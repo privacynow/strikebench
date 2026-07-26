@@ -153,6 +153,16 @@ function requirePackagedJar() {
   process.stdout.write(`# packaged artifact ${rel(JAR)} (${jar.size} bytes, built ${jar.mtime.toISOString()})\n`);
 }
 
+/** The exact source these results describe, so a stale report cannot be published as this commit. */
+function sourceSha() {
+  try {
+    return require('node:child_process')
+      .execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch (error) {
+    return null;
+  }
+}
+
 function publish(lane, shards, note) {
   const totals = shards.reduce((sum, shard) => ({
     tests: sum.tests + shard.tests,
@@ -163,8 +173,17 @@ function publish(lane, shards, note) {
 
   fs.mkdirSync(TARGET, { recursive: true });
   const report = path.join(TARGET, `dom-${lane}.tap`);
-  fs.writeFileSync(report, shards.map(shard => `# shard ${shard.file}\n${shard.tap}`).join('\n')
-    || `1..0\n# tests 0\n# pass 0\n# fail 0\n# skipped 0\n# ${note}\n`);
+  const sha = sourceSha();
+  const header = `# lane ${lane}\n${sha ? `# source ${sha}\n` : ''}`
+    + `# generated ${new Date().toISOString()}\n`;
+  const retried = shards.filter(shard => shard.retried);
+  const retryNote = retried.length
+    ? `# retried ${retried.length} shard(s): ${retried.map(shard =>
+        `${shard.file} (${shard.firstAttemptFail} failed on the first attempt)`).join(', ')}\n`
+    : '';
+  fs.writeFileSync(report, header + retryNote
+    + (shards.map(shard => `# shard ${shard.file}\n${shard.tap}`).join('\n')
+      || `1..0\n# tests 0\n# pass 0\n# fail 0\n# skipped 0\n# ${note}\n`));
 
   const headline = `${lane}: ${totals.tests} tests, ${totals.fail} failing`
     + `${totals.skipped ? `, ${totals.skipped} skipped` : ''}${note ? ` — ${note}` : ''}`;
@@ -205,13 +224,10 @@ async function main() {
     return;
   }
 
-  if (lane === 'visual' && !files.length) {
-    // Honest scaffold: the lane exists so the split is real and the first *.visual.test.js runs
-    // with no workflow change, but it must never be mistaken for viewport coverage we have.
-    publish(lane, [], 'NOT IMPLEMENTED — no *.visual.test.js exists; the §16.4 viewport matrix is unwritten');
-    return;
-  }
-  if (!files.length) die(`no test files for the ${lane} lane; the lane cannot report green on nothing`);
+  // Every lane is required. The visual lane used to publish a friendly "NOT IMPLEMENTED" row and
+  // exit 0, which meant a required lane could report green having run nothing at all — the most
+  // expensive kind of false evidence, because it looks like coverage in the release matrix.
+  if (!files.length) die(`no test files for the ${lane} lane; a required lane cannot report green on nothing`);
 
   for (const name of scratched) {
     process.stdout.write(`# skipped ${name} — not committed, so it does not gate the build\n`);

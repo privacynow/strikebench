@@ -1106,6 +1106,11 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   border-top:1px solid var(--line-soft);font-size:var(--f-sm)}
 .scensum .e .lbl{margin-bottom:1px} .scensum .e .v{font-family:var(--mono);font-weight:600}
 .scensum .e{display:flex;align-items:baseline;gap:7px}.scensum .range{margin-left:auto}
+/* `margin-top:auto` existed to pin the summary to the bottom of a FIXED-height panel. The Decide
+   panel is content-sized now, and the auto margin was still claiming free space that the panel no
+   longer has — putting the summary row outside its own box and on top of the market caption below
+   it at 1440x900. The summary sits after the tiles, where it belongs. */
+.dccenter .scenpanel .scensum{margin-top:0}
 .scensum .sumshort{display:none}
 .probleg{padding:8px 2px 0;font-size:var(--f-xs);color:var(--faint);line-height:1.4}
 .bloomgap{margin:6px 0 9px;padding:6px 10px;border:1px solid var(--line-soft);border-left:2px solid var(--loss);border-radius:7px;background:var(--panel-2);
@@ -1311,14 +1316,28 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    a thin top spine + a height-capped 3-column grid + stable execution dock. Default columns
    do not scroll; only the selected detail well may scroll when its content genuinely expands.
    .decwrap is the FLIP hero (breathes from the origin control). */
+/* The overlay is the ONE scrolling surface. Its rows used to be `auto minmax(0,1fr) auto` against
+   a definite height, which stretches tracks to fill rather than sizing them to content: the work
+   row resolved short, and every panel inside it either clamped with overflow:hidden (hiding facts)
+   or spilled across its neighbour. max-content rows size to what the columns hold. */
 .decwrap{position:absolute;inset:0;padding:10px 15px 12px;display:grid;
-  grid-template-rows:auto minmax(0,1fr) auto;gap:9px}
+  grid-template-rows:max-content max-content max-content;gap:9px;overflow:hidden auto}
 .decgrid,.decdock{--dec-left:clamp(600px,34vw,860px);--dec-right:clamp(500px,28vw,680px);
   display:grid;grid-template-columns:var(--dec-left) minmax(0,1fr) var(--dec-right);gap:13px;min-width:0}
-.decgrid{min-height:0}
-.deccol{min-height:0;min-width:0;display:flex;flex-direction:column;gap:9px;overflow:hidden}
+/* The work row must be at least as tall as its columns, or it overflows into the order dock below
+   it — the dock is the next grid row, and a shrunk work row printed the market panel across it. */
+.decgrid{min-height:min-content}
+/* THE column. `min-height:0` meant it contributed nothing to the work row's height, and
+   `overflow:hidden` meant whatever did not fit was cut — the two together are why every panel
+   inside had to be clamped, and why removing those clamps turned clipping into overlap. The column
+   states its real height; the overlay is the one thing that scrolls. */
+.deccol{min-height:min-content;min-width:0;display:flex;flex-direction:column;gap:9px}
 .deccol.dccenter{gap:7px}
-.decdock{align-items:end}
+/* The dock is the surface's last grid row and it must not be overlapped by the work row above it.
+   `align-items:end` was fine; what was missing is a stacking context of its own, so that if the
+   work row ever does exceed its track (a mid-render measurement, a font that loads late) the dock
+   stays legible rather than being printed through. */
+.decdock{align-items:end;position:relative;z-index:2;background:var(--bg)}
 .decdock>.execute{grid-column:2/-1;min-width:0}
 .decwrap.closewrap{display:flex;flex-direction:column;gap:11px;overflow:auto}
 /* templates row + wide (order) stepper reuse of .mstp */
@@ -1573,7 +1592,13 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
    support region would otherwise disappear; that genuine overflow stays in .fanrows. The exact
    package therefore follows the last visible recommendation immediately, and the map receives
    every pixel the list did not earn. */
-.dcleft .fan{flex:0 1 auto;min-height:96px;max-height:calc(100% - 224px);overflow:hidden;padding-right:2px}
+/* THE one intentional overflow owner on this surface (review's definition of done: "only one
+   intentional overflow owner where content genuinely exceeds capacity"). Twenty candidates should
+   scroll in place, not make the whole overlay three thousand pixels tall.
+   The bound is in viewport units on purpose: it used to be `calc(100% - 224px)` of a column that
+   is now content-sized, so the percentage no longer resolved, the list never bounded, and its
+   "+N more" affordance stopped appearing at all. */
+.dcleft .fan{flex:0 1 auto;min-height:96px;max-height:52vh;overflow:hidden;padding-right:2px}
 .fanrows{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:none;mask-image:linear-gradient(to bottom,transparent 0,#000 0,#000 100%,transparent 100%)}
 .fanrows::-webkit-scrollbar,.elegantscroll::-webkit-scrollbar{width:0;height:0}.fanrows:hover,.fanrows:focus-within,.elegantscroll:hover,.elegantscroll:focus-within{scrollbar-width:thin;scrollbar-color:var(--line) transparent}.fanrows:hover::-webkit-scrollbar,.elegantscroll:hover::-webkit-scrollbar{width:4px}.fanrows:hover::-webkit-scrollbar-thumb,.elegantscroll:hover::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 .fanrows .fanr,.elegantscroll>[data-scroll-row],.elegantscroll>.card{scroll-snap-align:start;scroll-snap-stop:normal;flex:none}
@@ -1591,7 +1616,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   /* Keep the decision sequence spatially honest on tall wide canvases: the selected package
      follows its ranked alternatives immediately instead of being pushed to the bottom by an
      expanding empty fan rail. Shorter canvases let the list flex to the full column instead. */
-  .dcleft .fan{flex:0 1 auto;height:auto;max-height:calc(100% - 270px)}
+  .dcleft .fan{flex:0 1 auto;height:auto;max-height:46vh}
   .dcleft .leftsupport{display:flex;flex-direction:column;gap:9px}
   .dcleft .pickmap{flex-basis:clamp(220px,22vh,300px);min-height:210px;height:auto;border-top:1px solid var(--line-soft);border-left:0;padding:7px 0 0}
   .dcleft .decmap{min-height:175px}
@@ -1608,8 +1633,16 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .dccenter .dccpay{flex:1;max-height:470px}
   .dccenter .decpay{flex:1;height:auto;max-height:none;min-height:210px}
   .dccenter .decmarketwide{flex:1 1 240px;min-height:210px}
-  .dccenter .scenpanel{display:flex;flex:0 0 min(34vh,380px);min-height:320px;flex-direction:column}
-  .dccenter .scenpanel .smx.barmode{flex:1;grid-auto-rows:1fr}
+  /* `flex:0 0 min(34vh,380px)` fixes the basis to a viewport fraction: at 1440x900 that is 306px
+     around 257px of tiles at one width and 218px around 257px at another, so the panel cut its own
+     scenario rows. The basis follows the content; the overlay scrolls. */
+  .dccenter .scenpanel{display:flex;flex:0 0 auto;min-height:min-content;flex-direction:column}
+  /* `flex:1` + `grid-auto-rows:1fr` divided whatever height the panel had among the tile rows, so
+     the tiles were squeezed and their content overflowed each row. Since the panel stopped
+     clipping — clipping is how facts were being hidden — that overflow landed on top of the market
+     panel below it: the review's "scenario panel and Market panel overlap by roughly 242px". The
+     tile grid takes the height its tiles need. */
+  .dccenter .scenpanel .smx.barmode{flex:0 0 auto;grid-auto-rows:min-content}
   .dccenter .scenpanel .srow{grid-template-areas:"name name" "desc desc" "odds odds" "pl value";align-content:center}
   .dccenter .scenpanel .sdesc{display:block}
 }
@@ -1784,12 +1817,21 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .dccenter .decmarketwide .histstrip{display:none}
   .dccenter .dccpay{height:auto;min-height:0;overflow:hidden}
   .dccenter .decpay{flex:1;height:auto;min-height:180px;max-height:none}
-  .dccenter .scenpanel{display:flex;height:auto;min-height:0;flex-direction:column;overflow:hidden;padding:8px 10px 7px}
+  /* min-height:0 + overflow:hidden = a panel that cuts its own scenario tiles when the column is
+     short: 493x218 around 493x257 at 1440x900. It states its real floor and does not clip. */
+  /* `min-height:min-content` and the flex base size disagreed by 31px — the base-size pass sized
+     the panel from its tiles at one wrapping and min-content resolved to another, so the panel
+     painted taller than the space the column allocated and the market lens below it started 31px
+     early. `flex:none` with no min-height makes the used height the content height, one pass. */
+  .dccenter .scenpanel{display:flex;flex:none;height:auto;min-height:0;flex-direction:column;padding:8px 10px 7px}
   .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:4px 0}
   .dccenter .scenpanel .srow{grid-template-areas:"name name" "pl value";min-height:42px;padding:4px 6px;row-gap:3px}
   .dccenter .scenpanel .srow .sprob{display:inline}.dccenter .scenpanel .srow .slk{display:none}
+  /* `margin-top:auto` here overrode the generic reset and pushed the summary past the panel's own
+     box — measured 686..699 against a panel ending at 673, landing on the history caption below it
+     at 1440x900. The panel is content-sized now, so there is nothing to push against. */
   .dccenter .scenpanel .scensum{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px 10px;
-    margin-top:auto;padding-top:3px;font-size:var(--f-xs);white-space:nowrap}
+    margin-top:0;padding-top:3px;font-size:var(--f-xs);white-space:nowrap}
   .dccenter .scenpanel:has(.srow-ctl)>.lenshd,.dccenter .scenpanel:has(.srow-ctl) .scensum{display:none}
   .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{min-height:35px;padding-top:2px;padding-bottom:2px}
 }
@@ -3675,7 +3717,24 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 @media(min-width:901px) and (max-width:1199px){
   .lv-book .board,
   .lv-book[data-position-count="1"] .board{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto;grid-template-areas:
-    "chain chain" "map bookrisk" "roster univ" "sector news";overflow:auto}
+    "chain chain" "map bookrisk" "roster univ" "sector news";overflow:auto;
+    /* `auto` rows in a definite-height grid stretch to fill it and resolved to 136px around 446px
+       and 556px bands, so every band overflowed its row and printed across its neighbours.
+       max-content rows size to what the bands hold; the board scrolls. */
+    grid-template-rows:max-content;grid-auto-rows:max-content}
+  /* At this width the board's rows are `auto`, which sizes each row from its items' min-content
+     contribution — and a band declaring `min-height:0` contributes nothing. The row came out
+     shorter than the panel inside it, and since panels no longer clip, #riskMain drew 449x136px
+     across the roster and 449x110px across the sector band. The bands state their real floor here,
+     so the rows size to what they hold and the board scrolls. */
+  .lv-book #riskMain,.lv-book #bookrisk,.lv-book #chainBand,
+  .lv-book #univBand,.lv-book #sectorBand,.lv-book #newsBand{min-height:min-content}
+  /* …and the panel inside must contribute its real height to that floor. `height:100%` against an
+     indefinite row resolves to auto for LAYOUT but contributes nothing to intrinsic sizing, which
+     is why the rows came out at 136px around 446px and 556px bands. */
+  .lv-book #riskMain>.authbookpanel,.lv-book #bookrisk>.authbookpanel,
+  .lv-book #chainBand>.authbookpanel,.lv-book #univBand>.authbookpanel,
+  .lv-book #sectorBand>.authbookpanel,.lv-book #newsBand>.authbookpanel{height:auto}
   .lv-book[data-book-authority="empty"] .board{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto;grid-template-areas:
     "chain chain" "map map" "univ sector" "news news";overflow:auto}
 }
@@ -3739,14 +3798,18 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    height while the evidence columns kept their natural height and painted straight through the
    panel's own bottom edge, over whatever sat below. The chart keeps a floor, the context region
    takes the remainder, and each column scrolls inside itself instead of escaping the panel. */
-.dccenter .marketlens{min-height:clamp(210px,24vh,300px);max-height:clamp(250px,32vh,380px)}
+.dccenter .marketlens{min-height:min-content}
 /* The centre column shares its height between three jobs: the payoff being decided, the story
    tiles, and the market lens. The lens must never grow so far that the payoff is crushed to a
    sliver — at 1440x900 it took 414 of 723px and left the payoff 85px showing a 301px chart. */
 .dccenter .dccpay{min-height:clamp(165px,20vh,240px)}
-.dccenter .marketlens .histwrap{flex:1 1 auto;min-height:112px}
+/* Every child of the lens takes the height it needs. `flex:1 1 auto` let each one be shrunk to a
+   share of the column, and since they no longer clip, the shrunk content printed across the row
+   below — the history notice landing on top of the execution receipt. */
+.dccenter .marketlens>*{flex:0 0 auto;min-height:min-content}
+.dccenter .marketlens .histwrap{flex:0 0 auto;min-height:112px}
 .dccenter .marketlens .histchart{min-height:96px}
-.dccenter .marketlens .marketctx{flex:0 1 auto;min-height:56px;max-height:46%;overflow:hidden}
+.dccenter .marketlens .marketctx{flex:0 0 auto;min-height:min-content}
 .dccenter .marketlens .marketcol,.dccenter .marketlens .packagebookcol{min-height:0;overflow:visible}
 /* A scroller has to show enough to be worth scrolling. These two were being squeezed to 30px of
    196px of nearby strikes at 2560x1440 — and 6px of 206px at 2000x963, which is a scrollbar with
@@ -3773,7 +3836,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      breakeven, and the entire chain/news context — and on a 390x900 phone. Hiding exact facts to
      make a layout fit is forbidden (audit §18); the centre column gets container-aware component
      density in M3, not another measured-canvas patch. */
-  .dccenter .marketlens{max-height:clamp(216px,27vh,300px)}
+  .dccenter .marketlens{min-height:min-content}
   /* The volume strip under the price chart is the first thing traded away for headroom, as it
      already is on shorter desktops. */
   .dccenter .marketlens .histstrip{display:none}
@@ -3781,7 +3844,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      on one line, so the price history and the execution evidence both stay whole. */
   .dccenter .marketlens .histchart{flex:1 1 auto;height:auto;min-height:54px}
   .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .dccenter .marketlens .marketctx{max-height:34%}
+  /* The 34% ceiling was the last measured-canvas clamp: it cut the market context — the evidence
+     the whole idea rests on — to a third of itself at every height this block covers. */
+  .dccenter .marketlens .marketctx{flex:0 0 auto}
   .understand .evsimstage{min-height:196px}
 }
 
