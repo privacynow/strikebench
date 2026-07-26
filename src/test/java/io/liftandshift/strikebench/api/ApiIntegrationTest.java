@@ -248,26 +248,6 @@ class ApiIntegrationTest {
 
     @Test
     @Order(4)
-    void exactLegIdentityUsesTheServerCatalogWithoutPricingOrPersistence() throws Exception {
-        HttpResponse<String> response = post("/api/strategies/identify", """
-                {"symbol":"AAPL","qty":1,"legs":[
-                  {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-21",
-                   "ratio":1,"entryPrice":null,"multiplier":100,"positionEffect":"OPEN"},
-                  {"action":"SELL","type":"CALL","strike":"260","expiration":"2026-08-21",
-                   "ratio":1,"entryPrice":null,"multiplier":100,"positionEffect":"OPEN"}
-                ]}
-                """);
-        assertThat(response.statusCode()).isEqualTo(200);
-        JsonNode identity = Json.parse(response.body());
-        assertThat(identity.get("family").asText()).isEqualTo("DEBIT_CALL_SPREAD");
-        assertThat(identity.get("label").asText()).isEqualTo("Bull call (debit) spread");
-
-        assertThat(post("/api/strategies/identify", "{\"symbol\":\"AAPL\",\"qty\":1,\"legs\":[]}")
-                .statusCode()).isEqualTo(400);
-    }
-
-    @Test
-    @Order(5)
     void recommendReturnsCandidatesAndRejectsNaked() throws Exception {
         HttpResponse<String> res = get("/api/welcome/teaching-example");
         assertThat(res.statusCode()).isEqualTo(200);
@@ -278,6 +258,8 @@ class ApiIntegrationTest {
         assertThat(first.get("maxLossCents").asLong()).isPositive();
         assertThat(first.get("structureGroup").asText()).isNotBlank();
         assertThat(first.get("beginnerExplanation").asText()).isNotBlank();
+        assertThat(first.at("/identity/family").asText()).isEqualTo(first.get("strategy").asText());
+        assertThat(first.at("/identity/definedRisk").isBoolean()).isTrue();
     }
 
     @Test
@@ -386,7 +368,10 @@ class ApiIntegrationTest {
         assertThat(res.statusCode()).isEqualTo(422);
         JsonNode json = Json.parse(res.body());
         assertThat(json.get("error").asText()).isEqualTo("trade_rejected");
-        assertThat(json.get("reasons").toString()).containsIgnoringCase("undefined risk");
+        assertThat(json.get("reasons").toString())
+                .containsIgnoringCase("undefined")
+                .containsIgnoringCase("unlimited")
+                .containsIgnoringCase("protective leg");
 
         JsonNode account = Json.parse(get("/api/account").body());
         assertThat(account.at("/account/cashCents").asLong()).isEqualTo(10_000_000L);
@@ -421,6 +406,9 @@ class ApiIntegrationTest {
         JsonNode created = Json.parse(createRes.body());
         String tradeId = created.at("/trade/id").asText();
         assertThat(created.at("/trade/status").asText()).isEqualTo("ACTIVE");
+        assertThat(created.at("/trade/orderInstruction/type").asText()).isEqualTo("MARKET");
+        assertThat(created.at("/trade/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
+        assertThat(created.at("/trade/orderLimitNetCents").isMissingNode()).isTrue();
         long maxLoss = created.at("/trade/maxLossCents").asLong();
         long feesOpen = created.at("/trade/feesOpenCents").asLong();
         assertThat(maxLoss).isPositive();
@@ -490,15 +478,12 @@ class ApiIntegrationTest {
         assertThat(afterLifecycleRead.at("/account/reservedCents").asLong())
                 .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
 
-        // The heat endpoint projects the ONE BookRiskService roster for compatibility and lets a
-        // caller ask the same owner for exact selected-book totals. It never re-ranks in the
-        // controller or expects the browser to add max loss / dollar delta.
+        // The heat endpoint publishes the ONE BookRiskService roster and lets a caller ask that
+        // same owner for exact selected-book totals. There is no parallel controller projection
+        // for the browser to accidentally consume.
         JsonNode heat = Json.parse(get("/api/portfolio/heat?selectedTradeIds=" + tradeId).body());
         assertThat(heat.at("/shareRoster/rows/0/tradeId").asText()).isEqualTo(tradeId);
-        assertThat(heat.at("/positions/0/riskRank").asInt())
-                .isEqualTo(heat.at("/shareRoster/rows/0/rank").asInt());
-        assertThat(heat.at("/positions/0/riskSharePct").asDouble())
-                .isEqualTo(heat.at("/shareRoster/rows/0/sharePct").asDouble());
+        assertThat(heat.has("positions")).as("parallel Book-rank projection is absent").isFalse();
         assertThat(heat.at("/selectedBook/selectionAvailable").asBoolean()).isTrue();
         assertThat(heat.at("/selectedBook/definedMaxLossCents").asLong()).isEqualTo(maxLoss);
         assertThat(heat.at("/selectedBook/tradeIds/0").asText()).isEqualTo(tradeId);
@@ -677,6 +662,14 @@ class ApiIntegrationTest {
             assertThat(post(path, "").statusCode()).as(path + " empty body").isEqualTo(400);
         }
         assertThat(post("/api/trades", "{\"symbol\":\"AAPL\",\"qty\":\"abc\"}").statusCode()).isEqualTo(400);
+
+        HttpResponse<String> removedPriceAlias = post("/api/trades/preview",
+                "{\"symbol\":\"AAPL\",\"strategy\":\"CUSTOM\",\"qty\":1,"
+                        + "\"proposedNetCents\":12345,\"legs\":[]}");
+        assertThat(removedPriceAlias.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(removedPriceAlias.body()).path("detail").asText())
+                .contains("proposedNetCents was removed")
+                .contains("orderInstruction.limitNetCents");
     }
 
     @Test
@@ -1091,6 +1084,27 @@ class ApiIntegrationTest {
         assertThat(p.get("ok").asBoolean()).isTrue();
         assertThat(p.get("underlyingCents").asLong()).isGreaterThan(0);
         JsonNode evaluation = spreadResponse.get("evaluation");
+        JsonNode marketRisk = p.get("marketImpliedRisk");
+        assertThat(marketRisk.get("available").asBoolean()).isTrue();
+        assertThat(marketRisk.get("priceFingerprint").asText())
+                .isEqualTo(p.at("/price/fingerprint").asText());
+        assertThat(marketRisk.get("fingerprint").asText())
+                .isEqualTo(p.at("/analytics/marketImpliedRisk/fingerprint").asText())
+                .isEqualTo(evaluation.at("/risk/marketImpliedRisk/fingerprint").asText());
+        assertThat(marketRisk.get("underlyingCents").asLong())
+                .isEqualTo(p.get("underlyingCents").asLong());
+        assertThat(marketRisk.get("marketIv").isNumber()).isTrue();
+        assertThat(marketRisk.get("riskFreeRate").isNumber()).isTrue();
+        assertThat(marketRisk.at("/time/years").isNumber()).isTrue();
+        assertThat(p.get("popEntry").asDouble())
+                .isEqualTo(marketRisk.at("/probabilityMap/pAnyProfit").asDouble());
+        assertThat(p.get("expectedValueCents").asLong())
+                .isEqualTo(marketRisk.get("expectedValueCents").asLong());
+        assertThat(evaluation.at("/risk/pop").asDouble()).isEqualTo(p.get("popEntry").asDouble());
+        assertThat(evaluation.at("/risk/expectedValueCents").asLong())
+                .isEqualTo(p.get("expectedValueCents").asLong());
+        assertThat(evaluation.at("/risk/scenarios").size())
+                .isEqualTo(marketRisk.at("/scenarioMasses").size());
         JsonNode economics = evaluation.at("/assessment/economics");
         assertThat(economics.get("verdict").asText()).isNotBlank();
         assertThat(economics.has("marketEvAfterCostsCents")).isTrue();
@@ -1465,8 +1479,13 @@ class ApiIntegrationTest {
             String simBody = """
                 {"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
                   "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
-                  "position":{"key":"BUY_AND_HOLD","qty":1,"entryCostCents":12345,
-                    "estimatedRoundTripFeesCents":0,
+                  "position":{"key":"BUY_AND_HOLD","qty":1,
+                    "price":{"quantity":1,"optionNetPremiumCents":0,"stockCashFlowCents":-12345,
+                      "grossPackageNetCents":-12345,"openingFeesCents":0,
+                      "estimatedRoundTripFeesCents":0,"afterFeeNetCents":-12345,
+                      "executableNetCents":-12345,"valuationBasis":"RECORDED_FILL",
+                      "executability":"IMMEDIATE","source":"broker","freshness":"RECORDED",
+                      "feeSide":"OPENING"},
                     "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1,
                               "multiplier":1,"positionEffect":"OPEN"}]},
                   "over":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
@@ -1481,8 +1500,9 @@ class ApiIntegrationTest {
             var rj = envelope.get("result");
             assertThat(rj.get("pathSource").asText()).isEqualTo("HISTORICAL_ANALOGS");
             assertThat(rj.get("paths").asInt()).isEqualTo(sj.get("analogPaths").size());
-            assertThat(rj.get("entryCostCents").asLong()).isEqualTo(12345L);
-            assertThat(rj.get("notes").toString()).contains("exact package price already shown");
+            assertThat(rj.at("/entryPrice/grossPackageNetCents").asLong()).isEqualTo(-12345L);
+            assertThat(rj.has("entryCostCents")).isFalse();
+            assertThat(rj.get("notes").toString()).contains("held position's recorded fill");
             // This server is FIXTURES_ONLY: the study ran on demo candles, and the note must say
             // so — 'REAL past occurrences' on fixture data was holistic-review blocker #9.
             assertThat(rj.get("sourceNote").asText()).contains("DEMO-data occurrences");
@@ -1497,19 +1517,56 @@ class ApiIntegrationTest {
         String exact = """
             {"operation":"POSITION","basis":"PARAMETRIC",
               "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
-              "position":{"key":"LONG_CALL","qty":1,"entryCostCents":1000,
-                "estimatedRoundTripFeesCents":130,
+              "position":{"key":"LONG_CALL","qty":1,
+                "price":{"quantity":1,"optionNetPremiumCents":-1000,"stockCashFlowCents":0,
+                  "grossPackageNetCents":-1000,"openingFeesCents":65,
+                  "estimatedRoundTripFeesCents":130,"afterFeeNetCents":-1065,
+                  "executableNetCents":-1000,"valuationBasis":"EXECUTABLE_BOOK",
+                  "executability":"IMMEDIATE","source":"fixture","freshness":"DELAYED",
+                  "feeSide":"OPENING"},
                 "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1,
                           "multiplier":100,"positionEffect":"OPEN"}]},
               "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
                       "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                       "jumpVol":0,"tailNu":6,"seed":17,"paths":40}}""";
+        String exactFingerprint =
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.fingerprintOf(
+                        java.util.List.of(io.liftandshift.strikebench.model.Leg.option(
+                                io.liftandshift.strikebench.model.LegAction.BUY,
+                                io.liftandshift.strikebench.model.OptionType.CALL,
+                                new BigDecimal("255"),
+                                java.time.LocalDate.of(2026, 8, 21),
+                                1, BigDecimal.ZERO)),
+                        1, -1_000L,
+                        io.liftandshift.strikebench.paper.PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                        null);
+        exact = exact.replace("\"feeSide\":\"OPENING\"",
+                "\"fingerprint\":\"" + exactFingerprint + "\",\"feeSide\":\"OPENING\"");
         var exactResult = post("/api/evaluate", exact);
-        assertThat(exactResult.statusCode()).isEqualTo(200);
+        assertThat(exactResult.statusCode())
+                .withFailMessage("exact PARAMETRIC evaluation failed: %s", exactResult.body())
+                .isEqualTo(200);
         assertThat(Json.parse(exactResult.body()).at("/result/roundTripFeesCents").longValue())
                 .isEqualTo(130L);
-        var missingFee = post("/api/evaluate",
-                exact.replace("\"estimatedRoundTripFeesCents\":130,", ""));
+        var riskNeutral = post("/api/evaluate",
+                exact.replace("\"basis\":\"PARAMETRIC\"", "\"basis\":\"RISK_NEUTRAL\""));
+        assertThat(riskNeutral.statusCode())
+                .withFailMessage("exact RISK_NEUTRAL evaluation failed: %s", riskNeutral.body())
+                .isEqualTo(200);
+        JsonNode riskNeutralResult = Json.parse(riskNeutral.body()).path("result");
+        assertThat(riskNeutralResult.at("/entryPrice/grossPackageNetCents").longValue())
+                .isEqualTo(-1_000L);
+        assertThat(riskNeutralResult.at("/entryPrice/estimatedRoundTripFeesCents").longValue())
+                .isEqualTo(130L);
+        assertThat(riskNeutralResult.has("entryCostCents"))
+                .as("risk-neutral output does not republish an inverse-sign loose price")
+                .isFalse();
+        String exactWithoutFees = exact
+                .replace("\"openingFeesCents\":65,", "\"openingFeesCents\":null,")
+                .replace("\"estimatedRoundTripFeesCents\":130,",
+                        "\"estimatedRoundTripFeesCents\":null,")
+                .replace("\"afterFeeNetCents\":-1065,", "\"afterFeeNetCents\":null,");
+        var missingFee = post("/api/evaluate", exactWithoutFees);
         assertThat(missingFee.statusCode()).isEqualTo(400);
         assertThat(missingFee.body()).contains("captured entry")
                 .contains("no estimated round-trip commission");
@@ -1527,6 +1584,18 @@ class ApiIntegrationTest {
         // ticker starts at $100 and says that. Per-symbol calibration is disclosed with basis.
         // F3: fictional status is NEVER inferred — without the explicit flag, the unknown
         // ticker is EXCLUDED with a reason instead of silently becoming a $100 instrument.
+        // Two spellings for one instrument are conflicting inputs, not two simulated symbols.
+        var aliasCollision = post("/api/sim/market", """
+                {"name":"Ambiguous aliases","symbols":{"BRK.B":1.0,"BRK-B":2.0},
+                 "spots":{"BRK.B":500},"scenario":"CHOP","speed":26}""");
+        assertThat(aliasCollision.statusCode()).isEqualTo(400);
+        assertThat(aliasCollision.body()).contains("more than one spelling").contains("BRK.B");
+        var spotCollision = post("/api/sim/market", """
+                {"name":"Ambiguous spots","symbols":{"BRK.B":1.0},
+                 "spots":{"BRK.B":500,"BRK/B":501},"scenario":"CHOP","speed":26}""");
+        assertThat(spotCollision.statusCode()).isEqualTo(400);
+        assertThat(spotCollision.body()).contains("more than one spelling").contains("BRK.B");
+
         String noFlag = """
             {"name":"Anchor gate strict","symbols":{"AAPL":1.0,"ZZZFAKE":1.0},"scenario":"CHOP","speed":26}""";
         var rStrict = post("/api/sim/market", noFlag);
@@ -1993,8 +2062,16 @@ class ApiIntegrationTest {
         assertThat(analyzed.at("/capacity/packageMatchStatus").asText())
                 .isEqualTo("NO_OBJECTIVE_REVISION");
         assertThat(analyzed.at("/decision/analysis/schemaVersion").asText())
-                .isEqualTo("position-lifecycle-decision-v1");
+                .isEqualTo("position-lifecycle-decision-v2");
         assertThat(analyzed.at("/decision/receiptFingerprint").asText()).hasSize(64);
+        assertThat(analyzed.at("/decision/analysis/presentation/evidenceState").asText())
+                .isNotBlank();
+        assertThat(analyzed.at("/decision/analysis/presentation/actionable").isBoolean()).isTrue();
+        assertThat(analyzed.at("/decision/analysis/presentation/userFacingVerdict").asText())
+                .isNotBlank();
+        assertThat(analyzed.at("/decision/analysis/presentation/userFacingStatus").asText())
+                .isNotBlank();
+        assertThat(analyzed.at("/decision/analysis/presentation/sortPriority").isInt()).isTrue();
         // Eight dimensions: MECHANICAL_PROTOCOL joined the lane so DEFEND can name the stop-loss
         // and expiry/time triggers §6.4 requires it to point at.
         assertThat(analyzed.at("/decision/analysis/dimensions")).hasSize(8);

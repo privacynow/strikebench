@@ -324,6 +324,53 @@ public final class MarketDataService {
         return java.time.LocalDate.ofInstant(laneNow(worldId, clock), MarketHours.EASTERN);
     }
 
+    /**
+     * Backend-owned currency test for a persisted package-price receipt. Surfaces must not hash
+     * quotes/chains or decide when a strategy run is stale. Live observations use the same
+     * 30-minute option-book gate as {@link #gateChain}; EOD evidence remains current until the
+     * next regular session has completed; generated worlds remain current inside their immutable
+     * world identity.
+     */
+    public boolean packagePriceCurrent(String freshnessName, Long observedAtEpochMs,
+                                       String worldId, java.time.Clock clock) {
+        if (freshnessName == null || freshnessName.isBlank()) return false;
+        io.liftandshift.strikebench.model.Freshness freshness;
+        try {
+            freshness = io.liftandshift.strikebench.model.Freshness.valueOf(
+                    freshnessName.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+        if (freshness == io.liftandshift.strikebench.model.Freshness.STALE
+                || freshness == io.liftandshift.strikebench.model.Freshness.MISSING) return false;
+        if (freshness == io.liftandshift.strikebench.model.Freshness.SIMULATED
+                || freshness == io.liftandshift.strikebench.model.Freshness.FIXTURE) {
+            return !observedWorld(worldId);
+        }
+        if (observedAtEpochMs == null) return false;
+        java.time.Instant now = laneNow(worldId, clock);
+        java.time.Instant observed = java.time.Instant.ofEpochMilli(observedAtEpochMs);
+        if (observed.isAfter(now.plusSeconds(60))) return false;
+        if (freshness.isObservedLive()) {
+            return java.time.Duration.between(observed, now).toMillis() <= CHAIN_STALE_MS;
+        }
+        if (freshness == io.liftandshift.strikebench.model.Freshness.EOD) {
+            java.time.LocalDate observedDate =
+                    java.time.LocalDate.ofInstant(observed, MarketHours.EASTERN);
+            java.time.ZonedDateTime easternNow = now.atZone(MarketHours.EASTERN);
+            java.time.LocalDate latestCompleted = easternNow.toLocalDate();
+            if (!MarketHours.isTradingDay(latestCompleted)
+                    || easternNow.toLocalTime().isBefore(MarketHours.CLOSE)) {
+                do { latestCompleted = latestCompleted.minusDays(1); }
+                while (!MarketHours.isTradingDay(latestCompleted));
+            }
+            return !observedDate.isBefore(latestCompleted);
+        }
+        // Modeled evidence remains a current comparison input only while its captured option-book
+        // observation is inside the option freshness window.
+        return java.time.Duration.between(observed, now).toMillis() <= CHAIN_STALE_MS;
+    }
+
     /** The world's own symbol set (empty optional = observed lane). */
     public Optional<java.util.Set<String>> worldSymbols(String worldId) {
         if ("demo".equals(worldId) && demoProvider instanceof io.liftandshift.strikebench.market.providers.FixtureProvider f) {

@@ -1,7 +1,10 @@
 package io.liftandshift.strikebench.position;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Locale;
 
 /** Event-aware rules that keep modeled or missing fills out of the authoritative ledger. */
 public final class RecordingPolicy {
@@ -87,9 +90,9 @@ public final class RecordingPolicy {
                           BigDecimal strike, BigDecimal price, long quantity, int multiplier,
                           PositionDomain.PriceAuthority authority) {
         public LegFact {
-            instrumentType = instrumentType == null ? null : instrumentType.trim().toUpperCase();
-            positionEffect = positionEffect == null ? null : positionEffect.trim().toUpperCase();
-            symbol = symbol == null ? null : symbol.trim().toUpperCase();
+            instrumentType = instrumentType == null ? null : instrumentType.trim().toUpperCase(Locale.ROOT);
+            positionEffect = positionEffect == null ? null : positionEffect.trim().toUpperCase(Locale.ROOT);
+            symbol = Symbol.normalizeOptional(symbol);
             if (quantity <= 0 || multiplier <= 0) {
                 throw new IllegalArgumentException("recorded leg quantity and multiplier must be positive");
             }

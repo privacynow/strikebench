@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.api;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,6 +52,8 @@ final class PlanController {
     private final PlanOutcomeController planOutcomeController;
     private final PlanDecisionController planDecisionController;
     private final io.liftandshift.strikebench.plan.PlanAdoptionService planAdoptions;
+
+    Clock clock() { return clock; }
 
     PlanController(AppConfig cfg, Clock clock, Db db, MarketDataService market,
                    io.liftandshift.strikebench.market.EventService events,
@@ -191,8 +195,8 @@ final class PlanController {
 
     /** A Plan may start only when its active market can supply a lane-owned option surface. */
     private PlanSymbolEligibility planSymbolEligibility(String rawSymbol, String world) {
-        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
-        if (symbol.isBlank()) return new PlanSymbolEligibility(false, "Choose a ticker symbol first.");
+        String symbol = Symbol.normalizeOptional(rawSymbol);
+        if (symbol == null) return new PlanSymbolEligibility(false, "Choose a ticker symbol first.");
         var lane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly());
         var quote = market.quote(symbol, world).orElse(null);
         if (quote == null) return new PlanSymbolEligibility(false,

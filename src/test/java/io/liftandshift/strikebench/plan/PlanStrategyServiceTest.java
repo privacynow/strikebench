@@ -15,6 +15,8 @@ import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static io.liftandshift.strikebench.support.CurrentEvaluationReceiptFixture.withComparisonEndorsement;
+import static io.liftandshift.strikebench.support.CurrentEvaluationReceiptFixture.withUnavailablePrice;
 
 class PlanStrategyServiceTest {
     private Db db;
@@ -73,6 +75,7 @@ class PlanStrategyServiceTest {
                      {"action":"BUY","type":"CALL","strike":"270","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.05","positionEffect":"OPEN"}
                    ]}]}
                 """);
+        withComparisonEndorsement(result);
 
         PlanStrategyService.SavedRun saved = strategies.saveCompetition(null, plan,
                 Json.parse("{\"filters\":{\"minPop\":0.55}}"), result);
@@ -97,6 +100,8 @@ class PlanStrategyServiceTest {
                 .isEqualTo("expected value");
         assertThat(restored.result().at("/candidates/0/evaluation/management/rules/0/action").asText())
                 .isEqualTo("close");
+        assertThat(restored.result().at("/candidates/0/evaluation/endorsement/status").asText())
+                .isEqualTo("COMPARISON");
         assertThat(restored.result().at("/candidates/0/price/estimatedRoundTripFeesCents").asLong())
                 .isEqualTo(520);
         assertThat(db.query("SELECT estimated_round_trip_fees_cents FROM plan_candidate WHERE id=?",
@@ -172,6 +177,7 @@ class PlanStrategyServiceTest {
                    {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-28","ratio":1,"multiplier":100,"entryPrice":"8.00","positionEffect":"OPEN"}
                  ]}
                 """);
+        withComparisonEndorsement(candidate);
 
         PlanStrategyService.SavedRun saved = strategies.saveCustom(null, plan,
                 Json.parse("{\"source\":\"BUILDER\"}"), candidate, plan.version(), true);
@@ -262,6 +268,7 @@ class PlanStrategyServiceTest {
                     "ratio":1,"multiplier":100,"entryPrice":"2.00","positionEffect":"OPEN"}
                  ]}
                 """));
+        withComparisonEndorsement(result);
 
         PlanStrategyService.SavedRun saved = strategies.saveCompetition(null, plan,
                 Json.parse("{}"), result);
@@ -311,6 +318,7 @@ class PlanStrategyServiceTest {
                     "ratio":1,"multiplier":100,"entryPrice":"2.00","positionEffect":"OPEN"}
                  ]}
                 """));
+        withComparisonEndorsement(result);
 
         PlanStrategyService.SavedRun prior = strategies.saveCompetition(null, plan,
                 Json.parse("{\"filters\":{\"minPop\":0.55}}"), result);
@@ -343,6 +351,7 @@ class PlanStrategyServiceTest {
         ObjectNode oldFullEvaluation = (ObjectNode) Json.parse("""
                 {"strategy":"CUSTOM","evaluation":{"id":"eval_old","available":true,"decisionScore":50,"viable":true}}
                 """);
+        withUnavailablePrice(oldFullEvaluation);
         assertThatThrownBy(() -> strategies.saveCustom(null, plan, Json.parse("{}"),
                 oldFullEvaluation, plan.version(), false))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -351,6 +360,7 @@ class PlanStrategyServiceTest {
         ObjectNode partialReceipt = (ObjectNode) Json.parse("""
                 {"strategy":"CUSTOM","evaluation":{"available":true,"decisionScore":50,"viable":true,"assessment":{}}}
                 """);
+        withUnavailablePrice(partialReceipt);
         assertThatThrownBy(() -> strategies.saveCustom(null, plan, Json.parse("{}"),
                 partialReceipt, plan.version(), false))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -389,6 +399,7 @@ class PlanStrategyServiceTest {
                      {"action":"SELL","type":"CALL","strike":"570","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"5.0","positionEffect":"OPEN"}
                    ]}]}
                 """);
+        withComparisonEndorsement(result);
 
         PlanStrategyService.SavedRun saved = strategies.saveScout(null, origin, "PEERS",
                 Json.parse("{\"scope\":\"PEERS\"}"), result);

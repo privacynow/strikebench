@@ -10,6 +10,21 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class PositionPackageFingerprintTest {
+    @Test void packageAndLegSymbolsShareTheCanonicalTickerIdentity() {
+        var leg = new PositionPackage.Leg(0, "SELL", "OPTION", " brk.b ", "CALL",
+                new BigDecimal("500"), LocalDate.parse("2026-08-21"), 1, 100,
+                new BigDecimal("4.50"), PositionDomain.PriceAuthority.OBSERVED);
+        var position = new PositionPackage("trade-symbol", PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, " brk.b ", 1, 45_000L,
+                OffsetDateTime.parse("2026-07-20T12:00:00Z"), List.of(leg));
+
+        assertThat(position.symbol()).isEqualTo("BRK.B");
+        assertThat(position.legs().getFirst().symbol()).isEqualTo("BRK.B");
+        assertThat(PositionPackageFingerprint.canonical(position).symbol()).isEqualTo("BRK.B");
+        assertThat(PositionPackageFingerprint.canonical(position).legs().getFirst().symbol())
+                .isEqualTo("BRK.B");
+    }
+
     @Test void focusedIdentityIgnoresArtifactTimeButBindsBasisAndImmutableEntryProvenance() {
         var leg = new PositionPackage.Leg(0, "SELL", "OPTION", "AAPL", "CALL",
                 new BigDecimal("265.00"), LocalDate.parse("2026-07-31"), 1, 100,

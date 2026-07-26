@@ -119,7 +119,7 @@ class PackagePriceReconciliationTest {
                 Leg.stockShares(LegAction.BUY, 100, BigDecimal.ZERO),
                 Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("105"), EXP, 1, BigDecimal.ZERO));
         return new TradeService.OpenRequest(accountId, "AAPL", "COVERED_CALL", 2, legs, "neutral",
-                "month", "balanced", "INCOME", false, instruction.limitNetCents(), null, "PLAN",
+                "month", "balanced", "INCOME", false, null, "PLAN",
                 "PROPOSED", instruction);
     }
 
@@ -168,7 +168,7 @@ class PackagePriceReconciliationTest {
         List<Leg> sameLegs = scanned.legs().stream().map(LegView::toLeg).toList();
         TradePreview preview = fixtureTrades.preview(new TradeService.OpenRequest(
                 fixtureAccountId, SCAN_SYMBOL, scanned.strategy(), scanned.qty(), sameLegs,
-                "neutral", "month", "balanced", "INCOME", false, null, null, "PLAN", "PROPOSED",
+                "neutral", "month", "balanced", "INCOME", false, null, "PLAN", "PROPOSED",
                 OrderInstruction.market()));
         assertThat(preview.ok()).as("blocked: %s", preview.blockReasons()).isTrue();
         PackagePriceReceipt dock = preview.price();
@@ -300,7 +300,7 @@ class PackagePriceReconciliationTest {
     private static TradeOpenRequest order(TradeService.OpenRequest request) {
         return new TradeOpenRequest(request.symbol(), request.strategy(), request.qty(), List.of(),
                 request.thesis(), request.horizon(), request.riskMode(), request.intent(), false, null,
-                request.proposedNetCents(), null, "PLAN", List.of(), null, "PROPOSED",
+                null, "PLAN", List.of(), null, "PROPOSED",
                 request.orderInstruction());
     }
 }

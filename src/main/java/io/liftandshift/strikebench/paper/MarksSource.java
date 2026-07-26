@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.paper;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.Quote;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
@@ -16,8 +17,26 @@ import java.util.Optional;
  */
 public interface MarksSource {
 
-    /** The underlying quote's OWN timestamp (source stamp), when the feed provides one. */
-        /** World-aware variants: a SIMULATION account's trades mark against ITS world. Defaults
+    /**
+     * One underlying quote receipt. A caller that needs price, provenance and timestamp must read
+     * this object once instead of making three provider/cache traversals that can observe three
+     * different market instants.
+     *
+     * <p>The compatibility default adapts older test/port implementations. Production market
+     * implementations override it and return their native {@link Quote} atomically.</p>
+     */
+    default Optional<Quote> underlyingQuote(String symbol, String worldId) {
+        Optional<BigDecimal> mark = underlyingMark(symbol, worldId);
+        if (mark.isEmpty()) return Optional.empty();
+        DataEvidence evidence = underlyingEvidence(symbol, worldId).orElse(null);
+        Freshness freshness = freshnessOf(evidence);
+        String source = evidence == null ? null : evidence.source();
+        long asOf = underlyingAsOfMs(symbol, worldId).orElse(0L);
+        return Optional.of(new Quote(symbol, null, mark.get(), null, null, null,
+                null, null, null, true, asOf, source, freshness));
+    }
+
+    /** World-aware variants: a SIMULATION account's trades mark against ITS world. Defaults
      *  ignore the world (observed) so existing implementations stay correct. */
     default java.util.Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
         return underlyingMark(symbol);
@@ -47,7 +66,10 @@ public interface MarksSource {
         return closeOn(symbol, date);
     }
 
-default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.util.Optional.empty(); }
+    /** The underlying quote's OWN timestamp (source stamp), when the feed provides one. */
+    default java.util.Optional<Long> underlyingAsOfMs(String symbol) {
+        return java.util.Optional.empty();
+    }
 
     /** The data's own stamp from the lane that actually prices the trade. */
     default java.util.Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
@@ -70,6 +92,14 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
     record LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
                    Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence,
                    Long asOfEpochMs) {
+        /** Derive a stock leg from the exact underlying quote already owned by the mark snapshot. */
+        public static LegMark fromUnderlying(Quote quote) {
+            if (quote == null) return null;
+            return new LegMark(quote.bid(), quote.ask(), quote.mark(), null,
+                    quote.markFreshness(), 1.0, 0.0, 0.0, 0.0,
+                    quote.evidence(), quote.asOfEpochMs());
+        }
+
         /** Compatibility constructor for marks whose source timestamp is unavailable. */
         public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
                        Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence) {
@@ -112,5 +142,23 @@ default java.util.Optional<Long> underlyingAsOfMs(String symbol) { return java.u
     /** Provenance of the rate assumption used by POP/EV modeling. */
     default DataEvidence riskFreeRateEvidence(int days, String worldId) {
         return DataEvidence.of("educational rate assumption", Freshness.MODELED);
+    }
+
+    /** Lossless mapping for the legacy adapter above; provenance resolves NOT_APPLICABLE ages. */
+    private static Freshness freshnessOf(DataEvidence evidence) {
+        if (evidence == null || evidence.age() == null) return Freshness.MISSING;
+        return switch (evidence.age()) {
+            case REALTIME -> Freshness.REALTIME;
+            case DELAYED -> Freshness.DELAYED;
+            case EOD -> Freshness.EOD;
+            case STALE -> Freshness.STALE;
+            case MISSING -> Freshness.MISSING;
+            case NOT_APPLICABLE -> switch (evidence.provenance()) {
+                case DEMO -> Freshness.FIXTURE;
+                case SIMULATED -> Freshness.SIMULATED;
+                case MODELED -> Freshness.MODELED;
+                default -> Freshness.MISSING;
+            };
+        };
     }
 }

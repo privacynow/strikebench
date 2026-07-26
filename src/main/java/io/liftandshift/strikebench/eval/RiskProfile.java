@@ -12,8 +12,6 @@ import java.util.List;
 public record RiskProfile(
         long maxLossCents,
         Long maxProfitCents,          // null = uncapped/model-dependent
-        Double pop,                   // probability of profit (lognormal), null when model-dependent
-        Long expectedValueCents,      // present-value RISK-NEUTRAL approximation (market IV, r, q=0)
         long tailLossCents,           // bounded envelope max loss, otherwise modeled stress loss (>= 0)
         double tailMovePct,           // base stress grid, e.g. 0.20 for -20%/+20%; bounded envelope may lie beyond it
         List<Scenario> scenarios,     // ordered by underlyingMovePct ascending
@@ -24,35 +22,39 @@ public record RiskProfile(
         // owns the tail-aware POP, expected shortfall and calm/base/tense gap dial. It sits ALONGSIDE
         // the risk-neutral lognormal `pop` above, never replacing it. Null when unavailable/not computed.
         io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail,
-        WorstScenario worstScenario
+        WorstScenario worstScenario,
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
 ) {
     public RiskProfile {
         scenarios = scenarios == null ? List.of() : List.copyOf(scenarios);
+        if (marketImpliedRisk == null) {
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "No fingerprinted market-implied evaluation was captured for this risk profile.");
+        }
     }
 
-    /** Compatibility constructor for callers that have not yet attached a named-story severity. */
-    public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
-                       long tailLossCents, double tailMovePct, List<Scenario> scenarios,
-                       TerminalPayoff terminalPayoff, Long evHistVolCents, String evBasisNote,
-                       io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail jumpTail) {
-        this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, terminalPayoff, evHistVolCents, evBasisNote, jumpTail, null);
+    /** The legacy wire projection is derived directly from the sole market-implied authority. */
+    @com.fasterxml.jackson.annotation.JsonProperty("pop")
+    public Double pop() {
+        return marketImpliedRisk.pop();
     }
 
-    /** Compatibility constructor for callers that produce presentation checkpoints but no tail lane. */
-    public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
-                       long tailLossCents, double tailMovePct, List<Scenario> scenarios,
-                       TerminalPayoff terminalPayoff, Long evHistVolCents, String evBasisNote) {
-        this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, terminalPayoff, evHistVolCents, evBasisNote, null, null);
+    /** The legacy wire projection is derived directly from the sole market-implied authority. */
+    @com.fasterxml.jackson.annotation.JsonProperty("expectedValueCents")
+    public Long expectedValueCents() {
+        return marketImpliedRisk.expectedValueCents();
     }
 
-    /** Compatibility constructor for callers that do not produce presentation checkpoints. */
-    public RiskProfile(long maxLossCents, Long maxProfitCents, Double pop, Long expectedValueCents,
+    /**
+     * Compact boundary for policy composers that do not publish a terminal curve, jump-tail lane,
+     * or named worst-scenario receipt. Market-implied values still arrive only as the typed receipt.
+     */
+    public RiskProfile(long maxLossCents, Long maxProfitCents,
                        long tailLossCents, double tailMovePct, List<Scenario> scenarios,
-                       Long evHistVolCents, String evBasisNote) {
-        this(maxLossCents, maxProfitCents, pop, expectedValueCents, tailLossCents, tailMovePct,
-                scenarios, null, evHistVolCents, evBasisNote, null, null);
+                       Long evHistVolCents, String evBasisNote,
+                       io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk) {
+        this(maxLossCents, maxProfitCents, tailLossCents, tailMovePct, scenarios, null,
+                evHistVolCents, evBasisNote, null, null, marketImpliedRisk);
     }
 
     /**
@@ -60,7 +62,14 @@ public record RiskProfile(
      * the Voronoi bin around this move (same distribution as {@link #pop()}); null when no ATM IV /
      * multi-expiry, so the client shows the bar without a probability rather than inventing one.
      */
-    public record Scenario(double underlyingMovePct, long pnlCents, Double prob) {}
+    public record Scenario(io.liftandshift.strikebench.model.ScenarioStory story,
+                           double underlyingMovePct, long pnlCents, Double prob) {
+        /** Compatibility for non-catalog test/checkpoint callers; production always names a story. */
+        public Scenario(double underlyingMovePct, long pnlCents, Double prob) {
+            this(io.liftandshift.strikebench.model.ScenarioStory.atMoveFraction(underlyingMovePct),
+                    underlyingMovePct, pnlCents, prob);
+        }
+    }
 
     public enum ScenarioSeverity {
         CONTAINED,
@@ -97,6 +106,7 @@ public record RiskProfile(
             String modelVersion,
             boolean available,
             Long anchorSpotCents,
+            Long anchorPnlCents,
             String expiration,
             String basis,
             String entryBasis,

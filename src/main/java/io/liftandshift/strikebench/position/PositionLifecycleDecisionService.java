@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.BookActionProjectionService;
 import io.liftandshift.strikebench.paper.BookRiskService;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.ProtocolEvaluator;
 import io.liftandshift.strikebench.util.Ids;
@@ -34,13 +35,43 @@ import java.util.Set;
  * transactions and not inputs that can alter EV.
  */
 public final class PositionLifecycleDecisionService {
-    public static final String SCHEMA_VERSION = "position-lifecycle-decision-v1";
+    public static final String SCHEMA_VERSION = "position-lifecycle-decision-v2";
     private static final Set<String> ACTIONS = Set.of("HOLD", "CLOSE_ONE", "CLOSE_K", "CLOSE_ALL",
             "ASSIGNMENT", "CALL_AWAY", "ROLL", "NO_ACTION");
 
     /** NEEDS_EVIDENCE is NOT an actionable verdict — it is the honest "insufficient evidence to
      *  decide" state that must win precedence over any hold/defend/harvest recommendation. */
     public enum Verdict { KEEP, HARVEST, REDUCE, DEFEND, ACCEPT_ASSIGNMENT, NEEDS_EVIDENCE }
+
+    /** The final evidence gate, after the policy's precedence has selected its decisive lane. */
+    public enum EvidenceState {
+        SUFFICIENT,
+        PARTIAL,
+        CURRENT_MARK_UNAVAILABLE,
+        FORWARD_ECONOMICS_UNAVAILABLE,
+        INSUFFICIENT
+    }
+
+    /**
+     * The one named reason the final verdict/status was selected. Dimension reasons retain the
+     * complete audit trail; this is the concise receipt a surface can render without rediscovering
+     * policy precedence from those dimensions.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record DecisionTrigger(String code, String label, String dimension, String status,
+                                  String basis) {}
+
+    /**
+     * Final surface semantics owned by the lifecycle policy. The browser may style and render this
+     * record; it may not reinterpret missing evidence, invent a friendlier verdict, or maintain a
+     * second urgency table.
+     *
+     * <p>{@code actionable} means that the policy reached a usable decision, including deliberate
+     * KEEP/no-action. It is false only when the evidence gate withheld a verdict.
+     */
+    public record DecisionPresentation(EvidenceState evidenceState, boolean actionable,
+                                       String userFacingVerdict, String userFacingStatus,
+                                       String tone, DecisionTrigger trigger, int sortPriority) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Dimension(String name, String status, Verdict policySignal, List<String> reasons) {
@@ -71,6 +102,7 @@ public final class PositionLifecycleDecisionService {
             OffsetDateTime observedAt,
             Verdict verdict,
             String summary,
+            DecisionPresentation presentation,
             ProtocolEvaluator.Policy policy,
             String policyFingerprint,
             String marketSnapshotFingerprint,
@@ -112,6 +144,7 @@ public final class PositionLifecycleDecisionService {
                                  String authority, String basis) {}
 
     private record CapacityResult(Dimension dimension, boolean assignmentActive) {}
+    private record VerdictSelection(Verdict verdict, Dimension decisiveDimension) {}
 
     private final Db db;
     private final Clock clock;
@@ -151,30 +184,42 @@ public final class PositionLifecycleDecisionService {
         List<Dimension> dimensions = List.of(mechanics, protocol, capacityResult.dimension(),
                 accountLimits, economics, tailAndEvents, carry, history);
 
-        Verdict verdict;
-        if (mechanics.policySignal() != null) verdict = mechanics.policySignal();
+        VerdictSelection selection;
+        if (mechanics.policySignal() != null) selection = select(mechanics.policySignal(), mechanics);
         // §6.4: DEFEND must name the trigger that fired. The stop-loss and the near-expiry time
         // rule are two of those named triggers, and they outrank every discretionary dimension.
-        else if (protocol.policySignal() == Verdict.DEFEND) verdict = Verdict.DEFEND;
-        else if (capacityResult.dimension().policySignal() == Verdict.DEFEND) verdict = Verdict.DEFEND;
-        else if (accountLimits.policySignal() != null) verdict = accountLimits.policySignal();
-        else if (capacityResult.assignmentActive()) verdict = Verdict.ACCEPT_ASSIGNMENT;
-        else if (protocol.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
-        else if (economics.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
-        else if (tailAndEvents.policySignal() != null) verdict = tailAndEvents.policySignal();
-        else if (carry.policySignal() == Verdict.HARVEST) verdict = Verdict.HARVEST;
+        else if (protocol.policySignal() == Verdict.DEFEND) selection = select(Verdict.DEFEND, protocol);
+        else if (capacityResult.dimension().policySignal() == Verdict.DEFEND) {
+            selection = select(Verdict.DEFEND, capacityResult.dimension());
+        }
+        else if (accountLimits.policySignal() != null) {
+            selection = select(accountLimits.policySignal(), accountLimits);
+        }
+        else if (capacityResult.assignmentActive()) {
+            selection = select(Verdict.ACCEPT_ASSIGNMENT, capacityResult.dimension());
+        }
+        else if (protocol.policySignal() == Verdict.HARVEST) selection = select(Verdict.HARVEST, protocol);
+        else if (economics.policySignal() == Verdict.HARVEST) selection = select(Verdict.HARVEST, economics);
+        else if (tailAndEvents.policySignal() != null) {
+            selection = select(tailAndEvents.policySignal(), tailAndEvents);
+        }
+        else if (carry.policySignal() == Verdict.HARVEST) selection = select(Verdict.HARVEST, carry);
         // Minimum-evidence contract: an affirmative KEEP ("hold, no action") must rest on an evaluated
         // hold-vs-close economics. If forward economics is unavailable and nothing above produced an
         // action signal, there is no basis to affirm a hold — surface NEEDS_EVIDENCE (the missing input
         // is named in the FORWARD_ECONOMICS dimension) rather than a silent affirmative hold.
-        else if (!lifecycle.currentChoice().holdVsClose().available()) verdict = Verdict.NEEDS_EVIDENCE;
-        else verdict = Verdict.KEEP;
+        else if (!lifecycle.currentChoice().holdVsClose().available()) {
+            selection = select(Verdict.NEEDS_EVIDENCE, economics);
+        }
+        else selection = select(Verdict.KEEP, null);
 
         List<ActionAlternative> alternatives = alternatives(closes, limits);
         String projectionFingerprint = fingerprint(projections.actions().stream()
                 .map(BookActionProjectionService.ActionProjection::fingerprint).toList());
+        DecisionPresentation presentation = presentation(selection, dimensions);
         return new DecisionAnalysis(SCHEMA_VERSION, lifecycle.positionFingerprint(),
-                lifecycle.evidence().observedAt(), verdict, summary(verdict, reduction), policy,
+                lifecycle.evidence().observedAt(), selection.verdict(),
+                summary(selection.verdict(), reduction), presentation, policy,
                 policyFingerprint, lifecycle.evidence().marketSnapshotFingerprint(),
                 lifecycle.evidence().modelFingerprint(), capacity.objectiveRevisionId(),
                 capacity.declarationFingerprint(), projectionFingerprint, dimensions, limits,
@@ -537,14 +582,17 @@ public final class PositionLifecycleDecisionService {
             if (risk.expiries().clusterNote() != null) reasons.add(risk.expiries().clusterNote());
             reasons.addAll(risk.collisions());
         }
-        boolean defend = tailBreach || (confirmed && policy.defendConfirmedEvents());
+        boolean eventBreach = confirmed && policy.defendConfirmedEvents();
+        boolean defend = tailBreach || eventBreach;
         if (tailBreach) reasons.add("Expected shortfall crosses the named policy's defense threshold.");
-        if (confirmed && policy.defendConfirmedEvents()) {
+        if (eventBreach) {
             reasons.add("This named policy requires defense for a confirmed event crossing.");
         }
-        return new Dimension("TAIL_EVENT", defend ? "DEFEND_TRIGGER"
-                : eventUnavailable ? "UNAVAILABLE" : confirmed ? "CAUTION" : "PASS",
-                defend ? Verdict.DEFEND : null, reasons);
+        String status = tailBreach && eventBreach ? "TAIL_AND_EVENT_TRIGGER"
+                : tailBreach ? "EXPECTED_SHORTFALL_TRIGGER"
+                : eventBreach ? "CONFIRMED_EVENT_TRIGGER"
+                : eventUnavailable ? "UNAVAILABLE" : confirmed ? "CAUTION" : "PASS";
+        return new Dimension("TAIL_EVENT", status, defend ? Verdict.DEFEND : null, reasons);
     }
 
     private static Dimension carry(PositionLifecycleReceipt lifecycle,
@@ -577,7 +625,10 @@ public final class PositionLifecycleDecisionService {
         if (capturedTrigger) reasons.add("Captured premium and residual premium cross this named harvest policy.");
         if (cheapRiskRemoval) reasons.add("The named cheap-risk-removal policy buys back assignment tail for a small fraction of strike dollars.");
         boolean harvest = capturedTrigger || cheapRiskRemoval;
-        return new Dimension("CARRY_COMPENSATION", harvest ? "HARVEST_TRIGGER" : "CONTEXT",
+        String status = capturedTrigger && cheapRiskRemoval ? "CAPTURED_AND_CHEAP_RISK_REMOVAL_TRIGGER"
+                : capturedTrigger ? "CAPTURED_PREMIUM_TRIGGER"
+                : cheapRiskRemoval ? "CHEAP_RISK_REMOVAL_TRIGGER" : "CONTEXT";
+        return new Dimension("CARRY_COMPENSATION", status,
                 harvest ? Verdict.HARVEST : null, reasons);
     }
 
@@ -619,7 +670,7 @@ public final class PositionLifecycleDecisionService {
         Map<String, Long> expiries = new LinkedHashMap<>();
         if (snapshot != null && snapshot.risk() != null) {
             snapshot.risk().themes().symbolNotionals().forEach(row ->
-                    symbols.merge(row.symbol().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
+                    symbols.merge(Symbol.normalize(row.symbol()), row.notionalCents(), Math::addExact));
             snapshot.risk().themes().rows().forEach(row ->
                     themes.merge(row.label().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
             snapshot.risk().expiries().rows().forEach(row ->
@@ -700,6 +751,116 @@ public final class PositionLifecycleDecisionService {
 
     private static Dimension dimension(String name, String status, Verdict signal, String reason) {
         return new Dimension(name, status, signal, List.of(reason));
+    }
+
+    private static VerdictSelection select(Verdict verdict, Dimension decisiveDimension) {
+        return new VerdictSelection(verdict, decisiveDimension);
+    }
+
+    private static DecisionPresentation presentation(VerdictSelection selection,
+                                                     List<Dimension> dimensions) {
+        Verdict verdict = selection.verdict();
+        Dimension decisive = selection.decisiveDimension();
+        EvidenceState evidenceState = switch (verdict) {
+            case NEEDS_EVIDENCE -> decisive != null && "MECHANICS".equals(decisive.name())
+                    ? EvidenceState.CURRENT_MARK_UNAVAILABLE
+                    : decisive != null && "FORWARD_ECONOMICS".equals(decisive.name())
+                    ? EvidenceState.FORWARD_ECONOMICS_UNAVAILABLE
+                    : EvidenceState.INSUFFICIENT;
+            default -> dimensions.stream().anyMatch(dimension ->
+                    "UNAVAILABLE".equals(dimension.status()))
+                    ? EvidenceState.PARTIAL : EvidenceState.SUFFICIENT;
+        };
+        String userFacingVerdict = switch (verdict) {
+            case KEEP -> "Keep";
+            case HARVEST -> "Harvest";
+            case REDUCE -> "Reduce";
+            case DEFEND -> "Defend · action required";
+            case ACCEPT_ASSIGNMENT -> "Accept assignment";
+            case NEEDS_EVIDENCE -> switch (evidenceState) {
+                case CURRENT_MARK_UNAVAILABLE -> "No verdict · current mark unavailable";
+                case FORWARD_ECONOMICS_UNAVAILABLE -> "No verdict · forward economics unavailable";
+                default -> "No verdict · evidence needed";
+            };
+        };
+        String userFacingStatus = switch (verdict) {
+            case KEEP -> "On plan";
+            case HARVEST -> "Take profit";
+            case REDUCE -> "Trim";
+            case DEFEND -> "Action required";
+            case ACCEPT_ASSIGNMENT -> "Assignment active";
+            case NEEDS_EVIDENCE -> switch (evidenceState) {
+                case CURRENT_MARK_UNAVAILABLE -> "Current mark unavailable";
+                case FORWARD_ECONOMICS_UNAVAILABLE -> "Forward economics unavailable";
+                default -> "Evidence needed";
+            };
+        };
+        String tone = switch (verdict) {
+            case DEFEND -> "CRITICAL";
+            case NEEDS_EVIDENCE, REDUCE -> "WARNING";
+            case HARVEST -> "OPPORTUNITY";
+            case ACCEPT_ASSIGNMENT -> "ASSIGNMENT";
+            case KEEP -> "POSITIVE";
+        };
+        int sortPriority = switch (verdict) {
+            case DEFEND -> 0;
+            case NEEDS_EVIDENCE -> 1;
+            case REDUCE -> 2;
+            case HARVEST -> 3;
+            case ACCEPT_ASSIGNMENT -> 4;
+            case KEEP -> 5;
+        };
+        return new DecisionPresentation(evidenceState, verdict != Verdict.NEEDS_EVIDENCE,
+                userFacingVerdict, userFacingStatus, tone,
+                trigger(verdict, decisive), sortPriority);
+    }
+
+    private static DecisionTrigger trigger(Verdict verdict, Dimension decisive) {
+        if (decisive == null) return null;
+        String key = decisive.name() + ":" + decisive.status();
+        String code = switch (key) {
+            case "MECHANICS:BLOCKED" -> "CURRENT_MARK_UNAVAILABLE";
+            case "MECHANICAL_PROTOCOL:STOP_LOSS_TRIGGER" -> "STOP_LOSS";
+            case "MECHANICAL_PROTOCOL:EXPIRY_TIME_TRIGGER" -> "EXPIRY_TIME_RULE";
+            case "MECHANICAL_PROTOCOL:TAKE_PROFIT_TRIGGER" -> "TAKE_PROFIT";
+            case "INTENT_CAPACITY:INCOHERENT" -> "ASSIGNMENT_CAPACITY_CONFLICT";
+            case "ACCOUNT_LIMITS:HARD_BREACH_UNRESOLVED" -> "HARD_ACCOUNT_LIMIT_UNRESOLVED";
+            case "ACCOUNT_LIMITS:HARD_BREACH_RESTORABLE" -> "HARD_ACCOUNT_LIMIT_REDUCTION";
+            case "FORWARD_ECONOMICS:ADVERSE" -> "ADVERSE_HOLD_VS_CLOSE_ECONOMICS";
+            case "FORWARD_ECONOMICS:UNAVAILABLE" -> "FORWARD_ECONOMICS_UNAVAILABLE";
+            case "TAIL_EVENT:EXPECTED_SHORTFALL_TRIGGER" -> "EXPECTED_SHORTFALL_LIMIT";
+            case "TAIL_EVENT:CONFIRMED_EVENT_TRIGGER" -> "CONFIRMED_EVENT_RULE";
+            case "TAIL_EVENT:TAIL_AND_EVENT_TRIGGER" -> "TAIL_AND_EVENT_RULES";
+            case "CARRY_COMPENSATION:CAPTURED_PREMIUM_TRIGGER" -> "PROFIT_CAPTURE";
+            case "CARRY_COMPENSATION:CHEAP_RISK_REMOVAL_TRIGGER" -> "CHEAP_RISK_REMOVAL";
+            case "CARRY_COMPENSATION:CAPTURED_AND_CHEAP_RISK_REMOVAL_TRIGGER" ->
+                    "PROFIT_CAPTURE_AND_CHEAP_RISK_REMOVAL";
+            default -> verdict == Verdict.ACCEPT_ASSIGNMENT
+                    ? "ASSIGNMENT_DECISION_ACTIVE" : "POLICY_TRIGGER";
+        };
+        String label = switch (key) {
+            case "MECHANICS:BLOCKED" -> "Current mark unavailable";
+            case "MECHANICAL_PROTOCOL:STOP_LOSS_TRIGGER" -> "Stop-loss line crossed";
+            case "MECHANICAL_PROTOCOL:EXPIRY_TIME_TRIGGER" -> "Expiry time rule";
+            case "MECHANICAL_PROTOCOL:TAKE_PROFIT_TRIGGER" -> "Take-profit line reached";
+            case "INTENT_CAPACITY:INCOHERENT" -> "Assignment capacity conflicts with the declared intent";
+            case "ACCOUNT_LIMITS:HARD_BREACH_UNRESOLVED" -> "Hard account limit cannot be restored";
+            case "ACCOUNT_LIMITS:HARD_BREACH_RESTORABLE" -> "Hard account limit has a minimum reduction";
+            case "FORWARD_ECONOMICS:ADVERSE" -> "Hold-vs-close economics favor closing";
+            case "FORWARD_ECONOMICS:UNAVAILABLE" -> "Forward hold-vs-close economics unavailable";
+            case "TAIL_EVENT:EXPECTED_SHORTFALL_TRIGGER" -> "Expected-shortfall limit crossed";
+            case "TAIL_EVENT:CONFIRMED_EVENT_TRIGGER" -> "Confirmed issuer-event rule crossed";
+            case "TAIL_EVENT:TAIL_AND_EVENT_TRIGGER" -> "Tail and confirmed-event rules crossed";
+            case "CARRY_COMPENSATION:CAPTURED_PREMIUM_TRIGGER" -> "Profit-capture rule reached";
+            case "CARRY_COMPENSATION:CHEAP_RISK_REMOVAL_TRIGGER" -> "Cheap risk-removal rule reached";
+            case "CARRY_COMPENSATION:CAPTURED_AND_CHEAP_RISK_REMOVAL_TRIGGER" ->
+                    "Profit-capture and cheap risk-removal rules reached";
+            default -> verdict == Verdict.ACCEPT_ASSIGNMENT
+                    ? "Assignment decision is active"
+                    : "Named lifecycle policy trigger";
+        };
+        String basis = decisive.reasons().isEmpty() ? null : decisive.reasons().getLast();
+        return new DecisionTrigger(code, label, decisive.name(), decisive.status(), basis);
     }
 
     private static BookActionProjectionService.ActionProjection action(

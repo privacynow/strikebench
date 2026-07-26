@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +31,198 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ScenarioCanvasTest {
+
+    @Test void serverOwnsOneExhaustiveTypedDefaultPolicyForEveryNamedStory() {
+        var catalog = ScenarioCanvasTemplateService.storyCatalog();
+
+        assertThat(catalog.keySet())
+                .containsExactly(ScenarioStory.values());
+        assertThat(catalog).hasSize(8);
+        assertThat(catalog.get(ScenarioStory.MARKET_CRASH))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(-20, 14, 5));
+        assertThat(catalog.get(ScenarioStory.GAP_DOWN))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(-9, 8, 1));
+        assertThat(catalog.get(ScenarioStory.ORDERLY_PULLBACK))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(-6, 4, 3));
+        assertThat(catalog.get(ScenarioStory.CHOPPY_SIDEWAYS))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(-1, 1, 5));
+        assertThat(catalog.get(ScenarioStory.FLAT_RANGE))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(0, 0, 7));
+        assertThat(catalog.get(ScenarioStory.GRIND_HIGHER))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(6, -2, 10));
+        assertThat(catalog.get(ScenarioStory.STRONG_RALLY))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(13, -4, 10));
+        assertThat(catalog.get(ScenarioStory.MELT_UP))
+                .isEqualTo(new ScenarioCanvasTemplateService.StoryPolicy(20, -6, 12));
+        assertThatThrownBy(() -> catalog.put(ScenarioStory.FLAT_RANGE,
+                new ScenarioCanvasTemplateService.StoryPolicy(1, 1, 1)))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test void namedStoryNullControlsUseServerDefaultsAndClampElapsedToStoredHorizon() {
+        var spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 3, .30, 142, 3);
+        double[][] storedPaths = {
+                {100, 99, 98, 97},
+                {100, 101, 102, 103},
+                {100, 98, 99, 97}};
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, storedPaths, null, PathGenerator.MODEL_VERSION,
+                LocalDate.of(2026, 7, 2));
+
+        var resolved = ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(),
+                new ScenarioCanvasTemplateService.Interaction(
+                        ScenarioStory.MELT_UP,
+                        null, null, null, null));
+
+        assertThat(resolved.declaration()).isEqualTo(
+                new ScenarioCanvasTemplateService.Interaction(
+                        ScenarioStory.MELT_UP,
+                        20.0, -6.0, 3, null));
+        assertThat(resolved.scenario().waypoints())
+                .extracting(ScenarioSpec.Waypoint::dayIndex)
+                .containsExactly(1, 2, 3);
+        assertThat(resolved.scenario().waypoints())
+                .extracting(ScenarioSpec.Waypoint::priceRatio)
+                .containsExactly(1.016, 1.076, 1.20);
+        assertThat(resolved.canvas().ivNodes())
+                .extracting(ScenarioCanvasSpec.IvNode::dayIndex)
+                .containsExactly(0, 3);
+        assertThat(resolved.canvas().ivNodes().getLast().atmIv()).isEqualTo(.24);
+        assertThat(resolved.pathWaypoints()).isEmpty();
+        assertThat(resolved.sourcePathIndex()).isNull();
+        assertThat(ensemble.paths()).isSameAs(storedPaths);
+        assertThat(ensemble.paths()[0]).containsExactly(100, 99, 98, 97);
+    }
+
+    @Test void explicitStoryControlsOverrideEveryDefaultWithoutCreatingAnotherPathSource() {
+        var spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 8, .30, 142, 3);
+        double[][] storedPaths = {
+                {100, 99, 98, 97, 96, 95, 94, 93, 92},
+                {100, 101, 102, 103, 104, 105, 106, 107, 108}};
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, storedPaths, null, PathGenerator.MODEL_VERSION,
+                LocalDate.of(2026, 7, 2));
+        var override = new ScenarioCanvasTemplateService.Interaction(
+                ScenarioStory.MARKET_CRASH,
+                -11.0, 3.0, 6, null);
+
+        var resolved = ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(), override);
+
+        assertThat(resolved.declaration()).isEqualTo(override);
+        assertThat(resolved.scenario().horizonDays()).isEqualTo(spec.horizonDays());
+        assertThat(resolved.scenario().waypoints().getLast().dayIndex()).isEqualTo(6);
+        assertThat(resolved.scenario().waypoints().getLast().priceRatio()).isEqualTo(.89);
+        assertThat(resolved.canvas().ivNodes().getLast().atmIv()).isCloseTo(.33,
+                org.assertj.core.data.Offset.offset(1e-12));
+        assertThat(resolved.pathWaypoints()).isEmpty();
+        assertThat(resolved.sourcePathIndex()).isNull();
+        assertThat(ensemble.paths()).isSameAs(storedPaths);
+    }
+
+    @Test void storyDefaultsAndOverridesAreValidatedWhileExactPathDefaultsStayExact() {
+        var spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 4, .25, 91, 4);
+        double[][] storedPaths = {
+                {100, 90, 80, 70, 60}, {100, 95, 90, 85, 80},
+                {100, 100, 100, 100, 100}, {100, 105, 110, 115, 120}};
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, storedPaths, null, PathGenerator.MODEL_VERSION,
+                LocalDate.of(2026, 7, 2));
+
+        var exact = ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(),
+                new ScenarioCanvasTemplateService.Interaction(
+                        null, null, null, null, 3));
+        assertThat(exact.declaration()).isEqualTo(
+                new ScenarioCanvasTemplateService.Interaction(
+                        null, null, 0.0, 4, 3));
+        assertThat(exact.sourcePathIndex()).isEqualTo(3);
+        assertThat(exact.scenario()).isNull();
+        assertThat(exact.pathWaypoints()).isEmpty();
+        assertThat(ensemble.paths()).isSameAs(storedPaths);
+
+        assertThatThrownBy(() -> ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(),
+                new ScenarioCanvasTemplateService.Interaction(
+                        ScenarioStory.GAP_DOWN,
+                        Double.NaN, null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("movePct");
+        assertThatThrownBy(() -> ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(),
+                new ScenarioCanvasTemplateService.Interaction(
+                        ScenarioStory.GAP_DOWN,
+                        null, null, 5, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stored ensemble horizon");
+        assertThatThrownBy(() -> ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(),
+                new ScenarioCanvasTemplateService.Interaction(
+                        null, null, null, null, 4)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside the stored ensemble");
+    }
+
+    @Test void compactDeskStoryIsResolvedOnlyByTheScenarioOwner() {
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                6, 1, 0, .30, 0, 0, 0, 6, null, 142, 3);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, new double[][]{
+                    {100, 99, 98, 97, 96, 95, 94},
+                    {100, 101, 100, 102, 101, 103, 102},
+                    {100, 98, 96, 94, 93, 92, 91}},
+                null, PathGenerator.MODEL_VERSION, LocalDate.of(2026, 7, 2));
+        var declaration = new ScenarioCanvasTemplateService.Interaction(
+                ScenarioStory.GAP_DOWN, -9.0, 12.0, 3, null);
+
+        var resolved = ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(), declaration);
+
+        assertThat(resolved.declaration()).isEqualTo(declaration);
+        assertThat(resolved.sourcePathIndex()).isNull();
+        assertThat(resolved.pathWaypoints()).isEmpty();
+        assertThat(resolved.scenario().waypoints())
+                .extracting(ScenarioSpec.Waypoint::dayIndex)
+                .containsExactly(1, 2, 3);
+        assertThat(resolved.scenario().waypoints())
+                .extracting(ScenarioSpec.Waypoint::priceRatio)
+                .containsExactly(.91, .9172, .91);
+        assertThat(resolved.canvas().ivNodes())
+                .extracting(ScenarioCanvasSpec.IvNode::dayIndex)
+                .containsExactly(0, 3);
+        assertThat(resolved.canvas().ivNodes().getFirst().atmIv()).isEqualTo(.30);
+        assertThat(resolved.canvas().ivNodes().getLast().atmIv()).isEqualTo(.42);
+    }
+
+    @Test void exactFanClickPreservesImmutableSourceIdentityWithoutAuthoredPins() {
+        var spec = ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 2, .25, 91, 4);
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, new double[][]{
+                    {100, 90, 80}, {100, 95, 90}, {100, 100, 100}, {100, 105, 110}},
+                null, PathGenerator.MODEL_VERSION, LocalDate.of(2026, 7, 2));
+        var declaration = new ScenarioCanvasTemplateService.Interaction(
+                null, null, -5.0, 2, 3);
+
+        var resolved = ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(), declaration);
+
+        assertThat(resolved.declaration()).isEqualTo(declaration);
+        assertThat(resolved.sourcePathIndex()).isEqualTo(3);
+        assertThat(resolved.scenario()).isNull();
+        assertThat(resolved.pathWaypoints()).isEmpty();
+        assertThatThrownBy(() -> ScenarioCanvasTemplateService.resolveInteraction(
+                ensemble, spec, IvSpec.flat(.30), ScenarioCanvasSpec.defaults(),
+                new ScenarioCanvasTemplateService.Interaction(
+                        ScenarioStory.MELT_UP, 20.0, 0.0, 2, 3)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("alternative scenario sources");
+    }
 
     @Test void ivNodesInterpolateThenEvolveStrikeAndTermSurface() {
         var canvas = new ScenarioCanvasSpec("NYSE", 0.012, "entered dividend yield", -0.30, 0.08,

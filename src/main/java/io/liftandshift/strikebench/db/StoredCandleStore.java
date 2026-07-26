@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.market.CandleCoverage;
 import io.liftandshift.strikebench.market.ports.CandleStore;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -38,8 +39,8 @@ public final class StoredCandleStore implements CandleStore {
 
     @Override
     public Optional<Read> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
-        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (sym.isEmpty() || from == null || to == null || from.isAfter(to)) return Optional.empty();
+        String sym = Symbol.normalizeOptional(symbol);
+        if (sym == null || from == null || to == null || from.isAfter(to)) return Optional.empty();
         String dataset = datasetId == null || datasetId.isBlank() ? DatasetService.OBSERVED : datasetId;
         boolean synthetic = !DatasetService.OBSERVED.equals(dataset);
         // Observed means observed: legacy/demo rows in the canonical dataset are not eligible

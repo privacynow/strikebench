@@ -33,6 +33,8 @@ class PlanDecisionOrderDockTest {
         assertThat(dock.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.UNAVAILABLE);
         assertThat(dock.price().unavailableReason()).isNotBlank();
+        assertThat(dock.displayCashNetCents()).isNull();
+        assertThat(dock.suggestedLimitNetCents()).isNull();
     }
 
     @Test void immediateAndRestingInstructionsExposeDistinctValuationBases() {
@@ -44,6 +46,8 @@ class PlanDecisionOrderDockTest {
         assertThat(immediate.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK);
         assertThat(immediate.price().restingLimitNetCents()).isNull();
+        assertThat(immediate.displayCashNetCents()).isEqualTo(67_000L);
+        assertThat(immediate.suggestedLimitNetCents()).isEqualTo(67_000L);
 
         var resting = PlanDecisionController.orderDock(order(OrderInstruction.limit(69_000)),
                 preview(false, priced(69_000, OrderInstruction.limit(69_000), 67_000L,
@@ -54,6 +58,8 @@ class PlanDecisionOrderDockTest {
         assertThat(resting.price().restingLimitNetCents()).isEqualTo(69_000L);
         assertThat(resting.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.RESTING_LIMIT);
+        assertThat(resting.displayCashNetCents()).isEqualTo(69_000L);
+        assertThat(resting.suggestedLimitNetCents()).isEqualTo(69_000L);
     }
 
     @Test void theDockReportsTheFeeActuallyCharged() {
@@ -67,6 +73,8 @@ class PlanDecisionOrderDockTest {
         assertThat(dock.price().openingFeesCents()).isEqualTo(130L);
         assertThat(dock.price().afterFeeNetCents()).isEqualTo(66_870L);
         assertThat(dock.price().valuedNetCents()).isEqualTo(66_870L);
+        assertThat(dock.displayCashNetCents()).isEqualTo(66_870L);
+        assertThat(dock.suggestedLimitNetCents()).isEqualTo(67_000L);
     }
 
     private static PackagePriceReceipt priced(long gross, OrderInstruction instruction,
@@ -80,7 +88,7 @@ class PlanDecisionOrderDockTest {
 
     private static TradeOpenRequest order(OrderInstruction instruction) {
         return new TradeOpenRequest("AMD", "CASH_SECURED_PUT", 1, List.of(), "neutral", "1d",
-                "conservative", "INCOME", false, null, instruction.limitNetCents(), null,
+                "conservative", "INCOME", false, null, null,
                 "PLAN", List.of(), null, "PROPOSED", instruction);
     }
 

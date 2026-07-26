@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import io.liftandshift.strikebench.support.TestMarketRiskReceipts;
 import io.liftandshift.strikebench.support.TestPrices;
 
 class EconomicAssessmentTest {
@@ -22,9 +23,10 @@ class EconomicAssessmentTest {
                 List.of(new LegView("BUY", "CALL", "100", "2026-08-21", 1, "4.00", 100, "OPEN"),
                         new LegView("SELL", "CALL", "105", "2026-08-21", 1, "2.00", 100, "OPEN")),
                 1, TestPrices.withFees(1, -20_000, -20_000, openingFeesCents),
-                30_000L, 20_000, List.of("102"), pop, 0L, 0.8,
+                30_000L, 20_000, List.of("102"), 0.8,
                 "DELAYED", List.of(), 0.7, "test", "test", "test", "test", "test",
-                "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null, false, null, null);
+                "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null, false, null, null,
+                TestMarketRiskReceipts.receipt(pop, 0L));
     }
 
     private EvalContext ctx() {
@@ -49,8 +51,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void materiallyNegativeEconomicsStayAvailableAsATeachingCase() {
-        RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.24, -5_000L,
-                20_000, 0.20, List.of(), -4_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 30_000L,
+                20_000, 0.20, List.of(), -4_000L, "test",
+                TestMarketRiskReceipts.receipt(0.24, -5_000L));
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.24), risk, observed(), pass(), ctx());
 
         assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.UNFAVORABLE);
@@ -64,8 +67,9 @@ class EconomicAssessmentTest {
                 1_000_000, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
-        RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.50, 1_000L,
-                20_000, 0.20, List.of(), 1_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 30_000L,
+                20_000, 0.20, List.of(), 1_000L, "test",
+                TestMarketRiskReceipts.receipt(0.50, 1_000L));
 
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.50, 230L), risk, observed(), pass(), context);
 
@@ -76,8 +80,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void economicVerdictUsesTheCapturedPackageFeeNotCurrentConfiguration() {
-        RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.50, 1_000L,
-                20_000, 0.20, List.of(), 1_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 30_000L,
+                20_000, 0.20, List.of(), 1_000L, "test",
+                TestMarketRiskReceipts.receipt(0.50, 1_000L));
 
         // Receipt says $2.30 to open ($4.60 round trip). EvalContext deliberately has no fee
         // schedule: replaying or re-ranking a captured package cannot consult current config.
@@ -95,8 +100,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void lowProbabilityAloneNeverRejectsAPositivePayoffTrade() {
-        RiskProfile risk = new RiskProfile(20_000, 80_000L, 0.20, 5_000L,
-                20_000, 0.20, List.of(), null, "test");
+        RiskProfile risk = new RiskProfile(20_000, 80_000L,
+                20_000, 0.20, List.of(), null, "test",
+                TestMarketRiskReceipts.receipt(0.20, 5_000L));
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.20), risk, observed(), pass(), ctx());
 
         assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.MIXED);
@@ -105,8 +111,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void observedRealizedVolEdgeThatSurvivesCostsCanBeFavorable() {
-        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 20_000L,
+                20_000, 0.20, List.of(), 2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, -100L));
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.55), risk, observed(), pass(), ctx());
 
         assertThat(a.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
@@ -125,8 +132,8 @@ class EconomicAssessmentTest {
                 new DeclaredObjective("DIRECTIONAL", "BULLISH", 30, "ACCEPT", "test"),
                 null, closes);
         RiskProfile pointEstimateClearsMateriality = new RiskProfile(
-                20_000, 30_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "test");
+                20_000, 30_000L, 20_000, 0.20, List.of(), 2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, -100L));
 
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.55),
                 pointEstimateClearsMateriality, observed(), pass(), withHistory);
@@ -150,8 +157,8 @@ class EconomicAssessmentTest {
                 new DeclaredObjective("DIRECTIONAL", "BULLISH", 30, "ACCEPT", "test"),
                 null, closes);
         RiskProfile adversePoint = new RiskProfile(
-                20_000, 30_000L, 0.45, -100L,
-                20_000, 0.20, List.of(), -2_000L, "test");
+                20_000, 30_000L, 20_000, 0.20, List.of(), -2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.45, -100L));
 
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.45),
                 adversePoint, observed(), pass(), withHistory);
@@ -169,21 +176,24 @@ class EconomicAssessmentTest {
                 List.of(new LegView("SELL", "PUT", "95", "2026-09-04", 1,
                         "3.00", 100, "OPEN")),
                 1, TestPrices.withFees(1, 30_000L, 30_000L, 65L),
-                30_000L, 920_000L, List.of("92"), 0.72,
-                -5_070L, 0.9, "DELAYED", List.of(), 0.8,
+                30_000L, 920_000L, List.of("92"),
+                0.9, "DELAYED", List.of(), 0.8,
                 "income", "premium", "assignment", "volatility expansion", "test",
                 "INCOME", List.of("INCOME", "ACQUIRE"), 0.28, 25.0, "92",
-                "Collect premium or acquire at $92", false, null, null);
+                "Collect premium or acquire at $92", false, null, null,
+                TestMarketRiskReceipts.receipt(0.72, -5_070L));
         List<Double> closes = java.util.stream.IntStream.range(0, 64)
                 .mapToObj(i -> 100.0 + Math.sin(i / 4.0) * 2.0 + i * 0.02)
                 .toList();
         EvalContext observedLike = new EvalContext("AAPL", 10_000,
-                java.time.LocalDate.parse("2026-07-22"), 45, 0.38, 0.20,
+                java.time.LocalDate.parse("2026-07-22"), 45, 0.80, 0.20,
                 List.of(), 1_000_000, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                         io.liftandshift.strikebench.model.Freshness.EOD), null,
                 new DeclaredObjective("INCOME", "NEUTRAL", 30, "ACCEPT", "test"),
                 null, closes);
+        income = io.liftandshift.strikebench.support.TestMarketRiskReceipts.attach(
+                income, observedLike);
         RiskProfile risk = new RiskProfiler().profile(income, observedLike);
         EconomicAssessment a = EconomicAssessment.assess(
                 income, risk, observed(), pass(), observedLike);
@@ -204,10 +214,12 @@ class EconomicAssessmentTest {
 
     @Test void cashSecuredPutNeedsAHorizonMeaningfulEdgeOnItsAsymmetricExposure() {
         Candidate put = asymmetricIncomeCandidate(false, 100_000L, 5_000_000L);
-        RiskProfile roundingSized = new RiskProfile(5_000_000L, 100_000L, 0.72, -5_000L,
-                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test");
-        RiskProfile material = new RiskProfile(5_000_000L, 100_000L, 0.72, -5_000L,
-                1_000_000L, 0.20, List.of(), 9_330L, "realized-vol test");
+        RiskProfile roundingSized = new RiskProfile(5_000_000L, 100_000L,
+                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test",
+                TestMarketRiskReceipts.receipt(0.72, -5_000L));
+        RiskProfile material = new RiskProfile(5_000_000L, 100_000L,
+                1_000_000L, 0.20, List.of(), 9_330L, "realized-vol test",
+                TestMarketRiskReceipts.receipt(0.72, -5_000L));
 
         EconomicAssessment small = EconomicAssessment.assess(
                 put, roundingSized, observed(), pass(), ctx(45));
@@ -225,10 +237,12 @@ class EconomicAssessmentTest {
 
     @Test void heldShareOverlayUsesCombinedCapitalWithoutMakingMaterialIncomeImpossible() {
         Candidate coveredCall = asymmetricIncomeCandidate(true, 200_000L, 5_000_000L);
-        RiskProfile roundingSized = new RiskProfile(5_000_000L, 200_000L, 0.68, -4_000L,
-                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test");
-        RiskProfile material = new RiskProfile(5_000_000L, 200_000L, 0.68, -4_000L,
-                1_000_000L, 0.20, List.of(), 9_330L, "realized-vol test");
+        RiskProfile roundingSized = new RiskProfile(5_000_000L, 200_000L,
+                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test",
+                TestMarketRiskReceipts.receipt(0.68, -4_000L));
+        RiskProfile material = new RiskProfile(5_000_000L, 200_000L,
+                1_000_000L, 0.20, List.of(), 9_330L, "realized-vol test",
+                TestMarketRiskReceipts.receipt(0.68, -4_000L));
 
         EconomicAssessment small = EconomicAssessment.assess(
                 coveredCall, roundingSized, observed(), pass(), ctx(45));
@@ -243,8 +257,9 @@ class EconomicAssessmentTest {
 
     @Test void knownFortyFiveDayAmdScaleStillAllowsTheObservedMaterialEdge() {
         Candidate put = asymmetricIncomeCandidate(false, 294_500L, 4_732_500L);
-        RiskProfile risk = new RiskProfile(4_732_500L, 294_500L, 0.73, -5_170L,
-                950_000L, 0.20, List.of(), 9_341L, "observed AMD scale");
+        RiskProfile risk = new RiskProfile(4_732_500L, 294_500L,
+                950_000L, 0.20, List.of(), 9_341L, "observed AMD scale",
+                TestMarketRiskReceipts.receipt(0.73, -5_170L));
 
         EconomicAssessment assessment = EconomicAssessment.assess(
                 put, risk, observed(), pass(), ctx(45));
@@ -256,8 +271,9 @@ class EconomicAssessmentTest {
 
     @Test void scoreComposerDoesNotMagnifySubThresholdEvOnAsymmetricCapital() {
         Candidate put = asymmetricIncomeCandidate(false, 100_000L, 5_000_000L);
-        RiskProfile risk = new RiskProfile(5_000_000L, 100_000L, 0.72, -5_000L,
-                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test");
+        RiskProfile risk = new RiskProfile(5_000_000L, 100_000L,
+                1_000_000L, 0.20, List.of(), 5_130L, "realized-vol test",
+                TestMarketRiskReceipts.receipt(0.72, -5_000L));
         CapitalProfile capital = new CapitalProfile(5_000_000L, 5_000_000L,
                 2.0, null, 45, "cash collateral", null);
 
@@ -283,17 +299,19 @@ class EconomicAssessmentTest {
                 List.of(new LegView("SELL", type, strike, "2026-09-04", 1,
                         "10.00", 100, "OPEN")),
                 1, TestPrices.withFees(1, 100_000L, 100_000L, 65L),
-                maxProfit, heldShares ? 0 : maxLoss, List.of(), 0.70,
-                -5_000L, 0.9, "DELAYED", List.of(), 0.8,
+                maxProfit, heldShares ? 0 : maxLoss, List.of(),
+                0.9, "DELAYED", List.of(), 0.8,
                 "income", "premium", "tail", "volatility", "test",
                 "INCOME", List.of("INCOME"), 0.25, 15.0, null,
                 "Income test", heldShares, heldShares ? 100 : null,
-                heldShares ? maxLoss : null);
+                heldShares ? maxLoss : null,
+                TestMarketRiskReceipts.receipt(0.70, -5_000L));
     }
 
     @Test void negativeRiskNeutralCostBenchmarkAloneIsNotAnUnfavorableVerdict() {
-        RiskProfile noHistory = new RiskProfile(20_000, 30_000L, 0.55, -5_000L,
-                20_000, 0.20, List.of(), null, "realistic measure unavailable");
+        RiskProfile noHistory = new RiskProfile(20_000, 30_000L,
+                20_000, 0.20, List.of(), null, "realistic measure unavailable",
+                TestMarketRiskReceipts.receipt(0.55, -5_000L));
         EconomicAssessment a = EconomicAssessment.assess(
                 candidate(0.55), noHistory, observed(), pass(), ctx());
 
@@ -305,8 +323,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void unrelatedIvRankHistoryDoesNotVetoAnObservedEconomicClaim() {
-        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 20_000L,
+                20_000, 0.20, List.of(), 2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, -100L));
         Map<String, EvidenceLevel> dimensions = Map.of(
                 "pricing", EvidenceLevel.OBSERVED_DELAYED,
                 "currentVolatility", EvidenceLevel.OBSERVED_DELAYED,
@@ -329,8 +348,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void modeledCurrentVolatilityStillBlocksAnObservedEndorsement() {
-        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 20_000L,
+                20_000, 0.20, List.of(), 2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, -100L));
         Map<String, EvidenceLevel> dimensions = Map.of(
                 "pricing", EvidenceLevel.OBSERVED_DELAYED,
                 "currentVolatility", EvidenceLevel.MODELED,
@@ -353,8 +373,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void generatedEvidenceCanTeachAFavorableCaseWithoutClaimingObservedEdge() {
-        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, 2_000L,
-                20_000, 0.20, List.of(), 3_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 20_000L,
+                20_000, 0.20, List.of(), 3_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, 2_000L));
         EvidenceProfile demo = EvidenceProfile.of(Map.of("pricing", EvidenceLevel.DEMO_FIXTURE), "demo");
         EconomicAssessment a = EconomicAssessment.assess(candidate(0.55), risk, demo, pass(), ctx());
 
@@ -366,8 +387,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void observedPricesWithAModeledWeakLinkCannotBecomeAnObservedEndorsement() {
-        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 20_000L,
+                20_000, 0.20, List.of(), 2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, -100L));
         EvidenceProfile incomplete = EvidenceProfile.of(Map.of(
                 "pricing", EvidenceLevel.OBSERVED_DELAYED,
                 "history", EvidenceLevel.OBSERVED_EOD,
@@ -382,8 +404,9 @@ class EconomicAssessmentTest {
     }
 
     @Test void modeledPricingFallbackIsIncompleteEvidenceNotATeachingMarket() {
-        RiskProfile risk = new RiskProfile(20_000, 20_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "test");
+        RiskProfile risk = new RiskProfile(20_000, 20_000L,
+                20_000, 0.20, List.of(), 2_000L, "test",
+                TestMarketRiskReceipts.receipt(0.55, -100L));
         EvidenceProfile modeledPricing = EvidenceProfile.of(Map.of(
                 "pricing", EvidenceLevel.MODELED,
                 "history", EvidenceLevel.OBSERVED_EOD), "modeled chain fallback");
@@ -406,10 +429,12 @@ class EconomicAssessmentTest {
                 List.of(new LegView("SELL", "CALL", "100", "2026-08-21", 1, "2.00", 100, "OPEN"),
                         new LegView("BUY", "CALL", "100", "2026-09-18", 1, "4.00", 100, "OPEN")),
                 1, TestPrices.withFees(1, -20_000, -20_000, 130L),
-                null, 20_000, List.of(), null, null, 0.8, "DELAYED", List.of(),
+                null, 20_000, List.of(), 0.8, "DELAYED", List.of(),
                 base.confidence(), base.whyConsidered(), base.bestUpside(), base.biggestRisk(),
                 base.wouldInvalidate(), base.beginnerExplanation(), base.intent(), base.intents(), null, null,
-                null, null, false, null, null);
+                null, null, false, null, null,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "A mixed-expiration package requires supplied-path valuation."));
         RiskProfile profiled = new RiskProfiler().profile(calendar, ctx());
         EconomicAssessment a = EconomicAssessment.assess(calendar, profiled, observed(), pass(), ctx());
 
@@ -447,13 +472,16 @@ class EconomicAssessmentTest {
 
     @Test void realizedVolLaneUsesTheExactPackagePrice() {
         Candidate base = candidate(0.50);
+        var repricedReceipt = TestMarketRiskReceipts.receipt(
+                TestPrices.optionOnly(base.qty(), -15_000), base.pop(), base.expectedValueCents());
         Candidate repriced = new Candidate(base.strategy(), base.displayName(), base.structureGroup(), base.label(),
-                base.legs(), base.qty(), TestPrices.optionOnly(base.qty(), -15_000), base.maxProfitCents(), 15_000, base.breakevens(), base.pop(),
-                base.expectedValueCents(), base.liquidityScore(), base.freshness(), base.warnings(),
+                base.legs(), base.qty(), TestPrices.optionOnly(base.qty(), -15_000), base.maxProfitCents(), 15_000, base.breakevens(),
+                base.liquidityScore(), base.freshness(), base.warnings(),
                 base.confidence(), base.whyConsidered(), base.bestUpside(), base.biggestRisk(), base.wouldInvalidate(),
                 base.beginnerExplanation(), base.intent(), base.intents(), base.assignmentProb(),
                 base.annualizedYieldPct(), base.effectivePrice(), base.intentNote(), base.usesHeldShares(),
-                base.sharesNeeded(), base.combinedMaxLossCents());
+                base.sharesNeeded(), base.combinedMaxLossCents(), repricedReceipt);
+        repriced = TestMarketRiskReceipts.attach(repriced, ctx());
 
         RiskProfile risk = new RiskProfiler().profile(repriced, ctx());
         var legs = repriced.legs().stream().map(LegView::toLeg).toList();
@@ -486,9 +514,10 @@ class EconomicAssessmentTest {
         return new Candidate("COVERED_CALL", "Covered call", "shares_income", "SELL 105C",
                 List.of(new LegView("SELL", "CALL", "105", "2026-08-21", 1, "2.00", 100, "OPEN")),
                 qty, TestPrices.withFees(qty, 20_000L * qty, 20_000L * qty, 65L * qty),
-                70_000L * qty, 0, List.of("98", "105"), 0.60, 0L, 0.8,
+                70_000L * qty, 0, List.of("98", "105"), 0.8,
                 "DELAYED", List.of(), 0.7, "test", "test", "test", "test", "test",
                 "INCOME", List.of("INCOME", "EXIT"), 0.30, null, null, null,
-                true, 100 * qty, 980_000L * qty);
+                true, 100 * qty, 980_000L * qty,
+                TestMarketRiskReceipts.receipt(0.60, 0L));
     }
 }

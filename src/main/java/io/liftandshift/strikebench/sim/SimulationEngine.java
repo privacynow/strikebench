@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.sim;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.util.Quantiles;
@@ -59,7 +61,7 @@ public final class SimulationEngine {
     public DatasetRun runAndPersist(String symbolRaw, ScenarioSpec specRaw, String userId,
                                     String worldId,
                                     io.liftandshift.strikebench.db.AnalysisContext analysis) {
-        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(symbolRaw);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
         var scope = new PathEnsembleService.Scope(symbol, worldId, analysis);
@@ -243,7 +245,7 @@ public final class SimulationEngine {
                                  io.liftandshift.strikebench.db.AnalysisContext analysis,
                                  List<DecisionLevel> requestedLevels, MarketVolInput marketVol,
                                  double riskFreeRate) {
-        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(symbolRaw);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
         String resolvedWorld = worldId == null || worldId.isBlank() ? "observed" : worldId;
@@ -303,7 +305,9 @@ public final class SimulationEngine {
         String limitation = executable ? null : "The anchor is " + freshness
                 + " and supports scenario analysis only; refresh an executable quote before trading.";
         EnsembleReceipt receipt = new EnsembleReceipt(stored.fingerprint(), scope.symbol(), scope.worldId(),
-                scope.analysis().datasetId(), isoInstant(stored.asOf()), round2(ensemble.spot()),
+                scope.analysis().datasetId(),
+                io.liftandshift.strikebench.util.Timestamps.isoInstant(stored.asOf()),
+                round2(ensemble.spot()),
                 stored.anchorSource(), freshness, executable, limitation,
                 ensemble.modelVersion(), ensemble.spec());
         return assemble(ensemble, decisionMap, marketVol, riskFreeRate, receipt);
@@ -423,16 +427,6 @@ public final class SimulationEngine {
         return "observed".equals(world) ? io.liftandshift.strikebench.market.MarketLane.OBSERVED
                 : "demo".equals(world) ? io.liftandshift.strikebench.market.MarketLane.DEMO
                 : io.liftandshift.strikebench.market.MarketLane.SIMULATED;
-    }
-
-    /** plan_ensemble.as_of round-trips through SQL text; re-emit the exact captured instant form. */
-    private static String isoInstant(String asOf) {
-        try { return java.time.Instant.parse(asOf).toString(); }
-        catch (java.time.format.DateTimeParseException e) {
-            String iso = asOf.replace(' ', 'T');
-            if (iso.matches(".*[+-]\\d{2}$")) iso += ":00";
-            return java.time.OffsetDateTime.parse(iso).toInstant().toString();
-        }
     }
 
     private static MarketImpliedRange marketImpliedRange(double spot, int horizonSessions, MarketVolInput input,

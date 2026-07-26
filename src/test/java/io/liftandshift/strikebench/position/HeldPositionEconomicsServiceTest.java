@@ -17,6 +17,7 @@ import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeService;
+import io.liftandshift.strikebench.paper.OrderInstruction;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -290,7 +291,7 @@ class HeldPositionEconomicsServiceTest {
     private static TradeService.OpenRequest request(int qty, Leg leg) {
         return new TradeService.OpenRequest("tracked", "NVDA", "CASH_SECURED_PUT", qty,
                 List.of(leg), null, null, null, "INCOME", false,
-                null, null, "TEST", "PROPOSED");
+                null, "TEST", "PROPOSED", OrderInstruction.market());
     }
 
     /**

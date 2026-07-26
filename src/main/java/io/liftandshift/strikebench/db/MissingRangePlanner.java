@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -108,8 +109,6 @@ public final class MissingRangePlanner {
     }
 
     private static String normalize(String symbol) {
-        String s = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (s.isBlank()) throw new IllegalArgumentException("symbol is required");
-        return s;
+        return Symbol.normalize(symbol);
     }
 }

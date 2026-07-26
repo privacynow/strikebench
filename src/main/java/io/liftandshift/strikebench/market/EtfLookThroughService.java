@@ -4,6 +4,7 @@ import static io.liftandshift.strikebench.util.Numbers.round4;
 import io.liftandshift.strikebench.model.DataAge;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.DataProvenance;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -295,8 +296,7 @@ public final class EtfLookThroughService {
                 "XLE", "XLF", "XLI", "XLC", "XLU", "JEPI", "QYLD", "XYLD", "RYLD");
     }
     private static String norm(String symbol) {
-        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("ETF symbol is required");
-        return symbol.trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
     private static String formatPct(double value) {
         return String.format(Locale.ROOT, "%.2f", value).replaceAll("0+$", "").replaceAll("\\.$", "");

@@ -29,6 +29,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static io.liftandshift.strikebench.support.CurrentEvaluationReceiptFixture.withComparisonEndorsement;
 import io.liftandshift.strikebench.support.TestPrices;
 
 class PlanOutcomeServiceTest {
@@ -253,6 +254,7 @@ class PlanOutcomeServiceTest {
                    {"action":"BUY","type":"CALL","strike":"250","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"7","positionEffect":"OPEN"},
                    {"action":"SELL","type":"CALL","strike":"260","expiration":"2026-08-21","ratio":1,"multiplier":100,"entryPrice":"4","positionEffect":"OPEN"}]}
                 """);
+        withComparisonEndorsement(candidate);
         strategies.saveCustom(null, plan, Json.parse("{\"source\":\"BUILDER\"}"), candidate, plan.version(), true);
         plan = plans.get(null, plan.id());
         String candidateId = strategies.selectedCandidate(null, plan.id()).path("id").asText();

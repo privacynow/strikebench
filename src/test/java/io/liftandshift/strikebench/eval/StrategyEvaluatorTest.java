@@ -26,15 +26,18 @@ class StrategyEvaluatorTest {
                 new LegView("BUY", "CALL", "250", expiration, 1, "4.00", 100, "OPEN"),
                 new LegView("SELL", "CALL", "255", expiration, 1, "2.00", 100, "OPEN"));
         // $2.00 debit and $5.00 width per share -> $200 debit / $300 profit / $200 loss PER CONTRACT (cents).
-        return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
+        return io.liftandshift.strikebench.support.TestMarketRiskReceipts.attach(
+                new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
                 legs, 1, TestPrices.withFeeSchedule(1, -20_000L, -20_000L, 130L, 260L),
                 30_000L, 20_000L, List.of("252.00"),
-                0.45, 2_000L, 0.70, freshness, List.of(),
+                0.70, freshness, List.of(),
                 confidence, "Cheap defined-risk way to play a move up",
                 "Up to $300 if AAPL is above $255", "Loses the $200 debit if AAPL stays flat/down",
                 "AAPL closes below $250 at expiry", "You risk $200 to make up to $300",
                 "DIRECTIONAL", List.of("DIRECTIONAL"),
-                0.30, null, null, null, false, null, null);
+                0.30, null, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.45, 2_000L)),
+                ctx());
     }
 
     @Test void perFamilyExpirySelectionUsesEconomicVerdictBeforeRawQuality() {
@@ -107,13 +110,16 @@ class StrategyEvaluatorTest {
                 new LegView("BUY", "CALL", "792", "2026-09-04", 1, "0.25", 100, "OPEN"));
         Candidate candidate = new Candidate("IRON_CONDOR", "Iron condor", "range_credit",
                 "SPY wide-put-wing reproduction", legs, 1, TestPrices.optionOnly(1, 10_500L), 10_500L, 179_500L,
-                List.of("592.95", "789.05"), 0.70, 0L, 0.80, "DELAYED", List.of(),
+                List.of("592.95", "789.05"), 0.80, "DELAYED", List.of(),
                 0.70, "range income", "credit", "wide put wing", "breakout",
                 "defined-risk package", "INCOME", List.of("INCOME"), 0.30,
-                null, null, null, false, null, null);
+                null, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.70, 0L));
         EvalContext context = new EvalContext("SPY", 74_813L, java.time.LocalDate.parse("2026-07-21"),
                 45, 0.20, 0.18, ctx().ivHistory(), 10_000_000L, true, 0.04,
                 ctx().rateEvidence(), null);
+        candidate = io.liftandshift.strikebench.support.TestMarketRiskReceipts.attach(
+                candidate, context);
 
         RiskProfile risk = new RiskProfiler().profile(candidate, context);
 
@@ -266,8 +272,9 @@ class StrategyEvaluatorTest {
         Candidate observedCandidate = debitCallSpread("DELAYED", 0.8);
         EvidenceProfile evidence = new EvidenceAssembler().assemble(observedCandidate, syntheticHistory);
         RiskProfile materialPositiveRealisticEv = new RiskProfile(
-                20_000, 30_000L, 0.55, -100L,
-                20_000, 0.20, List.of(), 2_000L, "synthetic history test");
+                20_000, 30_000L, 20_000, 0.20, List.of(), 2_000L,
+                "synthetic history test",
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.55, -100L));
         EconomicAssessment economics = EconomicAssessment.assess(observedCandidate,
                 materialPositiveRealisticEv, evidence,
                 new ScoreBreakdown(true, List.of(), 50, 50, List.of()), syntheticHistory);
@@ -301,7 +308,9 @@ class StrategyEvaluatorTest {
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
 
-        StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6),
+        StrategyEvaluation e = evaluator.evaluate(
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.attach(
+                        debitCallSpread("DELAYED", 0.6), candleStarved),
                 new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month",
                         "bullish", "balanced", "decision"), candleStarved);
 
@@ -508,9 +517,10 @@ class StrategyEvaluatorTest {
     private static Candidate candidate(String strategy, List<LegView> legs, long entryNet,
                                        Long maxProfit, Long maxLoss) {
         return new Candidate(strategy, strategy.replace('_', ' '), "test", strategy, legs, 1,
-                TestPrices.optionOnly(1, entryNet), maxProfit, maxLoss, List.of(), 0.50, 0L, 0.8, "DELAYED", List.of(),
+                TestPrices.optionOnly(1, entryNet), maxProfit, maxLoss, List.of(), 0.8, "DELAYED", List.of(),
                 0.7, "test", "test", "test", "test", "test", "DIRECTIONAL",
-                List.of("DIRECTIONAL"), null, null, null, null, false, null, maxLoss);
+                List.of("DIRECTIONAL"), null, null, null, null, false, null, maxLoss,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.50, 0L));
     }
 
     private static EvalContext withDeclared(EvalContext base, DeclaredObjective declared) {

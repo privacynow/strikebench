@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -97,12 +99,12 @@ public final class HistoricalOptionsIngest {
             for (String[] row : rows) {
                 rowNumber++;
                 try {
-                    String symbol = up(get(row, col, "symbol"));
+                    String symbol = Symbol.normalize(get(row, col, "symbol"));
                     LocalDate asof = LocalDate.parse(get(row, col, "date").trim());
                     LocalDate exp = LocalDate.parse(get(row, col, "expiration").trim());
                     BigDecimal strike = new BigDecimal(get(row, col, "strike").trim());
                     String type = optType(get(row, col, "type"));
-                    if (symbol.isEmpty() || type == null) { skipped++; continue; }
+                    if (type == null) { skipped++; continue; }
 
                     BigDecimal bid = dec(row, col, "bid"), ask = dec(row, col, "ask");
                     Double iv = dbl(row, col, "iv");

@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.position;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.OwnerScope;
 
@@ -250,8 +251,7 @@ public final class PositionArtifactStore {
     }
 
     private static String symbol(String value) {
-        if (value == null || value.isBlank()) throw new IllegalArgumentException("symbol is required");
-        return value.trim().toUpperCase(java.util.Locale.ROOT);
+        return Symbol.normalize(value);
     }
 
     private static String trim(String value) { return value == null || value.isBlank() ? null : value.trim(); }

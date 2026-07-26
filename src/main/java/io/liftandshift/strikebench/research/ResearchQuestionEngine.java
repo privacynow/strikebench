@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.research;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
@@ -116,8 +118,7 @@ public final class ResearchQuestionEngine {
     public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
                               String worldId) {
         String key = req.key() == null ? "" : req.key().trim();
-        String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
-        if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        String symbol = Symbol.normalize(req.symbol());
         Question q = catalog().stream().filter(x -> x.key().equals(key)).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();

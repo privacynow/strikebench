@@ -143,8 +143,9 @@ final class PlanAdoptionReviewService {
                     var identity = StrategyCatalog.identify(row.symbol(), 1, current);
                     String strategy = identity.family() == null ? "CUSTOM" : identity.family();
                     var request = new TradeService.OpenRequest(row.accountId(), row.symbol(), strategy, 1,
-                            current, null, null, null, null, false, null, null,
-                            "ADOPTION_REVIEW", "PROPOSED");
+                            current, null, null, null, null, false, null,
+                            "ADOPTION_REVIEW", "PROPOSED",
+                            io.liftandshift.strikebench.paper.OrderInstruction.market());
                     ApiResponses.TrackedPackageAnalysis analysis = analyzer.analyze(owner, row.accountId(), request);
                     if (analysis != null && analysis.lifecycle() != null) {
                         analysis = surfacer.surface(owner,

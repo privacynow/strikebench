@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.api;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import io.javalin.http.Context;
 import io.javalin.http.sse.SseClient;
 import io.liftandshift.strikebench.auth.AuthService;
@@ -59,9 +61,7 @@ final class MarketStreamController implements AutoCloseable {
         String raw = client.ctx().queryParam("symbols");
         List<String> symbols = raw == null || raw.isBlank()
                 ? universe.active().symbols()
-                : java.util.Arrays.stream(raw.split(","))
-                    .map(symbol -> symbol.trim().toUpperCase(Locale.ROOT))
-                    .filter(symbol -> !symbol.isBlank()).distinct().limit(60).toList();
+                : Symbol.list(java.util.Arrays.asList(raw.split(","))).stream().limit(60).toList();
         String streamOwner = ownerId.apply(client.ctx());
         client.keepAlive();
         var request = new MarketFrameBroadcaster.Request(streamOwner, symbols,

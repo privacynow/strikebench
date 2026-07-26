@@ -36,7 +36,9 @@ class PortfolioOptimizerTest {
                 null,
                 new CapitalProfile(capital, capital, null, null, 30, "test", null),
                 null,
-                new RiskProfile(capital, capital, 0.5, marketEv, tail, 0.2, List.of(), historyEv, "test"),
+                new RiskProfile(capital, capital, tail, 0.2, List.of(), historyEv, "test",
+                        io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
+                                0.5, marketEv)),
                 null, null,
                 new ScoreBreakdown(gate, List.of(), score, score, List.of()),
                 new FourOutputAssessment(

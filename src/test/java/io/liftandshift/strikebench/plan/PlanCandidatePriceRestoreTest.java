@@ -17,6 +17,7 @@ import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static io.liftandshift.strikebench.support.CurrentEvaluationReceiptFixture.withComparisonEndorsement;
 
 /**
  * A restored plan rail must be the SAME object as a live one — enforced by the receipt's own
@@ -129,8 +130,10 @@ class PlanCandidatePriceRestoreTest {
 
     @Test void aCandidateWithNoPriceReceiptIsRefusedInsteadOfStoredAsANamelessAmount() {
         Plan.View plan = plan("restore-nopricenode-1");
+        ObjectNode missingPriceAndEndorsement = competition(null);
+        ((ObjectNode) missingPriceAndEndorsement.at("/candidates/0/evaluation")).remove("endorsement");
         assertThatThrownBy(() -> strategies.saveCompetition(null, plan,
-                Json.parse("{\"filters\":{}}"), competition(null)))
+                Json.parse("{\"filters\":{}}"), missingPriceAndEndorsement))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("package-price receipt is required");
 
@@ -228,7 +231,7 @@ class PlanCandidatePriceRestoreTest {
 
     /** One covered-call candidate; {@code priceJson} null omits the price receipt entirely. */
     private static ObjectNode competition(String priceJson) {
-        return (ObjectNode) Json.parse("""
+        return withComparisonEndorsement((ObjectNode) Json.parse("""
                 {"symbol":"AAPL","thesis":"neutral","horizon":"month","riskMode":"conservative",
                  "intent":"INCOME","riskBudgetCents":100000,"ranking":"decision",
                  "economicMessage":"Compare the field","favorableCount":1,"mixedCount":0,
@@ -266,6 +269,6 @@ class PlanCandidatePriceRestoreTest {
                      {"action":"SELL","type":"CALL","strike":"105","expiration":"2026-08-21",
                       "ratio":1,"multiplier":100,"entryPrice":"2.40","positionEffect":"OPEN"}
                    ]}]}
-                """.formatted(priceJson == null ? "" : "\"price\":" + priceJson + ","));
+                """.formatted(priceJson == null ? "" : "\"price\":" + priceJson + ",")));
     }
 }

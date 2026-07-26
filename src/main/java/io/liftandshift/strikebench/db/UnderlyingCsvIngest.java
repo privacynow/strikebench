@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -195,9 +197,8 @@ public final class UnderlyingCsvIngest {
     }
 
     private static String normalizeSymbol(String symbol) {
-        String s = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (!s.isEmpty() && !s.matches("[A-Z0-9.^_-]{1,20}")) throw new IllegalArgumentException("invalid symbol");
-        return s;
+        String normalized = Symbol.normalizeOptional(symbol);
+        return normalized == null ? "" : normalized;
     }
 
     private static String safeLabel(String value) {

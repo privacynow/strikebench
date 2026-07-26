@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.DataProvenance;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.research.BootstrapSampler;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
 import io.liftandshift.strikebench.util.Quantiles;
@@ -58,6 +59,7 @@ public final class PathEnsembleService {
                                           int returnedPathCount, int sourcePathCount,
                                           int waypointCount, int explicitToleranceCount,
                                           int withinToleranceCount, int selectedWithinToleranceCount,
+                                          Double withinTolerancePct,
                                           int sourcePointCount, int returnedPointCount,
                                           List<Integer> displaySteps,
                                           int focusSourcePathIndex,
@@ -123,10 +125,9 @@ public final class PathEnsembleService {
 
     public record Scope(String symbol, String worldId, AnalysisContext analysis) {
         public Scope {
-            symbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+            symbol = Symbol.normalize(symbol);
             worldId = worldId == null || worldId.isBlank() ? "observed" : worldId;
             analysis = analysis == null ? AnalysisContext.OBSERVED : analysis;
-            if (symbol.isBlank()) throw new IllegalArgumentException("symbol is required");
         }
     }
 
@@ -167,8 +168,7 @@ public final class PathEnsembleService {
     public record HistoryInput(String symbol, List<DatedReturn> returns, int candleCount,
                                DataEvidence evidence) {
         public HistoryInput {
-            symbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-            if (symbol.isBlank()) throw new IllegalArgumentException("history symbol is required");
+            symbol = Symbol.normalize(symbol);
             returns = returns == null ? List.of() : returns.stream()
                     .sorted(Comparator.comparing(DatedReturn::session)).toList();
             candleCount = Math.max(0, candleCount);
@@ -195,8 +195,9 @@ public final class PathEnsembleService {
         }
 
         public Double correlation(String first, String second) {
-            String a = first == null ? "" : first.trim().toUpperCase(Locale.ROOT);
-            String b = second == null ? "" : second.trim().toUpperCase(Locale.ROOT);
+            String a = Symbol.normalizeOptional(first);
+            String b = Symbol.normalizeOptional(second);
+            if (a == null || b == null) return null;
             if (a.equals(b) && symbols.stream().anyMatch(row -> row.symbol().equals(a))) return 1.0;
             return pairs.stream().filter(pair -> pair.left().equals(a) && pair.right().equals(b)
                             || pair.left().equals(b) && pair.right().equals(a))
@@ -235,7 +236,8 @@ public final class PathEnsembleService {
         }
 
         public Ensemble member(String symbol) {
-            return members.get(symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT));
+            String canonical = Symbol.normalizeOptional(symbol);
+            return canonical == null ? null : members.get(canonical);
         }
     }
 
@@ -280,6 +282,71 @@ public final class PathEnsembleService {
                                                      List<DisplayWaypoint> rawWaypoints,
                                                      int requested) {
         return displayPathsAtProgress(ensemble, rawWaypoints, requested, null);
+    }
+
+    /**
+     * Project one exact source row as the focus while retaining the ordinary full-fan context and
+     * bands. A click therefore preserves immutable path identity instead of reconstructing pins
+     * and hoping nearest-neighbor selection finds the same row.
+     */
+    public DisplayProjection displayPathsFocusedOnSource(Ensemble ensemble, int sourcePathIndex,
+                                                          int requested, int[] exactDisplaySteps) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        double[][] source = ensemble.paths();
+        if (sourcePathIndex < 0 || sourcePathIndex >= source.length
+                || source[sourcePathIndex] == null || source[sourcePathIndex].length == 0) {
+            throw new IllegalArgumentException("sourcePathIndex is outside the stored ensemble");
+        }
+        DisplayProjection base = displayPathsAtProgress(
+                ensemble, List.of(), requested, exactDisplaySteps);
+        List<DisplayPath> paths = new ArrayList<>(base.paths());
+        int existing = -1, focus = -1;
+        for (int i = 0; i < paths.size(); i++) {
+            if (paths.get(i).sourcePathIndex() == sourcePathIndex) existing = i;
+            if ("FOCUS".equals(paths.get(i).role())) focus = i;
+        }
+        if (focus < 0) throw new IllegalStateException("display projection omitted its focus path");
+        if (existing >= 0) {
+            DisplayPath priorFocus = paths.get(focus);
+            DisplayPath exact = paths.get(existing);
+            paths.set(existing, new DisplayPath(exact.sourcePathIndex(), exact.prices(),
+                    exact.terminalQuantile(), 0, true, "FOCUS"));
+            if (existing != focus) {
+                paths.set(focus, new DisplayPath(priorFocus.sourcePathIndex(), priorFocus.prices(),
+                        priorFocus.terminalQuantile(), priorFocus.waypointDistance(),
+                        priorFocus.withinExplicitTolerance(), "CONTEXT"));
+            }
+        } else {
+            int sourceSteps = source[sourcePathIndex].length - 1;
+            int[] displaySteps = exactDisplaySteps == null
+                    ? displayStepIndices(sourceSteps)
+                    : exactDisplayStepIndices(sourceSteps, exactDisplaySteps);
+            double terminal = source[sourcePathIndex][sourceSteps];
+            long below = 0, comparable = 0;
+            for (int i = 0; i < source.length; i++) {
+                if (source[i] == null || source[i].length <= sourceSteps) continue;
+                comparable++;
+                double other = source[i][sourceSteps];
+                if (other < terminal || other == terminal && i < sourcePathIndex) below++;
+            }
+            double quantile = comparable <= 1 ? .5 : (double) below / (comparable - 1);
+            paths.set(focus, new DisplayPath(sourcePathIndex,
+                    displayPrices(source[sourcePathIndex], displaySteps),
+                    quantile, 0, true, "FOCUS"));
+        }
+        DisplaySelectionReceipt r = base.receipt();
+        DisplaySelectionReceipt receipt = new DisplaySelectionReceipt(
+                DISPLAY_SELECTION_VERSION, "EXACT_SOURCE_PATH", r.requestedLimit(),
+                r.returnedPathCount(), r.sourcePathCount(), 0, 0, 0, 0, null,
+                r.sourcePointCount(), r.returnedPointCount(), r.displaySteps(),
+                sourcePathIndex,
+                paths.stream().filter(path -> "FOCUS".equals(path.role())).findFirst()
+                        .orElseThrow().terminalQuantile(),
+                0);
+        return new DisplayProjection(paths, base.totalPathCount(), "EXACT_SOURCE_PATH",
+                base.bands(), "FULL_STORED_ENSEMBLE", base.bandPathCount(), receipt,
+                "The named source row is retained exactly as focus; context paths and bands come "
+                        + "from the same immutable stored ensemble and no path was reconstructed.");
     }
 
     /**
@@ -386,6 +453,8 @@ public final class PathEnsembleService {
         var receipt = new DisplaySelectionReceipt(DISPLAY_SELECTION_VERSION, selection, limit,
                 chosen.size(), ranked.size(), waypoints.size(),
                 explicitToleranceCount, withinToleranceCount, selectedWithinToleranceCount,
+                explicitToleranceCount == 0 || ranked.isEmpty()
+                        ? null : 100.0 * withinToleranceCount / ranked.size(),
                 sourceSteps + 1, displaySteps.length,
                 Arrays.stream(displaySteps).boxed().toList(),
                 focus.sourcePathIndex(),
@@ -776,9 +845,7 @@ public final class PathEnsembleService {
     private static AlignedHistory align(List<HistoryInput> rawHistories,
                                         List<String> rawExpectedSymbols) {
         List<HistoryInput> histories = rawHistories == null ? List.of() : List.copyOf(rawHistories);
-        List<String> expected = rawExpectedSymbols == null ? List.of() : rawExpectedSymbols.stream()
-                .map(symbol -> symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT))
-                .sorted().toList();
+        List<String> expected = Symbol.list(rawExpectedSymbols).stream().sorted().toList();
         if (expected.isEmpty()) throw new IllegalArgumentException("correlation symbols are required");
         Map<String, HistoryInput> bySymbol = new TreeMap<>();
         Map<String, TreeMap<LocalDate, Double>> returnsBySymbol = new TreeMap<>();

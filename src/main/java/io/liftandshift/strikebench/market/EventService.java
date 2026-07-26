@@ -6,6 +6,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.model.NewsItem;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Quantiles;
 
@@ -23,7 +24,6 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -466,11 +466,7 @@ public final class EventService {
     }
 
     private static String normalizeSymbol(String raw) {
-        String symbol = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
-        if (!symbol.matches("[A-Z0-9.^_-]{1,20}")) {
-            throw new IllegalArgumentException("a valid symbol is required");
-        }
-        return symbol;
+        return Symbol.normalize(raw);
     }
 
     private static String fingerprint(Object material) {

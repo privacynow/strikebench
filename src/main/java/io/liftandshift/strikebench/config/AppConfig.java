@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.config;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -280,10 +282,6 @@ public final class AppConfig {
         String raw = fixturesOnly()
                 ? get("AUTO_UNIVERSE", "AAPL,SPY,QQQ,TSLA")
                 : get("AUTO_UNIVERSE", "SPY,QQQ,IWM,AAPL,MSFT,NVDA,TSLA,AMZN,META,GOOGL,SMH,MU,STX,WDC,SNDK");
-        return java.util.Arrays.stream(raw.split(","))
-                .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .filter(s -> !s.isBlank())
-                .distinct()
-                .toList();
+        return Symbol.list(java.util.Arrays.asList(raw.split(",")));
     }
 }

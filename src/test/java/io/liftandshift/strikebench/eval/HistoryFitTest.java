@@ -32,20 +32,22 @@ class HistoryFitTest {
                 new LegView("BUY", "CALL", "265", "2026-08-21", 1, "1.30", 100, "OPEN"));
         return new Candidate("IRON_CONDOR", "Iron condor", "range_credit", "245/240/260/265",
                 legs, 1, TestPrices.optionOnly(1, 16_000L), 16_000L, 34_000L, List.of("243.40", "261.60"),
-                0.55, 900L, 0.70, "DELAYED", List.of(), 0.6,
+                0.70, "DELAYED", List.of(), 0.6,
                 "Range income", "Keep the credit inside the range", "A breakout through either wing",
                 "A close beyond a wing", "You collect the credit",
-                "INCOME", List.of("INCOME"), 0.30, null, null, null, false, null, null);
+                "INCOME", List.of("INCOME"), 0.30, null, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.55, 900L));
     }
 
     private Candidate longCall() {
         List<LegView> legs = List.of(new LegView("BUY", "CALL", "260", "2026-08-21", 1, "4.00", 100, "OPEN"));
         return new Candidate("LONG_CALL", "Long call", "single_long", "BUY 260C",
                 legs, 1, TestPrices.optionOnly(1, -40_000L), null, 40_000L, List.of("264.00"),
-                0.35, -500L, 0.70, "DELAYED", List.of(), 0.6,
+                0.70, "DELAYED", List.of(), 0.6,
                 "Upside bet", "Uncapped above the strike", "Theta if it stalls",
                 "No move by expiry", "You pay the debit",
-                "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null, false, null, null);
+                "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.35, -500L));
     }
 
     private EvalContext ctx(List<Double> closes) {

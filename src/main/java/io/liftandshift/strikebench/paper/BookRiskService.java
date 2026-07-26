@@ -103,14 +103,15 @@ public final class BookRiskService {
      * BOOK-level greeks are intentionally dollar-delta (and beta-weighted), NOT the per-position
      * share contract: raw share delta is not additive across names, so the aggregate rides
      * {@code net/betaWeightedDollarDeltaCents}. The option-vol greeks are already in the ONE
-     * canonical unit — {@code vegaPerPointCents} is cents per vol point, matching
-     * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks#vegaCentsPerPoint()};
+     * canonical unit — {@code vegaCentsPerPoint} is cents per vol point, matching
+     * {@link io.liftandshift.strikebench.model.GreeksView#vegaCentsPerPoint()};
      * {@code gammaPer1PctCents} is the book's cents-per-1%-move presentation. Per-position and
-     * per-candidate strips use the canonical share/cent Greeks (see TradeService.PositionGreeks#canonical).
+     * per-candidate strips use the canonical share/cent {@code GreeksView}.
      * The Practice lane obeys the same rule through {@link TradeService.BookGreeks}.
      */
     public record GreekBlock(Long betaWeightedDollarDeltaCents, Long netDollarDeltaCents,
-                             Long vegaPerPointCents, Long gammaPer1PctCents,
+                             Long thetaCentsPerDay, Long vegaCentsPerPoint,
+                             Long gammaPer1PctCents,
                              int optionLots, int markedOptionLots, int unmarkedOptionLots,
                              String greekCoverage, String betaCoverage, List<BetaRow> betas,
                              boolean complete, String basis) {}
@@ -236,6 +237,19 @@ public final class BookRiskService {
     // ---- Entry point ----
 
     public Lane lane(String ownerId, String practiceAccountId) {
+        TradeService.PracticeBookSnapshot practiceSnapshot =
+                practiceAccountId == null || trades == null
+                        ? null : trades.practiceBookSnapshot(practiceAccountId);
+        return lane(ownerId, practiceAccountId, practiceSnapshot);
+    }
+
+    /**
+     * Compose tracked risk and the Practice lane around the caller's one current Practice snapshot.
+     * The HTTP Book surface uses this overload so heat, Greeks, roster and Book risk never refetch
+     * or re-mark the Practice account while one response family is being composed.
+     */
+    public Lane lane(String ownerId, String practiceAccountId,
+                     TradeService.PracticeBookSnapshot practiceSnapshot) {
         List<PortfolioAccountingService.AccountProfile> profiles = books.accounts(ownerId);
         List<AccountRisk> accounts = new ArrayList<>();
         for (var profile : profiles) {
@@ -243,7 +257,8 @@ public final class BookRiskService {
             accounts.add(accountRisk(ownerId, profile));
         }
         CrossAccount cross = accounts.size() > 1 ? crossAccount(accounts) : null;
-        PracticeLane practice = practiceAccountId == null ? null : practiceLane(practiceAccountId);
+        PracticeLane practice = practiceAccountId == null ? null
+                : practiceLane(practiceAccountId, practiceSnapshot);
         return new Lane(List.copyOf(accounts), cross, practice,
                 "Book risk is computed from open tracked lots directly (portfolio_lot), never from "
                         + "structure groupings, so grouping mistakes can neither hide exposure nor "
@@ -357,7 +372,8 @@ public final class BookRiskService {
                                   Map<String, MarksSource.LegMark> optionMarks,
                                   BetaSet betas) {
         int optionLots = 0, marked = 0;
-        double dollarDelta = 0, betaDollarDelta = 0, vegaPerPoint = 0, gammaPer1Pct = 0;
+        double dollarDelta = 0, betaDollarDelta = 0, thetaPerDay = 0,
+                vegaPerPoint = 0, gammaPer1Pct = 0;
         Set<String> weightedSymbols = new LinkedHashSet<>();
         Set<String> unweightedSymbols = new LinkedHashSet<>();
         for (var lot : lots) {
@@ -365,7 +381,11 @@ public final class BookRiskService {
             optionLots++;
             MarksSource.LegMark mark = optionMarks.get(optionKey(lot));
             Long spot = spots.get(lot.symbol());
-            if (mark == null || mark.delta() == null || spot == null) continue;
+            // One option lot is "marked for Greeks" only when the canonical Δ/Γ/Θ/Vega set and
+            // observed spot are all present. The former delta-only gate silently substituted zero
+            // for absent gamma/vega and still called the whole book complete.
+            if (mark == null || mark.delta() == null || mark.gamma() == null
+                    || mark.theta() == null || mark.vega() == null || spot == null) continue;
             marked++;
             double units = signedUnits(lot);
             double spotDollars = spot / 100.0;
@@ -375,8 +395,9 @@ public final class BookRiskService {
             else unweightedSymbols.add(lot.symbol());
             dollarDelta += lotDollarDelta;
             betaDollarDelta += lotDollarDelta * (beta == null ? 1.0 : beta);
-            vegaPerPoint += (mark.vega() == null ? 0 : mark.vega()) * units * 100.0; // $/pt -> cents/pt
-            gammaPer1Pct += (mark.gamma() == null ? 0 : mark.gamma()) * units * 0.01 * spotDollars * spot;
+            thetaPerDay += mark.theta() * units * 100.0; // $/day -> cents/day
+            vegaPerPoint += mark.vega() * units * 100.0; // $/pt -> cents/pt
+            gammaPer1Pct += mark.gamma() * units * 0.01 * spotDollars * spot;
         }
         int unmarked = optionLots - marked;
         boolean complete = optionLots > 0 && unmarked == 0;
@@ -402,6 +423,7 @@ public final class BookRiskService {
         return new GreekBlock(
                 marked == 0 ? null : roundCents(betaDollarDelta),
                 marked == 0 ? null : roundCents(dollarDelta),
+                marked == 0 ? null : roundCents(thetaPerDay),
                 marked == 0 ? null : roundCents(vegaPerPoint),
                 marked == 0 ? null : roundCents(gammaPer1Pct),
                 optionLots, marked, unmarked, greekCoverage, betaCoverage,
@@ -410,7 +432,8 @@ public final class BookRiskService {
                         + "observed spot; beta weighting multiplies each name's dollar delta by its "
                         + "observed beta vs SPY (unweighted names enter at their raw dollar delta, "
                         + "disclosed). Raw share delta is not additive across names and is not "
-                        + "aggregated here. Vega is $ per volatility point; gamma is the $ delta "
+                        + "aggregated here. Theta is cents per day, vega is cents per volatility "
+                        + "point, and gamma is the $ delta "
                         + "change for a 1% underlying move. Model statistics at current observed "
                         + "marks — descriptions, not forecasts.");
     }
@@ -834,7 +857,7 @@ public final class BookRiskService {
     // ---- Cross-account subtotals (exposure only; cash is never fungible) ----
 
     private CrossAccount crossAccount(List<AccountRisk> accounts) {
-        double betaDelta = 0, delta = 0, vega = 0, gamma = 0;
+        double betaDelta = 0, delta = 0, theta = 0, vega = 0, gamma = 0;
         boolean anyMarked = false;
         int optionLots = 0, marked = 0;
         long obligation = 0, unmarkedObligation = 0;
@@ -855,7 +878,8 @@ public final class BookRiskService {
                 anyMarked = true;
                 betaDelta += greeks.betaWeightedDollarDeltaCents();
                 delta += greeks.netDollarDeltaCents();
-                vega += greeks.vegaPerPointCents();
+                theta += greeks.thetaCentsPerDay();
+                vega += greeks.vegaCentsPerPoint();
                 gamma += greeks.gammaPer1PctCents();
             }
             for (BetaRow row : greeks.betas()) {
@@ -889,7 +913,8 @@ public final class BookRiskService {
                         : "Betas from " + minSessions + " sessions of observed closes; "
                                 + lackHistory(unweighted.size());
         GreekBlock greeks = new GreekBlock(anyMarked ? roundCents(betaDelta) : null,
-                anyMarked ? roundCents(delta) : null, anyMarked ? roundCents(vega) : null,
+                anyMarked ? roundCents(delta) : null, anyMarked ? roundCents(theta) : null,
+                anyMarked ? roundCents(vega) : null,
                 anyMarked ? roundCents(gamma) : null, optionLots, marked, unmarked,
                 greekCoverage, betaCoverage, List.of(), optionLots > 0 && unmarked == 0,
                 "Sum of the per-account dollar aggregates above. Beta-weighted dollar delta is "
@@ -958,8 +983,12 @@ public final class BookRiskService {
 
     // ---- Practice lane (side-by-side, never netted) ----
 
-    private PracticeLane practiceLane(String practiceAccountId) {
-        TradeService.BookGreeks greeks = trades.portfolioGreeks(practiceAccountId);
+    private PracticeLane practiceLane(String practiceAccountId,
+                                      TradeService.PracticeBookSnapshot snapshot) {
+        if (snapshot == null) {
+            snapshot = trades.practiceBookSnapshot(practiceAccountId);
+        }
+        TradeService.BookGreeks greeks = snapshot.greeks();
         return new PracticeLane(greeks.netDollarDeltaCents(), greeks.grossDollarDeltaCents(),
                 greeks.thetaCentsPerDay(), greeks.vegaCentsPerPoint(),
                 greeks.perShareAvailable(), greeks.perShareUnavailableReason(),
@@ -969,8 +998,8 @@ public final class BookRiskService {
                         + "because share delta does not add across underlyings; theta is cents per day "
                         + "and vega cents per vol point, from current Practice marks; dollar delta uses "
                         + "the disclosed option model.",
-                measuredPracticeBook(practiceAccountId),
-                bookShareRoster(practiceAccountId));
+                measuredPracticeBook(practiceAccountId, snapshot.activeTrades()),
+                bookShareRoster(snapshot));
     }
 
     // ---- Book share and rank (ONE owner for the fact — §3.1) ----
@@ -1003,25 +1032,32 @@ public final class BookRiskService {
                     "The trade book is not wired in this service context, so no book total exists "
                             + "to measure a share against.");
         }
-        List<TradeRecord> active;
+        TradeService.PracticeBookSnapshot snapshot;
         try {
-            active = activePositions(accountId);
+            snapshot = trades.practiceBookSnapshot(accountId);
         } catch (RuntimeException e) {
             return unavailableRoster(accountId, List.of(), null,
-                    reason(e, "The open-position roster could not be read."));
+                    reason(e, "The current Practice-book snapshot could not be read."));
         }
-        Long denominator;
-        try {
-            denominator = heatTotalMaxLossCents(accountId);
-        } catch (RuntimeException e) {
-            return unavailableRoster(accountId, active, null,
-                    reason(e, "The portfolio-heat receipt could not be read, so this book's "
-                            + "defined-risk total is unknown."));
+        return bookShareRoster(snapshot);
+    }
+
+    public BookShareRoster bookShareRoster(TradeService.PracticeBookSnapshot snapshot) {
+        if (snapshot == null) {
+            return unavailableRoster(null, List.of(), null,
+                    "The current Practice-book snapshot is unavailable.");
         }
-        return shareRoster(accountId, active, denominator);
+        return shareRoster(snapshot.accountId(), snapshot.activeTrades(),
+                snapshot.heat().totalMaxLossCents());
     }
 
     public SelectedBookReceipt selectedBook(String accountId, Collection<String> selectedTradeIds) {
+        return selectedBook(trades.practiceBookSnapshot(accountId), selectedTradeIds);
+    }
+
+    public SelectedBookReceipt selectedBook(TradeService.PracticeBookSnapshot snapshot,
+                                            Collection<String> selectedTradeIds) {
+        String accountId = snapshot.accountId();
         LinkedHashSet<String> requested = new LinkedHashSet<>();
         if (selectedTradeIds != null) {
             for (String id : selectedTradeIds) {
@@ -1040,7 +1076,7 @@ public final class BookRiskService {
                     SHARE_DENOMINATOR_BASIS, basis);
         }
 
-        BookShareRoster roster = bookShareRoster(accountId);
+        BookShareRoster roster = bookShareRoster(snapshot);
         Map<String, BookShareRow> byId = new LinkedHashMap<>();
         for (BookShareRow row : roster.rows()) byId.put(row.tradeId(), row);
         List<String> missing = requested.stream().filter(id -> !byId.containsKey(id)).toList();
@@ -1070,7 +1106,7 @@ public final class BookRiskService {
                     : roster.unavailableReason();
         }
 
-        TradeService.DollarDeltaBook deltaBook = trades.portfolioDollarDeltaBook(accountId);
+        TradeService.DollarDeltaBook deltaBook = snapshot.dollarDelta();
         long delta = 0L;
         String deltaReason = null;
         for (String id : requested) {
@@ -1141,26 +1177,11 @@ public final class BookRiskService {
                 SHARE_DENOMINATOR_BASIS, rows, SHARE_ROSTER_BASIS);
     }
 
-    /** Every ACTIVE position, never a first page of them — a truncated roster would misrank. */
-    private List<TradeRecord> activePositions(String accountId) {
-        TradeService.Page page = trades.list(accountId, TradeRecord.ACTIVE, 0, 500);
-        if (page.total() > page.trades().size()) {
-            page = trades.list(accountId, TradeRecord.ACTIVE, 0,
-                    (int) Math.min(page.total(), Integer.MAX_VALUE));
-        }
-        return page.trades();
-    }
-
-    private Long heatTotalMaxLossCents(String accountId) {
-        Object total = trades.portfolioHeat(accountId).get(HEAT_TOTAL_KEY);
-        return total instanceof Number number ? number.longValue() : null;
-    }
-
     private static String reason(RuntimeException e, String fallback) {
         return e.getMessage() == null || e.getMessage().isBlank() ? fallback : e.getMessage();
     }
 
-    private MeasuredBook measuredPracticeBook(String accountId) {
+    private MeasuredBook measuredPracticeBook(String accountId, List<TradeRecord> active) {
         String unavailableBasis = "The automatic Book fan requires one synchronized artifact from "
                 + "the canonical PathEnsembleService and ScenarioCanvasValuator. It uses locally "
                 + "available history only, never independently generated position fans and never "
@@ -1171,7 +1192,7 @@ public final class BookRiskService {
         }
         try {
             List<PositionsService.Position> shares = positions.records(accountId);
-            List<TradeRecord> active = trades.list(accountId, TradeRecord.ACTIVE, 0, 100).trades();
+            active = active == null ? List.of() : active;
             LinkedHashSet<String> symbols = new LinkedHashSet<>();
             shares.stream().filter(position -> position.shares() != 0)
                     .map(PositionsService.Position::symbol).forEach(symbols::add);

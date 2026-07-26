@@ -36,7 +36,7 @@ public record TradeRecord(
         String updatedAt,
         String intent,        // StrategyIntent name the trade was placed under, nullable
         long sharesLocked,    // held shares pledged as short-call coverage while ACTIVE
-        Long proposedNetCents,// the USER'S package price when one was set (provenance), nullable
+        Long orderLimitNetCents,// signed LIMIT bound when this was a proposed order; null for MARKET/fills
         String dataProvenance,
         String dataAge,
         String dataSource

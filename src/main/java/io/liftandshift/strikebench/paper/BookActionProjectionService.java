@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.AuthorityFacts;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
@@ -518,7 +519,7 @@ public final class BookActionProjectionService {
                                                                          long taxBasis,
                                                                          long economicBasis) {
         return new PortfolioAccountingService.LotView("projection-assignment-stock", "STOCK", "LONG",
-                symbol.toUpperCase(Locale.ROOT), null, null, null, 1,
+                Symbol.normalize(symbol), null, null, null, 1,
                 "1970-01-01T00:00:00Z", shares, shares, taxBasis, taxBasis,
                 "OPEN", false, economicBasis, economicBasis);
     }
@@ -561,13 +562,13 @@ public final class BookActionProjectionService {
 
     private static String key(String symbol, Leg leg) {
         return String.join("|", leg.isStock() ? "STOCK" : "OPTION",
-                leg.action() == LegAction.BUY ? "LONG" : "SHORT", symbol.toUpperCase(Locale.ROOT),
+                leg.action() == LegAction.BUY ? "LONG" : "SHORT", Symbol.normalize(symbol),
                 leg.isStock() ? "" : leg.type().name(), decimal(leg.strike()),
                 leg.expiration() == null ? "" : leg.expiration().toString(), String.valueOf(leg.multiplier()));
     }
 
     private static String key(PortfolioAccountingService.LotView lot) {
-        return String.join("|", lot.instrumentType(), lot.side(), lot.symbol().toUpperCase(Locale.ROOT),
+        return String.join("|", lot.instrumentType(), lot.side(), Symbol.normalize(lot.symbol()),
                 lot.optionType() == null ? "" : lot.optionType(), decimal(lot.strike()),
                 lot.expiration() == null ? "" : lot.expiration().toString(), String.valueOf(lot.multiplier()));
     }

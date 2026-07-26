@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.market.ports.WarmOptionStore;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -43,5 +44,5 @@ public final class StoredOptionChainStore implements WarmOptionStore {
                 .stream().filter(Objects::nonNull).findFirst();
     }
 
-    private static String norm(String s) { return s == null ? "" : s.trim().toUpperCase(Locale.ROOT); }
+    private static String norm(String s) { return Symbol.normalize(s); }
 }

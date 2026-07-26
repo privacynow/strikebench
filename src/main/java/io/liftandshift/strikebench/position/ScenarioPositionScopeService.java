@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.position;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
@@ -45,8 +46,12 @@ public final class ScenarioPositionScopeService {
     public List<Scoped> list(String userId, String practiceAccountId, String rawSymbol,
                              LocalDate anchorDate) {
         String owner = OwnerScope.id(userId);
-        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
-        if (symbol.isBlank()) throw new IllegalArgumentException("canvas symbol is required");
+        String symbol;
+        try {
+            symbol = Symbol.normalize(rawSymbol);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("canvas symbol is required");
+        }
         OffsetDateTime asOf = anchorDate.atStartOfDay().atOffset(ZoneOffset.UTC);
         PositionDomain.PriceAuthority practiceHoldingAuthority =
                 practiceHoldingAuthority(practiceAccountId);
@@ -72,9 +77,13 @@ public final class ScenarioPositionScopeService {
     public Scoped focused(String userId, String practiceAccountId, String rawSymbol,
                           LocalDate anchorDate, String rawKey, String activePlanTradeId) {
         String owner = OwnerScope.id(userId);
-        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(Locale.ROOT);
+        String symbol;
+        try {
+            symbol = Symbol.normalize(rawSymbol);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("canvas symbol is required");
+        }
         String key = rawKey == null ? "" : rawKey.trim();
-        if (symbol.isBlank()) throw new IllegalArgumentException("canvas symbol is required");
         if (key.isBlank()) throw new IllegalArgumentException("focused package key is required");
         OffsetDateTime asOf = anchorDate.atStartOfDay().atOffset(ZoneOffset.UTC);
 

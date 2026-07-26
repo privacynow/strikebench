@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.AccountLiquidityReceipt;
 import io.liftandshift.strikebench.position.RecordingPolicy;
@@ -252,8 +253,9 @@ public final class PortfolioAccountingService {
             symbolGrossCents = symbolGrossCents == null ? Map.of() : Map.copyOf(symbolGrossCents);
         }
         public DollarDeltaExposure focus(String symbol) {
+            String canonical = Symbol.normalizeOptional(symbol);
             return new DollarDeltaExposure(grossCents, netCents,
-                    symbolGrossCents.getOrDefault(symbol == null ? "" : symbol.toUpperCase(Locale.ROOT), 0L),
+                    canonical == null ? 0L : symbolGrossCents.getOrDefault(canonical, 0L),
                     complete, basis);
         }
     }
@@ -1314,7 +1316,7 @@ public final class PortfolioAccountingService {
             long magnitude = absolute(delta, "dollar delta exposure");
             gross = Math.addExact(gross, magnitude);
             net = Math.addExact(net, delta);
-            bySymbol.merge(position.symbol().toUpperCase(Locale.ROOT), magnitude, Math::addExact);
+            bySymbol.merge(Symbol.normalize(position.symbol()), magnitude, Math::addExact);
         }
         return new DollarDeltaBook(gross, net, Map.copyOf(bySymbol), complete,
                 "Current tracked-account liquidation marks; each position retains its own provenance in the account summary."
@@ -2438,9 +2440,7 @@ public final class PortfolioAccountingService {
     }
 
     private static String symbol(String raw) {
-        String value = text(raw, "symbol", 20).toUpperCase(Locale.ROOT);
-        if (!value.matches("[A-Z][A-Z0-9._-]{0,19}")) throw new IllegalArgumentException("invalid symbol " + value);
-        return value;
+        return Symbol.normalize(raw);
     }
 
     private static String text(String raw, String label, int max) {

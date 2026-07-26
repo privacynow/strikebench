@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.paper;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Money;
 
@@ -381,8 +382,7 @@ public final class PositionsService {
     }
 
     private String norm(String symbol) {
-        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("symbol is required");
-        return symbol.trim().toUpperCase(java.util.Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
 
     private String now() {

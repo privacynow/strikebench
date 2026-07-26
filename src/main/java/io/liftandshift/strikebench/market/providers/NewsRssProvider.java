@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.market.providers;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.model.NewsItem;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -41,8 +42,8 @@ public final class NewsRssProvider implements NewsFilingsProvider {
 
     @Override
     public List<NewsItem> news(String symbol) {
-        String ticker = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (ticker.isEmpty() || baseUrl.isBlank()) return List.of();
+        String ticker = Symbol.normalizeOptional(symbol);
+        if (ticker == null || baseUrl.isBlank()) return List.of();
 
         String q = URLEncoder.encode("\"" + ticker + "\" stock", StandardCharsets.UTF_8);
         String url = baseUrl + "?q=" + q + "&hl=en-US&gl=US&ceid=US:en";

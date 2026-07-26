@@ -5,8 +5,10 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.outcomes.OutcomeContract;
 import io.liftandshift.strikebench.sim.PathPosition;
 import io.liftandshift.strikebench.util.DataUnavailableException;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -18,6 +20,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class OutcomeControllerContractTest {
+
+    @Test void retiredLooseOutcomePriceFieldsFailClosedInsteadOfTriggeringCurrentRepricing() {
+        assertThatThrownBy(() -> Json.read("""
+                {"key":"legacy","qty":1,"legs":[],
+                 "entryCostCents":1000,"estimatedRoundTripFeesCents":130}
+                """, OutcomeContract.Position.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("captured package-price receipt")
+                .hasMessageContaining("loose entry cost or fee fields are not accepted");
+    }
 
     @Test void missingOrUnusableOutcomeQuoteIsADataGap() {
         assertThatThrownBy(() -> OutcomeController.requireOutcomeQuote(Optional.empty(), "NVDA"))

@@ -140,11 +140,12 @@ class EvaluationServiceDataIsolationTest {
                 "acquisition_income", "SELL 240P",
                 List.of(new LegView("SELL", "PUT", "240", null, 1, "10.00", 100, "OPEN")),
                 1, TestPrices.withFees(1, 100_000L, 100_000L, 65L), 100_000L, 2_300_000L,
-                List.of("230.00"), 0.75, 90_000L, 0.90, "DELAYED", List.of(), 0.8,
+                List.of("230.00"), 0.90, "DELAYED", List.of(), 0.8,
                 "Income below spot", "Keep the premium", "Assignment below breakeven",
                 "A sharp selloff", "Collect premium or acquire shares", "INCOME",
                 List.of("INCOME", "ACQUIRE"), 0.20, 30.0, "230.00",
-                "Collect premium or acquire at $230", false, null, null);
+                "Collect premium or acquire at $230", false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.75, 90_000L));
 
         assertThatThrownBy(() -> new EvaluationService(market, db, laneClock).evaluate(
                 "AAPL", "INCOME", "NEUTRAL", "month", "balanced", List.of(undated),
@@ -160,11 +161,12 @@ class EvaluationServiceDataIsolationTest {
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income",
                 "SELL 240P", legs, 1, TestPrices.withFees(1, 100_000L, 100_000L, 65L),
                 100_000L, 2_300_000L,
-                List.of("230.00"), 0.75, 90_000L, 0.90, "DELAYED", List.of(), 0.8,
+                List.of("230.00"), 0.90, "DELAYED", List.of(), 0.8,
                 "Income below spot", "Keep the premium", "Assignment below breakeven",
                 "A sharp selloff", "Collect premium or acquire shares", "INCOME",
                 List.of("INCOME", "ACQUIRE"), 0.20, 30.0, "230.00",
-                "Collect premium or acquire at $230", false, null, null);
+                "Collect premium or acquire at $230", false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.75, 90_000L));
     }
 
     private void insertIv(String dataset, String asof, double iv, String source) {

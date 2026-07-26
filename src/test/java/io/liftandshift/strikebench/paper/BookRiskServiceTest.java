@@ -54,12 +54,12 @@ class BookRiskServiceTest {
     private static final Map<String, double[]> OPTION_GREEKS = greeks();
 
     private static Map<String, double[]> greeks() {
-        Map<String, double[]> m = new LinkedHashMap<>(); // delta, gamma, vega
-        m.put("NVDA|PUT|950|2026-08-07", new double[]{-0.35, 0.002, 1.20});
-        m.put("NVDA|CALL|1000|2026-08-07", new double[]{0.55, 0.002, 1.10});
-        m.put("AMD|PUT|160|2026-08-07", new double[]{-0.45, 0.01, 0.35});
-        m.put("AMD|PUT|100|2026-09-18", new double[]{-0.05, 0.001, 0.10});
-        m.put("AVGO|PUT|280|2026-08-21", new double[]{-0.40, 0.005, 0.50});
+        Map<String, double[]> m = new LinkedHashMap<>(); // delta, gamma, theta, vega
+        m.put("NVDA|PUT|950|2026-08-07", new double[]{-0.35, 0.002, -0.05, 1.20});
+        m.put("NVDA|CALL|1000|2026-08-07", new double[]{0.55, 0.002, -0.05, 1.10});
+        m.put("AMD|PUT|160|2026-08-07", new double[]{-0.45, 0.01, -0.05, 0.35});
+        m.put("AMD|PUT|100|2026-09-18", new double[]{-0.05, 0.001, -0.05, 0.10});
+        m.put("AVGO|PUT|280|2026-08-21", new double[]{-0.40, 0.005, -0.05, 0.50});
         return m;
     }
 
@@ -79,7 +79,8 @@ class BookRiskServiceTest {
             if (g == null) return Optional.empty();
             BigDecimal mid = new BigDecimal("10.00");
             return Optional.of(new LegMark(mid, mid, mid, 0.5, Freshness.DELAYED,
-                    g[0], g[1], null, g[2], DataEvidence.of("observed-test", Freshness.DELAYED)));
+                    g[0], g[1], g[2], g[3],
+                    DataEvidence.of("observed-test", Freshness.DELAYED)));
         }
     };
 
@@ -183,8 +184,12 @@ class BookRiskServiceTest {
         assertThat(greeks.netDollarDeltaCents()).isEqualTo(-5_500_000L);
         // Beta weighting: NVDA legs ×1.5, AMD legs ×2.0, AVGO unweighted (no history) ×1.
         assertThat(greeks.betaWeightedDollarDeltaCents()).isCloseTo(-8_450_000L, offset(100L));
-        assertThat(greeks.vegaPerPointCents()).isEqualTo(-43_500L);
+        assertThat(greeks.thetaCentsPerDay()).isEqualTo(3_000L);
+        assertThat(greeks.vegaCentsPerPoint()).isEqualTo(-43_500L);
         assertThat(greeks.gammaPer1PctCents()).isEqualTo(-673_160L);
+        var wire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(greeks);
+        assertThat(wire.has("vegaCentsPerPoint")).isTrue();
+        assertThat(wire.has("vegaPerPointCents")).isFalse();
         assertThat(greeks.optionLots()).isEqualTo(5);
         assertThat(greeks.markedOptionLots()).isEqualTo(5);
         assertThat(greeks.complete()).isTrue();
@@ -518,7 +523,9 @@ class BookRiskServiceTest {
     @Test
     void selectedBookConsumesCanonicalRiskRowsAndWithholdsIncompleteDollarDelta() {
         seedPracticeTrade("trade-nvda", "NVDA", "CASH_SECURED_PUT", "950", 1_500_000L);
-        seedPracticeTrade("trade-amd", "AMD", "CREDIT_PUT_SPREAD", "160", 500_000L);
+        // Deliberately choose a strike with no fixture mark so the selected subset is incomplete
+        // even though the same symbol has a complete mark elsewhere in this battery.
+        seedPracticeTrade("trade-amd", "AMD", "CREDIT_PUT_SPREAD", "161", 500_000L);
 
         var selected = risk.selectedBook(practice.id(), List.of("trade-amd"));
 

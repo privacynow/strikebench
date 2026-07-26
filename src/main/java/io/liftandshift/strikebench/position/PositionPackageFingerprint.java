@@ -63,12 +63,12 @@ public final class PositionPackageFingerprint {
     public static CanonicalPackage canonical(PositionPackage position) {
         if (position == null) return null;
         List<CanonicalLeg> legs = position.legs().stream().map(leg -> new CanonicalLeg(
-                        upper(leg.action()), upper(leg.instrumentType()), upper(leg.symbol()),
+                        upper(leg.action()), upper(leg.instrumentType()), leg.symbol(),
                         upper(leg.optionType()), decimal(leg.strike()),
                         leg.expiration() == null ? null : leg.expiration().toString(),
                         leg.quantity(), leg.multiplier(), decimal(leg.price()), leg.priceAuthority()))
                 .sorted(Comparator.comparing(CanonicalLeg::sortKey)).toList();
-        return new CanonicalPackage(position.source(), position.lane(), upper(position.symbol()),
+        return new CanonicalPackage(position.source(), position.lane(), position.symbol(),
                 position.packageQuantity(), position.exactPackageCashCents(), legs);
     }
 

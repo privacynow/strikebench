@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -87,15 +88,7 @@ public final class UniverseService {
 
     /** Sets a custom list (1..MAX_CUSTOM sane symbols). */
     public Active selectCustom(List<String> symbols) {
-        List<String> clean = new ArrayList<>();
-        for (String raw : symbols == null ? List.<String>of() : symbols) {
-            String s = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
-            if (s.isEmpty()) continue;
-            if (!s.matches("[A-Z0-9.\\-]{1,10}")) {
-                throw new IllegalArgumentException("'" + raw + "' is not a valid ticker symbol");
-            }
-            if (!clean.contains(s)) clean.add(s);
-        }
+        List<String> clean = Symbol.list(symbols);
         if (clean.isEmpty()) throw new IllegalArgumentException("A custom universe needs at least one symbol");
         if (clean.size() > MAX_CUSTOM) throw new IllegalArgumentException("A custom universe is capped at " + MAX_CUSTOM + " symbols");
         putSetting(KEY_CUSTOM, String.join(",", clean));
@@ -139,10 +132,6 @@ public final class UniverseService {
     }
 
     private static List<String> parseList(String csv) {
-        return java.util.Arrays.stream(csv.split(","))
-                .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .filter(s -> !s.isBlank())
-                .distinct()
-                .toList();
+        return Symbol.list(java.util.Arrays.asList(csv.split(",")));
     }
 }

@@ -13,6 +13,31 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PathValuationKernelTest {
 
+    @Test
+    void frozenDatedPackageUsesOneCanonicalSignUnitAndPerLegIvLoop() {
+        LocalDate asOf = LocalDate.parse("2026-07-24");
+        List<Leg> legs = List.of(
+                Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("95"),
+                        LocalDate.parse("2026-08-21"), 1, BigDecimal.ZERO, 100),
+                Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("90"),
+                        LocalDate.parse("2026-08-21"), 1, BigDecimal.ZERO, 100),
+                Leg.stock(LegAction.BUY, 2, BigDecimal.ZERO));
+
+        double value = PathValuationKernel.valueAtDate(
+                legs, java.util.Arrays.asList(0.40, 0.35, null),
+                2, 100.0, asOf, 0.04);
+
+        double years = java.time.temporal.ChronoUnit.DAYS.between(
+                asOf, LocalDate.parse("2026-08-21")) / 365.0;
+        double shortPut = io.liftandshift.strikebench.pricing.BlackScholes.price(
+                false, 100, 95, years, 0.04, 0, 0.40);
+        double longPut = io.liftandshift.strikebench.pricing.BlackScholes.price(
+                false, 100, 90, years, 0.04, 0, 0.35);
+        assertThat(value).isCloseTo(
+                -shortPut * 100 * 2 + longPut * 100 * 2 + 100 * 100 * 2 * 2,
+                org.assertj.core.data.Offset.offset(0.000001));
+    }
+
     @Test void expirationValueUsesTheExactContractMultiplier() {
         LocalDate asOf = LocalDate.parse("2026-07-15");
         Leg standard = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"),

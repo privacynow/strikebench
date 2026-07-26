@@ -19,6 +19,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,7 +81,8 @@ class AlertCenterServiceTest {
     private TradeRecord creditPutSpread(LocalDate exp) {
         return trades.create(new TradeService.OpenRequest(account.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
                 List.of(put(LegAction.SELL, "100", "3.00", exp), put(LegAction.BUY, "95", "1.20", exp)),
-                "bullish", "month", "balanced", null, null, null, null, null, "PROPOSED"));
+                "bullish", "month", "balanced", null, null, null, null, "PROPOSED",
+                io.liftandshift.strikebench.paper.OrderInstruction.market()));
     }
 
     private List<AlertCenterService.Alert> ofKind(AlertCenterService.AlertSet set, String kind) {
@@ -155,6 +157,66 @@ class AlertCenterServiceTest {
     }
 
     @Test
+    void observedExpiryUsesEasternMarketDateAtThePhoenixDateBoundary() {
+        LocalDate easternThursday = LocalDate.of(2026, 7, 9);
+        creditPutSpread(easternThursday);
+        // 04:30Z is still Wednesday evening in Phoenix, but already Thursday on the US
+        // options calendar. The old LocalDate.now(clock) path called this "tomorrow".
+        Clock phoenixClock = Clock.fixed(Instant.parse("2026-07-09T04:30:00Z"),
+                ZoneId.of("America/Phoenix"));
+        try (AlertCenterService boundary = new AlertCenterService(db, phoenixClock, trades, marks,
+                symbol -> earnings, events, 65)) {
+            AlertCenterService.Alert expiry = ofKind(boundary.compute("local"), "EXPIRY").getFirst();
+            assertThat(expiry.headline()).contains("expires today").contains("before the close");
+            assertThat(expiry.meta()).containsEntry("expiration", easternThursday.toString())
+                    .containsEntry("sessionsToExpiry", 0);
+        }
+    }
+
+    @Test
+    void simulatedAccountExpiryUsesItsWorldDateInsteadOfTheHostDate() {
+        LocalDate simulatedFriday = LocalDate.of(2026, 7, 10);
+        TradeRecord trade = creditPutSpread(simulatedFriday);
+        db.exec("INSERT INTO sim_session(id,name,user_id,config,status) "
+                + "VALUES ('sim-alert-clock','Alert clock','local','{}'::jsonb,'CREATED')");
+        db.exec("UPDATE accounts SET type='SIMULATION', world_id='sim-alert-clock' WHERE id=?",
+                account.id());
+
+        Instant simNow = Instant.parse("2026-07-10T15:30:00Z"); // Friday 11:30 ET
+        MarksSource laneMarks = laneClockMarks(Map.of("sim-alert-clock", simNow));
+        try (AlertCenterService simulated = new AlertCenterService(db, CLOCK, trades, laneMarks,
+                symbol -> earnings, events, 65)) {
+            AlertCenterService.Alert expiry = ofKind(simulated.compute("local"), "EXPIRY").stream()
+                    .filter(row -> trade.id().equals(row.tradeId())).findFirst().orElseThrow();
+            assertThat(expiry.headline()).contains("expires today").contains("before the close");
+            assertThat(expiry.meta()).containsEntry("sessionsToExpiry", 0);
+        }
+    }
+
+    @Test
+    void expiryDayAfterFinalBellHandsThePositionToSettlementInsteadOfIssuingManagementAdvice() {
+        TradeRecord trade = creditPutSpread(TODAY);
+        Clock afterBell = Clock.fixed(Instant.parse("2026-07-08T20:00:00Z"),
+                ZoneId.of("America/Phoenix")); // exactly 16:00 ET
+        try (AlertCenterService closed = new AlertCenterService(db, afterBell, trades, marks,
+                symbol -> earnings, events, 65)) {
+            AlertCenterService.AlertSet set = closed.compute("local");
+            AlertCenterService.Alert expiry = ofKind(set, "EXPIRY").stream()
+                    .filter(row -> trade.id().equals(row.tradeId())).findFirst().orElseThrow();
+            assertThat(expiry.headline()).contains("expired at the final bell")
+                    .contains("settlement is pending").doesNotContain("before the close");
+            assertThat(expiry.detail()).contains("Do not roll or close")
+                    .contains("settlement mechanics now own");
+            assertThat(expiry.meta()).containsEntry("state", "EXPIRED")
+                    .containsEntry("sessionsToExpiry", 0);
+            assertThat(ofKind(set, "PIN_RISK")).noneMatch(row -> trade.id().equals(row.tradeId()));
+            assertThat(ofKind(set, "PROTOCOL_BREACH"))
+                    .noneMatch(row -> trade.id().equals(row.tradeId())
+                            && (row.headline().contains("roll") || row.headline().contains("expiry")));
+        }
+    }
+
+    @Test
     void expiryThisWeekNeedsALookAndTheTimeRuleStaysQuietInsideTheExpiryWindow() {
         creditPutSpread(LocalDate.of(2026, 7, 10)); // Friday, 2 sessions out
         AlertCenterService.AlertSet set = alerts.compute("local");
@@ -190,7 +252,8 @@ class AlertCenterServiceTest {
         positions.buy(account.id(), "AAPL", 100);
         trades.create(new TradeService.OpenRequest(account.id(), "AAPL", "COVERED_CALL", 1,
                 List.of(call(LegAction.SELL, "100", "2.50", LocalDate.of(2026, 7, 10))),
-                "neutral", "month", "balanced", "EXIT", true, null, null, null, "PROPOSED"));
+                "neutral", "month", "balanced", "EXIT", true, null, null, "PROPOSED",
+                io.liftandshift.strikebench.paper.OrderInstruction.market()));
         marks.underlying = new BigDecimal("130.00");
         marks.mids.put("CALL100", new BigDecimal("30.00"));
         AlertCenterService.AlertSet set = alerts.compute("local");
@@ -236,6 +299,34 @@ class AlertCenterServiceTest {
                 null, null, EventService.SourceKind.UNAVAILABLE, "StrikeBench event evidence", null,
                 java.time.OffsetDateTime.ofInstant(CLOCK.instant(), java.time.ZoneOffset.UTC),
                 "a".repeat(64), "test event availability", "no event evidence in this test");
+    }
+
+    /**
+     * Test adapter over the existing deterministic marks. Only the lane clock changes; pricing
+     * stays on the exact same source so the test cannot accidentally introduce a second market.
+     */
+    private MarksSource laneClockMarks(Map<String, Instant> laneTimes) {
+        return new MarksSource() {
+            @Override public Optional<Instant> simNow(String worldId) {
+                return worldId == null ? Optional.empty() : Optional.ofNullable(laneTimes.get(worldId));
+            }
+            @Override public Optional<BigDecimal> underlyingMark(String symbol) {
+                return marks.underlyingMark(symbol);
+            }
+            @Override public Optional<BigDecimal> underlyingMark(String symbol, String worldId) {
+                return marks.underlyingMark(symbol, worldId);
+            }
+            @Override public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(
+                    String symbol, String worldId) {
+                return marks.underlyingEvidence(symbol, worldId);
+            }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+                return marks.legMark(symbol, leg);
+            }
+            @Override public Optional<LegMark> legMark(String symbol, Leg leg, String worldId) {
+                return marks.legMark(symbol, leg, worldId);
+            }
+        };
     }
 
     @Test

@@ -234,7 +234,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(
                 market, db, clock, eventCalendar);
         AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
-                engine, evaluations, cfg, clock);
+                engine, evaluations, cfg);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.marketDataMaintenance = marketDataMaintenance;
         marksSource.setEngine(server.marketEngine);

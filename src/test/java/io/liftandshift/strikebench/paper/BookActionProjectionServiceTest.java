@@ -65,7 +65,7 @@ class BookActionProjectionServiceTest {
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
                         LocalDate.parse("2026-08-07"), 1, BigDecimal.ZERO)),
                 null, "16d", "DEFINED", "INCOME", false,
-                null, null, "IMPORT", "EXECUTED");
+                null, "IMPORT", "EXECUTED", null);
         var close = new PositionLifecycleReceipt.CloseQuote(true,
                 TestPrices.closing(3, -15_000L, -15_000L, 300L), -14_250L,
                 PositionDomain.PriceAuthority.OBSERVED,
@@ -124,7 +124,7 @@ class BookActionProjectionServiceTest {
                 List.of(Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("130"),
                         LocalDate.parse("2026-08-21"), 1, BigDecimal.ZERO)),
                 null, "30d", "DEFINED", "INCOME", true,
-                null, null, "IMPORT", "EXECUTED");
+                null, "IMPORT", "EXECUTED", null);
         var close = new PositionLifecycleReceipt.CloseQuote(true,
                 TestPrices.closing(2, -32_000L, -32_000L, 200L), -30_000L,
                 PositionDomain.PriceAuthority.OBSERVED,

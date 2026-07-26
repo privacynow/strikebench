@@ -39,6 +39,9 @@ class PathEnsembleDisplayTest {
         assertThat(projected.receipt().explicitToleranceCount()).isEqualTo(1);
         assertThat(projected.receipt().withinToleranceCount()).isGreaterThanOrEqualTo(2);
         assertThat(projected.receipt().selectedWithinToleranceCount()).isEqualTo(2);
+        assertThat(projected.receipt().withinTolerancePct())
+                .isEqualTo(100.0 * projected.receipt().withinToleranceCount()
+                        / projected.receipt().sourcePathCount());
         assertThat(projected.bandBasis())
                 .isEqualTo("CONDITIONED_NEAREST_QUINTILE_PLUS_FULL_TOLERANCE_SET");
         assertThat(projected.bandPathCount()).isGreaterThanOrEqualTo(projected.paths().size());
@@ -75,9 +78,37 @@ class PathEnsembleDisplayTest {
         assertThat(projected.receipt().focusSourcePathIndex()).isEqualTo(2);
         assertThat(projected.receipt().withinToleranceCount()).isZero();
         assertThat(projected.receipt().selectedWithinToleranceCount()).isZero();
+        assertThat(projected.receipt().withinTolerancePct()).isNull();
         assertThat(projected.bandBasis()).isEqualTo("FULL_STORED_ENSEMBLE");
         assertThat(projected.bandPathCount()).isEqualTo(6);
         assertThat(projected.bands()).hasSize(2);
+    }
+
+    @Test void exactSourceProjectionNeverReconstructsTheClickedPath() {
+        var base = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "demo", AnalysisContext.OBSERVED), 100,
+                ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 1, .25, 9L, 6),
+                new double[][]{{100, 80}, {100, 90}, {100, 100}, {100, 110}, {100, 120}, {100, 130}},
+                null, "paths-test");
+
+        var projected = new PathEnsembleService(null,
+                Clock.fixed(Instant.parse("2026-07-20T12:00:00Z"), ZoneOffset.UTC))
+                .displayPathsFocusedOnSource(base, 5, 3, null);
+
+        assertThat(projected.selection()).isEqualTo("EXACT_SOURCE_PATH");
+        assertThat(projected.receipt().rule()).isEqualTo("EXACT_SOURCE_PATH");
+        assertThat(projected.receipt().focusSourcePathIndex()).isEqualTo(5);
+        assertThat(projected.receipt().waypointCount()).isZero();
+        assertThat(projected.receipt().withinTolerancePct()).isNull();
+        assertThat(projected.paths()).filteredOn(path -> "FOCUS".equals(path.role()))
+                .singleElement()
+                .satisfies(path -> {
+                    assertThat(path.sourcePathIndex()).isEqualTo(5);
+                    assertThat(path.prices()).containsExactly(100, 130);
+                });
+        assertThat(projected.bandBasis()).isEqualTo("FULL_STORED_ENSEMBLE");
+        assertThat(projected.bandPathCount()).isEqualTo(6);
+        assertThat(projected.interpretation()).contains("no path was reconstructed");
     }
 
     @Test void fractionalSessionPinsUseStoredIntradayStepsAndABroaderBandNeighborhood() {

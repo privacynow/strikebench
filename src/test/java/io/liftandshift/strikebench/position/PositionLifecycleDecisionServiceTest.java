@@ -79,7 +79,7 @@ class PositionLifecycleDecisionServiceTest {
         var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
                         EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
-                false, null, null, "IMPORT", "EXECUTED");
+                false, null, "IMPORT", "EXECUTED", null);
         PositionLifecycleReceipt lifecycle = lifecycle();
 
         var fullPolicy = policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5);
@@ -91,6 +91,15 @@ class PositionLifecycleDecisionServiceTest {
                 AccountObjectiveService.capacityContext(fullRevision, POSITION));
 
         assertThat(full.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.KEEP);
+        assertThat(full.presentation()).satisfies(presentation -> {
+            assertThat(presentation.evidenceState())
+                    .isEqualTo(PositionLifecycleDecisionService.EvidenceState.SUFFICIENT);
+            assertThat(presentation.actionable()).isTrue();
+            assertThat(presentation.userFacingVerdict()).isEqualTo("Keep");
+            assertThat(presentation.userFacingStatus()).isEqualTo("On plan");
+            assertThat(presentation.sortPriority()).isEqualTo(5);
+            assertThat(presentation.trigger()).isNull();
+        });
         assertThat(full.dimensions()).filteredOn(row -> row.name().equals("TAIL_EVENT"))
                 .singleElement().satisfies(row -> {
                     assertThat(row.status()).isEqualTo("CAUTION");
@@ -102,9 +111,17 @@ class PositionLifecycleDecisionServiceTest {
         var assignmentPolicy = policy("ASSIGNMENT_READY", 90, 1_000L, 0, 20);
         var assignmentRevision = objectives.declare("local", account.id(), "ACCUMULATE", "BULLISH",
                 null, "ACCEPT", List.of(packageCapacity()), capacity(assignmentPolicy, List.of()));
-        assertThat(decisions.analyze(lifecycle, actionSet,
-                AccountObjectiveService.capacityContext(assignmentRevision, POSITION)).verdict())
+        var assignment = decisions.analyze(lifecycle, actionSet,
+                AccountObjectiveService.capacityContext(assignmentRevision, POSITION));
+        assertThat(assignment.verdict())
                 .isEqualTo(PositionLifecycleDecisionService.Verdict.ACCEPT_ASSIGNMENT);
+        assertThat(assignment.presentation()).satisfies(presentation -> {
+            assertThat(presentation.userFacingVerdict()).isEqualTo("Accept assignment");
+            assertThat(presentation.userFacingStatus()).isEqualTo("Assignment active");
+            assertThat(presentation.sortPriority()).isEqualTo(4);
+            assertThat(presentation.trigger().code()).isEqualTo("ASSIGNMENT_DECISION_ACTIVE");
+            assertThat(presentation.trigger().label()).isEqualTo("Assignment decision is active");
+        });
 
         var limitedPolicy = policy("CONCENTRATION_LIMITED", 90, 1_000L, 0, 5);
         var limitedCapacity = capacity(limitedPolicy, List.of(new AccountObjectiveService.ScopedCeiling(
@@ -115,6 +132,14 @@ class PositionLifecycleDecisionServiceTest {
                 AccountObjectiveService.capacityContext(limitedRevision, POSITION));
 
         assertThat(limited.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.REDUCE);
+        assertThat(limited.presentation()).satisfies(presentation -> {
+            assertThat(presentation.actionable()).isTrue();
+            assertThat(presentation.userFacingStatus()).isEqualTo("Trim");
+            assertThat(presentation.sortPriority()).isEqualTo(2);
+            assertThat(presentation.trigger().code()).isEqualTo("HARD_ACCOUNT_LIMIT_REDUCTION");
+            assertThat(presentation.trigger().label()).contains("minimum reduction");
+            assertThat(presentation.trigger().dimension()).isEqualTo("ACCOUNT_LIMITS");
+        });
         assertThat(limited.reduction().quantityToClose()).isEqualTo(2);
         assertThat(limited.reduction().quantityRemaining()).isEqualTo(1);
         assertThat(limited.limits()).singleElement().satisfies(limit -> {
@@ -174,7 +199,7 @@ class PositionLifecycleDecisionServiceTest {
         var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
                         EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
-                false, null, null, "IMPORT", "EXECUTED");
+                false, null, "IMPORT", "EXECUTED", null);
         var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()),
                 capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
@@ -185,6 +210,18 @@ class PositionLifecycleDecisionServiceTest {
 
         assertThat(decision.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.NEEDS_EVIDENCE);
         assertThat(decision.verdict()).isNotEqualTo(PositionLifecycleDecisionService.Verdict.DEFEND);
+        assertThat(decision.presentation()).satisfies(presentation -> {
+            assertThat(presentation.evidenceState())
+                    .isEqualTo(PositionLifecycleDecisionService.EvidenceState.CURRENT_MARK_UNAVAILABLE);
+            assertThat(presentation.actionable()).isFalse();
+            assertThat(presentation.userFacingVerdict())
+                    .isEqualTo("No verdict · current mark unavailable");
+            assertThat(presentation.userFacingStatus()).isEqualTo("Current mark unavailable");
+            assertThat(presentation.sortPriority()).isEqualTo(1);
+            assertThat(presentation.trigger().code()).isEqualTo("CURRENT_MARK_UNAVAILABLE");
+            assertThat(presentation.trigger().label()).isEqualTo("Current mark unavailable");
+            assertThat(presentation.trigger().basis()).contains("current mark is unavailable");
+        });
         assertThat(decision.dimensions()).filteredOn(d -> d.name().equals("MECHANICS"))
                 .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("BLOCKED"));
         assertThat(decision.summary()).contains("NO VERDICT").contains("no action is recommended");
@@ -201,7 +238,7 @@ class PositionLifecycleDecisionServiceTest {
         var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
                         EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
-                false, null, null, "IMPORT", "EXECUTED");
+                false, null, "IMPORT", "EXECUTED", null);
         var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()),
                 capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
@@ -214,6 +251,14 @@ class PositionLifecycleDecisionServiceTest {
                 .as("missing forward economics must not become an affirmative hold")
                 .isEqualTo(PositionLifecycleDecisionService.Verdict.NEEDS_EVIDENCE);
         assertThat(decision.verdict()).isNotEqualTo(PositionLifecycleDecisionService.Verdict.KEEP);
+        assertThat(decision.presentation()).satisfies(presentation -> {
+            assertThat(presentation.evidenceState())
+                    .isEqualTo(PositionLifecycleDecisionService.EvidenceState.FORWARD_ECONOMICS_UNAVAILABLE);
+            assertThat(presentation.actionable()).isFalse();
+            assertThat(presentation.userFacingStatus()).isEqualTo("Forward economics unavailable");
+            assertThat(presentation.trigger().code()).isEqualTo("FORWARD_ECONOMICS_UNAVAILABLE");
+            assertThat(presentation.trigger().dimension()).isEqualTo("FORWARD_ECONOMICS");
+        });
         assertThat(decision.dimensions()).filteredOn(d -> d.name().equals("FORWARD_ECONOMICS"))
                 .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("UNAVAILABLE"));
         assertThat(decision.summary()).contains("NO VERDICT").contains("no action is recommended");
@@ -227,7 +272,7 @@ class PositionLifecycleDecisionServiceTest {
         var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
                         EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
-                false, null, null, "IMPORT", "EXECUTED");
+                false, null, "IMPORT", "EXECUTED", null);
         var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()),
                 capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
@@ -236,6 +281,9 @@ class PositionLifecycleDecisionServiceTest {
                 projections.project("local", account.id(), request, receipt),
                 AccountObjectiveService.capacityContext(revision, POSITION));
 
+        assertThat(decision.presentation().evidenceState())
+                .isEqualTo(PositionLifecycleDecisionService.EvidenceState.PARTIAL);
+        assertThat(decision.presentation().actionable()).isTrue();
         assertThat(decision.dimensions()).filteredOn(d -> d.name().equals("TAIL_EVENT"))
                 .singleElement().satisfies(d -> {
                     assertThat(d.status()).isEqualTo("UNAVAILABLE");
@@ -254,7 +302,7 @@ class PositionLifecycleDecisionServiceTest {
         var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
                 List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
                         EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
-                false, null, null, "IMPORT", "EXECUTED");
+                false, null, "IMPORT", "EXECUTED", null);
         var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
                 null, "ACCEPT", List.of(packageCapacity()),
                 capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
@@ -277,6 +325,14 @@ class PositionLifecycleDecisionServiceTest {
         var defend = decisions.analyze(breached,
                 projections.project("local", account.id(), request, breached), context);
         assertThat(defend.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.DEFEND);
+        assertThat(defend.presentation()).satisfies(presentation -> {
+            assertThat(presentation.actionable()).isTrue();
+            assertThat(presentation.userFacingVerdict()).isEqualTo("Defend · action required");
+            assertThat(presentation.userFacingStatus()).isEqualTo("Action required");
+            assertThat(presentation.sortPriority()).isZero();
+            assertThat(presentation.trigger().code()).isEqualTo("STOP_LOSS");
+            assertThat(presentation.trigger().label()).isEqualTo("Stop-loss line crossed");
+        });
         assertThat(defend.dimensions()).filteredOn(d -> d.name().equals("MECHANICAL_PROTOCOL"))
                 .singleElement().satisfies(d -> {
                     assertThat(d.status()).isEqualTo("STOP_LOSS_TRIGGER");
@@ -288,6 +344,11 @@ class PositionLifecycleDecisionServiceTest {
         var harvest = decisions.analyze(captured,
                 projections.project("local", account.id(), request, captured), context);
         assertThat(harvest.verdict()).isEqualTo(PositionLifecycleDecisionService.Verdict.HARVEST);
+        assertThat(harvest.presentation()).satisfies(presentation -> {
+            assertThat(presentation.userFacingStatus()).isEqualTo("Take profit");
+            assertThat(presentation.trigger().code()).isEqualTo("TAKE_PROFIT");
+            assertThat(presentation.trigger().label()).isEqualTo("Take-profit line reached");
+        });
         assertThat(harvest.dimensions()).filteredOn(d -> d.name().equals("MECHANICAL_PROTOCOL"))
                 .singleElement().satisfies(d ->
                         assertThat(d.status()).isEqualTo("TAKE_PROFIT_TRIGGER"));

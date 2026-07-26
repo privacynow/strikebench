@@ -22,7 +22,7 @@ class MigrationsTest {
             assertThat(db.query(
                     "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank",
                     r -> r.str("version"))).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-                    "11", "12", "13", "14");
+                    "11", "12", "13", "14", "15");
 
             // The baseline carries its seed rows and the current column shape.
             assertThat(db.query("SELECT id FROM users ORDER BY id", r -> r.str("id")))
@@ -86,6 +86,13 @@ class MigrationsTest {
                             + "WHERE table_schema='public' AND table_name='plan_decision' "
                             + "AND column_name IN ('price_receipt','proposed_net_cents') ORDER BY column_name",
                     r -> r.str("column_name"))).containsExactly("price_receipt");
+            // V15: a typed LIMIT is the only persisted proposed package price. The ambiguous
+            // aggregate legacy field (which also carried recorded-fill nets) is gone.
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='trades' "
+                            + "AND column_name IN ('order_limit_net_cents','proposed_net_cents') "
+                            + "ORDER BY column_name",
+                    r -> r.str("column_name"))).containsExactly("order_limit_net_cents");
             // V9: the managed backtest stores its exit knobs in the ONE management-policy
             // vocabulary, so the old max-profit/max-loss/calendar-DTE column names are gone.
             assertThat(db.query("SELECT column_name FROM information_schema.columns "
@@ -255,6 +262,49 @@ class MigrationsTest {
                     + "jsonb_set(price_receipt,'{optionNetPremiumCents}','100'::jsonb) "
                     + "WHERE id='decision-unpriced'"))
                     .hasMessageContaining("plan_decision_price_receipt");
+        }
+    }
+
+    @Test void v15KeepsOnlyTypedLimitProvenanceAndDropsTheAmbiguousTradePrice() {
+        var cfg = TestDb.emptyConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure()
+                    .dataSource(db.dataSource())
+                    .locations("classpath:db/migrations")
+                    .target("14")
+                    .load()
+                    .migrate();
+
+            db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,"
+                    + "reserved_cents,created_at,updated_at) VALUES"
+                    + "('order-migration','local','Order migration','PAPER',100000,100000,0,"
+                    + "'2026-07-20T12:00:00Z','2026-07-20T12:00:00Z')");
+            String insert = "INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,"
+                    + "entry_underlying_cents,entry_net_premium_cents,max_loss_cents,breakevens_json,"
+                    + "fees_open_cents,fees_close_cents,entry_snapshot_json,is_live,created_at,updated_at,"
+                    + "proposed_net_cents) VALUES(?, 'order-migration','AAPL','CUSTOM','ACTIVE',1,"
+                    + "'[]'::jsonb,10000,?,10000,'[]'::jsonb,0,0,?::jsonb,0,"
+                    + "'2026-07-20T12:00:00Z','2026-07-20T12:00:00Z',?)";
+            db.exec(insert, "typed-limit", 12_300L,
+                    "{\"orderInstruction\":{\"type\":\"LIMIT\",\"limitNetCents\":12300}}", 12_300L);
+            db.exec(insert, "recorded-fill", 9_900L,
+                    "{\"orderInstruction\":{\"type\":\"MARKET\"}}", 9_900L);
+
+            Flyway.configure()
+                    .dataSource(db.dataSource())
+                    .locations("classpath:db/migrations")
+                    .target("15")
+                    .load()
+                    .migrate();
+
+            assertThat(db.query("SELECT order_limit_net_cents FROM trades WHERE id='typed-limit'",
+                    r -> r.lngOrNull("order_limit_net_cents"))).containsExactly(12_300L);
+            assertThat(db.query("SELECT order_limit_net_cents FROM trades WHERE id='recorded-fill'",
+                    r -> r.lngOrNull("order_limit_net_cents"))).containsExactly((Long) null);
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='trades' "
+                            + "AND column_name='proposed_net_cents'",
+                    r -> r.str("column_name"))).isEmpty();
         }
     }
 

@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.api;
 
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.support.TestPrices;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -12,8 +14,10 @@ class OutcomeCapturedFeePolicyTest {
     @Test
     void frozenEntryUsesItsCapturedFeeWithoutConsultingCurrentConfiguration() {
         AtomicBoolean currentScheduleConsulted = new AtomicBoolean();
+        PackagePriceReceipt captured =
+                TestPrices.withFeeSchedule(1, 42_000L, 42_000L, 65L, 777L);
 
-        long fees = OutcomeController.resolveOutcomeRoundTripFees(42_000L, 777L, () -> {
+        long fees = OutcomeController.resolveOutcomeRoundTripFees(captured, () -> {
             currentScheduleConsulted.set(true);
             return 260L;
         });
@@ -25,8 +29,9 @@ class OutcomeCapturedFeePolicyTest {
     @Test
     void frozenEntryWithoutCapturedFeeIsRefusedByName() {
         AtomicBoolean currentScheduleConsulted = new AtomicBoolean();
+        PackagePriceReceipt withoutFees = TestPrices.optionOnly(42_000L);
 
-        assertThatThrownBy(() -> OutcomeController.resolveOutcomeRoundTripFees(42_000L, null, () -> {
+        assertThatThrownBy(() -> OutcomeController.resolveOutcomeRoundTripFees(withoutFees, () -> {
             currentScheduleConsulted.set(true);
             return 260L;
         }))
@@ -41,7 +46,7 @@ class OutcomeCapturedFeePolicyTest {
     void freshEntryUsesTheCurrentFeeSchedule() {
         AtomicBoolean currentScheduleConsulted = new AtomicBoolean();
 
-        long fees = OutcomeController.resolveOutcomeRoundTripFees(null, null, () -> {
+        long fees = OutcomeController.resolveOutcomeRoundTripFees(null, () -> {
             currentScheduleConsulted.set(true);
             return 260L;
         });
@@ -51,9 +56,12 @@ class OutcomeCapturedFeePolicyTest {
     }
 
     @Test
-    void capturedFeeCannotTravelWithoutItsCapturedEntry() {
-        assertThatThrownBy(() -> OutcomeController.resolveOutcomeRoundTripFees(null, 777L, () -> 260L))
+    void unavailableCapturedEntryIsNeverSilentlyRepricedFromTheCurrentBook() {
+        PackagePriceReceipt unavailable = PackagePriceReceipt.unavailable(
+                1, PackagePriceReceipt.FeeSide.OPENING, "one leg has no executable quote");
+        assertThatThrownBy(() -> OutcomeController.resolveOutcomeRoundTripFees(unavailable, () -> 260L))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("requires its captured entry price");
+                .hasMessageContaining("captured entry is unavailable")
+                .hasMessageContaining("one leg has no executable quote");
     }
 }

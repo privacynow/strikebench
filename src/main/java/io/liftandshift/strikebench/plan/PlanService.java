@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.plan;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.EventBus;
 import io.liftandshift.strikebench.util.Ids;
@@ -575,9 +576,7 @@ public final class PlanService {
     }
 
     private static String normalizeSymbol(String raw) {
-        String symbol = required(raw, "symbol").toUpperCase(Locale.ROOT);
-        if (!symbol.matches("[A-Z0-9._-]{1,20}")) throw new IllegalArgumentException("invalid symbol: " + raw);
-        return symbol;
+        return Symbol.normalize(raw);
     }
 
     private static String normalizeIntent(String raw, boolean nullable) {

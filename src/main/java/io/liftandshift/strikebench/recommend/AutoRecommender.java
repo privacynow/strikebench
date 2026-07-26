@@ -10,7 +10,6 @@ import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.BoundedFanout;
 import io.liftandshift.strikebench.util.Money;
 
-import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -73,7 +72,11 @@ public final class AutoRecommender {
     public record RedeploymentRequest(String lifecycleReceiptId, String action, Integer quantity) {}
 
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
-    public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {}
+    public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {
+        public HoldingInfo {
+            symbol = Symbol.normalize(symbol);
+        }
+    }
 
     public record ScoredCandidate(String targetFit, StrategyEvaluation evaluation) {
         public ScoredCandidate {
@@ -200,16 +203,14 @@ public final class AutoRecommender {
     private final SignalEngine signals;
     private final RecommendationEngine engine;
     private final AppConfig cfg;
-    private final Clock clock;
     private final EvaluationService evaluations;
 
     public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
-                           AppConfig cfg, Clock clock) {
+                           AppConfig cfg) {
         this.signals = signals;
         this.engine = engine;
         this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
         this.cfg = cfg;
-        this.clock = clock;
     }
 
     public AutoResult run(AutoRequest req, long buyingPowerCents) {
@@ -269,7 +270,8 @@ public final class AutoRecommender {
         double minConfidence = req.minConfidence() == null ? MIN_SIGNAL_CONFIDENCE : Math.clamp(req.minConfidence(), 0, 1);
         List<StrategyIntent> intents = normalizeIntents(req.intents());
         ScanTally tally = new ScanTally();
-        emit(progressListener, new Progress("STARTING", 0, universe.size(), tally.counts(), null, null,
+        ProgressEmitter progress = new ProgressEmitter(progressListener);
+        progress.emit(new Progress("STARTING", 0, universe.size(), tally.counts(), null, null,
                 "Preparing the governed universe and declared goal."));
 
         List<String> skipped = new ArrayList<>();
@@ -298,7 +300,6 @@ public final class AutoRecommender {
                         if (analyzed != null) bySymbol.put(symbol, analyzed);
                         return analyzed;
                     } finally {
-                        int completed = signalCompleted.incrementAndGet();
                         Pick preview = null;
                         if (analyzed != null && analyzed.optionable()
                                 && analyzed.confidence() >= minConfidence) {
@@ -309,14 +310,19 @@ public final class AutoRecommender {
                                     opportunity.score(), List.of(), primaryIntent.name(),
                                     opportunity, null);
                         }
+                        Pick completedPreview = preview;
                         // The two counts advance on the SAME predicate the eligibility screen below
-                        // applies, so "considered" and "eligible" can never disagree with it.
-                        tally.considered(completed);
-                        if (preview != null) tally.evidenceEligible();
-                        emit(progressListener, new Progress("SIGNALS", completed, universe.size(),
-                                tally.counts(), symbol, preview, preview == null
-                                ? "Reading price, volatility, event, and liquidity evidence."
-                                : "Evidence is ready; exact package pricing follows after the field is ranked."));
+                        // applies, so "considered" and "eligible" can never disagree with it. The
+                        // tiny tally+delivery critical section is intentional: signal work remains
+                        // parallel, but callbacks cannot overtake each other and publish 3 then 2.
+                        progress.updateAndEmit(() -> {
+                            int completed = signalCompleted.incrementAndGet();
+                            tally.considered(completed);
+                            if (completedPreview != null) tally.evidenceEligible();
+                        }, () -> new Progress("SIGNALS", signalCompleted.get(), universe.size(),
+                                tally.counts(), symbol, completedPreview, completedPreview == null
+                                    ? "Reading price, volatility, event, and liquidity evidence."
+                                    : "Evidence is ready; exact package pricing follows after the field is ranked."));
                     }
                 },
                 (symbol, failure) -> null);
@@ -334,7 +340,7 @@ public final class AutoRecommender {
         long[] riskBudget = {0};
         List<Pick> picks = new ArrayList<>();
         java.util.Map<String, HoldingInfo> heldBySymbol = new java.util.HashMap<>();
-        for (HoldingInfo h : holdings) heldBySymbol.put(h.symbol().toUpperCase(Locale.ROOT), h);
+        for (HoldingInfo h : holdings) heldBySymbol.put(h.symbol(), h);
         java.util.concurrent.atomic.AtomicInteger ideasCompleted = new java.util.concurrent.atomic.AtomicInteger();
         int ideasTotal = Math.max(1, maxPicks * intents.size());
 
@@ -359,7 +365,7 @@ public final class AutoRecommender {
                     continue;
                 }
                 for (HoldingInfo h : eligible) {
-                    String sym = h.symbol().toUpperCase(Locale.ROOT);
+                    String sym = h.symbol();
                     SignalEngine.Signals s = bySymbol.get(sym);
                     if (s == null) s = signals.analyze(sym, worldId).orElse(null);
                     if (s == null || !s.optionable()) {
@@ -375,7 +381,7 @@ public final class AutoRecommender {
                             opportunity, bestIdea(perHorizon));
                     picks.add(pick);
                     tally.rowsRetained(surfaced(picks).size());
-                    emit(progressListener, new Progress("IDEAS", ideasCompleted.incrementAndGet(),
+                    progress.emit(new Progress("IDEAS", ideasCompleted.incrementAndGet(),
                             ideasTotal, tally.counts(), sym, pick,
                             "A canonical candidate field is ready; destination-Book gates are still composing."));
                 }
@@ -383,7 +389,7 @@ public final class AutoRecommender {
             }
             for (GoalScored top : rankedForGoal.subList(0, Math.min(maxPicks, rankedForGoal.size()))) {
                 SignalEngine.Signals s = top.signals();
-                HoldingInfo held = heldBySymbol.get(s.symbol().toUpperCase(Locale.ROOT));
+                HoldingInfo held = heldBySymbol.get(Symbol.normalize(s.symbol()));
                 // ACQUIRE never inherits the existing position: sharesOwned means "shares I want"
                 // there and defaults to one lot — owned shares must not scale new purchases.
                 RecommendationEngine.Holdings ctx = intent != StrategyIntent.DIRECTIONAL
@@ -396,7 +402,7 @@ public final class AutoRecommender {
                         top.opportunity(), bestIdea(perHorizon));
                 picks.add(pick);
                 tally.rowsRetained(surfaced(picks).size());
-                emit(progressListener, new Progress("IDEAS", ideasCompleted.incrementAndGet(),
+                progress.emit(new Progress("IDEAS", ideasCompleted.incrementAndGet(),
                         ideasTotal, tally.counts(), s.symbol(), pick,
                         "A canonical candidate field is ready; destination-Book gates are still composing."));
             }
@@ -412,7 +418,7 @@ public final class AutoRecommender {
         // across picks and horizons, BESIDE the per-pick decision ordering (Phase 10.3).
         List<StrategyEvaluation> surfaced = surfaced(picks);
         tally.rowsRetained(surfaced.size());
-        emit(progressListener, new Progress("BOOK", ideasCompleted.get(), ideasTotal, tally.counts(),
+        progress.emit(new Progress("BOOK", ideasCompleted.get(), ideasTotal, tally.counts(),
                 null, null,
                 "Applying destination-Book capacity, concentration, and expiry checks."));
         RedeploymentFrontier.BookLayer book =
@@ -477,6 +483,33 @@ public final class AutoRecommender {
         }
     }
 
+    /**
+     * Listener-visible frames have one order even though the work producing them is parallel.
+     * Only tally publication and callback delivery are serialized; provider reads, signal
+     * analysis, ranking, and package evaluation stay outside this critical section.
+     */
+    private static final class ProgressEmitter {
+        private final ProgressListener listener;
+        private final Object deliveryLock = new Object();
+
+        private ProgressEmitter(ProgressListener listener) {
+            this.listener = listener == null ? NO_PROGRESS : listener;
+        }
+
+        void emit(Progress progress) {
+            synchronized (deliveryLock) {
+                AutoRecommender.emit(listener, progress);
+            }
+        }
+
+        void updateAndEmit(Runnable update, java.util.function.Supplier<Progress> frame) {
+            synchronized (deliveryLock) {
+                update.run();
+                AutoRecommender.emit(listener, frame.get());
+            }
+        }
+    }
+
     /** Runs the engine per horizon for one symbol under one intent. */
     private List<HorizonIdeas> horizonIdeas(SignalEngine.Signals s, List<String> horizons, boolean allow0dte,
                                             AutoRequest req, StrategyIntent intent,
@@ -502,9 +535,12 @@ public final class AutoRecommender {
             List<String> hNotes = new ArrayList<>();
             List<Candidate> pool = result.candidates();
             if ("0DTE".equals(horizon)) {
-                LocalDate today = worldId == null
-                        ? LocalDate.now(clock)
-                        : engine.marketDate(worldId);
+                // The recommendation engine owns the selected lane's market date for EVERY lane.
+                // LocalDate.now(clock) uses the Clock's presentation zone (often Phoenix on the
+                // owner's machine), which can still be yesterday after the US option market has
+                // crossed midnight Eastern. That made a valid observed 0DTE book disappear while
+                // simulated lanes happened to use the correct market date.
+                LocalDate today = engine.marketDate(worldId);
                 pool = pool.stream().filter(c -> expiresOn(c, today)).toList();
                 if (pool.isEmpty()) {
                     hNotes.add("No same-day expiration listed for " + s.symbol() + " — 0DTE skipped");

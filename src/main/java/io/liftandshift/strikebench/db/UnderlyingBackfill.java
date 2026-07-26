@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.db;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -45,8 +46,7 @@ public final class UnderlyingBackfill {
 
     public BackfillResult backfill(String symbol, LocalDate from, LocalDate to,
                                    String requestedSource, String ownerId, String jobId) {
-        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        String sym = Symbol.normalize(symbol);
         if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("bad date range");
 
         String sourceRequest = requestedSource == null || requestedSource.isBlank()

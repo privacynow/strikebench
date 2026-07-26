@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.strategy.Guardrails;
@@ -174,7 +175,7 @@ public final class RecommendationEngine {
     /** World-aware: inside a SIMULATED session, recommendations price against THAT world —
      *  the whole point of a reviewer market. null = observed (the real-lane rule stands). */
     public Result recommend(Request req, long buyingPowerCents, String worldId) {
-        String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(req.symbol());
         RiskMode mode = RiskMode.parse(req.riskMode());
         StrategyIntent intent = StrategyIntent.parse(req.intent());
         String horizon = effectiveHorizon(req.horizon(), intent);
@@ -369,7 +370,7 @@ public final class RecommendationEngine {
                     Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
                             ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
                             builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
-                            quote, ctx.riskFreeRate(), lane, probe);
+                            quote, ctx.riskFreeRate(), laneNow, lane, probe);
                     if (candidate == null) {
                         if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
                                 List.of(probe.reason != null ? probe.reason
@@ -462,7 +463,7 @@ public final class RecommendationEngine {
             default -> throw new IllegalArgumentException(
                     "Ladders exist for acquire, exit, and hedge — '" + req.intent() + "' has no strike ladder");
         };
-        String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(req.symbol());
         List<String> notes = new ArrayList<>();
         Holdings holdings = req.holdings();
         Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
@@ -546,7 +547,7 @@ public final class RecommendationEngine {
             Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
-                    quote, riskFreeRate, lane, new CandidateProbe());
+                    quote, riskFreeRate, ladderNow, lane, new CandidateProbe());
             if (c == null) continue;
             String filterReason = failsFilter(c, filters);
             if (filterReason != null) {
@@ -623,7 +624,7 @@ public final class RecommendationEngine {
                                   LocalDate today, long budget, long buyingPowerCents, Freshness freshness, boolean avoidEarnings,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
                                   long coverSharesPerUnit, int freeShares, Quote underlyingQuote,
-                                  double riskFreeRate,
+                                  double riskFreeRate, java.time.Instant laneNow,
                                   io.liftandshift.strikebench.market.MarketLane lane,
                                   CandidateProbe probe) {
         // Re-price legs at the EXECUTABLE side (buys pay the ask, sells receive the bid) so
@@ -761,30 +762,77 @@ public final class RecommendationEngine {
         Long maxProfit = unitMaxProfit == null ? null : unitMaxProfit * qty;
         Long combinedMaxLoss = unitCombinedMaxLoss == null ? null : unitCombinedMaxLoss * qty;
 
+        List<Leg> optionLegs = built.legs().stream().filter(l -> !l.isStock()).toList();
+        long optionNetCents = io.liftandshift.strikebench.paper.ProtocolEvaluator
+                .optionEntryBasisCents(built.legs(), qty, entryNet);
+        long optionContracts = Fees.optionContracts(optionLegs, qty);
+        Fees.Schedule feeSchedule = Fees.schedule(optionContracts,
+                feePerContractCents, feePerOrderCents);
+        long openingFees = feeSchedule.openingCents();
+        List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
+        List<LegView> legViews = new ArrayList<>(built.legs().size());
+        List<io.liftandshift.strikebench.model.DataEvidence> priceEvidence =
+                new ArrayList<>(built.legs().size());
+        for (int i = 0; i < built.legs().size(); i++) {
+            OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
+            legViews.add(LegView.of(built.legs().get(i), quoteReceipt));
+            priceEvidence.add(built.legs().get(i).isStock() || quoteReceipt == null
+                    ? underlyingQuote.evidence() : quoteReceipt.evidence());
+        }
+        var packageEvidence = io.liftandshift.strikebench.model.DataEvidence.aggregate(priceEvidence);
+        boolean executableBook = !priceEvidence.isEmpty()
+                && priceEvidence.stream().allMatch(e -> e.executableIn(lane));
+        var valuationBasis = io.liftandshift.strikebench.paper.PackagePriceReceipt
+                .markBasis(executableBook, false);
+        var executability = io.liftandshift.strikebench.paper.OrderInstruction.market()
+                .executability(entryNet, executableBook);
+        if (!executableBook) {
+            candidateWarnings.add("These prices come from " + packageEvidence.provenance() + " "
+                    + packageEvidence.age() + " marks (" + packageEvidence.source() + "), which are not "
+                    + "an executable book in the " + lane + " market. The package can be studied at this "
+                    + "price; it cannot be traded at it until the market quotes it again.");
+        }
+        Long scannedAt = io.liftandshift.strikebench.paper.PackagePriceReceipt.observedAtOf(
+                legViews.stream().map(LegView::quoteAsOfEpochMs).toList());
+        var price = io.liftandshift.strikebench.paper.PackagePriceReceipt.of(qty, entryNet, optionNetCents,
+                io.liftandshift.strikebench.paper.ProtocolEvaluator.stockEntryBasisCents(built.legs(), qty),
+                openingFees, feeSchedule.roundTripCents(),
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
+                executableBook ? entryNet : null,
+                io.liftandshift.strikebench.paper.OrderInstruction.market(),
+                executability, valuationBasis,
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.sourceOf(
+                        legViews.stream().map(LegView::quoteSource).toList()),
+                freshness.name(), scannedAt,
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.fingerprintOf(built.legs(), qty,
+                        entryNet, valuationBasis, scannedAt));
+
         List<String> breakevens;
-        Double pop;
-        Long ev;
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk;
         boolean ivMissing = built.quotes().stream().filter(Objects::nonNull)
                 .map(OptionQuote::iv).noneMatch(Objects::nonNull);
         if (multiExp) {
             breakevens = List.of();
-            pop = null;
-            ev = null;
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                    .unavailable("A mixed-expiration package requires supplied-path valuation.");
+        } else if (ivMissing) {
+            breakevens = curve.breakevens().stream()
+                    .map(b -> b.stripTrailingZeros().toPlainString()).toList();
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                    .unavailable("No implied volatility was captured for this exact package.");
         } else {
             breakevens = curve.breakevens().stream().map(b -> b.stripTrailingZeros().toPlainString()).toList();
             double ivAvg = built.quotes().stream().filter(Objects::nonNull).map(OptionQuote::iv)
-                    .filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0.30);
-            double t = built.legs().stream().filter(l -> !l.isStock())
-                    .mapToLong(l -> ChronoUnit.DAYS.between(today, l.expiration())).min().stream()
-                    .mapToDouble(d -> Math.max(d, 0.5) / 365.0).findFirst().orElse(7 / 365.0);
+                    .filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElseThrow();
             List<BigDecimal> shorts = built.legs().stream()
                     .filter(l -> !l.isStock() && l.action() == LegAction.SELL)
                     .map(Leg::strike).filter(Objects::nonNull).distinct().toList();
-            var analyzed = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                    curve, spot.doubleValue(), ivAvg, t, riskFreeRate, shorts);
-            pop = analyzed.probabilityMap().pAnyProfit();
-            ev = analyzed.expectedValueCents();
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                    curve, price, Money.toCents(spot), ivAvg,
+                    io.liftandshift.strikebench.market.OptionTime.nearest(built.legs(), laneNow),
+                    riskFreeRate, shorts);
         }
+        Double pop = marketImpliedRisk.pop();
 
         double liquidity = liquidityScore(built.quotes());
         boolean zeroDte = built.legs().stream().anyMatch(l -> !l.isStock() && l.expiration().equals(today));
@@ -805,7 +853,6 @@ public final class RecommendationEngine {
         BigDecimal longPutStrike = built.legs().stream()
                 .filter(l -> !l.isStock() && l.action() == LegAction.BUY && l.type() == OptionType.PUT)
                 .map(Leg::strike).findFirst().orElse(null);
-        List<Leg> optionLegs = built.legs().stream().filter(l -> !l.isStock()).toList();
         long packageShareUnitsPerUnit = built.legs().stream().filter(Leg::isStock)
                 .mapToLong(leg -> Math.multiplyExact((long) leg.ratio(), leg.multiplier())).sum();
         if (packageShareUnitsPerUnit <= 0) {
@@ -813,14 +860,6 @@ public final class RecommendationEngine {
                     .shareContextUnitsNeeded(built.legs());
         }
         if (packageShareUnitsPerUnit <= 0) packageShareUnitsPerUnit = Leg.SHARES_PER_CONTRACT;
-        // The option-only basis comes from the ONE canonical owner, not a second private copy of
-        // the same PayoffCurve call (§3.8).
-        long optionNetCents = io.liftandshift.strikebench.paper.ProtocolEvaluator
-                .optionEntryBasisCents(built.legs(), qty, entryNet);
-        long optionContracts = Fees.optionContracts(optionLegs, qty);
-        Fees.Schedule feeSchedule = Fees.schedule(optionContracts,
-                feePerContractCents, feePerOrderCents);
-        long openingFees = feeSchedule.openingCents();
         long netOptionIncomeCents = optionNetCents - openingFees;
 
         // Annualized yield is quoted ONLY for share-backed premium (covered calls, cash-secured
@@ -915,66 +954,13 @@ public final class RecommendationEngine {
                 effectivePrice, assignProb, annualYieldPct, shortCallStrike, shortPutStrike, longPutStrike,
                 onHeldShares, packageShareUnitsPerUnit);
 
-        List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
         if (ivMissing && !multiExp) {
-            candidateWarnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
+            candidateWarnings.add("No implied volatility available — POP/EV are unavailable for this exact package");
         }
-        List<LegView> legViews = new ArrayList<>(built.legs().size());
-        for (int i = 0; i < built.legs().size(); i++) {
-            OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
-            legViews.add(LegView.of(built.legs().get(i), quoteReceipt));
-        }
-        // THE §7.2 receipt for this candidate, stating ONLY what the legs' own evidence supports.
-        // Every leg was re-priced to the natural side above (buys pay the ask, sells receive the
-        // bid), but a natural side is not automatically a TRADEABLE side: the scan gate is
-        // usableIn(lane) — analysis grade — while execution requires executableIn(lane), which for
-        // OBSERVED means REALTIME or DELAYED. An EOD or last-trade-fallback chain is a legitimate
-        // scan input and scores 0.70 freshness, so hardcoding EXECUTABLE_BOOK/IMMEDIATE here made
-        // every rail row state that a package was immediately tradeable at that price while
-        // TradeService refused the identical package and published UNAVAILABLE (§3.1/§3.2). The
-        // basis is now DERIVED from the same evidence the order lane will consult.
-        List<io.liftandshift.strikebench.model.DataEvidence> priceEvidence =
-                new ArrayList<>(built.legs().size());
-        for (int i = 0; i < built.legs().size(); i++) {
-            OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
-            priceEvidence.add(built.legs().get(i).isStock() || quoteReceipt == null
-                    ? underlyingQuote.evidence() : quoteReceipt.evidence());
-        }
-        var packageEvidence = io.liftandshift.strikebench.model.DataEvidence.aggregate(priceEvidence);
-        boolean executableBook = !priceEvidence.isEmpty()
-                && priceEvidence.stream().allMatch(e -> e.executableIn(lane));
-        // No midpoint can enter this package: ExecutablePrice.forAction returns null on a one-sided
-        // or crossed book and the candidate is refused above, so the only two honest outcomes are
-        // "the natural book, executable now" and "natural sides of a book nobody can trade now".
-        var valuationBasis = io.liftandshift.strikebench.paper.PackagePriceReceipt
-                .markBasis(executableBook, false);
-        var executability = io.liftandshift.strikebench.paper.OrderInstruction.market()
-                .executability(entryNet, executableBook);
-        if (!executableBook) {
-            candidateWarnings.add("These prices come from " + packageEvidence.provenance() + " "
-                    + packageEvidence.age() + " marks (" + packageEvidence.source() + "), which are not "
-                    + "an executable book in the " + lane + " market. The package can be studied at this "
-                    + "price; it cannot be traded at it until the market quotes it again.");
-        }
-        Long scannedAt = io.liftandshift.strikebench.paper.PackagePriceReceipt.observedAtOf(
-                legViews.stream().map(LegView::quoteAsOfEpochMs).toList());
-        var price = io.liftandshift.strikebench.paper.PackagePriceReceipt.of(qty, entryNet, optionNetCents,
-                io.liftandshift.strikebench.paper.ProtocolEvaluator.stockEntryBasisCents(built.legs(), qty),
-                openingFees, feeSchedule.roundTripCents(),
-                io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
-                // A field named "executable" never carries a price nobody can trade on (§3.2).
-                executableBook ? entryNet : null,
-                io.liftandshift.strikebench.paper.OrderInstruction.market(),
-                executability, valuationBasis,
-                io.liftandshift.strikebench.paper.PackagePriceReceipt.sourceOf(
-                        legViews.stream().map(LegView::quoteSource).toList()),
-                freshness.name(), scannedAt,
-                io.liftandshift.strikebench.paper.PackagePriceReceipt.fingerprintOf(built.legs(), qty,
-                        entryNet, valuationBasis, scannedAt));
 
         return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
                 List.copyOf(legViews), qty,
-                price, maxProfit, maxLoss, breakevens, pop, ev,
+                price, maxProfit, maxLoss, breakevens,
                 round2(liquidity), freshness.name(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
@@ -982,7 +968,7 @@ public final class RecommendationEngine {
                 annualYieldPct, effectivePrice, intentNote,
                 onHeldShares ? Boolean.TRUE : null,
                 onHeldShares ? Math.toIntExact(Math.multiplyExact(displaySharesPerUnit, (long) qty)) : null,
-                combinedMaxLoss);
+                combinedMaxLoss, marketImpliedRisk);
     }
 
     private static final class CandidateProbe {

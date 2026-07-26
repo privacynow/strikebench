@@ -4,7 +4,9 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.providers.FixtureProvider;
+import io.liftandshift.strikebench.market.sim.SimulatedWorld;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -46,7 +48,7 @@ class AutoRecommenderTest {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         RecommendationEngine engine = new RecommendationEngine(market, CLOCK);
         EvaluationService evaluations = new EvaluationService(market, db, CLOCK);
-        auto = new AutoRecommender(new SignalEngine(market, CLOCK), engine, evaluations, cfg, CLOCK);
+        auto = new AutoRecommender(new SignalEngine(market, CLOCK), engine, evaluations, cfg);
         opportunityScanner = new OpportunityScanner(engine, evaluations);
     }
 
@@ -240,6 +242,66 @@ class AutoRecommenderTest {
     }
 
     @Test
+    void observedZeroDteUsesEasternDateWhenTheHostClockIsStillOnThePriorPhoenixDay() {
+        Instant boundary = Instant.parse("2026-07-09T04:30:00Z");
+        Clock phoenixClock = Clock.fixed(boundary, ZoneId.of("America/Phoenix"));
+        // The deterministic exchange fixture lists against the US market date. Keeping its zone
+        // Eastern isolates the assertion: the scan clock's zone must not filter that valid book.
+        Clock exchangeClock = Clock.fixed(boundary, MarketHours.EASTERN);
+        AutoRecommender boundaryAuto = autoFor(new FixtureProvider(exchangeClock), phoenixClock, null);
+
+        AutoRecommender.AutoResult result = boundaryAuto.run(zeroDteSpyRequest(), BP);
+
+        assertZeroDteExpirations(result, LocalDate.of(2026, 7, 9));
+    }
+
+    @Test
+    void simulatedZeroDteUsesTheSelectedWorldDateInsteadOfTheHostDate() {
+        SimulatedWorld world = new SimulatedWorld(new SimulatedWorld.Config(
+                "sim-auto-clock", "Clock world", Map.of("SPY", 1.0),
+                Map.of("SPY", 562.10), "CALM", 0.20, 77L,
+                "2026-07-10T10:00:00", 1.0, null, null));
+        FixtureProvider observedFixture = new FixtureProvider(CLOCK);
+        AutoRecommender simulatedAuto = autoFor(observedFixture, CLOCK, world);
+
+        AutoRecommender.AutoResult result = simulatedAuto.run(
+                zeroDteSpyRequest(), BP, List.of(), "sim-auto-clock");
+
+        assertZeroDteExpirations(result, LocalDate.of(2026, 7, 10));
+    }
+
+    private AutoRecommender autoFor(FixtureProvider fixture, Clock deskClock, SimulatedWorld world) {
+        MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
+        if (world != null) {
+            market.setWorldResolver(id -> world.config().worldId().equals(id)
+                    ? java.util.Optional.of(world) : java.util.Optional.empty());
+        }
+        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
+        RecommendationEngine engine = new RecommendationEngine(market, deskClock);
+        return new AutoRecommender(new SignalEngine(market, deskClock), engine,
+                new EvaluationService(market, db, deskClock), cfg);
+    }
+
+    private static AutoRecommender.AutoRequest zeroDteSpyRequest() {
+        return new AutoRecommender.AutoRequest(
+                List.of("SPY"), List.of("0DTE"), 1, null, null, null, null,
+                "aggressive", true, List.of("DIRECTIONAL"), null, "bullish");
+    }
+
+    private static void assertZeroDteExpirations(AutoRecommender.AutoResult result, LocalDate date) {
+        assertThat(result.picks()).hasSize(1);
+        AutoRecommender.HorizonIdeas horizon = result.picks().getFirst().horizons().getFirst();
+        assertThat(horizon.horizon()).isEqualTo("0DTE");
+        assertThat(horizon.candidates()).isNotEmpty();
+        assertThat(horizon.candidates()).allSatisfy(scored ->
+                assertThat(scored.evaluation().candidate().legs()).allSatisfy(leg -> {
+                    if (leg.expiration() != null) {
+                        assertThat(LocalDate.parse(leg.expiration())).isEqualTo(date);
+                    }
+                }));
+    }
+
+    @Test
     void profitTargetAnnotatesEveryCandidate() {
         AutoRecommender.AutoResult result = auto.run(req(List.of("month"), 25_000L, false), BP);
         assertThat(result.picks()).isNotEmpty();
@@ -344,9 +406,11 @@ class AutoRecommenderTest {
     private static AutoRecommender.ScoredCandidate scored(
             io.liftandshift.strikebench.eval.EconomicAssessment economics) {
         Candidate candidate = new Candidate("TEST", "Test", "test", "test", List.of(), 1,
-                TestPrices.optionOnly(1, 0), null, 1, List.of(), null, null, 1.0, "DELAYED", List.of(), 1.0,
+                TestPrices.optionOnly(1, 0), null, 1, List.of(), 1.0, "DELAYED", List.of(), 1.0,
                 "test", "test", "test", "test", "test", "DIRECTIONAL", List.of("DIRECTIONAL"),
-                null, null, null, null, false, null, null);
+                null, null, null, null, false, null, null,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "This policy fixture deliberately has no market-implied evaluation."));
         var score = new io.liftandshift.strikebench.eval.ScoreBreakdown(true, List.of(), 50, 50, List.of());
         var assessment = new io.liftandshift.strikebench.eval.FourOutputAssessment(
                 new io.liftandshift.strikebench.eval.FourOutputAssessment.MechanicalAssessment(true, List.of()),
@@ -464,6 +528,49 @@ class AutoRecommenderTest {
                 .isEqualTo(AutoRecommender.surfaced(result).size())
                 .isEqualTo(result.frontier().decisionRanking().size());
         assertThat(result.counts()).isEqualTo(finalCounts);
+    }
+
+    @Test
+    void parallelSignalWorkNeverInvokesProgressListenerConcurrentlyOrOutOfOrder() {
+        List<String> universe = List.of("AAPL", "SPY", "QQQ");
+        var firstSignal = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var firstEntered = new java.util.concurrent.CountDownLatch(1);
+        var anotherEntered = new java.util.concurrent.CountDownLatch(1);
+        var overlapped = new java.util.concurrent.atomic.AtomicBoolean(false);
+        List<AutoRecommender.Progress> frames =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+        auto.runWithFrontier(
+                new AutoRecommender.AutoRequest(universe, List.of("month"), 1, null, null, null, null,
+                        "balanced", false, List.of("INCOME"), null, null),
+                BP, List.of(), null, evaluations -> practiceContext(universe), frame -> {
+                    if ("SIGNALS".equals(frame.phase())) {
+                        if (firstSignal.compareAndSet(true, false)) {
+                            firstEntered.countDown();
+                            try {
+                                overlapped.set(anotherEntered.await(
+                                        1, java.util.concurrent.TimeUnit.SECONDS));
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(interrupted);
+                            }
+                        } else if (firstEntered.getCount() == 0) {
+                            anotherEntered.countDown();
+                        }
+                    }
+                    frames.add(frame);
+                });
+
+        assertThat(overlapped.get()).as("progress callbacks are serialized after parallel signal work")
+                .isFalse();
+        int considered = 0;
+        int eligible = 0;
+        for (AutoRecommender.Progress frame : frames) {
+            assertThat(frame.counts().universeConsidered()).isGreaterThanOrEqualTo(considered);
+            assertThat(frame.counts().evidenceEligible()).isGreaterThanOrEqualTo(eligible);
+            considered = frame.counts().universeConsidered();
+            eligible = frame.counts().evidenceEligible();
+        }
     }
 
     /**

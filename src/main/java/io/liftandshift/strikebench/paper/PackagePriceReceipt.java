@@ -16,7 +16,7 @@ import java.util.Map;
  * previews, orders, reviews and held-position closes so no surface has to choose among competing
  * price fields and no two surfaces can print unexplained different amounts for the same package
  * (§3.3). Before this record the same package was published under nine different names —
- * {@code entryNetPremiumCents}, {@code proposedNetCents}, {@code valuedNetCents},
+ * {@code entryNetPremiumCents}, legacy proposal fields, {@code valuedNetCents},
  * {@code fillNetCents}, {@code closeCostCents}, … — on four different bases, with no field on
  * either object able to explain the gap.
  *
@@ -195,6 +195,27 @@ public record PackagePriceReceipt(
      */
     public Long valuedNetCents() {
         return afterFeeNetCents != null ? afterFeeNetCents : grossPackageNetCents;
+    }
+
+    /**
+     * The package's gross opening value in the cost convention used by payoff and outcome
+     * valuation: money paid is positive and money received is negative.
+     *
+     * <p>This is the one deliberate sign conversion between the ledger/package-price convention
+     * and the valuation-kernel convention. Controllers must not repeat {@code -grossNet} ladders:
+     * doing so is how a debit, credit, or legitimate zero entry acquires a different meaning on
+     * another outcome surface. Fees are deliberately not folded into this amount; outcome kernels
+     * consume the captured round-trip commission separately.</p>
+     *
+     * @return the gross entry cost, or {@code null} when this receipt is unavailable
+     * @throws IllegalStateException when a closing-side receipt is used as an opening entry
+     */
+    public Long payoffEntryCostCents() {
+        if (!priced()) return null;
+        if (feeSide != FeeSide.OPENING) {
+            throw new IllegalStateException("an outcome entry requires an OPENING package-price receipt");
+        }
+        return Math.negateExact(grossPackageNetCents);
     }
 
     /**

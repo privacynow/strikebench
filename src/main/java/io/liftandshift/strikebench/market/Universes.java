@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.market;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,8 +68,7 @@ public final class Universes {
     }
 
     private static String normalize(String symbol) {
-        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("symbol is required");
-        return symbol.trim().toUpperCase(java.util.Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
 
     private static Map<String, Sector> build() {

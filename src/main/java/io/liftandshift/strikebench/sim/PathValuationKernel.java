@@ -6,6 +6,8 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 
 import java.time.temporal.ChronoUnit;
+import java.time.LocalDate;
+import java.util.List;
 import java.util.Arrays;
 
 /** The sole leg-by-leg valuation rule used over generated and historical path ensembles. */
@@ -17,6 +19,50 @@ public final class PathValuationKernel {
                            double deltaShares, double gammaSharesPerDollar,
                            double thetaDollarsPerDay, double vegaDollarsPerPoint,
                            String state, int transformationStep) {}
+
+    /**
+     * Values one frozen package at one dated underlying close using the IV recorded for each leg.
+     * This is the canonical kernel for a not-taken package review: controllers map their stored
+     * receipt into legs and IVs, but never implement a second Black–Scholes/sign/unit loop.
+     */
+    public static double valueAtDate(List<Leg> legs, List<Double> legIvs, int quantity,
+                                     double underlying, LocalDate asOf, double annualRate) {
+        if (legs == null || legs.isEmpty()) throw new IllegalArgumentException("legs are required");
+        if (legIvs == null || legIvs.size() != legs.size()) {
+            throw new IllegalArgumentException("one frozen IV slot is required per leg");
+        }
+        if (quantity < 1) throw new IllegalArgumentException("quantity must be positive");
+        if (asOf == null) throw new IllegalArgumentException("valuation date is required");
+        if (!Double.isFinite(underlying) || underlying <= 0) {
+            throw new IllegalArgumentException("underlying must be positive");
+        }
+        if (!Double.isFinite(annualRate)) throw new IllegalArgumentException("annual rate is required");
+
+        double value = 0;
+        for (int index = 0; index < legs.size(); index++) {
+            Leg leg = legs.get(index);
+            double price;
+            if (leg.isStock()) {
+                price = underlying;
+            } else {
+                Double iv = legIvs.get(index);
+                if (iv == null || !Double.isFinite(iv) || iv <= 0) {
+                    throw new IllegalArgumentException("a positive frozen IV is required for every option leg");
+                }
+                double years = Math.max(0,
+                        ChronoUnit.DAYS.between(asOf, leg.expiration()) / 365.0);
+                price = years == 0
+                        ? Math.max(0, leg.type() == OptionType.CALL
+                                ? underlying - leg.strike().doubleValue()
+                                : leg.strike().doubleValue() - underlying)
+                        : BlackScholes.price(leg.type() == OptionType.CALL, underlying,
+                                leg.strike().doubleValue(), years, annualRate, 0, iv);
+            }
+            double sign = leg.action() == LegAction.BUY ? 1 : -1;
+            value += sign * price * leg.multiplier() * (double) leg.ratio() * quantity;
+        }
+        return value;
+    }
 
     /** Signed portfolio value in dollars for one strategy unit. */
     public static double value(PathPosition position, double[] path, int step, int steps,

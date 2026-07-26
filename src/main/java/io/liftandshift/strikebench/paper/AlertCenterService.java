@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.EventService;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
@@ -13,8 +14,8 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -126,13 +127,14 @@ public final class AlertCenterService implements AutoCloseable {
     /** Computes the current alert set for one user, ordered severity-first then recency. Pure read. */
     public AlertSet compute(String ownerId) {
         String owner = OwnerScope.id(ownerId);
-        LocalDate today = LocalDate.now(clock);
         List<Alert> out = new ArrayList<>();
         Map<String, String> symbolLinks = new LinkedHashMap<>(); // symbol -> a deep link for earnings rows
 
-        practiceAlerts(owner, today, out, symbolLinks);
-        trackedAlerts(owner, today, out, symbolLinks);
-        earningsAlerts(today, out, symbolLinks);
+        practiceAlerts(owner, out, symbolLinks);
+        trackedAlerts(owner, out, symbolLinks);
+        // Issuer-event evidence belongs to the observed calendar. Position mechanics below use
+        // each account's own lane instant; the shared research row uses the observed desk instant.
+        earningsAlerts(marketDate(marks.simNow(null, clock)), out, symbolLinks);
         pendingImportAlerts(owner, out);
 
         out.sort(Comparator
@@ -210,12 +212,14 @@ public final class AlertCenterService implements AutoCloseable {
 
     // ---- Practice lane: open trades, marked by the exact services the Manage band uses ----
 
-    private void practiceAlerts(String owner, LocalDate today, List<Alert> out,
+    private void practiceAlerts(String owner, List<Alert> out,
                                 Map<String, String> symbolLinks) {
         List<AccountRow> accounts = db.query(
                 "SELECT id,name,type FROM accounts WHERE user_id=?",
                 r -> new AccountRow(r.str("id"), r.str("name"), r.str("type")), owner);
         for (AccountRow account : accounts) {
+            String world = trades.worldOf(account.id());
+            Instant laneNow = marks.simNow(world, clock);
             for (TradeRecord t : trades.list(account.id(), TradeRecord.ACTIVE, 0, 500).trades()) {
                 String planId = planForTrade(t.id());
                 String deepLink = planId != null ? "#/plan/" + planId + "/manage-review"
@@ -232,7 +236,7 @@ public final class AlertCenterService implements AutoCloseable {
                                 account.id(), account.name(), laneOf(account.type()), t.symbol(),
                                 strategyLabel(t.strategy()), deepLink),
                         t.legs(), t.qty(), optionBasis, unrealized, spotCents,
-                        leg -> optionMidCents(t.symbol(), leg, trades.worldOf(account.id())), today,
+                        leg -> optionMidCents(t.symbol(), leg, world), laneNow,
                         policies.policyFor(owner, account.id()));
             }
         }
@@ -240,8 +244,9 @@ public final class AlertCenterService implements AutoCloseable {
 
     // ---- Tracked lane: open structures over their exact lots, marked from the same source ----
 
-    private void trackedAlerts(String owner, LocalDate today, List<Alert> out,
+    private void trackedAlerts(String owner, List<Alert> out,
                                Map<String, String> symbolLinks) {
+        Instant laneNow = marks.simNow(null, clock);
         List<StructureRow> structures = db.with(c -> loadStructures(c, owner));
         for (StructureRow s : structures) {
             if (s.legs().isEmpty()) continue;
@@ -277,7 +282,7 @@ public final class AlertCenterService implements AutoCloseable {
                             s.label() == null || s.label().isBlank() ? "tracked structure" : s.label(),
                             deepLink),
                     legs, 1, hasOption ? entryNet : 0, unrealized, spotCents,
-                    leg -> optionMidCents(s.symbol(), leg, null), today,
+                    leg -> optionMidCents(s.symbol(), leg, null), laneNow,
                     policies.policyFor(owner, s.accountId()));
         }
     }
@@ -309,15 +314,17 @@ public final class AlertCenterService implements AutoCloseable {
      */
     private void positionAlerts(List<Alert> out, PositionRef ref, List<Leg> legs, int qty,
                                 long optionNetPremiumCents, Long unrealizedCents, Long spotCents,
-                                java.util.function.Function<Leg, Long> optionMid, LocalDate today,
+                                java.util.function.Function<Leg, Long> optionMid, Instant laneNow,
                                 ProtocolEvaluator.Policy policy) {
         LocalDate nearest = legs.stream().filter(l -> !l.isStock()).map(Leg::expiration)
                 .filter(java.util.Objects::nonNull).min(LocalDate::compareTo).orElse(null);
+        LocalDate today = marketDate(laneNow);
         // ONE clock: MarketHours owns the calendar, and the same measure feeds the protocol, the
         // expiry window, and the pin/assignment windows below.
-        var time = ProtocolEvaluator.timeTo(today, nearest);
+        var time = ProtocolEvaluator.timeTo(laneNow, nearest);
         int sessionsToNearest = time == null ? Integer.MAX_VALUE : time.sessions();
         int expirySessions = policy.nearExpirySessions();
+        boolean nearestExpired = nearest != null && MarketHours.contractDead(nearest, laneNow);
 
         // Protocol — one alert per position carrying the top trigger; the time rule stays quiet
         // inside the expiry window so the rail never says the same thing twice.
@@ -355,30 +362,40 @@ public final class AlertCenterService implements AutoCloseable {
         }
 
         // Expiry today / this week, with strike notional (the settlement ceiling, unit-labeled).
-        if (nearest != null && sessionsToNearest <= expirySessions) {
+        if (nearest != null && (nearestExpired || sessionsToNearest <= expirySessions)) {
             long notional = 0;
             for (Leg leg : legs) {
                 if (leg.isStock() || !nearest.equals(leg.expiration())) continue;
                 notional += Money.centsFromPrice(leg.strike(), (long) leg.multiplier() * leg.ratio() * qty);
             }
             boolean isToday = nearest.equals(today);
-            String headline = isToday
-                    ? ref.symbol() + " " + ref.positionLabel() + ": expires today — decide before the close."
-                    : ref.symbol() + " " + ref.positionLabel() + ": expires " + nearest
-                            + " (" + sessionsToNearest + " sessions) — plan the exit, roll, or settlement.";
-            String detail = Money.fmt(notional) + " of strike value (strike × contracts × multiplier) "
-                    + "settles at this expiry. Options in the money become shares by assignment or "
-                    + "exercise; out-of-the-money options expire worthless.";
-            out.add(alert(ref, "EXPIRY", isToday ? URGENT : ATTENTION, headline, detail,
+            String headline = nearestExpired
+                    ? ref.symbol() + " " + ref.positionLabel()
+                            + ": expired at the final bell — settlement is pending."
+                    : isToday
+                            ? ref.symbol() + " " + ref.positionLabel()
+                                    + ": expires today — decide before the close."
+                            : ref.symbol() + " " + ref.positionLabel() + ": expires " + nearest
+                                    + " (" + sessionsToNearest
+                                    + " sessions) — plan the exit, roll, or settlement.";
+            String detail = nearestExpired
+                    ? "The option market's final bell has passed. Do not roll or close this expired "
+                            + "contract; settlement mechanics now own " + Money.fmt(notional)
+                            + " of strike value (strike × contracts × multiplier)."
+                    : Money.fmt(notional) + " of strike value (strike × contracts × multiplier) "
+                            + "settles at this expiry. Options in the money become shares by assignment or "
+                            + "exercise; out-of-the-money options expire worthless.";
+            out.add(alert(ref, "EXPIRY", nearestExpired || isToday ? URGENT : ATTENTION, headline, detail,
                     Map.of("expiration", nearest.toString(),
-                            "sessionsToExpiry", sessionsToNearest,
+                            "sessionsToExpiry", nearestExpired ? 0 : sessionsToNearest,
+                            "state", nearestExpired ? "EXPIRED" : isToday ? "LIVE_0DTE" : "LIVE",
                             "strikeNotionalCents", notional)));
         }
 
         // Pin risk + extrinsic-based early assignment: short legs only, both labeled heuristics.
         for (Leg leg : legs) {
             if (leg.isStock() || leg.action() != LegAction.SELL || leg.expiration() == null) continue;
-            var legTime = ProtocolEvaluator.timeTo(today, leg.expiration());
+            var legTime = ProtocolEvaluator.timeTo(laneNow, leg.expiration());
             if (legTime == null) continue; // already expired: settlement mechanics own it
             int legSessions = legTime.sessions();
             long strikeCents = Money.toCents(leg.strike());
@@ -481,6 +498,11 @@ public final class AlertCenterService implements AutoCloseable {
     }
 
     // ---- helpers ----
+
+    /** The US-options trading date of an already-resolved lane instant. */
+    private static LocalDate marketDate(Instant laneNow) {
+        return LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+    }
 
     private Alert alert(PositionRef ref, String kind, String severity, String headline,
                         String detail, Map<String, Object> meta) {

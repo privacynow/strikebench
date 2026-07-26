@@ -317,7 +317,8 @@ public final class PlanOutcomeService {
                     x -> x.date("anchor_date"), r.id()).stream().findFirst().orElse(null);
             if (anchorDate == null) {
                 try {
-                    anchorDate = java.time.LocalDate.ofInstant(parseAsOf(r.asOf()),
+                    anchorDate = java.time.LocalDate.ofInstant(
+                            io.liftandshift.strikebench.util.Timestamps.instant(r.asOf()),
                             io.liftandshift.strikebench.market.MarketHours.EASTERN);
                 } catch (RuntimeException e) {
                     anchorDate = java.time.LocalDate.of(1970, 1, 1);
@@ -1009,15 +1010,6 @@ public final class PlanOutcomeService {
             out[i] = canvas.atmIv(i / spd, spec.horizonDays(), legacy[i]);
         }
         return out;
-    }
-
-    private static java.time.Instant parseAsOf(String raw) {
-        try { return java.time.Instant.parse(raw); }
-        catch (java.time.format.DateTimeParseException e) {
-            String iso = raw.replace(' ', 'T');
-            if (iso.matches(".*[+-]\\d{2}$")) iso += ":00";
-            return java.time.OffsetDateTime.parse(iso).toInstant();
-        }
     }
 
     private static byte[] encodeMatrix(double[][] matrix) {

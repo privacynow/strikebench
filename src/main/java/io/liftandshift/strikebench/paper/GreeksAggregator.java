@@ -1,6 +1,6 @@
 package io.liftandshift.strikebench.paper;
 
-import io.liftandshift.strikebench.sim.ScenarioCanvasValuator;
+import io.liftandshift.strikebench.model.GreeksView;
 
 import java.util.List;
 
@@ -28,8 +28,7 @@ final class GreeksAggregator {
         }
     }
 
-    static ScenarioCanvasValuator.Greeks aggregate(List<LegExposure> legs,
-                                                    double additionalDeltaShares) {
+    static GreeksView aggregate(List<LegExposure> legs, double additionalDeltaShares) {
         if ((legs == null || legs.isEmpty()) && additionalDeltaShares == 0) return null;
         double delta = additionalDeltaShares;
         double gamma = 0;
@@ -57,7 +56,7 @@ final class GreeksAggregator {
             any = true;
         }
         if (!any) return null;
-        return new ScenarioCanvasValuator.Greeks(
+        return new GreeksView(
                 round(delta, 2), round(gamma, 4),
                 round(theta * 100.0, 2), round(vega * 100.0, 2));
     }

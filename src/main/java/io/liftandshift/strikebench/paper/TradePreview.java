@@ -53,7 +53,8 @@ public record TradePreview(
         // surface was most likely to read. One receipt is now not just published but consumed
         // (§3.1): every consumer reads `price`, and a consumer that cannot proceed without a price
         // says so rather than reading a zero.
-        PackagePriceReceipt price
+        PackagePriceReceipt price,
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
 ) {
     public TradePreview {
         boolean maxLossKnown = maxLossCents != null;
@@ -69,6 +70,54 @@ public record TradePreview(
             throw new IllegalArgumentException(
                     "an executable preview requires maximum-loss and reserve receipts");
         }
+        Object analyticsRisk = analytics == null ? null : analytics.get("marketImpliedRisk");
+        if (marketImpliedRisk == null) {
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "No fingerprinted market-implied evaluation was captured for this preview.");
+        }
+        if (analyticsRisk instanceof
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt analyticsReceipt
+                && !java.util.Objects.equals(
+                        analyticsReceipt.fingerprint(), marketImpliedRisk.fingerprint())) {
+            throw new IllegalArgumentException(
+                    "preview and analytics carry different market-implied evaluation receipts");
+        }
+        if (marketImpliedRisk.available()) {
+            if (price == null || !java.util.Objects.equals(
+                    price.fingerprint(), marketImpliedRisk.priceFingerprint())) {
+                throw new IllegalArgumentException(
+                        "preview market-implied evaluation does not match its package-price fingerprint");
+            }
+            if (!java.util.Objects.equals(popEntry, marketImpliedRisk.pop())
+                    || !java.util.Objects.equals(expectedValueCents,
+                            marketImpliedRisk.expectedValueCents())) {
+                throw new IllegalArgumentException(
+                        "preview POP/EV projections do not match the fingerprinted evaluation");
+            }
+        }
+    }
+
+    /**
+     * Source-compatible boundary for persisted/test previews that predate the typed receipt.
+     * Their loose POP/EV values are not promoted without the exact original model inputs.
+     */
+    public TradePreview(
+            boolean ok, List<String> blockReasons, List<String> warnings,
+            Long maxLossCents, Long maxProfitCents, List<String> breakevens,
+            Double popEntry, Long expectedValueCents, Long reserveCents,
+            long cashBeforeCents, long cashAfterCents, long reservedBeforeCents,
+            long reservedAfterCents, long buyingPowerBeforeCents, long buyingPowerAfterCents,
+            String freshness, io.liftandshift.strikebench.model.DataEvidence evidence,
+            Long underlyingCents, Double assignmentProb, List<Map<String, Object>> legs,
+            List<Map<String, Object>> payoff, Map<String, Object> analytics,
+            PackagePriceReceipt price) {
+        this(ok, blockReasons, warnings, maxLossCents, maxProfitCents, breakevens, popEntry,
+                expectedValueCents, reserveCents, cashBeforeCents, cashAfterCents,
+                reservedBeforeCents, reservedAfterCents, buyingPowerBeforeCents,
+                buyingPowerAfterCents, freshness, evidence, underlyingCents, assignmentProb, legs,
+                payoff, analytics, price,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "This preview predates the fingerprinted market-implied evaluation receipt."));
     }
 
     /** True only when the package has a complete finite-risk receipt. */

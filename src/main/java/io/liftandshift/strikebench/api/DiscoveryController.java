@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.api;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -159,9 +161,11 @@ final class DiscoveryController {
             io.liftandshift.strikebench.eval.EconomicReadiness.Tally readinessTally =
                     io.liftandshift.strikebench.eval.EconomicReadiness.tally();
             java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
+            io.liftandshift.strikebench.eval.DecisionEndorsement deskPick = null;
             for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(e.candidate());
+                m.put("id", e.id());
                 m.set("identity", Json.MAPPER.valueToTree(
                         io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
                                 io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(
@@ -174,11 +178,21 @@ final class DiscoveryController {
                 readinessTally.add(e.assessment().economics(),
                         endorsement == null ? null : endorsement.missingDimensions());
                 ApiResponses.EvaluationReceipt.attachTo(m, e);
+                var promotion = e.endorsement();
+                if (deskPick == null && promotion.endorsed()) deskPick = promotion;
                 cands.add(m);
             }
             io.liftandshift.strikebench.eval.EconomicReadiness readiness = readinessTally.summarize();
             out.put("ranking", "decision"); // disclosed: what ordered this list
             out.put("economicPolicy", "decision_score");
+            if (deskPick == null) out.putNull("deskPickCandidateId");
+            else out.put("deskPickCandidateId", deskPick.candidateId());
+            out.set("deskPickEndorsement", Json.MAPPER.valueToTree(deskPick == null
+                    ? new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
+                        io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON,
+                        null, List.of("No ranked package cleared every promotion gate."),
+                        "The full ranked field remains available for explicit comparison.")
+                    : deskPick));
             out.put("favorableCount", readiness.favorable());
             out.put("actionableFavorableCount", readiness.actionableFavorable());
             out.put("mixedCount", readiness.mixed());
@@ -231,8 +245,9 @@ final class DiscoveryController {
         }
 
         List<ApiResponses.DecisionBaseline> baselines = new java.util.ArrayList<>();
-        baselines.add(new ApiResponses.DecisionBaseline("CASH", 0L, 0L, 0L, null, 0L,
-                null, true, null, null, null, null, null, null,
+        baselines.add(new ApiResponses.DecisionBaseline("CASH", 0L, 0L,
+                true, null, null, null, null, null, null,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineReceipt.cash(),
                 "Do nothing: $0 expected, $0 at risk, zero costs — every idea above must beat this after fees and spreads."));
         addBuyAndHoldBaseline(result, world, baselines);
 
@@ -299,20 +314,17 @@ final class DiscoveryController {
                     : (int) Math.max(1, ChronoUnit.DAYS.between(laneToday, frontExpiration));
             Double iv = marketVolatility.atmIv(result.symbol(), laneWorld, 30);
             double volatility = iv == null ? 0.3 : iv;
-            var stockLeg = io.liftandshift.strikebench.model.Leg.stock(
-                    io.liftandshift.strikebench.model.LegAction.BUY, 1, quote.mark());
-            var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(stockLeg), 1);
             var rateQuote = market.riskFreeRateQuote(horizonDays, laneWorld);
             double rate = rateQuote.annualRate();
-            var probability = io.liftandshift.strikebench.pricing.ProbabilityMap.of(
-                    curve, spot, volatility, horizonDays / 365.0, rate, List.of());
+            var time = io.liftandshift.strikebench.market.OptionTime.toExpiry(
+                    market.laneNow(laneWorld, clock), laneToday.plusDays(horizonDays));
+            var baseline = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
+                    .analyzeBuyAndHold(Math.round(spot * 100), volatility, time, rate);
 
             baselines.add(new ApiResponses.DecisionBaseline("BUY_AND_HOLD",
-                    curve.riskNeutralExpectedValueCents(spot, volatility, horizonDays / 365.0, rate),
-                    null, probability.cvar95Cents(), probability.stressLossCents(), capitalCents,
-                    probability.pAnyProfit(), true, market.lane(laneWorld).name(), laneToday.toString(),
+                    null, capitalCents, true, market.lane(laneWorld).name(), laneToday.toString(),
                     horizonDays, volatility, iv != null ? "same-market ATM IV" : "30% modeled fallback",
-                    rateQuote.evidence(),
+                    rateQuote.evidence(), baseline,
                     "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(capitalCents)
                             + "): present-value risk-neutral EV is approximately $0 before costs (r="
                             + String.format(Locale.ROOT, "%.2f", rate * 100)
@@ -411,7 +423,7 @@ final class DiscoveryController {
     }
 
     private void researchIntentLadder(Context ctx) {
-        String symbol = ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(ctx.pathParam("symbol"));
         RecommendationEngine.Request req = ApiRequest.bodyOrNull(ctx, RecommendationEngine.Request.class);
         StrategyIntent intent = DecisionDeclarationPolicy.requireLadder("Strike ladder", req);
         if (req.symbol() != null && !req.symbol().isBlank()
@@ -630,9 +642,7 @@ final class DiscoveryController {
             return new RedeploymentFrontier.UniverseScope(active.source().toUpperCase(Locale.ROOT),
                     active.sectorLabel(), active.symbols());
         }
-        List<String> normalized = requested.stream().filter(java.util.Objects::nonNull)
-                .map(value -> value.trim().toUpperCase(Locale.ROOT)).filter(value -> !value.isBlank())
-                .distinct().toList();
+        List<String> normalized = Symbol.list(requested);
         List<String> opportunitySymbols = universe.warmSymbols();
         if (normalized.equals(opportunitySymbols)) {
             return new RedeploymentFrontier.UniverseScope(
@@ -660,8 +670,7 @@ final class DiscoveryController {
             boolean includeTracked) {
         List<String> symbols = evaluations.stream()
                 .map(io.liftandshift.strikebench.eval.StrategyEvaluation::symbol)
-                .filter(java.util.Objects::nonNull).map(value -> value.toUpperCase(Locale.ROOT))
-                .distinct().toList();
+                .filter(java.util.Objects::nonNull).map(Symbol::normalize).distinct().toList();
         List<RedeploymentFrontier.BookLane> lanes = new java.util.ArrayList<>();
         TradeService.DollarDeltaBook practiceDelta = trades.portfolioDollarDeltaBook(practice.id());
         Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> practiceExposures =

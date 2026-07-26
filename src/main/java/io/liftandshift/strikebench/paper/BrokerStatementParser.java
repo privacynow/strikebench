@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.paper;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -637,9 +639,11 @@ public final class BrokerStatementParser {
     }
 
     private static String symbol(String raw, int line) {
-        String symbol = raw.trim().toUpperCase(Locale.ROOT);
-        if (!symbol.matches("[A-Z0-9._/-]{1,24}")) throw new IllegalArgumentException("line " + line + ": symbol is invalid");
-        return symbol;
+        try {
+            return Symbol.normalize(raw);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("line " + line + ": symbol is invalid");
+        }
     }
 
     private static String cleanAccount(String raw) {

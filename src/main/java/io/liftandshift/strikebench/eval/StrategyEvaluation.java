@@ -35,6 +35,9 @@ public record StrategyEvaluation(
         return assessment == null || assessment.economics() == null
                 ? EconomicAssessment.Verdict.UNAVAILABLE : assessment.economics().verdict();
     }
+    /** Backend-owned promotion receipt; browser surfaces must not reconstruct this policy. */
+    @JsonProperty("endorsement")
+    public DecisionEndorsement endorsement() { return DecisionEndorsement.ranked(this); }
 
     /**
      * The one 0-100 score whose numeric order exactly matches the product's decision order.

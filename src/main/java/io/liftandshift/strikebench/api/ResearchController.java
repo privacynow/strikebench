@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.api;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.config.JavalinConfig;
@@ -107,28 +109,11 @@ final class ResearchController {
                 ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
                         Arrays.stream(StrategyFamily.values()).map(Enum::name).toList(),
                         StrategyCatalog.families(), StrategyCatalog.templates())),
-                this::identifyStrategy,
                 this::sizeExposure,
                 ctx -> ctx.json(new ApiResponses.Evaluations<>(
                         evaluations.recent(ownerId.apply(ctx), 50))),
                 ctx -> ctx.json(evaluations.calibrationReport(ownerId.apply(ctx))),
                 this::resolveCalibration));
-    }
-
-    /** Pure exact-leg classification through the one server-owned strategy catalog. */
-    private void identifyStrategy(Context ctx) {
-        TradeOpenRequest body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class));
-        if (body.symbol() == null || body.symbol().isBlank()) {
-            throw new IllegalArgumentException("symbol is required");
-        }
-        if (body.qty() == null || body.qty() < 1) {
-            throw new IllegalArgumentException("qty must be positive");
-        }
-        if (body.legs() == null || body.legs().isEmpty()) {
-            throw new IllegalArgumentException("legs are required");
-        }
-        ctx.json(StrategyCatalog.identify(body.symbol().trim().toUpperCase(Locale.ROOT), body.qty(),
-                body.legs().stream().map(io.liftandshift.strikebench.recommend.LegView::toLeg).toList()));
     }
 
     private void runEventStudy(Context ctx) {
@@ -524,7 +509,7 @@ final class ResearchController {
     }
 
     private static String symbol(Context ctx) {
-        return ctx.pathParam("symbol").trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(ctx.pathParam("symbol"));
     }
 
 }

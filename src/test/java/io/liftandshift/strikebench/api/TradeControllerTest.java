@@ -9,13 +9,59 @@ import io.liftandshift.strikebench.recommend.LegView;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TradeControllerTest {
+
+    @Test
+    void exactPreviewCandidateCarriesTheSameFingerprintWithoutRepricing() {
+        LocalDate expiry = LocalDate.parse("2026-08-21");
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                expiry, 1, new BigDecimal("2.00"));
+        var price = io.liftandshift.strikebench.support.TestPrices.optionOnly(20_000L);
+        var time = io.liftandshift.strikebench.market.OptionTime.toExpiry(
+                Instant.parse("2026-07-22T15:30:00Z"), expiry);
+        var marketRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                io.liftandshift.strikebench.pricing.PayoffCurve.of(List.of(put), 1),
+                price, 10_000L, 0.30, time, 0.04, List.of(new BigDecimal("100")));
+        var request = new TradeService.OpenRequest("acct", "TEST", "CASH_SECURED_PUT", 1,
+                List.of(put), "neutral", "month", "balanced", "INCOME", false,
+                null, "TEST", "PROPOSED",
+                io.liftandshift.strikebench.paper.OrderInstruction.market());
+        Map<String, Object> markedLeg = Map.ofEntries(
+                Map.entry("action", "SELL"), Map.entry("type", "PUT"),
+                Map.entry("strike", "100"), Map.entry("expiration", expiry.toString()),
+                Map.entry("ratio", 1), Map.entry("multiplier", 100),
+                Map.entry("fill", "2.00"), Map.entry("bid", "2.00"),
+                Map.entry("ask", "2.10"), Map.entry("source", "fixture"),
+                Map.entry("freshness", "DELAYED"));
+        var preview = new io.liftandshift.strikebench.paper.TradePreview(
+                true, List.of(), List.of(), 980_000L, 20_000L, List.of("98"),
+                marketRisk.pop(), marketRisk.expectedValueCents(), 980_000L,
+                10_000_000L, 10_019_935L, 0L, 980_000L,
+                10_000_000L, 9_039_935L, "DELAYED",
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "fixture", io.liftandshift.strikebench.model.Freshness.DELAYED),
+                10_000L, 0.5, List.of(markedLeg), List.of(),
+                Map.of("marketImpliedRisk", marketRisk), price, marketRisk);
+
+        var candidate = TradeController.exactPreviewCandidate(request, preview);
+
+        assertThat(candidate.marketImpliedRisk()).isSameAs(preview.marketImpliedRisk());
+        assertThat(candidate.marketImpliedRisk().fingerprint())
+                .isEqualTo(marketRisk.fingerprint());
+        assertThat(candidate.marketImpliedRisk().priceFingerprint())
+                .isEqualTo(price.fingerprint());
+        assertThat(candidate.pop()).isEqualTo(marketRisk.pop());
+        assertThat(candidate.expectedValueCents())
+                .isEqualTo(marketRisk.expectedValueCents());
+    }
 
     @Test
     void payoffUsesTheExactHeldShareCountInsteadOfAssumingOneHundredShares() {
@@ -36,6 +82,25 @@ class TradeControllerTest {
                 .filter(point -> point.price().compareTo(new BigDecimal("70.00")) == 0)
                 .findFirst().orElseThrow();
         assertThat(low.profitCents()).isEqualTo(-29_000L);
+    }
+
+    @Test
+    void payoffKeepsEveryHeldShareWhenShareCountIsNotDivisibleByPackageQuantity() {
+        Leg adjustedCall = Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("110"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("1.00"), 10);
+        TradeRecord trade = new TradeRecord("tr_odd_shares", "acct", "XYZ", "COVERED_CALL",
+                TradeRecord.ACTIVE, 3, List.of(adjustedCall), "income", "30d", "balanced",
+                10_000L, 3_000L, 90_000L, 33_000L, List.of(), null,
+                0L, 0L, null, null, null, "{\"heldShareContextShares\":10}", false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, null, null, null);
+
+        var payoff = TradeController.heldTerminalPayoff(trade);
+        var low = payoff.points().stream()
+                .filter(point -> point.price().compareTo(new BigDecimal("70.00")) == 0)
+                .findFirst().orElseThrow();
+        // Ten shares lose $300 at $70; the three adjusted calls retain their $30 credit.
+        assertThat(low.profitCents()).isEqualTo(-27_000L);
     }
 
     /**
@@ -128,7 +193,7 @@ class TradeControllerTest {
         TradeOpenRequest request = new TradeOpenRequest("AAPL", "CUSTOM", 500,
                 List.of(new LegView("BUY", "STOCK", null, null, 1, "250", 1, "OPEN")),
                 "bullish", "month", "balanced", "DIRECTIONAL", false,
-                null, null, null, "ANALYZE", null, null, "EXECUTED");
+                null, null, "ANALYZE", null, null, "EXECUTED", null);
 
         assertThat(TradeController.toAnalysisOpenRequest(request, "tracked-account").qty())
                 .isEqualTo(500);

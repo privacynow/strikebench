@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.recommend;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -111,7 +113,7 @@ public final class SignalEngine {
 
     /** World-aware: a simulated session's scout reads THAT world's market. null = observed. */
     public Optional<Signals> analyze(String symbol, String worldId) {
-        String sym = symbol.trim().toUpperCase(Locale.ROOT);
+        String sym = Symbol.normalize(symbol);
         Quote quote = market.quote(sym, worldId).orElse(null);
         if (quote == null) return Optional.empty();
         var lane = market.lane(worldId);

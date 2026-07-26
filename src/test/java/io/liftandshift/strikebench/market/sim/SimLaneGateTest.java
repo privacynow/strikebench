@@ -63,7 +63,8 @@ class SimLaneGateTest {
                                                         int qty, List<Leg> legs, String thesis,
                                                         String horizon, String riskMode) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, null, null, null, null, null, "PROPOSED");
+                riskMode, null, null, null, null, "PROPOSED",
+                io.liftandshift.strikebench.paper.OrderInstruction.market());
     }
 
     @BeforeAll

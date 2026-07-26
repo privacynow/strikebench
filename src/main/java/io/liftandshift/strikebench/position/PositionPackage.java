@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.position;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -22,7 +24,7 @@ public record PositionPackage(
     public PositionPackage {
         if (id == null || id.isBlank()) throw new IllegalArgumentException("position package id is required");
         if (source == null || lane == null) throw new IllegalArgumentException("position package provenance is required");
-        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("position package symbol is required");
+        symbol = Symbol.normalize(symbol);
         if (packageQuantity <= 0) throw new IllegalArgumentException("position package quantity must be positive");
         legs = legs == null ? List.of() : List.copyOf(legs);
         if (legs.isEmpty()) throw new IllegalArgumentException("position package requires at least one leg");
@@ -43,6 +45,7 @@ public record PositionPackage(
     ) {
         public Leg {
             if (index < 0) throw new IllegalArgumentException("leg index cannot be negative");
+            symbol = Symbol.normalize(symbol);
             if (quantity <= 0 || multiplier <= 0) throw new IllegalArgumentException("leg quantity and multiplier must be positive");
             if (price != null && price.signum() < 0) throw new IllegalArgumentException("leg price cannot be negative");
         }

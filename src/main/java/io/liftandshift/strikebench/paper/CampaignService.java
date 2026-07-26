@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.CampaignMath;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -1697,10 +1698,7 @@ public final class CampaignService {
     }
 
     private static String normalizeSymbol(String symbol) {
-        if (symbol == null || symbol.isBlank()) return null;
-        String upper = symbol.trim().toUpperCase(Locale.ROOT);
-        if (upper.length() > 20) throw new IllegalArgumentException("symbol is limited to 20 characters");
-        return upper;
+        return Symbol.normalizeOptional(symbol);
     }
 
     private static String blankToNull(String value) {

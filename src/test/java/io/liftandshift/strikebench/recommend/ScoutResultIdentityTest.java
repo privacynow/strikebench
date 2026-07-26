@@ -17,6 +17,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ScoutResultIdentityTest {
 
+    @Test void resultIdentityUsesTheSameCanonicalTickerAsItsStrategySpec() {
+        StrategyEvaluation lowerCase = evaluation("eval-lower", " brk.b ", "COVERED_CALL", "INCOME",
+                List.of(shortCall("500", "2026-09-18")));
+
+        assertThat(lowerCase.spec().symbol()).isEqualTo("BRK.B");
+        assertThat(ResultIdentity.of(lowerCase).symbol()).isEqualTo("BRK.B");
+    }
+
     @Test void twoStructuresOnOneSymbolAreTwoDifferentResults() {
         StrategyEvaluation spread = evaluation("eval-spread", "IWM", "BULL_PUT_SPREAD", "INCOME",
                 List.of(shortPut("210", "2026-09-18"), longPut("205", "2026-09-18")));
@@ -98,9 +106,11 @@ class ScoutResultIdentityTest {
     private static StrategyEvaluation evaluation(String id, String symbol, String family, String goal,
                                                  List<LegView> legs, PackagePriceReceipt price) {
         Candidate candidate = new Candidate(family, family + " package", "RANGE", "label", legs, 1,
-                price, 25_000L, 75_000L, List.of("207.50"), 0.62, 1_200L, 0.8, "FIXTURE",
+                price, 25_000L, 75_000L, List.of("207.50"), 0.8, "FIXTURE",
                 List.of(), 0.7, "why", "upside", "risk", "invalidate", "explanation",
-                goal, List.of(goal), 0.2, 12.5, "207.50", "note", false, 0, null);
+                goal, List.of(goal), 0.2, 12.5, "207.50", "note", false, 0, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
+                        price, 0.62, 1_200L));
         return new StrategyEvaluation(id,
                 new StrategySpec(symbol, family, goal, "30d", "neutral", "balanced", "decision"),
                 candidate, null, null, null, null, null, null, null, null, null, null, null, null, null);

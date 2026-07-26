@@ -226,10 +226,11 @@ class RecommendationEngineTest {
                         new LegView("SELL", "PUT", shortPut, "2026-08-21", 1, "0.40", 100, "OPEN"),
                         new LegView("SELL", "CALL", shortCall, "2026-08-21", 1, "0.40", 100, "OPEN"),
                         new LegView("BUY", "CALL", longCall, "2026-08-21", 1, "0.10", 100, "OPEN")),
-                1, TestPrices.optionOnly(1, creditCents), creditCents, maxLossCents, List.of(), 0.50, 0L,
+                1, TestPrices.optionOnly(1, creditCents), creditCents, maxLossCents, List.of(),
                 0.50, "DELAYED", List.of(), 0.50, "range income", "credit", "wing risk",
                 "breakout", "four defined-risk legs", "INCOME", List.of("INCOME"),
-                0.20, null, null, null, false, null, null);
+                0.20, null, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.50, 0L));
     }
 
     private static RecommendationEngine.Request intentReq(String intent, RecommendationEngine.Holdings holdings,

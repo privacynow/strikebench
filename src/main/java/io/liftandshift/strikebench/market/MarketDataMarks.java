@@ -42,14 +42,19 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
+    public Optional<Quote> underlyingQuote(String symbol, String worldId) {
+        return observed(worldId) ? observedQuote(symbol) : market.quote(symbol, worldId);
+    }
+
+    @Override
     public Optional<BigDecimal> underlyingMark(String symbol) {
-        return observedQuote(symbol).map(Quote::mark).filter(m -> m != null && m.signum() > 0);
+        return underlyingQuote(symbol, null).map(Quote::mark)
+                .filter(m -> m != null && m.signum() > 0);
     }
 
     @Override
     public Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
-        if (observed(worldId)) return underlyingMark(symbol);
-        return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::mark)
+        return underlyingQuote(symbol, worldId).map(Quote::mark)
                 .filter(m -> m != null && m.signum() > 0);
     }
 
@@ -66,8 +71,7 @@ public final class MarketDataMarks implements MarksSource {
 
     @Override
     public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(String symbol, String worldId) {
-        return (observed(worldId) ? observedQuote(symbol) : market.quote(symbol, worldId))
-                .map(io.liftandshift.strikebench.model.Quote::evidence);
+        return underlyingQuote(symbol, worldId).map(Quote::evidence);
     }
 
     @Override
@@ -101,13 +105,12 @@ public final class MarketDataMarks implements MarksSource {
 
     @Override
     public Optional<Long> underlyingAsOfMs(String symbol) {
-        return observedQuote(symbol).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
+        return underlyingQuote(symbol, null).map(Quote::asOfEpochMs);
     }
 
     @Override
     public Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
-        if (observed(worldId)) return underlyingAsOfMs(symbol);
-        return market.quote(symbol, worldId).map(io.liftandshift.strikebench.model.Quote::asOfEpochMs);
+        return underlyingQuote(symbol, worldId).map(Quote::asOfEpochMs);
     }
 
     @Override
@@ -130,8 +133,7 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     private static LegMark stockMark(Quote q) {
-        return new LegMark(q.bid(), q.ask(), q.mark(), null, q.markFreshness(),
-                1.0, 0.0, 0.0, 0.0, q.evidence(), q.asOfEpochMs());
+        return LegMark.fromUnderlying(q);
     }
 
     private static LegMark optionMark(OptionQuote q) {

@@ -128,7 +128,7 @@ class UnpricedPackageAssessmentTest {
                 Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("95"), EXP, 1, BigDecimal.ZERO),
                 Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("90"), EXP, 1, BigDecimal.ZERO));
         return new TradeService.OpenRequest(accountId, "AAPL", "CREDIT_PUT_SPREAD", 1, legs, "neutral",
-                "month", "balanced", "INCOME", false, null, null, "PLAN", "PROPOSED",
+                "month", "balanced", "INCOME", false, null, "PLAN", "PROPOSED",
                 OrderInstruction.market());
     }
 
@@ -141,7 +141,7 @@ class UnpricedPackageAssessmentTest {
         List<Leg> legs = List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("95"),
                 LocalDate.of(2026, 6, 19), 1, BigDecimal.ZERO));
         return new TradeService.OpenRequest(accountId, "AAPL", "CASH_SECURED_PUT", 1, legs, "neutral",
-                "month", "balanced", "INCOME", false, null, null, "PLAN", "PROPOSED",
+                "month", "balanced", "INCOME", false, null, "PLAN", "PROPOSED",
                 OrderInstruction.market());
     }
 
@@ -149,7 +149,7 @@ class UnpricedPackageAssessmentTest {
         List<Leg> legs = List.of(Leg.option(LegAction.SELL, OptionType.CALL,
                 new BigDecimal("105"), EXP, 1, BigDecimal.ZERO));
         return new TradeService.OpenRequest(accountId, "AAPL", "CUSTOM", 1, legs, "neutral",
-                "month", "aggressive", "INCOME", false, null, null, "PLAN", "PROPOSED",
+                "month", "aggressive", "INCOME", false, null, "PLAN", "PROPOSED",
                 OrderInstruction.market());
     }
 

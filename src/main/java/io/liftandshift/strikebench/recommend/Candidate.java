@@ -29,8 +29,6 @@ public record Candidate(
         Long maxProfitCents,          // null = uncapped or model-dependent
         long maxLossCents,
         List<String> breakevens,
-        Double pop,                   // probability of profit under lognormal model, null when model-dependent
-        Long expectedValueCents,      // modeled EV, null when model-dependent
         double liquidityScore,        // 0..1
         String freshness,
         List<String> warnings,
@@ -48,7 +46,10 @@ public record Candidate(
         String intentNote,            // human framing vs the holdings/target context
         Boolean usesHeldShares,
         Integer sharesNeeded,         // held shares this trade would lock, when usesHeldShares
-        Long combinedMaxLossCents     // worst case incl. locked shares from today's price, when usesHeldShares
+        Long combinedMaxLossCents,    // worst case incl. locked shares from today's price, when usesHeldShares
+        // The sole market-implied probability/EV authority for this exact priced package.
+        // The legacy top-level wire projections are derived accessors below; no second values are stored.
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
 ) {
     /**
      * Every candidate carries a §7.2 receipt — a missing one IS the unpriced state, so it is
@@ -61,5 +62,32 @@ public record Candidate(
                     Math.max(1, qty), io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
                     "No package-price receipt was produced for this candidate.");
         }
+        if (marketImpliedRisk == null) {
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "No fingerprinted market-implied evaluation was captured for this candidate.");
+        } else if (marketImpliedRisk.available()) {
+            if (!java.util.Objects.equals(price.fingerprint(), marketImpliedRisk.priceFingerprint())) {
+                throw new IllegalArgumentException(
+                        "candidate market-implied evaluation does not match its package-price fingerprint");
+            }
+        }
+    }
+
+    /**
+     * Source-compatible wire projection. The value is never stored independently: it can only be
+     * read from the fingerprinted market-implied evaluation receipt.
+     */
+    @com.fasterxml.jackson.annotation.JsonProperty("pop")
+    public Double pop() {
+        return marketImpliedRisk.pop();
+    }
+
+    /**
+     * Source-compatible wire projection. The value is never stored independently: it can only be
+     * read from the fingerprinted market-implied evaluation receipt.
+     */
+    @com.fasterxml.jackson.annotation.JsonProperty("expectedValueCents")
+    public Long expectedValueCents() {
+        return marketImpliedRisk.expectedValueCents();
     }
 }

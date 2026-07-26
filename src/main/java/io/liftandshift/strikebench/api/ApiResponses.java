@@ -168,7 +168,9 @@ public final class ApiResponses {
     public record PlanStrategyAdoption<T, U, V>(T plan, U strategy, V identity, String evaluationId) {}
     public record PlanStrategyPreview<T, U, V>(T plan, U strategy, V preview,
                                                 io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
-    public record StrategyState<T, U>(T strategy, U selected) {}
+    /** One server-owned answer to whether a persisted computed artifact may be reused now. */
+    public record ArtifactCurrency(boolean current, String status, String reason) {}
+    public record StrategyState<T, U>(T strategy, U selected, ArtifactCurrency currency) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanStrategyFit<T, U, V>(T plan, U result, V candidate) {}
     public record Evidence<T>(T evidence) {}
@@ -183,7 +185,8 @@ public final class ApiResponses {
             this(id, fingerprint, basis, null);
         }
     }
-    public record PlanEnsemble<T, U>(T plan, EnsembleRef ensemble, U preview) {}
+    public record PlanEnsemble<T, U>(T plan, EnsembleRef ensemble, U preview,
+                                     ArtifactCurrency currency) {}
     public record PlanScenario<T, U>(T plan, U scenario) {}
     public record PlanScenarios<T, U>(T plan, U scenarios) {}
     /** A named scenario's immutable receipt alongside a display-only subset of its base fan. */
@@ -238,6 +241,8 @@ public final class ApiResponses {
             io.liftandshift.strikebench.sim.IvSpec ivAssumptions,
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationAssumptions,
             double rateAnnual,
+            io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction
+                    interaction,
             String selectedCandidateId,
             String focusPositionKey,
             String focusedPackageFingerprint,
@@ -364,11 +369,37 @@ public final class ApiResponses {
         }
     }
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record DecisionBaseline(String key, Long evCents, Long maxLossCents,
-                                   Long cvar95Cents, Long stressLossCents, Long capitalCents,
-                                   Double pAnyProfit, boolean viable, String marketLane,
+    public record DecisionBaseline(String key, Long maxLossCents, Long capitalCents,
+                                   boolean viable, String marketLane,
                                    String asOfDate, Integer horizonDays, Double volatility,
-                                   String volatilityBasis, DataEvidence rateEvidence, String note) {}
+                                   String volatilityBasis, DataEvidence rateEvidence,
+                                   io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineReceipt
+                                           marketImpliedRisk,
+                                   String note) {
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @com.fasterxml.jackson.annotation.JsonProperty("evCents")
+        public Long evCents() {
+            return marketImpliedRisk == null ? null : marketImpliedRisk.expectedValueCents();
+        }
+
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @com.fasterxml.jackson.annotation.JsonProperty("cvar95Cents")
+        public Long cvar95Cents() {
+            return marketImpliedRisk == null ? null : marketImpliedRisk.cvar95Cents();
+        }
+
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @com.fasterxml.jackson.annotation.JsonProperty("stressLossCents")
+        public Long stressLossCents() {
+            return marketImpliedRisk == null ? null : marketImpliedRisk.stressLossCents();
+        }
+
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @com.fasterxml.jackson.annotation.JsonProperty("pAnyProfit")
+        public Double pAnyProfit() {
+            return marketImpliedRisk == null ? null : marketImpliedRisk.pop();
+        }
+    }
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionCompetition(String symbol, String intent,
                                       List<StrategyEvaluation> evaluations,
@@ -396,7 +427,8 @@ public final class ApiResponses {
             io.liftandshift.strikebench.eval.ImpliedStance impliedStance,
             io.liftandshift.strikebench.eval.IvContext ivContext,
             io.liftandshift.strikebench.eval.DataCoverageReceipt coverage,
-            io.liftandshift.strikebench.eval.Explanation explanation
+            io.liftandshift.strikebench.eval.Explanation explanation,
+            io.liftandshift.strikebench.eval.DecisionEndorsement endorsement
     ) {
         public static EvaluationReceipt of(StrategyEvaluation evaluation) {
             if (evaluation == null) throw new IllegalArgumentException("evaluation is required");
@@ -404,7 +436,7 @@ public final class ApiResponses {
                     evaluation.capital(), evaluation.volatility(), evaluation.risk(), evaluation.evidence(),
                     evaluation.management(), evaluation.score(), evaluation.assessment(), evaluation.stance(),
                     evaluation.participation(), evaluation.impliedStance(), evaluation.ivContext(),
-                    evaluation.coverage(), evaluation.explanation());
+                    evaluation.coverage(), evaluation.explanation(), evaluation.endorsement());
         }
 
         /** Attaches this receipt onto a candidate JSON node under "evaluation" — THE one place that
@@ -455,7 +487,11 @@ public final class ApiResponses {
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.PortfolioImpacts(
                             null, null, List.of("Portfolio impact was not inferred from incomplete assessment data.")));
             return new EvaluationReceipt(false, reason, null, null,
-                    null, null, null, null, null, null, assessment, null, null, null, null, null, null);
+                    null, null, null, null, null, null, assessment, null, null, null, null, null, null,
+                    new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
+                            io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON,
+                            null, List.of(reason),
+                            "An unavailable evaluation cannot be promoted from comparison."));
         }
     }
     public record CreatedTrade<T, U>(T trade, U warnings) {}
@@ -470,25 +506,46 @@ public final class ApiResponses {
     public record AccountFit(Double pctOfNlv, Double pctOfCashBp, Double pctOfMarginBp,
                              Double pctOfRiskCapital, Boolean overRiskCapital,
                              CapitalUse selectedCapital) {}
+    /**
+     * The server's final execution decision for an exact preview. The browser renders this
+     * receipt; it does not re-run guardrails, account-fit policy, or package executability.
+     */
+    public record ExecutionDecision(boolean reviewAllowed, boolean confirmAllowed,
+                                    boolean immediate, String state, List<String> reasons) {
+        public ExecutionDecision {
+            reasons = reasons == null ? List.of() : List.copyOf(reasons);
+        }
+    }
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record TradePreviewResponse(TradePreview preview, EvaluationReceipt evaluation,
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit,
-                                       io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {}
+                                       io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
+                                       io.liftandshift.strikebench.eval.DecisionEndorsement endorsement,
+                                       ExecutionDecision execution) {}
     /**
-     * The order dock. `OrderSummary` used to sit here with nine fields, four of which were names
-     * for the same money on different bases (proposedNetCents, executableNetCents, valuedNetCents,
-     * the instruction's limitNetCents) and one — feesOverrideCents — which was an OVERRIDE that
+     * The order dock. `OrderSummary` used to sit here with nine fields, several of which were names
+     * for the same money on different bases, plus feesOverrideCents — an OVERRIDE that
      * defaulted to 0 and made the dock claim $0 of fees. All of it is now the ONE §7.2 receipt the
      * candidate rail also carries, so the two screens are finally comparable (§3.3, §3.8).
      */
-    public record OrderDock(OrderInstruction orderInstruction, PackagePriceReceipt price) {}
+    /**
+     * The instruction beside its one price receipt. The two scalar fields are not alternate
+     * prices: {@code displayCashNetCents} is the receipt's exact after-fee cash value, while
+     * {@code suggestedLimitNetCents} is the gross exchange price to seed if the user changes this
+     * exact instruction to LIMIT. Publishing both semantic answers prevents the browser from
+     * choosing among gross, executable, resting, and after-fee amounts.
+     */
+    public record OrderDock(OrderInstruction orderInstruction, PackagePriceReceipt price,
+                            Long displayCashNetCents, Long suggestedLimitNetCents) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
                                              Guardrails guardrails,
                                              List<RiskAcknowledgment> requiredAcks,
                                              String ackToken, AccountFit accountFit,
-                                             T plan, U selected, OrderDock order) {}
+                                             T plan, U selected, OrderDock order,
+                                             io.liftandshift.strikebench.eval.DecisionEndorsement endorsement,
+                                             ExecutionDecision execution) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
     public record TrackedPackageAnalysis(TradePreview preview, EvaluationReceipt evaluation,

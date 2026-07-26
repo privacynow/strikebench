@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.eval;
 import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.pricing.JumpMixtureTerminal;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.recommend.Candidate;
@@ -26,10 +27,6 @@ public final class RiskProfiler {
      * moves by interpolating between checkpoints and displayed the result as a priced outcome.
      * Every tile is now a real valuation at a move the engine actually priced.
      */
-    private static final double[] MOVES = {-0.20, -0.09, -0.06, -0.01, 0.0, 0.06, 0.13, 0.20};
-    /** The named-story checkpoint set, shared so held lines price the SAME moves ideas do. */
-    public static double[] storyMoves() { return MOVES.clone(); }
-
     private static final double TAIL_MOVE = 0.20;
     private static final String TERMINAL_PAYOFF_SCHEMA = RiskProfile.TerminalPayoff.SCHEMA;
     private static final String TERMINAL_PAYOFF_MODEL = RiskProfile.TerminalPayoff.MODEL;
@@ -68,29 +65,29 @@ public final class RiskProfiler {
         } else try {
             PayoffCurve pc = payoffCurve(c, ctx);
             exactLossBounded = !pc.maxLossUnbounded();
-            BigDecimal spot = cents(ctx.underlyingCents());
+            long marketAnchorCents = marketAnchorCents(c, ctx);
+            BigDecimal spot = cents(marketAnchorCents);
             double spotD = spot.doubleValue();
-            // The SAME risk-neutral lognormal that owns pop — used only to weight each checkpoint
-            // by its probability mass (Voronoi bins over MOVES). Null when no ATM IV / degenerate.
-            io.liftandshift.strikebench.pricing.LognormalTerminal term =
-                    (ctx.atmIv() != null && ctx.atmIv() > 0 && spotD > 0
-                            && ctx.hasModelTime())
-                            ? io.liftandshift.strikebench.pricing.LognormalTerminal.of(
-                                    spotD, ctx.atmIv(), ctx.yearsToExpiry(), ctx.riskFreeRate())
-                            : null;
-            for (int i = 0; i < MOVES.length; i++) {
-                double m = MOVES[i];
+            // Scenario mass is consumed from the candidate's ONE fingerprinted market-implied
+            // receipt. This profiler prices the story payoffs but never rebuilds the distribution.
+            var marketImpliedRisk = c.marketImpliedRisk();
+            java.util.Map<ScenarioStory, Double> probabilityByStory =
+                    marketImpliedRisk != null && marketImpliedRisk.available()
+                            ? marketImpliedRisk.scenarioMasses().stream().collect(
+                                    java.util.stream.Collectors.toUnmodifiableMap(
+                                            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
+                                                    .ScenarioMass::story,
+                                            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
+                                                    .ScenarioMass::probability))
+                            : java.util.Map.of();
+            ScenarioStory[] stories = ScenarioStory.values();
+            for (int i = 0; i < stories.length; i++) {
+                ScenarioStory story = stories[i];
+                double m = story.underlyingMoveFraction();
                 BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
                 long pnl = pc.profitAtCents(s);
-                Double prob = null;
-                if (term != null) {
-                    double lo = i == 0 ? 0 : spotD * (1.0 + (MOVES[i - 1] + m) / 2.0);
-                    double hiEdge = i == MOVES.length - 1
-                            ? Double.POSITIVE_INFINITY : spotD * (1.0 + (m + MOVES[i + 1]) / 2.0);
-                    double mass = (Double.isInfinite(hiEdge) ? 1.0 : term.cdf(hiEdge)) - term.cdf(lo);
-                    prob = io.liftandshift.strikebench.util.Numbers.round4(Math.max(0, Math.min(1, mass)));
-                }
-                scenarios.add(new RiskProfile.Scenario(m, pnl, prob));
+                Double prob = probabilityByStory.get(story);
+                scenarios.add(new RiskProfile.Scenario(story, m, pnl, prob));
                 worstPnl = have ? Math.min(worstPnl, pnl) : pnl;
                 have = true;
             }
@@ -101,7 +98,8 @@ public final class RiskProfiler {
                     .map(p -> new RiskProfile.PayoffPoint(p.price(), p.profitCents()))
                     .toList();
             terminalPayoff = new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA,
-                    TERMINAL_PAYOFF_MODEL, !points.isEmpty(), ctx.underlyingCents(), expiration,
+                    TERMINAL_PAYOFF_MODEL, !points.isEmpty(), marketAnchorCents,
+                    pc.profitAtCents(spot), expiration,
                     "EXPIRATION_INTRINSIC", "CAPTURED_CANDIDATE_NET", false, points,
                     points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
             // Real-world / tail lane over the same curve: sector prior from the symbol, IV-rank and
@@ -138,8 +136,16 @@ public final class RiskProfiler {
         // this scenario EV is positive — that gap IS the volatility risk premium, and the two
         // numbers must never be blended into one.
         Long evHistVol = null;
-        String basisNote = String.format("market EV = present-value risk-neutral approximation "
-                + "(market IV, r=%.2f%%, q=0 assumed); pre-commission", ctx.riskFreeRate() * 100);
+        double marketRate = c.marketImpliedRisk() != null && c.marketImpliedRisk().available()
+                ? c.marketImpliedRisk().riskFreeRate() : ctx.riskFreeRate();
+        String basisNote = c.marketImpliedRisk() != null && c.marketImpliedRisk().available()
+                ? String.format("market EV = present-value risk-neutral approximation "
+                        + "(captured market IV, r=%.2f%%, q=0 assumed); pre-commission",
+                        marketRate * 100)
+                : "market EV unavailable: "
+                        + (c.marketImpliedRisk() == null
+                            ? "no fingerprinted market-implied receipt was captured"
+                            : c.marketImpliedRisk().unavailableReason());
         if (unpriced != null) {
             basisNote = "Both EV lanes are unavailable because this package has no entry price: " + unpriced;
         } else if (distinctExpirations <= 1
@@ -156,9 +162,13 @@ public final class RiskProfiler {
             basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
         RiskProfile.WorstScenario worstScenario = worstScenario(scenarios, maxLoss);
-        return new RiskProfile(maxLoss, maxProfit, c.pop(), c.expectedValueCents(), tailLoss,
+        var marketImpliedRisk = c.marketImpliedRisk() == null
+                ? io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "No fingerprinted market-implied evaluation was captured for this candidate.")
+                : c.marketImpliedRisk();
+        return new RiskProfile(maxLoss, maxProfit, tailLoss,
                 TAIL_MOVE, scenarios, terminalPayoff, evHistVol, basisNote, jumpTail,
-                worstScenario);
+                worstScenario, marketImpliedRisk);
     }
 
     static RiskProfile.WorstScenario worstScenario(
@@ -198,7 +208,7 @@ public final class RiskProfiler {
 
     private static RiskProfile.TerminalPayoff unavailableTerminalPayoff(String reason) {
         return new RiskProfile.TerminalPayoff(TERMINAL_PAYOFF_SCHEMA, TERMINAL_PAYOFF_MODEL,
-                false, null, null, null, null, false, List.of(), reason);
+                false, null, null, null, null, null, false, List.of(), reason);
     }
 
     private static JumpMixtureTerminal.Tail unavailableJumpTail(String reason) {
@@ -245,9 +255,16 @@ public final class RiskProfiler {
         List<Leg> combined = new ArrayList<>(c.legs().stream().map(LegView::toLeg).toList());
         if (Boolean.TRUE.equals(c.usesHeldShares()) && c.sharesNeeded() != null && c.sharesNeeded() > 0) {
             int sharesPerUnit = Math.max(1, c.sharesNeeded() / qty);
-            combined.add(Leg.stockShares(LegAction.BUY, sharesPerUnit, cents(ctx.underlyingCents())));
+            combined.add(Leg.stockShares(LegAction.BUY, sharesPerUnit,
+                    cents(marketAnchorCents(c, ctx))));
         }
         return combined;
+    }
+
+    private static long marketAnchorCents(Candidate candidate, EvalContext context) {
+        var receipt = candidate == null ? null : candidate.marketImpliedRisk();
+        return receipt != null && receipt.available()
+                ? receipt.underlyingCents() : context.underlyingCents();
     }
 
     /** The authoritative package net less what the leg marks alone add up to. Priced packages only. */

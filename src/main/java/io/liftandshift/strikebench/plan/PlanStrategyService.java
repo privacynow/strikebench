@@ -97,10 +97,24 @@ public final class PlanStrategyService {
             persistNotes(c, runId, result.path("notes"));
             persistRejections(c, runId, result.path("rejected"));
             int rank = 0;
+            String deskPickCandidateId = null;
+            JsonNode deskPickEndorsement = null;
             for (JsonNode candidate : result.path("candidates")) {
                 String candidateId = persistCandidate(c, runId, plan, candidate, ++rank, runState, now);
-                if (candidate instanceof ObjectNode object) object.put("id", candidateId);
+                if (candidate instanceof ObjectNode object) {
+                    object.put("id", candidateId);
+                    JsonNode endorsement = object.path("evaluation").path("endorsement");
+                    if (deskPickCandidateId == null && endorsement.path("endorsed").asBoolean(false)) {
+                        deskPickCandidateId = candidateId;
+                        ObjectNode bound = endorsement.deepCopy();
+                        bound.put("candidateId", candidateId);
+                        deskPickEndorsement = bound;
+                    }
+                }
             }
+            if (deskPickCandidateId == null) result.putNull("deskPickCandidateId");
+            else result.put("deskPickCandidateId", deskPickCandidateId);
+            if (deskPickEndorsement != null) result.set("deskPickEndorsement", deskPickEndorsement);
             return runState;
         });
         result.put("strategyRunId", runId);
@@ -259,6 +273,23 @@ public final class PlanStrategyService {
                     needsHistory, missingDimensions);
         }
         io.liftandshift.strikebench.eval.EconomicReadiness readiness = tally.summarize();
+        String deskPickCandidateId = null;
+        JsonNode deskPickEndorsement = null;
+        for (JsonNode candidate : result.path("candidates")) {
+            JsonNode endorsement = candidate.path("evaluation").path("endorsement");
+            if (deskPickCandidateId == null && endorsement.path("endorsed").asBoolean(false)) {
+                deskPickCandidateId = candidate.path("id").asText(null);
+                deskPickEndorsement = endorsement;
+            }
+        }
+        if (deskPickCandidateId == null) result.putNull("deskPickCandidateId");
+        else result.put("deskPickCandidateId", deskPickCandidateId);
+        result.set("deskPickEndorsement", deskPickEndorsement == null
+                ? Json.MAPPER.valueToTree(new io.liftandshift.strikebench.eval.DecisionEndorsement(
+                        false, io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON,
+                        null, List.of("No persisted package cleared every promotion gate."),
+                        "The full ranked field remains available for explicit comparison."))
+                : deskPickEndorsement.deepCopy());
         result.put("actionableFavorableCount", readiness.actionableFavorable());
         result.put("economicReadiness", readiness.readiness());
         ArrayNode missingArray = result.putArray("missingEvidence");
@@ -497,7 +528,6 @@ public final class PlanStrategyService {
             throws java.sql.SQLException {
         String id = Ids.newId("pcand");
         JsonNode evaluation = n.path("evaluation");
-        requireCurrentEvaluationReceipt(n, evaluation);
         String family = requiredText(n, "strategy");
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("id", id); values.put("plan_id", plan.id()); values.put("context_rev", plan.context().rev());
@@ -518,6 +548,10 @@ public final class PlanStrategyService {
         // receipt's own identities never reaches the columns and cannot be restored later as a
         // self-contradictory rail.
         PackagePriceReceipt price = requirePriceReceipt(n.path("price"));
+        // Price and evaluation are independent required receipts. Validate the package price first
+        // so a candidate that has no price cannot have that concrete defect masked by an unrelated
+        // evaluation-shape error (for example, a newly required endorsement field).
+        requireCurrentEvaluationReceipt(n, evaluation);
         values.put("entry_net_cents", price.grossPackageNetCents());
         values.put("option_net_cents", price.optionNetPremiumCents());
         values.put("stock_cash_flow_cents", price.stockCashFlowCents());
@@ -585,7 +619,8 @@ public final class PlanStrategyService {
             throw new IllegalArgumentException("available evaluation receipt requires decisionScore and viable");
         }
         for (String field : List.of("capital", "volatility", "risk", "evidence", "management", "score",
-                "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage", "explanation")) {
+                "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage",
+                "explanation", "endorsement")) {
             if (!evaluation.path(field).isObject()) {
                 throw new IllegalArgumentException("evaluation receipt requires object field " + field);
             }

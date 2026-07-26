@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -33,7 +35,11 @@ public final class OptionBarWriter {
                       BigDecimal bid, BigDecimal ask, BigDecimal last, BigDecimal mark, Double iv,
                       Double delta, Double gamma, Double theta, Double vega, Long openInterest, Long volume,
                       BigDecimal underlying, String source, boolean bidAskObserved, String ivSource,
-                      String greeksSource) {}
+                      String greeksSource) {
+        public Row {
+            symbol = Symbol.normalize(symbol);
+        }
+    }
 
     /** Bind one Row onto a statement prepared with {@link #UPSERT_SQL}, in the canonical column order. */
     public static void bind(PreparedStatement ps, Row r) throws SQLException {

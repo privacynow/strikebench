@@ -513,6 +513,12 @@ class EvaluateIntegrationTest {
             assertThat(stock.get("horizonDays").asInt()).isBetween(1, 60);
             assertThat(stock.get("volatilityBasis").asText()).isEqualTo("same-market ATM IV");
             assertThat(stock.at("/rateEvidence/provenance").asText()).isEqualTo("SIMULATED");
+            assertThat(stock.at("/marketImpliedRisk/key").asText()).isEqualTo("BUY_AND_HOLD");
+            assertThat(stock.at("/marketImpliedRisk/fingerprint").asText()).isNotBlank();
+            assertThat(stock.get("evCents").asLong())
+                    .isEqualTo(stock.at("/marketImpliedRisk/expectedValueCents").asLong());
+            assertThat(stock.get("pAnyProfit").asDouble())
+                    .isEqualTo(stock.at("/marketImpliedRisk/pop").asDouble());
             assertThat(result.at("/evaluations/0/evidence/rollup").asText()).isEqualTo("SIMULATED");
         } finally {
             put("/api/world", "{\"world\":\"demo\"}");

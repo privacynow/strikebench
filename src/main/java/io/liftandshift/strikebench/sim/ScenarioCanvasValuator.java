@@ -2,9 +2,11 @@ package io.liftandshift.strikebench.sim;
 import static io.liftandshift.strikebench.util.Numbers.round4;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
+import io.liftandshift.strikebench.model.GreeksView;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Money;
 import io.liftandshift.strikebench.util.Quantiles;
 
@@ -94,19 +96,10 @@ public final class ScenarioCanvasValuator {
                                  int frameCount, int sourceStepCount, int stepsPerDay,
                                  double anchorSpot, double horizonSessions,
                                  double baselineAtmIv, String baselineAtmIvSource) {}
-    /**
-     * THE greeks view — the single shape every backend surface serializes and every client reads:
-     * a held position, one of its legs, an idea candidate, a package preview and this canvas. The
-     * unit is in each name (share-equivalent delta, share-per-dollar gamma, CENTS per day of theta,
-     * CENTS per vol point of vega), so nothing has to be converted or guessed downstream. There is
-     * deliberately no second greeks record and no dollar-named variant (§3.1, §3.8, §5.3).
-     */
-    public record Greeks(double deltaShares, double gammaSharesPerDollar,
-                         double thetaCentsPerDay, double vegaCentsPerPoint) {}
-    public record LegDay(int day, long valueCents, long optionPriceCents, Greeks greeks, String state) {}
+    public record LegDay(int day, long valueCents, long optionPriceCents, GreeksView greeks, String state) {}
     /** One leg repriced at one stored focus-path step through {@link PathValuationKernel}. */
     public record LegStep(int step, double sessionProgress, long valueCents,
-                          long optionPriceCents, Greeks greeks, String state) {}
+                          long optionPriceCents, GreeksView greeks, String state) {}
     public record LegPath(int legNo, String label, String expiration, int multiplier,
                           List<LegDay> days, List<LegStep> steps) {
         public LegPath(int legNo, String label, String expiration, int multiplier,
@@ -118,10 +111,10 @@ public final class ScenarioCanvasValuator {
                               long valueP10Cents, long valueP50Cents, long valueP90Cents,
                               Long pnlP10Cents, Long pnlP50Cents, Long pnlP90Cents,
                               long focusValueCents, Long focusPnlCents,
-                              Greeks greeks) {}
+                              GreeksView greeks) {}
     /** One package repriced at one stored focus-path step; probability bands remain daily. */
     public record PositionStep(int step, double sessionProgress, String sessionDate,
-                               long focusValueCents, Long focusPnlCents, Greeks greeks) {}
+                               long focusValueCents, Long focusPnlCents, GreeksView greeks) {}
     /**
      * Full-ensemble package-value quantiles on the bounded display grid.  These are valued by the
      * same kernel as the daily canvas and focus path; the browser only interpolates them.
@@ -197,8 +190,7 @@ public final class ScenarioCanvasValuator {
     /** One held package bound to the matching member of a joint multi-symbol path artifact. */
     public record JointPositionInput(String symbol, PositionInput position, double atmIvAnnual) {
         public JointPositionInput {
-            symbol = symbol == null ? "" : symbol.trim().toUpperCase(java.util.Locale.ROOT);
-            if (symbol.isBlank()) throw new IllegalArgumentException("joint position symbol is required");
+            symbol = Symbol.normalize(symbol);
             if (position == null) throw new IllegalArgumentException("joint position package is required");
             if (!(atmIvAnnual >= .01 && atmIvAnnual <= 4) || !Double.isFinite(atmIvAnnual)) {
                 throw new IllegalArgumentException("joint position ATM IV must be 1%..400%");
@@ -633,7 +625,7 @@ public final class ScenarioCanvasValuator {
                 dd += point.deltaShares() * q; gg += point.gammaSharesPerDollar() * q;
                 tt += point.thetaDollarsPerDay() * q; vv += point.vegaDollarsPerPoint() * q;
                 legDays.get(legNo).add(new LegDay(day, Money.toCents(point.valueDollars() * q),
-                        Money.toCents(point.optionPrice()), new Greeks(round4(point.deltaShares() * q),
+                        Money.toCents(point.optionPrice()), new GreeksView(round4(point.deltaShares() * q),
                         round4(point.gammaSharesPerDollar() * q), Money.toCents(point.thetaDollarsPerDay() * q),
                         Money.toCents(point.vegaDollarsPerPoint() * q)), point.state()));
             }
@@ -641,7 +633,7 @@ public final class ScenarioCanvasValuator {
                     Quantiles.of(sorted, 0.10), Quantiles.of(sorted, 0.50), Quantiles.of(sorted, 0.90),
                     Quantiles.of(sorted, 0.10) - entry, Quantiles.of(sorted, 0.50) - entry, Quantiles.of(sorted, 0.90) - entry,
                     focusValue, focusValue - entry,
-                    new Greeks(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
+                    new GreeksView(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
         }
         List<PositionStep> focusSteps = new ArrayList<>(displaySteps.length);
         List<PositionStepBand> stepBands = new ArrayList<>(displaySteps.length);
@@ -680,7 +672,7 @@ public final class ScenarioCanvasValuator {
                 tt += point.thetaDollarsPerDay() * q; vv += point.vegaDollarsPerPoint() * q;
                 legSteps.get(legNo).add(new LegStep(step, progress,
                         Money.toCents(point.valueDollars() * q), Money.toCents(point.optionPrice()),
-                        new Greeks(round4(point.deltaShares() * q),
+                        new GreeksView(round4(point.deltaShares() * q),
                                 round4(point.gammaSharesPerDollar() * q),
                                 Money.toCents(point.thetaDollarsPerDay() * q),
                                 Money.toCents(point.vegaDollarsPerPoint() * q)), point.state()));
@@ -688,7 +680,7 @@ public final class ScenarioCanvasValuator {
             focusSteps.add(new PositionStep(step, progress,
                     dateForStep(step, spd, days, ensemble.anchorDate(), sessionDates),
                     focusValue, focusValue - entry,
-                    new Greeks(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
+                    new GreeksView(round4(dd), round4(gg), Money.toCents(tt), Money.toCents(vv))));
         }
         List<DisplayPositionPath> valuedDisplayPaths = new ArrayList<>(displaySelections.size());
         for (int i = 0; i < displaySelections.size(); i++) {

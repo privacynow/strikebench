@@ -75,7 +75,37 @@ final class PlanStrategyController {
         // live trading-sessions-to-expiry receipt at read time (sessions REMAINING now, not stale).
         if (saved != null) discoveryController.attachCandidateTimes(saved.result(), root.activeWorld(ctx));
         ctx.json(new ApiResponses.StrategyState<>(saved,
-                planStrategy.selectedCandidate(root.ownerId(ctx), ctx.pathParam("id"))));
+                planStrategy.selectedCandidate(root.ownerId(ctx), ctx.pathParam("id")),
+                strategyCurrency(saved, root.activeWorld(ctx))));
+    }
+
+    /** One backend decision about whether a persisted competition may be reused. */
+    private ApiResponses.ArtifactCurrency strategyCurrency(PlanStrategyService.SavedRun saved,
+                                                           String world) {
+        if (saved == null) {
+            return new ApiResponses.ArtifactCurrency(false, "MISSING",
+                    "No current strategy competition is stored for this Plan.");
+        }
+        if (!"CURRENT".equalsIgnoreCase(saved.state())) {
+            return new ApiResponses.ArtifactCurrency(false, "STALE",
+                    "The stored strategy competition is no longer current for this Plan.");
+        }
+        JsonNode candidates = saved.result() == null ? null : saved.result().path("candidates");
+        if (candidates == null || !candidates.isArray()) {
+            return new ApiResponses.ArtifactCurrency(false, "INCOMPATIBLE",
+                    "The stored strategy competition has no canonical candidate field.");
+        }
+        for (JsonNode candidate : candidates) {
+            JsonNode price = candidate.path("price");
+            if (!market.packagePriceCurrent(price.path("freshness").asText(null),
+                    price.path("observedAt").isNumber() ? price.path("observedAt").asLong() : null,
+                    MarketLane.worldParam(world), root.clock())) {
+                return new ApiResponses.ArtifactCurrency(false, "MARKET_CHANGED",
+                        "At least one captured package price is no longer current in this market.");
+            }
+        }
+        return new ApiResponses.ArtifactCurrency(true, "CURRENT",
+                "The backend confirms this run, Plan context, engine version, and captured package prices are current.");
     }
 
     void planStrategyRun(Context ctx) {
@@ -254,6 +284,11 @@ final class PlanStrategyController {
     }
 
     void planStrategyCustom(Context ctx) {
+        JsonNode rawBody = Json.parse(ctx.body());
+        if (rawBody.at("/position").has("proposedNetCents")) {
+            throw new IllegalArgumentException(
+                    "proposedNetCents was removed; use position.orderInstruction.limitNetCents for a LIMIT order");
+        }
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanStrategyCustomRequest.class));
         if (body.expectedVersion() == null || body.position() == null) {
             throw new IllegalArgumentException("expectedVersion and position are required");
@@ -272,9 +307,8 @@ final class PlanStrategyController {
         var c = plan.context();
         TradeOpenRequest exactBody = new TradeOpenRequest(plan.symbol(), supplied.strategy(), supplied.qty(),
                 supplied.legs(), c.thesis(), PlanController.planHorizon(c.horizonDays()), c.riskMode(), plan.intent(),
-                supplied.useHeldShares(), supplied.recommendationId(), supplied.proposedNetCents(),
-                supplied.feesOverrideCents(), "BUILDER", null, null,
-                supplied.fillNature());
+                supplied.useHeldShares(), supplied.recommendationId(), supplied.feesOverrideCents(),
+                "BUILDER", null, null, supplied.fillNature(), supplied.orderInstruction());
         Account account = root.currentAccount(ctx);
         TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(exactBody, account.id());
         var preview = trades.analyze(request);

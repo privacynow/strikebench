@@ -26,11 +26,12 @@ class IncomeWhileAccumulatingLensTest {
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income",
                 "SELL " + strike + "P Aug21", legs, 1, TestPrices.optionOnly(1, 35_000L), 35_000L,
                 Math.round(Double.parseDouble(strike) * 100) * 100L - 35_000L, List.of(),
-                0.60, 1_800L, 0.70, "DELAYED", List.of(), 0.6,
+                0.70, "DELAYED", List.of(), 0.6,
                 "Get paid to bid below the market", "Keep the premium", "Assigned in a selloff",
                 "A crash through the strike", "You collect premium up front",
                 "ACQUIRE", List.of("INCOME", "ACQUIRE"),
-                0.35, 5.1, null, null, false, null, null);
+                0.35, 5.1, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.60, 1_800L));
     }
 
     private Candidate coveredCall() {
@@ -39,11 +40,12 @@ class IncomeWhileAccumulatingLensTest {
                 new LegView("SELL", "CALL", "260", "2026-08-21", 1, "3.00", 100, "OPEN"));
         return new Candidate("COVERED_CALL", "Covered call", "covered_income", "BUY 100sh / SELL 260C",
                 legs, 1, TestPrices.optionOnly(1, 30_000L), 33_000L, 2_490_000L, List.of(),
-                0.55, 1_500L, 0.70, "DELAYED", List.of(), 0.6,
+                0.70, "DELAYED", List.of(), 0.6,
                 "Income against shares", "Premium plus gains to 260", "Shares keep downside",
                 "Runs far above 260", "You collect premium",
                 "EXIT", List.of("INCOME", "EXIT"),
-                0.40, 4.2, null, null, false, null, null);
+                0.40, 4.2, null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.55, 1_500L));
     }
 
     private EvalContext ctx(DeclaredObjective declared, PortfolioExposureContext exposure) {

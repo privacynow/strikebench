@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.position;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -110,7 +112,7 @@ public final class CampaignMath {
         long total = 0;
         if (holdings == null || dividends == null) return 0;
         for (Dividend dividend : dividends) for (HoldingWindow holding : holdings) {
-            if (dividend != null && holding != null && holding.symbol().equalsIgnoreCase(dividend.symbol())
+            if (dividend != null && holding != null && holding.symbol().equals(dividend.symbol())
                     && !dividend.exDate().isBefore(holding.fromInclusive())
                     && (holding.toExclusive() == null || dividend.exDate().isBefore(holding.toExclusive()))) {
                 total = Math.addExact(total, Math.multiplyExact(holding.quantity(), dividend.perShareCents()));
@@ -201,8 +203,16 @@ public final class CampaignMath {
         }
     }
     public enum DividendTreatment { CASH, REINVEST_AT_EX_DATE_CLOSE }
-    public record HoldingWindow(String symbol, LocalDate fromInclusive, LocalDate toExclusive, long quantity) {}
-    public record Dividend(String symbol, LocalDate exDate, long perShareCents) {}
+    public record HoldingWindow(String symbol, LocalDate fromInclusive, LocalDate toExclusive, long quantity) {
+        public HoldingWindow {
+            symbol = Symbol.normalize(symbol);
+        }
+    }
+    public record Dividend(String symbol, LocalDate exDate, long perShareCents) {
+        public Dividend {
+            symbol = Symbol.normalize(symbol);
+        }
+    }
     public record TaggedInterest(String campaignId, long signedCents) {}
     private record Remainder(int index, BigDecimal fraction) {}
 

@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.db;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataProvenance;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.sql.Connection;
 import java.time.LocalDate;
@@ -27,7 +28,7 @@ final class ObservedCandleWriter {
     static Result write(Db db, String symbol, String source, List<Candle> candles) {
         String sym = normalizeSymbol(symbol);
         String src = normalizeSource(source);
-        if (sym.isEmpty() || src.isEmpty()) throw new IllegalArgumentException("symbol and source are required");
+        if (src.isEmpty()) throw new IllegalArgumentException("symbol and source are required");
 
         LinkedHashMap<LocalDate, Candle> accepted = new LinkedHashMap<>();
         java.util.Set<LocalDate> conflicts = new java.util.HashSet<>();
@@ -98,7 +99,7 @@ final class ObservedCandleWriter {
     }
 
     private static String normalizeSymbol(String value) {
-        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(value);
     }
 
     private static String normalizeSource(String value) {

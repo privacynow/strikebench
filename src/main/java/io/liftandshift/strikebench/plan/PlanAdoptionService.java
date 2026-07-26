@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.plan;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionArtifactStore;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.paper.MarksSource;
@@ -193,8 +194,12 @@ public final class PlanAdoptionService {
         if (raw.allocations() == null || raw.allocations().isEmpty()) {
             throw new IllegalArgumentException("every adopted or linked position needs at least one lot");
         }
-        String symbol = raw.symbol() == null ? null : raw.symbol().trim().toUpperCase(java.util.Locale.ROOT);
-        if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("every adopted position needs a symbol");
+        String symbol;
+        try {
+            symbol = Symbol.normalize(raw.symbol());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("every adopted position needs a valid symbol");
+        }
         Request asRequest = new Request(raw.clientRequestId(), raw.portfolioAccountId(), symbol,
                 raw.label(), raw.allocations());
         List<LotRow> lots = resolveLotsOn(c, owner, asRequest, true);
@@ -223,7 +228,7 @@ public final class PlanAdoptionService {
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("action", action);
         input.put("portfolioAccountId", raw.portfolioAccountId());
-        input.put("symbol", raw.symbol() == null ? null : raw.symbol().trim().toUpperCase(java.util.Locale.ROOT));
+        input.put("symbol", Symbol.normalize(raw.symbol()));
         input.put("label", trim(raw.label()));
         input.put("existingPlanId", raw.existingPlanId());
         List<Map<String, Object>> allocations = new ArrayList<>();
@@ -239,7 +244,7 @@ public final class PlanAdoptionService {
     private static String positionOwnerHash(BatchItem raw, List<LotRow> lots) {
         Map<String, Object> identity = new LinkedHashMap<>();
         identity.put("portfolioAccountId", raw.portfolioAccountId());
-        identity.put("symbol", raw.symbol() == null ? null : raw.symbol().trim().toUpperCase(java.util.Locale.ROOT));
+        identity.put("symbol", Symbol.normalize(raw.symbol()));
         List<Map<String, Object>> allocations = new ArrayList<>();
         for (int i = 0; i < lots.size(); i++) {
             Long requested = raw.allocations().get(i).quantity();

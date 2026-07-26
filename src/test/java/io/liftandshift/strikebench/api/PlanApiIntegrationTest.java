@@ -791,12 +791,23 @@ class PlanApiIntegrationTest {
         validPosition.put("qty", source.path("qty").asInt(1));
         validPosition.put("fillNature", "PROPOSED");
         validPosition.set("legs", source.get("legs"));
+
+        var removedAlias = validBody.deepCopy();
+        removedAlias.withObject("/position").put("proposedNetCents", 12_345L);
+        HttpResponse<String> rejectedAlias = post(
+                "/api/plans/" + id + "/strategy/custom", removedAlias.toString());
+        assertThat(rejectedAlias.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(rejectedAlias.body()).path("detail").asText())
+                .contains("proposedNetCents was removed")
+                .contains("position.orderInstruction.limitNetCents");
+
         JsonNode valid = json(post("/api/plans/" + id + "/strategy/custom", validBody.toString()));
         long selectedVersion = valid.at("/plan/version").asLong();
 
         var constrainedBody = validBody.deepCopy();
         constrainedBody.put("expectedVersion", selectedVersion);
-        constrainedBody.withObject("/position").put("proposedNetCents", 99_999_00L);
+        constrainedBody.withObject("/position/orderInstruction")
+                .put("type", "LIMIT").put("limitNetCents", 99_999_00L).put("timeInForce", "DAY");
         JsonNode constrained = json(post("/api/plans/" + id + "/strategy/custom", constrainedBody.toString()));
 
         assertThat(constrained.at("/preview/ok").asBoolean()).isFalse();
@@ -916,6 +927,8 @@ class PlanApiIntegrationTest {
         JsonNode ran = json(post("/api/plans/" + id + "/outcomes/ensemble", """
                 {"expectedVersion":%d,"levels":[{"key":"floor","price":240},{"key":"target","price":280}]}
                 """.formatted(plan.get("version").asLong())));
+        assertThat(ran.at("/currency/current").asBoolean()).isTrue();
+        assertThat(ran.at("/currency/status").asText()).isEqualTo("CURRENT");
         HttpResponse<String> restoredResponse = get("/api/plans/" + id + "/outcomes/ensemble/latest");
         assertThat(restoredResponse.statusCode()).isEqualTo(200);
         JsonNode restored = Json.parse(restoredResponse.body());
@@ -928,6 +941,9 @@ class PlanApiIntegrationTest {
         assertThat(restored.at("/preview/receipt/fingerprint").asText())
                 .isEqualTo(ran.at("/ensemble/fingerprint").asText());
         assertThat(restored.at("/preview/decisionMap/levels")).hasSize(2);
+        assertThat(restored.at("/currency/current").asBoolean()).isTrue();
+        assertThat(restored.at("/currency/reason").asText())
+                .contains("quote").contains("volatility").contains("rate");
         assertJsonEquivalent(restored.get("preview"), ran.get("preview"));
     }
 
@@ -1133,7 +1149,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 2);
-        order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         preview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -1308,7 +1324,7 @@ class PlanApiIntegrationTest {
             var order = Json.MAPPER.createObjectNode();
             order.put("expectedVersion", selectedVersion);
             order.put("qty", 1);
-            order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
+            order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
             order.put("feesOverrideCents", exactFees);
             if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
             var acks = order.putArray("acknowledgedRisks");
@@ -1586,6 +1602,53 @@ class PlanApiIntegrationTest {
                 .isEqualTo(animation.at("/receipt/conditioningAssumptions/waypoints/0/dayIndex").asDouble());
         assertThat(animation.at("/paths/receipt/waypointCount").asInt()).isEqualTo(1);
 
+        // The Desk submits only a compact user declaration. The server owns the named-story
+        // trajectory, the absolute IV nodes, and the immutable source-path selection.
+        JsonNode storyAnimation = json(post(
+                "/api/plans/" + id + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","limit":6,
+                 "interaction":{"story":"GAP_DOWN","movePct":-9.0,
+                   "ivShiftPoints":12.0,"elapsedSessions":10}}
+                """.formatted(guidedEnsembleId)));
+        assertThat(storyAnimation.at("/receipt/interaction/story").asText())
+                .isEqualTo("GAP_DOWN");
+        assertThat(storyAnimation.at("/receipt/interaction/movePct").asDouble()).isEqualTo(-9.0);
+        assertThat(storyAnimation.at("/receipt/interaction/ivShiftPoints").asDouble())
+                .isEqualTo(12.0);
+        assertThat(storyAnimation.at("/receipt/interaction/elapsedSessions").asInt())
+                .isEqualTo(10);
+        assertThat(storyAnimation.at("/receipt/conditioningAssumptions/waypoints")).hasSize(3);
+        assertThat(storyAnimation.at("/receipt/valuationAssumptions/ivNodes")).hasSize(2);
+        assertThat(storyAnimation.at("/paths/selection").asText())
+                .isEqualTo("NEAREST_AUTHORED_WAYPOINTS");
+
+        int exactSourcePathIndex =
+                storyAnimation.at("/paths/receipt/focusSourcePathIndex").asInt();
+        JsonNode exactPathAnimation = json(post(
+                "/api/plans/" + id + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","limit":6,
+                 "interaction":{"ivShiftPoints":0.0,"elapsedSessions":10,
+                   "sourcePathIndex":%d}}
+                """.formatted(guidedEnsembleId, exactSourcePathIndex)));
+        assertThat(exactPathAnimation.at("/receipt/interaction/sourcePathIndex").asInt())
+                .isEqualTo(exactSourcePathIndex);
+        assertThat(exactPathAnimation.at("/receipt/interaction/story").isMissingNode()
+                || exactPathAnimation.at("/receipt/interaction/story").isNull()).isTrue();
+        assertThat(exactPathAnimation.at("/receipt/conditioningAssumptions").isMissingNode()
+                || exactPathAnimation.at("/receipt/conditioningAssumptions").isNull()).isTrue();
+        assertThat(exactPathAnimation.at("/receipt/conditioningPathWaypoints")).isEmpty();
+        assertThat(exactPathAnimation.at("/paths/selection").asText())
+                .isEqualTo("EXACT_SOURCE_PATH");
+        assertThat(exactPathAnimation.at("/paths/receipt/rule").asText())
+                .isEqualTo("EXACT_SOURCE_PATH");
+        assertThat(exactPathAnimation.at("/paths/receipt/focusSourcePathIndex").asInt())
+                .isEqualTo(exactSourcePathIndex);
+        assertThat(exactPathAnimation.at("/paths/paths")).anySatisfy(path -> {
+                    assertThat(path.path("role").asText()).isEqualTo("FOCUS");
+                    assertThat(path.path("sourcePathIndex").asInt())
+                            .isEqualTo(exactSourcePathIndex);
+                });
+
         HttpResponse<String> ambiguousConditioning = post(
                 "/api/plans/" + id + "/outcomes/ensemble/paths", """
                 {"ensembleId":"%s","limit":6,
@@ -1596,6 +1659,16 @@ class PlanApiIntegrationTest {
         assertThat(Json.parse(ambiguousConditioning.body()).path("detail").asText())
                 .contains("waypoints and pathWaypoints")
                 .contains("alternative conditioning sources");
+        HttpResponse<String> clientAuthoredStory = post(
+                "/api/plans/" + id + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","limit":6,
+                 "interaction":{"story":"GAP_DOWN","movePct":-9.0,
+                   "ivShiftPoints":12.0,"elapsedSessions":10},
+                 "waypoints":[{"dayIndex":10,"priceRatio":0.91,"tolerance":0.03}]}
+                """.formatted(guidedEnsembleId));
+        assertThat(clientAuthoredStory.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(clientAuthoredStory.body()).path("detail").asText())
+                .contains("interaction").contains("alternative scenario sources");
 
         JsonNode changedAnimation = json(post("/api/plans/" + id + "/outcomes/ensemble/paths",
                 animationRequest.replace("\"startIv\":0.55", "\"startIv\":0.65")));
@@ -1798,20 +1871,30 @@ class PlanApiIntegrationTest {
                 .isEqualTo(naturalNet + 1000);
         assertThat(restingLimit.at("/preview/ok").asBoolean()).isFalse();
 
-        JsonNode legacyMarketRoundTrip = json(post("/api/plans/" + tradePlanId + "/decision/preview",
-                "{\"expectedVersion\":" + version + ",\"qty\":1,\"proposedNetCents\":" + naturalNet + "}"));
-        assertThat(legacyMarketRoundTrip.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
-        assertThat(legacyMarketRoundTrip.at("/order/price/grossPackageNetCents").asLong()).isEqualTo(naturalNet);
+        HttpResponse<String> removedAlias = post(
+                "/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1,\"proposedNetCents\":"
+                        + naturalNet + "}");
+        assertThat(removedAlias.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(removedAlias.body()).path("detail").asText())
+                .contains("proposedNetCents was removed")
+                .contains("orderInstruction.limitNetCents");
+
+        JsonNode explicitMarketRoundTrip = json(post("/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
+                        + "{\"type\":\"MARKET\",\"timeInForce\":\"DAY\"}}"));
+        assertThat(explicitMarketRoundTrip.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
+        assertThat(explicitMarketRoundTrip.at("/order/price/grossPackageNetCents").asLong()).isEqualTo(naturalNet);
 
         var tradeRequest = Json.MAPPER.createObjectNode();
         tradeRequest.put("expectedVersion", version);
         tradeRequest.put("qty", 1);
-        tradeRequest.put("proposedNetCents", naturalNet);
-        if (legacyMarketRoundTrip.has("ackToken")) {
-            tradeRequest.put("ackToken", legacyMarketRoundTrip.get("ackToken").asText());
+        tradeRequest.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
+        if (explicitMarketRoundTrip.has("ackToken")) {
+            tradeRequest.put("ackToken", explicitMarketRoundTrip.get("ackToken").asText());
         }
         var acknowledgments = tradeRequest.putArray("acknowledgedRisks");
-        for (JsonNode ack : legacyMarketRoundTrip.withArray("requiredAcks")) {
+        for (JsonNode ack : explicitMarketRoundTrip.withArray("requiredAcks")) {
             acknowledgments.add(ack.get("id").asText());
         }
         JsonNode opened = json(post("/api/plans/" + tradePlanId + "/decision/trade", tradeRequest.toString()));
@@ -1828,6 +1911,9 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/price/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");
         assertThat(opened.at("/decision/accountNlvCents").asLong()).isEqualTo(1_930_000L);
         assertThat(opened.at("/decision/riskCapitalCents").asLong()).isEqualTo(193_000L);
+        assertThat(opened.at("/trade/orderInstruction/type").asText()).isEqualTo("MARKET");
+        assertThat(opened.at("/trade/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
+        assertThat(opened.at("/trade/orderLimitNetCents").isMissingNode()).isTrue();
 
         JsonNode planBook = json(get("/api/plans/portfolio"));
         JsonNode tradePlanRow = null;
@@ -2014,7 +2100,6 @@ class PlanApiIntegrationTest {
         var request = Json.MAPPER.createObjectNode();
         request.put("expectedVersion", version);
         request.put("qty", 1);
-        request.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
         request.put("portfolioAccountId", accountId);
         request.put("externalRef", "broker-order-77");
         request.put("feesCents", 130);
@@ -2131,7 +2216,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", version);
         order.put("qty", 3);
-        order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acknowledgments = order.putArray("acknowledgedRisks");
         preview.withArray("requiredAcks").forEach(ack -> acknowledgments.add(ack.get("id").asText()));
@@ -2221,7 +2306,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
-        order.put("proposedNetCents", decisionPreview.at("/order/price/grossPackageNetCents").asLong());
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -2297,7 +2382,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
-        order.put("proposedNetCents", decisionPreview.at("/order/price/grossPackageNetCents").asLong());
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -2370,7 +2455,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
-        order.put("proposedNetCents", decisionPreview.at("/order/price/grossPackageNetCents").asLong());
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
         decisionPreview.withArray("requiredAcks").forEach(ack -> openingAcks.add(ack.get("id").asText()));
@@ -2430,7 +2515,7 @@ class PlanApiIntegrationTest {
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", version);
         order.put("qty", 1);
-        order.put("proposedNetCents", preview.at("/order/price/grossPackageNetCents").asLong());
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acks = order.putArray("acknowledgedRisks");
         for (JsonNode ack : preview.withArray("requiredAcks")) acks.add(ack.get("id").asText());

@@ -24,6 +24,7 @@ import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.AuditLog;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
@@ -399,11 +400,7 @@ final class DataController {
     }
 
     private static List<String> normalizeSymbols(List<String> raw) {
-        if (raw == null) return List.of();
-        return raw.stream().filter(Objects::nonNull).map(String::trim)
-                .filter(s -> !s.isBlank()).map(s -> s.toUpperCase(Locale.ROOT))
-                .filter(s -> s.matches("[A-Z0-9.^_-]{1,20}"))
-                .distinct().limit(120).toList();
+        return Symbol.list(raw).stream().limit(120).toList();
     }
 
     private static ApiResponses.DataSource source(String name, String covers, boolean enabled,

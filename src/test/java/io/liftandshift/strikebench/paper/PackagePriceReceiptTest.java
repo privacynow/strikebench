@@ -31,6 +31,40 @@ class PackagePriceReceiptTest {
     }
 
     @Test
+    void payoffEntryCostHasOneExactDebitCreditZeroAndUnavailableSignPolicy() {
+        PackagePriceReceipt credit = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L,
+                65L, 155L, PackagePriceReceipt.FeeSide.OPENING, 42_000L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "fixture", "REALTIME", 1L, "credit");
+        PackagePriceReceipt debit = PackagePriceReceipt.of(1, -42_000L, -42_000L, 0L,
+                65L, 155L, PackagePriceReceipt.FeeSide.OPENING, -42_000L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "fixture", "REALTIME", 1L, "debit");
+        PackagePriceReceipt zero = PackagePriceReceipt.of(1, 0L, 0L, 0L,
+                0L, 0L, PackagePriceReceipt.FeeSide.OPENING, 0L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.RECORDED_FILL,
+                "broker", "RECORDED", 1L, "zero");
+
+        assertThat(credit.payoffEntryCostCents()).isEqualTo(-42_000L);
+        assertThat(debit.payoffEntryCostCents()).isEqualTo(42_000L);
+        assertThat(zero.payoffEntryCostCents()).isZero();
+        assertThat(PackagePriceReceipt.unavailable(1, PackagePriceReceipt.FeeSide.OPENING,
+                "no executable book").payoffEntryCostCents()).isNull();
+
+        PackagePriceReceipt close = PackagePriceReceipt.of(1, -100L, -100L, 0L,
+                5L, null, PackagePriceReceipt.FeeSide.CLOSING, -100L, null,
+                OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "fixture", "REALTIME", 1L, "close");
+        assertThatThrownBy(close::payoffEntryCostCents)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("OPENING");
+    }
+
+    @Test
     void optionOnlyPackageHasZeroStockCashFlowAndReconcilesThroughFees() {
         PackagePriceReceipt price = PackagePriceReceipt.ofLegs(List.of(shortCall("3.20")), 2,
                 64_000L, 130L, 260L, PackagePriceReceipt.FeeSide.OPENING, 64_000L,
@@ -250,7 +284,7 @@ class PackagePriceReceiptTest {
 
         assertThatThrownBy(() -> new TradeService.OpenRequest("acct", "AAPL", "CUSTOM", 1,
                 List.of(shortCall("3.20")), null, "month", "balanced", null, null,
-                null, -1L, "TICKET", "PROPOSED"))
+                -1L, "TICKET", "PROPOSED", OrderInstruction.market()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("feesOverrideCents cannot be negative");
     }

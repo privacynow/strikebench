@@ -6,16 +6,83 @@ import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataProvenance;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 /** Seeds the canvas from lane-owned inputs without creating a second scenario endpoint or engine. */
 public final class ScenarioCanvasTemplateService {
+    /**
+     * The canonical default declaration for a named story. Values are percentage points and
+     * exchange sessions; this policy only conditions the already-stored ensemble and is not a
+     * second path generator or valuation model.
+     */
+    public record StoryPolicy(double movePct, double ivShiftPoints, int elapsedSessions) {
+        public StoryPolicy {
+            if (!Double.isFinite(movePct) || movePct < -95 || movePct > 500) {
+                throw new IllegalArgumentException("story movePct must be within -95%..500%");
+            }
+            if (!Double.isFinite(ivShiftPoints)
+                    || ivShiftPoints < -300 || ivShiftPoints > 300) {
+                throw new IllegalArgumentException(
+                        "story ivShiftPoints must be within -300..300");
+            }
+            if (elapsedSessions < 1) {
+                throw new IllegalArgumentException("story elapsedSessions must be positive");
+            }
+        }
+
+        StoryPolicy withinHorizon(int horizonSessions) {
+            if (horizonSessions < 1) {
+                throw new IllegalArgumentException("scenario horizon must be positive");
+            }
+            return new StoryPolicy(movePct, ivShiftPoints,
+                    Math.min(elapsedSessions, horizonSessions));
+        }
+    }
+
+    private static final Map<ScenarioStory, StoryPolicy> STORY_CATALOG = storyCatalogDefinition();
+
+    /** Immutable, exhaustive server-owned catalog; browsers submit a {@link ScenarioStory} name. */
+    public static Map<ScenarioStory, StoryPolicy> storyCatalog() {
+        return STORY_CATALOG;
+    }
+
+    /** Resolve one story's defaults for the exact stored-ensemble horizon. */
+    public static StoryPolicy storyPolicy(ScenarioStory story, int horizonSessions) {
+        if (story == null) throw new IllegalArgumentException("scenario story is required");
+        StoryPolicy policy = STORY_CATALOG.get(story);
+        if (policy == null) {
+            throw new IllegalArgumentException("unsupported scenario story: " + story);
+        }
+        return policy.withinHorizon(horizonSessions);
+    }
+
+    /**
+     * A UI declaration, not model input. {@code sourcePathIndex} identifies an exact row in the
+     * immutable stored fan and is alternative to {@code story}; move, IV shift, and elapsed
+     * sessions are optional user overrides of the named story's server-owned policy.
+     */
+    public record Interaction(ScenarioStory story, Double movePct, Double ivShiftPoints,
+                              Integer elapsedSessions, Integer sourcePathIndex) {}
+
+    /** Server-resolved inputs and the exact declaration that produced them. */
+    public record ResolvedInteraction(Interaction declaration, ScenarioSpec scenario,
+                                      List<PathEnsembleService.DisplayWaypoint> pathWaypoints,
+                                      ScenarioCanvasSpec canvas, Integer sourcePathIndex) {
+        public ResolvedInteraction {
+            pathWaypoints = pathWaypoints == null ? List.of() : List.copyOf(pathWaypoints);
+        }
+    }
+
     public record Request(ScenarioCanvasSpec.TemplateKind kind, Long targetPriceCents,
                           String sectorSymbol, String historicalFrom, String historicalTo) {}
     public record Seed(ScenarioSpec spec, ScenarioCanvasSpec canvas) {}
@@ -28,6 +95,100 @@ public final class ScenarioCanvasTemplateService {
         this.market = market;
         this.events = events;
         this.clock = clock;
+    }
+
+    /**
+     * Resolve the compact Desk controls against one stored fan. This is the only owner of the
+     * named-story trajectory and IV-node transformation; callers submit declarations and never
+     * manufacture waypoints or absolute volatility nodes.
+     */
+    public static ResolvedInteraction resolveInteraction(
+            PathEnsembleService.Ensemble ensemble,
+            ScenarioSpec baseScenario,
+            IvSpec baseIv,
+            ScenarioCanvasSpec baseCanvas,
+            Interaction raw) {
+        if (ensemble == null) throw new IllegalArgumentException("stored ensemble is required");
+        if (raw == null) throw new IllegalArgumentException("scenario interaction is required");
+        ScenarioSpec base = (baseScenario == null ? ensemble.spec() : baseScenario).sane();
+        int horizon = base.horizonDays();
+        Integer sourcePathIndex = raw.sourcePathIndex();
+        if (sourcePathIndex != null) {
+            if (raw.story() != null) {
+                throw new IllegalArgumentException("story and sourcePathIndex are alternative scenario sources");
+            }
+            if (sourcePathIndex < 0 || sourcePathIndex >= ensemble.paths().length) {
+                throw new IllegalArgumentException("sourcePathIndex is outside the stored ensemble");
+            }
+        } else if (raw.story() == null) {
+            throw new IllegalArgumentException("scenario story is required when no exact source path is named");
+        }
+        StoryPolicy storyPolicy = sourcePathIndex == null
+                ? storyPolicy(raw.story(), horizon) : null;
+        Double movePct;
+        if (raw.movePct() != null) {
+            movePct = finite(raw.movePct(), "movePct");
+        } else {
+            movePct = storyPolicy == null ? null : Double.valueOf(storyPolicy.movePct());
+        }
+        if (movePct != null && (movePct < -95 || movePct > 500)) {
+            throw new IllegalArgumentException("movePct must be within -95%..500%");
+        }
+        double ivShiftPoints = raw.ivShiftPoints() == null
+                ? storyPolicy == null ? 0 : storyPolicy.ivShiftPoints()
+                : finite(raw.ivShiftPoints(), "ivShiftPoints");
+        if (ivShiftPoints < -300 || ivShiftPoints > 300) {
+            throw new IllegalArgumentException("ivShiftPoints must be within -300..300");
+        }
+        int elapsed = raw.elapsedSessions() == null
+                ? storyPolicy == null ? horizon : storyPolicy.elapsedSessions()
+                : raw.elapsedSessions();
+        if (elapsed < 1 || elapsed > horizon) {
+            throw new IllegalArgumentException("elapsedSessions must be within the stored ensemble horizon");
+        }
+        Interaction declaration = new Interaction(raw.story(), movePct, ivShiftPoints,
+                elapsed, sourcePathIndex);
+
+        ScenarioCanvasSpec canvas = (baseCanvas == null ? ScenarioCanvasSpec.defaults() : baseCanvas)
+                .sane(horizon);
+        if (ivShiftPoints != 0) {
+            IvSpec iv = (baseIv == null ? IvSpec.flat(base.volAnnual()) : baseIv).sane();
+            double anchorIv = canvas.atmIv(0, horizon, iv.startIv());
+            List<ScenarioCanvasSpec.IvNode> nodes = List.of(
+                    new ScenarioCanvasSpec.IvNode(0, anchorIv),
+                    new ScenarioCanvasSpec.IvNode(elapsed,
+                            Math.clamp(anchorIv + ivShiftPoints / 100.0, 0.01, 4.0)));
+            canvas = new ScenarioCanvasSpec(canvas.calendar(), canvas.dividendYieldAnnual(),
+                    canvas.dividendBasis(), canvas.skewVolPerLogMoneyness(),
+                    canvas.termVolPerSqrtYear(), canvas.surfaceDynamics(),
+                    canvas.settlementPolicy(), canvas.exercisePolicy(), nodes, canvas.template())
+                    .sane(horizon);
+        }
+
+        if (sourcePathIndex != null) {
+            return new ResolvedInteraction(declaration, null, List.of(), canvas, sourcePathIndex);
+        }
+        double[] shape = raw.story().waypointMoveFractions(movePct / 100.0);
+        if (horizon <= 1) {
+            List<PathEnsembleService.DisplayWaypoint> pins = List.of(
+                    new PathEnsembleService.DisplayWaypoint(1.0 / 3.0,
+                            Math.max(.01, 1 + shape[0]), .035),
+                    new PathEnsembleService.DisplayWaypoint(2.0 / 3.0,
+                            Math.max(.01, 1 + shape[1]), .035),
+                    new PathEnsembleService.DisplayWaypoint(1,
+                            Math.max(.01, 1 + shape[2]), .02));
+            return new ResolvedInteraction(declaration, null, pins, canvas, null);
+        }
+        int[] days = {Math.max(1, Math.round(elapsed / 3f)),
+                Math.max(1, Math.round(elapsed * 2f / 3f)), elapsed};
+        java.util.LinkedHashMap<Integer, ScenarioSpec.Waypoint> byDay =
+                new java.util.LinkedHashMap<>();
+        for (int i = 0; i < days.length; i++) {
+            byDay.put(days[i], new ScenarioSpec.Waypoint(days[i],
+                    Math.max(.01, 1 + shape[i]), i == days.length - 1 ? .02 : .035));
+        }
+        ScenarioSpec conditioned = base.withWaypoints(new ArrayList<>(byDay.values())).sane();
+        return new ResolvedInteraction(declaration, conditioned, List.of(), canvas, null);
     }
 
     public Seed apply(String symbol, String worldId, AnalysisContext analysis, double spot,
@@ -235,6 +396,23 @@ public final class ScenarioCanvasTemplateService {
     private static void putIv(List<ScenarioCanvasSpec.IvNode> nodes, ScenarioCanvasSpec.IvNode node) {
         nodes.removeIf(p -> p.dayIndex() == node.dayIndex()); nodes.add(node);
         nodes.sort(Comparator.comparingInt(ScenarioCanvasSpec.IvNode::dayIndex));
+    }
+    private static double finite(Double raw, String name) {
+        if (raw == null || !Double.isFinite(raw)) {
+            throw new IllegalArgumentException(name + " is required and must be finite");
+        }
+        return raw;
+    }
+    private static Map<ScenarioStory, StoryPolicy> storyCatalogDefinition() {
+        EnumMap<ScenarioStory, StoryPolicy> policies = new EnumMap<>(ScenarioStory.class);
+        for (ScenarioStory story : ScenarioStory.values()) {
+            policies.put(story, new StoryPolicy(
+                    story.movePct(), story.ivShiftPoints(), story.elapsedSessions()));
+        }
+        if (policies.size() != ScenarioStory.values().length) {
+            throw new IllegalStateException("every scenario story must own one default policy");
+        }
+        return Collections.unmodifiableMap(policies);
     }
     private static boolean observed(DataProvenance p) {
         return p == DataProvenance.OBSERVED || p == DataProvenance.BROKER;

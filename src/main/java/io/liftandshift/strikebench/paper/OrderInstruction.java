@@ -34,11 +34,6 @@ public record OrderInstruction(Type type, Long limitNetCents, TimeInForce timeIn
         return new OrderInstruction(Type.LIMIT, signedNetCents, TimeInForce.DAY);
     }
 
-    /** Compatibility for the former nullable package-price field at API and internal boundaries. */
-    public static OrderInstruction fromLegacy(Long proposedNetCents) {
-        return proposedNetCents == null ? market() : limit(proposedNetCents);
-    }
-
     /**
      * A larger signed net is always more favorable to the customer: more credit or less debit.
      * A limit is therefore marketable when it is less than or equal to the natural executable net.

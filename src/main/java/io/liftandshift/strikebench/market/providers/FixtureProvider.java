@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 
@@ -303,7 +304,7 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
     // ---- helpers ----
 
     private static String norm(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
 
     private static Random seededRng(String key, LocalDate date, int salt) {

@@ -9,6 +9,7 @@ import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeService;
@@ -184,7 +185,7 @@ public final class HeldPositionEconomicsService {
                 : PositionLifecycleReceipt.STANCE_REF;
         OffsetDateTime now = OffsetDateTime.ofInstant(time.asOf(), ZoneOffset.UTC);
         return new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION,
-                request.symbol().trim().toUpperCase(Locale.ROOT), positionFingerprint,
+                Symbol.normalize(request.symbol()), positionFingerprint,
                 PositionLifecycleReceipt.History.unavailable(
                         "No linked opening/campaign receipt was supplied to this exact-package analysis.",
                         "Opening history is never inferred from today's executable marks."),

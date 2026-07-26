@@ -50,7 +50,7 @@ class PaperCoreTest {
                                                         int qty, List<Leg> legs, String thesis,
                                                         String horizon, String riskMode) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, null, null, null, null, null, "PROPOSED");
+                riskMode, null, null, null, null, "PROPOSED", OrderInstruction.market());
     }
 
     private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
@@ -58,17 +58,20 @@ class PaperCoreTest {
                                                         String horizon, String riskMode, String intent,
                                                         Boolean useHeldShares) {
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, intent, useHeldShares, null, null, null, "PROPOSED");
+                riskMode, intent, useHeldShares, null, null, "PROPOSED", OrderInstruction.market());
     }
 
     private static TradeService.OpenRequest openRequest(String accountId, String symbol, String strategy,
                                                         int qty, List<Leg> legs, String thesis,
                                                         String horizon, String riskMode, String intent,
-                                                        Boolean useHeldShares, Long proposedNetCents,
+                                                        Boolean useHeldShares, Long orderLimitNetCents,
                                                         Long feesOverrideCents, String source) {
+        boolean recordedFill = "IMPORT".equals(source) || "BROKER".equals(source);
         return new TradeService.OpenRequest(accountId, symbol, strategy, qty, legs, thesis, horizon,
-                riskMode, intent, useHeldShares, proposedNetCents, feesOverrideCents, source,
-                "IMPORT".equals(source) || "BROKER".equals(source) ? "EXECUTED" : "PROPOSED");
+                riskMode, intent, useHeldShares, feesOverrideCents, source,
+                recordedFill ? "EXECUTED" : "PROPOSED",
+                recordedFill ? null : orderLimitNetCents == null
+                        ? OrderInstruction.market() : OrderInstruction.limit(orderLimitNetCents));
     }
 
     /**
@@ -209,23 +212,23 @@ class PaperCoreTest {
     }
 
     @org.junit.jupiter.api.Test
-    void proposedNetPriceRepricesTheWholePackage() {
+    void recordedFillPriceComesFromExactLegFills() {
         Account acct = accounts.getOrCreateDefault();
         // Executable credit for the 100/95 put spread in the stub book: 3.00 - 1.20 = 1.80/sh = $180.
         TradePreview atMarket = trades.preview(creditPutSpread(acct.id(), 1));
         assertThat(atMarket.price().grossPackageNetCents()).isEqualTo(180_00);
         assertThat(atMarket.maxLossCents()).isEqualTo(500_00 - 180_00);
 
-        // The SAME package at YOUR price ($1.60 credit — a worse fill): max loss, breakevens and
-        // the ledgered economics all follow the real number, and the override is disclosed.
+        // The SAME package at a recorded $1.60 credit: exact per-leg fills—not an order
+        // instruction or aggregate proposal alias—own max loss, breakevens and ledger economics.
         TradeService.OpenRequest mine = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
-                List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
-                "bullish", "month", "balanced", null, null, 160_00L, 200L, "IMPORT");
+                List.of(put(LegAction.SELL, "100", "2.80"), put(LegAction.BUY, "95", "1.20")),
+                "bullish", "month", "balanced", null, null, null, 200L, "IMPORT");
         TradePreview atMine = trades.preview(mine);
         assertThat(atMine.price().grossPackageNetCents()).isEqualTo(160_00);
         assertThat(atMine.maxLossCents()).isEqualTo(500_00 - 160_00);
         assertThat(atMine.price().openingFeesCents()).isEqualTo(200L); // fee override respected
-        assertThat(atMine.warnings()).anySatisfy(w -> assertThat(w).contains("YOUR net price"));
+        assertThat(atMine.warnings()).anySatisfy(w -> assertThat(w).contains("entered leg price"));
 
         // The analytics contract every Review consumer shares.
         assertThat(atMine.analytics()).containsKeys("probabilityMap", "evSensitivity", "executionQuality",
@@ -241,7 +244,7 @@ class PaperCoreTest {
         // The PRICES moved onto the one §7.2 receipt; executionQuality keeps only quality metrics.
         assertThat(exec).doesNotContainKeys("executableNetCents", "proposedNetCents", "fillNetCents");
         assertThat(atMine.price().executableNetCents()).isEqualTo(180_00L);
-        assertThat(atMine.price().restingLimitNetCents()).isEqualTo(160_00L);
+        assertThat(atMine.price().restingLimitNetCents()).isNull();
         assertThat(atMine.price().grossPackageNetCents()).isEqualTo(160_00L);
         assertThat(atMine.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.RECORDED_FILL);
@@ -271,7 +274,7 @@ class PaperCoreTest {
 
         TradeService.OpenRequest market = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
-                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.market());
+                null, null, null, "TICKET", "PROPOSED", OrderInstruction.market());
         TradePreview marketPreview = trades.preview(market);
         assertThat(marketPreview.price().grossPackageNetCents())
                 .as("MARKET ignores entered proposal prices and fills the natural package")
@@ -285,7 +288,7 @@ class PaperCoreTest {
 
         TradeService.OpenRequest marketableLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
-                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(160_00L));
+                null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(160_00L));
         TradePreview improved = trades.preview(marketableLimit);
         assertThat(improved.ok()).isTrue();
         assertThat(improved.price().grossPackageNetCents())
@@ -300,7 +303,7 @@ class PaperCoreTest {
 
         TradeService.OpenRequest restingLimit = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1, enteredLegs, "bullish", "month", "balanced",
-                null, null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(200_00L));
+                null, null, null, "TICKET", "PROPOSED", OrderInstruction.limit(200_00L));
         TradePreview resting = trades.preview(restingLimit);
         assertThat(resting.ok()).isFalse();
         assertThat(resting.price().grossPackageNetCents()).isEqualTo(200_00L);
@@ -341,8 +344,8 @@ class PaperCoreTest {
         TradeService.OpenRequest analyze = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1,
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
-                "bullish", "month", "balanced", null, null, null, null,
-                "ANALYZE", "PROPOSED");
+                "bullish", "month", "balanced", null, null, null,
+                "ANALYZE", "PROPOSED", OrderInstruction.market());
 
         TradePreview preview = trades.analyze(analyze);
 
@@ -363,8 +366,8 @@ class PaperCoreTest {
         TradeService.OpenRequest mixed = new TradeService.OpenRequest(acct.id(), "AAPL",
                 "CREDIT_PUT_SPREAD", 1,
                 List.of(put(LegAction.SELL, "100", "4.25"), put(LegAction.BUY, "95", "0")),
-                "bullish", "month", "balanced", null, null, null, null,
-                "ANALYZE", "PROPOSED");
+                "bullish", "month", "balanced", null, null, null,
+                "ANALYZE", "PROPOSED", OrderInstruction.market());
 
         TradePreview preview = trades.analyze(mixed);
         assertThat(preview.ok()).isTrue();
@@ -676,11 +679,23 @@ class PaperCoreTest {
                 .of(trade.legs(), trade.qty()).entryNetPremiumCents();
         long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
         var exact = io.liftandshift.strikebench.pricing.PayoffCurve.of(combined, trade.qty(), adjustment);
-        double years = io.liftandshift.strikebench.market.OptionTime
-                .nearest(trade.legs(), LocalDate.of(2026, 7, 8)).years();
+        var time = io.liftandshift.strikebench.market.OptionTime
+                .nearest(trade.legs(), CLOCK.instant());
+        long optionNet = ProtocolEvaluator.optionEntryBasisCents(
+                trade.legs(), trade.qty(), trade.entryNetPremiumCents());
+        long stockCash = ProtocolEvaluator.stockEntryBasisCents(trade.legs(), trade.qty());
+        var basis = PackagePriceReceipt.ValuationBasis.RECORDED_FILL;
+        var price = PackagePriceReceipt.of(trade.qty(), trade.entryNetPremiumCents(),
+                optionNet, stockCash, trade.feesOpenCents(),
+                trade.feesOpenCents() + Math.max(0L, trade.feesCloseCents()),
+                PackagePriceReceipt.FeeSide.OPENING, trade.entryNetPremiumCents(),
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE, basis,
+                trade.dataSource(), trade.dataAge(), null,
+                PackagePriceReceipt.fingerprintOf(trade.legs(), trade.qty(),
+                        trade.entryNetPremiumCents(), basis, null));
         double expected = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                exact, 120.0, 0.25, years, 0.04, List.of(new BigDecimal("105")))
-                .probabilityMap().pAnyProfit();
+                exact, price, 12_000L, 0.25, time, 0.04,
+                List.of(new BigDecimal("105"))).pop();
 
         assertThat(marked.popNow()).isCloseTo(expected, org.assertj.core.data.Offset.offset(1e-9));
         assertThat(marked.unrealizedCents()).isEqualTo(-65L);
@@ -708,11 +723,11 @@ class PaperCoreTest {
         assertThatThrownBy(() -> trades.create(resting))
                 .isInstanceOf(TradeRejectedException.class)
                 .hasMessageContaining("cannot claim this paper order filled");
-        TradeService.OpenRequest spoofedImport = openRequest(acct.id(), "AAPL", "CREDIT_PUT_SPREAD", 1,
-                resting.legs(), "bullish", "month", "balanced", null, null, 200_00L, null, "IMPORT");
-        assertThatThrownBy(() -> trades.create(spoofedImport))
-                .isInstanceOf(TradeRejectedException.class)
-                .hasMessageContaining("cannot claim this paper order filled");
+        assertThatThrownBy(() -> new TradeService.OpenRequest(acct.id(), "AAPL",
+                "CREDIT_PUT_SPREAD", 1, resting.legs(), "bullish", "month", "balanced",
+                null, null, null, "IMPORT", "EXECUTED", OrderInstruction.limit(200_00L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("recorded fills").hasMessageContaining("not order instructions");
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(START);
     }
 
@@ -754,14 +769,19 @@ class PaperCoreTest {
         // Near-expiry world: shorts AT the money, wings a step out, expiring in 2 sessions
         // (Fri 2026-07-10 from the fixed Wed 2026-07-08 clock).
         LocalDate soon = LocalDate.of(2026, 7, 10);
-        java.util.function.BiFunction<LegAction, String, Leg> putL = (a, k) ->
-                Leg.option(a, OptionType.PUT, new BigDecimal(k), soon, 1, BigDecimal.ZERO);
-        java.util.function.BiFunction<LegAction, String, Leg> callL = (a, k) ->
-                Leg.option(a, OptionType.CALL, new BigDecimal(k), soon, 1, BigDecimal.ZERO);
-        // The user's ACTUAL fill: slightly below the stub executable, with real fees.
+        // The user's ACTUAL fill: exact leg prices reconcile to a $330 package credit,
+        // slightly above the $320 stub executable, with real fees. A recorded fill must
+        // never smuggle an aggregate proposal scalar past the per-leg price authority.
         TradeService.OpenRequest condor = openRequest(acct.id(), "AAPL", "IRON_BUTTERFLY", 1,
-                List.of(putL.apply(LegAction.SELL, "100"), putL.apply(LegAction.BUY, "95"),
-                        callL.apply(LegAction.SELL, "100"), callL.apply(LegAction.BUY, "105")),
+                List.of(
+                        Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"), soon, 1,
+                                new BigDecimal("3.10")),
+                        Leg.option(LegAction.BUY, OptionType.PUT, new BigDecimal("95"), soon, 1,
+                                new BigDecimal("1.20")),
+                        Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("100"), soon, 1,
+                                new BigDecimal("2.50")),
+                        Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("105"), soon, 1,
+                                new BigDecimal("1.10"))),
                 "neutral", "week", "balanced", null, null, 330_00L, 200L, "IMPORT");
         TradePreview p = trades.preview(condor);
         assertThat(p.ok()).isTrue();
@@ -1103,9 +1123,17 @@ class PaperCoreTest {
         assertThat(view.unrealizedCents()).isEqualTo(-130L);    // same book; opening fees are already spent
         assertThat(view.closeCostCents()).isEqualTo(-18000);
         assertThat(view.popNow()).isBetween(0.0, 1.0);
+        assertThat(view.marketImpliedRisk().available()).isTrue();
+        assertThat(view.marketImpliedRisk().pop()).isEqualTo(view.popNow());
+        assertThat(view.marketImpliedRisk().priceFingerprint()).isNotBlank();
 
         assertThat(accounts.get(acct.id()).cashCents()).isEqualTo(cashBefore);
-        assertThat(trades.marksHistory(t.id(), 10)).hasSize(1);
+        assertThat(trades.marksHistory(t.id(), 10)).singleElement().satisfies(stored -> {
+            assertThat(stored.marketImpliedRisk().fingerprint())
+                    .isEqualTo(view.marketImpliedRisk().fingerprint());
+            assertThat(stored.marketImpliedRisk().priceFingerprint())
+                    .isEqualTo(view.marketImpliedRisk().priceFingerprint());
+        });
         assertLedgerInvariants(acct.id());
     }
 
@@ -1435,7 +1463,7 @@ class PaperCoreTest {
 
         // B5 + B6: the same-shape package greeks and the trading-sessions receipt ride the preview.
         TradePreview preview = trades.preview(creditPutSpread(acct.id(), 2));
-        var pkgGreeks = (io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks)
+        var pkgGreeks = (io.liftandshift.strikebench.model.GreeksView)
                 preview.analytics().get("greeks");
         assertThat(pkgGreeks).isNotNull();
         assertThat(pkgGreeks.deltaShares()).isEqualTo(40.0);
@@ -1452,6 +1480,29 @@ class PaperCoreTest {
         assertThat(pg.positions().getFirst().greeks().deltaShares()).isEqualTo(40.0);
         assertThat(pg.thetaCentsPerDay()).isEqualTo(600.0);   // book theta names its unit
         assertThat(pg.netDollarDeltaCents()).isEqualTo(400_000L); // 40 shares × $100
+    }
+
+    @Test
+    void currentMarkUsesOneUnderlyingReceiptForPriceEvidenceAndTimestamp() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord trade = trades.create(creditPutSpread(acct.id(), 1));
+        marks.evidenceOverride = new io.liftandshift.strikebench.model.DataEvidence(
+                io.liftandshift.strikebench.model.DataProvenance.DEMO,
+                io.liftandshift.strikebench.model.DataAge.DELAYED, "test-demo delayed feed");
+        marks.scalarUnderlyingCalls.set(0);
+
+        TradeService.MarkView view = trades.currentMark(trade.id());
+
+        assertThat(marks.scalarUnderlyingCalls).hasValue(1);
+        assertThat(view.underlyingCents()).isEqualTo(10_000L);
+        assertThat(view.underlyingQuote()).isNotNull();
+        assertThat(view.underlyingQuote().mark()).isEqualByComparingTo("100.00");
+        assertThat(view.underlyingQuote().evidence()).isEqualTo(marks.evidenceOverride);
+        assertThat(view.underlyingQuote().markFreshness()).isEqualTo(Freshness.DELAYED);
+        // Package freshness remains the worst of the quote and every option leg. The fixture
+        // option books are intentionally FIXTURE, so this must not be promoted to DELAYED merely
+        // because the underlying quote is newer.
+        assertThat(view.freshness()).isEqualTo(Freshness.FIXTURE.name());
     }
 
     /**
@@ -2209,6 +2260,33 @@ class PaperCoreTest {
         assertThat((Long) heat.get("assignmentReserveReleasedCents")).isEqualTo(1_000_000L);
         assertThat((Long) heat.get("postPhysicalAssignmentBuyingPowerCents")).isEqualTo(buyingPowerBefore);
         assertThat(heat).doesNotContainKeys("assignmentCashCents", "postAssignmentBuyingPowerCents");
+    }
+
+    @Test
+    void practiceBookSnapshotIsTheOneProjectionSourceAndMarksEachPositionOnce() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(acct.id(), 1));
+        marks.scalarUnderlyingCalls.set(0);
+
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(acct.id());
+
+        assertThat(snapshot.accountId()).isEqualTo(acct.id());
+        assertThat(snapshot.activeTrades()).extracting(TradeRecord::id).containsExactly(opened.id());
+        assertThat(snapshot.marksByTrade()).containsOnlyKeys(opened.id());
+        assertThat(marks.scalarUnderlyingCalls).hasValue(1);
+        assertThat(snapshot.heat().activeTrades()).isEqualTo(snapshot.activeTrades().size());
+        assertThat(snapshot.openPositions().openTradesCount()).isEqualTo(snapshot.activeTrades().size());
+        assertThat(snapshot.greeks().activeTrades()).isEqualTo(snapshot.activeTrades().size());
+        assertThat(snapshot.greeks().netDollarDeltaCents())
+                .isEqualTo(snapshot.dollarDelta().netCents());
+        assertThat(snapshot.heat().legacyProjection())
+                .isEqualTo(trades.portfolioHeat(acct.id()));
+        assertThat(snapshot.openPositions()).isEqualTo(trades.openPositionsValue(acct.id()));
+        assertThat(snapshot.greeks()).isEqualTo(trades.portfolioGreeks(acct.id()));
+        assertThat(snapshot.dollarDelta()).isEqualTo(trades.portfolioDollarDeltaBook(acct.id()));
+        assertThat(marks.scalarUnderlyingCalls)
+                .as("legacy API projections reuse the current Practice snapshot mark map")
+                .hasValue(1);
     }
 
     /**

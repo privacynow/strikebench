@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.recommend;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.eval.StrategySpec;
 import io.liftandshift.strikebench.model.Horizon;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Json;
 
 import java.nio.charset.StandardCharsets;
@@ -54,8 +55,7 @@ public record ResultIdentity(
         }
         Candidate candidate = evaluation.candidate();
         StrategySpec spec = evaluation.spec();
-        String symbol = upper(evaluation.symbol());
-        if (symbol == null) throw new IllegalArgumentException("a result identity requires its symbol");
+        String symbol = Symbol.normalize(evaluation.symbol());
         String family = upper(evaluation.family());
         String goal = upper(spec == null ? candidate.intent() : spec.intent());
         String view = upper(spec == null ? null : spec.thesis());

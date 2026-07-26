@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.db;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.Universes;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Json;
@@ -454,13 +455,7 @@ public record WorkspaceContext(
     }
 
     private static String symbol(String raw) {
-        String value = blankToNull(raw);
-        if (value == null) return null;
-        String upper = value.trim().toUpperCase(Locale.ROOT);
-        if (!upper.matches("[A-Z0-9._-]{1,20}")) {
-            throw new IllegalArgumentException("focusedSymbol is not a valid symbol: " + raw);
-        }
-        return upper;
+        return Symbol.normalizeOptional(raw);
     }
 
     private static String id(String field, String raw) {

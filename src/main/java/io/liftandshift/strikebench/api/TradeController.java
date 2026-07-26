@@ -1,6 +1,9 @@
 package io.liftandshift.strikebench.api;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.config.AppConfig;
@@ -152,13 +155,23 @@ final class TradeController {
     private record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
 
     private void preview(Context ctx) {
+        rejectRemovedProposalAlias(ctx);
         ctx.json(previewPayload(ctx, ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class)));
     }
 
     private void create(Context ctx) {
+        rejectRemovedProposalAlias(ctx);
         CreatedTrade created = execute(ctx, ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class), null);
         ctx.status(201).json(new ApiResponses.CreatedTrade<>(
                 TradeView.of(created.trade()), created.verdict().warnings()));
+    }
+
+    private static void rejectRemovedProposalAlias(Context ctx) {
+        JsonNode body = Json.parse(ctx.body());
+        if (body.has("proposedNetCents")) {
+            throw new IllegalArgumentException(
+                    "proposedNetCents was removed; use orderInstruction.limitNetCents for a LIMIT order");
+        }
     }
 
     private void list(Context ctx) {
@@ -276,6 +289,7 @@ final class TradeController {
             Verdict verdict, List<ApiResponses.RiskAcknowledgment> required,
             String excludedTradeId) {
         ApiResponses.EvaluationReceipt evaluation;
+        io.liftandshift.strikebench.eval.StrategyEvaluation exactEvaluation = null;
         // §3.1: the round-trip commission is the §7.2 receipt's own doubling, not a fourth copy of
         // `feesOpenCents * 2` — and §3.2: null when the package states no commission, so the
         // assessment reports "no EV after costs" instead of netting the gross EV against $0.
@@ -285,11 +299,12 @@ final class TradeController {
         } else {
             try {
                 Candidate exact = exactPreviewCandidate(request, preview);
-                evaluation = ApiResponses.EvaluationReceipt.of(exactAssessment.assess(
+                exactEvaluation = exactAssessment.assess(
                         request.symbol(), exact, preview.buyingPowerBeforeCents(),
                         analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
                         preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
-                                excludedTradeId)));
+                                excludedTradeId));
+                evaluation = ApiResponses.EvaluationReceipt.of(exactEvaluation);
             } catch (RuntimeException e) {
                 log.warn("Exact-ticket assessment is unavailable for this preview", e);
                 evaluation = unavailableAssessmentEvaluation(preview);
@@ -315,8 +330,45 @@ final class TradeController {
                     pctOfRiskCapital, overRiskCapital,
                     selectedCapitalUse(request, preview, identity, riskContext.riskCapitalCents()));
         }
+        var endorsement = exactEvaluation == null
+                ? new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
+                    io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON, null,
+                    List.of(evaluation.unavailableReason() == null
+                            ? "The exact package evaluation is unavailable."
+                            : evaluation.unavailableReason()),
+                    "The exact package remains a comparison until its backend evaluation is available.")
+                : exactEvaluation.endorsement();
+        var execution = executionDecision(preview, guardrails);
         return new ApiResponses.TradePreviewResponse(preview, evaluation, guardrails,
-                required.isEmpty() ? null : required, token, accountFit, identity);
+                required.isEmpty() ? null : required, token, accountFit, identity, endorsement,
+                execution);
+    }
+
+    private static ApiResponses.ExecutionDecision executionDecision(
+            io.liftandshift.strikebench.paper.TradePreview preview,
+            ApiResponses.Guardrails guardrails) {
+        List<String> reasons = java.util.stream.Stream.concat(
+                        preview.blockReasons().stream(), guardrails.blockReasons().stream())
+                .filter(java.util.Objects::nonNull)
+                .map(String::trim)
+                .filter(reason -> !reason.isEmpty())
+                .distinct()
+                .toList();
+        boolean reviewAllowed = preview.ok() && reasons.isEmpty()
+                && !"BLOCK".equalsIgnoreCase(guardrails.level());
+        var price = preview.price();
+        boolean immediate = price != null
+                && price.executability()
+                == io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE;
+        boolean confirmAllowed = reviewAllowed && immediate;
+        String state = price == null ? "UNAVAILABLE" : price.executability().name();
+        if (!reviewAllowed && reasons.isEmpty()) {
+            reasons = List.of("This exact instruction is unavailable.");
+        } else if (reviewAllowed && !immediate) {
+            reasons = List.of("This exact instruction is not presently executable.");
+        }
+        return new ApiResponses.ExecutionDecision(
+                reviewAllowed, confirmAllowed, immediate, state, reasons);
     }
 
     /**
@@ -516,8 +568,8 @@ final class TradeController {
         long reserved = projection == null ? account.reservedCents() : projection.reservedCents();
         long releasedShares = projection == null ? 0 : projection.releasedShares();
         long buyingPower = Math.subtractExact(cash, reserved);
-        Verdict verdict = guardrailCheck(request, account, riskCapCents(ctx), buyingPower, releasedShares);
         io.liftandshift.strikebench.paper.TradePreview preview = trades.preview(request, cash, reserved, releasedShares);
+        Verdict verdict = placementVerdict(request, account, preview, riskCapCents(ctx), buyingPower);
         long effectiveRiskBudget = RiskBudgetPolicy.compute(
                 RecommendationEngine.RiskMode.parse(request.riskMode()),
                 buyingPower, riskCapCents(ctx)).effectiveBudgetCents();
@@ -550,7 +602,6 @@ final class TradeController {
 
     ApiResponses.TradeDetail<TradeView, TradeService.MarkView, Object, Object> detailData(String id) {
         TradeRecord trade = trades.get(id);
-        ApiResponses.QuoteView quote = positionQuote(trade);
         TradeService.MarkView current = null;
         String currentUnavailableReason = null;
         if (TradeRecord.ACTIVE.equals(trade.status())) {
@@ -564,6 +615,17 @@ final class TradeController {
                 log.debug("Paper-trade mark detail for " + id, e);
             }
         }
+        Quote positionQuote = current == null
+                ? trades.currentUnderlyingQuote(id).orElse(null)
+                : current.underlyingQuote();
+        ApiResponses.QuoteView quote = positionQuote != null
+                ? ApiResponses.QuoteView.of(positionQuote, false)
+                : ApiResponses.QuoteView.unavailable(trade.symbol(),
+                    current != null && current.availability() != null
+                            && current.availability().quoteUnavailableReason() != null
+                            ? current.availability().quoteUnavailableReason()
+                            : "No current quote is available for " + trade.symbol()
+                                + " in this position's market lane.");
         ApiResponses.PracticePositionAnalysis analysis = null;
         if (TradeRecord.ACTIVE.equals(trade.status()) && lifecycleAnalyses != null) {
             try {
@@ -585,27 +647,9 @@ final class TradeController {
                 // "If price holds" is a question about a package still exposed to the market. A
                 // closed line has a REALIZED result; publishing a hypothetical beside it would
                 // invite reading the wrong number as today's outcome.
-                active ? heldSpotPnl(trade, current, quote) : null);
+                active ? heldSpotPnl(trade, current) : null);
         return new ApiResponses.TradeDetail<>(view, current, quote, currentUnavailableReason,
                 trades.marksHistory(id, 50), audit.forTrade(id, 50), analysis);
-    }
-
-    /** The same canonical display-price decision used by Home and New Idea, now on Position. */
-    private ApiResponses.QuoteView positionQuote(TradeRecord trade) {
-        Account account = accounts.get(trade.accountId());
-        String world = "DEMO".equals(account.type()) ? "demo" : account.worldId();
-        try {
-            return market.quote(trade.symbol(), world)
-                    .map(quote -> ApiResponses.QuoteView.of(quote, false))
-                    .orElseGet(() -> ApiResponses.QuoteView.unavailable(trade.symbol(),
-                            "No current quote is available for " + trade.symbol()
-                                    + " in this position's market lane."));
-        } catch (RuntimeException e) {
-            String reason = e.getMessage() == null || e.getMessage().isBlank()
-                    ? "The current quote for " + trade.symbol() + " could not be read."
-                    : e.getMessage();
-            return ApiResponses.QuoteView.unavailable(trade.symbol(), reason);
-        }
     }
 
     static long decisionPnl(TradeRecord trade, long packagePnlCents) {
@@ -674,14 +718,14 @@ final class TradeController {
         List<Leg> legs = body.legs().stream().map(LegView::toLeg).toList();
         if (body.intent() != null && !body.intent().isBlank()) StrategyIntent.parse(body.intent());
         String suppliedStrategy = body.strategy().trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(body.symbol());
         var identified = io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                body.symbol().trim().toUpperCase(Locale.ROOT), body.qty(), legs);
+                symbol, body.qty(), legs);
         String strategy = "CUSTOM".equals(suppliedStrategy) && identified.family() != null
                 ? identified.family() : suppliedStrategy;
-        return new TradeService.OpenRequest(accountId, body.symbol().trim().toUpperCase(Locale.ROOT), strategy,
+        return new TradeService.OpenRequest(accountId, symbol, strategy,
                 body.qty(), legs, body.thesis(), body.horizon(),
-                body.riskMode(), body.intent(), body.useHeldShares(), body.proposedNetCents(),
-                body.feesOverrideCents(),
+                body.riskMode(), body.intent(), body.useHeldShares(), body.feesOverrideCents(),
                 body.source(),
                 body.fillNature(), body.orderInstruction());
     }
@@ -692,20 +736,21 @@ final class TradeController {
                 ? context.riskCapitalCents() : null;
     }
 
-    private Verdict guardrailCheck(TradeService.OpenRequest request, Account account,
-                                   Long riskCapCents, long buyingPowerCents,
-                                   long releasedShares) {
-        StrategyFamily family = null;
-        try {
-            family = StrategyFamily.valueOf(request.strategy());
-        } catch (IllegalArgumentException ignored) {
-            // Custom positions are validated by their exact legs.
-        }
-        List<OptionQuote> quotes = new ArrayList<>();
-        Freshness worst = Freshness.REALTIME;
+    /**
+     * Adds account policy and event context to the one canonical priced-risk preview.
+     *
+     * <p>This method deliberately does not fetch or reprice a quote, chain, leg, payoff, reserve,
+     * or maximum loss. {@link TradeService#preview} owns those facts and already applies the exact
+     * expiry, evidence, executability, coverage, and buying-power gates used by create. The former
+     * controller-side guardrail pass repeated all of that against a second market snapshot, which
+     * allowed preview and placement to disagree.</p>
+     */
+    private Verdict placementVerdict(TradeService.OpenRequest request, Account account,
+                                     io.liftandshift.strikebench.paper.TradePreview preview,
+                                     Long riskCapCents, long buyingPowerCents) {
+        List<String> blocks = new ArrayList<>(preview.blockReasons());
+        List<String> warnings = new ArrayList<>(preview.warnings());
         String accountWorld = "DEMO".equals(account.type()) ? "demo" : account.worldId();
-        MarketLane lane = MarketLane.of(accountWorld, cfg.fixturesOnly());
-        List<String> integrityBlocks = new ArrayList<>();
         LocalDate latestExpiration = request.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).filter(Objects::nonNull).max(LocalDate::compareTo).orElse(null);
         boolean inWorld = accountWorld != null;
@@ -716,93 +761,28 @@ final class TradeController {
             return headline.contains("earnings") || headline.contains("guidance")
                     || headline.contains("results");
         });
-        Quote underlyingQuote = market.quote(request.symbol(), accountWorld).orElse(null);
-        if (underlyingQuote != null && !underlyingQuote.evidence().usableIn(lane)) {
-            integrityBlocks.add("The " + lane + " market cannot use "
-                    + underlyingQuote.evidence().provenance() + " underlying data from "
-                    + underlyingQuote.evidence().source());
-        }
-        BigDecimal spot = underlyingQuote == null ? null : underlyingQuote.mark();
-        LocalDate laneToday = market.laneToday(accountWorld, clock);
-        List<String> expired = request.legs().stream()
-                .filter(leg -> !leg.isStock() && leg.expiration().isBefore(laneToday))
-                .map(leg -> "Contract " + leg.strike() + " " + leg.type() + " "
-                        + leg.expiration() + " is already expired")
-                .toList();
-        if (!expired.isEmpty()) return Verdict.of(expired, List.of());
-        List<Leg> priced = new ArrayList<>(request.legs().size());
-        for (Leg leg : request.legs()) {
-            if (leg.isStock()) {
-                quotes.add(null);
-                BigDecimal price = leg.entryPrice().signum() > 0 ? leg.entryPrice() : spot;
-                if (price == null) {
-                    integrityBlocks.add("No current underlying mark is available for the "
-                            + request.symbol() + " stock leg; the package cannot be evaluated.");
-                    continue;
-                }
-                priced.add(new Leg(leg.action(), null, null, null, leg.ratio(), price, leg.multiplier()));
-                continue;
-            }
-            OptionChain chain = market.chain(request.symbol(), leg.expiration(), accountWorld).orElse(null);
-            if (chain != null && !chain.evidence().executableIn(lane)) {
-                integrityBlocks.add("The " + lane + " market cannot execute " + leg.strike()
-                        + " " + leg.type() + " " + leg.expiration() + " from "
-                        + chain.evidence().provenance() + " data (" + chain.evidence().source() + ")");
-            }
-            OptionQuote quote = chain == null ? null : chain.find(leg.type(), leg.strike()).orElse(null);
-            quotes.add(quote);
-            if (quote != null) worst = Freshness.worse(worst, quote.freshness());
-            BigDecimal mid = leg.entryPrice().signum() > 0 ? leg.entryPrice()
-                    : quote != null ? quote.mid() : null;
-            if (mid == null) {
-                integrityBlocks.add("No current option mark is available for "
-                        + leg.action() + " " + leg.type() + " " + leg.strike() + " exp "
-                        + leg.expiration() + "; the package cannot be evaluated.");
-                continue;
-            }
-            priced.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(),
-                    leg.ratio(), mid, leg.multiplier()));
-        }
-        // A missing market fact is a blocked receipt, not a free leg. Return before coverage,
-        // payoff, risk-budget, or exact-evaluation code can see a partial package.
-        if (priced.size() != request.legs().size()) {
-            return Verdict.of(List.copyOf(integrityBlocks), List.of());
-        }
-        long lockedShares = 0;
-        String shareShortfall = null;
-        if (request.heldShares()) {
-            long coverSharesPerUnit = Math.max(0,
-                    io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(priced));
-            long contextSharesPerUnit = Math.max(coverSharesPerUnit,
-                    io.liftandshift.strikebench.strategy.CoverageCheck.shareContextUnitsNeeded(priced));
-            long neededShares = Math.multiplyExact(contextSharesPerUnit, request.qty());
-            long freeShares = Math.addExact(positions.freeShares(account.id(), request.symbol()),
-                    releasedShares);
-            if (freeShares >= neededShares) {
-                lockedShares = Math.multiplyExact(coverSharesPerUnit, request.qty());
-            } else {
-                shareShortfall = "Needs " + neededShares + " free shares of " + request.symbol()
-                        + " but only " + Math.max(0, freeShares)
-                        + " are free (held minus already locked)";
+
+        // Risk posture is an advisory account policy layered over the exact preview, not another
+        // payoff calculation. Missing risk stays missing and therefore cannot create a warning
+        // against an invented zero.
+        if (preview.maxLossCents() != null) {
+            RecommendationEngine.RiskMode mode =
+                    RecommendationEngine.RiskMode.parse(request.riskMode());
+            long budget = RiskBudgetPolicy.compute(mode, buyingPowerCents, riskCapCents)
+                    .effectiveBudgetCents();
+            if (preview.maxLossCents() > budget) {
+                warnings.add("Max loss " + io.liftandshift.strikebench.util.Money.fmt(
+                                preview.maxLossCents())
+                        + " exceeds your " + mode.name().toLowerCase(Locale.ROOT)
+                        + " risk budget of "
+                        + io.liftandshift.strikebench.util.Money.fmt(budget)
+                        + " per trade — allowed, but oversized for your chosen risk mode");
             }
         }
-        Verdict verdict = Guardrails.check(new Guardrails.Proposal(family, priced, request.qty(),
-                quotes, spot, worst, laneToday, buyingPowerCents, false,
-                earningsSoon, false, lockedShares));
-        if (!integrityBlocks.isEmpty()) {
-            List<String> blocks = new ArrayList<>(verdict.blockReasons());
-            blocks.addAll(0, integrityBlocks);
-            verdict = Verdict.of(blocks, verdict.warnings());
-        }
-        if (shareShortfall != null) {
-            List<String> blocks = new ArrayList<>(verdict.blockReasons());
-            blocks.addFirst(shareShortfall);
-            verdict = Verdict.of(blocks, verdict.warnings());
-        }
+
         if (earningsSoon) {
             EventService.EventEvidence event = eventCalendar.earnings(request.symbol());
             if (event.available()) {
-                List<String> warnings = new ArrayList<>(verdict.warnings());
                 String timing = event.session() == EventService.EventSession.BEFORE_OPEN ? " before open"
                         : event.session() == EventService.EventSession.AFTER_CLOSE ? " after close" : "";
                 warnings.add(event.status() == EventService.EvidenceStatus.CONFIRMED
@@ -810,52 +790,12 @@ final class TradeController {
                             + " — it lands inside this trade"
                         : "Earnings ESTIMATED around " + event.date() + " ±" + event.windowDays()
                             + "d (" + event.basis() + ") — not a confirmed date, but it lands inside this trade");
-                verdict = Verdict.of(verdict.blockReasons(), warnings);
             }
         } else if (eventLikeNews) {
-            List<String> warnings = new ArrayList<>(verdict.warnings());
             warnings.add("Event-like news in recent headlines (earnings/guidance keywords) — "
                     + "a news signal only; no earnings event is ESTIMATED before this trade's expiration");
-            verdict = Verdict.of(verdict.blockReasons(), warnings);
         }
-        try {
-            Long adjustment = null;
-            if (request.proposedNetCents() != null) {
-                long pricedNet = 0;
-                for (Leg leg : priced) {
-                    long shares = (long) leg.multiplier() * leg.ratio() * request.qty();
-                    long cents = io.liftandshift.strikebench.util.Money.centsFromPrice(
-                            leg.entryPrice(), shares);
-                    pricedNet += leg.action() == io.liftandshift.strikebench.model.LegAction.SELL
-                            ? cents : -cents;
-                }
-                // An executable limit receives the natural package price. Only a resting limit
-                // is analyzed at its requested economics; an actual recorded fill remains fact.
-                if (request.executedFill() || request.proposedNetCents() > pricedNet) {
-                    adjustment = request.proposedNetCents() - pricedNet;
-                }
-            }
-            PayoffCurve curve = PayoffCurve.of(priced, request.qty(), adjustment);
-            if (!curve.maxLossUnbounded() && curve.maxLossCents() > 0) {
-                RecommendationEngine.RiskMode mode =
-                        RecommendationEngine.RiskMode.parse(request.riskMode());
-                long budget = RiskBudgetPolicy.compute(mode, buyingPowerCents, riskCapCents)
-                        .effectiveBudgetCents();
-                if (curve.maxLossCents() > budget) {
-                    List<String> warnings = new ArrayList<>(verdict.warnings());
-                    warnings.add("Max loss "
-                            + io.liftandshift.strikebench.util.Money.fmt(curve.maxLossCents())
-                            + " exceeds your " + mode.name().toLowerCase(Locale.ROOT)
-                            + " risk budget of "
-                            + io.liftandshift.strikebench.util.Money.fmt(budget)
-                            + " per trade — allowed, but oversized for your chosen risk mode");
-                    verdict = Verdict.of(verdict.blockReasons(), warnings);
-                }
-            }
-        } catch (RuntimeException ignored) {
-            // Budget comparison is advisory; structural checks above remain authoritative.
-        }
-        return verdict;
+        return Verdict.of(List.copyOf(blocks), List.copyOf(warnings));
     }
 
     static Candidate exactPreviewCandidate(TradeService.OpenRequest request,
@@ -897,7 +837,7 @@ final class TradeController {
                 description.display(), legs, request.qty(),
                 price, preview.maxProfitCents(), preview.maxLossCents(),
                 preview.breakevens() == null ? List.of() : preview.breakevens(),
-                preview.popEntry(), preview.expectedValueCents(),
+                preview.marketImpliedRisk(),
                 liquidity, preview.freshness(),
                 preview.warnings() == null ? List.of() : preview.warnings(), confidence,
                 "Exact ticket", "", "", "", "", description.intent(), description.intents(),
@@ -913,7 +853,8 @@ final class TradeController {
             @com.fasterxml.jackson.annotation.JsonInclude(
                     com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
             Long maxLossCents,
-            List<String> breakevens, Double pop, Long expectedValueCents,
+            List<String> breakevens,
+            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
             @com.fasterxml.jackson.annotation.JsonInclude(
                     com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
             Double liquidityScore,
@@ -937,11 +878,21 @@ final class TradeController {
                         "This exact package has no complete executable-price receipt and cannot become an assessed candidate.");
             }
             return new Candidate(strategy, displayName, structureGroup, label, legs, qty, price,
-                    maxProfitCents, maxLossCents, breakevens, pop, expectedValueCents,
+                    maxProfitCents, maxLossCents, breakevens,
                     liquidityScore, freshness, warnings, confidence, whyConsidered, bestUpside,
                     biggestRisk, wouldInvalidate, beginnerExplanation, intent, intents,
                     assignmentProb, annualizedYieldPct, effectivePrice, intentNote,
-                    usesHeldShares, sharesNeeded, combinedMaxLossCents);
+                    usesHeldShares, sharesNeeded, combinedMaxLossCents, marketImpliedRisk);
+        }
+
+        @com.fasterxml.jackson.annotation.JsonProperty("pop")
+        Double pop() {
+            return marketImpliedRisk == null ? null : marketImpliedRisk.pop();
+        }
+
+        @com.fasterxml.jackson.annotation.JsonProperty("expectedValueCents")
+        Long expectedValueCents() {
+            return marketImpliedRisk == null ? null : marketImpliedRisk.expectedValueCents();
         }
     }
 
@@ -1097,7 +1048,7 @@ final class TradeController {
             mac.init(new javax.crypto.spec.SecretKeySpec(acknowledgmentSecret, "HmacSHA256"));
             String payload = request.symbol() + "|" + request.strategy() + "|" + request.qty()
                     + "|" + io.liftandshift.strikebench.util.Json.canonical(request.legs())
-                    + "|" + request.proposedNetCents() + "|" + request.feesOverrideCents()
+                    + "|" + request.feesOverrideCents()
                     + "|" + io.liftandshift.strikebench.util.Json.canonical(request.orderInstruction())
                     + "|" + request.accountId() + "|" + timestamp;
             return java.util.HexFormat.of().formatHex(mac.doFinal(
@@ -1130,22 +1081,6 @@ final class TradeController {
                 mark == null ? null : mark.freshness());
     }
 
-    private static ApiResponses.HeldSpotPnl heldSpotPnl(
-            TradeRecord trade, TradeService.MarkView mark, ApiResponses.QuoteView quote) {
-        if (quote != null && quote.priced() && quote.displayPrice() != null) {
-            return heldSpotPnlAtCurrentQuote(trade,
-                    io.liftandshift.strikebench.util.Money.toCents(quote.displayPrice()),
-                    quote.markBasis(), quote.freshness());
-        }
-        String reason = quote == null ? null : quote.quoteUnavailableReason();
-        if (reason == null && mark != null && mark.availability() != null) {
-            reason = mark.availability().quoteUnavailableReason();
-        }
-        return ApiResponses.HeldSpotPnl.unavailable(reason == null
-                ? "No current underlying quote is available for this position."
-                : reason);
-    }
-
     private static ApiResponses.HeldSpotPnl heldSpotPnlAtCurrentQuote(
             TradeRecord trade, Long spotCents, String spotBasis, String freshness) {
         boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
@@ -1165,7 +1100,7 @@ final class TradeController {
         }
         BigDecimal anchor = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
         BigDecimal spot = BigDecimal.valueOf(spotCents).movePointLeft(2);
-        PayoffCurve curve = heldPayoffCurve(trade, anchor);
+        PayoffCurve curve = TradeService.heldPayoffCurve(trade);
         List<PayoffCurve.ChartPoint> served = curve.chartPoints(anchor);
         boolean within = !served.isEmpty()
                 && spot.compareTo(served.getFirst().price()) >= 0
@@ -1173,21 +1108,6 @@ final class TradeController {
         return new ApiResponses.HeldSpotPnl(curve.profitAtCents(spot), spotCents,
                 spotBasis, freshness,
                 within, null);
-    }
-
-    /** The one held-line payoff curve (folds locked shares in as a synthetic lot at entry spot). */
-    private static PayoffCurve heldPayoffCurve(TradeRecord trade, BigDecimal spot) {
-        List<Leg> chartLegs = trade.legs();
-        long heldShares = TradeService.heldShareContextSharesForDisplay(trade);
-        long sharesPerUnit = trade.qty() > 0 ? heldShares / trade.qty() : 0;
-        if (sharesPerUnit > 0 && sharesPerUnit * trade.qty() == heldShares) {
-            chartLegs = new ArrayList<>(trade.legs());
-            chartLegs.add(Leg.stockShares(io.liftandshift.strikebench.model.LegAction.BUY,
-                    Math.toIntExact(sharesPerUnit), spot));
-        }
-        long tradedLegEntry = PayoffCurve.of(trade.legs(), trade.qty()).entryNetPremiumCents();
-        long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
-        return PayoffCurve.of(chartLegs, trade.qty(), adjustment);
     }
 
     /**
@@ -1206,13 +1126,15 @@ final class TradeController {
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations || trade.entryUnderlyingCents() <= 0) return List.of();
         BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
-        PayoffCurve curve = heldPayoffCurve(trade, spot);
+        PayoffCurve curve = TradeService.heldPayoffCurve(trade);
         List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> out = new ArrayList<>();
-        for (double move : io.liftandshift.strikebench.eval.RiskProfiler.storyMoves()) {
+        for (io.liftandshift.strikebench.model.ScenarioStory story
+                : io.liftandshift.strikebench.model.ScenarioStory.values()) {
+            double move = story.underlyingMoveFraction();
             BigDecimal price = spot.multiply(BigDecimal.valueOf(1.0 + move));
             if (price.signum() <= 0) continue;
             out.add(new io.liftandshift.strikebench.eval.RiskProfile.Scenario(
-                    move, curve.profitAtCents(price), null));
+                    story, move, curve.profitAtCents(price), null));
         }
         return List.copyOf(out);
     }
@@ -1230,22 +1152,23 @@ final class TradeController {
             return new io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff(
                     io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.SCHEMA,
                     io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.MODEL,
-                    false, null, null, null, null, false, List.of(),
+                    false, null, null, null, null, null, false, List.of(),
                     "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
         }
         BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
         String expiration = trade.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).filter(Objects::nonNull)
                 .min(LocalDate::compareTo).map(LocalDate::toString).orElse(null);
+        PayoffCurve curve = TradeService.heldPayoffCurve(trade);
         List<io.liftandshift.strikebench.eval.RiskProfile.PayoffPoint> points =
-                heldPayoffCurve(trade, spot).chartPoints(spot).stream()
+                curve.chartPoints(spot).stream()
                         .map(p -> new io.liftandshift.strikebench.eval.RiskProfile.PayoffPoint(
                                 p.price(), p.profitCents()))
                         .toList();
         return new io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff(
                 io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.SCHEMA,
                 io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.MODEL,
-                !points.isEmpty(), trade.entryUnderlyingCents(), expiration,
+                !points.isEmpty(), trade.entryUnderlyingCents(), curve.profitAtCents(spot), expiration,
                 "EXPIRATION_INTRINSIC", "RECORDED_TRADE_NET", false, points,
                 points.isEmpty() ? "No positive underlying anchor is recorded for this trade." : null);
     }
@@ -1272,7 +1195,7 @@ final class TradeController {
                     false, null, false, false, 0L, null,
                     "No positive underlying anchor is recorded for this trade.");
         }
-        PayoffCurve curve = heldPayoffCurve(trade, spot);
+        PayoffCurve curve = TradeService.heldPayoffCurve(trade);
         String sectorLabel = trade.symbol() == null || trade.symbol().isBlank()
                 ? null : Universes.allocationSectorLabel(trade.symbol());
         return io.liftandshift.strikebench.pricing.JumpMixtureTerminal.tail(spotD, sectorLabel, 55.0,

@@ -95,6 +95,8 @@ final class PlanOutcomeController {
                                                    pathWaypoints,
                                            io.liftandshift.strikebench.sim.IvSpec iv,
                                            io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas,
+                                           io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction
+                                                   interaction,
                                            Integer limit,
                                            String focusPositionKey) {}
     public record PlanBacktestRequest(Long expectedVersion, String engine, String from, String to,
@@ -131,6 +133,7 @@ final class PlanOutcomeController {
         List<io.liftandshift.strikebench.sim.PathEnsembleService.DisplayWaypoint> inlinePathWaypoints =
                 body == null || body.pathWaypoints() == null
                         ? List.of() : List.copyOf(body.pathWaypoints());
+        var interaction = body == null ? null : body.interaction();
         if (!inlineWaypoints.isEmpty() && !inlinePathWaypoints.isEmpty()) {
             throw new IllegalArgumentException(
                     "waypoints and pathWaypoints are alternative conditioning sources; provide exactly one");
@@ -138,6 +141,15 @@ final class PlanOutcomeController {
         if (scenarioId != null && !scenarioId.isBlank()
                 && (!inlineWaypoints.isEmpty() || !inlinePathWaypoints.isEmpty())) {
             throw new IllegalArgumentException("scenarioId and inline waypoints are alternative scenario sources");
+        }
+        if (interaction != null && (scenarioId != null && !scenarioId.isBlank()
+                || !inlineWaypoints.isEmpty() || !inlinePathWaypoints.isEmpty())) {
+            throw new IllegalArgumentException(
+                    "interaction, scenarioId, and inline waypoints are alternative scenario sources");
+        }
+        if (interaction != null && body.canvas() != null) {
+            throw new IllegalArgumentException(
+                    "interaction resolves its canvas on the server; canvas cannot also be supplied");
         }
         int limit = body == null || body.limit() == null
                 ? parseDisplayPathLimit(ctx.queryParam("limit")) : body.limit();
@@ -168,6 +180,19 @@ final class PlanOutcomeController {
                         "Run the possible-futures fan before requesting display paths.");
             }
         }
+        io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.ResolvedInteraction
+                resolvedInteraction = null;
+        Integer exactSourcePathIndex = null;
+        if (interaction != null) {
+            resolvedInteraction =
+                    io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.resolveInteraction(
+                            stored.ensemble(), stored.ensemble().spec(),
+                            body.iv() == null ? stored.iv() : body.iv().sane(),
+                            stored.canvas(), interaction);
+            scenarioSpec = resolvedInteraction.scenario();
+            inlinePathWaypoints = resolvedInteraction.pathWaypoints();
+            exactSourcePathIndex = resolvedInteraction.sourcePathIndex();
+        }
         if (!inlineWaypoints.isEmpty()) {
             scenarioSpec = stored.ensemble().spec().withWaypoints(inlineWaypoints).sane();
         }
@@ -180,9 +205,12 @@ final class PlanOutcomeController {
                 && !java.util.Objects.equals(root.activeWorld(ctx), stored.ensemble().scope().worldId())) {
             throw new IllegalStateException("This path set belongs to another market world. Open its market before animating it.");
         }
-        var projection = inlinePathWaypoints.isEmpty()
-                ? pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit)
-                : pathEnsembles.displayPathsAtProgress(stored.ensemble(), inlinePathWaypoints, limit);
+        var projection = exactSourcePathIndex != null
+                ? pathEnsembles.displayPathsFocusedOnSource(
+                        stored.ensemble(), exactSourcePathIndex, limit, null)
+                : inlinePathWaypoints.isEmpty()
+                    ? pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit)
+                    : pathEnsembles.displayPathsAtProgress(stored.ensemble(), inlinePathWaypoints, limit);
         var ensembleRef = new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().waypointFill().name());
         if (!typedAnimationRequest) {
@@ -195,7 +223,9 @@ final class PlanOutcomeController {
         int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
         var displayPathSelections = canvasDisplaySelections(projection);
         var effectiveIv = body.iv() == null ? stored.iv() : body.iv().sane();
-        var effectiveCanvas = (body.canvas() == null
+        var effectiveCanvas = (resolvedInteraction != null
+                ? resolvedInteraction.canvas()
+                : body.canvas() == null
                 ? stored.canvas() == null
                     ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults() : stored.canvas()
                 : body.canvas()).sane(stored.ensemble().spec().horizonDays());
@@ -219,10 +249,14 @@ final class PlanOutcomeController {
                     : "The focused position could not be repriced on this stored ensemble; inspect the named canvas refusal.");
         }
         int[] sharedDisplaySteps = canvasDisplaySteps(checkpoints, stored.ensemble().spec().totalSteps());
-        var alignedProjection = inlinePathWaypoints.isEmpty()
-                ? pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit, sharedDisplaySteps)
-                : pathEnsembles.displayPathsAtProgress(
-                    stored.ensemble(), inlinePathWaypoints, limit, sharedDisplaySteps);
+        var alignedProjection = exactSourcePathIndex != null
+                ? pathEnsembles.displayPathsFocusedOnSource(
+                        stored.ensemble(), exactSourcePathIndex, limit, sharedDisplaySteps)
+                : inlinePathWaypoints.isEmpty()
+                    ? pathEnsembles.displayPaths(
+                            stored.ensemble(), scenarioSpec, limit, sharedDisplaySteps)
+                    : pathEnsembles.displayPathsAtProgress(
+                        stored.ensemble(), inlinePathWaypoints, limit, sharedDisplaySteps);
         requireSameDisplaySelection(projection, alignedProjection);
         projection = alignedProjection;
         String valuationFingerprint = checkpoints.at("/modelReceipt/valuationFingerprint").asText();
@@ -251,6 +285,7 @@ final class PlanOutcomeController {
                             .toList()
                         : inlinePathWaypoints,
                 effectiveIv, effectiveCanvas, stored.rateAnnual(),
+                resolvedInteraction == null ? null : resolvedInteraction.declaration(),
                 selectedCandidateId, focusPositionKey, focusedPackageFingerprint,
                 focusedPackageProvenance, valuationFingerprint);
         ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection,
@@ -327,7 +362,8 @@ final class PlanOutcomeController {
         alignPreviewProjection(preview, stored.ensemble(), canvasJson);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
-                        run.ensemble().waypointFill().name()), preview));
+                        run.ensemble().waypointFill().name()), preview,
+                currentBuildCurrency(stored, preview)));
     }
 
     /** Exact-receipt branch of the one canonical ensemble command; deliberately no generator call. */
@@ -354,7 +390,11 @@ final class PlanOutcomeController {
         alignPreviewProjection(preview, stored.ensemble(), canvasJson);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
-                        stored.ensemble().waypointFill().name()), preview));
+                        stored.ensemble().waypointFill().name()), preview,
+                ensembleCurrency(plan, stored, preview, outcomeController.marketVol(
+                        plan.symbol(), world, stored.ensemble().spec().horizonDays()),
+                        market.riskFreeRateQuote(Math.max(1,
+                                stored.ensemble().spec().horizonDays()), world).annualRate())));
     }
 
     /** Repaint the stored fan for the Plan's current view — same wire shape as a fresh run. */
@@ -379,7 +419,85 @@ final class PlanOutcomeController {
         alignPreviewProjection(preview, stored.ensemble(), canvasJson);
         ctx.json(new ApiResponses.PlanEnsemble<>(plan,
                 new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
-                        stored.ensemble().waypointFill().name()), preview));
+                        stored.ensemble().waypointFill().name()), preview,
+                ensembleCurrency(plan, stored, preview, marketVol, rate)));
+    }
+
+    private static ApiResponses.ArtifactCurrency currentBuildCurrency(
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored,
+            ObjectNode preview) {
+        if (!"CURRENT".equals(stored.state())) {
+            return new ApiResponses.ArtifactCurrency(false, "STALE",
+                    "The stored fan is not current for this Plan context.");
+        }
+        if (!displayReady(preview)) {
+            return new ApiResponses.ArtifactCurrency(false, "INCOMPATIBLE",
+                    "The stored fan does not contain a complete display projection.");
+        }
+        return new ApiResponses.ArtifactCurrency(true, "CURRENT",
+                "The server just built this fan from the current Plan and market receipts.");
+    }
+
+    /**
+     * One server-owned reuse decision for a stored fan. The browser must not compare timestamps,
+     * prices, volatility inputs, rates, or display density and thereby create another currency
+     * policy in JavaScript.
+     */
+    private ApiResponses.ArtifactCurrency ensembleCurrency(
+            io.liftandshift.strikebench.plan.Plan.View plan,
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored,
+            ObjectNode preview,
+            io.liftandshift.strikebench.sim.SimulationEngine.MarketVolInput marketVol,
+            double rateAnnual) {
+        ApiResponses.ArtifactCurrency structural = currentBuildCurrency(stored, preview);
+        if (!structural.current()) return structural;
+        if (stored.contextRev() != plan.context().rev()) {
+            return new ApiResponses.ArtifactCurrency(false, "STALE",
+                    "The Plan declarations changed after this fan was stored.");
+        }
+        String world = MarketLane.worldParam(stored.ensemble().scope().worldId());
+        var quote = market.quote(plan.symbol(), world).orElse(null);
+        if (quote == null || quote.mark() == null) {
+            return new ApiResponses.ArtifactCurrency(false, "MARKET_UNAVAILABLE",
+                    "A current underlying quote is unavailable; the stored fan remains historical evidence.");
+        }
+        String quoteAsOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
+        String quoteFreshness = quote.markFreshness() == null
+                ? "MISSING" : quote.markFreshness().name();
+        boolean quoteMatches = Math.round(quote.mark().doubleValue() * 100)
+                    == Math.round(stored.ensemble().spot() * 100)
+                && java.util.Objects.equals(
+                        io.liftandshift.strikebench.util.Timestamps.instant(stored.asOf()),
+                        io.liftandshift.strikebench.util.Timestamps.instant(quoteAsOf))
+                && String.valueOf(stored.anchorSource()).equalsIgnoreCase(
+                        String.valueOf(quote.source()))
+                && String.valueOf(stored.anchorFreshness()).equalsIgnoreCase(quoteFreshness);
+        if (!quoteMatches) {
+            return new ApiResponses.ArtifactCurrency(false, "MARKET_CHANGED",
+                    "The underlying quote receipt changed after this fan was stored.");
+        }
+        if (marketVol != null && Math.abs(stored.ensemble().spec().volAnnual()
+                - marketVol.atmIv()) > 0.000001) {
+            return new ApiResponses.ArtifactCurrency(false, "MARKET_CHANGED",
+                    "The market-volatility calibration changed after this fan was stored.");
+        }
+        if (Math.abs(stored.rateAnnual() - rateAnnual) > 0.0000001) {
+            return new ApiResponses.ArtifactCurrency(false, "MARKET_CHANGED",
+                    "The risk-free-rate receipt changed after this fan was stored.");
+        }
+        return new ApiResponses.ArtifactCurrency(true, "CURRENT",
+                "Plan context, quote, volatility, rate, and display receipts still match.");
+    }
+
+    private static boolean displayReady(ObjectNode preview) {
+        JsonNode samples = preview.path("samples");
+        if (!samples.isArray() || samples.isEmpty()) return false;
+        int horizon = preview.path("horizonDays").asInt();
+        if (horizon > 2) return true;
+        for (JsonNode sample : samples) {
+            if (!sample.isArray() || sample.size() < 5) return false;
+        }
+        return true;
     }
 
     void planOutcomeRun(Context ctx) {
@@ -413,8 +531,7 @@ final class PlanOutcomeController {
         var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
                 stored.ensemble().anchorDate());
         var simRequest = new OutcomeController.StrategySimRequest(plan.symbol(), pathPosition, position.qty(),
-                stored.ensemble().spec(), stored.iv(), basis, null, position.entryCostCents(),
-                position.estimatedRoundTripFeesCents(),
+                stored.ensemble().spec(), stored.iv(), basis, null, position.price(),
                 outcomeController.contractExpirations(position.legs()));
         JsonNode result = Json.MAPPER.valueToTree(
                 outcomeController.simStrategyResult(ctx, simRequest, stored.ensemble(), stored.canvas()));
@@ -471,19 +588,24 @@ final class PlanOutcomeController {
             String id = candidate.path("id").asText();
             int qty = Math.clamp(candidate.path("qty").asInt(1), 1, 100);
             var position = planOutcomePosition(candidate);
-            Long fees = capturedRoundTripFees(candidate);
-            metadata.put(id, new PlanComparisonMeta(candidate, position, qty, fees));
-            if (fees == null) {
-                earlyRefusals.put(id, "The captured proposal price states no commission, so an "
-                        + "after-cost outcome comparison cannot be reported.");
+            metadata.put(id, new PlanComparisonMeta(candidate, position, qty));
+            io.liftandshift.strikebench.paper.PackagePriceReceipt price;
+            try {
+                price = OutcomeController.requireOutcomeEntryPrice(position.price(), qty);
+            } catch (IllegalArgumentException unavailablePrice) {
+                earlyRefusals.put(id, unavailablePrice.getMessage());
                 continue;
             }
             try {
                 var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
                         stored.ensemble().anchorDate());
                 simItems.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
-                        id, pathPosition, position.entryCostCents(),
-                        "entry fixed to the Plan proposal's captured executable package", fees, qty));
+                        id, pathPosition, price.payoffEntryCostCents(),
+                        price.valuationBasis()
+                                == io.liftandshift.strikebench.paper.PackagePriceReceipt.ValuationBasis.RECORDED_FILL
+                            ? "entry fixed to the held position's recorded fill"
+                            : "entry fixed to the Plan proposal's captured package-price receipt",
+                        price.estimatedRoundTripFeesCents(), qty));
             } catch (RuntimeException e) {
                 earlyRefusals.put(id, io.liftandshift.strikebench.sim.ScenarioSimulator.publicReason(e));
             }
@@ -515,11 +637,12 @@ final class PlanOutcomeController {
             JsonNode mechanics = assessment.path("mechanics");
             items.add(new io.liftandshift.strikebench.plan.PlanOutcomeService.ComparisonItem(
                     id, id, 0, candidate.path("strategy").asText("CUSTOM"), display, meta.qty(),
-                    meta.position().entryCostCents(), candidate.hasNonNull("maxLossCents")
+                    meta.position().price().payoffEntryCostCents(), candidate.hasNonNull("maxLossCents")
                             ? candidate.path("maxLossCents").longValue() : null,
                     result == null ? null : result.winRatePct(), expected, p5,
                     result == null ? null : result.p50Cents(), result == null ? null : result.p95Cents(),
-                    tailScore, meta.roundTripFees(), economics.path("verdict").asText(null),
+                    tailScore, meta.position().price().estimatedRoundTripFeesCents(),
+                    economics.path("verdict").asText(null),
                     economics.path("placement").asText(null),
                     mechanics.hasNonNull("eligible") ? mechanics.path("eligible").asBoolean() : null,
                     evaluation.hasNonNull("decisionScore") ? evaluation.path("decisionScore").doubleValue() : null,
@@ -561,23 +684,7 @@ final class PlanOutcomeController {
 
     private record PlanComparisonMeta(ObjectNode candidate,
                                       io.liftandshift.strikebench.outcomes.OutcomeContract.Position position,
-                                      int qty, Long roundTripFees) {}
-
-    /**
-     * Read the fee from the candidate's captured package-price receipt. This deliberately has no
-     * configuration fallback: a historical proposal with an absent or malformed receipt has an
-     * unknown after-cost outcome, not a newly priced commission.
-     */
-    static Long capturedRoundTripFees(ObjectNode candidate) {
-        if (candidate == null || !candidate.path("price").isObject()) return null;
-        try {
-            var price = Json.MAPPER.convertValue(candidate.path("price"),
-                    io.liftandshift.strikebench.paper.PackagePriceReceipt.class);
-            return price.estimatedRoundTripFeesCents();
-        } catch (IllegalArgumentException malformed) {
-            return null;
-        }
-    }
+                                      int qty) {}
 
     // ---- Authored scenarios (the scenario canvas's save/list/load surface) ----
 
@@ -760,14 +867,34 @@ final class PlanOutcomeController {
                     leg.path("expiration").asText(null), null, leg.path("ratio").asInt(),
                     leg.path("multiplier").asInt()));
         }
-        // The package net now lives on the canonical §7.2 price receipt, not loose on the candidate.
-        JsonNode price = candidate.path("price");
-        JsonNode gross = price.path("grossPackageNetCents");
-        JsonNode fees = price.path("estimatedRoundTripFeesCents");
-        Long entryNet = gross.isNumber() ? gross.longValue() : null;
-        Long roundTripFees = fees.isNumber() ? fees.longValue() : null;
+        // The complete captured price travels into Outcomes intact. Its valuation basis preserves
+        // the distinction between a proposal snapshot and an actual RECORDED_FILL; no controller
+        // negates a loose package net or pairs it with a separately parsed fee.
+        io.liftandshift.strikebench.paper.PackagePriceReceipt price =
+                capturedOutcomePrice(candidate);
         return new io.liftandshift.strikebench.outcomes.OutcomeContract.Position(candidate.path("id").asText(), legs,
-                candidate.path("qty").asInt(), entryNet == null ? null : -entryNet, roundTripFees);
+                candidate.path("qty").asInt(), price);
+    }
+
+    static io.liftandshift.strikebench.paper.PackagePriceReceipt capturedOutcomePrice(
+            JsonNode candidate) {
+        if (candidate == null || !candidate.path("price").isObject()) {
+            throw new IllegalArgumentException(
+                    "The proposal has no captured package-price receipt.");
+        }
+        try {
+            var price = Json.MAPPER.convertValue(candidate.path("price"),
+                    io.liftandshift.strikebench.paper.PackagePriceReceipt.class);
+            return OutcomeController.requireOutcomeEntryPrice(
+                    price, Math.clamp(candidate.path("qty").asInt(1), 1, 100));
+        } catch (IllegalArgumentException malformed) {
+            if (malformed.getMessage() != null
+                    && malformed.getMessage().startsWith("The captured entry")) {
+                throw malformed;
+            }
+            throw new IllegalArgumentException(
+                    "The proposal's captured package-price receipt is malformed.", malformed);
+        }
     }
 
     private io.liftandshift.strikebench.outcomes.OutcomeContract.MarketContext planOutcomeContext(
@@ -904,7 +1031,8 @@ final class PlanOutcomeController {
                         candidate.path("displayName").asText(candidate.path("strategy").asText("Proposed structure")),
                         "HYPOTHETICAL", "PLAN_PROPOSAL", outcomeController.toPathPosition(
                                 ctx, position.legs(), anchor),
-                        position.qty(), position.entryCostCents(), true));
+                        position.qty(), position.price() == null
+                                ? null : position.price().payoffEntryCostCents(), true));
             } catch (RuntimeException e) {
                 ObjectNode row = refused.addObject();
                 row.put("key", "PROPOSED:" + candidate.path("id").asText());

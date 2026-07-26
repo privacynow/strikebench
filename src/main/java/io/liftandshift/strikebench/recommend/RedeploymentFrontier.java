@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.eval.PortfolioExposureContext;
 import io.liftandshift.strikebench.eval.PortfolioImpactComposer;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.market.Universes;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.BookActionProjectionService;
 import io.liftandshift.strikebench.paper.BookRiskService;
@@ -37,10 +38,7 @@ public final class RedeploymentFrontier {
         public UniverseScope {
             source = text(source, "universe source");
             label = text(label, "universe label");
-            symbols = symbols == null ? List.of() : symbols.stream()
-                    .filter(java.util.Objects::nonNull).map(String::trim)
-                    .filter(value -> !value.isBlank()).map(value -> value.toUpperCase(Locale.ROOT))
-                    .distinct().toList();
+            symbols = Symbol.list(symbols);
         }
     }
 
@@ -97,7 +95,7 @@ public final class RedeploymentFrontier {
         public RedeploymentSource {
             receiptId = text(receiptId, "lifecycle receipt id");
             accountId = text(accountId, "source account id");
-            symbol = text(symbol, "source symbol").toUpperCase(Locale.ROOT);
+            symbol = Symbol.normalize(symbol);
             action = text(action, "source action").toUpperCase(Locale.ROOT);
             if (quantity <= 0) throw new IllegalArgumentException("source quantity must be positive");
             if (executableCloseCostCents != null && executableCloseCostCents < 0) {
@@ -474,7 +472,7 @@ public final class RedeploymentFrontier {
         if (!optionLeg && evaluation.capitalEconomicCents() != null) {
             notional = evaluation.capitalEconomicCents();
         }
-        String symbol = evaluation.symbol().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(evaluation.symbol());
         String theme = Universes.allocationSectorLabel(symbol).toUpperCase(Locale.ROOT);
         return new CandidateUsage(symbol, theme, notional, Map.copyOf(expiries));
     }
@@ -487,7 +485,7 @@ public final class RedeploymentFrontier {
         Map<String, Long> expiries = new LinkedHashMap<>();
         if (risk != null) {
             risk.themes().symbolNotionals().forEach(row -> symbols.merge(
-                    row.symbol().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
+                    Symbol.normalize(row.symbol()), row.notionalCents(), Math::addExact));
             risk.themes().rows().forEach(row -> themes.merge(
                     row.label().toUpperCase(Locale.ROOT), row.notionalCents(), Math::addExact));
             risk.expiries().rows().forEach(row -> expiries.merge(

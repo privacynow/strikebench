@@ -4,8 +4,10 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.GreeksView;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionPackage;
 import io.liftandshift.strikebench.position.PositionTransformation;
@@ -81,8 +83,7 @@ public final class TradeService {
      * THE canonical OrderPackage: every entry path — recommendations, builder, guided ticket,
      * broker integration and tracked-book imports — produces exactly this typed package, and the
      * one evaluation pipeline consumes it. Package-level extras: {@code orderInstruction} carries
-     * MARKET/LIMIT and its signed package limit (+ credit received / − debit paid), while the
-     * former {@code proposedNetCents} remains a compatibility/provenance alias for that limit;
+     * MARKET/LIMIT and its signed package limit (+ credit received / − debit paid);
      * {@code feesOverrideCents}
      * (null = platform default; a Practice ticket treats this as the fee per side),
      * {@code source} (RECOMMENDATION | BUILDER | TICKET |
@@ -91,37 +92,21 @@ public final class TradeService {
     public record OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
                               String thesis, String horizon, String riskMode,
                               String intent, Boolean useHeldShares,
-                              Long proposedNetCents, Long feesOverrideCents, String source,
+                              Long feesOverrideCents, String source,
                               String fillNature, OrderInstruction orderInstruction) {
         /** Jackson and every internal caller bind one complete position contract. */
         @com.fasterxml.jackson.annotation.JsonCreator
         public OpenRequest {
+            symbol = Symbol.normalize(symbol);
             if (feesOverrideCents != null && feesOverrideCents < 0) {
                 throw new IllegalArgumentException("feesOverrideCents cannot be negative");
             }
-            if (orderInstruction == null) {
-                orderInstruction = OrderInstruction.fromLegacy(proposedNetCents);
-            } else if (orderInstruction.type() == OrderInstruction.Type.MARKET) {
-                if (proposedNetCents != null) {
-                    throw new IllegalArgumentException("MARKET orders cannot carry proposedNetCents; use LIMIT with a signed limitNetCents");
-                }
-            } else {
-                if (proposedNetCents != null
-                        && !proposedNetCents.equals(orderInstruction.limitNetCents())) {
-                    throw new IllegalArgumentException("proposedNetCents must match orderInstruction.limitNetCents");
-                }
-                proposedNetCents = orderInstruction.limitNetCents();
+            boolean recordedFill = "EXECUTED".equalsIgnoreCase(fillNature);
+            if (recordedFill && orderInstruction != null) {
+                throw new IllegalArgumentException(
+                        "recorded fills are exact package-price evidence, not order instructions");
             }
-        }
-
-        /** Source compatibility for the established canonical package constructor. */
-        public OpenRequest(String accountId, String symbol, String strategy, int qty, List<Leg> legs,
-                           String thesis, String horizon, String riskMode,
-                           String intent, Boolean useHeldShares,
-                           Long proposedNetCents, Long feesOverrideCents, String source,
-                           String fillNature) {
-            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, intent,
-                    useHeldShares, proposedNetCents, feesOverrideCents, source, fillNature, null);
+            if (!recordedFill && orderInstruction == null) orderInstruction = OrderInstruction.market();
         }
         public boolean heldShares() { return Boolean.TRUE.equals(useHeldShares); }
         public boolean explicitFillMeaning() {
@@ -145,7 +130,7 @@ public final class TradeService {
     public record LegGreekRow(String leg, String bid, String ask, Double iv,
                               Double deltaPerShare, Double gammaPerSharePerDollar,
                               Double thetaCentsPerSharePerDay, Double vegaCentsPerSharePerPoint,
-                              io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks) {}
+                              GreeksView greeks) {}
 
     /**
      * Availability of the four independent current-market facts on a held package. Entry facts
@@ -199,8 +184,9 @@ public final class TradeService {
             tradeNetCents = tradeNetCents == null ? Map.of() : Map.copyOf(tradeNetCents);
         }
         public DollarDeltaExposure focus(String symbol) {
+            String canonical = Symbol.normalizeOptional(symbol);
             return new DollarDeltaExposure(grossCents, netCents,
-                    symbolGrossCents.getOrDefault(symbol == null ? "" : symbol.toUpperCase(java.util.Locale.ROOT), 0L),
+                    canonical == null ? 0L : symbolGrossCents.getOrDefault(canonical, 0L),
                     complete, basis);
         }
     }
@@ -216,14 +202,29 @@ public final class TradeService {
      */
     public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
                            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
-                           io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+                           GreeksView greeks,
                            List<LegGreekRow> legGreeks,
-                           CurrentMarketAvailability availability) {
+                           CurrentMarketAvailability availability,
+                           io.liftandshift.strikebench.model.Quote underlyingQuote,
+                           io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                                   marketImpliedRisk) {
+        public MarkView {
+            marketImpliedRisk = marketImpliedRisk == null
+                    ? io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                            "This mark predates the fingerprinted market-implied receipt.")
+                    : marketImpliedRisk;
+            if (marketImpliedRisk.available()
+                    && !java.util.Objects.equals(popNow, marketImpliedRisk.pop())) {
+                throw new IllegalArgumentException(
+                        "held-position POP does not match its market-implied receipt");
+            }
+        }
+
         /** Historical rows predate component reasons; retain their facts without inventing them. */
         public MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
                         Long unrealizedCents, Long decisionUnrealizedCents, Double popNow,
                         String freshness,
-                        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+                        GreeksView greeks,
                         List<LegGreekRow> legGreeks) {
             this(tradeId, ts, underlyingCents, closeCostCents, unrealizedCents,
                     decisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
@@ -243,7 +244,38 @@ public final class TradeService {
                                     ? "This stored mark has no current probability receipt." : null,
                             greeks != null,
                             greeks == null
-                                    ? "This stored mark has no complete current Greeks receipt." : null));
+                                    ? "This stored mark has no complete current Greeks receipt." : null),
+                    null,
+                    io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                            "This stored mark has no fingerprinted market-implied receipt."));
+        }
+
+        /** Persisted marks written after receipt consolidation retain their exact model identity. */
+        public MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
+                        Long unrealizedCents, Long decisionUnrealizedCents, Double popNow,
+                        String freshness, GreeksView greeks, List<LegGreekRow> legGreeks,
+                        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                                marketImpliedRisk) {
+            this(tradeId, ts, underlyingCents, closeCostCents, unrealizedCents,
+                    decisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
+                    new CurrentMarketAvailability(
+                            underlyingCents != null,
+                            underlyingCents == null
+                                    ? "This stored mark has no current underlying quote." : null,
+                            closeCostCents != null,
+                            closeCostCents == null
+                                    ? "This stored mark has no executable close receipt." : null,
+                            decisionUnrealizedCents != null,
+                            decisionUnrealizedCents == null
+                                    ? "This stored mark has no complete current position P/L receipt."
+                                    : null,
+                            marketImpliedRisk != null && marketImpliedRisk.available(),
+                            marketImpliedRisk == null || marketImpliedRisk.available()
+                                    ? null : marketImpliedRisk.unavailableReason(),
+                            greeks != null,
+                            greeks == null
+                                    ? "This stored mark has no complete current Greeks receipt." : null),
+                    null, marketImpliedRisk);
         }
     }
 
@@ -408,11 +440,11 @@ public final class TradeService {
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
             long free = Math.addExact(PositionsService.heldShares(c, req.accountId(),
-                            req.symbol().toUpperCase(java.util.Locale.ROOT))
+                            req.symbol())
                     - PositionsService.lockedShares(c, req.accountId(),
-                            req.symbol().toUpperCase(java.util.Locale.ROOT)), releasedShares);
+                            req.symbol()), releasedShares);
             if (free < needed) {
-                blocks.add("Needs " + needed + " free shares of " + req.symbol().toUpperCase(java.util.Locale.ROOT)
+                blocks.add("Needs " + needed + " free shares of " + req.symbol()
                         + " but only " + Math.max(0, free) + " are free (held minus already locked)");
             }
         }
@@ -426,7 +458,8 @@ public final class TradeService {
                 reservedBeforeCents, blocks.isEmpty() ? reservedAfter : reservedBeforeCents,
                 buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price());
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
+                marketImpliedRisk(p.analytics()));
     }
 
     /**
@@ -445,10 +478,10 @@ public final class TradeService {
                 ? Math.addExact(acct.reservedCents(), planReserve) : acct.reservedCents();
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-            long free = db.with(c -> PositionsService.heldShares(c, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT))
-                    - PositionsService.lockedShares(c, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT)));
+            long free = db.with(c -> PositionsService.heldShares(c, req.accountId(), req.symbol())
+                    - PositionsService.lockedShares(c, req.accountId(), req.symbol()));
             if (free < needed) {
-                blocks.add("Needs " + needed + " free shares of " + req.symbol().toUpperCase(java.util.Locale.ROOT)
+                blocks.add("Needs " + needed + " free shares of " + req.symbol()
                         + " but only " + Math.max(0, free) + " are free (held minus already locked)");
             }
         }
@@ -463,7 +496,8 @@ public final class TradeService {
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price());
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
+                marketImpliedRisk(p.analytics()));
     }
 
     /**
@@ -660,8 +694,8 @@ public final class TradeService {
         long exactOpenFees = Math.addExact(Math.subtractExact(trade.feesOpenCents(), allocatedOpenFees), openingFees);
         OpenRequest exactAfter = new OpenRequest(trade.accountId(), trade.symbol(), desiredAfter.strategy(),
                 exactQuantity, exactLegs, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
-                trade.sharesLocked() > 0, exactEntry, exactOpenFees,
-                "POSITION_TRANSFORMATION", "EXECUTED");
+                trade.sharesLocked() > 0, exactOpenFees,
+                "POSITION_TRANSFORMATION", "EXECUTED", null);
 
         String world = worldOf(trade.accountId());
         Plan exactPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
@@ -823,8 +857,8 @@ public final class TradeService {
             String intentAfter = lifecycleIntent(strategyAfter, trade.intent());
             exactAfter = new OpenRequest(trade.accountId(), trade.symbol(), strategyAfter, quantity,
                     canonicalLegs(retained), trade.thesis(), trade.horizon(), trade.riskMode(), intentAfter,
-                    heldContextAfter > 0, Math.addExact(cashForLots(retained), remainingPackageAdjustment),
-                    remainingOpenFees, "POSITION_TRANSFORMATION", "EXECUTED");
+                    heldContextAfter > 0, remainingOpenFees,
+                    "POSITION_TRANSFORMATION", "EXECUTED", null);
             exactAfterPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
             reserveAfter = exactAfterPlan.reserve();
             sharesLockedAfter = exactAfterPlan.sharesToLock();
@@ -909,8 +943,7 @@ public final class TradeService {
         List<Leg> legs = canonicalLegs(combined);
         OpenRequest request = new OpenRequest(trade.accountId(), trade.symbol(), trade.strategy(), quantity,
                 legs, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(), false,
-                Math.addExact(cashForLots(combined), packageAdjustment), optionFees,
-                "POSITION_TRANSFORMATION", "EXECUTED");
+                optionFees, "POSITION_TRANSFORMATION", "EXECUTED", null);
         Plan plan = computePlan(request, true, world, true, laneFor(world), true);
         long placementCash = Math.addExact(Math.subtractExact(projectedCash, plan.entryNet()), plan.fees());
         TradePreview preview = previewFromPlan(request, plan, placementCash, reservedWithoutCurrent, 0);
@@ -928,7 +961,8 @@ public final class TradeService {
                 leg.expiration(), leg.ratio(), BigDecimal.ZERO, leg.multiplier())).toList();
         return new OpenRequest(trade.accountId(), trade.symbol(), trade.strategy(), quantity,
                 unpriced, trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
-                sharesLocked > 0, null, null, "POSITION_TRANSFORMATION", "PROPOSED");
+                sharesLocked > 0, null, "POSITION_TRANSFORMATION", "PROPOSED",
+                OrderInstruction.market());
     }
 
     /**
@@ -954,7 +988,8 @@ public final class TradeService {
                 0, blocks.isEmpty() ? reservedAfter : 0,
                 trackedCashCents, blocks.isEmpty() ? cashAfter - reservedAfter : trackedCashCents,
                 p.freshness.name(), trackedAnalysisEvidence(p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price());
+                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
+                marketImpliedRisk(p.analytics()));
     }
 
     private static io.liftandshift.strikebench.model.DataEvidence trackedAnalysisEvidence(Freshness freshness) {
@@ -977,9 +1012,10 @@ public final class TradeService {
 
     /** Opens the trade and an owning workflow record in one database transaction. */
     public TradeRecord create(OpenRequest req, TransactionHook hook) {
-        // A create path still checks an entered fill against the current executable package.
-        // Broker/tracked-book promotion has its own atomic fact-recording boundary.
-        Plan p = computePlan(req);
+        // A proposed Practice order must clear the current executable package. An explicitly
+        // recorded broker/import fill is instead valued from its exact leg fills and published as
+        // RECORDED_FILL evidence; it is not silently reinterpreted as a MARKET order on create.
+        Plan p = computePlan(req, req.executedFill());
         if (!p.blocks.isEmpty()) {
             reject(req, p.blocks);
         }
@@ -1015,7 +1051,7 @@ public final class TradeService {
             throw new TradeRejectedException(List.of("Insufficient buying power: needs "
                     + Money.fmt(planMaxLoss + p.fees) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
         }
-        String symbol = req.symbol().toUpperCase(java.util.Locale.ROOT);
+        String symbol = req.symbol();
         if (req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
             long free = PositionsService.heldShares(c, acct.id(), symbol)
@@ -1050,7 +1086,7 @@ public final class TradeService {
                 INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,thesis,horizon,risk_mode,
                   entry_underlying_cents,entry_net_premium_cents,max_loss_cents,max_profit_cents,breakevens_json,
                   pop_entry,fees_open_cents,fees_close_cents,realized_pnl_cents,close_reason,entry_snapshot_json,
-                  is_live,created_at,closed_at,updated_at,intent,shares_locked,proposed_net_cents,
+                  is_live,created_at,closed_at,updated_at,intent,shares_locked,order_limit_net_cents,
                   data_provenance,data_age,data_source)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?,?,?,?)""",
                 tradeId, acct.id(), symbol, req.strategy(), TradeRecord.ACTIVE,
@@ -1059,7 +1095,8 @@ public final class TradeService {
                 p.pop, p.fees, p.snapshotJson, now, now,
                 req.intent() == null || req.intent().isBlank() ? null
                         : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
-                p.sharesToLock(), req.proposedNetCents(), evidence.provenance().name(), evidence.age().name(),
+                p.sharesToLock(), req.orderInstruction() == null ? null : req.orderInstruction().limitNetCents(),
+                evidence.provenance().name(), evidence.age().name(),
                 evidence.source());
         Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
                 cash, reserved, now, acct.id());
@@ -1180,17 +1217,17 @@ public final class TradeService {
             long survivingMaxLoss = remainingAllocation(trade.maxLossCents(), trade.qty(), closeQuantity);
             Long survivingMaxProfit = trade.maxProfitCents() == null ? null
                     : remainingAllocation(trade.maxProfitCents(), trade.qty(), closeQuantity);
-            Long survivingProposed = trade.proposedNetCents() == null ? null
-                    : remainingAllocation(trade.proposedNetCents(), trade.qty(), closeQuantity);
+            Long survivingOrderLimit = trade.orderLimitNetCents() == null ? null
+                    : remainingAllocation(trade.orderLimitNetCents(), trade.qty(), closeQuantity);
             long closeFeesToDate = Math.addExact(trade.feesCloseCents(), close.feesCents());
             String snapshot = survivorEntrySnapshot(trade, survivingQuantity, survivingShares);
             Db.execOn(c, "UPDATE trades SET qty=?,entry_net_premium_cents=?,max_loss_cents=?," +
                             "max_profit_cents=?,fees_open_cents=?,fees_close_cents=?,realized_pnl_cents=?," +
-                            "decision_pnl_cents=?,shares_locked=?,proposed_net_cents=?,entry_snapshot_json=?::jsonb," +
+                            "decision_pnl_cents=?,shares_locked=?,order_limit_net_cents=?,entry_snapshot_json=?::jsonb," +
                             "updated_at=? WHERE id=?",
                     survivingQuantity, survivingEntry, survivingMaxLoss, survivingMaxProfit,
                     survivingOpenFees, closeFeesToDate, totalRealized, totalDecision, survivingShares,
-                    survivingProposed, snapshot, at, trade.id());
+                    survivingOrderLimit, snapshot, at, trade.id());
             AccountService.applyBalances(c, account.id(), cash, reserved, at);
             TradeRecord survivor = getOn(c, trade.id());
             if (Ledger.outstandingReserve(c, trade.id()) != survivingReserve) {
@@ -1250,8 +1287,8 @@ public final class TradeService {
                     Math.subtractExact(trade.feesOpenCents(), allocatedOpenFees), openingFees);
             OpenRequest currentAfter = new OpenRequest(trade.accountId(), trade.symbol(), exactAfter.strategy(),
                     currentQuantity, canonicalLegs(currentLots), trade.thesis(), trade.horizon(), trade.riskMode(),
-                    trade.intent(), trade.sharesLocked() > 0, currentEntry, currentOpenFees,
-                    "POSITION_TRANSFORMATION", "EXECUTED");
+                    trade.intent(), trade.sharesLocked() > 0, currentOpenFees,
+                    "POSITION_TRANSFORMATION", "EXECUTED", null);
 
             String world = worldOf(trade.accountId());
             Plan exactPlan = computePlan(currentAfter, true, world, true, laneFor(world), true);
@@ -1327,12 +1364,13 @@ public final class TradeService {
             Db.execOn(c, "UPDATE trades SET strategy=?,qty=?,legs_json=?::jsonb,entry_net_premium_cents=?," +
                             "max_loss_cents=?,max_profit_cents=?,breakevens_json=?::jsonb,pop_entry=?," +
                             "fees_open_cents=?,fees_close_cents=?,realized_pnl_cents=?,decision_pnl_cents=?," +
-                            "shares_locked=?,proposed_net_cents=?,entry_snapshot_json=?::jsonb," +
+                            "shares_locked=?,order_limit_net_cents=?,entry_snapshot_json=?::jsonb," +
                             "data_provenance=?,data_age=?,data_source=?,updated_at=? WHERE id=?",
                     currentAfter.strategy(), currentAfter.qty(), Json.write(exactPlan.filledLegs()), exactPlan.entryNet(),
                     exactMaxLoss, exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
                     exactPlan.fees(), closeFeesToDate, totalRealized, decisionToDate, sharesAfter,
-                    exactPlan.entryNet(), snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
+                    currentAfter.orderInstruction() == null ? null : currentAfter.orderInstruction().limitNetCents(),
+                    snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
                     entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
                     entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
             AccountService.applyBalances(c, account.id(), cash, reserved, at);
@@ -1443,11 +1481,12 @@ public final class TradeService {
                 Db.execOn(c, "UPDATE trades SET strategy=?,intent=?,qty=?,legs_json=?::jsonb,entry_net_premium_cents=?,"
                                 + "max_loss_cents=?,max_profit_cents=?,breakevens_json=?::jsonb,pop_entry=?,"
                                 + "fees_open_cents=?,realized_pnl_cents=?,decision_pnl_cents=?,shares_locked=?,"
-                                + "proposed_net_cents=?,entry_snapshot_json=?::jsonb,data_provenance=?,data_age=?,"
+                                + "order_limit_net_cents=?,entry_snapshot_json=?::jsonb,data_provenance=?,data_age=?,"
                                 + "data_source=?,updated_at=? WHERE id=?",
                         exactAfter.strategy(), exactAfter.intent(), exactAfter.qty(), Json.write(exactPlan.filledLegs()), exactPlan.entryNet(),
                         exactMaxLoss, exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
-                        exactPlan.fees(), totalRealized, totalDecision, exactPlan.sharesToLock(), exactPlan.entryNet(),
+                        exactPlan.fees(), totalRealized, totalDecision, exactPlan.sharesToLock(),
+                        exactAfter.orderInstruction() == null ? null : exactAfter.orderInstruction().limitNetCents(),
                         snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
                         entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
                         entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
@@ -1759,15 +1798,23 @@ public final class TradeService {
         }
         MarkView view = computeMark(t);
         markMemo.put(tradeId, view);
-        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,unrealized_cents,decision_unrealized_cents,pop_now,freshness,detail_json) VALUES (?,?,?,?,?,?,?,?,?)",
+        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,unrealized_cents,decision_unrealized_cents,pop_now,freshness,detail_json) VALUES (?,?,?,?,?,?,?,?,?::jsonb)",
                 tradeId, view.ts(), view.underlyingCents(), view.closeCostCents(), view.unrealizedCents(),
-                view.decisionUnrealizedCents(), view.popNow(), view.freshness(), null);
+                view.decisionUnrealizedCents(), view.popNow(), view.freshness(),
+                Json.write(view.marketImpliedRisk()));
         return view;
     }
 
     /** Same computation as refresh, but persists nothing — used by the detail view. */
     public MarkView currentMark(String tradeId) {
         return memoizedMark(get(tradeId));
+    }
+
+    /** The position lane's one current underlying receipt, including for historical/closed detail. */
+    public java.util.Optional<io.liftandshift.strikebench.model.Quote> currentUnderlyingQuote(
+            String tradeId) {
+        TradeRecord trade = get(tradeId);
+        return marks.underlyingQuote(trade.symbol(), worldOf(trade.accountId()));
     }
 
     private MarkView memoizedMark(TradeRecord t) {
@@ -1788,13 +1835,87 @@ public final class TradeService {
                     .expireAfterWrite(java.time.Duration.ofSeconds(10)).maximumSize(50).build();
 
     public Map<String, MarkView> accountMarkSnapshot(String accountId) {
+        return accountMarkSnapshot(accountId, null);
+    }
+
+    private Map<String, MarkView> accountMarkSnapshot(String accountId,
+                                                      List<TradeRecord> alreadyReadActiveTrades) {
         return accountSnapshot.get(accountId, id -> {
             Map<String, MarkView> out = new LinkedHashMap<>();
-            for (TradeRecord t : activeTrades(id)) {
+            List<TradeRecord> active = alreadyReadActiveTrades == null
+                    ? activeTrades(id) : alreadyReadActiveTrades;
+            for (TradeRecord t : active) {
                 try { out.put(t.id(), memoizedMark(t)); } catch (RuntimeException ignored) { /* partial */ }
             }
-            return out;
+            return Map.copyOf(out);
         });
+    }
+
+    /**
+     * The current Practice book's non-scenario financial read model. Every served Practice-book
+     * projection consumes this one typed object, so liquidation value, heat, dollar delta and
+     * Greeks are derived from the same active-position roster and the same mark map. It is a
+     * compositor over the existing mark/risk authorities, not a second calculator.
+     */
+    public record PracticeBookSnapshot(
+            String accountId,
+            List<TradeRecord> activeTrades,
+            Map<String, MarkView> marksByTrade,
+            PortfolioHeat heat,
+            OpenPositionsValue openPositions,
+            DollarDeltaBook dollarDelta,
+            BookGreeks greeks,
+            String asOf) {
+        public PracticeBookSnapshot {
+            activeTrades = activeTrades == null ? List.of() : List.copyOf(activeTrades);
+            marksByTrade = marksByTrade == null ? Map.of() : Map.copyOf(marksByTrade);
+        }
+    }
+
+    /** Typed heat receipt; the historic flat JSON shape is now only a projection of this record. */
+    public record PortfolioHeat(
+            int activeTrades,
+            long totalMaxLossCents,
+            long reservedCents,
+            int shortVolTrades,
+            Map<String, Long> bySymbolMaxLossCents,
+            long concentrationPct,
+            long earlyAssignmentLiquidityCents,
+            long physicalAssignmentCashCents,
+            long assignmentReserveReleasedCents,
+            long postPhysicalAssignmentBuyingPowerCents) {
+        public PortfolioHeat {
+            bySymbolMaxLossCents = bySymbolMaxLossCents == null
+                    ? Map.of() : Map.copyOf(bySymbolMaxLossCents);
+        }
+
+        /** Compatibility projection only; no financial value is recalculated here. */
+        public Map<String, Object> legacyProjection() {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("activeTrades", activeTrades);
+            out.put("totalMaxLossCents", totalMaxLossCents);
+            out.put("reservedCents", reservedCents);
+            out.put("shortVolTrades", shortVolTrades);
+            out.put("bySymbolMaxLossCents", bySymbolMaxLossCents);
+            out.put("concentrationPct", concentrationPct);
+            out.put("earlyAssignmentLiquidityCents", earlyAssignmentLiquidityCents);
+            out.put("physicalAssignmentCashCents", physicalAssignmentCashCents);
+            out.put("assignmentReserveReleasedCents", assignmentReserveReleasedCents);
+            out.put("postPhysicalAssignmentBuyingPowerCents", postPhysicalAssignmentBuyingPowerCents);
+            return out;
+        }
+    }
+
+    public PracticeBookSnapshot practiceBookSnapshot(String accountId) {
+        List<TradeRecord> active = activeTrades(accountId);
+        Map<String, MarkView> snapshot = accountMarkSnapshot(accountId, active);
+        Account account = db.with(c -> AccountService.get(c, accountId));
+        PortfolioHeat heat = portfolioHeatFacts(accountId, active, account);
+        OpenPositionsValue open = openPositionsValue(active, snapshot);
+        DollarDeltaBook dollarDelta = portfolioDollarDeltaBook(active, snapshot);
+        BookGreeks greeks = portfolioGreeks(active, snapshot, dollarDelta);
+        return new PracticeBookSnapshot(accountId, active, snapshot, heat, open, dollarDelta,
+                greeks, now());
     }
 
     /**
@@ -1805,39 +1926,15 @@ public final class TradeService {
      * loss or becoming a stock position in StrikeBench's settlement model.
      */
     public Map<String, Object> portfolioHeat(String accountId) {
-        PortfolioHeatFacts facts = portfolioHeatFacts(accountId);
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("activeTrades", facts.activeTrades());
-        out.put("totalMaxLossCents", facts.totalMaxLossCents());
-        out.put("reservedCents", facts.reservedCents());
-        out.put("shortVolTrades", facts.shortVolTrades());
-        out.put("bySymbolMaxLossCents", facts.bySymbolMaxLossCents());
-        long worstSymbol = facts.bySymbolMaxLossCents().values().stream()
-                .mapToLong(Long::longValue).max().orElse(0);
-        out.put("concentrationPct", facts.totalMaxLossCents() > 0
-                ? Math.round(100.0 * worstSymbol / facts.totalMaxLossCents()) : 0);
-        out.put("earlyAssignmentLiquidityCents", facts.theoreticalShortPutObligationCents());
-        out.put("physicalAssignmentCashCents", facts.physicalAssignmentCashCents());
-        out.put("assignmentReserveReleasedCents", facts.assignmentReserveReleasedCents());
-        out.put("postPhysicalAssignmentBuyingPowerCents", facts.postPhysicalAssignmentBuyingPowerCents());
-        return out;
+        return practiceBookSnapshot(accountId).heat().legacyProjection();
     }
 
     /** Gross strike obligation across active short puts; the same canonical fact used by heat. */
     public long theoreticalShortPutObligationCents(String accountId) {
-        return portfolioHeatFacts(accountId).theoreticalShortPutObligationCents();
+        return practiceBookSnapshot(accountId).heat().earlyAssignmentLiquidityCents();
     }
 
-    private record PortfolioHeatFacts(int activeTrades, long totalMaxLossCents, long reservedCents,
-                                      int shortVolTrades, Map<String, Long> bySymbolMaxLossCents,
-                                      long theoreticalShortPutObligationCents,
-                                      long physicalAssignmentCashCents,
-                                      long assignmentReserveReleasedCents,
-                                      long postPhysicalAssignmentBuyingPowerCents) {}
-
-    private PortfolioHeatFacts portfolioHeatFacts(String accountId) {
-        List<TradeRecord> active = activeTrades(accountId);
-        Account acct = db.with(c -> AccountService.get(c, accountId));
+    private PortfolioHeat portfolioHeatFacts(String accountId, List<TradeRecord> active, Account acct) {
         Map<String, Long> reserveByTrade = new java.util.HashMap<>();
         for (Map.Entry<String, Long> e : db.query(
                 "SELECT trade_id, COALESCE(SUM(amount_cents),0) AS amount FROM ledger "
@@ -1870,9 +1967,12 @@ public final class TradeService {
                 assignmentReserveReleased += tradeReserve;
             }
         }
-        return new PortfolioHeatFacts(active.size(), totalMaxLoss, acct.reservedCents(), shortVol,
-                Map.copyOf(bySymbol), earlyAssignmentLiquidity, physicalAssignmentCash,
-                assignmentReserveReleased,
+        long worstSymbol = bySymbol.values().stream().mapToLong(Long::longValue).max().orElse(0);
+        long concentrationPct = totalMaxLoss > 0
+                ? Math.round(100.0 * worstSymbol / totalMaxLoss) : 0;
+        return new PortfolioHeat(active.size(), totalMaxLoss, acct.reservedCents(), shortVol,
+                Map.copyOf(bySymbol), concentrationPct, earlyAssignmentLiquidity,
+                physicalAssignmentCash, assignmentReserveReleased,
                 acct.buyingPowerCents() - physicalAssignmentCash + assignmentReserveReleased);
     }
 
@@ -1889,7 +1989,10 @@ public final class TradeService {
     private MarkView computeMark(TradeRecord t) {
         String now = now();
         String world = worldOf(t.accountId());
-        Long underlyingCents = marks.underlyingMark(t.symbol(), world).map(Money::toCents).orElse(null);
+        io.liftandshift.strikebench.model.Quote underlyingQuote =
+                marks.underlyingQuote(t.symbol(), world).orElse(null);
+        Long underlyingCents = underlyingQuote == null || underlyingQuote.mark() == null
+                ? null : Money.toCents(underlyingQuote.mark());
         String quoteUnavailableReason = underlyingCents == null
                 ? "No current underlying quote is available for " + t.symbol()
                     + " in this position's market lane."
@@ -1900,7 +2003,8 @@ public final class TradeService {
         boolean greeksComplete = true;
         String closeUnavailableReason = null;
         String greeksUnavailableReason = null;
-        Freshness worst = underlyingCents == null ? Freshness.MISSING : Freshness.REALTIME;
+        Freshness worst = underlyingCents == null
+                ? Freshness.MISSING : underlyingQuote.markFreshness();
         List<Double> ivs = new ArrayList<>();
         int optionLegs = 0;
         boolean ivComplete = true;
@@ -1909,7 +2013,9 @@ public final class TradeService {
         List<LegGreekRow> legGreeks = new ArrayList<>();
         long heldContextShares = heldShareContextShares(t);
         for (Leg leg : t.legs()) {
-            var mark = marks.legMark(t.symbol(), leg, world).orElse(null);
+            var mark = leg.isStock() && underlyingQuote != null
+                    ? MarksSource.LegMark.fromUnderlying(underlyingQuote)
+                    : marks.legMark(t.symbol(), leg, world).orElse(null);
             if (!leg.isStock()) optionLegs++;
             if (mark == null) {
                 closeComplete = false;
@@ -1990,14 +2096,14 @@ public final class TradeService {
         if (heldContextShares > 0) {
             legGreeks.add(new LegGreekRow(heldContextShares + " held shares", null, null, null,
                     1.0, 0.0, 0.0, 0.0,
-                    new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks(
+                    new GreeksView(
                             heldContextShares, 0.0, 0.0, 0.0)));
         }
         // §3.2: an incomplete greeks strip is ABSENT, not a partial sum. A leg whose mark carried no
         // greeks used to be skipped while the remaining legs were still published as the position's
         // delta/gamma/theta/vega — a fabricated exposure that read as complete. Same rule the idea
         // path already applies in packageGreeks. Units are canonical: theta/vega in CENTS.
-        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks = greeksComplete
+        GreeksView greeks = greeksComplete
                 ? GreeksAggregator.aggregate(greekExposures, heldContextShares) : null;
         if (greeks == null && greeksUnavailableReason == null) {
             greeksComplete = false;
@@ -2029,6 +2135,7 @@ public final class TradeService {
         boolean mixedExp = t.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         Double popNow = null;
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk = null;
         String popUnavailableReason = null;
         if (optionLegs == 0) {
             popUnavailableReason = "A share-only position has no option probability-of-profit receipt.";
@@ -2043,22 +2150,7 @@ public final class TradeService {
             popUnavailableReason = "The held-share payoff has no recorded entry-price anchor, so "
                     + "current probability of profit is unavailable.";
         } else {
-            List<Leg> curveLegs = new ArrayList<>(t.legs());
-            long sharesPerUnit = t.qty() > 0 ? heldContextShares / t.qty() : 0;
-            if (sharesPerUnit > 0) {
-                // Held-share trades were risk-shaped from the ENTRY spot. Resetting the stock
-                // basis to today's mark erases the move already earned/lost and makes POP jump
-                // even when the package itself did not change.
-                curveLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(sharesPerUnit),
-                        BigDecimal.valueOf(t.entryUnderlyingCents(), 2)));
-            }
-            // The package fill is authoritative. A net limit/fill need not equal the sum of the
-            // executable leg marks stored in legs_json, and held-share stock context is not an
-            // entry cash flow. Reapply the exact package adjustment so POP-now starts at the
-            // same payoff curve the ticket showed.
-            long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
-            long entryAdjustment = t.entryNetPremiumCents() - tradedLegEntry;
-            PayoffCurve curve = PayoffCurve.of(curveLegs, t.qty(), entryAdjustment);
+            PayoffCurve curve = heldPayoffCurve(t);
             double ivAvg = ivs.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
             io.liftandshift.strikebench.market.OptionTime.Measure mtte =
                     io.liftandshift.strikebench.market.OptionTime.nearest(t.legs(), nowFor(world));
@@ -2067,10 +2159,12 @@ public final class TradeService {
                     .map(Leg::strike).filter(java.util.Objects::nonNull).distinct().toList();
             if (mtte.hasModelTime()) {
                 try {
-                    popNow = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                            curve, underlyingCents / 100.0, ivAvg, mtte.years(),
+                    marketImpliedRisk =
+                            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                            curve, recordedEntryPrice(t), underlyingCents, ivAvg, mtte,
                             marks.riskFreeRate((int) Math.max(1, mtte.calendarDays()), world),
-                            shortStrikes).probabilityMap().pAnyProfit();
+                            shortStrikes);
+                    popNow = marketImpliedRisk.pop();
                 } catch (RuntimeException e) {
                     popUnavailableReason = e.getMessage() == null || e.getMessage().isBlank()
                             ? "The current probability model could not value this exact package."
@@ -2085,6 +2179,11 @@ public final class TradeService {
             popUnavailableReason =
                     "The current probability model did not return a value for this exact package.";
         }
+        if (marketImpliedRisk == null) {
+            marketImpliedRisk =
+                    io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                            popUnavailableReason);
+        }
         CurrentMarketAvailability availability = new CurrentMarketAvailability(
                 underlyingCents != null, quoteUnavailableReason,
                 closeCost != null, closeCost == null ? closeUnavailableReason : null,
@@ -2094,7 +2193,7 @@ public final class TradeService {
                 greeks != null, greeks == null ? greeksUnavailableReason : null);
         return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized,
                 decisionUnrealized, popNow, worst.name(), greeks,
-                List.copyOf(legGreeks), availability);
+                List.copyOf(legGreeks), availability, underlyingQuote, marketImpliedRisk);
     }
 
     private static Double round2(double v) { return Math.round(v * 100.0) / 100.0; }
@@ -2107,8 +2206,11 @@ public final class TradeService {
                                      long unrealizedCents, boolean complete, String freshness) {}
 
     public OpenPositionsValue openPositionsValue(String accountId) {
-        List<TradeRecord> active = activeTrades(accountId);
-        Map<String, MarkView> snap = accountMarkSnapshot(accountId); // ONE atomic snapshot for all consumers
+        return practiceBookSnapshot(accountId).openPositions();
+    }
+
+    private static OpenPositionsValue openPositionsValue(List<TradeRecord> active,
+                                                         Map<String, MarkView> snap) {
         long value = 0, unrealized = 0;
         int counted = 0;
         boolean complete = true;
@@ -2138,7 +2240,7 @@ public final class TradeService {
      * pooling several rows adds THAT and never the share figures.
      */
     public record PositionGreekRow(String id, String symbol, String strategy, int qty,
-                                   io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+                                   GreeksView greeks,
                                    Long netDollarDeltaCents, Long unrealizedCents) {}
 
     /**
@@ -2146,7 +2248,7 @@ public final class TradeService {
      * {@link #SHARE_GREEKS_NOT_ADDITIVE}); the additive dollar delta from
      * {@link #portfolioDollarDeltaBook} carries the book's directional exposure instead. Theta and
      * vega DO add in money terms, so they ride the canonical cent units of
-     * {@link io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks} — the unit is in the
+     * {@link GreeksView} — the unit is in the
      * field name so nothing sits next to cent fields wearing a bare dollar name (§7.6).
      */
     public record BookGreeks(long netDollarDeltaCents, long grossDollarDeltaCents,
@@ -2167,9 +2269,12 @@ public final class TradeService {
 
     /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Exposure and model stats, never P&L. */
     public BookGreeks portfolioGreeks(String accountId) {
-        List<TradeRecord> active = activeTrades(accountId);
-        Map<String, MarkView> snap = accountMarkSnapshot(accountId); // same atomic snapshot as the summary
-        DollarDeltaBook dollarDelta = portfolioDollarDeltaBook(accountId); // same cached snapshot, one delta math site
+        return practiceBookSnapshot(accountId).greeks();
+    }
+
+    private static BookGreeks portfolioGreeks(List<TradeRecord> active,
+                                              Map<String, MarkView> snap,
+                                              DollarDeltaBook dollarDelta) {
         double thetaCents = 0, vegaCents = 0;
         boolean complete = true;
         int measured = 0;
@@ -2210,15 +2315,20 @@ public final class TradeService {
     }
 
     public DollarDeltaBook portfolioDollarDeltaBook(String accountId) {
-        return portfolioDollarDeltaBook(accountId, null);
+        return practiceBookSnapshot(accountId).dollarDelta();
     }
 
     /** Current Practice exposure in one canonical mark pass, optionally omitting one trade. */
     public DollarDeltaBook portfolioDollarDeltaBook(String accountId, String excludedTradeId) {
-        List<TradeRecord> active = activeTrades(accountId).stream()
-                .filter(trade -> excludedTradeId == null || !excludedTradeId.equals(trade.id()))
-                .toList();
-        Map<String, MarkView> marksByTrade = accountMarkSnapshot(accountId);
+        PracticeBookSnapshot snapshot = practiceBookSnapshot(accountId);
+        if (excludedTradeId == null) return snapshot.dollarDelta();
+        List<TradeRecord> active = snapshot.activeTrades().stream()
+                .filter(trade -> !excludedTradeId.equals(trade.id())).toList();
+        return portfolioDollarDeltaBook(active, snapshot.marksByTrade());
+    }
+
+    private static DollarDeltaBook portfolioDollarDeltaBook(
+            List<TradeRecord> active, Map<String, MarkView> marksByTrade) {
         long gross = 0, net = 0;
         Map<String, Long> bySymbol = new LinkedHashMap<>();
         Map<String, Long> byTrade = new LinkedHashMap<>();
@@ -2238,7 +2348,7 @@ public final class TradeService {
             long magnitude = safeAbsolute(delta);
             gross = Math.addExact(gross, magnitude);
             net = Math.addExact(net, delta);
-            bySymbol.merge(trade.symbol().toUpperCase(java.util.Locale.ROOT), magnitude, Math::addExact);
+            bySymbol.merge(Symbol.normalize(trade.symbol()), magnitude, Math::addExact);
             byTrade.put(trade.id(), delta);
         }
         return new DollarDeltaBook(gross, net, Map.copyOf(bySymbol), Map.copyOf(byTrade), complete,
@@ -2277,7 +2387,7 @@ public final class TradeService {
         }
         if (symbol != null && !symbol.isBlank()) {
             where.append(" AND symbol=?");
-            params.add(symbol.trim().toUpperCase(java.util.Locale.ROOT));
+            params.add(Symbol.normalize(symbol));
         }
         if (intent != null && !intent.isBlank()) {
             String norm = intent.trim().toUpperCase(java.util.Locale.ROOT);
@@ -2302,7 +2412,23 @@ public final class TradeService {
         return db.query("SELECT * FROM trade_marks WHERE trade_id=? ORDER BY id DESC LIMIT ?", r ->
                 new MarkView(tradeId, r.str("ts"), r.lngOrNull("underlying_px_cents"), r.lngOrNull("close_cost_cents"),
                         r.lngOrNull("unrealized_cents"), r.lngOrNull("decision_unrealized_cents"),
-                        r.dblOrNull("pop_now"), r.str("freshness"), null, List.of()), tradeId, limit);
+                        r.dblOrNull("pop_now"), r.str("freshness"), null, List.of(),
+                        storedMarketImpliedRisk(r.str("detail_json"))), tradeId, limit);
+    }
+
+    private static io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+    storedMarketImpliedRisk(String detailJson) {
+        if (detailJson == null || detailJson.isBlank()) {
+            return io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "This stored mark predates the fingerprinted market-implied receipt.");
+        }
+        try {
+            return Json.read(detailJson,
+                    io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.class);
+        } catch (RuntimeException invalidHistoricalReceipt) {
+            return io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "This stored mark has an unreadable historical market-implied receipt.");
+        }
     }
 
     public Excursion excursion(String tradeId) {
@@ -2685,26 +2811,27 @@ public final class TradeService {
                         + " is marketable; the package is valued at the better natural executable net "
                         + Money.fmt(entryNet) + ".");
             }
-        } else if (req.proposedNetCents() != null && optionPackage) {
-            // Exact recorded fills and nonmarketable limits reprice the package without fabricating
-            // per-leg allocations. Max loss, breakevens, POP, and EV follow the signed package net.
-            netAdjust = req.proposedNetCents() - entryNet;
+        } else if (!recordedFill && req.orderInstruction() != null
+                && req.orderInstruction().limitNetCents() != null && optionPackage) {
+            // A nonmarketable limit is a proposed package price, not a fill. Reprice the analysis
+            // without fabricating per-leg executions; recorded fills remain the exact submitted
+            // leg prices and are identified only by the RECORDED_FILL receipt basis.
+            long orderLimitNetCents = req.orderInstruction().limitNetCents();
+            netAdjust = orderLimitNetCents - entryNet;
             if (netAdjust != 0) {
                 curve = PayoffCurve.of(filled, req.qty(), netAdjust);
                 entryNet = curve.entryNetPremiumCents();
             }
-            valuationBasis = recordedFill || req.executedFill()
-                    ? PackagePriceReceipt.ValuationBasis.RECORDED_FILL
-                    : PackagePriceReceipt.ValuationBasis.RESTING_LIMIT;
-            warnings.add((recordedFill ? "Priced at YOUR net price (recorded executed net) " : "Analyzed at your resting limit ")
-                    + Money.fmt(req.proposedNetCents()) + " — the executable sides right now say "
+            valuationBasis = PackagePriceReceipt.ValuationBasis.RESTING_LIMIT;
+            warnings.add("Analyzed at your resting limit "
+                    + Money.fmt(orderLimitNetCents) + " — the executable sides right now say "
                     + (naturalExecutableNet == null ? "unavailable" : Money.fmt(naturalExecutableNet))
                     + (packageMid != null ? ", midpoint " + Money.fmt(packageMid) : ""));
-            if (packageMid != null && req.proposedNetCents() > packageMid) {
+            if (packageMid != null && orderLimitNetCents > packageMid) {
                 warnings.add("Your price is MORE favorable than the midpoint — resting there may never fill");
             }
-            if (!recordedFill && executability == OrderInstruction.Executability.RESTING) {
-                blocks.add("Your limit " + Money.fmt(req.proposedNetCents())
+            if (executability == OrderInstruction.Executability.RESTING) {
+                blocks.add("Your limit " + Money.fmt(orderLimitNetCents)
                         + " is more favorable than the executable market " + Money.fmt(executableNet)
                         + ". StrikeBench does not model resting limit orders, so it cannot claim this paper "
                         + "order filled. The order is RESTING and is not presently executable. "
@@ -2837,9 +2964,8 @@ public final class TradeService {
         List<Map<String, Object>> payoff = chartPointMaps(riskCurve, underlying);
 
         double spot = underlying.doubleValue();
-        Double t = tte.years();
         if (ivs.isEmpty()) {
-            warnings.add("No implied volatility available — POP/EV assume a 30% placeholder volatility");
+            warnings.add("No implied volatility available — POP/EV are unavailable for this exact package");
         }
         double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
 
@@ -2874,17 +3000,33 @@ public final class TradeService {
             }
         }
 
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk;
+        if (ivs.isEmpty()) {
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "No implied volatility was captured for this exact package.");
+        } else if (!tte.hasModelTime()) {
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                    "This package has no live option model clock (" + tte.state()
+                            + "); no probability or expected value was inferred.");
+        } else {
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                    riskCurve, price, Money.toCents(underlying), ivAvg, tte, rfr, shortStrikes);
+        }
+
         if (riskCurve.maxLossUnbounded()) {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
-            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
+            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg,
+                    tte, marketImpliedRisk,
                     io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
                     snapshotLegs, req.qty(),
                     shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
-                    entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
-                    feeSchedule.roundTripCents(), null, null, null, worst,
+                    entryNet, optionEntryNet, packageMid,
+                    feeSchedule.roundTripCents(), null, null, worst,
                     marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
-            return new Plan(filled, entryNet, openingFees, null, null, null, List.of(), null, null, Money.toCents(underlying),
+            return new Plan(filled, entryNet, openingFees, null, null, null, List.of(),
+                    marketImpliedRisk.pop(), marketImpliedRisk.expectedValueCents(),
+                    Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked, price);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
@@ -2898,11 +3040,8 @@ public final class TradeService {
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
         long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
 
-        var riskNeutral = t == null ? null
-                : io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
-                        riskCurve, spot, ivAvg, t, rfr, shortStrikes);
-        Double pop = riskNeutral == null ? null : riskNeutral.probabilityMap().pAnyProfit();
-        Long ev = riskNeutral == null ? null : riskNeutral.expectedValueCents();
+        Double pop = marketImpliedRisk.pop();
+        Long ev = marketImpliedRisk.expectedValueCents();
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());
@@ -2923,12 +3062,13 @@ public final class TradeService {
         if (shareContext) snapshot.put("heldShareContextShares",
                 Math.multiplyExact(contextSharesPerUnit, req.qty()));
 
-        Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
+        Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, tte,
+                marketImpliedRisk,
                 io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
                 snapshotLegs, req.qty(),
                 shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
-                entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
-                feeSchedule.roundTripCents(), maxLoss, maxProfit, ev, worst,
+                entryNet, optionEntryNet, packageMid,
+                feeSchedule.roundTripCents(), maxLoss, maxProfit, worst,
                 marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
         if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
@@ -2950,6 +3090,23 @@ public final class TradeService {
     }
 
     // ---- Package price receipt (program §7.2) ----
+
+    /** Rehydrates the exact recorded opening basis for current held-position probabilities. */
+    private static PackagePriceReceipt recordedEntryPrice(TradeRecord trade) {
+        long optionNet = ProtocolEvaluator.optionEntryBasisCents(
+                trade.legs(), trade.qty(), trade.entryNetPremiumCents());
+        long stockCash = ProtocolEvaluator.stockEntryBasisCents(trade.legs(), trade.qty());
+        long roundTripFees = Math.addExact(trade.feesOpenCents(),
+                Math.max(0L, trade.feesCloseCents()));
+        var basis = PackagePriceReceipt.ValuationBasis.RECORDED_FILL;
+        return PackagePriceReceipt.of(trade.qty(), trade.entryNetPremiumCents(), optionNet,
+                stockCash, trade.feesOpenCents(), roundTripFees,
+                PackagePriceReceipt.FeeSide.OPENING, trade.entryNetPremiumCents(),
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE, basis,
+                trade.dataSource(), trade.dataAge(), null,
+                PackagePriceReceipt.fingerprintOf(trade.legs(), trade.qty(),
+                        trade.entryNetPremiumCents(), basis, null));
+    }
 
     /**
      * §3.2: a package refused before it could be priced publishes NO price. The first blocking
@@ -3017,6 +3174,16 @@ public final class TradeService {
         return number.intValue();
     }
 
+    private static io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+    marketImpliedRisk(Map<String, Object> analytics) {
+        Object value = analytics == null ? null : analytics.get("marketImpliedRisk");
+        if (value instanceof io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt receipt) {
+            return receipt;
+        }
+        return io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                "No fingerprinted market-implied evaluation was produced for this preview.");
+    }
+
 
     /**
      * The assembled judgment every Review consumer shares: full probability map (risk-neutral,
@@ -3035,26 +3202,29 @@ public final class TradeService {
         return session == null ? null : (session.p84() - session.p16()) / 2;
     }
 
-    private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg, Double t,
+    private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg,
                                                io.liftandshift.strikebench.market.OptionTime.Measure tte,
+                                               io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                                                       marketImpliedRisk,
                                                LocalDate nearestExpiry,
                                                List<BigDecimal> shortStrikes,
                                                List<Map<String, Object>> snaps, int qty,
                                                long heldShareContextShares,
                                                long entryNet, long optionEntryNet,
-                                               long executableNet, Long packageMid,
-                                               Long proposedNet, long roundTripFees, Long maxLoss, Long maxProfit,
-                                               Long ev, Freshness freshness, Long sourceAsOf, double rfr,
+                                               Long packageMid,
+                                               long roundTripFees, Long maxLoss, Long maxProfit,
+                                               Freshness freshness, Long sourceAsOf, double rfr,
                                                io.liftandshift.strikebench.model.DataEvidence rateEvidence) {
         Map<String, Object> out = new LinkedHashMap<>();
-        var riskNeutral = t == null ? null
-                : io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
-                        .analyze(curve, spot, ivAvg, t, rfr, shortStrikes);
-        var map = riskNeutral == null ? null : riskNeutral.probabilityMap();
+        var riskNeutral = marketImpliedRisk == null
+                ? io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                        "No fingerprinted market-implied evaluation was supplied.")
+                : marketImpliedRisk;
+        var map = riskNeutral.probabilityMap();
+        out.put("marketImpliedRisk", riskNeutral);
         Map<String, Object> prob = new LinkedHashMap<>();
         if (map == null) {
-            prob.put("unavailableReason", "This package has no live option model clock ("
-                    + tte.state() + "); no probability or expected value was inferred.");
+            prob.put("unavailableReason", riskNeutral.unavailableReason());
         } else {
             prob.put("pAnyProfit", map.pAnyProfit());
             prob.put("pMaxProfit", map.pMaxProfit());
@@ -3072,7 +3242,7 @@ public final class TradeService {
 
         // EV sensitivity: the same integral at ±20% of the vol input — one falsely precise number
         // never travels alone.
-        List<Map<String, Object>> sens = riskNeutral == null ? List.of()
+        List<Map<String, Object>> sens = !riskNeutral.available() ? List.of()
                 : riskNeutral.sensitivity().stream()
                     .map(x -> Map.<String, Object>of("ivScale", x.ivScale(), "evCents", x.evCents()))
                     .toList();
@@ -3080,8 +3250,8 @@ public final class TradeService {
 
         // Execution QUALITY, not price. The package net, the executable net, the resting limit, the
         // executability and the order type all moved onto the one §7.2 receipt (§3.8); publishing
-        // them here as well is how `fillNetCents`, `proposedNetCents`, `executableNetCents` and
-        // `valuedNetCents` became four names for the same money. The midpoint stays because it is
+        // them here as well is how legacy fill/executable/value aliases became several names for
+        // the same money. The midpoint stays because it is
         // the concession benchmark computed below, and it is labelled as such.
         Map<String, Object> exec = new LinkedHashMap<>();
         exec.put("midNetCents", packageMid);
@@ -3089,8 +3259,11 @@ public final class TradeService {
         exec.put("packageSpreadCents", spread);
         if (spread != null) exec.put("exitSpreadEstimateCents", spread / 2);
         if (packageMid != null) {
-            long basisNet = proposedNet != null ? proposedNet : executableNet;
-            long concession = packageMid - basisNet;   // dollars surrendered vs midpoint (signed net)
+            // The ONE package receipt's stated net is already `entryNet`: executable MARKET,
+            // exact RECORDED_FILL, or the typed RESTING_LIMIT according to its declared basis.
+            // Re-reading an order limit here used to make this quality metric a second price
+            // authority and made exact recorded fills compare as though they occurred at market.
+            long concession = packageMid - entryNet;   // dollars surrendered vs midpoint (signed net)
             exec.put("concessionVsMidCents", concession);
             if (packageMid != 0) exec.put("concessionPctOfMid", round4((double) concession / Math.abs(packageMid)));
             if (maxProfit != null && maxProfit > 0) exec.put("concessionPctOfMaxProfit", round4((double) concession / maxProfit));
@@ -3163,7 +3336,8 @@ public final class TradeService {
         // commissions used by EconomicAssessment and the ticket acknowledgment, not merely the
         // opening commission. Otherwise Builder, Ideas and Decide show three different numbers
         // for the same package.
-        Long evAfterFees = ev == null ? null : Math.subtractExact(ev, roundTripFees);
+        Long marketEv = riskNeutral.expectedValueCents();
+        Long evAfterFees = marketEv == null ? null : Math.subtractExact(marketEv, roundTripFees);
         if (curve.maxLossUnbounded()) {
             verdict = "unfavorable"; reason = "Risk is UNDEFINED — the stress loss below is a scenario, not a cap.";
         } else if (evAfterFees == null || map == null) {
@@ -3202,7 +3376,7 @@ public final class TradeService {
      * position it becomes report greeks identically. Never a re-pricing; null when any option leg
      * lacks a mark, so the strip stays honestly absent rather than understated.
      */
-    static io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks packageGreeks(
+    static GreeksView packageGreeks(
             List<Map<String, Object>> snaps, int qty, double heldDeltaShares) {
         if (snaps == null || snaps.isEmpty() || qty < 1) return null;
         List<GreeksAggregator.LegExposure> exposures = new ArrayList<>();
@@ -3281,16 +3455,38 @@ public final class TradeService {
         long expirations = t.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count();
         if (underlyingClose == null || expirations > 1) return incrementalPnl;
-        long totalShares = heldShareContextShares(t);
-        List<Leg> combined = new ArrayList<>(t.legs());
-        if (totalShares > 0 && t.qty() > 0 && totalShares % t.qty() == 0 && t.entryUnderlyingCents() > 0) {
-            combined.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(totalShares / t.qty()),
-                    BigDecimal.valueOf(t.entryUnderlyingCents(), 2)));
+        return heldPayoffCurve(t).profitAtCents(underlyingClose) - t.feesOpenCents();
+    }
+
+    /**
+     * The one exact held-position terminal payoff. Every trade leg is expanded to its total
+     * position quantity, then the exact held-share context is added as one total-share lot. This
+     * avoids the old {@code heldShares / packageQty} truncation: an imported or partially closed
+     * position with a non-divisible share count keeps every share in its payoff, POP, scenario,
+     * settlement, and display receipts.
+     */
+    public static PayoffCurve heldPayoffCurve(TradeRecord trade) {
+        if (trade == null || trade.qty() < 1) {
+            throw new IllegalArgumentException("a positive-quantity trade is required");
         }
-        long tradedLegEntry = PayoffCurve.of(t.legs(), t.qty()).entryNetPremiumCents();
-        long adjustment = t.entryNetPremiumCents() - tradedLegEntry;
-        return PayoffCurve.of(combined, t.qty(), adjustment).profitAtCents(underlyingClose)
-                - t.feesOpenCents();
+        List<Leg> totalLegs = new ArrayList<>(trade.legs().size() + 1);
+        for (Leg leg : trade.legs()) {
+            totalLegs.add(new Leg(leg.action(), leg.type(), leg.strike(), leg.expiration(),
+                    Math.multiplyExact(leg.ratio(), trade.qty()), leg.entryPrice(),
+                    leg.multiplier()));
+        }
+        long totalShares = heldShareContextShares(trade);
+        if (totalShares > 0) {
+            if (trade.entryUnderlyingCents() <= 0) {
+                throw new IllegalStateException(
+                        "The held-share payoff has no recorded entry-price anchor.");
+            }
+            totalLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(totalShares),
+                    BigDecimal.valueOf(trade.entryUnderlyingCents(), 2)));
+        }
+        long tradedLegEntry = PayoffCurve.of(trade.legs(), trade.qty()).entryNetPremiumCents();
+        long adjustment = trade.entryNetPremiumCents() - tradedLegEntry;
+        return PayoffCurve.of(totalLegs, 1, adjustment);
     }
 
     /** Exact held-share decision context for every current receipt. */
@@ -3520,7 +3716,7 @@ public final class TradeService {
         int quantity = canonicalQuantity(unpriced);
         OpenRequest addedRequest = new OpenRequest(trade.accountId(), trade.symbol(), "CUSTOM", quantity,
                 canonicalLegs(unpriced), trade.thesis(), trade.horizon(), trade.riskMode(), trade.intent(),
-                false, null, null, "POSITION_TRANSFORMATION", "PROPOSED");
+                false, null, "POSITION_TRANSFORMATION", "PROPOSED", OrderInstruction.market());
         String world = worldOf(trade.accountId());
         Plan priced = computePlan(addedRequest, false, world, true, laneFor(world), false);
         if (priced.filledLegs().size() != addedRequest.legs().size()) {
@@ -3728,7 +3924,7 @@ public final class TradeService {
             stable.put("symbol", request.symbol());
             stable.put("quantity", request.qty());
             stable.put("legs", request.legs());
-            stable.put("entryNetCents", request.proposedNetCents());
+            stable.put("orderInstruction", request.orderInstruction());
             stable.put("feesOpenCents", request.feesOverrideCents());
             return HexFormat.of().formatHex(digest.digest(
                     Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
@@ -3955,7 +4151,7 @@ public final class TradeService {
                 r.lngOrNull("realized_pnl_cents"), r.lngOrNull("decision_pnl_cents"),
                 r.str("close_reason"), r.str("entry_snapshot_json"),
                 r.bool("is_live"), r.str("created_at"), r.str("closed_at"), r.str("updated_at"),
-                r.str("intent"), r.lng("shares_locked"), r.lngOrNull("proposed_net_cents"),
+                r.str("intent"), r.lng("shares_locked"), r.lngOrNull("order_limit_net_cents"),
                 r.str("data_provenance"), r.str("data_age"), r.str("data_source"));
     }
 

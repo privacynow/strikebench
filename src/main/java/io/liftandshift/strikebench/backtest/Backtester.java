@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.backtest;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -150,7 +152,7 @@ public final class Backtester {
 
     public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
                               String userId, String worldId) {
-        String symbol = require(req.symbol(), "symbol").trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(req.symbol());
         StrategyFamily family = parseFamily(require(req.strategy(), "strategy"));
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
         LocalDate to = LocalDate.parse(require(req.to(), "to"));
@@ -367,7 +369,7 @@ public final class Backtester {
 
     public PortfolioReport runPortfolio(PortfolioRequest req,
             io.liftandshift.strikebench.db.AnalysisContext analysis, String userId, String worldId) {
-        String symbol = require(req.symbol(), "symbol").trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(req.symbol());
         ManagedFamily family = parseManagedFamily(req.strategy());
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
         LocalDate to = LocalDate.parse(require(req.to(), "to"));

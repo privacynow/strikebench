@@ -15,6 +15,7 @@ import io.liftandshift.strikebench.plan.PlanManagementService;
 import io.liftandshift.strikebench.plan.PlanRehearsalService;
 import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.recommend.LegView;
+import io.liftandshift.strikebench.util.Json;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -60,20 +61,13 @@ final class PlanDecisionController {
         this.adoptionReviews = adoptionReviews;
     }
 
-    public record PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
+    public record PlanDecisionRequest(Long expectedVersion, Integer qty,
                                       Long feesOverrideCents, List<String> acknowledgedRisks,
                                       String ackToken, String note,
-                                      OrderInstruction orderInstruction) {
-        public PlanDecisionRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
-                                   Long feesOverrideCents, List<String> acknowledgedRisks,
-                                   String ackToken, String note) {
-            this(expectedVersion, qty, proposedNetCents, feesOverrideCents, acknowledgedRisks,
-                    ackToken, note, null);
-        }
-    }
+                                      OrderInstruction orderInstruction) {}
     public record PlanManageRequest(Long expectedVersion) {}
     public record BrokerFill(Integer legIndex, String fillPrice) {}
-    public record PlanBrokerRequest(Long expectedVersion, Integer qty, Long proposedNetCents,
+    public record PlanBrokerRequest(Long expectedVersion, Integer qty,
                                     String portfolioAccountId, String externalRef, String occurredAt,
                                     Long feesCents, List<BrokerFill> fills,
                                     List<String> acknowledgedRisks, String ackToken, String note) {}
@@ -103,26 +97,36 @@ final class PlanDecisionController {
     }
 
     void planDecisionPreview(Context ctx) {
+        rejectRemovedProposalAlias(ctx);
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanDecisionRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
-        body = normalizeLegacyMarketRoundTrip(ctx, plan, candidate, body);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
+        var exactEndorsement = io.liftandshift.strikebench.eval.DecisionEndorsement.exact(
+                payload.endorsement(), order.orderInstruction(),
+                payload.preview().price().executability(),
+                "BLOCK".equalsIgnoreCase(payload.guardrails().level())
+                        || !payload.guardrails().blockReasons().isEmpty()
+                        || !payload.preview().blockReasons().isEmpty(),
+                java.util.stream.Stream.concat(payload.guardrails().blockReasons().stream(),
+                        payload.preview().blockReasons().stream()).distinct().toList())
+                .forCandidate(candidate.path("id").asText(null));
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
-                plan, candidate, orderDock(order, payload.preview())));
+                plan, candidate, orderDock(order, payload.preview()), exactEndorsement,
+                payload.execution()));
     }
 
     void planDecisionTrade(Context ctx) {
+        rejectRemovedProposalAlias(ctx);
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanDecisionRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
-        body = normalizeLegacyMarketRoundTrip(ctx, plan, candidate, body);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         var prepared = planDecisions.prepareTrade(planDecisionInput(ctx, plan, body, candidate, payload, order));
@@ -133,6 +137,7 @@ final class PlanDecisionController {
     }
 
     void planDecisionCash(Context ctx) {
+        rejectRemovedProposalAlias(ctx);
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanDecisionRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
@@ -151,6 +156,7 @@ final class PlanDecisionController {
      *  One transaction freezes the BROKER decision, records the fills in the chosen tracked
      *  account, and links Plan to structure through the four-artifact receipt set. */
     void planDecisionBroker(Context ctx) {
+        rejectRemovedProposalAlias(ctx);
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanBrokerRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
@@ -167,8 +173,7 @@ final class PlanDecisionController {
         // keeps its own fee model, so feesOverrideCents stays null here (it is also bound into
         // the acknowledgment token, which the preview minted without an override).
         PlanDecisionRequest decisionBody = new PlanDecisionRequest(body.expectedVersion(), body.qty(),
-                body.proposedNetCents(), null, body.acknowledgedRisks(), body.ackToken(), body.note());
-        decisionBody = normalizeLegacyMarketRoundTrip(ctx, plan, candidate, decisionBody);
+                null, body.acknowledgedRisks(), body.ackToken(), body.note(), OrderInstruction.market());
         TradeOpenRequest order = planDecisionOrder(plan, candidate, decisionBody, true);
         tradeController.requireRecordedPlacementApproval(ctx, order);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
@@ -250,49 +255,40 @@ final class PlanDecisionController {
                         ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
                         : plan.context().horizonDays()) + "d",
                 plan.context().riskMode(), plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
-                candidate.path("recommendationId").asText(null), body.proposedNetCents(), body.feesOverrideCents(),
+                candidate.path("recommendationId").asText(null), body.feesOverrideCents(),
                 freezeAnalyzedPackage ? "ANALYZE" : "PLAN",
-                body.acknowledgedRisks(), body.ackToken(), "PROPOSED", body.orderInstruction());
-    }
-
-    private PlanDecisionRequest normalizeLegacyMarketRoundTrip(
-            Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, ObjectNode candidate,
-            PlanDecisionRequest body) {
-        if (body.orderInstruction() != null || body.proposedNetCents() == null) return body;
-        PlanDecisionRequest marketBody = new PlanDecisionRequest(body.expectedVersion(), body.qty(), null,
-                body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(), body.note(),
-                OrderInstruction.market());
-        TradeOpenRequest marketOrder = planDecisionOrder(plan, candidate, marketBody, false);
-        var marketPreview = tradeController.previewPayload(ctx, marketOrder).preview();
-        // Older Plan clients echoed the preview's natural net in proposedNetCents. Preserve that
-        // round trip as MARKET without turning the server's former second-pass default into LIMIT.
-        // Compared against the ONE §7.2 receipt the market preview published, not a parallel
-        // primitive: an unpriced market preview must not match a client's stated net by both being 0.
-        Long marketNet = marketPreview.price() == null ? null : marketPreview.price().grossPackageNetCents();
-        return isLegacyMarketEcho(body.proposedNetCents(), marketNet) ? marketBody : body;
-    }
-
-    /**
-     * A legacy client meant MARKET only when it echoed a price the server actually published.
-     * Two absent values are not equal financial facts; treating {@code null == null} as a match
-     * silently changes an unpriced proposed order into a market order.
-     */
-    static boolean isLegacyMarketEcho(Long proposedNetCents, Long marketNetCents) {
-        return marketNetCents != null && java.util.Objects.equals(proposedNetCents, marketNetCents);
+                body.acknowledgedRisks(), body.ackToken(), "PROPOSED",
+                body.orderInstruction() == null ? OrderInstruction.market() : body.orderInstruction());
     }
 
     /**
      * The dock publishes the preview's OWN §7.2 receipt. It used to re-derive the valuation here by
      * string-parsing the analytics map and re-running the executable-vs-resting ladder — a third
      * copy of a decision TradeService had already made, published under a field named
-     * `proposedNetCents` that actually held the preview's package net, beside a fee line that
-     * defaulted to $0 whether or not fees were charged.
+     * a second package-net field beside a fee line that defaulted to $0 whether or not fees were
+     * charged.
      */
     static ApiResponses.OrderDock orderDock(TradeOpenRequest order,
                                             io.liftandshift.strikebench.paper.TradePreview preview) {
-        OrderInstruction instruction = order.orderInstruction() == null
-                ? OrderInstruction.fromLegacy(order.proposedNetCents()) : order.orderInstruction();
-        return new ApiResponses.OrderDock(instruction, preview.price());
+        OrderInstruction instruction = order.orderInstruction();
+        if (instruction == null) {
+            throw new IllegalStateException("a proposed order must carry an order instruction");
+        }
+        var price = preview.price();
+        Long suggestedLimit = instruction.type() == OrderInstruction.Type.LIMIT
+                ? instruction.limitNetCents()
+                : price != null
+                    && price.executability() == OrderInstruction.Executability.IMMEDIATE
+                        ? price.executableNetCents() : null;
+        return new ApiResponses.OrderDock(instruction, price,
+                price == null ? null : price.valuedNetCents(), suggestedLimit);
+    }
+
+    private static void rejectRemovedProposalAlias(Context ctx) {
+        if (Json.parse(ctx.body()).has("proposedNetCents")) {
+            throw new IllegalArgumentException(
+                    "proposedNetCents was removed; use orderInstruction.limitNetCents for a LIMIT order");
+        }
     }
 
     private static String requiredCandidateText(ObjectNode candidate, String field) {
@@ -414,7 +410,8 @@ final class PlanDecisionController {
         int qty = Math.max(1, (int) Math.round(metrics.path("decisionQty").asDouble(1)));
         double rate = metrics.path("riskFreeRateAnnual").asDouble(Double.NaN);
         if (!Double.isFinite(rate)) throw new IllegalStateException("The frozen decision has no pricing-rate snapshot.");
-        long packageEnd = modeledRejectedPackageValue(decision.withArray("legs"), dueBar.close(), dueDate, rate, qty);
+        long packageEnd = modeledRejectedPackageValue(decision.withArray("legs"), dueBar.close(),
+                dueDate, rate, qty);
         // §3.2: both of these are now recorded only when the frozen decision's §7.2 receipt actually
         // stated them, so an absent value must refuse the review the way the underlying anchor and
         // the rate snapshot above already do. `asLong(0)` would price the not-taken package as a
@@ -447,7 +444,8 @@ final class PlanDecisionController {
 
     private static long modeledRejectedPackageValue(ArrayNode legs, BigDecimal spot, LocalDate horizon,
                                                      double rate, int qty) {
-        long value = 0;
+        List<io.liftandshift.strikebench.model.Leg> frozenLegs = new java.util.ArrayList<>();
+        List<Double> frozenIvs = new java.util.ArrayList<>();
         for (JsonNode leg : legs) {
             int ratio = leg.path("ratio").asInt();
             if (ratio < 1) throw new IllegalStateException("The frozen decision has an invalid leg ratio.");
@@ -455,25 +453,30 @@ final class PlanDecisionController {
             if (multiplier < 1 || multiplier > 10_000) {
                 throw new IllegalStateException("The frozen decision has an invalid contract multiplier.");
             }
-            long units = Math.multiplyExact((long) multiplier, Math.multiplyExact((long) ratio, qty));
-            double price;
             if ("STOCK".equals(leg.path("type").asText())) {
-                price = spot.doubleValue();
+                frozenLegs.add(new io.liftandshift.strikebench.model.Leg(
+                        io.liftandshift.strikebench.model.LegAction.valueOf(
+                                leg.path("action").asText()),
+                        null, null, null, ratio, BigDecimal.ZERO, multiplier));
+                frozenIvs.add(null);
             } else {
                 if (!leg.hasNonNull("strikePrice") || !leg.hasNonNull("expiration") || !leg.hasNonNull("iv")) {
                     throw new IllegalStateException("The rejected package lacks a frozen strike, expiration, or IV.");
                 }
-                double strike = leg.get("strikePrice").asDouble();
-                LocalDate expiry = LocalDate.parse(leg.get("expiration").asText());
-                double years = Math.max(0, java.time.temporal.ChronoUnit.DAYS.between(horizon, expiry) / 365.0);
-                price = io.liftandshift.strikebench.pricing.BlackScholes.price(
-                        "CALL".equals(leg.path("type").asText()), spot.doubleValue(), strike, years,
-                        rate, 0, leg.get("iv").asDouble());
+                frozenLegs.add(new io.liftandshift.strikebench.model.Leg(
+                        io.liftandshift.strikebench.model.LegAction.valueOf(
+                                leg.path("action").asText()),
+                        io.liftandshift.strikebench.model.OptionType.valueOf(
+                                leg.path("type").asText()),
+                        leg.get("strikePrice").decimalValue(),
+                        LocalDate.parse(leg.get("expiration").asText()),
+                        ratio, BigDecimal.ZERO, multiplier));
+                frozenIvs.add(leg.get("iv").asDouble());
             }
-            long cents = io.liftandshift.strikebench.util.Money.centsFromPrice(BigDecimal.valueOf(price), units);
-            value += "BUY".equals(leg.path("action").asText()) ? cents : -cents;
         }
-        return value;
+        return io.liftandshift.strikebench.util.Money.toCents(BigDecimal.valueOf(
+                io.liftandshift.strikebench.sim.PathValuationKernel.valueAtDate(
+                        frozenLegs, frozenIvs, qty, spot.doubleValue(), horizon, rate)));
     }
 
     private String requirePlanActiveTrade(Context ctx, String planId) {

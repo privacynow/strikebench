@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.api;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -74,9 +76,7 @@ final class SparklineController {
         LocalDate from = today.minusDays(days);
         List<String> symbols = raw == null || raw.isBlank()
                 ? MarketUniverseView.symbolsForWorld(market, universe, world)
-                : java.util.Arrays.stream(raw.split(","))
-                    .map(symbol -> symbol.trim().toUpperCase(Locale.ROOT))
-                    .filter(symbol -> !symbol.isBlank()).distinct().toList();
+                : Symbol.list(java.util.Arrays.asList(raw.split(",")));
         int totalRequested = symbols.size();
         if (totalRequested > 16) symbols = symbols.subList(0, 16);
 

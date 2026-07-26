@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -65,5 +66,5 @@ public final class StoredHistoricalOptionsProvider implements HistoricalOptionsP
                 r -> LocalDate.parse(r.str("e")), norm(symbol), asOf);
     }
 
-    private static String norm(String s) { return s == null ? "" : s.trim().toUpperCase(Locale.ROOT); }
+    private static String norm(String s) { return Symbol.normalize(s); }
 }

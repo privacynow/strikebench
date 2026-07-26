@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -33,7 +34,6 @@ public final class AccountObjectiveService {
     private static final Set<String> DIRECTIONS = Set.of("BULLISH", "BEARISH", "NEUTRAL", "NON_DIRECTIONAL");
     private static final Set<String> ASSIGNMENT = Set.of("AVOID", "ACCEPT", "PREFER_BELOW_BASIS", "SEEK");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
-    private static final Pattern SYMBOL = Pattern.compile("[A-Z0-9][A-Z0-9.\\-]{0,19}");
 
     public enum Enforcement { HARD, ADVISORY }
 
@@ -49,12 +49,9 @@ public final class AccountObjectiveService {
     ) {
         public PackageCapacity {
             positionFingerprint = clean(positionFingerprint).toLowerCase(Locale.ROOT);
-            symbol = clean(symbol).toUpperCase(Locale.ROOT);
+            symbol = Symbol.normalize(symbol);
             if (!SHA256.matcher(positionFingerprint).matches()) {
                 throw new IllegalArgumentException("position fingerprint must be a 64-character SHA-256 value");
-            }
-            if (!SYMBOL.matcher(symbol).matches()) {
-                throw new IllegalArgumentException("package capacity symbol is invalid");
             }
             nonNegative(acceptedAssignmentShares, "accepted assignment shares");
             nonNegative(acceptedAssignmentDollarsCents, "accepted assignment dollars");
@@ -159,9 +156,9 @@ public final class AccountObjectiveService {
             String basis
     ) {
         public CapacityUsage {
-            symbolCents = normalizeUsage(symbolCents);
-            themeCents = normalizeUsage(themeCents);
-            expiryCents = normalizeUsage(expiryCents);
+            symbolCents = normalizeUsage(symbolCents, true);
+            themeCents = normalizeUsage(themeCents, false);
+            expiryCents = normalizeUsage(expiryCents, false);
             if (encumbranceCents != null && encumbranceCents < 0) {
                 throw new IllegalArgumentException("capacity encumbrance cannot be negative");
             }
@@ -336,11 +333,13 @@ public final class AccountObjectiveService {
         return List.copyOf(out);
     }
 
-    private static Map<String, Long> normalizeUsage(Map<String, Long> raw) {
+    private static Map<String, Long> normalizeUsage(Map<String, Long> raw, boolean symbolKeys) {
         if (raw == null || raw.isEmpty()) return Map.of();
         Map<String, Long> out = new LinkedHashMap<>();
         for (Map.Entry<String, Long> entry : raw.entrySet()) {
-            String key = clean(entry.getKey()).toUpperCase(Locale.ROOT);
+            String key = symbolKeys
+                    ? Symbol.normalize(entry.getKey())
+                    : clean(entry.getKey()).toUpperCase(Locale.ROOT);
             Long value = entry.getValue();
             if (value == null || value < 0) {
                 throw new IllegalArgumentException("capacity usage values must be non-negative");
@@ -356,8 +355,8 @@ public final class AccountObjectiveService {
         Set<String> seen = new HashSet<>();
         for (ScopedCeiling item : raw) {
             if (item == null) throw new IllegalArgumentException(scope + " ceiling cannot be null");
-            if ("symbol".equals(scope) && !SYMBOL.matcher(item.key()).matches()) {
-                throw new IllegalArgumentException("symbol ceiling key is invalid");
+            if ("symbol".equals(scope)) {
+                item = new ScopedCeiling(Symbol.normalize(item.key()), item.maxCents(), item.enforcement());
             }
             if ("expiry".equals(scope)) {
                 try { LocalDate.parse(item.key()); }

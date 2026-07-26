@@ -69,8 +69,8 @@ final class PortfolioController {
                 ctx -> ctx.json(AccountRiskContext.load(db, ownerId.apply(ctx))),
                 this::updateRiskContext,
                 this::riskBudget,
-                ctx -> ctx.json(trades.portfolioGreeks(currentAccount.apply(ctx).id())),
-                ctx -> ctx.json(bookRisk.lane(ownerId.apply(ctx), currentAccount.apply(ctx).id())),
+                ctx -> ctx.json(trades.practiceBookSnapshot(currentAccount.apply(ctx).id()).greeks()),
+                this::bookRisk,
                 ctx -> ctx.json(new ApiResponses.Accounts<>(books.accounts(ownerId.apply(ctx)))),
                 this::createAccount,
                 ctx -> ctx.json(books.account(ownerId.apply(ctx), ctx.pathParam("id"))),
@@ -109,39 +109,23 @@ final class PortfolioController {
      */
     private void portfolioHeat(Context ctx) {
         String accountId = currentAccount.apply(ctx).id();
-        Map<String, Object> out = new LinkedHashMap<>(trades.portfolioHeat(accountId));
-        BookRiskService.BookShareRoster roster = bookRisk.bookShareRoster(accountId);
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(accountId);
+        Map<String, Object> out = new LinkedHashMap<>(snapshot.heat().legacyProjection());
+        BookRiskService.BookShareRoster roster = bookRisk.bookShareRoster(snapshot);
         out.put("shareRoster", roster);
-
-        List<Map<String, Object>> compatibilityRows = new ArrayList<>();
-        for (BookRiskService.BookShareRow row : roster.rows()) {
-            Map<String, Object> projected = new LinkedHashMap<>();
-            projected.put("tradeId", row.tradeId());
-            projected.put("symbol", row.symbol());
-            projected.put("strategy", row.strategy());
-            projected.put("maxLossCents", row.riskCents());
-            projected.put("riskSharePct", row.sharePct());
-            projected.put("riskRank", row.rank());
-            projected.put("riskRankOf", row.rankOf());
-            projected.put("denominatorCents", row.denominatorCents());
-            projected.put("denominatorBasis", row.denominatorBasis());
-            projected.put("shareUnavailableReason", row.unavailableReason());
-            compatibilityRows.add(java.util.Collections.unmodifiableMap(projected));
-        }
-        out.put("positions", List.copyOf(compatibilityRows));
-        out.put("rankedPositions", roster.available() ? roster.positions() : 0);
-        out.put("bookShareAvailable", roster.available());
-        out.put("bookShareUnavailableReason", roster.unavailableReason());
-        out.put("bookShareDenominatorCents", roster.denominatorCents());
-        out.put("bookShareDenominatorBasis", roster.denominatorBasis());
-        out.put("bookShareBasis", roster.basis());
         String selected = ctx.queryParam("selectedTradeIds");
         if (selected != null) {
             List<String> ids = java.util.Arrays.stream(selected.split(","))
                     .map(String::trim).filter(value -> !value.isEmpty()).toList();
-            out.put("selectedBook", bookRisk.selectedBook(accountId, ids));
+            out.put("selectedBook", bookRisk.selectedBook(snapshot, ids));
         }
         ctx.json(out);
+    }
+
+    private void bookRisk(Context ctx) {
+        Account account = currentAccount.apply(ctx);
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
+        ctx.json(bookRisk.lane(ownerId.apply(ctx), account.id(), snapshot));
     }
 
     private void updateRiskContext(Context ctx) {
@@ -289,6 +273,7 @@ final class PortfolioController {
     /** Cash + share value + executable close value; reserve is a lien inside cash. */
     private void summary(Context ctx) {
         Account account = currentAccount.apply(ctx);
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
         long sharesValue = 0;
         int sharesCount = 0;
         boolean complete = true;
@@ -300,7 +285,7 @@ final class PortfolioController {
                 sharesValue += position.marketValueCents();
             }
         }
-        TradeService.OpenPositionsValue open = trades.openPositionsValue(account.id());
+        TradeService.OpenPositionsValue open = snapshot.openPositions();
         if (!open.complete()) complete = false;
         long total = account.cashCents() + sharesValue + open.valueCents();
         ctx.json(new ApiResponses.PortfolioSummary(account.cashCents(), account.reservedCents(),
@@ -310,7 +295,7 @@ final class PortfolioController {
                 "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted.",
                 io.liftandshift.strikebench.position.AccountLiquidityReceipt.practice(account.id(),
                         account.cashCents(), account.reservedCents(), account.buyingPowerCents(),
-                        trades.theoreticalShortPutObligationCents(account.id()),
+                        snapshot.heat().earlyAssignmentLiquidityCents(),
                         OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC))));
     }
 

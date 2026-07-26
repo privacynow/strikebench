@@ -25,7 +25,7 @@ class OptionTimeProfilerConsistencyTest {
         LocalDate expiry = LocalDate.of(2026, 7, 24);
         OptionTime.Measure time = OptionTime.toExpiry(
                 Instant.parse("2026-07-24T19:00:00Z"), expiry);
-        Candidate candidate = candidate(expiry);
+        Candidate candidate = candidate(expiry, time);
         EvalContext context = context(time);
 
         StrategyEvaluation evaluation = new StrategyEvaluator().evaluate(candidate,
@@ -48,16 +48,21 @@ class OptionTimeProfilerConsistencyTest {
         assertThat(evaluation.stance().durationCalendarDays()).isZero();
     }
 
-    private static Candidate candidate(LocalDate expiration) {
+    private static Candidate candidate(LocalDate expiration, OptionTime.Measure time) {
+        var leg = new LegView("BUY", "CALL", "100", expiration.toString(),
+                1, "2.00", 100, "OPEN");
+        var price = TestPrices.withFees(1, -20_000L, -20_000L, 65L);
+        var curve = io.liftandshift.strikebench.pricing.PayoffCurve.of(
+                List.of(leg.toLeg()), 1);
+        var receipt = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
+                curve, price, 10_000L, 0.30, time, 0.04, List.of());
         return new Candidate("LONG_CALL", "Long call", "single_long", "BUY 100C",
-                List.of(new LegView("BUY", "CALL", "100", expiration.toString(),
-                        1, "2.00", 100, "OPEN")),
-                1, TestPrices.withFees(1, -20_000L, -20_000L, 65L),
-                null, 20_000L, List.of("102.00"), 0.48, -1_000L, 0.9,
+                List.of(leg), 1, price,
+                null, 20_000L, List.of("102.00"), 0.9,
                 "DELAYED", List.of(), 0.8, "Upside", "Uncapped upside",
                 "Premium can expire worthless", "Thesis breaks", "Pay the debit",
                 "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null,
-                false, null, null);
+                false, null, null, receipt);
     }
 
     private static EvalContext context(OptionTime.Measure time) {

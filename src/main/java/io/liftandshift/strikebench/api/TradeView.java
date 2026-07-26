@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import io.liftandshift.strikebench.model.GreeksView;
+import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.util.Json;
@@ -37,7 +39,7 @@ public record TradeView(
         String updatedAt,
         String intent,
         long sharesLocked,
-        Long proposedNetCents,
+        @JsonInclude(JsonInclude.Include.NON_NULL) OrderInstruction orderInstruction,
         String dataProvenance,
         String dataAge,
         String dataSource,
@@ -50,7 +52,7 @@ public record TradeView(
         // B6: held greeks in the ONE canonical unit (deltaShares, gammaSharesPerDollar,
         // thetaCentsPerDay, vegaCentsPerPoint) — the same contract ideas and the canvas report.
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks greeks,
+        GreeksView greeks,
         // B13: the real-world / tail lane (Merton jump-mixture) for the held line, so trade.popEntry
         // can read a tail-aware POP and the desk gap dial reads a backend receipt. The full-fidelity
         // tail (live IV / IV-rank / DTE) rides the position-detail analysis; this roster row uses the
@@ -70,6 +72,9 @@ public record TradeView(
     public static TradeView of(TradeRecord t) {
         Map<String, Object> snapshot = t.entrySnapshotJson() == null || t.entrySnapshotJson().isBlank()
                 ? Map.of() : Json.read(t.entrySnapshotJson(), Map.class);
+        OrderInstruction orderInstruction = snapshot.get("orderInstruction") == null
+                ? (t.orderLimitNetCents() == null ? null : OrderInstruction.limit(t.orderLimitNetCents()))
+                : Json.MAPPER.convertValue(snapshot.get("orderInstruction"), OrderInstruction.class);
         return new TradeView(t.id(), t.symbol(), t.strategy(), t.status(), t.qty(),
                 t.legs().stream().map(LegView::of).toList(),
                 t.thesis(), t.horizon(), t.riskMode(),
@@ -77,7 +82,7 @@ public record TradeView(
                 t.breakevens(), t.popEntry(), t.feesOpenCents(), t.feesCloseCents(), t.realizedPnlCents(),
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
-                t.intent(), t.sharesLocked(), t.proposedNetCents(), t.dataProvenance(),
+                t.intent(), t.sharesLocked(), orderInstruction, t.dataProvenance(),
                 t.dataAge(), t.dataSource(), null, null, null, null, null, null, null);
     }
 
@@ -86,7 +91,7 @@ public record TradeView(
                 entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents,
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
-                updatedAt, intent, sharesLocked, proposedNetCents, dataProvenance, dataAge,
+                updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
                 dataSource, unrealized, decisionUnrealized, terminalPayoff, greeks, jumpTail,
                 scenarios, spotPnl);
     }
@@ -97,7 +102,7 @@ public record TradeView(
      * read off that same curve.
      */
     public TradeView withHeldReceipts(io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff,
-                                      io.liftandshift.strikebench.sim.ScenarioCanvasValuator.Greeks heldGreeks,
+                                      GreeksView heldGreeks,
                                       io.liftandshift.strikebench.pricing.JumpMixtureTerminal.Tail heldJumpTail,
                                       java.util.List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> heldScenarios,
                                       ApiResponses.HeldSpotPnl heldSpotPnl) {
@@ -105,7 +110,7 @@ public record TradeView(
                 entryUnderlyingCents, entryNetPremiumCents, maxLossCents, maxProfitCents,
                 breakevens, popEntry, feesOpenCents, feesCloseCents, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
-                updatedAt, intent, sharesLocked, proposedNetCents, dataProvenance, dataAge,
+                updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
                 dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents, payoff, heldGreeks, heldJumpTail,
                 heldScenarios, heldSpotPnl);
     }
