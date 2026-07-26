@@ -14,6 +14,11 @@ nohup.out
 # Browser review captures are generated artifacts; CI preserves them separately.
 dom-tests/shots/*.png
 dom-tests/shots/**/*.png
+# Diagnostic probes written while investigating a surface. They are working files, not suites, and
+# a blanket `git add` once swept fifty of them into the repo — one of which then gated CI.
+dom-tests/*probe*.js
+dom-tests/scratch-*
+dom-tests/shots/**/*.json
 
 # Local engineering log / agent handoff notes — not part of the shipped codebase
 CLAUDE.md

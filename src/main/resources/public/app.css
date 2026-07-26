@@ -1923,8 +1923,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .understand .decisionbrief .dbtop b{font-size:var(--f-xs);line-height:1.25}
   .understand .decisionbrief .dbread{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .understand .decisionbrief .dbfacts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:5px}
-  .understand .decisionbrief .dbfact{display:flex;min-width:0;flex-direction:column;gap:0;white-space:nowrap;overflow:hidden}
-  .understand .decisionbrief .dbfact b{overflow:hidden;text-overflow:ellipsis}
+  .understand .decisionbrief .dbfact{display:flex;min-width:0;flex-direction:column;gap:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* The VALUE ellipsised but the label did not, so a fact's name lost its last characters with no
+     sign that anything was missing — "…cost benchmar". Both truncate visibly now. */
+  .understand .decisionbrief .dbfact b,.understand .decisionbrief .dbfact>span{overflow:hidden;text-overflow:ellipsis}
 }
 .inspectwell{flex:1;height:auto;min-height:310px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);overflow:hidden}
 .inspectpane{height:100%;min-height:0;padding:10px 11px;overflow:auto}
@@ -3726,7 +3728,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .dccenter .marketlens .histchart{min-height:96px}
 .dccenter .marketlens .marketctx{flex:0 1 auto;min-height:56px;max-height:46%;overflow:hidden}
 .dccenter .marketlens .marketcol,.dccenter .marketlens .packagebookcol{min-height:0;overflow:visible}
-.dccenter .marketlens .packagebooknear,.dccenter .marketlens .authnews{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* A scroller has to show enough to be worth scrolling. These two were being squeezed to 30px of
+   196px of nearby strikes at 2560x1440 — and 6px of 206px at 2000x963, which is a scrollbar with
+   a sliver of content behind it, not a list. The floor keeps several rows readable; the column's
+   full redesign is M6's. */
+.dccenter .marketlens .packagebooknear,.dccenter .marketlens .authnews{min-height:96px;overflow-y:auto;overscroll-behavior:contain}
 /* The nearby-strike list is the column's only content now, and it is the designated scroller. */
 .dccenter .marketlens .packagebook{display:flex;flex-direction:column;min-height:0;flex:1 1 auto}
 
