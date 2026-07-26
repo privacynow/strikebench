@@ -614,7 +614,11 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
      rows is what crushed twelve cards to 40px around 73px of content and then cut them. */
   grid-template-rows:auto repeat(var(--home-position-count,6),minmax(min-content,1fr));
   grid-auto-rows:minmax(min-content,1fr);
-  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:none;position:relative}
+  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;
+  /* The header is sticky, so a snap that parks a card at scrollTop 0 parks it UNDERNEATH it —
+     measured at twelve positions, 41 of the first card's 69px were covered on a fresh load, and
+     scrolling back to the top re-snapped into the same place. Snap targets clear the header. */
+  scroll-padding-top:48px;scroll-snap-type:y proximity;scrollbar-width:none;position:relative}
 .lv-book .book>.rosterhd{position:sticky;top:0;z-index:3;background:var(--panel);padding-block:2px}
 .bookoverflowmeta{margin-left:auto;min-width:112px;max-width:150px}.bookoverflowmeta .overflowhair{min-width:58px}
 #riskMain,#bookrisk,#chainBand,#univBand,#sectorBand,#newsBand{display:none}
@@ -1387,6 +1391,22 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .bookauthority>.authfailed{margin:auto}
 .bookauthority .emptycard.hero .emptyactions{margin-top:22px}
 .authbookpanel{height:100%;min-height:min-content;display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line-soft);border-radius:9px;background:var(--panel)}
+/* …except in the bands that occupy a sized board row. There the content floor made the panel
+   taller than its band — a 412px #sectorBand holding an 818px panel — and an opaque panel drew
+   over its neighbour: 24 cross-panel overprints at 2000x963 with twelve positions. Scoped, not
+   removed: #riskMain's panel keeps the floor, because taking it away amputates 213px of the Scout
+   workbench at 1000x800. */
+/* …except in the bands that occupy a sized board row. There the content floor made the panel
+   taller than its band — a 412px #sectorBand holding an 818px panel — and because the panel no
+   longer clips (clipping hid facts), it drew straight across its neighbour: 24 cross-panel
+   overprints at 2000x963 with twelve positions, 23 at 1920x1080, both now 0.
+
+   Scoped deliberately: #riskMain KEEPS the floor. Without it the Scout workbench is amputated
+   213px below the GOAL row at 1000x800. Putting the floor on the bands instead, or removing it
+   from #riskMain too, each just moves the overprint somewhere else — measured, three ways. The
+   one width where #riskMain's panel still overflows its row is recorded in the visual lane. */
+#univBand .authbookpanel,#sectorBand .authbookpanel,#newsBand .authbookpanel,#chainBand .authbookpanel,
+#bookrisk .authbookpanel{min-height:0}
 .authmetricgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
 .authmetric{min-width:0;padding:9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);display:flex;flex-direction:column;gap:2px}
 .authmetric span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.06em}.authmetric b{color:var(--text);font-family:var(--mono);font-size:var(--f-sm);overflow-wrap:anywhere}.authmetric b.pos{color:var(--profit)}.authmetric b.neg{color:var(--loss)}
@@ -2953,7 +2973,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 @media (max-width:1100px){ .rkgrid{grid-template-columns:1fr} .impgrid{grid-template-columns:1fr} .ch-stats{grid-template-columns:repeat(2,1fr)} }
 
 @media (max-width:900px){
-  .lv-book .board{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;grid-template-areas:"roster" "map" "chain" "bookrisk" "univ" "sector" "news";gap:8px;padding:8px;overflow-x:hidden;overflow-y:auto}
+  .lv-book .board{grid-template-columns:minmax(0,1fr);grid-template-rows:max-content;grid-auto-rows:max-content;grid-template-areas:"roster" "map" "chain" "bookrisk" "univ" "sector" "news";gap:8px;padding:8px;overflow-x:hidden;overflow-y:auto}
   .lv-book[data-book-authority="empty"] .board{grid-template-rows:auto;grid-template-areas:"map" "chain" "univ" "sector" "news"}
   .lv-book .book,.lv-book #riskMain,.lv-book #bookrisk,.lv-book #chainBand,.lv-book #univBand,.lv-book #sectorBand,.lv-book #newsBand{min-height:210px;overflow:visible}
   .lv-book[data-book-authority="empty"] #riskMain{min-height:650px}.emptyopportunityintro{grid-template-columns:1fr;align-items:start}.emptyopportunityintro span{white-space:normal}.opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}.scoutidlefield{grid-template-columns:1fr}.scoutlaunch{grid-template-columns:1fr}.scoutlaunch .scoutprimary{width:100%}
