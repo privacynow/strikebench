@@ -33,7 +33,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Freezes one Plan decision and links its execution atomically to the owning Plan. */
 public final class PlanDecisionService {
-    public static final String MODEL_VERSION = "plan-decision-2";
+    public static final String MODEL_VERSION = "plan-decision-3";
 
     public record Input(String userId, Plan.View plan, long expectedVersion, String candidateId,
                         Account account, TradePreview preview, EconomicAssessment economics,
@@ -73,6 +73,7 @@ public final class PlanDecisionService {
     }
 
     public PreparedTradeDecision prepareTrade(Input input) {
+        requirePracticeRisk(input == null ? null : input.preview());
         String id = Ids.newId("pdec");
         return new PreparedTradeDecision(id, (connection, trade, executionPreview) ->
                 saveOn(connection, id, input, "TRADE", trade, executionPreview));
@@ -124,7 +125,8 @@ public final class PlanDecisionService {
                         put(node, "quoteAsOf", row.str("quote_as_of")); put(node, "accountNlvCents", row.lngOrNull("account_nlv_cents"));
                         put(node, "buyingPowerCents", row.lngOrNull("buying_power_cents"));
                         put(node, "riskCapitalCents", row.lngOrNull("risk_capital_cents"));
-                        put(node, "maxLossCents", row.lngOrNull("max_loss_cents")); put(node, "maxProfitCents", row.lngOrNull("max_profit_cents"));
+                        putNullable(node, "maxLossCents", row.lngOrNull("max_loss_cents"));
+                        put(node, "maxProfitCents", row.lngOrNull("max_profit_cents"));
                         put(node, "pop", row.dblOrNull("pop")); put(node, "pMaxProfit", row.dblOrNull("p_max_profit"));
                         put(node, "pMaxLoss", row.dblOrNull("p_max_loss")); put(node, "evMarketCents", row.lngOrNull("ev_market_cents"));
                         put(node, "evHistvolCents", row.lngOrNull("ev_histvol_cents")); put(node, "cvarCents", row.lngOrNull("cvar_cents"));
@@ -163,6 +165,7 @@ public final class PlanDecisionService {
                         else if (metric.cents() != null) metrics.put(metric.key(), metric.cents());
                         else metrics.put(metric.key(), metric.text());
                     });
+            if (!metrics.has("reserveCents")) metrics.putNull("reserveCents");
             String orderType = metrics.path("orderType").asText(null);
             if (orderType != null) {
                 ObjectNode instruction = out.putObject("orderInstruction");
@@ -218,6 +221,7 @@ public final class PlanDecisionService {
         }
         if (!"ACTIVE".equals(current.status())) throw new IllegalStateException("This Plan is not ready for another decision.");
         TradePreview preview = frozenPreview(input.preview(), trade, executionPreview);
+        if ("TRADE".equals(action)) requirePracticeRisk(preview);
         EconomicAssessment economics = input.economics();
         Account account = input.account();
         AccountRiskContext risk = input.riskContext();
@@ -247,6 +251,9 @@ public final class PlanDecisionService {
         int reviewHorizonSessions = input.plan().context().horizonDays() == null
                 ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
                 : input.plan().context().horizonDays();
+        Long frozenMaxLossCents = trade == null
+                ? preview.maxLossCents()
+                : Long.valueOf(trade.maxLossCents());
         Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
                         "ensemble_id,account_id,action,qty,price_receipt," +
                         "quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
@@ -257,7 +264,7 @@ public final class PlanDecisionService {
                 references.recommendationId(), references.ensembleId(), account.id(), action, qty,
                 Json.write(price), now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
                 risk == null ? null : risk.riskCapitalCents(),
-                trade == null ? preview.maxLossCents() : trade.maxLossCents(),
+                frozenMaxLossCents,
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
                 trade == null ? preview.popEntry() : trade.popEntry(), pMaxProfit, pMaxLoss,
                 economics.marketEvAfterCostsCents(), economics.realizedVolEvAfterCostsCents(), cvar,
@@ -335,6 +342,13 @@ public final class PlanDecisionService {
         if (value != null) Db.execOn(c,
                 "INSERT INTO plan_decision_metric(decision_id,metric_key,value_number) VALUES(?,?,?)",
                 id, key, value.doubleValue());
+    }
+
+    private static void requirePracticeRisk(TradePreview preview) {
+        if (preview == null || !preview.hasRiskFacts()) {
+            throw new IllegalStateException(
+                    "A Practice trade decision requires reviewed maximum-loss and reserve receipts.");
+        }
     }
 
     private static String nextTradeRole(Connection c, String planId) throws SQLException {
@@ -469,12 +483,12 @@ public final class PlanDecisionService {
             boolean ok,
             List<String> blockReasons,
             List<String> warnings,
-            long maxLossCents,
+            Long maxLossCents,
             Long maxProfitCents,
             List<String> breakevens,
             Double popEntry,
             Long expectedValueCents,
-            long reserveCents,
+            Long reserveCents,
             long cashBeforeCents,
             long cashAfterCents,
             long reservedBeforeCents,
@@ -535,6 +549,10 @@ public final class PlanDecisionService {
         else if (value instanceof Double d) node.put(key, d);
         else if (value instanceof Boolean b) node.put(key, b);
         else node.set(key, Json.MAPPER.valueToTree(value));
+    }
+    private static void putNullable(ObjectNode node, String key, Long value) {
+        if (value == null) node.putNull(key);
+        else node.put(key, value);
     }
     private static void putDecimal(ObjectNode node, String key, BigDecimal value) {
         if (value != null) node.put(key, value.stripTrailingZeros().toPlainString());

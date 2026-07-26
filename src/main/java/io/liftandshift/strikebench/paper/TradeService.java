@@ -223,9 +223,9 @@ public final class TradeService {
                                        long closingFeesCents, long openingFeesCents,
                                        long allocatedEntryBasisCents, long allocatedOpenFeesCents,
                                        long actionRealizedPnlCents, long realizedPnlToDateCents,
-                                       long reserveBeforeCents, long reserveAfterCents,
+                                       long reserveBeforeCents, Long reserveAfterCents,
                                        long sharesLockedAfter,
-                                       long projectedCashAfterCents, long projectedReservedAfterCents,
+                                       long projectedCashAfterCents, Long projectedReservedAfterCents,
                                        long placementCashBeforeCents, long placementReservedBeforeCents,
                                        List<String> basisNotes) {}
 
@@ -247,9 +247,9 @@ public final class TradeService {
                                       long allocatedOpenFeesCents, long actionRealizedPnlCents,
                                       long decisionPnlDeltaCents, long realizedPnlToDateCents,
                                       long reserveBeforeCents,
-                                      long reserveAfterCents, long heldShareContextAfter,
+                                      Long reserveAfterCents, long heldShareContextAfter,
                                       long sharesLockedAfter, long projectedCashAfterCents,
-                                      long projectedReservedAfterCents, List<String> basisNotes,
+                                      Long projectedReservedAfterCents, List<String> basisNotes,
                                       String exactStateFingerprint) {}
 
     public record LifecycleResult(TradeRecord trade, long actionRealizedPnlCents,
@@ -344,8 +344,11 @@ public final class TradeService {
         }
         long buyingPowerBefore = Math.subtractExact(cashBeforeCents, reservedBeforeCents);
         long cashAfter = Math.subtractExact(Math.addExact(cashBeforeCents, p.entryNet), p.fees);
-        long reservedAfter = Math.addExact(reservedBeforeCents, p.reserve);
         List<String> blocks = new ArrayList<>(p.blocks);
+        long planReserve = p.blocks.isEmpty() ? requiredRiskFact(p.reserve, "reserve") : 0L;
+        long planMaxLoss = p.blocks.isEmpty() ? requiredRiskFact(p.maxLoss, "maximum loss") : 0L;
+        long reservedAfter = p.blocks.isEmpty()
+                ? Math.addExact(reservedBeforeCents, planReserve) : reservedBeforeCents;
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
             long free = Math.addExact(PositionsService.heldShares(c, req.accountId(),
@@ -358,7 +361,7 @@ public final class TradeService {
             }
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
-            blocks.add("Insufficient buying power: needs " + Money.fmt(p.maxLoss + p.fees)
+            blocks.add("Insufficient buying power: needs " + Money.fmt(planMaxLoss + p.fees)
                     + " but only " + Money.fmt(buyingPowerBefore) + " is available");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
@@ -379,8 +382,11 @@ public final class TradeService {
         Account acct = db.with(c -> AccountService.get(c, req.accountId()));
         Plan p = computePlan(req, req.executedFill(), null, false, null, true);
         long cashAfter = acct.cashCents() + p.entryNet - p.fees;
-        long reservedAfter = acct.reservedCents() + p.reserve;
         List<String> blocks = new ArrayList<>(p.blocks);
+        long planReserve = p.blocks.isEmpty() ? requiredRiskFact(p.reserve, "reserve") : 0L;
+        long planMaxLoss = p.blocks.isEmpty() ? requiredRiskFact(p.maxLoss, "maximum loss") : 0L;
+        long reservedAfter = p.blocks.isEmpty()
+                ? Math.addExact(acct.reservedCents(), planReserve) : acct.reservedCents();
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
             long free = db.with(c -> PositionsService.heldShares(c, req.accountId(), req.symbol().toUpperCase(java.util.Locale.ROOT))
@@ -392,7 +398,7 @@ public final class TradeService {
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
             blocks.add("This Practice account has " + Money.fmt(acct.buyingPowerCents())
-                    + " buying power; the analyzed package needs " + Money.fmt(p.maxLoss + p.fees)
+                    + " buying power; the analyzed package needs " + Money.fmt(planMaxLoss + p.fees)
                     + ". Analysis remains visible, but the account cannot fund it as entered.");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
@@ -609,7 +615,8 @@ public final class TradeService {
                 Math.addExact(account.cashCents(), closingCash), openingCash),
                 Math.addExact(closingFees, openingFees));
         long placementReservedBefore = Math.subtractExact(account.reservedCents(), reserveBefore);
-        long projectedReserved = Math.addExact(placementReservedBefore, exactPlan.reserve());
+        Long projectedReserved = exactPlan.reserve() == null ? null
+                : Math.addExact(placementReservedBefore, exactPlan.reserve());
         long placementCashBefore = Math.addExact(Math.subtractExact(projectedCash, exactPlan.entryNet()),
                 exactPlan.fees());
         TradePreview exactPreview = previewFromPlan(exactAfter, exactPlan, placementCashBefore,
@@ -751,7 +758,7 @@ public final class TradeService {
         long reservedWithoutCurrent = Math.subtractExact(account.reservedCents(), reserveBefore);
         OpenRequest exactAfter = null;
         Plan exactAfterPlan = null;
-        long reserveAfter = 0;
+        Long reserveAfter = 0L;
         long sharesLockedAfter = 0;
         if (!retained.isEmpty()) {
             int quantity = canonicalQuantity(retained);
@@ -766,20 +773,22 @@ public final class TradeService {
             reserveAfter = exactAfterPlan.reserve();
             sharesLockedAfter = exactAfterPlan.sharesToLock();
         }
-        long projectedReserved = Math.addExact(reservedWithoutCurrent, reserveAfter);
+        Long projectedReserved = reserveAfter == null ? null
+                : Math.addExact(reservedWithoutCurrent, reserveAfter);
 
         PositionAssessment current = lifecycleAssessment(c, trade, allLots, heldContextBefore,
                 holding == null ? trade.entryUnderlyingCents() : holding.avgCostCents(),
                 packageAdjustment, trade.feesOpenCents(), account.cashCents(), reservedWithoutCurrent,
-                reserveBefore, world);
+                trade.maxLossCents(), reserveBefore, world);
         PositionAssessment survivor = null;
         if (!retained.isEmpty() || heldContextAfter > 0) {
             survivor = lifecycleAssessment(c, trade, retained, heldContextAfter,
                     projectedHolding.afterBasisCents(), remainingPackageAdjustment, remainingOpenFees,
-                    projectedCash, reservedWithoutCurrent, reserveAfter, world);
+                    projectedCash, reservedWithoutCurrent,
+                    exactAfterPlan == null ? null : exactAfterPlan.maxLoss(), reserveAfter, world);
             List<String> blocks = new ArrayList<>(survivor.risk().blockReasons());
             if (exactAfterPlan != null) blocks.addAll(exactAfterPlan.blocks());
-            if (action == PositionTransformation.Action.EXERCISE
+            if (action == PositionTransformation.Action.EXERCISE && projectedReserved != null
                     && projectedCash - projectedReserved < 0) {
                 blocks.add("Exercise needs " + Money.fmt(-stockCash)
                         + " of strike cash and would exceed current Practice buying power.");
@@ -831,7 +840,8 @@ public final class TradeService {
                                                    List<LegLot> optionLots, long contextShares,
                                                    long stockBasisCents, long packageAdjustment,
                                                    long optionFees, long projectedCash,
-                                                   long reservedWithoutCurrent, long exactReserve,
+                                                   long reservedWithoutCurrent, Long exactMaxLoss,
+                                                   Long exactReserve,
                                                    String world) throws SQLException {
         List<LegLot> combined = new ArrayList<>(optionLots);
         if (contextShares > 0) {
@@ -850,7 +860,9 @@ public final class TradeService {
         TradePreview preview = previewFromPlan(request, plan, placementCash, reservedWithoutCurrent, 0);
         PositionAssessment assessment = assessmentFromPlan(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
                 PositionDomain.ExecutionLane.PRACTICE, request, plan, preview);
-        var risk = new PositionTransformation.RiskSnapshot(plan.maxLoss(), exactReserve, plan.maxProfit(),
+        Long reviewedMaxLoss = exactMaxLoss != null ? exactMaxLoss
+                : exactReserve != null ? plan.maxLoss() : null;
+        var risk = new PositionTransformation.RiskSnapshot(reviewedMaxLoss, exactReserve, plan.maxProfit(),
                 plan.blocks().isEmpty(), plan.blocks(), assessment.risk().evidenceBasis());
         return new PositionAssessment(assessment.position(), assessment.preview(), risk);
     }
@@ -871,11 +883,13 @@ public final class TradeService {
         Plan p = computePlan(req, req.executedFill(), null, true,
                 io.liftandshift.strikebench.market.MarketLane.OBSERVED, true);
         long cashAfter = trackedCashCents + p.entryNet - p.fees;
-        long reservedAfter = p.reserve;
         List<String> blocks = new ArrayList<>(p.blocks);
+        long planReserve = p.blocks.isEmpty() ? requiredRiskFact(p.reserve, "reserve") : 0L;
+        long planMaxLoss = p.blocks.isEmpty() ? requiredRiskFact(p.maxLoss, "maximum loss") : 0L;
+        long reservedAfter = planReserve;
         if (p.blocks.isEmpty() && cashAfter - reservedAfter < 0) {
             blocks.add("This tracked account has " + Money.fmt(trackedCashCents)
-                    + " cash; the analyzed package needs " + Money.fmt(p.maxLoss + p.fees)
+                    + " cash; the analyzed package needs " + Money.fmt(planMaxLoss + p.fees)
                     + ". Analysis remains visible, but the account cannot fund it as entered.");
         }
         return new TradePreview(blocks.isEmpty(), blocks, p.warnings,
@@ -913,6 +927,8 @@ public final class TradeService {
         if (!p.blocks.isEmpty()) {
             reject(req, p.blocks);
         }
+        requiredRiskFact(p.maxLoss, "maximum loss");
+        requiredRiskFact(p.reserve, "reserve");
         String tradeId = Ids.trade();
         try {
             TradeRecord out = db.tx(c -> openOn(c, AccountService.getForUpdate(c, req.accountId()),
@@ -935,11 +951,13 @@ public final class TradeService {
         if (!executionPreview.ok()) {
             throw new TradeRejectedException(executionPreview.blockReasons());
         }
+        long planMaxLoss = requiredRiskFact(p.maxLoss, "maximum loss");
+        long planReserve = requiredRiskFact(p.reserve, "reserve");
         long cashAfter = acct.cashCents() + p.entryNet - p.fees;
-        long reservedAfter = acct.reservedCents() + p.reserve;
+        long reservedAfter = acct.reservedCents() + planReserve;
         if (cashAfter - reservedAfter < 0) {
             throw new TradeRejectedException(List.of("Insufficient buying power: needs "
-                    + Money.fmt(p.maxLoss + p.fees) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
+                    + Money.fmt(planMaxLoss + p.fees) + " but only " + Money.fmt(acct.buyingPowerCents()) + " is available"));
         }
         String symbol = req.symbol().toUpperCase(java.util.Locale.ROOT);
         if (req.heldShares()) {
@@ -967,9 +985,9 @@ public final class TradeService {
             cash -= p.fees;
             Ledger.append(c, acct.id(), tradeId, now, "FEE", -p.fees, cash, reserved, "open commissions");
         }
-        if (p.reserve != 0) {
-            reserved += p.reserve;
-            Ledger.append(c, acct.id(), tradeId, now, "RESERVE_HOLD", p.reserve, cash, reserved, "max-loss reserve");
+        if (planReserve != 0) {
+            reserved += planReserve;
+            Ledger.append(c, acct.id(), tradeId, now, "RESERVE_HOLD", planReserve, cash, reserved, "max-loss reserve");
         }
         var evidence = entryEvidence(acct.id(), p.freshness());
         Db.execOn(c, """
@@ -981,7 +999,7 @@ public final class TradeService {
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,NULL,?,0,?,NULL,?,?,?,?,?,?,?)""",
                 tradeId, acct.id(), symbol, req.strategy(), TradeRecord.ACTIVE,
                 req.qty(), Json.write(p.filledLegs), req.thesis(), req.horizon(), req.riskMode(),
-                p.underlyingCents, p.entryNet, p.maxLoss, p.maxProfit, Json.write(p.breakevens),
+                p.underlyingCents, p.entryNet, planMaxLoss, p.maxProfit, Json.write(p.breakevens),
                 p.pop, p.fees, p.snapshotJson, now, now,
                 req.intent() == null || req.intent().isBlank() ? null
                         : io.liftandshift.strikebench.strategy.StrategyIntent.parse(req.intent()).name(),
@@ -1184,6 +1202,8 @@ public final class TradeService {
             if (!exactPlan.blocks().isEmpty()) {
                 throw new TradeRejectedException(exactPlan.blocks());
             }
+            long exactReserve = requiredRiskFact(exactPlan.reserve(), "reserve");
+            long exactMaxLoss = requiredRiskFact(exactPlan.maxLoss(), "maximum loss");
             long sharesAfter = exactPlan.sharesToLock();
             if (sharesAfter > 0) {
                 long freeIncludingCurrent = Math.addExact(
@@ -1229,7 +1249,7 @@ public final class TradeService {
                 Ledger.append(c, account.id(), trade.id(), at, "FEE", -openingFees, cash, reserved,
                         action + " open commissions");
             }
-            long reserveDelta = Math.subtractExact(exactPlan.reserve(), reserveBefore);
+            long reserveDelta = Math.subtractExact(exactReserve, reserveBefore);
             if (reserveDelta < 0) {
                 reserved = Math.addExact(reserved, reserveDelta);
                 Ledger.append(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
@@ -1254,14 +1274,14 @@ public final class TradeService {
                             "shares_locked=?,proposed_net_cents=?,entry_snapshot_json=?::jsonb," +
                             "data_provenance=?,data_age=?,data_source=?,updated_at=? WHERE id=?",
                     currentAfter.strategy(), currentAfter.qty(), Json.write(exactPlan.filledLegs()), exactPlan.entryNet(),
-                    exactPlan.maxLoss(), exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
+                    exactMaxLoss, exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
                     exactPlan.fees(), closeFeesToDate, totalRealized, decisionToDate, sharesAfter,
                     exactPlan.entryNet(), snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
                     entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
                     entryEvidence(trade.accountId(), exactPlan.freshness()).source(), at, trade.id());
             AccountService.applyBalances(c, account.id(), cash, reserved, at);
             TradeRecord survivor = getOn(c, trade.id());
-            if (Ledger.outstandingReserve(c, trade.id()) != exactPlan.reserve()) {
+            if (Ledger.outstandingReserve(c, trade.id()) != exactReserve) {
                 throw new IllegalStateException("Adjusted-position reserve did not reconcile.");
             }
             if (hook != null) hook.afterMutation(c, survivor, actionRealized, totalRealized);
@@ -1297,6 +1317,12 @@ public final class TradeService {
             if (projected.survivor() != null && !projected.survivor().risk().mechanicallyEligible()) {
                 throw new TradeRejectedException(projected.survivor().risk().blockReasons());
             }
+            long projectedReserve = projected.survivor() == null
+                    ? 0L : projected.survivor().risk().requiredReserveCents();
+            if (!Objects.equals(projected.reserveAfterCents(), projectedReserve)) {
+                throw new TradeRejectedException(List.of(
+                        "The surviving lifecycle reserve is unavailable or changed; review the conversion again."));
+            }
 
             Account account = locked.account();
             long cash = Math.addExact(account.cashCents(), projected.optionSettlementCashCents());
@@ -1321,7 +1347,7 @@ public final class TradeService {
                                 + " at the contract strike (stock P/L vs basis " + Money.fmt(stockRealized) + ")");
             }
 
-            long reserveDelta = Math.subtractExact(projected.reserveAfterCents(), reserveBefore);
+            long reserveDelta = Math.subtractExact(projectedReserve, reserveBefore);
             if (reserveDelta < 0) {
                 reserved = Math.addExact(reserved, reserveDelta);
                 Ledger.append(c, account.id(), trade.id(), at, "RESERVE_RELEASE", reserveDelta, cash, reserved,
@@ -1349,6 +1375,12 @@ public final class TradeService {
                 String world = worldOf(trade.accountId());
                 Plan exactPlan = computePlan(exactAfter, true, world, true, laneFor(world), true);
                 if (!exactPlan.blocks().isEmpty()) throw new TradeRejectedException(exactPlan.blocks());
+                long exactMaxLoss = requiredRiskFact(exactPlan.maxLoss(), "maximum loss");
+                long exactReserve = requiredRiskFact(exactPlan.reserve(), "reserve");
+                if (exactReserve != projectedReserve) {
+                    throw new TradeRejectedException(List.of(
+                            "The surviving lifecycle reserve changed after preview. Review the conversion again."));
+                }
                 String snapshot = lifecycleEntrySnapshot(trade, exactPlan, action, at,
                         projected.allocatedEntryBasisCents(), projected.allocatedOpenFeesCents(),
                         projected.heldShareContextAfter());
@@ -1358,7 +1390,7 @@ public final class TradeService {
                                 + "proposed_net_cents=?,entry_snapshot_json=?::jsonb,data_provenance=?,data_age=?,"
                                 + "data_source=?,updated_at=? WHERE id=?",
                         exactAfter.strategy(), exactAfter.intent(), exactAfter.qty(), Json.write(exactPlan.filledLegs()), exactPlan.entryNet(),
-                        exactPlan.maxLoss(), exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
+                        exactMaxLoss, exactPlan.maxProfit(), Json.write(exactPlan.breakevens()), exactPlan.pop(),
                         exactPlan.fees(), totalRealized, totalDecision, exactPlan.sharesToLock(), exactPlan.entryNet(),
                         snapshot, entryEvidence(trade.accountId(), exactPlan.freshness()).provenance().name(),
                         entryEvidence(trade.accountId(), exactPlan.freshness()).age().name(),
@@ -1366,7 +1398,7 @@ public final class TradeService {
             }
             AccountService.applyBalances(c, account.id(), cash, reserved, at);
             TradeRecord changed = getOn(c, trade.id());
-            if (Ledger.outstandingReserve(c, trade.id()) != projected.reserveAfterCents()) {
+            if (Ledger.outstandingReserve(c, trade.id()) != projectedReserve) {
                 throw new IllegalStateException("Lifecycle conversion reserve did not reconcile.");
             }
             if (hook != null) hook.afterMutation(c, changed, projected.actionRealizedPnlCents(), totalRealized);
@@ -1393,6 +1425,8 @@ public final class TradeService {
         if (replacement == null) throw new IllegalArgumentException("a roll requires the replacement position");
         Plan replacementPlan = computePlan(replacement);
         if (!replacementPlan.blocks().isEmpty()) reject(replacement, replacementPlan.blocks());
+        requiredRiskFact(replacementPlan.maxLoss(), "maximum loss");
+        requiredRiskFact(replacementPlan.reserve(), "reserve");
         requireExpectedOpen(replacementPlan, expectedOpen);
         String replacementTradeId = Ids.trade();
         markMemo.invalidate(tradeId);
@@ -2170,13 +2204,29 @@ public final class TradeService {
     // underlying mark existed has no spot, and 0 would be a $0.00 stock (§3.2/§3.3). Every priced
     // path below passes Money.toCents(underlying) on a non-null underlying; only the pre-pricing
     // refusals pass null, and their reason is already in `blocks`.
-    private record Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+    private record Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
                         Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
                         long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
                         List<Map<String, Object>> payoff, Map<String, Object> analytics,
                         PackagePriceReceipt price) {
-        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+        Plan {
+            boolean maxLossKnown = maxLoss != null;
+            boolean reserveKnown = reserve != null;
+            if (maxLossKnown != reserveKnown) {
+                throw new IllegalArgumentException(
+                        "plan maximum loss and reserve must share availability");
+            }
+            if (maxLossKnown && (maxLoss < 0 || reserve < 0)) {
+                throw new IllegalArgumentException("plan maximum loss and reserve cannot be negative");
+            }
+            if ((blocks == null || blocks.isEmpty()) && !maxLossKnown) {
+                throw new IllegalArgumentException(
+                        "an otherwise eligible plan requires maximum-loss and reserve receipts");
+            }
+        }
+
+        Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
@@ -2186,7 +2236,7 @@ public final class TradeService {
                     legDetails, assignmentProb, payoff, Map.of(), price);
         }
 
-        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+        Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              PackagePriceReceipt price) {
@@ -2194,7 +2244,7 @@ public final class TradeService {
                     underlyingCents, freshness, blocks, warnings, snapshotJson, 0, List.of(), null, List.of(), price);
         }
 
-        Plan(List<Leg> filledLegs, long entryNet, long fees, long reserve, long maxLoss,
+        Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
              Long maxProfit, List<String> breakevens, Double pop, Long ev, Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, PackagePriceReceipt price) {
@@ -2202,6 +2252,22 @@ public final class TradeService {
                     underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock, List.of(), null,
                     List.of(), price);
         }
+    }
+
+    /**
+     * Accepted placement and funded-analysis paths require a complete risk receipt. Refused
+     * previews are allowed to carry null; reaching this gate with null and no block would mean a
+     * calculator silently lost a required fact, so fail closed rather than converting it to zero.
+     */
+    private static long requiredRiskFact(Long value, String fact) {
+        if (value == null) {
+            throw new IllegalStateException("An otherwise eligible package is missing its " + fact
+                    + " receipt; placement is refused.");
+        }
+        if (value < 0) {
+            throw new IllegalStateException("A package " + fact + " receipt cannot be negative.");
+        }
+        return value;
     }
 
     private Plan computePlan(OpenRequest req) {
@@ -2230,7 +2296,7 @@ public final class TradeService {
         if (req.legs() == null || req.legs().isEmpty()) blocks.add("At least one leg is required");
         if (!blocks.isEmpty()) {
             // Refused before any market was consulted: there is no spot to report, so report none.
-            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, null,
+            return new Plan(List.of(), 0, 0, null, null, null, List.of(), null, null, null,
                     Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
         }
@@ -2263,7 +2329,7 @@ public final class TradeService {
         if (!blocks.isEmpty()) {
             // A dead leg or a non-executable lane refuses the package even when the spot IS known;
             // report the spot we actually have and null only when there truly is none.
-            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null,
+            return new Plan(List.of(), 0, 0, null, null, null, List.of(), null, null,
                     underlying == null ? null : Money.toCents(underlying),
                     Freshness.MISSING, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
@@ -2419,7 +2485,7 @@ public final class TradeService {
         if (!blocks.isEmpty()) {
             // Leg-level refusal. `underlying` is non-null here (the null case returned above), so
             // the spot is a fact we have and must report rather than flatten to 0.
-            return new Plan(List.of(), 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+            return new Plan(List.of(), 0, 0, null, null, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
         }
@@ -2439,13 +2505,13 @@ public final class TradeService {
         if (req.heldShares()) {
             if (filled.stream().anyMatch(Leg::isStock)) {
                 blocks.add("useHeldShares cannot be combined with stock legs — either buy shares inside the trade or write against shares you already hold");
-                return new Plan(filled, 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                return new Plan(filled, 0, 0, null, null, null, List.of(), null, null, Money.toCents(underlying),
                         worst, blocks, warnings, "{}", unpricedPackage(req, blocks));
             }
             coverSharesPerUnit = io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(filled);
             if (coverSharesPerUnit < 0) {
                 blocks.add("Held shares can only cover short CALLS — this structure has uncovered short puts or short stock that shares cannot protect");
-                return new Plan(filled, 0, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                return new Plan(filled, 0, 0, null, null, null, List.of(), null, null, Money.toCents(underlying),
                         worst, blocks, warnings, "{}", unpricedPackage(req, blocks));
             }
         }
@@ -2605,7 +2671,7 @@ public final class TradeService {
         if (mixedExpirations) {
             if (entryNet >= 0) {
                 blocks.add("Multi-expiration credit positions can carry undefined risk after the near leg expires; blocked");
-                return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                return new Plan(filled, entryNet, openingFees, null, null, null, List.of(), null, null, Money.toCents(underlying),
                         worst, blocks, warnings, "{}", price);
             }
             // A net debit does NOT prove defined risk: a short leg that outlives (or out-strikes)
@@ -2614,7 +2680,7 @@ public final class TradeService {
                     .uncoveredShortsWithHeldShares(filled, coverSharesPerUnit);
             if (!uncovered.isEmpty()) {
                 blocks.addAll(uncovered);
-                return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                return new Plan(filled, entryNet, openingFees, null, null, null, List.of(), null, null, Money.toCents(underlying),
                         worst, blocks, warnings, "{}", price);
             }
             long maxLossCal = -entryNet;
@@ -2626,7 +2692,7 @@ public final class TradeService {
             if (world != null) snapCal.put("laneTime", java.time.LocalDateTime.ofInstant(
                     nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
             snapCal.put("legs", snapshotLegs);
-            return new Plan(filled, entryNet, openingFees, 0, maxLossCal, null, List.of(), null, null,
+            return new Plan(filled, entryNet, openingFees, 0L, maxLossCal, null, List.of(), null, null,
                     Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock,
                     snapshotLegs, assignProb, List.of(), price);
         }
@@ -2701,14 +2767,14 @@ public final class TradeService {
                     feeSchedule.roundTripCents(), null, null, null, worst,
                     marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
-            return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+            return new Plan(filled, entryNet, openingFees, null, null, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked, price);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
         if (combinedMaxLoss <= 0 && !shareContext) {
             blocks.add("Computed max loss is $0.00 — a risk-free position does not exist in real markets. "
                     + "The quotes feeding this trade are unreliable (stale, crossed, or expired book); refusing to fill.");
-            return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+            return new Plan(filled, entryNet, openingFees, null, null, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, price);
         }
         long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
@@ -3281,14 +3347,14 @@ public final class TradeService {
         }
     }
 
-    private static void requireExpectedLifecycle(LifecycleAssessment actual, ExpectedLifecycle expected) {
+    static void requireExpectedLifecycle(LifecycleAssessment actual, ExpectedLifecycle expected) {
         if (actual.settlementUnderlyingCents() != expected.settlementUnderlyingCents()
                 || actual.optionSettlementCashCents() != expected.optionSettlementCashCents()
                 || actual.stockCashCents() != expected.stockCashCents()
                 || actual.sharesDelta() != expected.sharesDelta()
                 || actual.allocatedEntryBasisCents() != expected.allocatedEntryBasisCents()
                 || actual.allocatedOpenFeesCents() != expected.allocatedOpenFeesCents()
-                || actual.reserveAfterCents() != expected.reserveAfterCents()
+                || !Objects.equals(actual.reserveAfterCents(), Long.valueOf(expected.reserveAfterCents()))
                 || actual.heldShareContextAfter() != expected.heldShareContextAfter()
                 || actual.sharesLockedAfter() != expected.sharesLockedAfter()
                 || !Objects.equals(actual.exactStateFingerprint(), expected.exactStateFingerprint())) {
@@ -3535,14 +3601,16 @@ public final class TradeService {
                                                   long closingFees, long openingFees,
                                                   Plan plan, long sharesAfter,
                                                   OpenRequest exactAfter) {
+        long reserve = requiredRiskFact(plan.reserve(), "reserve");
+        long maxLoss = requiredRiskFact(plan.maxLoss(), "maximum loss");
         if (closingCash != expected.closingCashCents()
                 || openingCash != expected.openingCashCents()
                 || closingFees != expected.closingFeesCents()
                 || openingFees != expected.openingFeesCents()
                 || plan.entryNet() != expected.entryNetCents()
                 || plan.fees() != expected.feesOpenCents()
-                || plan.reserve() != expected.reserveAfterCents()
-                || plan.maxLoss() != expected.maxLossCents()
+                || reserve != expected.reserveAfterCents()
+                || maxLoss != expected.maxLossCents()
                 || !Objects.equals(plan.maxProfit(), expected.maxProfitCents())
                 || sharesAfter != expected.sharesLocked()
                 || !exactPositionFingerprint(exactAfter).equals(expected.legsFingerprint())) {
@@ -3615,8 +3683,10 @@ public final class TradeService {
 
     private static void requireExpectedOpen(Plan actual, ExpectedOpen expected) {
         if (expected == null) return;
+        long reserve = requiredRiskFact(actual.reserve(), "reserve");
+        long maxLoss = requiredRiskFact(actual.maxLoss(), "maximum loss");
         if (actual.entryNet() != expected.entryNetCents() || actual.fees() != expected.feesCents()
-                || actual.reserve() != expected.reserveCents() || actual.maxLoss() != expected.maxLossCents()
+                || reserve != expected.reserveCents() || maxLoss != expected.maxLossCents()
                 || !Objects.equals(actual.maxProfit(), expected.maxProfitCents())) {
             throw new TradeRejectedException(List.of(
                     "The executable replacement book changed after the transformation preview. Review the updated roll before applying it."));

@@ -278,25 +278,28 @@ final class PlanStrategyController {
         Account account = root.currentAccount(ctx);
         TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(exactBody, account.id());
         var preview = trades.analyze(request);
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-        ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
+        ObjectNode candidateJson;
         // §3.1/§3.2: the ONE round-trip commission off the package's own §7.2 receipt; null when
         // the package could not be priced, so no EV is published "after costs" it never paid.
-        Long roundTripFees = preview.price() == null ? null
-                : preview.price().estimatedRoundTripFeesCents();
+        Long roundTripFees = TradeController.exactRoundTripFees(preview);
         ApiResponses.EvaluationReceipt evaluation;
-        try {
-            evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
-                    plan.symbol(), candidate, account.buyingPowerCents(),
-                    root.analysisCtx(ctx), MarketLane.worldParam(root.activeWorld(ctx)), preview.ok(),
-                    preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol()),
-                    new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(), c.thesis(),
-                            c.horizonDays(), c.assignmentPreference(), "this Plan's declared view")));
-        } catch (RuntimeException e) {
-            log.debug("Plan custom-package assessment is unavailable", e);
-            evaluation = ApiResponses.EvaluationReceipt.unavailable(
-                    "The package mechanics were checked, but the broader decision assessment is unavailable because one or more market inputs could not be observed. No score or economic claim was substituted.",
-                    preview.ok(), preview.blockReasons(), roundTripFees);
+        candidateJson = TradeController.exactPreviewNode(request, preview);
+        if (!preview.hasRiskFacts()) {
+            evaluation = TradeController.unavailableRiskEvaluation(
+                    preview, "This custom package");
+        } else {
+            try {
+                Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
+                evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
+                        plan.symbol(), candidate, account.buyingPowerCents(),
+                        root.analysisCtx(ctx), MarketLane.worldParam(root.activeWorld(ctx)), preview.ok(),
+                        preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol()),
+                        new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(), c.thesis(),
+                                c.horizonDays(), c.assignmentPreference(), "this Plan's declared view")));
+            } catch (RuntimeException e) {
+                log.debug("Plan custom-package assessment is unavailable", e);
+                evaluation = TradeController.unavailableAssessmentEvaluation(preview);
+            }
         }
         candidateJson.set("evaluation", Json.MAPPER.valueToTree(evaluation));
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);

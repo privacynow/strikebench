@@ -8,12 +8,16 @@ public record TradePreview(
         boolean ok,
         List<String> blockReasons,
         List<String> warnings,
-        long maxLossCents,
+        // A refused/unpriced package has no risk fact. Explicit null is materially different from
+        // a valid zero-risk cash flow and must survive the API mapper's NON_NULL default.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+        Long maxLossCents,
         Long maxProfitCents,           // null = unbounded upside OR model-dependent for multi-expiration structures
         List<String> breakevens,
         Double popEntry,
         Long expectedValueCents,
-        long reserveCents,             // gross reserve held (future liability not already paid)
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+        Long reserveCents,             // gross reserve held (future liability not already paid)
         long cashBeforeCents,
         long cashAfterCents,
         long reservedBeforeCents,
@@ -50,4 +54,46 @@ public record TradePreview(
         // (§3.1): every consumer reads `price`, and a consumer that cannot proceed without a price
         // says so rather than reading a zero.
         PackagePriceReceipt price
-) {}
+) {
+    public TradePreview {
+        boolean maxLossKnown = maxLossCents != null;
+        boolean reserveKnown = reserveCents != null;
+        if (maxLossKnown != reserveKnown) {
+            throw new IllegalArgumentException(
+                    "maximum loss and reserve must either both be known or both be unavailable");
+        }
+        if (maxLossKnown && (maxLossCents < 0 || reserveCents < 0)) {
+            throw new IllegalArgumentException("maximum loss and reserve cannot be negative");
+        }
+        if (ok && !maxLossKnown) {
+            throw new IllegalArgumentException(
+                    "an executable preview requires maximum-loss and reserve receipts");
+        }
+    }
+
+    /** True only when the package has a complete finite-risk receipt. */
+    public boolean hasRiskFacts() {
+        return maxLossCents != null;
+    }
+
+    /**
+     * Mutation and risk-ranking boundaries call this instead of auto-unboxing a nullable wire
+     * fact. A refused preview may legitimately omit risk; an accepted action may not.
+     */
+    public long requiredMaxLossCents() {
+        if (maxLossCents == null) {
+            throw new IllegalStateException(
+                    "This package has no maximum-loss receipt; the action cannot be approved.");
+        }
+        return maxLossCents;
+    }
+
+    /** See {@link #requiredMaxLossCents()}; reserve shares the same availability invariant. */
+    public long requiredReserveCents() {
+        if (reserveCents == null) {
+            throw new IllegalStateException(
+                    "This package has no reserve receipt; the action cannot be approved.");
+        }
+        return reserveCents;
+    }
+}

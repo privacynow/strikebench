@@ -5550,7 +5550,9 @@ test('unavailable execution preserves candidate economics without promoting zero
       'an unavailable exact package cannot retain the Desk Pick endorsement');
     assert.equal(rendered.pickBadges, 0);
     assert.match(rendered.rankRead, /favorable economic.*execution unavailable/i);
-    assert.match(rendered.dockText, /candidate −\$123 debit · execution unavailable/i);
+    assert.match(rendered.dockText, /execution unavailable/i);
+    assert.doesNotMatch(rendered.dockText, /candidate −\$123 debit/i,
+      'an unavailable execution preview cannot fall back to the analyzed candidate price');
     assert.match(rendered.dockText, /book unavailable/i);
     assert.match(rendered.dockText,
       /Execution paused: the current AMD quote is stale\. Refresh an executable quote/i);
@@ -6828,6 +6830,12 @@ test('exact-package drafts are previewed and selected by the backend on the exis
         animationMarker: window.DeskBackend.state().animation.testMarker,
         workbenchLegs: document.querySelectorAll('#decideStage .declegpanel .legr').length,
         payoffTitle: document.querySelector('#decideStage .dccenter .paytitle')?.textContent
+          .replace(/\s+/g, ' ').trim(),
+        scenarioTitle: document.querySelector('#decideStage .scenpanel .lenshd')?.textContent
+          .replace(/\s+/g, ' ').trim(),
+        evidenceTitle: document.querySelector('#decideStage .evsimstage')?.closest('.upanel')
+          ?.querySelector('.lenshd')?.textContent.replace(/\s+/g, ' ').trim(),
+        dockTitle: document.querySelector('#decideStage .execute .dockorder')?.textContent
           .replace(/\s+/g, ' ').trim()
       };
     });
@@ -6845,7 +6853,11 @@ test('exact-package drafts are previewed and selected by the backend on the exis
     assert.equal(pending.animationMarker, baseline.animationMarker);
     assert.equal(pending.workbenchLegs, 1,
       'the edited leg package remains visible while its preview is pending');
-    assert.match(pending.payoffTitle, /draft repricing.*selected package remains shown until applied/i);
+    assert.match(pending.payoffTitle,
+      /Previous selected idea payoff.*draft repricing.*previous selected idea remains unchanged until the exact draft is accepted/i);
+    assert.match(pending.scenarioTitle, /previous selected idea/i);
+    assert.match(pending.evidenceTitle, /previous selected idea/i);
+    assert.match(pending.dockTitle, /previous selected idea/i);
 
     await page.waitForFunction(() => !window.decide.draftPending
       && /one-leg draft is blocked/i.test(window.decide.draftError || ''));
@@ -6878,7 +6890,8 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       'an invalid draft cannot replace the selected candidate financial surface');
     assert.equal(invalid.activePayoffAtSpot, 777,
       'the selected backend payoff remains visible instead of a browser-calculated zero shell');
-    assert.match(invalid.payoffTitle, /Backend debit call spread.*selected package remains shown until applied/i);
+    assert.match(invalid.payoffTitle,
+      /Previous selected idea payoff.*Backend debit call spread.*draft blocked.*previous selected idea remains unchanged until the exact draft is accepted/i);
     assert.equal(invalid.workbenchLegs, 1,
       'the edited draft legs remain visible independently from the selected payoff');
     assert.match(invalid.workbenchText, /one-leg draft is blocked/i);
@@ -9814,61 +9827,133 @@ for (const viewport of [
 }
 
 test('candidate capital names the receipt it came from, and its absence carries a reason', async () => {
-  /* §3.1/§3.2, the root policy behind the candidate-net fix above. candidateToDesk() resolved `cap`
-     from THREE different wire fields — evaluation.capital.incrementalCents, .economicCents, and the
-     package's own maxLossCents — and published the winner under one name with nothing saying which
-     it was. Two consequences, both visible: a rail cell labelled "Capital" could be carrying the
-     package's MAX LOSS (a different financial fact, from a different authority), and when all three
-     were absent the model carried a bare null that index.html's money() coerces to "$0" with no
-     reason anywhere on the object for a renderer to print instead. The bridge now states the
-     authority, and states the reason when there is none. */
+  /* Capital and max loss are separate receipts. Missing capital must remain null through mapping,
+     rail, maps, fit and governors; a genuine zero-capital receipt must remain a visible zero. */
+  const asCashSecuredPut = (row, id, label) => {
+    row.id = id;
+    row.label = label;
+    row.displayName = label;
+    row.strategy = 'CASH_SECURED_PUT';
+    row.legs = [{
+      type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 90, expiration: '2026-08-21', entryPrice: 2
+    }];
+    return row;
+  };
+  const zero = asCashSecuredPut(candidate(), 'candidate_cap_zero', 'Zero incremental capital');
+  zero.evaluation.capital = { incrementalCents: 0 };
   const substituted = candidate();
-  substituted.id = 'candidate_cap_substituted';
-  substituted.label = 'Capital from max loss only';
+  asCashSecuredPut(substituted, 'candidate_cap_substituted', 'Max loss is not capital');
   delete substituted.evaluation.capital;      // no capital receipt; maxLossCents 12345 survives
   const absent = candidate();
   absent.id = 'candidate_cap_absent';
   absent.label = 'Capital unavailable';
+  absent.displayName = absent.label;
   delete absent.evaluation.capital;
-  absent.maxLossCents = null;                 // nothing is left that could stand in for capital
+  absent.maxLossCents = null;
+  absent.evaluation.risk.terminalPayoff = {
+    available: false,
+    points: [],
+    unavailableReason: 'Exact loss boundary is unavailable because one leg has no executable quote.'
+  };
   const { context, page, pageErrors } = await openAuthoritativeDesk({
-    strategyCandidates: [candidate(), substituted, absent]
+    strategyCandidates: [candidate(), zero, substituted, absent]
   });
   try {
     await page.waitForSelector(`.fanr[data-cand="${absent.id}"]`);
-    const read = await page.evaluate(ids => ids.map(id => {
-      const c = window.decide.cands.find(row => row.id === id);
-      return c ? {
-        id: id,
-        cap: c.cap,
-        capAuthority: c.capAuthority,
-        capUnavailableReason: c.capUnavailableReason
-      } : null;
-    }), [CANDIDATE_ID, substituted.id, absent.id]);
+    const state = await page.evaluate(ids => {
+      const byId = id => window.decide.cands.find(row => row.id === id);
+      const text = html => {
+        const host = document.createElement('div');
+        host.innerHTML = html;
+        return {
+          text: host.textContent.replace(/\s+/g, ' ').trim(),
+          sliders: host.querySelectorAll('input[type="range"]').length
+        };
+      };
+      window.drawDecMap();
+      const plotted = window.DEC_MPOS.map(row => row.id);
+      const prior = window.decide.candId;
+      const missing = byId(ids.substituted);
+      window.decide.candId = ids.substituted;
+      const missingFit = text(window.fitBudgetPanel(missing));
+      const missingGovernors = text(window.governorsPanel());
+      const zero = byId(ids.zero);
+      window.decide.candId = ids.zero;
+      const zeroFit = text(window.fitBudgetPanel(zero));
+      const zeroGovernors = text(window.governorsPanel());
+      window.decide.candId = prior;
+      const base = byId(ids.known);
+      const identity = {
+        nullNet: window.hashCand(Object.assign({}, base, { net: null })),
+        zeroNet: window.hashCand(Object.assign({}, base, { net: 0 })),
+        nullCapital: window.hashCand(Object.assign({}, base, { cap: null })),
+        zeroCapital: window.hashCand(Object.assign({}, base, { cap: 0 }))
+      };
+      return {
+        rows: [ids.known, ids.zero, ids.substituted, ids.absent].map(id => {
+          const c = byId(id);
+          const cell = document.querySelector(`.fanr[data-cand="${id}"] .fcol-cap`);
+          const maxLossCells = document.querySelectorAll(`.fanr[data-cand="${id}"] .fnum`);
+          return {
+            id, cap: c.cap, capAuthority: c.capAuthority,
+            capUnavailableReason: c.capUnavailableReason,
+            maxLossUnavailableReason: c.maxLossUnavailableReason,
+            capitalText: cell?.textContent.trim(),
+            capitalTitle: cell?.getAttribute('title'),
+            maxLossTitle: maxLossCells[1]?.getAttribute('title')
+          };
+        }),
+        plotted, missingFit, missingGovernors, zeroFit, zeroGovernors, identity
+      };
+    }, { known: CANDIDATE_ID, zero: zero.id, substituted: substituted.id, absent: absent.id });
 
-    assert.ok(read[0] && read[1] && read[2], 'all three candidates must reach the desk model');
+    const [knownRead, zeroRead, substitutedRead, absentRead] = state.rows;
+    assert.ok(knownRead && zeroRead && substitutedRead && absentRead,
+      'all nullable-capital states must reach the desk model');
 
-    // A real capital receipt: the authority is named and there is nothing to explain.
-    assert.equal(read[0].cap, 123.45);
-    assert.equal(read[0].capAuthority, 'CAPITAL_INCREMENTAL',
-      'a capital receipt must publish WHICH capital it is; an unnamed number cannot be reconciled '
-      + 'against the Capital cell of any other surface (§3.3).');
-    assert.equal(read[0].capUnavailableReason, null);
+    assert.equal(knownRead.cap, 123.45);
+    assert.equal(knownRead.capAuthority, 'CAPITAL_INCREMENTAL');
+    assert.equal(knownRead.capUnavailableReason, null);
 
-    // Max loss standing in for capital is allowed to be displayed, but never unlabelled.
-    assert.equal(read[1].cap, 123.45);
-    assert.equal(read[1].capAuthority, 'PACKAGE_MAX_LOSS',
-      'with no capital receipt the bridge falls back to the package max loss. That substitution must '
-      + 'be named on the model, or the surface states one fact under another fact\'s label (§3.1).');
-    assert.equal(read[1].capUnavailableReason, null);
+    assert.equal(zeroRead.cap, 0, 'a genuine backend zero remains distinct from absence');
+    assert.equal(zeroRead.capAuthority, 'CAPITAL_INCREMENTAL');
+    assert.equal(zeroRead.capitalText, '$0');
+    assert.ok(state.plotted.includes(zero.id), 'a genuine zero-capital candidate remains drawable');
+    assert.match(zeroRead.capitalTitle, /incremental capital/i);
+    assert.equal(state.zeroFit.text,
+      'Collateral screen$0 / $50,000$50,000 remains after this package.');
+    assert.match(state.zeroGovernors.text, /ties up \$0 collateral/i);
 
-    // Nothing to show: absent, WITH a reason. Never a zero, and never an unexplained null.
-    assert.equal(read[2].cap, null,
-      'with no capital receipt and no max loss there is no capital to state; it may not be 0.');
-    assert.equal(read[2].capAuthority, null);
-    assert.match(String(read[2].capUnavailableReason), /capital/i,
-      'a null capital must arrive beside the reason it is null, so a surface can print the reason '
-      + 'instead of formatting the null into "$0" (§3.2, review P0 #4).');
+    assert.equal(substitutedRead.cap, null,
+      'max loss may not silently stand in for a missing capital receipt');
+    assert.equal(substitutedRead.capAuthority, null);
+    assert.match(substitutedRead.capUnavailableReason, /Maximum loss remains available separately/i);
+    assert.equal(substitutedRead.capitalText, '—');
+    assert.match(substitutedRead.capitalTitle, /not substituted for capital/i);
+    assert.equal(state.plotted.includes(substituted.id), false,
+      'unknown capital cannot originate plot geometry');
+    assert.equal(state.missingFit.text,
+      'Collateral requiredunavailableNo capital receipt accompanied this package, so the capital it would tie up is not available. Maximum loss remains available separately and is not substituted for capital. No cap fit or remaining headroom is calculated.');
+    assert.match(state.missingFit.text, /No cap fit or remaining headroom is calculated/i);
+    assert.doesNotMatch(state.missingFit.text, /\$0|within cap|remaining \$|over by/i);
+    assert.match(state.missingGovernors.text, /ties up unavailable/i);
+    assert.match(state.missingGovernors.text, /No cap fit or headroom is calculated/i);
+    assert.equal(state.missingGovernors.sliders, 5,
+      'unknown package risk does not hide the user-owned screens and caps');
+    assert.doesNotMatch(state.missingGovernors.text, /\$0|within cap|over by/i);
+
+    assert.equal(absentRead.cap, null);
+    assert.equal(absentRead.capAuthority, null);
+    assert.equal(absentRead.capitalText, '—');
+    assert.match(absentRead.maxLossUnavailableReason, /one leg has no executable quote/i);
+    assert.match(absentRead.maxLossTitle, /one leg has no executable quote/i,
+      'the rendered unavailable max loss carries the backend reason');
+
+    assert.notEqual(state.identity.nullNet, state.identity.zeroNet,
+      'scenario identity distinguishes an absent package price from an actual zero');
+    assert.notEqual(state.identity.nullCapital, state.identity.zeroCapital,
+      'scenario identity distinguishes absent capital from actual zero capital');
 
     assert.deepEqual(pageErrors, [],
       `candidate capital states emitted page errors: ${pageErrors.join('\n')}`);

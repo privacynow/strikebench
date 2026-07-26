@@ -1411,6 +1411,8 @@
         }) : [];
     var economics = candidate.evaluation && candidate.evaluation.assessment
       && candidate.evaluation.assessment.economics || {};
+    var mechanics = candidate.evaluation && candidate.evaluation.assessment
+      && candidate.evaluation.assessment.mechanics || {};
     var capital = candidate.evaluation && candidate.evaluation.capital || {};
     var optionLeg = (candidate.legs || []).find(function (leg) {
       return String(leg.type || '').toUpperCase() !== 'STOCK';
@@ -1429,6 +1431,17 @@
     var incremental = capital.incrementalCents == null ? null : Number(capital.incrementalCents);
     var economic = capital.economicCents == null ? null : Number(capital.economicCents);
     var maxLossCents = candidate.maxLossCents == null ? null : Number(candidate.maxLossCents);
+    var maxLossBasis = candidate.maxLossBasis || riskProfile.maxLossBasis || null;
+    var maxLossUnavailableReason = maxLossCents != null ? null
+      : candidate.maxLossUnavailableReason
+        || riskProfile.maxLossUnavailableReason
+        || riskProfile.unavailableReason
+        || (terminalPayoff.available === false ? terminalPayoff.unavailableReason : null)
+        || candidate.unavailableReason
+        || candidate.blockReason
+        || candidate.rejectionReason
+        || (Array.isArray(mechanics.reasons) && mechanics.reasons.length ? mechanics.reasons[0] : null)
+        || 'Maximum loss is unavailable because no bounded-loss receipt accompanied this package.';
     var combinedMaxLossCents = candidate.combinedMaxLossCents == null
       ? null : Number(candidate.combinedMaxLossCents);
     // §3.1/§3.2: capital has THREE possible authorities on the wire and the bridge used to pick one
@@ -1436,15 +1449,18 @@
     // — a different financial fact — with nothing on the model saying which. Name the authority, and
     // when there is none, publish the REASON beside the null instead of an unexplained absence that
     // the next renderer coerces to $0.
-    var displayCapital = incremental != null ? incremental : economic != null ? economic : maxLossCents;
+    /* Capital and maximum loss are different financial facts. A missing capital receipt used to
+       fall through to maxLossCents, after which every surface labelled the substituted value
+       "Capital." Keep capital absent instead; max loss remains available on its own field. */
+    var displayCapital = incremental != null ? incremental : economic != null ? economic : null;
     var capBasis = incremental != null ? 'CAPITAL_INCREMENTAL'
-      : economic != null ? 'CAPITAL_ECONOMIC'
-      : maxLossCents != null ? 'PACKAGE_MAX_LOSS' : null;
+      : economic != null ? 'CAPITAL_ECONOMIC' : null;
     var capUnavailableReason = displayCapital != null ? null
       : candidate.evaluation && candidate.evaluation.capital
         ? 'This package’s capital receipt states neither incremental nor economic capital, so the '
           + 'capital it would tie up is not available.'
-        : 'No capital receipt accompanied this package, so the capital it would tie up is not available.';
+        : 'No capital receipt accompanied this package, so the capital it would tie up is not available.'
+          + (maxLossCents == null ? '' : ' Maximum loss remains available separately and is not substituted for capital.');
     var realisticEv = economics.realizedVolEvAfterCostsCents == null
       ? null : Number(economics.realizedVolEvAfterCostsCents);
     var realisticLow = economics.realisticEvLowAfterCostsCents == null
@@ -1478,6 +1494,8 @@
       pop: (candidate.pop == null ? riskProfile.pop : candidate.pop) == null ? null
         : Math.round(Number(candidate.pop == null ? riskProfile.pop : candidate.pop) * 100),
       maxLoss: maxLossCents == null ? null : maxLossCents / 100,
+      maxLossBasis: maxLossBasis,
+      maxLossUnavailableReason: maxLossUnavailableReason,
       combinedMaxLoss: combinedMaxLossCents == null ? null : combinedMaxLossCents / 100,
       maxProfit: candidate.maxProfitCents == null ? null : Number(candidate.maxProfitCents) / 100,
       bestUpside: candidate.bestUpside || null,

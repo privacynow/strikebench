@@ -23,6 +23,7 @@ import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.paper.AuditLog;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeRejectedException;
@@ -36,6 +37,7 @@ import io.liftandshift.strikebench.strategy.Guardrails;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.strategy.Verdict;
+import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -273,38 +275,40 @@ final class TradeController {
             io.liftandshift.strikebench.paper.TradePreview preview,
             Verdict verdict, List<ApiResponses.RiskAcknowledgment> required,
             String excludedTradeId) {
-        Candidate exact = exactPreviewCandidate(request, preview);
         ApiResponses.EvaluationReceipt evaluation;
         // §3.1: the round-trip commission is the §7.2 receipt's own doubling, not a fourth copy of
         // `feesOpenCents * 2` — and §3.2: null when the package states no commission, so the
         // assessment reports "no EV after costs" instead of netting the gross EV against $0.
-        Long roundTripFees = preview.price() == null ? null
-                : preview.price().estimatedRoundTripFeesCents();
-        try {
-            evaluation = ApiResponses.EvaluationReceipt.of(exactAssessment.assess(
-                    request.symbol(), exact, preview.buyingPowerBeforeCents(),
-                    analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
-                    preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
-                            excludedTradeId)));
-        } catch (RuntimeException e) {
-            log.warn("Exact-ticket assessment is unavailable for this preview", e);
-            evaluation = ApiResponses.EvaluationReceipt.unavailable(
-                    "The package mechanics were checked, but the broader decision assessment is unavailable because one or more market inputs could not be observed. No score or economic claim was substituted.",
-                    preview.ok(), preview.blockReasons(), roundTripFees);
+        Long roundTripFees = exactRoundTripFees(preview);
+        if (!preview.hasRiskFacts()) {
+            evaluation = unavailableRiskEvaluation(preview, "The exact package");
+        } else {
+            try {
+                Candidate exact = exactPreviewCandidate(request, preview);
+                evaluation = ApiResponses.EvaluationReceipt.of(exactAssessment.assess(
+                        request.symbol(), exact, preview.buyingPowerBeforeCents(),
+                        analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
+                        preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
+                                excludedTradeId)));
+            } catch (RuntimeException e) {
+                log.warn("Exact-ticket assessment is unavailable for this preview", e);
+                evaluation = unavailableAssessmentEvaluation(preview);
+            }
         }
         ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
                 verdict.level().name(), verdict.blockReasons(), verdict.warnings());
         AccountRiskContext riskContext = AccountRiskContext.load(db, ownerId.apply(ctx));
         String token = required.isEmpty() ? null : acknowledgmentToken(request);
         ApiResponses.AccountFit accountFit = null;
-        if (!riskContext.isEmpty() && preview.maxLossCents() > 0) {
-            Double pctOfNlv = percentage(preview.maxLossCents(), riskContext.nlvCents());
-            Double pctOfCash = percentage(preview.maxLossCents(), riskContext.cashBpCents());
-            Double pctOfMargin = percentage(preview.maxLossCents(), riskContext.marginBpCents());
-            Double pctOfRiskCapital = percentage(preview.maxLossCents(), riskContext.riskCapitalCents());
+        if (!riskContext.isEmpty() && preview.maxLossCents() != null && preview.maxLossCents() > 0) {
+            long maxLoss = preview.requiredMaxLossCents();
+            Double pctOfNlv = percentage(maxLoss, riskContext.nlvCents());
+            Double pctOfCash = percentage(maxLoss, riskContext.cashBpCents());
+            Double pctOfMargin = percentage(maxLoss, riskContext.marginBpCents());
+            Double pctOfRiskCapital = percentage(maxLoss, riskContext.riskCapitalCents());
             Boolean overRiskCapital = riskContext.riskCapitalCents() != null
                     && riskContext.riskCapitalCents() > 0
-                    && preview.maxLossCents() > riskContext.riskCapitalCents() ? true : null;
+                    && maxLoss > riskContext.riskCapitalCents() ? true : null;
             accountFit = new ApiResponses.AccountFit(pctOfNlv, pctOfCash, pctOfMargin,
                     pctOfRiskCapital, overRiskCapital);
         }
@@ -733,6 +737,121 @@ final class TradeController {
 
     static Candidate exactPreviewCandidate(TradeService.OpenRequest request,
             io.liftandshift.strikebench.paper.TradePreview preview) {
+        return exactPreviewFacts(request, preview).toCandidate();
+    }
+
+    /** One serialization shape for an exact package, whether risk is known or unavailable. */
+    static com.fasterxml.jackson.databind.node.ObjectNode exactPreviewNode(
+            TradeService.OpenRequest request,
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        return Json.MAPPER.valueToTree(exactPreviewFacts(request, preview));
+    }
+
+    private static ExactPreviewFacts exactPreviewFacts(
+            TradeService.OpenRequest request,
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        ExactPreviewDescription description = exactPreviewDescription(request);
+        List<LegView> legs = exactPreviewLegs(request, preview);
+        List<Map<String, Object>> markedLegs = preview.legs() == null ? List.of() : preview.legs();
+        Map<String, Object> analytics = preview.analytics() == null ? Map.of() : preview.analytics();
+        Long combinedMaxLoss = analytics.get("combinedMaxLossCents") instanceof Number number
+                ? number.longValue() : null;
+        Integer sharesNeeded = exactPreviewSharesNeeded(request);
+        PackagePriceReceipt price = preview.price() == null
+                ? PackagePriceReceipt.unavailable(Math.max(1, request.qty()),
+                        PackagePriceReceipt.FeeSide.OPENING,
+                        "No package-price receipt was produced for this exact package.")
+                : preview.price();
+        long optionLegCount = request.legs().stream().filter(leg -> !leg.isStock()).count();
+        List<Map<String, Object>> optionMarks = markedLegs.stream()
+                .filter(mark -> !"STOCK".equals(mark.get("type"))).toList();
+        boolean completeBook = optionMarks.size() == optionLegCount
+                && optionMarks.stream().allMatch(mark ->
+                        mark.get("bid") != null && mark.get("ask") != null);
+        Double liquidity = price.priced() && completeBook ? 1.0 : null;
+        Double confidence = preview.hasRiskFacts() && price.priced() ? 1.0 : null;
+        return new ExactPreviewFacts(request.strategy(), description.display(), description.group(),
+                description.display(), legs, request.qty(),
+                price, preview.maxProfitCents(), preview.maxLossCents(),
+                preview.breakevens() == null ? List.of() : preview.breakevens(),
+                preview.popEntry(), preview.expectedValueCents(),
+                liquidity, preview.freshness(),
+                preview.warnings() == null ? List.of() : preview.warnings(), confidence,
+                "Exact ticket", "", "", "", "", description.intent(), description.intents(),
+                preview.assignmentProb(), null, null, null,
+                request.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonInclude(
+            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private record ExactPreviewFacts(
+            String strategy, String displayName, String structureGroup, String label,
+            List<LegView> legs, int qty, PackagePriceReceipt price, Long maxProfitCents,
+            @com.fasterxml.jackson.annotation.JsonInclude(
+                    com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+            Long maxLossCents,
+            List<String> breakevens, Double pop, Long expectedValueCents,
+            @com.fasterxml.jackson.annotation.JsonInclude(
+                    com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+            Double liquidityScore,
+            String freshness, List<String> warnings,
+            @com.fasterxml.jackson.annotation.JsonInclude(
+                    com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+            Double confidence,
+            String whyConsidered, String bestUpside, String biggestRisk, String wouldInvalidate,
+            String beginnerExplanation, String intent, List<String> intents,
+            Double assignmentProb, Double annualizedYieldPct, String effectivePrice,
+            String intentNote, Boolean usesHeldShares, Integer sharesNeeded,
+            Long combinedMaxLossCents
+    ) {
+        Candidate toCandidate() {
+            if (maxLossCents == null) {
+                throw new IllegalStateException(
+                        "This exact package has no maximum-loss receipt and cannot become a risk-screened candidate.");
+            }
+            if (liquidityScore == null || confidence == null) {
+                throw new IllegalStateException(
+                        "This exact package has no complete executable-price receipt and cannot become an assessed candidate.");
+            }
+            return new Candidate(strategy, displayName, structureGroup, label, legs, qty, price,
+                    maxProfitCents, maxLossCents, breakevens, pop, expectedValueCents,
+                    liquidityScore, freshness, warnings, confidence, whyConsidered, bestUpside,
+                    biggestRisk, wouldInvalidate, beginnerExplanation, intent, intents,
+                    assignmentProb, annualizedYieldPct, effectivePrice, intentNote,
+                    usesHeldShares, sharesNeeded, combinedMaxLossCents);
+        }
+    }
+
+    static Long exactRoundTripFees(
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        return preview == null || preview.price() == null ? null
+                : preview.price().estimatedRoundTripFeesCents();
+    }
+
+    static ApiResponses.EvaluationReceipt unavailableRiskEvaluation(
+            io.liftandshift.strikebench.paper.TradePreview preview, String subject) {
+        List<String> reasons = preview.blockReasons() == null ? List.of() : preview.blockReasons();
+        String cause = reasons.isEmpty()
+                ? "no complete finite-risk receipt is available"
+                : reasons.getFirst();
+        String label = subject == null || subject.isBlank() ? "The exact package" : subject.trim();
+        return ApiResponses.EvaluationReceipt.unavailable(
+                label + " cannot be financially evaluated because " + cause
+                        + ". No maximum loss, reserve, score, stance, or forward economics was substituted.",
+                preview.ok(), reasons, exactRoundTripFees(preview));
+    }
+
+    static ApiResponses.EvaluationReceipt unavailableAssessmentEvaluation(
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        return ApiResponses.EvaluationReceipt.unavailable(
+                "The package mechanics were checked, but the broader decision assessment is unavailable "
+                        + "because one or more market inputs could not be observed. No score, stance, "
+                        + "or economic claim was substituted.",
+                preview.ok(), preview.blockReasons(), exactRoundTripFees(preview));
+    }
+
+    private static ExactPreviewDescription exactPreviewDescription(
+            TradeService.OpenRequest request) {
         StrategyFamily family = null;
         try {
             family = StrategyFamily.valueOf(request.strategy().trim().toUpperCase(Locale.ROOT));
@@ -746,12 +865,18 @@ final class TradeController {
                 : StrategyIntent.parse(request.intent()).name();
         List<String> intents = family == null ? List.of(intent)
                 : family.intents().stream().map(Enum::name).sorted().toList();
+        return new ExactPreviewDescription(display, group, intent, intents);
+    }
+
+    private static List<LegView> exactPreviewLegs(TradeService.OpenRequest request,
+            io.liftandshift.strikebench.paper.TradePreview preview) {
         // A mechanically refused package can have no executable leg-detail rows (for example an
         // impossible user price). Its entered geometry still needs a complete assessment: use the
         // request facts and let the authoritative package net carry the price constraint.
-        List<LegView> legs = preview.legs().isEmpty()
+        List<Map<String, Object>> markedLegs = preview.legs() == null ? List.of() : preview.legs();
+        return markedLegs.isEmpty()
                 ? request.legs().stream().map(LegView::of).toList()
-                : preview.legs().stream().map(mark -> new LegView(
+                : markedLegs.stream().map(mark -> new LegView(
                     Objects.toString(mark.get("action"), null),
                     Objects.toString(mark.get("type"), null),
                     Objects.toString(mark.get("strike"), null),
@@ -765,28 +890,19 @@ final class TradeController {
                     mark.get("asOfEpochMs") instanceof Number timestamp ? timestamp.longValue() : null,
                     Objects.toString(mark.get("source"), null),
                     Objects.toString(mark.get("freshness"), null))).toList();
-        boolean liquid = preview.legs().stream().filter(mark -> !"STOCK".equals(mark.get("type")))
-                .allMatch(mark -> mark.get("bid") != null && mark.get("ask") != null);
-        Long combinedMaxLoss = preview.analytics().get("combinedMaxLossCents") instanceof Number number
-                ? number.longValue() : null;
-        Integer sharesNeeded = null;
+    }
+
+    private static Integer exactPreviewSharesNeeded(TradeService.OpenRequest request) {
         if (request.heldShares()) {
             long units = io.liftandshift.strikebench.strategy.CoverageCheck
                     .shareContextUnitsNeeded(request.legs());
-            sharesNeeded = Math.toIntExact(Math.multiplyExact(units, request.qty()));
+            return Math.toIntExact(Math.multiplyExact(units, request.qty()));
         }
-        // The exact ticket carries the preview's OWN §7.2 receipt. It used to build its option-only
-        // net from request.legs() — the prices the customer SUBMITTED — while taking the package net
-        // from the preview's FILLED legs, which TradeService may have swapped to the natural
-        // executable book. For a marketable buy-write those were two different bases on one object.
-        return new Candidate(request.strategy(), display, group, display, legs, request.qty(),
-                preview.price(), preview.maxProfitCents(), preview.maxLossCents(),
-                preview.breakevens(), preview.popEntry(), preview.expectedValueCents(),
-                liquid ? 1.0 : 0.0, preview.freshness(), preview.warnings(), 1,
-                "Exact ticket", "", "", "", "", intent, intents, preview.assignmentProb(),
-                null, null, null, request.heldShares() ? Boolean.TRUE : null,
-                sharesNeeded, combinedMaxLoss);
+        return null;
     }
+
+    private record ExactPreviewDescription(String display, String group, String intent,
+                                           List<String> intents) {}
 
     private List<ApiResponses.RiskAcknowledgment> requiredAcksFor(
             io.liftandshift.strikebench.paper.TradePreview preview,
@@ -822,7 +938,8 @@ final class TradeController {
             out.add(new ApiResponses.RiskAcknowledgment("ack-dte", "Only " + plan.sessionsToExpiry()
                     + " trading session(s) remain — gamma, weekend gaps and pin risk dominate."));
         }
-        if (effectiveRiskBudgetCents > 0 && preview.maxLossCents() > effectiveRiskBudgetCents) {
+        if (effectiveRiskBudgetCents > 0 && preview.maxLossCents() != null
+                && preview.maxLossCents() > effectiveRiskBudgetCents) {
             out.add(new ApiResponses.RiskAcknowledgment("ack-capital", "The theoretical max loss "
                     + io.liftandshift.strikebench.util.Money.fmt(preview.maxLossCents())
                     + " exceeds your selected per-trade risk budget ("

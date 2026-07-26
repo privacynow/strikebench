@@ -403,8 +403,12 @@ final class PlanDecisionController {
                 .orElseThrow(() -> new IllegalStateException("No lane-owned closing price is available for the review horizon."));
         long startUnderlying = metrics.path("underlyingCents").asLong(0);
         if (startUnderlying <= 0) throw new IllegalStateException("The frozen decision has no underlying anchor.");
+        if (!decision.hasNonNull("maxLossCents")) {
+            throw new IllegalStateException(
+                    "The frozen cash decision has no maximum-loss receipt, so no risk-matched opportunity comparison can be stated.");
+        }
         long endUnderlying = io.liftandshift.strikebench.util.Money.toCents(dueBar.close());
-        long riskCapital = Math.max(startUnderlying, decision.path("maxLossCents").asLong(startUnderlying));
+        long riskCapital = Math.max(startUnderlying, decision.path("maxLossCents").asLong());
         long shares = Math.max(1, Math.min(10_000, riskCapital / startUnderlying));
         long stockPnl = Math.multiplyExact(endUnderlying - startUnderlying, shares);
         int qty = Math.max(1, (int) Math.round(metrics.path("decisionQty").asDouble(1)));

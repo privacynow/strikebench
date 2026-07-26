@@ -94,7 +94,7 @@ public final class BookActionProjectionService {
                     var unwind = practiceTrades.previewUnwind(tradeId);
                     closingCash = unwind.closingCashCents();
                     closingFees = unwind.closingFeesCents();
-                    reserveRelease = unwind.current().risk().reserveCents();
+                    reserveRelease = unwind.current().risk().requiredReserveCents();
                 } else {
                     var partial = practiceTrades.previewPartialClose(tradeId, quantity);
                     closingCash = partial.closingCashCents();
@@ -179,6 +179,10 @@ public final class BookActionProjectionService {
                         .map(PositionLifecycleReceipt.AssignmentLeg::strikeDollarsCents).orElse(0L)
                     : 0L;
             long cashDelta = Math.subtractExact(converted.projectedCashAfterCents(), account.cashCents());
+            if (converted.projectedReservedAfterCents() == null) {
+                throw new IllegalStateException(
+                        "The lifecycle survivor has no reserve receipt, so this Book action is unavailable.");
+            }
             ActionProjection projected = practiceSnapshot(action, trade.qty(),
                     converted.exactSurvivorRequest() == null ? 0 : converted.exactSurvivorRequest().qty(),
                     converted.projectedCashAfterCents(), converted.projectedReservedAfterCents(),

@@ -35,8 +35,10 @@ public final class PositionTransformation {
         if (request == null || request.action() == null || request.before() == null || request.beforeRisk() == null) {
             throw new IllegalArgumentException("a transformation needs an action, current position, and current evaluated risk");
         }
-        if (request.after() != null && request.afterRisk() == null) {
-            throw new IllegalArgumentException("a surviving position requires a fresh-eyes after assessment");
+        if ((request.after() == null) != (request.afterRisk() == null)) {
+            throw new IllegalArgumentException(request.after() == null
+                    ? "a transformation with no surviving position cannot carry an after-risk assessment"
+                    : "a surviving position requires a fresh-eyes after assessment");
         }
         if (request.after() != null && (!request.before().symbol().equals(request.after().symbol())
                 || request.before().lane() != request.after().lane()
@@ -91,8 +93,9 @@ public final class PositionTransformation {
                     : " is a blocked-family teaching case, not an executable suggestion."));
         }
 
-        Delta delta = new Delta(delta(request.beforeRisk().maxLossCents(), risk(request.afterRisk()).maxLossCents()),
-                delta(request.beforeRisk().reserveCents(), risk(request.afterRisk()).reserveCents()),
+        RiskSnapshot afterForComparison = request.after() == null ? cashRisk() : request.afterRisk();
+        Delta delta = new Delta(delta(request.beforeRisk().maxLossCents(), afterForComparison.maxLossCents()),
+                delta(request.beforeRisk().reserveCents(), afterForComparison.reserveCents()),
                 delta(beforeObligations.putAssignmentCashCents(), afterObligations.putAssignmentCashCents()),
                 Math.subtractExact(afterObligations.callDeliveryShares(), beforeObligations.callDeliveryShares()));
         boolean identityChanged = !beforeIdentity.label().equals(afterIdentity.label())
@@ -105,8 +108,8 @@ public final class PositionTransformation {
                 request.realizedClosingCents(), List.copyOf(warnings), fingerprint);
     }
 
-    private static RiskSnapshot risk(RiskSnapshot value) {
-        return value == null ? new RiskSnapshot(0L, 0L, null, true, List.of(), "cash") : value;
+    private static RiskSnapshot cashRisk() {
+        return new RiskSnapshot(0L, 0L, null, true, List.of(), "no surviving position");
     }
 
     private static Long delta(Long before, Long after) {
@@ -371,11 +374,54 @@ public final class PositionTransformation {
     public record Request(Action action, PositionPackage before, PositionPackage after,
                           RiskSnapshot beforeRisk, RiskSnapshot afterRisk, Long realizedClosingCents) {}
 
-    public record RiskSnapshot(Long maxLossCents, long reserveCents, Long maxProfitCents,
+    public record RiskSnapshot(
+                               @com.fasterxml.jackson.annotation.JsonInclude(
+                                       com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+                               Long maxLossCents,
+                               @com.fasterxml.jackson.annotation.JsonInclude(
+                                       com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+                               Long reserveCents,
+                               Long maxProfitCents,
                                boolean mechanicallyEligible, List<String> blockReasons, String evidenceBasis) {
         public RiskSnapshot {
             blockReasons = blockReasons == null ? List.of() : List.copyOf(blockReasons);
-            if (reserveCents < 0) throw new IllegalArgumentException("reserve cannot be negative");
+            boolean maxLossKnown = maxLossCents != null;
+            boolean reserveKnown = reserveCents != null;
+            if (maxLossKnown != reserveKnown) {
+                throw new IllegalArgumentException(
+                        "maximum loss and reserve must share availability");
+            }
+            if (maxLossKnown && (maxLossCents < 0 || reserveCents < 0)) {
+                throw new IllegalArgumentException("maximum loss and reserve cannot be negative");
+            }
+            if (mechanicallyEligible && !maxLossKnown) {
+                throw new IllegalArgumentException(
+                        "a mechanically eligible position requires finite-risk receipts");
+            }
+            if (!maxLossKnown && blockReasons.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "unavailable position risk requires a named blocking reason");
+            }
+        }
+
+        public boolean hasRiskFacts() {
+            return maxLossCents != null;
+        }
+
+        public long requiredReserveCents() {
+            if (reserveCents == null) {
+                throw new IllegalStateException(
+                        "This position has no reserve receipt; the action cannot be approved.");
+            }
+            return reserveCents;
+        }
+
+        public long requiredMaxLossCents() {
+            if (maxLossCents == null) {
+                throw new IllegalStateException(
+                        "This position has no maximum-loss receipt; the action cannot be approved.");
+            }
+            return maxLossCents;
         }
     }
 
@@ -383,7 +429,13 @@ public final class PositionTransformation {
                               long shortStockShares, boolean uncappedUpside,
                               List<String> expirations) {}
 
-    public record Delta(Long maxLossCents, long reserveCents,
+    public record Delta(
+                        @com.fasterxml.jackson.annotation.JsonInclude(
+                                com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+                        Long maxLossCents,
+                        @com.fasterxml.jackson.annotation.JsonInclude(
+                                com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+                        Long reserveCents,
                         long putAssignmentCashCents, long callDeliveryShares) {}
 
     public record Preview(Action action,
@@ -411,6 +463,6 @@ public final class PositionTransformation {
     private record StableRequest(Action action, PositionPackageFingerprint.CanonicalPackage before,
                                  PositionPackageFingerprint.CanonicalPackage after,
                                  StableRisk beforeRisk, StableRisk afterRisk, Long realizedClosingCents) {}
-    private record StableRisk(Long maxLossCents, long reserveCents, Long maxProfitCents,
+    private record StableRisk(Long maxLossCents, Long reserveCents, Long maxProfitCents,
                               boolean mechanicallyEligible, List<String> blockReasons, String evidenceBasis) {}
 }

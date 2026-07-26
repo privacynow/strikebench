@@ -515,9 +515,14 @@ public final class PositionLifecycleDecisionService {
                                            BookActionProjectionService.ActionProjection hold,
                                            ProtocolEvaluator.Policy policy) {
         List<String> reasons = new ArrayList<>();
+        String eventStatus = lifecycle.assignmentExit().eventEvidenceStatus();
+        boolean eventUnavailable = "UNAVAILABLE".equals(eventStatus);
         boolean confirmed = lifecycle.assignmentExit().eventCrossings().stream()
                 .anyMatch(event -> "CONFIRMED".equals(event.status()));
-        if (confirmed) reasons.add("The package crosses confirmed issuer event evidence.");
+        if (eventUnavailable) {
+            reasons.add("Event crossing cannot be assessed because the canonical event receipt is unavailable.");
+            reasons.addAll(lifecycle.assignmentExit().limitations());
+        } else if (confirmed) reasons.add("The package crosses confirmed issuer event evidence.");
         else if (!lifecycle.assignmentExit().eventCrossings().isEmpty()) {
             reasons.add("The package crosses estimated issuer event evidence; it is not promoted to confirmed.");
         } else reasons.add("No event crossing is present in the canonical event receipt.");
@@ -537,7 +542,8 @@ public final class PositionLifecycleDecisionService {
         if (confirmed && policy.defendConfirmedEvents()) {
             reasons.add("This named policy requires defense for a confirmed event crossing.");
         }
-        return new Dimension("TAIL_EVENT", defend ? "DEFEND_TRIGGER" : confirmed ? "CAUTION" : "PASS",
+        return new Dimension("TAIL_EVENT", defend ? "DEFEND_TRIGGER"
+                : eventUnavailable ? "UNAVAILABLE" : confirmed ? "CAUTION" : "PASS",
                 defend ? Verdict.DEFEND : null, reasons);
     }
 

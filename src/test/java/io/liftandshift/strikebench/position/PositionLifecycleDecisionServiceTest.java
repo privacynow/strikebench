@@ -220,6 +220,31 @@ class PositionLifecycleDecisionServiceTest {
     }
 
     @Test
+    void unavailableEventEvidenceNeverBecomesANoEventClaim() {
+        var account = books.createAccount("local", new PortfolioAccountingService.AccountInput(
+                "Synthetic event-evidence book", "TAXABLE", null, "FIFO", null, null, null, null,
+                100_000_000L));
+        var request = new TradeService.OpenRequest(account.id(), "QQQ", "CASH_SECURED_PUT", 3,
+                List.of(Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("450"),
+                        EXPIRY, 1, BigDecimal.ZERO)), null, "16d", "DEFINED", "INCOME",
+                false, null, null, "IMPORT", "EXECUTED");
+        var revision = objectives.declare("local", account.id(), "INCOME", "NON_DIRECTIONAL",
+                null, "ACCEPT", List.of(packageCapacity()),
+                capacity(policy("FULL_ASSIGNMENT_CAPACITY", 90, 1_000L, 0, 5), List.of()));
+        PositionLifecycleReceipt receipt = lifecycleWithUnavailableEvents();
+        var decision = decisions.analyze(receipt,
+                projections.project("local", account.id(), request, receipt),
+                AccountObjectiveService.capacityContext(revision, POSITION));
+
+        assertThat(decision.dimensions()).filteredOn(d -> d.name().equals("TAIL_EVENT"))
+                .singleElement().satisfies(d -> {
+                    assertThat(d.status()).isEqualTo("UNAVAILABLE");
+                    assertThat(d.reasons()).anyMatch(reason -> reason.contains("cannot be assessed"));
+                    assertThat(d.reasons()).noneMatch(reason -> reason.contains("No event crossing"));
+                });
+    }
+
+    @Test
     void defendNamesTheStopLossTriggerAndHarvestNamesTheTakeProfitTrigger() {
         // §6.4: DEFEND must say WHICH named trigger fired. The stop-loss and expiry/time rules
         // now reach the verdict lane through the ONE ProtocolEvaluator, on this position's own
@@ -368,6 +393,19 @@ class PositionLifecycleDecisionServiceTest {
         return lifecycleWith(availableClose(), new PositionLifecycleReceipt.ForwardEconomics(false,
                 null, null, null, null, null, false, "Hold-vs-close economics unavailable.",
                 "No forward economics receipt for this position."));
+    }
+
+    private static PositionLifecycleReceipt lifecycleWithUnavailableEvents() {
+        PositionLifecycleReceipt base = lifecycle();
+        PositionLifecycleReceipt.AssignmentExit assignment = base.assignmentExit();
+        return new PositionLifecycleReceipt(base.schemaVersion(), base.symbol(), base.positionFingerprint(),
+                base.history(), base.currentChoice(), base.carryCollateral(),
+                new PositionLifecycleReceipt.AssignmentExit(
+                        assignment.legs(), assignment.taxLotBasisPerShare(),
+                        assignment.campaignBasisPerShare(), List.of(), "UNAVAILABLE",
+                        assignment.bookImpactRef(), assignment.basis(),
+                        List.of("Canonical event evidence could not be read; this is not a no-event claim.")),
+                base.evidence());
     }
 
     private long count(String table) {

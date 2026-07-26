@@ -82,15 +82,15 @@ public final class HeldPositionEconomicsService {
 
     public PositionLifecycleReceipt compose(TradeService.OpenRequest request, TradePreview preview,
                                             StrategyEvaluation evaluation) {
-        if (request == null || preview == null || evaluation == null) {
-            throw new IllegalArgumentException("request, exact preview, and canonical evaluation are required");
+        if (request == null || preview == null) {
+            throw new IllegalArgumentException("request and exact preview are required");
         }
         if (request.qty() < 1 || request.legs() == null || request.legs().isEmpty()) {
             throw new IllegalArgumentException("a held position requires positive exact package geometry");
         }
 
         PositionLifecycleReceipt.CloseQuote close = closeQuote(request, preview);
-        EconomicAssessment freshEyes = evaluation.assessment() == null
+        EconomicAssessment freshEyes = evaluation == null || evaluation.assessment() == null
                 ? null : evaluation.assessment().economics();
         PositionLifecycleReceipt.ForwardEconomics hold = holdVsClose(preview, close, freshEyes);
         List<String> currentLimitations = new ArrayList<>();
@@ -103,14 +103,18 @@ public final class HeldPositionEconomicsService {
         int days = singleExpirationDays(request.legs());
         long grossRemaining = close.executable()
                 ? Math.max(0, Math.negateExact(close.price().optionNetPremiumCents())) : 0;
-        long modeledCollateral = Math.max(0, preview.reserveCents());
-        Double grossAnnualized = days > 0 && modeledCollateral > 0 && grossRemaining > 0
+        Long modeledCollateral = preview.reserveCents();
+        Double grossAnnualized = days > 0 && modeledCollateral != null
+                && modeledCollateral > 0 && grossRemaining > 0
                 ? round4(100.0 * grossRemaining / modeledCollateral * 365.0 / days) : null;
         List<String> carryLimitations = new ArrayList<>();
         if (singleExpiration(request.legs()) == null) {
             carryLimitations.add("A mixed-expiration package has no single honest annualized remaining-premium clock.");
         }
-        if (modeledCollateral == 0) {
+        if (modeledCollateral == null) {
+            carryLimitations.add("This exact package has no finite reserve receipt, so collateral, "
+                    + "encumbrance, and released capital remain unavailable.");
+        } else if (modeledCollateral == 0) {
             carryLimitations.add("This exact package has no model-derived cash reserve denominator.");
         }
         carryLimitations.add("Tracked-account encumbrance is model-derived until a broker-reported reserve is linked.");
@@ -118,15 +122,24 @@ public final class HeldPositionEconomicsService {
 
         long sharesReleased = request.heldShares()
                 ? Math.multiplyExact(CoverageCheck.shareContextUnitsNeeded(request.legs()), request.qty()) : 0;
-        var collateral = new AuthorityFacts.MoneyFact(modeledCollateral,
-                PositionDomain.FactAuthority.MODEL_DERIVED,
-                "The exact package's canonical reserve model; not a broker buying-power claim.");
-        var encumbrance = new AuthorityFacts.MoneyFact(modeledCollateral,
-                PositionDomain.FactAuthority.MODEL_DERIVED,
-                "Theoretical cash encumbrance from the exact package geometry.");
-        var release = new AuthorityFacts.MoneyFact(modeledCollateral,
-                PositionDomain.FactAuthority.MODEL_DERIVED,
-                "Theoretical encumbrance removed by a full close; this is not a broker buying-power claim.");
+        var collateral = modeledCollateral == null
+                ? AuthorityFacts.MoneyFact.unavailable(
+                        "The exact package has no finite reserve receipt.")
+                : new AuthorityFacts.MoneyFact(modeledCollateral,
+                        PositionDomain.FactAuthority.MODEL_DERIVED,
+                        "The exact package's canonical reserve model; not a broker buying-power claim.");
+        var encumbrance = modeledCollateral == null
+                ? AuthorityFacts.MoneyFact.unavailable(
+                        "The exact package has no finite reserve receipt.")
+                : new AuthorityFacts.MoneyFact(modeledCollateral,
+                        PositionDomain.FactAuthority.MODEL_DERIVED,
+                        "Theoretical cash encumbrance from the exact package geometry.");
+        var release = modeledCollateral == null
+                ? AuthorityFacts.MoneyFact.unavailable(
+                        "Capital release cannot be stated without a finite reserve receipt.")
+                : new AuthorityFacts.MoneyFact(modeledCollateral,
+                        PositionDomain.FactAuthority.MODEL_DERIVED,
+                        "Theoretical encumbrance removed by a full close; this is not a broker buying-power claim.");
 
         List<PositionLifecycleReceipt.AssignmentLeg> assignmentLegs = assignmentLegs(request, preview);
         EventFacts eventFacts = eventFacts(request);
@@ -138,6 +151,12 @@ public final class HeldPositionEconomicsService {
         String positionFingerprint = positionFingerprint(request);
         String marketFingerprint = snapshotFingerprint(preview);
         String modelFingerprint = modelFingerprint(evaluation);
+        String freshEyesRef = evaluation == null
+                ? "evaluation:UNAVAILABLE"
+                : PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF;
+        String stanceRef = evaluation == null
+                ? "evaluation:UNAVAILABLE"
+                : PositionLifecycleReceipt.STANCE_REF;
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         return new PositionLifecycleReceipt(PositionLifecycleReceipt.SCHEMA_VERSION,
                 request.symbol().trim().toUpperCase(Locale.ROOT), positionFingerprint,
@@ -145,11 +164,13 @@ public final class HeldPositionEconomicsService {
                         "No linked opening/campaign receipt was supplied to this exact-package analysis.",
                         "Opening history is never inferred from today's executable marks."),
                 new PositionLifecycleReceipt.CurrentChoice(close, FRESH_EYES_QUESTION,
-                        PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF, hold, expectedShortfall,
+                        freshEyesRef, hold, expectedShortfall,
                         expectedShortfall == null ? null
                                 : "Absolute loss of the canonical risk-neutral CVaR95 P/L receipt.",
-                        PositionLifecycleReceipt.STANCE_REF,
-                        "Fresh-eyes keeps the existing evaluation; hold-vs-close replaces only today's immediate cash leg.",
+                        stanceRef,
+                        evaluation == null
+                                ? "Fresh-eyes economics and stance are unavailable; close facts remain separate and no hold claim is inferred."
+                                : "Fresh-eyes keeps the existing evaluation; hold-vs-close replaces only today's immediate cash leg.",
                         currentLimitations),
                 new PositionLifecycleReceipt.CarryCollateral(
                         close.executable() ? grossRemaining : null,
@@ -170,14 +191,19 @@ public final class HeldPositionEconomicsService {
                 new PositionLifecycleReceipt.Evidence(now, "PARTIAL", marketFingerprint,
                         modelFingerprint, "FACTS_ONLY",
                         eventFacts.sourceRefs().isEmpty()
-                                ? List.of("preview", "evaluation", PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
-                                    PositionLifecycleReceipt.STANCE_REF)
+                                ? List.of("preview",
+                                    evaluation == null ? "evaluation:UNAVAILABLE" : "evaluation",
+                                    freshEyesRef, stanceRef).stream().distinct().toList()
                                 : java.util.stream.Stream.concat(
-                                        List.of("preview", "evaluation",
-                                                PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
-                                                PositionLifecycleReceipt.STANCE_REF).stream(),
+                                        List.of("preview",
+                                                evaluation == null ? "evaluation:UNAVAILABLE" : "evaluation",
+                                                freshEyesRef, stanceRef).stream(),
                                         eventFacts.sourceRefs().stream()).distinct().toList(),
-                        List.of("History, broker reserve, settlement income, and Book projections are not linked yet.")));
+                        evaluation == null
+                                ? List.of("The canonical fresh-eyes evaluation is unavailable; no score, "
+                                        + "stance, or forward economics was substituted.",
+                                        "History, broker reserve, settlement income, and Book projections are not linked yet.")
+                                : List.of("History, broker reserve, settlement income, and Book projections are not linked yet.")));
     }
 
     private record EventFacts(List<PositionLifecycleReceipt.EventCrossing> crossings,
@@ -517,6 +543,10 @@ public final class HeldPositionEconomicsService {
 
     private static String modelFingerprint(StrategyEvaluation evaluation) {
         Map<String, Object> model = new LinkedHashMap<>();
+        if (evaluation == null) {
+            model.put("evaluation", "UNAVAILABLE");
+            return PositionPackageFingerprint.entrySnapshotFingerprint(Json.write(model));
+        }
         model.put("pricingModel", evaluation.coverage() == null ? null : evaluation.coverage().pricingModel());
         model.put("evBasis", evaluation.risk() == null ? null : evaluation.risk().evBasisNote());
         model.put("terminalPayoffModel", evaluation.risk() == null || evaluation.risk().terminalPayoff() == null

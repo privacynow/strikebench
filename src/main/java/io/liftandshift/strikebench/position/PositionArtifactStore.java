@@ -190,11 +190,13 @@ public final class PositionArtifactStore {
         insertTextMetric(c, input.receiptId(), "before_identity", preview.beforeIdentity().label());
         insertTextMetric(c, input.receiptId(), "after_identity", preview.afterIdentity().label());
         insertCentsMetric(c, input.receiptId(), "before_max_loss", preview.beforeRisk().maxLossCents());
-        insertCentsMetric(c, input.receiptId(), "after_max_loss",
-                preview.afterRisk() == null ? 0L : preview.afterRisk().maxLossCents());
+        Long afterMaxLoss = preview.afterRisk() == null
+                ? Long.valueOf(0L) : preview.afterRisk().maxLossCents();
+        insertCentsMetric(c, input.receiptId(), "after_max_loss", afterMaxLoss);
         insertCentsMetric(c, input.receiptId(), "before_reserve", preview.beforeRisk().reserveCents());
-        insertCentsMetric(c, input.receiptId(), "after_reserve",
-                preview.afterRisk() == null ? 0L : preview.afterRisk().reserveCents());
+        Long afterReserve = preview.afterRisk() == null
+                ? Long.valueOf(0L) : preview.afterRisk().reserveCents();
+        insertCentsMetric(c, input.receiptId(), "after_reserve", afterReserve);
         insertCentsMetric(c, input.receiptId(), "before_assignment_cash",
                 preview.beforeObligations().putAssignmentCashCents());
         insertCentsMetric(c, input.receiptId(), "after_assignment_cash",

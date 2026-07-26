@@ -107,6 +107,55 @@ class HeldPositionEconomicsServiceTest {
         assertThat(receipt.currentChoice().limitations()).anyMatch(x -> x.contains("ask"));
     }
 
+    @Test void unavailableRiskAndEvaluationNeverBecomeZeroCollateralOrADanglingReference() {
+        var service = new HeldPositionEconomicsService(CLOCK);
+        var request = request(Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("180"), EXPIRATION, 1, BigDecimal.ZERO));
+        TradePreview priced = preview("0.47", "0.48", "0.475", 4_700L, 1_800_000L);
+        TradePreview unavailable = new TradePreview(false, List.of("Maximum loss is undefined."),
+                priced.warnings(), null, priced.maxProfitCents(), priced.breakevens(),
+                priced.popEntry(), priced.expectedValueCents(), null,
+                priced.cashBeforeCents(), priced.cashAfterCents(), priced.reservedBeforeCents(),
+                priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
+                priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
+                priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
+                priced.analytics(), priced.price());
+
+        PositionLifecycleReceipt receipt = service.compose(request, unavailable, null);
+
+        assertThat(receipt.currentChoice().freshEyesEconomicsRef())
+                .isEqualTo("evaluation:UNAVAILABLE");
+        assertThat(receipt.currentChoice().stanceRef()).isEqualTo("evaluation:UNAVAILABLE");
+        assertThat(receipt.currentChoice().basis()).contains("unavailable");
+        assertThat(receipt.currentChoice().holdVsClose().available()).isFalse();
+        assertThat(receipt.carryCollateral().collateral().cents()).isNull();
+        assertThat(receipt.carryCollateral().collateral().authority())
+                .isEqualTo(PositionDomain.FactAuthority.UNAVAILABLE);
+        assertThat(receipt.carryCollateral().encumbrance().cents()).isNull();
+        assertThat(receipt.carryCollateral().capitalReleasedByClosing().cents()).isNull();
+        assertThat(receipt.evidence().sourceRefs()).contains("evaluation:UNAVAILABLE");
+        assertThat(receipt.evidence().sourceRefs())
+                .doesNotContain(PositionLifecycleReceipt.FRESH_EYES_ECONOMICS_REF,
+                        PositionLifecycleReceipt.STANCE_REF);
+    }
+
+    @Test void aKnownZeroReserveRemainsAnAvailableZeroFact() {
+        var service = new HeldPositionEconomicsService(CLOCK);
+        var request = request(Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("220"), EXPIRATION, 1, BigDecimal.ZERO));
+
+        PositionLifecycleReceipt receipt = service.compose(request,
+                preview("2.10", "2.20", "2.15", 21_000L, 0), evaluation());
+
+        assertThat(receipt.carryCollateral().collateral().cents()).isZero();
+        assertThat(receipt.carryCollateral().collateral().authority())
+                .isEqualTo(PositionDomain.FactAuthority.MODEL_DERIVED);
+        assertThat(receipt.carryCollateral().capitalReleasedByClosing().cents()).isZero();
+        assertThat(receipt.carryCollateral().grossAnnualizedRemainingPremiumPct()).isNull();
+        assertThat(receipt.carryCollateral().limitations())
+                .anyMatch(note -> note.contains("no model-derived cash reserve denominator"));
+    }
+
     @Test void positionIdentityIgnoresChangingQuotesWhileSnapshotIdentityDoesNot() {
         var service = new HeldPositionEconomicsService(CLOCK);
         var request = request(Leg.option(LegAction.SELL, OptionType.CALL,

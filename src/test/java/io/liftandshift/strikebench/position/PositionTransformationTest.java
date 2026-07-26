@@ -8,6 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PositionTransformationTest {
     private static final LocalDate EXPIRY = LocalDate.parse("2026-08-21");
@@ -88,7 +89,7 @@ class PositionTransformationTest {
         var preview = PositionTransformation.preview(new PositionTransformation.Request(
                 PositionTransformation.Action.REMOVE_LEG, before, after,
                 risk(75_000, 100_000, true),
-                new PositionTransformation.RiskSnapshot(null, 0, null, false,
+                new PositionTransformation.RiskSnapshot(null, null, null, false,
                         List.of("Undefined upside risk"), "observed"), null));
 
         assertThat(preview.afterIdentity().family()).isEqualTo("NAKED_CALL");
@@ -108,7 +109,7 @@ class PositionTransformationTest {
         var preview = PositionTransformation.preview(new PositionTransformation.Request(
                 PositionTransformation.Action.ADD_LEG, before, after,
                 risk(80_000, 100_000, true),
-                new PositionTransformation.RiskSnapshot(null, 0, null, false,
+                new PositionTransformation.RiskSnapshot(null, null, null, false,
                         List.of("One short call remains uncovered"), "observed"), null));
 
         assertThat(preview.afterObligations().callDeliveryShares()).isEqualTo(200);
@@ -140,7 +141,7 @@ class PositionTransformationTest {
         var preview = PositionTransformation.preview(new PositionTransformation.Request(
                 PositionTransformation.Action.REMOVE_LEG, before, after,
                 risk(75_000, 100_000, true),
-                new PositionTransformation.RiskSnapshot(null, 0, null, false,
+                new PositionTransformation.RiskSnapshot(null, null, null, false,
                         List.of("Undefined upside risk"), "broker reported"), null));
 
         assertThat(preview.applicable()).isTrue();
@@ -211,6 +212,86 @@ class PositionTransformationTest {
                                 risk(75_000, 100_000, true), null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cannot leave a surviving position");
+    }
+
+    @Test
+    void riskAvailabilityIsPairedAndEligibleRiskCannotBeUnknown() {
+        assertThatThrownBy(() -> new PositionTransformation.RiskSnapshot(
+                10_000L, null, null, false, List.of("reserve unavailable"), "observed"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("share availability");
+        assertThatThrownBy(() -> new PositionTransformation.RiskSnapshot(
+                null, null, null, true, List.of("risk unavailable"), "observed"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("requires finite-risk receipts");
+        assertThatThrownBy(() -> new PositionTransformation.RiskSnapshot(
+                null, null, null, false, List.of(), "observed"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("named blocking reason");
+    }
+
+    @Test
+    void noSurvivingPositionCannotCarryOrPersistAnAfterRiskAssessment() {
+        var before = pkg("before", 1,
+                option(0, "SELL", "PUT", "980", 1), option(1, "BUY", "PUT", "970", 1));
+
+        assertThatThrownBy(() -> PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.CLOSE, before, null,
+                risk(80_000, 100_000, true), risk(75_000, 90_000, true), 12_000L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no surviving position cannot carry an after-risk assessment");
+    }
+
+    @Test
+    void anUnknownSurvivingRiskKeepsBothRiskDeltasUnavailable() {
+        var before = pkg("before", 1,
+                option(0, "SELL", "CALL", "1000", 1),
+                option(1, "BUY", "CALL", "1010", 1));
+        var after = pkg("after", 1, option(0, "SELL", "CALL", "1000", 1));
+
+        var preview = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.REMOVE_LEG, before, after,
+                risk(75_000, 100_000, true),
+                new PositionTransformation.RiskSnapshot(null, null, null, false,
+                        List.of("Undefined upside risk"), "observed"), null));
+
+        assertThat(preview.afterRisk().maxLossCents()).isNull();
+        assertThat(preview.afterRisk().reserveCents()).isNull();
+        assertThat(preview.delta().maxLossCents()).isNull();
+        assertThat(preview.delta().reserveCents()).isNull();
+        var wire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(preview);
+        assertThat(wire.at("/afterRisk/maxLossCents").isNull()).isTrue();
+        assertThat(wire.at("/afterRisk/reserveCents").isNull()).isTrue();
+        assertThat(wire.at("/delta/maxLossCents").isNull()).isTrue();
+        assertThat(wire.at("/delta/reserveCents").isNull()).isTrue();
+    }
+
+    @Test
+    void fullCloseUsesExplicitCashZeroOnlyForComparison() {
+        var before = pkg("before", 1,
+                option(0, "SELL", "PUT", "980", 1),
+                option(1, "BUY", "PUT", "970", 1));
+        var preview = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.CLOSE, before, null,
+                risk(80_000, 100_000, true), null, 12_000L));
+
+        assertThat(preview.afterRisk()).isNull();
+        assertThat(preview.delta().maxLossCents()).isEqualTo(-80_000L);
+        assertThat(preview.delta().reserveCents()).isEqualTo(-100_000L);
+    }
+
+    @Test
+    void fullCloseCannotInventADeltaWhenTheBeforeRiskWasUnavailable() {
+        var before = pkg("before", 1, option(0, "SELL", "CALL", "1000", 1));
+        var preview = PositionTransformation.preview(new PositionTransformation.Request(
+                PositionTransformation.Action.CLOSE, before, null,
+                new PositionTransformation.RiskSnapshot(null, null, null, false,
+                        List.of("Undefined upside risk"), "observed"),
+                null, 12_000L));
+
+        assertThat(preview.afterRisk()).isNull();
+        assertThat(preview.delta().maxLossCents()).isNull();
+        assertThat(preview.delta().reserveCents()).isNull();
     }
 
     private static PositionPackage pkg(String id, long quantity, PositionPackage.Leg... legs) {

@@ -179,13 +179,15 @@ final class PositionTransformationController {
                 if (planHook != null) planHook.afterMutation(connection, survivor, actionDelta, lifetimeTotal);
             };
             TradeService.AdjustmentAssessment adjustment = prepared.adjustment();
+            var adjustmentPrice = reviewedPrice(adjustment.survivor().preview());
+            var adjustmentRisk = reviewedRisk(adjustment.survivor().preview());
             TradeService.AdjustmentResult result = trades.adjustPosition(request.sourceId(), request.action(),
                     adjustment.exactAfterRequest(), true, atomicArtifacts, expectedPosition(prepared),
                     new TradeService.ExpectedAdjustment(adjustment.closingCashCents(),
                             adjustment.openingCashCents(), adjustment.closingFeesCents(),
-                            adjustment.openingFeesCents(), reviewedPrice(adjustment.survivor().preview()).grossPackageNetCents(),
-                            reviewedPrice(adjustment.survivor().preview()).openingFeesCents(), adjustment.reserveAfterCents(),
-                            adjustment.survivor().preview().maxLossCents(),
+                            adjustment.openingFeesCents(), adjustmentPrice.grossPackageNetCents(),
+                            adjustmentPrice.openingFeesCents(), adjustmentRisk.reserveCents(),
+                            adjustmentRisk.maxLossCents(),
                             adjustment.survivor().preview().maxProfitCents(), adjustment.sharesLockedAfter(),
                             TradeService.exactPositionFingerprint(adjustment.exactAfterRequest())));
             responseTrade = result.trade();
@@ -208,11 +210,13 @@ final class PositionTransformationController {
                 }
             };
             var afterPreview = prepared.after().preview();
+            var afterPrice = reviewedPrice(afterPreview);
+            var afterRisk = reviewedRisk(afterPreview);
             TradeService.RollResult result = trades.roll(request.sourceId(), approvedAfter, true,
                     atomicArtifacts, prepared.unwind().closingCashCents(), prepared.unwind().closingFeesCents(),
-                    new TradeService.ExpectedOpen(reviewedPrice(afterPreview).grossPackageNetCents(),
-                            reviewedPrice(afterPreview).openingFeesCents(),
-                            afterPreview.reserveCents(), afterPreview.maxLossCents(), afterPreview.maxProfitCents()));
+                    new TradeService.ExpectedOpen(afterPrice.grossPackageNetCents(),
+                            afterPrice.openingFeesCents(), afterRisk.reserveCents(),
+                            afterRisk.maxLossCents(), afterPreview.maxProfitCents()));
             responseTrade = result.replacementTrade();
             resolvedTrade = result.closedTrade();
             actionRealized = result.actionRealizedClosingCents();
@@ -270,19 +274,50 @@ final class PositionTransformationController {
         return price;
     }
 
+    /** An approved mutation must carry both finite-risk facts; a preview may remain visible without them. */
+    private static ReviewedRisk reviewedRisk(
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        if (preview != null && preview.hasRiskFacts()) {
+            return new ReviewedRisk(preview.requiredMaxLossCents(), preview.requiredReserveCents());
+        }
+        List<String> reasons = new ArrayList<>();
+        if (preview != null && preview.blockReasons() != null) reasons.addAll(preview.blockReasons());
+        reasons.add("The reviewed surviving position has no maximum-loss and reserve receipt, "
+                + "so this transformation cannot be applied.");
+        throw new io.liftandshift.strikebench.paper.TradeRejectedException(
+                reasons.stream().distinct().toList());
+    }
+
+    private record ReviewedRisk(long maxLossCents, long reserveCents) {}
+
     private static TradeService.ExpectedPositionState expectedPosition(Prepared prepared) {
         TradeRecord trade = prepared.trade();
         return new TradeService.ExpectedPositionState(trade.qty(), trade.entryNetPremiumCents(),
                 trade.feesOpenCents(), trade.maxLossCents(), trade.maxProfitCents(), trade.sharesLocked(),
                 trade.realizedPnlCents() == null ? 0 : trade.realizedPnlCents(),
-                prepared.before().risk().reserveCents());
+                prepared.before().risk().requiredReserveCents());
     }
 
     private static TradeService.ExpectedLifecycle expectedLifecycle(TradeService.LifecycleAssessment lifecycle) {
+        long reserveAfter;
+        if (lifecycle.survivor() == null) {
+            if (lifecycle.reserveAfterCents() == null || lifecycle.reserveAfterCents() != 0L) {
+                throw new IllegalStateException(
+                        "A lifecycle event with no surviving position must release its reserve to zero.");
+            }
+            reserveAfter = 0L;
+        } else {
+            ReviewedRisk risk = reviewedRisk(lifecycle.survivor().preview());
+            reserveAfter = risk.reserveCents();
+            if (!java.util.Objects.equals(lifecycle.reserveAfterCents(), reserveAfter)) {
+                throw new IllegalStateException(
+                        "The lifecycle reserve does not match the surviving position receipt.");
+            }
+        }
         return new TradeService.ExpectedLifecycle(lifecycle.settlementUnderlyingCents(),
                 lifecycle.optionSettlementCashCents(), lifecycle.stockCashCents(), lifecycle.sharesDelta(),
                 lifecycle.allocatedEntryBasisCents(), lifecycle.allocatedOpenFeesCents(),
-                lifecycle.reserveAfterCents(), lifecycle.heldShareContextAfter(),
+                reserveAfter, lifecycle.heldShareContextAfter(),
                 lifecycle.sharesLockedAfter(), lifecycle.exactStateFingerprint());
     }
 

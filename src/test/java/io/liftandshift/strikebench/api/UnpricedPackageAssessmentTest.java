@@ -4,12 +4,6 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.EvalContext;
-import io.liftandshift.strikebench.eval.IvContext;
-import io.liftandshift.strikebench.eval.ManagementPlan;
-import io.liftandshift.strikebench.eval.ManagementPlanner;
-import io.liftandshift.strikebench.eval.StrategyEvaluation;
-import io.liftandshift.strikebench.eval.StrategyEvaluator;
-import io.liftandshift.strikebench.eval.StrategySpec;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
@@ -23,7 +17,6 @@ import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.ProtocolEvaluator;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeService;
-import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.support.TestDb;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +32,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * THE §3.2 regression test for the canonical package-price receipt (§7.2).
@@ -166,11 +160,6 @@ class UnpricedPackageAssessmentTest {
                 DataEvidence.of("treasury", Freshness.EOD), null);
     }
 
-    private static StrategySpec spec() {
-        return new StrategySpec("AAPL", "CREDIT_PUT_SPREAD", "INCOME", "month", "NEUTRAL",
-                "BALANCED", "decision");
-    }
-
     @Test
     void anUnmarkedContractRefusesWithAReasonInsteadOfPricingThePackageAtZero() {
         TradePreview preview = trades.analyze(creditPutSpread());
@@ -188,72 +177,37 @@ class UnpricedPackageAssessmentTest {
     }
 
     /**
-     * THE regression: the whole evaluation pipeline over a genuinely unpriced package. Every
-     * producer runs; none of them throws; none of them prints a zero it cannot prove.
+     * THE regression: a genuinely unpriced package remains a complete mechanical preview, but it
+     * cannot cross the risk-screened Candidate boundary. The API publishes a typed unavailable
+     * evaluation instead of asking the evaluator to invent maximum loss or reserve.
      */
     @Test
-    void theWholeEvaluationPipelineDegradesCompletelyRatherThanThrowing() {
+    void theWholeEvaluationPipelineStopsAtTheTypedUnavailableBoundary() {
         TradeService.OpenRequest request = creditPutSpread();
         TradePreview preview = trades.analyze(request);
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-        assertThat(candidate.price().priced()).isFalse();
+        assertThat(preview.maxLossCents()).isNull();
+        assertThat(preview.reserveCents()).isNull();
+        assertThatThrownBy(() -> TradeController.exactPreviewCandidate(request, preview))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot become a risk-screened candidate");
 
-        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate, spec(), ctx(),
-                preview.ok(), preview.blockReasons(), 130L);
-
-        // COMPLETE: every lane is present and answers for itself.
-        assertThat(evaluation.risk()).isNotNull();
-        assertThat(evaluation.capital()).isNotNull();
-        assertThat(evaluation.volatility()).isNotNull();
-        assertThat(evaluation.evidence()).isNotNull();
-        assertThat(evaluation.management()).isNotNull();
-        assertThat(evaluation.score()).isNotNull();
-        assertThat(evaluation.assessment()).isNotNull();
-        assertThat(evaluation.explanation()).isNotNull();
-        assertThat(evaluation.stance()).isNotNull();
-        assertThat(evaluation.participation()).isNotNull();
-        assertThat(evaluation.ivContext()).isNotNull();
-
-        // DEGRADED, never endorsed: an unpriced package cannot pass the mechanical gate, and the
-        // absence itself is one of the stated reasons rather than a silent omission.
-        assertThat(evaluation.score().gatePassed()).isFalse();
-        assertThat(evaluation.score().gateFailures())
-                .anySatisfy(failure -> assertThat(failure).contains("No market or model mark"));
-        assertThat(evaluation.assessment().mechanics().eligible()).isFalse();
-        assertThat(evaluation.assessment().economics().verdict())
+        ApiResponses.EvaluationReceipt receipt =
+                TradeController.unavailableRiskEvaluation(preview, "The exact package");
+        assertThat(receipt.available()).isFalse();
+        assertThat(receipt.decisionScore()).isNull();
+        assertThat(receipt.risk()).isNull();
+        assertThat(receipt.stance()).isNull();
+        assertThat(receipt.assessment().mechanics().eligible()).isFalse();
+        assertThat(receipt.assessment().economics().verdict())
                 .isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
+        assertThat(receipt.assessment().economics().marketEvAfterCostsCents()).isNull();
+        assertThat(receipt.unavailableReason()).contains("No market or model mark");
 
-        // NO FABRICATED PRICE: the entry side is unavailable rather than a "flat" $0 package.
-        assertThat(evaluation.ivContext().entrySide()).isEqualTo(IvContext.EntrySide.UNAVAILABLE);
-        assertThat(evaluation.ivContext().message()).contains("No market or model mark");
-
-        // The management protocol still renders its time and invalidation rules, but its PRICE
-        // rules carry no trigger — a stop at "50% of the credit" is meaningless with no credit.
-        assertThat(evaluation.management().side()).isEqualTo(ProtocolEvaluator.Side.UNPRICED);
-        assertThat(evaluation.management().rules()).isNotEmpty();
-        assertThat(evaluation.management().rules()).filteredOn(r ->
-                        ProtocolEvaluator.TAKE_PROFIT.equals(r.rule())
-                                || ProtocolEvaluator.STOP_LOSS.equals(r.rule()))
-                .isNotEmpty()
-                .allSatisfy(rule -> assertThat(rule.triggerPnlCents()).isNull());
-        assertThat(evaluation.management().rules()).anySatisfy(rule ->
-                assertThat(rule.rule()).isEqualTo(ProtocolEvaluator.INVALIDATION));
-
-        // The payoff/tail lanes state their absence rather than drawing a curve off unmarked legs.
-        assertThat(evaluation.risk().terminalPayoff().available()).isFalse();
-        assertThat(evaluation.risk().terminalPayoff().unavailableReason())
-                .contains("No market or model mark");
-        assertThat(evaluation.risk().scenarios()).isEmpty();
-        assertThat(evaluation.risk().evHistVolCents()).isNull();
-
-        // Stance keeps the Greeks it can prove from geometry, and withholds the payoff-derived
-        // participation it cannot.
-        assertThat(evaluation.participation().terminalUpsideCaptureBps()).isNull();
-        assertThat(evaluation.participation().terminalBasis()).contains("No market or model mark");
-
-        // The explanation names the absence instead of asserting a debit or a credit.
-        assertThat(evaluation.explanation().failureModes())
-                .anySatisfy(mode -> assertThat(mode).contains("No market or model mark"));
+        var node = TradeController.exactPreviewNode(request, preview);
+        assertThat(node.path("maxLossCents").isNull()).isTrue();
+        assertThat(node.at("/price/priced").asBoolean()).isFalse();
+        assertThat(node.path("liquidityScore").isNull()).isTrue();
+        assertThat(node.path("confidence").isNull()).isTrue();
     }
 
     /**
@@ -288,13 +242,10 @@ class UnpricedPackageAssessmentTest {
      */
     @Test
     void anUnknownCommissionRefusesToStateAnyExpectedValueAfterCosts() {
-        TradeService.OpenRequest request = creditPutSpread();
-        TradePreview preview = trades.analyze(request);
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-
-        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate, spec(), ctx(),
-                preview.ok(), preview.blockReasons(), preview.price().estimatedRoundTripFeesCents());
-        EconomicAssessment economics = evaluation.assessment().economics();
+        TradePreview preview = trades.analyze(creditPutSpread());
+        ApiResponses.EvaluationReceipt receipt =
+                TradeController.unavailableRiskEvaluation(preview, "The exact package");
+        EconomicAssessment economics = receipt.assessment().economics();
 
         assertThat(economics.verdict()).isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
         assertThat(economics.estimatedRoundTripFeesCents()).isNull();
@@ -306,9 +257,9 @@ class UnpricedPackageAssessmentTest {
                 .anySatisfy(reason -> assertThat(reason).contains("No market or model mark"));
 
         // And it stays null all the way onto the wire, rather than serializing as a free round trip.
-        var wire = io.liftandshift.strikebench.util.Json.MAPPER
-                .valueToTree(ApiResponses.EvaluationReceipt.of(evaluation));
+        var wire = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(receipt);
         assertThat(wire.at("/assessment/economics/estimatedRoundTripFeesCents").isNumber()).isFalse();
+        assertThat(wire.path("available").asBoolean()).isFalse();
     }
 
     @Test
@@ -324,18 +275,16 @@ class UnpricedPackageAssessmentTest {
         assertThat(preview.price().openingFeesCents()).isEqualTo(65L);
         assertThat(preview.price().estimatedRoundTripFeesCents()).isEqualTo(130L);
 
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate,
-                new StrategySpec("AAPL", "CUSTOM", "INCOME", "month", "NEUTRAL",
-                        "AGGRESSIVE", "decision"),
-                ctx(), preview.ok(), preview.blockReasons(),
-                preview.price().estimatedRoundTripFeesCents());
-
-        assertThat(evaluation.assessment().economics().estimatedRoundTripFeesCents())
+        assertThat(preview.maxLossCents()).isNull();
+        assertThat(preview.reserveCents()).isNull();
+        ApiResponses.EvaluationReceipt receipt =
+                TradeController.unavailableRiskEvaluation(preview, "The exact package");
+        assertThat(receipt.assessment().economics().estimatedRoundTripFeesCents())
                 .isEqualTo(130L);
-        assertThat(evaluation.assessment().economics().reasons())
+        assertThat(receipt.assessment().economics().reasons())
                 .doesNotContain(EconomicAssessment.UNKNOWN_FEES_REASON);
-        assertThat(evaluation.assessment().mechanics().eligible()).isFalse();
+        assertThat(receipt.assessment().mechanics().eligible()).isFalse();
+        assertThat(receipt.available()).isFalse();
     }
 
     /**
@@ -344,24 +293,16 @@ class UnpricedPackageAssessmentTest {
      * replacing a complete degraded assessment with the generic wholesale-unavailable fallback.
      */
     @Test
-    void theExactAssessmentApiSeamCarriesAnUnknownCommissionWithoutUnboxingIt() {
-        TradeService.OpenRequest request = creditPutSpread();
-        TradePreview preview = trades.analyze(request);
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-        TradeController.ExactAssessment seam = (symbol, exact, buyingPower, analysisContext, worldId,
-                eligible, failures, roundTripFees, exposure) -> {
-            assertThat(roundTripFees).isNull();
-            return new StrategyEvaluator().assessExact(exact, spec(), ctx(), eligible, failures,
-                    roundTripFees);
-        };
+    void theExactAssessmentApiSeamDoesNotInvokeTheEvaluatorWithoutRisk() {
+        TradePreview preview = trades.analyze(creditPutSpread());
+        ApiResponses.EvaluationReceipt receipt =
+                TradeController.unavailableRiskEvaluation(preview, "The exact package");
 
-        StrategyEvaluation evaluation = seam.assess("AAPL", candidate, 10_000_000L, null, null,
-                preview.ok(), preview.blockReasons(),
-                preview.price().estimatedRoundTripFeesCents(), null);
-
-        assertThat(evaluation.assessment().economics().verdict())
+        assertThat(receipt.assessment().economics().verdict())
                 .isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
-        assertThat(evaluation.assessment().economics().estimatedRoundTripFeesCents()).isNull();
+        assertThat(receipt.assessment().economics().estimatedRoundTripFeesCents()).isNull();
+        assertThat(receipt.decisionScore()).isNull();
+        assertThat(receipt.stance()).isNull();
     }
 
     /**
@@ -370,20 +311,25 @@ class UnpricedPackageAssessmentTest {
      */
     @Test
     void theManagementPlannerRendersAnUnpricedProtocolInsteadOfThrowing() {
-        TradeService.OpenRequest request = creditPutSpread();
-        Candidate candidate = TradeController.exactPreviewCandidate(request, trades.analyze(request));
-
-        ManagementPlan plan = new ManagementPlanner().plan(candidate, spec(), ctx(),
-                ProtocolEvaluator.Policy.standard());
+        TradePreview preview = trades.analyze(creditPutSpread());
+        var time = ProtocolEvaluator.timeTo(ctx().asOfDate(), EXP);
+        ProtocolEvaluator.Plan plan = ProtocolEvaluator.unpricedPlan(
+                ProtocolEvaluator.Policy.standard(), preview.price().unavailableReason(), time, true);
 
         assertThat(plan.side()).isEqualTo(ProtocolEvaluator.Side.UNPRICED);
-        assertThat(plan.summary()).contains("no price").contains("No market or model mark");
         // The rules that DO NOT need a price still stand — withholding them would hide guidance
         // the calendar and the structure can prove.
-        assertThat(plan.rules()).extracting(ManagementPlan.Rule::rule)
+        assertThat(plan.rules()).extracting(ProtocolEvaluator.Rule::rule)
                 .contains(ProtocolEvaluator.TIME_EXIT, ProtocolEvaluator.INVALIDATION);
         assertThat(plan.rules()).filteredOn(r -> ProtocolEvaluator.TIME_EXIT.equals(r.rule()))
                 .allSatisfy(rule -> assertThat(rule.triggerSessionsToExpiry()).isNotNull());
+        assertThat(plan.rules()).filteredOn(r ->
+                        ProtocolEvaluator.TAKE_PROFIT.equals(r.rule())
+                                || ProtocolEvaluator.STOP_LOSS.equals(r.rule()))
+                .allSatisfy(rule -> {
+                    assertThat(rule.triggerPnlCents()).isNull();
+                    assertThat(rule.summary()).contains("No market or model mark");
+                });
     }
 
     /** Every refusal exit publishes the same unpriced receipt, so every one must degrade alike. */
@@ -395,18 +341,16 @@ class UnpricedPackageAssessmentTest {
         assertThat(preview.price().priced()).isFalse();
         assertThat(preview.price().unavailableReason()).contains("already expired");
 
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate,
-                new StrategySpec("AAPL", "CASH_SECURED_PUT", "INCOME", "month", "NEUTRAL",
-                        "BALANCED", "decision"),
-                ctx(), preview.ok(), preview.blockReasons(), 130L);
-
-        assertThat(evaluation.management().side()).isEqualTo(ProtocolEvaluator.Side.UNPRICED);
-        assertThat(evaluation.score().gatePassed()).isFalse();
-        assertThat(evaluation.score().gateFailures())
-                .anySatisfy(failure -> assertThat(failure).contains("already expired"));
-        assertThat(evaluation.ivContext().entrySide()).isEqualTo(IvContext.EntrySide.UNAVAILABLE);
-        assertThat(evaluation.risk().terminalPayoff().available()).isFalse();
+        assertThat(preview.maxLossCents()).isNull();
+        assertThat(preview.reserveCents()).isNull();
+        ApiResponses.EvaluationReceipt receipt =
+                TradeController.unavailableRiskEvaluation(preview, "The exact package");
+        assertThat(receipt.available()).isFalse();
+        assertThat(receipt.unavailableReason()).contains("already expired");
+        assertThat(receipt.assessment().mechanics().eligible()).isFalse();
+        assertThat(receipt.risk()).isNull();
+        assertThat(TradeController.exactPreviewNode(request, preview)
+                .path("maxLossCents").isNull()).isTrue();
     }
 
     /**
@@ -451,25 +395,23 @@ class UnpricedPackageAssessmentTest {
 
     /** The API surface the desk actually calls must degrade the same way — no 500, no blank lane. */
     @Test
-    void theReviewPayloadPublishesTheDegradedAssessmentRatherThanNoAssessment() {
+    void theReviewPayloadPublishesATypedUnavailableAssessmentRatherThanInventingRisk() {
         TradeService.OpenRequest request = creditPutSpread();
         TradePreview preview = trades.analyze(request);
-        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
+        ApiResponses.EvaluationReceipt receipt =
+                TradeController.unavailableRiskEvaluation(preview, "The exact package");
 
-        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate, spec(), ctx(),
-                preview.ok(), preview.blockReasons(), 130L);
-        ApiResponses.EvaluationReceipt receipt = ApiResponses.EvaluationReceipt.of(evaluation);
-
-        // available=true is the point: the assessment EXISTS and is degraded lane by lane. The
-        // wholesale "assessment unavailable" fallback in TradeController.reviewPayload is the
-        // failure mode this test forbids — it is for unexpected faults, not for absent prices.
-        assertThat(receipt.available()).isTrue();
-        assertThat(receipt.unavailableReason()).isNull();
-        assertThat(receipt.decisionScore()).isZero();
-        assertThat(receipt.viable()).isFalse();
-        assertThat(receipt.management()).isNotNull();
-        assertThat(receipt.risk()).isNotNull();
-        assertThat(receipt.explanation()).isNotNull();
-        assertThat(receipt.ivContext()).isNotNull();
+        assertThat(receipt.available()).isFalse();
+        assertThat(receipt.unavailableReason()).contains("No market or model mark");
+        assertThat(receipt.decisionScore()).isNull();
+        assertThat(receipt.viable()).isNull();
+        assertThat(receipt.management()).isNull();
+        assertThat(receipt.risk()).isNull();
+        assertThat(receipt.explanation()).isNull();
+        assertThat(receipt.ivContext()).isNull();
+        assertThat(receipt.assessment().economics().verdict())
+                .isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
+        assertThat(TradeController.exactPreviewNode(request, preview)
+                .path("maxLossCents").isNull()).isTrue();
     }
 }

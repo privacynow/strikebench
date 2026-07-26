@@ -411,9 +411,15 @@ public final class ApiResponses {
             if (estimatedRoundTripFeesCents != null && estimatedRoundTripFeesCents < 0) {
                 throw new IllegalArgumentException("round-trip fees cannot be negative");
             }
-            List<String> reasons = mechanicalReasons == null
+            List<String> baseReasons = mechanicalReasons == null
                     ? List.of(reason) : java.util.stream.Stream.concat(mechanicalReasons.stream(),
                             java.util.stream.Stream.of(reason)).distinct().toList();
+            List<String> reasons = estimatedRoundTripFeesCents == null
+                    ? java.util.stream.Stream.concat(baseReasons.stream(),
+                            java.util.stream.Stream.of(
+                                    io.liftandshift.strikebench.eval.EconomicAssessment.UNKNOWN_FEES_REASON))
+                            .distinct().toList()
+                    : baseReasons;
             var economics = new io.liftandshift.strikebench.eval.EconomicAssessment(
                     io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE,
                     mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
@@ -513,8 +519,12 @@ public final class ApiResponses {
                                             String settlementPriceBasis,
                                             long optionSettlementCashCents, long stockCashCents,
                                             long sharesDelta, long reserveBeforeCents,
-                                            long reserveAfterCents, long projectedCashAfterCents,
-                                            long projectedReservedAfterCents, List<String> basisNotes) {}
+                                            @JsonInclude(JsonInclude.Include.ALWAYS)
+                                            Long reserveAfterCents,
+                                            long projectedCashAfterCents,
+                                            @JsonInclude(JsonInclude.Include.ALWAYS)
+                                            Long projectedReservedAfterCents,
+                                            List<String> basisNotes) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationPreview<T, U>(
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,

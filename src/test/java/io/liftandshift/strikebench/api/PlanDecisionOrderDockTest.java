@@ -13,12 +13,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The order dock publishes the preview's own §7.2 receipt. These two behaviours were pinned when
  * the dock re-derived its own valuation from the analytics map, and they survive the move onto the
- * shared receipt: an UNAVAILABLE execution never promotes a zero to a valuation, and an immediate
+ * shared receipt: an UNAVAILABLE execution never promotes absent risk to a valuation, and an immediate
  * order and a resting one state visibly different bases for the money on screen.
  */
 class PlanDecisionOrderDockTest {
 
-    @Test void unavailableExecutionDoesNotPromoteThePreviewZeroSentinelToAValuation() {
+    @Test void unavailableExecutionDoesNotPromoteAbsentRiskToAValuation() {
         var order = order(OrderInstruction.market());
         var preview = preview(false,
                 PackagePriceReceipt.unavailable(1, PackagePriceReceipt.FeeSide.OPENING,
@@ -87,8 +87,9 @@ class PlanDecisionOrderDockTest {
     private static TradePreview preview(boolean ok, PackagePriceReceipt price) {
         // The two legacy package-price primitives are gone: `price` IS the preview's price, so a
         // fixture can no longer state one net beside the receipt's other one.
+        Long risk = price.priced() ? 0L : null;
         return new TradePreview(ok, ok ? List.of() : List.of("Execution is unavailable."), List.of(),
-                0, null, List.of(), null, null, 0,
+                risk, null, List.of(), null, null, risk,
                 100_000, 100_000, 0, 0, 100_000, 100_000,
                 // A preview with no price has no spot either; underlyingCents is nullable precisely
                 // so this fixture cannot claim the underlying trades at $0.00 (§3.2).

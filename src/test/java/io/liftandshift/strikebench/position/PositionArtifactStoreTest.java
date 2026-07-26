@@ -215,6 +215,69 @@ class PositionArtifactStoreTest {
                 .containsExactly("BEFORE:2");
         assertThat(db.query("SELECT value_cents FROM position_receipt_metric WHERE receipt_id=? AND metric_key=?",
                 r -> r.lng("value_cents"), "practice-receipt", "realized_closing")).containsExactly(12_300L);
+        assertThat(db.query("SELECT metric_key || ':' || value_cents v FROM position_receipt_metric "
+                        + "WHERE receipt_id=? AND metric_key IN ('after_max_loss','after_reserve') "
+                        + "ORDER BY metric_key", r -> r.str("v"), "practice-receipt"))
+                .containsExactly("after_max_loss:0", "after_reserve:0");
+    }
+
+    @Test
+    void survivingUnavailableRiskIsOmittedRatherThanStoredAsCashZero() {
+        db.exec("INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,"
+                        + "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "practice-unknown", "local", "Practice", "PAPER", 10_000_000L, 10_000_000L, 100_000L, 1,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"),
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"));
+        db.exec("INSERT INTO trades(id,account_id,symbol,strategy,status,qty,legs_json,entry_underlying_cents,"
+                        + "entry_net_premium_cents,max_loss_cents,breakevens_json,entry_snapshot_json,created_at,updated_at) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "practice-unknown-trade", "practice-unknown", "MU", "CREDIT_CALL_SPREAD", "ACTIVE",
+                1, "[]", 98_000L, 20_000L, 80_000L, "[]", "{}",
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"),
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"));
+        createPlan("plan-practice-unknown", "MU");
+        PositionPackage before = new PositionPackage("practice-unknown-trade",
+                PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, "MU", 1, null,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"), List.of(
+                new PositionPackage.Leg(0, "SELL", "OPTION", "MU", "CALL",
+                        new BigDecimal("1000"), LocalDate.parse("2026-08-21"), 1, 100,
+                        new BigDecimal("10.00"), PositionDomain.PriceAuthority.OBSERVED),
+                new PositionPackage.Leg(1, "BUY", "OPTION", "MU", "CALL",
+                        new BigDecimal("1010"), LocalDate.parse("2026-08-21"), 1, 100,
+                        new BigDecimal("8.00"), PositionDomain.PriceAuthority.OBSERVED)));
+        PositionPackage after = new PositionPackage("practice-unknown-trade",
+                PositionDomain.PackageSource.PRACTICE_TRADE,
+                PositionDomain.ExecutionLane.PRACTICE, "MU", 1, null,
+                OffsetDateTime.parse("2026-07-15T12:00:00Z"),
+                List.of(before.legs().getFirst()));
+        PositionTransformation.Preview preview = PositionTransformation.preview(
+                new PositionTransformation.Request(PositionTransformation.Action.REMOVE_LEG,
+                        before, after,
+                        new PositionTransformation.RiskSnapshot(80_000L, 100_000L, 20_000L,
+                                true, List.of(), "observed"),
+                        new PositionTransformation.RiskSnapshot(null, null, null, false,
+                                List.of("Undefined upside risk"), "observed"), null));
+
+        PositionArtifactStore store = new PositionArtifactStore(db);
+        db.tx(c -> {
+            store.recordPracticeTransformation(c,
+                    new PositionArtifactStore.PracticeTransformationAction(
+                            "local", "practice-unknown-receipt", "plan-practice-unknown", 1,
+                            "practice-unknown-trade", PositionDomain.PositionState.OPEN,
+                            OffsetDateTime.parse("2026-07-15T12:00:00Z"),
+                            EvidenceLevel.OBSERVED_DELAYED, PositionTransformation.MODEL_VERSION,
+                            before, after, preview, null));
+            return null;
+        });
+
+        assertThat(db.query("SELECT metric_key FROM position_receipt_metric WHERE receipt_id=? "
+                        + "AND metric_key IN ('after_max_loss','after_reserve')",
+                r -> r.str("metric_key"), "practice-unknown-receipt")).isEmpty();
+        assertThat(db.query("SELECT metric_key || ':' || value_cents v FROM position_receipt_metric "
+                        + "WHERE receipt_id=? AND metric_key IN ('before_max_loss','before_reserve') "
+                        + "ORDER BY metric_key", r -> r.str("v"), "practice-unknown-receipt"))
+                .containsExactly("before_max_loss:80000", "before_reserve:100000");
     }
 
     private PositionArtifactStore.NewStructureAction action(String planId, String accountId,

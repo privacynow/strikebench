@@ -2023,6 +2023,31 @@ class PaperCoreTest {
     }
 
     @Test
+    void lifecycleExpectedStateRejectsRiskBecomingUnavailableWithoutAutoUnboxing() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord spread = trades.create(creditPutSpread(acct.id(), 1));
+        marks.underlying = new BigDecimal("90.00");
+        TradeService.LifecycleAssessment preview = trades.previewLifecycleConversion(spread.id(),
+                io.liftandshift.strikebench.position.PositionTransformation.Action.ASSIGNMENT, 0);
+        TradeService.LifecycleAssessment lostRisk = new TradeService.LifecycleAssessment(
+                preview.current(), preview.survivor(), preview.exactSurvivorRequest(),
+                preview.action(), preview.legIndex(), preview.contract(), preview.expiration(),
+                preview.settlementUnderlyingCents(), preview.settlementPriceBasis(),
+                preview.optionSettlementCashCents(), preview.stockCashCents(),
+                preview.sharesDelta(), preview.allocatedEntryBasisCents(),
+                preview.allocatedOpenFeesCents(), preview.actionRealizedPnlCents(),
+                preview.decisionPnlDeltaCents(), preview.realizedPnlToDateCents(),
+                preview.reserveBeforeCents(), null, preview.heldShareContextAfter(),
+                preview.sharesLockedAfter(), preview.projectedCashAfterCents(), null,
+                preview.basisNotes(), preview.exactStateFingerprint());
+
+        assertThatThrownBy(() -> TradeService.requireExpectedLifecycle(
+                lostRisk, expectedLifecycle(preview)))
+                .isInstanceOf(TradeRejectedException.class)
+                .hasMessageContaining("changed after preview");
+    }
+
+    @Test
     void expirationCannotRunBeforeTheLaneClosingBell() {
         Account acct = accounts.getOrCreateDefault();
         TradeRecord call = trades.create(openRequest(acct.id(), "AAPL", "LONG_CALL", 1,
