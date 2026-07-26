@@ -49,7 +49,7 @@ public final class PlanPromotionService {
         var prepared = planDecisions.prepareBroker(decision);
         try {
             return db.tx(c -> {
-                prepared.hook().afterTradeCreated(c, null);
+                prepared.hook().afterTradeCreated(c, null, null);
                 PortfolioAccountingService.TransactionView txn =
                         books.recordOn(c, decision.userId(), order.portfolioAccountId(), order.transaction());
                 List<LotRow> lots = Db.queryOn(c, "SELECT id,side,instrument_type,option_type,original_quantity "

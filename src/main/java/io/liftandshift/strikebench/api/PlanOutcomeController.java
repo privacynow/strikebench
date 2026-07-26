@@ -403,6 +403,7 @@ final class PlanOutcomeController {
                 stored.ensemble().anchorDate());
         var simRequest = new OutcomeController.StrategySimRequest(plan.symbol(), pathPosition, position.qty(),
                 stored.ensemble().spec(), stored.iv(), basis, null, position.entryCostCents(),
+                position.estimatedRoundTripFeesCents(),
                 outcomeController.contractExpirations(position.legs()));
         JsonNode result = Json.MAPPER.valueToTree(
                 outcomeController.simStrategyResult(ctx, simRequest, stored.ensemble(), stored.canvas()));
@@ -459,20 +460,13 @@ final class PlanOutcomeController {
             String id = candidate.path("id").asText();
             int qty = Math.clamp(candidate.path("qty").asInt(1), 1, 100);
             var position = planOutcomePosition(candidate);
-            JsonNode evaluation = candidate.path("evaluation");
-            JsonNode assessment = evaluation.path("assessment");
-            JsonNode economics = assessment.path("economics");
-            long fees;
-            if (economics.path("estimatedRoundTripFeesCents").isNumber()) {
-                fees = economics.path("estimatedRoundTripFeesCents").longValue();
-            } else {
-                long contracts = position.legs().stream().filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
-                        .mapToLong(leg -> Math.max(1, leg.ratio())).sum() * qty;
-                // THE one fee formula (no option order fee on a stock-only package).
-                fees = io.liftandshift.strikebench.util.Fees.roundTripCents(
-                        contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
-            }
+            Long fees = capturedRoundTripFees(candidate);
             metadata.put(id, new PlanComparisonMeta(candidate, position, qty, fees));
+            if (fees == null) {
+                earlyRefusals.put(id, "The captured proposal price states no commission, so an "
+                        + "after-cost outcome comparison cannot be reported.");
+                continue;
+            }
             try {
                 var pathPosition = outcomeController.toPathPosition(ctx, position.legs(),
                         stored.ensemble().anchorDate());
@@ -556,7 +550,23 @@ final class PlanOutcomeController {
 
     private record PlanComparisonMeta(ObjectNode candidate,
                                       io.liftandshift.strikebench.outcomes.OutcomeContract.Position position,
-                                      int qty, long roundTripFees) {}
+                                      int qty, Long roundTripFees) {}
+
+    /**
+     * Read the fee from the candidate's captured package-price receipt. This deliberately has no
+     * configuration fallback: a historical proposal with an absent or malformed receipt has an
+     * unknown after-cost outcome, not a newly priced commission.
+     */
+    static Long capturedRoundTripFees(ObjectNode candidate) {
+        if (candidate == null || !candidate.path("price").isObject()) return null;
+        try {
+            var price = Json.MAPPER.convertValue(candidate.path("price"),
+                    io.liftandshift.strikebench.paper.PackagePriceReceipt.class);
+            return price.estimatedRoundTripFeesCents();
+        } catch (IllegalArgumentException malformed) {
+            return null;
+        }
+    }
 
     // ---- Authored scenarios (the scenario canvas's save/list/load surface) ----
 
@@ -740,10 +750,13 @@ final class PlanOutcomeController {
                     leg.path("multiplier").asInt()));
         }
         // The package net now lives on the canonical §7.2 price receipt, not loose on the candidate.
-        JsonNode gross = candidate.path("price").path("grossPackageNetCents");
+        JsonNode price = candidate.path("price");
+        JsonNode gross = price.path("grossPackageNetCents");
+        JsonNode fees = price.path("estimatedRoundTripFeesCents");
         Long entryNet = gross.isNumber() ? gross.longValue() : null;
+        Long roundTripFees = fees.isNumber() ? fees.longValue() : null;
         return new io.liftandshift.strikebench.outcomes.OutcomeContract.Position(candidate.path("id").asText(), legs,
-                candidate.path("qty").asInt(), entryNet == null ? null : -entryNet);
+                candidate.path("qty").asInt(), entryNet == null ? null : -entryNet, roundTripFees);
     }
 
     private io.liftandshift.strikebench.outcomes.OutcomeContract.MarketContext planOutcomeContext(

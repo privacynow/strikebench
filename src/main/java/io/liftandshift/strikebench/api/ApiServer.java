@@ -232,8 +232,7 @@ public final class ApiServer {
                         market, universe, db, clock, marketDataMaintenance);
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(
-                market, db, clock, eventCalendar)
-                .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents()); // decision EV matches the REAL commission
+                market, db, clock, eventCalendar);
         AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
                 engine, evaluations, cfg, clock);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);

@@ -408,6 +408,9 @@ public final class ApiResponses {
             if (reason == null || reason.isBlank()) {
                 throw new IllegalArgumentException("an unavailable evaluation requires a reason");
             }
+            if (estimatedRoundTripFeesCents != null && estimatedRoundTripFeesCents < 0) {
+                throw new IllegalArgumentException("round-trip fees cannot be negative");
+            }
             List<String> reasons = mechanicalReasons == null
                     ? List.of(reason) : java.util.stream.Stream.concat(mechanicalReasons.stream(),
                             java.util.stream.Stream.of(reason)).distinct().toList();
@@ -416,7 +419,7 @@ public final class ApiResponses {
                     mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
                     mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
                     reason, null, null,
-                    estimatedRoundTripFeesCents == null ? null : Math.max(0, estimatedRoundTripFeesCents),
+                    estimatedRoundTripFeesCents,
                     null, false, reasons);
             var assessment = new io.liftandshift.strikebench.eval.FourOutputAssessment(
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.MechanicalAssessment(

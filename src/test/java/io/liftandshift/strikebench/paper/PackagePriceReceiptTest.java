@@ -33,7 +33,7 @@ class PackagePriceReceiptTest {
     @Test
     void optionOnlyPackageHasZeroStockCashFlowAndReconcilesThroughFees() {
         PackagePriceReceipt price = PackagePriceReceipt.ofLegs(List.of(shortCall("3.20")), 2,
-                64_000L, 130L, PackagePriceReceipt.FeeSide.OPENING, 64_000L,
+                64_000L, 130L, 260L, PackagePriceReceipt.FeeSide.OPENING, 64_000L,
                 OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp");
 
@@ -42,6 +42,7 @@ class PackagePriceReceiptTest {
         assertThat(price.stockCashFlowCents()).isZero();
         assertThat(price.grossPackageNetCents()).isEqualTo(64_000L);
         assertThat(price.afterFeeNetCents()).isEqualTo(63_870L);
+        assertThat(price.estimatedRoundTripFeesCents()).isEqualTo(260L);
         assertThat(price.restingLimitNetCents()).isNull();
         assertThat(price.priced()).isTrue();
         assertThat(price.valuedNetCents()).isEqualTo(63_870L);
@@ -53,7 +54,7 @@ class PackagePriceReceiptTest {
         List<Leg> legs = List.of(shortCall("3.20"), hundredShares("195"));
         long gross = -1_918_000L;
 
-        PackagePriceReceipt price = PackagePriceReceipt.ofLegs(legs, 1, gross, 65L,
+        PackagePriceReceipt price = PackagePriceReceipt.ofLegs(legs, 1, gross, 65L, 130L,
                 PackagePriceReceipt.FeeSide.OPENING, gross, OrderInstruction.market(),
                 OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp");
@@ -82,7 +83,7 @@ class PackagePriceReceiptTest {
         // Legs price the buy-write at +$320 option credit − $19,500 shares = −$19,180.
         List<Leg> legs = List.of(shortCall("3.20"), hundredShares("195"));
 
-        assertThatThrownBy(() -> PackagePriceReceipt.ofLegs(legs, 1, -1_919_000L, 65L,
+        assertThatThrownBy(() -> PackagePriceReceipt.ofLegs(legs, 1, -1_919_000L, 65L, 130L,
                 PackagePriceReceipt.FeeSide.OPENING, -1_919_000L, OrderInstruction.market(),
                 OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp"))
@@ -94,7 +95,7 @@ class PackagePriceReceiptTest {
 
         // The honest package net on the same legs still builds, and its share cash flow is the
         // SHARES — measured — rather than whatever balances the books.
-        PackagePriceReceipt honest = PackagePriceReceipt.ofLegs(legs, 1, -1_918_000L, 65L,
+        PackagePriceReceipt honest = PackagePriceReceipt.ofLegs(legs, 1, -1_918_000L, 65L, 130L,
                 PackagePriceReceipt.FeeSide.OPENING, -1_918_000L, OrderInstruction.market(),
                 OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp");
@@ -104,7 +105,7 @@ class PackagePriceReceiptTest {
 
     @Test
     void aRestingLimitStatesItsOwnBasisAndCarriesTheLimitPrice() {
-        PackagePriceReceipt price = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, 65L,
+        PackagePriceReceipt price = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, 65L, 130L,
                 PackagePriceReceipt.FeeSide.OPENING, 40_000L, OrderInstruction.limit(42_000L),
                 OrderInstruction.Executability.RESTING,
                 PackagePriceReceipt.ValuationBasis.RESTING_LIMIT, "fixture", "REALTIME", 1L, "fp");
@@ -119,7 +120,7 @@ class PackagePriceReceiptTest {
 
     @Test
     void aOneSidedBookLeavesExecutableNetNullRatherThanBorrowingTheRecordedNet() {
-        PackagePriceReceipt price = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, 65L,
+        PackagePriceReceipt price = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, 65L, 130L,
                 PackagePriceReceipt.FeeSide.OPENING, null, OrderInstruction.market(),
                 OrderInstruction.Executability.UNAVAILABLE,
                 PackagePriceReceipt.ValuationBasis.MODELED, "fixture", "EOD", 1L, "fp");
@@ -140,6 +141,7 @@ class PackagePriceReceiptTest {
         assertThat(price.stockCashFlowCents()).isNull();
         assertThat(price.afterFeeNetCents()).isNull();
         assertThat(price.openingFeesCents()).isNull();
+        assertThat(price.estimatedRoundTripFeesCents()).isNull();
         assertThat(price.valuedNetCents()).isNull();
         assertThat(price.priced()).isFalse();
         assertThat(price.unavailableReason()).contains("no executable market");
@@ -148,25 +150,41 @@ class PackagePriceReceiptTest {
 
     @Test
     void closingFeesAreDisclosedAsSuchRatherThanMislabelledAsOpening() {
-        PackagePriceReceipt close = PackagePriceReceipt.of(1, -21_500L, -21_500L, 0L, 65L,
+        PackagePriceReceipt close = PackagePriceReceipt.of(1, -21_500L, -21_500L, 0L, 65L, null,
                 PackagePriceReceipt.FeeSide.CLOSING, -21_500L, null,
                 OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp");
 
         assertThat(close.feeSide()).isEqualTo(PackagePriceReceipt.FeeSide.CLOSING);
         assertThat(close.afterFeeNetCents()).isEqualTo(-21_565L);
+        assertThat(close.estimatedRoundTripFeesCents()).isNull();
+    }
+
+    @Test
+    void anAsymmetricRoundTripEstimateIsCapturedRatherThanReconstructed() {
+        PackagePriceReceipt price = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L,
+                65L, 155L, PackagePriceReceipt.FeeSide.OPENING, 42_000L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "fixture", "REALTIME", 1L, "fp");
+
+        assertThat(price.openingFeesCents()).isEqualTo(65L);
+        assertThat(price.estimatedRoundTripFeesCents()).isEqualTo(155L);
+        assertThat(price.afterFeeNetCents()).isEqualTo(41_935L);
     }
 
     @Test
     void theAdditiveAndFeeIdentitiesAreEnforcedNotAssumed() {
-        assertThatThrownBy(() -> new PackagePriceReceipt(1, 32_000L, -1_950_000L, 0L, null, null, null, null,
+        assertThatThrownBy(() -> new PackagePriceReceipt(1, 32_000L, -1_950_000L, 0L,
+                null, null, null, null, null,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
                 OrderInstruction.Executability.IMMEDIATE, "s", "REALTIME", 1L, "fp",
                 PackagePriceReceipt.FeeSide.OPENING, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("option net plus stock cash flow");
 
-        assertThatThrownBy(() -> new PackagePriceReceipt(1, 64_000L, 0L, 64_000L, 130L, 64_000L, null, null,
+        assertThatThrownBy(() -> new PackagePriceReceipt(1, 64_000L, 0L, 64_000L,
+                130L, 260L, 64_000L, null, null,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
                 OrderInstruction.Executability.IMMEDIATE, "s", "REALTIME", 1L, "fp",
                 PackagePriceReceipt.FeeSide.OPENING, null))
@@ -174,7 +192,8 @@ class PackagePriceReceiptTest {
                 .hasMessageContaining("less fees");
 
         // A stated basis without a price, or a price without a basis, is the §3.2 fallthrough.
-        assertThatThrownBy(() -> new PackagePriceReceipt(1, null, null, null, null, null, null, null,
+        assertThatThrownBy(() -> new PackagePriceReceipt(1, null, null, null,
+                null, null, null, null, null,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
                 OrderInstruction.Executability.IMMEDIATE, "s", "REALTIME", 1L, "fp",
                 PackagePriceReceipt.FeeSide.OPENING, null))
@@ -187,7 +206,7 @@ class PackagePriceReceiptTest {
     }
 
     @Test
-    void theWireShapeIsExactlyTheFourteenNamedFieldsPlusTheTwoDisclosures() {
+    void theWireShapeIsExactlyTheCanonicalAmountsAndDisclosures() {
         // The frontend binds every price cell to THIS object, so its field set is a contract:
         // nothing may be dropped when null (an absent field and a null field must read alike) and
         // no derived convenience accessor may leak in as a fifteenth "amount" to choose among.
@@ -197,7 +216,8 @@ class PackagePriceReceiptTest {
         node.fieldNames().forEachRemaining(fields::add);
         assertThat(fields).containsExactlyInAnyOrder(
                 "quantity", "optionNetPremiumCents", "stockCashFlowCents", "grossPackageNetCents",
-                "openingFeesCents", "afterFeeNetCents", "executableNetCents", "restingLimitNetCents",
+                "openingFeesCents", "estimatedRoundTripFeesCents", "afterFeeNetCents",
+                "executableNetCents", "restingLimitNetCents",
                 "valuationBasis", "executability", "source", "freshness", "observedAt",
                 "fingerprint", "feeSide", "unavailableReason");
     }
@@ -210,23 +230,56 @@ class PackagePriceReceiptTest {
      */
     @Test
     void aNegativeFeeIsRefusedRatherThanSilentlyPublishedAsAFreeOrder() {
-        assertThatThrownBy(() -> PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, -65L,
+        assertThatThrownBy(() -> PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, -65L, -130L,
                 PackagePriceReceipt.FeeSide.OPENING, 42_000L, OrderInstruction.market(),
                 OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("fees cannot be negative");
 
-        PackagePriceReceipt priced = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, null,
+        PackagePriceReceipt priced = PackagePriceReceipt.of(1, 42_000L, 42_000L, 0L, null, null,
                 PackagePriceReceipt.FeeSide.OPENING, 42_000L, OrderInstruction.market(),
                 OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "REALTIME", 1L, "fp");
-        assertThatThrownBy(() -> priced.withFees(-1L))
+        assertThatThrownBy(() -> priced.withFees(-1L, -2L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("fees cannot be negative");
 
         // A zero commission is a legitimate schedule (stock-only packages carry none) and still builds.
-        assertThat(priced.withFees(0L).afterFeeNetCents()).isEqualTo(42_000L);
+        assertThat(priced.withFees(0L, 0L).afterFeeNetCents()).isEqualTo(42_000L);
+
+        assertThatThrownBy(() -> new TradeService.OpenRequest("acct", "AAPL", "CUSTOM", 1,
+                List.of(shortCall("3.20")), null, "month", "balanced", null, null,
+                null, -1L, "TICKET", "PROPOSED"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("feesOverrideCents cannot be negative");
+    }
+
+    @Test
+    void anUnavailableReceiptCannotSmuggleFinancialFactsIntoConsumers() {
+        assertThatThrownBy(() -> new PackagePriceReceipt(1, 100L, null, null,
+                null, null, null, null, null,
+                PackagePriceReceipt.ValuationBasis.UNAVAILABLE,
+                OrderInstruction.Executability.UNAVAILABLE, "legacy", "UNKNOWN", 1L, "fp",
+                PackagePriceReceipt.FeeSide.OPENING, "legacy price unavailable"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot carry financial amounts");
+
+        assertThatThrownBy(() -> new PackagePriceReceipt(1, null, null, null,
+                null, null, null, null, null,
+                PackagePriceReceipt.ValuationBasis.UNAVAILABLE,
+                OrderInstruction.Executability.IMMEDIATE, "legacy", "UNKNOWN", 1L, "fp",
+                PackagePriceReceipt.FeeSide.OPENING, "legacy price unavailable"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UNAVAILABLE executability");
+
+        assertThatThrownBy(() -> new PackagePriceReceipt(1, 100L, 0L, 100L,
+                0L, 0L, 100L, 100L, null,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                OrderInstruction.Executability.IMMEDIATE, "book", "REALTIME", 1L, "fp",
+                PackagePriceReceipt.FeeSide.OPENING, "contradictory unavailable reason"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("priced package cannot carry");
     }
 
     /**

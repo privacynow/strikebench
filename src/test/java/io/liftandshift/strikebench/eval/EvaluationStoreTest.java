@@ -26,13 +26,14 @@ class EvaluationStoreTest {
                 new LegView("BUY", "CALL", "250", "2026-08-21", 1, "4.00", 100, "OPEN"),
                 new LegView("SELL", "CALL", "255", "2026-08-21", 1, "2.00", 100, "OPEN"));
         Candidate c = new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C",
-                legs, 1, TestPrices.optionOnly(1, -20_000L), 30_000L, 20_000L, List.of("252.00"),
+                legs, 1, TestPrices.withFees(1, -20_000L, -20_000L, 130L),
+                30_000L, 20_000L, List.of("252.00"),
                 0.45, 2_000L, 0.70, "DELAYED", List.of(), 0.6,
                 "why", "up", "down", "inval", "plain", "DIRECTIONAL", List.of("DIRECTIONAL"),
                 0.30, null, null, null, false, null, null);
         EvalContext ctx = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.2, 0.25, 0.3, 0.35, 0.4, 0.28, 0.31, 0.27, 0.33, 0.29, 0.26, 0.32),
-                10_000_000L, true, 65, 0, 0.04,
+                10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         return new StrategyEvaluator().evaluate(c,
                 new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "decision"),

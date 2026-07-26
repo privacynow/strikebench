@@ -150,5 +150,10 @@ class TradeControllerTest {
         assertThat(receipt.assessment().economics().verdict())
                 .isEqualTo(io.liftandshift.strikebench.eval.EconomicAssessment.Verdict.UNAVAILABLE);
         assertThat(receipt.assessment().economics().estimatedRoundTripFeesCents()).isEqualTo(260L);
+
+        assertThatThrownBy(() -> ApiResponses.EvaluationReceipt.unavailable(
+                "Observed decision inputs are unavailable.", true, List.of(), -1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fees cannot be negative");
     }
 }

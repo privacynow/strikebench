@@ -53,7 +53,7 @@ class AssignmentPreferenceLensTest {
                 : new DeclaredObjective("INCOME", null, 21, assignmentPreference, "your account objective");
         return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.22, 0.26, 0.30, 0.34, 0.38, 0.29),
-                10_000_000L, true, 65, 0, 0.04,
+                10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                         io.liftandshift.strikebench.model.Freshness.EOD), null, declared);
     }

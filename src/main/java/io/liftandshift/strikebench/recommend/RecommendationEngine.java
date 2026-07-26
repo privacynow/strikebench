@@ -155,8 +155,11 @@ public final class RecommendationEngine {
 
     /** Candidate income/effective-price metrics use the same opening commission as the ticket. */
     public RecommendationEngine withFees(long perContractCents, long perOrderCents) {
-        this.feePerContractCents = Math.max(0, perContractCents);
-        this.feePerOrderCents = Math.max(0, perOrderCents);
+        if (perContractCents < 0 || perOrderCents < 0) {
+            throw new IllegalArgumentException("configured commissions cannot be negative");
+        }
+        this.feePerContractCents = perContractCents;
+        this.feePerOrderCents = perOrderCents;
         return this;
     }
 
@@ -815,7 +818,9 @@ public final class RecommendationEngine {
         long optionNetCents = io.liftandshift.strikebench.paper.ProtocolEvaluator
                 .optionEntryBasisCents(built.legs(), qty, entryNet);
         long optionContracts = Fees.optionContracts(optionLegs, qty);
-        long openingFees = Fees.openingCents(optionContracts, feePerContractCents, feePerOrderCents);
+        Fees.Schedule feeSchedule = Fees.schedule(optionContracts,
+                feePerContractCents, feePerOrderCents);
+        long openingFees = feeSchedule.openingCents();
         long netOptionIncomeCents = optionNetCents - openingFees;
 
         // Annualized yield is quoted ONLY for share-backed premium (covered calls, cash-secured
@@ -955,7 +960,8 @@ public final class RecommendationEngine {
                 legViews.stream().map(LegView::quoteAsOfEpochMs).toList());
         var price = io.liftandshift.strikebench.paper.PackagePriceReceipt.of(qty, entryNet, optionNetCents,
                 io.liftandshift.strikebench.paper.ProtocolEvaluator.stockEntryBasisCents(built.legs(), qty),
-                openingFees, io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
+                openingFees, feeSchedule.roundTripCents(),
+                io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
                 // A field named "executable" never carries a price nobody can trade on (§3.2).
                 executableBook ? entryNet : null,
                 io.liftandshift.strikebench.paper.OrderInstruction.market(),

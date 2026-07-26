@@ -356,10 +356,11 @@ public final class RedeploymentFrontier {
                                                      LaneImpact destination,
                                                      RedeploymentSource source) {
         EconomicAssessment economics = economics(evaluation);
-        // §3.2: an assessment whose package states no commission publishes a null round trip, so the
-        // implied opening half stays null rather than unboxing into a free replacement.
-        Long openingFees = economics == null || economics.estimatedRoundTripFeesCents() == null ? null
-                : divideHalf(economics.estimatedRoundTripFeesCents());
+        // Opening commission is an exact captured fact on the candidate's package-price receipt.
+        // Never reconstruct it from a round-trip estimate: opening and closing costs may differ.
+        Long openingFees = evaluation == null || evaluation.candidate() == null
+                || evaluation.candidate().price() == null ? null
+                : evaluation.candidate().price().openingFeesCents();
         Long capital = evaluation.capitalIncrementalCents();
         Long additional = source.capitalReleasedCents() == null || capital == null ? null
                 : Math.max(0, Math.subtractExact(capital, source.capitalReleasedCents()));
@@ -536,11 +537,6 @@ public final class RedeploymentFrontier {
 
     private static long magnitude(long value) {
         return value == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(value);
-    }
-
-    private static long divideHalf(long value) {
-        return BigDecimal.valueOf(value).divide(BigDecimal.valueOf(2), 0,
-                RoundingMode.HALF_UP).longValueExact();
     }
 
     private static String value(Long cents) { return cents == null ? "unavailable" : cents + " cents"; }

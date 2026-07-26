@@ -61,7 +61,7 @@ public final class PlanOutcomeService {
                                  String displayName, int qty, Long entryCostCents,
                                  Long maxLossCents, Double winRatePct, Long expectedPnlCents, Long p5Cents,
                                  Long p50Cents, Long p95Cents, Double tailReturnScore,
-                                 long roundTripFeesCents, String economicVerdict,
+                                 Long roundTripFeesCents, String economicVerdict,
                                  String economicPlacement, Boolean mechanicallyEligible,
                                  Double decisionScore, boolean selected, String refusalReason) {}
 
@@ -679,7 +679,7 @@ public final class PlanOutcomeService {
                         r.lngOrNull("max_loss_cents"), r.dblOrNull("win_rate_pct"),
                         r.lngOrNull("expected_pnl_cents"), r.lngOrNull("p5_cents"),
                         r.lngOrNull("p50_cents"), r.lngOrNull("p95_cents"), r.dblOrNull("tail_return_score"),
-                        r.lng("round_trip_fees_cents"), r.str("economic_verdict"), r.str("economic_placement"),
+                        r.lngOrNull("round_trip_fees_cents"), r.str("economic_verdict"), r.str("economic_placement"),
                         boolOrNull(r, "mechanically_eligible"), r.dblOrNull("decision_score"),
                         r.bool("selected"), r.str("refusal_reason")), row.id())
                 .forEach(item -> items.add(Json.MAPPER.valueToTree(item)));

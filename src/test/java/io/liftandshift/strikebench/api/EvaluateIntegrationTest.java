@@ -385,6 +385,26 @@ class EvaluateIntegrationTest {
         assertThat(comparison.get("fairness").asText()).contains("one captured");
     }
 
+    @Test void pathComparisonNamesTheCapturedRoundTripFeeAndNeverFallsBackToAFreeTrade() throws Exception {
+        String body = """
+                {"operation":"COMPARE","basis":"PARAMETRIC",
+                 "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
+                 "positions":[{"key":"PUT_SPREAD","qty":1,"legs":[
+                   {"action":"SELL","type":"PUT","strike":255,"expiration":"2026-08-14","ratio":1,"multiplier":100},
+                   {"action":"BUY","type":"PUT","strike":250,"expiration":"2026-08-14","ratio":1,"multiplier":100}]}],
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                         "driftAnnual":0,"volAnnual":0.25,"jumpsPerYear":0,"jumpMean":0,
+                         "jumpVol":0,"tailNu":6,"seed":77,"paths":40}}
+                """;
+
+        HttpResponse<String> response = post("/api/evaluate", body);
+        assertThat(response.statusCode()).isEqualTo(200);
+        JsonNode item = Json.MAPPER.readTree(response.body()).at("/result/results/0");
+        assertThat(item.path("roundTripFeesCents").isIntegralNumber()).isTrue();
+        assertThat(item.path("roundTripFeesCents").asLong()).isPositive();
+        assertThat(item.has("feesCents")).isFalse();
+    }
+
     @Test void pathPositionsUseTheSharedTradingCalendar() {
         var beforeHoliday = java.time.LocalDate.parse("2026-07-02");
         var holidayLeg = io.liftandshift.strikebench.model.Leg.option(

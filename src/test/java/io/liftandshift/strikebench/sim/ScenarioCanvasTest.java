@@ -337,6 +337,11 @@ class ScenarioCanvasTest {
         var distribution = new ScenarioSimulator().compare(ensemble,
                 List.of(new ScenarioSimulator.CompareItem("call", position, null, null, 0, 1)),
                 1, iv, canvas, .04).report().results().getFirst().result();
+        assertThatThrownBy(() -> new ScenarioSimulator().compare(ensemble,
+                List.of(new ScenarioSimulator.CompareItem("call", position, null, null, -1, 1)),
+                1, iv, canvas, .04))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fees cannot be negative");
         var daily = new ScenarioCanvasValuator().value(ensemble, iv, canvas, .04,
                 List.of(new ScenarioCanvasValuator.PositionInput("call", "Call", "PLAN",
                         "PROPOSAL", position, 1, null, true)));

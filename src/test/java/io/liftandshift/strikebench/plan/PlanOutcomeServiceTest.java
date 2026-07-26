@@ -232,7 +232,8 @@ class PlanOutcomeServiceTest {
                 {"strategy":"DEBIT_CALL_SPREAD","displayName":"Bull call spread","structureGroup":"DIRECTIONAL",
                  "label":"BUY 250C / SELL 260C","qty":1,
 	                 "price":{"quantity":1,"optionNetPremiumCents":-30000,"stockCashFlowCents":0,
-	                   "grossPackageNetCents":-30000,"openingFeesCents":130,"afterFeeNetCents":-30130,
+	                   "grossPackageNetCents":-30000,"openingFeesCents":130,
+	                   "estimatedRoundTripFeesCents":520,"afterFeeNetCents":-30130,
 	                   "executableNetCents":-30000,"valuationBasis":"EXECUTABLE_BOOK",
 	                   "executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE",
 	                   "observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"},
@@ -297,11 +298,15 @@ class PlanOutcomeServiceTest {
         var baselineComparison = outcomes.saveComparison(null, plan, plan.version(), restored, List.of(
                         new PlanOutcomeService.ComparisonItem(candidateId, candidateId, 1,
                                 "DEBIT_CALL_SPREAD", "Bull call spread", 1, 30000L,
-                                30000L, 66.6667, 2000L, -25000L, 5000L, 30000L, 0.08, 520,
+                                30000L, 66.6667, 2000L, -25000L, 5000L, 30000L, 0.08, 520L,
                                 "MIXED", "LEARN_FROM", true, 70.0, true, null),
                         new PlanOutcomeService.ComparisonItem("CASH", null, 2, "CASH", "Keep cash",
-                                0, 0L, 0L, null, 0L, 0L, 0L, 0L, 0.0, 0,
-                                null, "BASELINE", true, null, false, null)),
+                                0, 0L, 0L, null, 0L, 0L, 0L, 0L, 0.0, 0L,
+                                null, "BASELINE", true, null, false, null),
+                        new PlanOutcomeService.ComparisonItem("UNPRICED", null, 3, "UNPRICED",
+                                "Comparison unavailable", 1, null, null, null, null, null, null,
+                                null, null, null, null, "UNAVAILABLE", false, null, false,
+                                "The captured proposal states no commission.")),
                 Json.parse("{\"basis\":\"PARAMETRIC\"}"),
                 "Every Plan proposal on the exact stored futures",
                 "Same entry snapshot and ensemble fingerprint");
@@ -312,6 +317,13 @@ class PlanOutcomeServiceTest {
         assertThat(withComparison.at("/comparisons/0/items/0/displayName").asText())
                 .isEqualTo("Bull call spread");
         assertThat(withComparison.at("/comparisons/0/items/1/key").asText()).isEqualTo("CASH");
+        assertThat(withComparison.at("/comparisons/0/items/2/key").asText()).isEqualTo("UNPRICED");
+        assertThat(withComparison.at("/comparisons/0/items/2/roundTripFeesCents").isMissingNode()
+                || withComparison.at("/comparisons/0/items/2/roundTripFeesCents").isNull()).isTrue();
+        assertThat(db.query("SELECT round_trip_fees_cents FROM plan_outcome_comparison_item "
+                        + "WHERE comparison_id=? AND item_key='UNPRICED'",
+                r -> r.lngOrNull("round_trip_fees_cents"), baselineComparison.id()))
+                .containsExactly((Long) null);
 
         ObjectNode firstReport = (ObjectNode) Json.parse("""
                 {"id":"bt-old","symbol":"AAPL","strategy":"DEBIT_CALL_SPREAD","from":"2025-01-02","to":"2025-06-30",
@@ -355,10 +367,10 @@ class PlanOutcomeServiceTest {
         outcomes.saveComparison(null, plan, plan.version(), alternateStored, List.of(
                         new PlanOutcomeService.ComparisonItem(candidateId, candidateId, 1,
                                 "DEBIT_CALL_SPREAD", "Bull call spread", 1, 30000L,
-                                30000L, 75.0, 6000L, -18000L, 9000L, 34000L, 0.333, 520,
+                                30000L, 75.0, 6000L, -18000L, 9000L, 34000L, 0.333, 520L,
                                 "MIXED", "LEARN_FROM", true, 70.0, true, null),
                         new PlanOutcomeService.ComparisonItem("CASH", null, 2, "CASH", "Keep cash",
-                                0, 0L, 0L, null, 0L, 0L, 0L, 0L, 0.0, 0,
+                                0, 0L, 0L, null, 0L, 0L, 0L, 0L, 0.0, 0L,
                                 null, "BASELINE", true, null, false, null)),
                 Json.parse("{\"basis\":\"PARAMETRIC\",\"dataset\":\"alternate\"}"),
                 "Every Plan proposal on the alternate stored futures",

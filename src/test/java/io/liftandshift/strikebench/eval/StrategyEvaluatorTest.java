@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.liftandshift.strikebench.support.TestPrices;
 
 /** The Phase-2 backbone: producers + evaluator assemble a coherent, honest evaluation. */
@@ -26,7 +27,8 @@ class StrategyEvaluatorTest {
                 new LegView("SELL", "CALL", "255", expiration, 1, "2.00", 100, "OPEN"));
         // $2.00 debit and $5.00 width per share -> $200 debit / $300 profit / $200 loss PER CONTRACT (cents).
         return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 250C / SELL 255C Aug21",
-                legs, 1, TestPrices.optionOnly(1, -20_000L), 30_000L, 20_000L, List.of("252.00"),
+                legs, 1, TestPrices.withFeeSchedule(1, -20_000L, -20_000L, 130L, 260L),
+                30_000L, 20_000L, List.of("252.00"),
                 0.45, 2_000L, 0.70, freshness, List.of(),
                 confidence, "Cheap defined-risk way to play a move up",
                 "Up to $300 if AAPL is above $255", "Loses the $200 debit if AAPL stays flat/down",
@@ -90,7 +92,7 @@ class StrategyEvaluatorTest {
     private EvalContext ctx() {
         return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
-                10_000_000L, true, 65, 0, 0.04,
+                10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD),
                 null, null, null, List.of(),
                 io.liftandshift.strikebench.model.DataEvidence.of(
@@ -110,7 +112,7 @@ class StrategyEvaluatorTest {
                 "defined-risk package", "INCOME", List.of("INCOME"), 0.30,
                 null, null, null, false, null, null);
         EvalContext context = new EvalContext("SPY", 74_813L, java.time.LocalDate.parse("2026-07-21"),
-                45, 0.20, 0.18, ctx().ivHistory(), 10_000_000L, true, 65, 0, 0.04,
+                45, 0.20, 0.18, ctx().ivHistory(), 10_000_000L, true, 0.04,
                 ctx().rateEvidence(), null);
 
         RiskProfile risk = new RiskProfiler().profile(candidate, context);
@@ -212,11 +214,16 @@ class StrategyEvaluatorTest {
         assertThat(refused.risk()).isEqualTo(proposal.risk());
 
         EvalContext noBuyingPower = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
-                ctx().ivHistory(), 100L, true, 65, 0, 0.04, ctx().rateEvidence(), null);
+                ctx().ivHistory(), 100L, true, 0.04, ctx().rateEvidence(), null);
         StrategyEvaluation accountRefusal = evaluator.assessExact(candidate, spec, noBuyingPower,
                 true, List.of(), 260L);
         assertThat(accountRefusal.assessment().economics().reasons())
                 .anyMatch(reason -> reason.contains("buying power"));
+
+        assertThatThrownBy(() -> evaluator.assessExact(candidate, spec, ctx(),
+                true, List.of(), -1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fees cannot be negative");
     }
 
     @Test void demoDataIsHaircutAndLabeled() {
@@ -235,7 +242,7 @@ class StrategyEvaluatorTest {
 
     @Test void generatedPricingCannotBeSoftenedByModeledVolatilityOrRates() {
         EvalContext generated = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
-                10_000_000L, true, 65, 0, 0.04,
+                10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED),
                 null, null, null, List.of(),
@@ -275,8 +282,8 @@ class StrategyEvaluatorTest {
     }
 
     @Test void gateBlocksInsufficientBuyingPower() {
-        EvalContext broke = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(), 100L, true, 65,
-                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
+        EvalContext broke = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(), 100L, true,
+                0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         StrategyEvaluation e = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, broke);
         assertThat(e.viable()).isFalse();
         assertThat(e.score().gateFailures()).anyMatch(f -> f.contains("buying power"));
@@ -287,7 +294,7 @@ class StrategyEvaluatorTest {
     @Test void missingDailyHistoryIsAnEvidenceLimitationNotAMechanicalFailure() {
         EvalContext candleStarved = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, null,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
-                10_000_000L, true, 65, 0, 0.04,
+                10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
 
@@ -395,7 +402,7 @@ class StrategyEvaluatorTest {
 
     @Test void debitIvWarningAndAnnualizationCarryTheirEvidenceLimits() {
         EvalContext expensiveVol = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"),
-                30, 0.90, 0.25, ctx().ivHistory(), 10_000_000L, true, 65, 0, 0.04,
+                30, 0.90, 0.25, ctx().ivHistory(), 10_000_000L, true, 0.04,
                 ctx().rateEvidence(), null);
         StrategyEvaluation evaluation = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, expensiveVol);
 
@@ -414,7 +421,7 @@ class StrategyEvaluatorTest {
         var exposure = new PortfolioExposureContext(PositionDomain.ExecutionLane.PRACTICE,
                 2_000_000L, 500_000L, 1_000_000L, true, "test Practice marks");
         EvalContext withBook = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"),
-                30, 0.30, 0.25, ctx().ivHistory(), 10_000_000L, true, 65, 0, 0.04,
+                30, 0.30, 0.25, ctx().ivHistory(), 10_000_000L, true, 0.04,
                 ctx().rateEvidence(), exposure);
         StrategyEvaluation evaluation = evaluator.evaluate(debitCallSpread("DELAYED", 0.6), null, withBook);
         var impacts = evaluation.assessment().portfolioImpacts();
@@ -506,8 +513,7 @@ class StrategyEvaluatorTest {
     private static EvalContext withDeclared(EvalContext base, DeclaredObjective declared) {
         return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.daysToExpiry(),
                 base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
-                base.marketOpen(), base.feePerContractCents(), base.feePerOrderCents(),
-                base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), declared,
+                base.marketOpen(), base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), declared,
                 base.regime(), base.trailingCloses(), base.historyEvidence());
     }
 
@@ -515,8 +521,8 @@ class StrategyEvaluatorTest {
                                                    io.liftandshift.strikebench.model.DataEvidence evidence) {
         return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.daysToExpiry(),
                 base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
-                base.marketOpen(), base.feePerContractCents(), base.feePerOrderCents(),
-                base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), base.declared(),
+                base.marketOpen(), base.riskFreeRate(), base.rateEvidence(),
+                base.portfolioExposure(), base.declared(),
                 base.regime(), base.trailingCloses(), evidence);
     }
 }

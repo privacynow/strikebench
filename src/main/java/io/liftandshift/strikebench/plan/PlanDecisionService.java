@@ -10,6 +10,7 @@ import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
@@ -73,7 +74,8 @@ public final class PlanDecisionService {
 
     public PreparedTradeDecision prepareTrade(Input input) {
         String id = Ids.newId("pdec");
-        return new PreparedTradeDecision(id, (connection, trade) -> saveOn(connection, id, input, "TRADE", trade));
+        return new PreparedTradeDecision(id, (connection, trade, executionPreview) ->
+                saveOn(connection, id, input, "TRADE", trade, executionPreview));
     }
 
     /** The third decision outcome: the user placed this exact structure at their real broker.
@@ -82,13 +84,14 @@ public final class PlanDecisionService {
      *  position artifacts, so the decision and its real-lane consequences commit together. */
     public PreparedTradeDecision prepareBroker(Input input) {
         String id = Ids.newId("pdec");
-        return new PreparedTradeDecision(id, (connection, trade) -> saveOn(connection, id, input, "BROKER", null));
+        return new PreparedTradeDecision(id, (connection, trade, executionPreview) ->
+                saveOn(connection, id, input, "BROKER", null, null));
     }
 
     public ObjectNode chooseCash(Input input) {
         String id = Ids.newId("pdec");
         db.tx(connection -> {
-            saveOn(connection, id, input, "CASH", null);
+            saveOn(connection, id, input, "CASH", null, null);
             return null;
         });
         return latest(input.userId(), input.plan().id());
@@ -99,7 +102,7 @@ public final class PlanDecisionService {
             requireOwned(connection, planId, userId, false);
             List<ObjectNode> rows = Db.queryOn(connection, "SELECT d.id,d.context_rev,d.candidate_id,d.recommendation_id," +
                             "d.ensemble_id,d.account_id,d.action," +
-                            "d.qty,d.proposed_net_cents,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
+                            "d.qty,d.price_receipt::text price_receipt,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
                             "d.buying_power_cents,d.risk_capital_cents,d.max_loss_cents,d.max_profit_cents,d.pop," +
                             "d.p_max_profit,d.p_max_loss,d.ev_market_cents,d.ev_histvol_cents,d.cvar_cents," +
                             "d.economic_verdict,d.evidence_provenance,d.model_version,d.study_key,d.review_horizon_sessions," +
@@ -117,7 +120,7 @@ public final class PlanDecisionService {
                         put(node, "recommendationId", row.str("recommendation_id"));
                         put(node, "ensembleId", row.str("ensemble_id")); put(node, "accountId", row.str("account_id"));
                         put(node, "action", row.str("action")); put(node, "qty", intOrNull(row, "qty"));
-                        put(node, "proposedNetCents", row.lngOrNull("proposed_net_cents"));
+                        node.set("price", Json.parse(row.str("price_receipt")));
                         put(node, "quoteAsOf", row.str("quote_as_of")); put(node, "accountNlvCents", row.lngOrNull("account_nlv_cents"));
                         put(node, "buyingPowerCents", row.lngOrNull("buying_power_cents"));
                         put(node, "riskCapitalCents", row.lngOrNull("risk_capital_cents"));
@@ -168,8 +171,6 @@ public final class PlanDecisionService {
                 if (metrics.has("orderLimitNetCents")) {
                     instruction.put("limitNetCents", metrics.path("orderLimitNetCents").asLong());
                 }
-                put(out, "executability", metrics.path("orderExecutability").asText(null));
-                put(out, "valuationBasis", metrics.path("orderValuationBasis").asText(null));
             }
             return out;
         });
@@ -206,7 +207,8 @@ public final class PlanDecisionService {
         });
     }
 
-    private void saveOn(Connection connection, String id, Input input, String action, TradeRecord trade) throws SQLException {
+    private void saveOn(Connection connection, String id, Input input, String action, TradeRecord trade,
+                        TradePreview executionPreview) throws SQLException {
         if (input == null || input.plan() == null || input.preview() == null || input.economics() == null) {
             throw new IllegalArgumentException("complete decision inputs are required");
         }
@@ -215,7 +217,7 @@ public final class PlanDecisionService {
             throw new IllegalStateException("This Plan changed while the decision was being recorded.");
         }
         if (!"ACTIVE".equals(current.status())) throw new IllegalStateException("This Plan is not ready for another decision.");
-        TradePreview preview = input.preview();
+        TradePreview preview = frozenPreview(input.preview(), trade, executionPreview);
         EconomicAssessment economics = input.economics();
         Account account = input.account();
         AccountRiskContext risk = input.riskContext();
@@ -227,14 +229,11 @@ public final class PlanDecisionService {
         Number pMaxProfit = nestedNumber(preview.analytics(), "probabilityMap", "pMaxProfit");
         Number pMaxLoss = nestedNumber(preview.analytics(), "probabilityMap", "pMaxLoss");
         Number cvar = nestedNumber(preview.analytics(), "probabilityMap", "cvar95Cents");
-        // §3.1: the frozen decision records the package net from the ONE §7.2 receipt when no trade
-        // was created, and from the persisted trade when one was. `preview.entryNetPremiumCents()`
-        // was the receipt's grossPackageNetCents restated as a primitive, so a decision recorded
-        // against an unpriced preview froze proposed_net_cents = 0 instead of NULL (§3.2) — a
-        // reviewable receipt claiming the user proposed a costless package.
-        Long actualEntry = trade == null
-                ? (preview.price() == null ? null : preview.price().grossPackageNetCents())
-                : trade.entryNetPremiumCents();
+        // §3.1: the frozen decision records the ONE §7.2 receipt that was reviewed. There is no
+        // primitive package-net twin: that older column converted an unpriced preview into $0 and
+        // gave campaign review a second price authority.
+        PackagePriceReceipt price = java.util.Objects.requireNonNull(preview.price(),
+                "a frozen decision requires the preview's package-price receipt");
         Integer qty = switch (action) {
             case "TRADE" -> trade == null ? null : trade.qty();
             case "BROKER" -> input.requestedQty();
@@ -249,14 +248,14 @@ public final class PlanDecisionService {
                 ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
                 : input.plan().context().horizonDays();
         Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
-                        "ensemble_id,account_id,action,qty," +
-                        "proposed_net_cents,quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
+                        "ensemble_id,account_id,action,qty,price_receipt," +
+                        "quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
                         "max_loss_cents,max_profit_cents,pop,p_max_profit,p_max_loss,ev_market_cents,ev_histvol_cents," +
                         "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_sessions,created_at) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(),
                 references.recommendationId(), references.ensembleId(), account.id(), action, qty,
-                actualEntry, now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
+                Json.write(price), now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
                 risk == null ? null : risk.riskCapitalCents(),
                 trade == null ? preview.maxLossCents() : trade.maxLossCents(),
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
@@ -274,9 +273,6 @@ public final class PlanDecisionService {
             if (key != null && !key.isBlank()) Db.execOn(connection,
                     "INSERT INTO plan_decision_ack(decision_id,ack_key,ack_at) VALUES(?,?,?)", id, key, now);
         }
-        metric(connection, id, "entryNetPremiumCents", actualEntry, true);
-        metric(connection, id, "feesOpenCents",
-                preview.price() == null ? null : preview.price().openingFeesCents(), true);
         metric(connection, id, "reserveCents", preview.reserveCents(), true);
         metric(connection, id, "buyingPowerAfterCents", preview.buyingPowerAfterCents(), true);
         metric(connection, id, "underlyingCents", preview.underlyingCents(), true);
@@ -294,12 +290,6 @@ public final class PlanDecisionService {
             // The frozen decision records the execution facts from the ONE §7.2 receipt, not from a
             // string-keyed analytics map. `presentlyExecutable` is gone: it was never a second fact,
             // only `executability == IMMEDIATE` restated (§3.8).
-            if (preview.price() != null && preview.price().executability() != null) {
-                metric(connection, id, "orderExecutability",
-                        preview.price().executability().name(), false);
-                metric(connection, id, "orderValuationBasis",
-                        preview.price().valuationBasis().name(), false);
-            }
         }
         if (input.note() != null && !input.note().isBlank()) metric(connection, id, "decisionNote", input.note().trim(), false);
         if (trade != null) {
@@ -412,6 +402,107 @@ public final class PlanDecisionService {
             throw new IllegalStateException("A frozen decision leg contains an invalid price; no receipt was written.", e);
         }
     }
+
+    /**
+     * The create-time preview—not merely package net—is checked against the reviewed decision facts.
+     * Underlying/rate/IV changes can alter POP, tails, Greeks, payoff and evidence while leaving an
+     * offsetting package net unchanged. Any such difference therefore forces another review.
+     *
+     * <p>Do not compare the whole transport record here. {@code analytics.evaluatedAtEpochMs} is the
+     * time StrikeBench performed the calculation, not a financial input; two otherwise identical
+     * previews are necessarily evaluated at different instants. Likewise, future diagnostics do not
+     * become decision gates merely because somebody adds a map entry. The typed projection below is
+     * the explicit review contract: adding a new decision-bearing fact requires adding it there.</p>
+     */
+    static TradePreview frozenPreview(TradePreview reviewed, TradeRecord trade,
+                                      TradePreview execution) {
+        TradePreview reviewedPreview = java.util.Objects.requireNonNull(reviewed,
+                "a frozen decision requires the reviewed trade preview");
+        if (trade == null) return reviewedPreview;
+        TradePreview executionPreview = java.util.Objects.requireNonNull(execution,
+                "a trade decision requires the create-time trade preview");
+        PackagePriceReceipt price = executionPreview.price();
+        if (!decisionFacts(executionPreview).equals(decisionFacts(reviewedPreview))
+                || price == null
+                || !price.priced()
+                || !java.util.Objects.equals(price.grossPackageNetCents(),
+                        trade.entryNetPremiumCents())
+                || !java.util.Objects.equals(price.openingFeesCents(),
+                        trade.feesOpenCents())) {
+            throw new IllegalStateException(
+                    "The executable package or its decision evidence changed after review; "
+                            + "review the current book before placing it.");
+        }
+        return executionPreview;
+    }
+
+    /**
+     * Exact facts that authorize a decision. Ephemeral render/diagnostic metadata is deliberately
+     * absent; all economic, risk, evidence, execution, account-impact, payoff and leg facts are
+     * explicit. Map-valued analytics are selected by name rather than accepted wholesale.
+     */
+    private static DecisionFacts decisionFacts(TradePreview p) {
+        Map<String, Object> analytics = p.analytics() == null ? Map.of() : p.analytics();
+        return new DecisionFacts(
+                p.ok(), p.blockReasons(), p.warnings(), p.maxLossCents(), p.maxProfitCents(),
+                p.breakevens(), p.popEntry(), p.expectedValueCents(), p.reserveCents(),
+                p.cashBeforeCents(), p.cashAfterCents(), p.reservedBeforeCents(),
+                p.reservedAfterCents(), p.buyingPowerBeforeCents(), p.buyingPowerAfterCents(),
+                p.freshness(), p.evidence(), p.underlyingCents(), p.assignmentProb(),
+                p.legs(), p.payoff(), p.price(),
+                analytics.get("probabilityMap"),
+                analytics.get("evSensitivity"),
+                analytics.get("executionQuality"),
+                analytics.get("managementPlan"),
+                analytics.get("time"),
+                analytics.get("greeks"),
+                analytics.get("expectedMove"),
+                analytics.get("sourceAsOfEpochMs"),
+                analytics.get("freshness"),
+                analytics.get("rate"),
+                analytics.get("verdict"),
+                analytics.get("verdictReason"),
+                analytics.get("combinedMaxLossCents"));
+    }
+
+    private record DecisionFacts(
+            boolean ok,
+            List<String> blockReasons,
+            List<String> warnings,
+            long maxLossCents,
+            Long maxProfitCents,
+            List<String> breakevens,
+            Double popEntry,
+            Long expectedValueCents,
+            long reserveCents,
+            long cashBeforeCents,
+            long cashAfterCents,
+            long reservedBeforeCents,
+            long reservedAfterCents,
+            long buyingPowerBeforeCents,
+            long buyingPowerAfterCents,
+            String freshness,
+            io.liftandshift.strikebench.model.DataEvidence evidence,
+            Long underlyingCents,
+            Double assignmentProb,
+            List<Map<String, Object>> legs,
+            List<Map<String, Object>> payoff,
+            PackagePriceReceipt price,
+            Object probabilityMap,
+            Object evSensitivity,
+            Object executionQuality,
+            Object managementPlan,
+            Object time,
+            Object greeks,
+            Object expectedMove,
+            Object sourceAsOfEpochMs,
+            Object analyticsFreshness,
+            Object rate,
+            Object verdict,
+            Object verdictReason,
+            Object combinedMaxLossCents
+    ) {}
+
     static Double decisionDecimal(Object value) {
         if (value == null || String.valueOf(value).isBlank() || "null".equals(String.valueOf(value))) return null;
         try {

@@ -50,7 +50,7 @@ class HistoryFitTest {
 
     private EvalContext ctx(List<Double> closes) {
         return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 21, 0.30, 0.25,
-                List.of(0.22, 0.30, 0.38), 10_000_000L, true, 65, 0, 0.04,
+                List.of(0.22, 0.30, 0.38), 10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                         io.liftandshift.strikebench.model.Freshness.EOD), null, null, null, closes);
     }

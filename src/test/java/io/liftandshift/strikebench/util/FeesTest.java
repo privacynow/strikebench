@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class FeesTest {
 
@@ -28,8 +29,13 @@ class FeesTest {
     }
 
     @Test
-    void negativeConfiguredFeesAreClampedToZero() {
-        assertThat(Fees.roundTripCents(4, -65, -100)).isZero();
+    void negativeConfiguredFeesAreRejectedInsteadOfPublishedAsFree() {
+        assertThatThrownBy(() -> Fees.roundTripCents(4, -65, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot be negative");
+        assertThatThrownBy(() -> Fees.openingCents(0, 65, -100))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot be negative");
     }
 
     @Test

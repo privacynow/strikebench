@@ -56,6 +56,7 @@ class MigrationImmutabilityTest {
         pinned.put("V11__plan_decision_horizon_sessions.sql", 706271111);
         pinned.put("V12__candidate_after_fee_not_null_check.sql", -1329899912);
         pinned.put("V13__scout_row_identity_and_adoption.sql", -909760999);
+        pinned.put("V14__nullable_captured_comparison_fees.sql", -373313129);
         return pinned;
     }
 

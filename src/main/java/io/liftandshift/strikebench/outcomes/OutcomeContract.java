@@ -29,8 +29,14 @@ public final class OutcomeContract {
     public record Leg(String action, String type, BigDecimal strike, String expiration,
                       Integer expiryDay, int ratio, int multiplier) {}
 
-    /** Signed entryCostCents: debit paid is positive, credit received is negative. */
-    public record Position(String key, List<Leg> legs, int qty, Long entryCostCents) {}
+    /**
+     * Signed {@code entryCostCents}: debit paid is positive, credit received is negative.
+     * A captured entry and its estimated round-trip commission are one receipt: callers may omit
+     * both to ask the server to price the current book, but must never supply a historical entry
+     * without the commission captured with it.
+     */
+    public record Position(String key, List<Leg> legs, int qty, Long entryCostCents,
+                           Long estimatedRoundTripFeesCents) {}
 
     /** A price threshold the path ensemble should answer directly (target, floor, strike, breakeven). */
     public record DecisionLevel(String key, BigDecimal price) {}

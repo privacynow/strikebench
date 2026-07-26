@@ -1400,6 +1400,7 @@ class ApiIntegrationTest {
                 {"operation":"POSITION","basis":"HISTORICAL_ANALOGS",
                   "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
                   "position":{"key":"BUY_AND_HOLD","qty":1,"entryCostCents":12345,
+                    "estimatedRoundTripFeesCents":0,
                     "legs":[{"action":"BUY","type":"STOCK","strike":0,"expiryDay":0,"ratio":1,
                               "multiplier":1,"positionEffect":"OPEN"}]},
                   "over":{"model":"GBM","shape":"CHOP","horizonDays":10,"stepsPerDay":1,
@@ -1431,12 +1432,21 @@ class ApiIntegrationTest {
             {"operation":"POSITION","basis":"PARAMETRIC",
               "context":{"symbol":"AAPL","marketLane":"DEMO","worldId":"demo","datasetId":"observed"},
               "position":{"key":"LONG_CALL","qty":1,"entryCostCents":1000,
+                "estimatedRoundTripFeesCents":130,
                 "legs":[{"action":"BUY","type":"CALL","strike":255,"expiration":"2026-08-21","expiryDay":5,"ratio":1,
                           "multiplier":100,"positionEffect":"OPEN"}]},
               "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":1,
                       "driftAnnual":0,"volAnnual":0.3,"jumpsPerYear":0,"jumpMean":0,
                       "jumpVol":0,"tailNu":6,"seed":17,"paths":40}}""";
-        assertThat(post("/api/evaluate", exact).statusCode()).isEqualTo(200);
+        var exactResult = post("/api/evaluate", exact);
+        assertThat(exactResult.statusCode()).isEqualTo(200);
+        assertThat(Json.parse(exactResult.body()).at("/result/roundTripFeesCents").longValue())
+                .isEqualTo(130L);
+        var missingFee = post("/api/evaluate",
+                exact.replace("\"estimatedRoundTripFeesCents\":130,", ""));
+        assertThat(missingFee.statusCode()).isEqualTo(400);
+        assertThat(missingFee.body()).contains("captured entry")
+                .contains("no estimated round-trip commission");
         String missingExact = exact.replace("2026-08-21", "2099-01-16");
         var refused = post("/api/evaluate", missingExact);
         assertThat(refused.statusCode()).isEqualTo(400);

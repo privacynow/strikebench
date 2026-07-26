@@ -93,6 +93,11 @@ public final class ScenarioSimulator {
     /** One structure to compare: resolved legs + an optional market-priced entry. */
     public record CompareItem(String key, PathPosition position, Long entryOverrideCents, String entryNote,
                               long roundTripFeesCents, Integer qty) {
+        public CompareItem {
+            if (roundTripFeesCents < 0) {
+                throw new IllegalArgumentException("round-trip fees cannot be negative");
+            }
+        }
         public CompareItem(String key, PathPosition position, Long entryOverrideCents, String entryNote,
                            long roundTripFeesCents) {
             this(key, position, entryOverrideCents, entryNote, roundTripFeesCents, null);
@@ -202,6 +207,9 @@ public final class ScenarioSimulator {
                                IvSpec ivSpec, ScenarioCanvasSpec rawCanvas, LocalDate ensembleAnchor,
                                double riskFreeRate,
                                Long entryOverrideCents, String entryNote, long roundTripFeesCents) {
+        if (roundTripFeesCents < 0) {
+            throw new IllegalArgumentException("round-trip fees cannot be negative");
+        }
         IvSpec iv = (ivSpec == null ? IvSpec.flat(s.volAnnual()) : ivSpec).sane();
         ScenarioCanvasSpec canvas = rawCanvas == null ? null : rawCanvas.sane(s.horizonDays());
         int steps = s.totalSteps();
@@ -222,7 +230,7 @@ public final class ScenarioSimulator {
         }
 
         int q = Math.max(1, qty);
-        double fees = Math.max(0, roundTripFeesCents) / 100.0;
+        double fees = roundTripFeesCents / 100.0;
         double entry = entryOverrideCents != null
                 ? entryOverrideCents / 100.0
                 : (canvas == null
@@ -289,7 +297,7 @@ public final class ScenarioSimulator {
                 ? "Exit values along each path are MODELED (Black-Scholes on the IV path); the entry reflects the quotes named above."
                 : "Synthetic scenario — entry AND exits are MODELED (Black-Scholes on the IV path), never observed market quotes.");
         notes.add("Seed " + s.seed() + " reproduces this exact run. The distribution includes "
-                + io.liftandshift.strikebench.util.Money.fmt(Math.max(0, roundTripFeesCents))
+                + io.liftandshift.strikebench.util.Money.fmt(roundTripFeesCents)
                 + " of configured round-trip commissions; modeled exits do not include future bid/ask slippage or early assignment.");
         if (s.model() == ScenarioSpec.PathModel.STUDENT_T) {
             notes.add("Student-t uses non-integer ν=" + s.tailNu()

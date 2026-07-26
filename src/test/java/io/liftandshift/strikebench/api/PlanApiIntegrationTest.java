@@ -755,7 +755,7 @@ class PlanApiIntegrationTest {
         assertThat(decided.at("/decision/legs/0/multiplier").asInt())
                 .as(decided.toPrettyString()).isEqualTo(10);
         assertThat(decided.at("/decision/metrics/decisionQty").asInt()).isEqualTo(3);
-        assertThat(decided.at("/decision/metrics/entryNetPremiumCents").asLong())
+        assertThat(decided.at("/decision/price/grossPackageNetCents").asLong())
                 .isEqualTo(candidate.path("price").path("grossPackageNetCents").asLong());
         assertThat(decided.at("/decision/maxLossCents").asLong())
                 .isEqualTo(candidate.path("maxLossCents").asLong());
@@ -1791,11 +1791,11 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/action").asText()).isEqualTo("TRADE");
         assertThat(opened.at("/decision/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
         assertThat(opened.at("/decision/legs")).hasSize(candidate.withArray("legs").size());
-        assertThat(opened.at("/decision/proposedNetCents").asLong())
+        assertThat(opened.at("/decision/price/grossPackageNetCents").asLong())
                 .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
         assertThat(opened.at("/decision/orderInstruction/type").asText()).isEqualTo("MARKET");
-        assertThat(opened.at("/decision/executability").asText()).isEqualTo("IMMEDIATE");
-        assertThat(opened.at("/decision/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");
+        assertThat(opened.at("/decision/price/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(opened.at("/decision/price/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");
         assertThat(opened.at("/decision/accountNlvCents").asLong()).isEqualTo(1_930_000L);
         assertThat(opened.at("/decision/riskCapitalCents").asLong()).isEqualTo(193_000L);
 

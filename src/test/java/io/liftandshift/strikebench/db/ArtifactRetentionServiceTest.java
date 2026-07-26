@@ -2,6 +2,8 @@ package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,9 +63,12 @@ class ArtifactRetentionServiceTest {
         context("p_decided");
         artifact("fp_decided", true);
         ensemble("pe_decided", "p_decided", "fp_decided", "STALE");
-        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,decision_seq,ensemble_id,action,quote_as_of,economic_verdict,"
-                        + "evidence_provenance,model_version,review_horizon_sessions,created_at) VALUES('decision_frozen',"
-                        + "'p_decided',1,1,'pe_decided','CASH',?,'MIXED','DEMO_FIXTURE','decision-1',30,?)", OLD, OLD);
+        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,decision_seq,ensemble_id,action,price_receipt,"
+                        + "quote_as_of,economic_verdict,evidence_provenance,model_version,review_horizon_sessions,created_at) "
+                        + "VALUES('decision_frozen','p_decided',1,1,'pe_decided','CASH',?::jsonb,?,"
+                        + "'MIXED','DEMO_FIXTURE','decision-1',30,?)",
+                Json.write(PackagePriceReceipt.unavailable(1,
+                        PackagePriceReceipt.FeeSide.OPENING, "cash decision")), OLD, OLD);
 
         // A rehearsal source is a reproducibility receipt and protects both the Plan ensemble and blob.
         plan("p_rehearsal", "ACTIVE");

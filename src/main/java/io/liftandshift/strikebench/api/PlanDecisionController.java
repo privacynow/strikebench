@@ -8,6 +8,7 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.plan.PlanDecisionService;
 import io.liftandshift.strikebench.plan.PlanManagementService;
@@ -268,7 +269,16 @@ final class PlanDecisionController {
         // Compared against the ONE §7.2 receipt the market preview published, not a parallel
         // primitive: an unpriced market preview must not match a client's stated net by both being 0.
         Long marketNet = marketPreview.price() == null ? null : marketPreview.price().grossPackageNetCents();
-        return java.util.Objects.equals(body.proposedNetCents(), marketNet) ? marketBody : body;
+        return isLegacyMarketEcho(body.proposedNetCents(), marketNet) ? marketBody : body;
+    }
+
+    /**
+     * A legacy client meant MARKET only when it echoed a price the server actually published.
+     * Two absent values are not equal financial facts; treating {@code null == null} as a match
+     * silently changes an unpriced proposed order into a market order.
+     */
+    static boolean isLegacyMarketEcho(Long proposedNetCents, Long marketNetCents) {
+        return marketNetCents != null && java.util.Objects.equals(proposedNetCents, marketNetCents);
     }
 
     /**
@@ -405,17 +415,25 @@ final class PlanDecisionController {
         // stated them, so an absent value must refuse the review the way the underlying anchor and
         // the rate snapshot above already do. `asLong(0)` would price the not-taken package as a
         // costless entry and report the difference as a real missed P/L.
-        if (!decision.hasNonNull("proposedNetCents")) {
+        PackagePriceReceipt frozenPrice;
+        try {
+            frozenPrice = io.liftandshift.strikebench.util.Json.MAPPER.convertValue(
+                    decision.path("price"), PackagePriceReceipt.class);
+        } catch (IllegalArgumentException malformed) {
+            frozenPrice = null;
+        }
+        if (frozenPrice == null || !frozenPrice.priced()
+                || frozenPrice.grossPackageNetCents() == null) {
             throw new IllegalStateException("The frozen decision recorded no package price, so the"
                     + " not-taken outcome cannot be valued.");
         }
-        long entry = decision.path("proposedNetCents").asLong();
-        if (!metrics.hasNonNull("feesOpenCents")) {
+        long entry = frozenPrice.grossPackageNetCents();
+        Long roundTripFees = frozenPrice.estimatedRoundTripFeesCents();
+        if (roundTripFees == null) {
             throw new IllegalStateException("The frozen decision recorded no commission, so the"
                     + " not-taken outcome cannot be valued after costs.");
         }
-        long fees = metrics.path("feesOpenCents").asLong();
-        long rejectedPnl = entry + packageEnd - Math.multiplyExact(fees, 2L);
+        long rejectedPnl = entry + packageEnd - roundTripFees;
         ObjectNode management = planManagement.recordCashReview(root.ownerId(ctx), plan.id(), body.expectedVersion(),
                 new PlanManagementService.CashReview(startUnderlying, endUnderlying, stockPnl, entry, packageEnd,
                         rejectedPnl, horizonSessions, decision.hasNonNull("pop") ? decision.get("pop").asDouble() : null,

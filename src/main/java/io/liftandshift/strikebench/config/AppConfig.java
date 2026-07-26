@@ -102,10 +102,22 @@ public final class AppConfig {
     public long httpTimeoutMs() { return getLong("HTTP_TIMEOUT_MS", 10_000L); }
 
     /** Per-contract, per-leg commission in cents (default $0.65). */
-    public long feePerContractCents() { return getLong("FEE_PER_CONTRACT_CENTS", 65); }
+    public long feePerContractCents() {
+        return nonNegativeMoneySetting("FEE_PER_CONTRACT_CENTS", 65);
+    }
 
     /** Per-order base fee in cents (default $0). */
-    public long feePerOrderCents() { return getLong("FEE_PER_ORDER_CENTS", 0); }
+    public long feePerOrderCents() {
+        return nonNegativeMoneySetting("FEE_PER_ORDER_CENTS", 0);
+    }
+
+    private long nonNegativeMoneySetting(String key, long defaultValue) {
+        long value = getLong(key, defaultValue);
+        if (value < 0) {
+            throw new IllegalArgumentException(key + " cannot be negative");
+        }
+        return value;
+    }
 
     /** Default starting cash for a new paper account, in cents (default $100,000). */
     public long defaultStartingCashCents() { return getLong("DEFAULT_STARTING_CASH_CENTS", 100_000_00L); }

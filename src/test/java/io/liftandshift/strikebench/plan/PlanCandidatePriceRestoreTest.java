@@ -62,6 +62,7 @@ class PlanCandidatePriceRestoreTest {
         db.exec("ALTER TABLE plan_candidate ALTER COLUMN price_fee_side DROP NOT NULL");
         db.exec("UPDATE plan_candidate SET valuation_basis=NULL, price_executability=NULL,"
                 + " price_fee_side=NULL, stock_cash_flow_cents=NULL, opening_fees_cents=NULL,"
+                + " estimated_round_trip_fees_cents=NULL,"
                 + " after_fee_net_cents=NULL, executable_net_cents=NULL, price_source=NULL,"
                 + " price_observed_at_epoch_ms=NULL, price_fingerprint=NULL,"
                 + " price_unavailable_reason=NULL WHERE id=?", candidateId);
@@ -99,6 +100,7 @@ class PlanCandidatePriceRestoreTest {
         assertThat(restored.optionNetPremiumCents()).isEqualTo(48_000L);
         assertThat(restored.stockCashFlowCents()).isEqualTo(-2_001_000L);
         assertThat(restored.grossPackageNetCents()).isEqualTo(-1_953_000L);
+        assertThat(restored.estimatedRoundTripFeesCents()).isEqualTo(260L);
         assertThat(restored.afterFeeNetCents()).isEqualTo(-1_953_130L);
         assertThat(restored.valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK);
@@ -109,8 +111,9 @@ class PlanCandidatePriceRestoreTest {
 
     @Test void anHonestlyUnpricedCandidateStoresAndRestoresWithItsReason() {
         Plan.View plan = plan("restore-unpriced-1");
-        strategies.saveCompetition(null, plan, Json.parse("{\"filters\":{}}"),
+        PlanStrategyService.SavedRun saved = strategies.saveCompetition(null, plan, Json.parse("{\"filters\":{}}"),
                 competition(UNPRICED_RECEIPT));
+        String candidateId = saved.result().at("/candidates/0/id").asText();
 
         PackagePriceReceipt restored = receiptFromNode(strategies.latestCompetition(null, plan.id())
                 .result().at("/candidates/0/price"));
@@ -118,6 +121,10 @@ class PlanCandidatePriceRestoreTest {
         assertThat(restored.priced()).isFalse();
         assertThat(restored.unavailableReason()).contains("no executable market");
         assertThat(restored.quantity()).isEqualTo(2);
+        assertThat(restored.estimatedRoundTripFeesCents()).isNull();
+        assertThat(db.query("SELECT estimated_round_trip_fees_cents FROM plan_candidate WHERE id=?",
+                r -> r.lngOrNull("estimated_round_trip_fees_cents"), candidateId))
+                .containsExactly((Long) null);
     }
 
     @Test void aCandidateWithNoPriceReceiptIsRefusedInsteadOfStoredAsANamelessAmount() {
@@ -174,6 +181,7 @@ class PlanCandidatePriceRestoreTest {
         return new PackagePriceReceipt(price.path("quantity").asInt(),
                 lng(price, "optionNetPremiumCents"), lng(price, "stockCashFlowCents"),
                 lng(price, "grossPackageNetCents"), lng(price, "openingFeesCents"),
+                lng(price, "estimatedRoundTripFeesCents"),
                 lng(price, "afterFeeNetCents"), lng(price, "executableNetCents"),
                 lng(price, "restingLimitNetCents"),
                 PackagePriceReceipt.ValuationBasis.valueOf(price.path("valuationBasis").asText()),
@@ -203,14 +211,16 @@ class PlanCandidatePriceRestoreTest {
     /** A buy-write: the structure where the option-only net and the package net are furthest apart. */
     private static final String PRICED_RECEIPT = """
             {"quantity":2,"optionNetPremiumCents":48000,"stockCashFlowCents":-2001000,
-             "grossPackageNetCents":-1953000,"openingFeesCents":130,"afterFeeNetCents":-1953130,
+             "grossPackageNetCents":-1953000,"openingFeesCents":130,
+             "estimatedRoundTripFeesCents":260,"afterFeeNetCents":-1953130,
              "executableNetCents":-1953000,"valuationBasis":"EXECUTABLE_BOOK",
              "executability":"IMMEDIATE","source":"fixture","freshness":"FIXTURE",
              "observedAt":1785000000000,"fingerprint":"fixture-price","feeSide":"OPENING"}""";
 
     private static final String UNPRICED_RECEIPT = """
             {"quantity":2,"optionNetPremiumCents":null,"stockCashFlowCents":null,
-             "grossPackageNetCents":null,"openingFeesCents":null,"afterFeeNetCents":null,
+             "grossPackageNetCents":null,"openingFeesCents":null,
+             "estimatedRoundTripFeesCents":null,"afterFeeNetCents":null,
              "executableNetCents":null,"valuationBasis":"UNAVAILABLE",
              "executability":"UNAVAILABLE","source":null,"freshness":"FIXTURE","observedAt":null,
              "fingerprint":null,"feeSide":"OPENING",

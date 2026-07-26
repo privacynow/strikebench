@@ -56,7 +56,8 @@ final class TrackedPackageAnalysisService {
      * gross EV. Null now, and the assessment says so.
      */
     private static Long roundTripFees(io.liftandshift.strikebench.paper.TradePreview preview) {
-        return preview == null || preview.price() == null ? null : preview.price().roundTripFeesCents();
+        return preview == null || preview.price() == null ? null
+                : preview.price().estimatedRoundTripFeesCents();
     }
 
     /**

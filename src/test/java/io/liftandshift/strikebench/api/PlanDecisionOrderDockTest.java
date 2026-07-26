@@ -62,7 +62,7 @@ class PlanDecisionOrderDockTest {
         var dock = PlanDecisionController.orderDock(order(OrderInstruction.market()),
                 preview(true, priced(67_000, null, 67_000L,
                         OrderInstruction.Executability.IMMEDIATE,
-                        PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK).withFees(130L)));
+                        PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK).withFees(130L, 260L)));
 
         assertThat(dock.price().openingFeesCents()).isEqualTo(130L);
         assertThat(dock.price().afterFeeNetCents()).isEqualTo(66_870L);
@@ -73,7 +73,8 @@ class PlanDecisionOrderDockTest {
                                               Long executableNet,
                                               OrderInstruction.Executability executability,
                                               PackagePriceReceipt.ValuationBasis basis) {
-        return PackagePriceReceipt.of(1, gross, gross, 0L, null, PackagePriceReceipt.FeeSide.OPENING,
+        return PackagePriceReceipt.of(1, gross, gross, 0L, null, null,
+                PackagePriceReceipt.FeeSide.OPENING,
                 executableNet, instruction, executability, basis, "fixture", "MISSING", null, "fp");
     }
 

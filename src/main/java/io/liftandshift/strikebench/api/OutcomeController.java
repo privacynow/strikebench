@@ -81,6 +81,9 @@ final class OutcomeController {
                                      // Signed TOTAL opening value: debit positive, credit negative.
                                      // Builder/Review can preserve the exact displayed package price.
                                      Long entryCostCents,
+                                     // Captured with entryCostCents. Null is valid only when the
+                                     // server is also pricing a fresh entry from the current book.
+                                     Long estimatedRoundTripFeesCents,
                                      // Optional leg-aligned ISO expirations. When present, the
                                      // listed package is exact: no neighboring expiry/strike snap.
                                      java.util.List<String> contractExpirations) {}
@@ -88,6 +91,7 @@ final class OutcomeController {
     public record CompareStructure(String key,
                                    io.liftandshift.strikebench.sim.PathPosition position,
                                    Long entryCostCents,
+                                   Long estimatedRoundTripFeesCents,
                                    List<String> contractExpirations) {}
     public record CompareRequest(String symbol, io.liftandshift.strikebench.sim.ScenarioSpec spec,
                                  io.liftandshift.strikebench.sim.IvSpec iv, Integer qty,
@@ -129,6 +133,13 @@ final class OutcomeController {
                 refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(), "reason", "no position"));
                 continue;
             }
+            try {
+                requireCapturedFeePair(st.entryCostCents(), st.estimatedRoundTripFeesCents());
+            } catch (IllegalArgumentException missingReceipt) {
+                refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(),
+                        "reason", missingReceipt.getMessage()));
+                continue;
+            }
             validateContractExpirations(st.position(), st.contractExpirations());
             MarketEntry me = marketEntry(sym, st.position(), qty, world, book,
                     st.contractExpirations());
@@ -139,12 +150,21 @@ final class OutcomeController {
             }
             var positionToRun = me != null && me.resolvedPosition() != null
                     ? me.resolvedPosition() : st.position();
+            long roundTripFees;
+            try {
+                roundTripFees = outcomeRoundTripFees(st.entryCostCents(),
+                        st.estimatedRoundTripFeesCents(), positionToRun, qty);
+            } catch (IllegalArgumentException missingReceipt) {
+                refusedEarly.add(Map.of("key", st.key() == null ? "?" : st.key(),
+                        "reason", missingReceipt.getMessage()));
+                continue;
+            }
             items.add(new io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem(
                     st.key(), positionToRun,
                     st.entryCostCents() != null ? st.entryCostCents() : me == null ? null : me.entryCents(),
                     st.entryCostCents() != null ? "entry fixed to the supplied package price"
                             : me == null ? null : "entry at " + me.source() + " executable quotes",
-                    scenarioRoundTripFees(positionToRun, qty)));
+                    roundTripFees));
         }
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
@@ -163,11 +183,12 @@ final class OutcomeController {
             // a 1x2 backspread pays for 3 contracts, a buy-write's stock leg pays none.
             long fees = items.stream().filter(it -> it.key().equals(oc.key()))
                     .findFirst().map(io.liftandshift.strikebench.sim.ScenarioSimulator.CompareItem::roundTripFeesCents)
-                    .orElse(0L);
+                    .orElseThrow(() -> new IllegalStateException(
+                            "comparison result has no matching captured fee receipt: " + oc.key()));
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("key", oc.key());
             m.put("result", oc.result());
-            m.put("feesCents", fees);
+            m.put("roundTripFeesCents", fees);
             feeAware.add(m);
         }
         Map<String, Object> outCmp = new LinkedHashMap<>();
@@ -201,6 +222,40 @@ final class OutcomeController {
         // THE one fee formula (also correctly charges no option order fee on a stock-only package).
         return io.liftandshift.strikebench.util.Fees.roundTripCents(
                 contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
+    }
+
+    /**
+     * A historical entry may only travel with the fee estimate captured beside it. Current fee
+     * configuration is consulted exclusively when this same request asks the server to price the
+     * current entry book.
+     */
+    private long outcomeRoundTripFees(Long entryCostCents, Long capturedRoundTripFeesCents,
+                                      io.liftandshift.strikebench.sim.PathPosition position, int qty) {
+        return resolveOutcomeRoundTripFees(entryCostCents, capturedRoundTripFeesCents,
+                () -> scenarioRoundTripFees(position, qty));
+    }
+
+    static long resolveOutcomeRoundTripFees(Long entryCostCents, Long capturedRoundTripFeesCents,
+                                            java.util.function.LongSupplier currentFeeSchedule) {
+        requireCapturedFeePair(entryCostCents, capturedRoundTripFeesCents);
+        return entryCostCents == null ? currentFeeSchedule.getAsLong() : capturedRoundTripFeesCents;
+    }
+
+    private static void requireCapturedFeePair(Long entryCostCents, Long capturedRoundTripFeesCents) {
+        if (entryCostCents != null) {
+            if (capturedRoundTripFeesCents == null) {
+                throw new IllegalArgumentException("The captured entry states no estimated round-trip "
+                        + "commission, so an after-cost outcome cannot be reported.");
+            }
+            if (capturedRoundTripFeesCents < 0) {
+                throw new IllegalArgumentException("The captured estimated round-trip commission cannot be negative.");
+            }
+            return;
+        }
+        if (capturedRoundTripFeesCents != null) {
+            throw new IllegalArgumentException(
+                    "A captured estimated round-trip commission requires its captured entry price.");
+        }
     }
 
     private io.liftandshift.strikebench.sim.SimulationEngine.PreviewRun simScenarioRun(Context ctx, ScenarioRequest b) {
@@ -282,6 +337,7 @@ final class OutcomeController {
         if (b.entryCostCents() != null && Math.abs(b.entryCostCents()) > 1_000_000_000L) {
             throw new IllegalArgumentException("entry cost is outside the supported range");
         }
+        requireCapturedFeePair(b.entryCostCents(), b.estimatedRoundTripFeesCents());
         validateContractExpirations(b.position(), b.contractExpirations());
         MarketEntry me = marketEntry(sym, b.position(), qty, world, entryBook,
                 b.contractExpirations());
@@ -332,6 +388,8 @@ final class OutcomeController {
         entryNote = (entryNote == null || entryNote.isBlank() ? "" : entryNote + " ") + ivBasis + ".";
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
+        long roundTripFees = outcomeRoundTripFees(b.entryCostCents(),
+                b.estimatedRoundTripFeesCents(), positionToRun, qty);
         io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun evaluated;
         var simulator = new io.liftandshift.strikebench.sim.ScenarioSimulator();
         if (fixedEnsemble != null) {
@@ -340,13 +398,13 @@ final class OutcomeController {
             }
             var result = simulator.runOnPaths(fixedEnsemble.paths(), positionToRun, qty,
                     fixedEnsemble.spec(), iv, canvas, r, entryCost, entryNote,
-                    scenarioRoundTripFees(positionToRun, qty));
+                    roundTripFees);
             evaluated = new io.liftandshift.strikebench.sim.ScenarioSimulator.EnsembleRun(fixedEnsemble, result);
         } else {
             evaluated = simulator.run(pathEnsembles,
                     new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisContext.apply(ctx)),
                     pathBasis, spec, b.study(), spot, positionToRun, qty, iv, r, entryCost, entryNote,
-                    scenarioRoundTripFees(positionToRun, qty));
+                    roundTripFees);
         }
         var studyRes = evaluated.ensemble().study();
         String pathModelVersion = evaluated.ensemble().modelVersion();
@@ -354,6 +412,7 @@ final class OutcomeController {
             var eresult = evaluated.result();
             // The interpretation is DIFFERENT and must say so: conditional history, not a model.
             var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(eresult);
+            out.put("roundTripFeesCents", roundTripFees);
             out.put("pathSource", pathBasis.name());
             out.put("pathModelVersion", pathModelVersion);
             out.put("ivStart", iv.sane().startIv());
@@ -378,6 +437,7 @@ final class OutcomeController {
             return out;
         }
         var out = (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(evaluated.result());
+        out.put("roundTripFeesCents", roundTripFees);
         out.put("pathModelVersion", pathModelVersion);
         out.put("ivStart", iv.sane().startIv());
         out.put("ivLongRun", iv.sane().longRunIv());
@@ -589,7 +649,8 @@ final class OutcomeController {
                     Object positionOutcome = simStrategyResult(ctx, new StrategySimRequest(symbol, pathPosition,
                             position.qty(), run.ensemble().spec(), request.iv(),
                             io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC,
-                            null, position.entryCostCents(), contractExpirations(position.legs())), run.ensemble());
+                            null, position.entryCostCents(), position.estimatedRoundTripFeesCents(),
+                            contractExpirations(position.legs())), run.ensemble());
                     pathResult.set("positionOutcome", Json.MAPPER.valueToTree(positionOutcome));
                     pathResult.put("positionEnsembleFingerprint", publicReceipt.fingerprint());
                 }
@@ -607,7 +668,8 @@ final class OutcomeController {
                 var pathPosition = toPathPosition(ctx, position.legs());
                 result = simStrategyResult(ctx, new StrategySimRequest(symbol, pathPosition,
                         position.qty(), requireOutcomeSpec(request.over()), request.iv(), pathBasis(basis),
-                        request.study(), position.entryCostCents(), contractExpirations(position.legs())));
+                        request.study(), position.entryCostCents(), position.estimatedRoundTripFeesCents(),
+                        contractExpirations(position.legs())));
                 interpretation = basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.PARAMETRIC
                         ? "The exact position is repriced over model-generated paths; probabilities are scenario-conditional, not a forecast."
                         : basis == io.liftandshift.strikebench.outcomes.OutcomeContract.Basis.HISTORICAL_ANALOGS
@@ -631,7 +693,8 @@ final class OutcomeController {
                     int pq = position.qty();
                     if (pq != qty) throw new IllegalArgumentException("COMPARE positions must use the same quantity");
                     structures.add(new CompareStructure(position.key(), toPathPosition(ctx, position.legs()),
-                            position.entryCostCents(), contractExpirations(position.legs())));
+                            position.entryCostCents(), position.estimatedRoundTripFeesCents(),
+                            contractExpirations(position.legs())));
                 }
                 result = simCompareResult(ctx, new CompareRequest(symbol, requireOutcomeSpec(request.over()),
                         request.iv(), qty, structures, pathBasis(basis), request.study()));
@@ -676,6 +739,7 @@ final class OutcomeController {
 
     private Map<String, Object> riskNeutralPositionResult(Context ctx, String symbol,
             io.liftandshift.strikebench.outcomes.OutcomeContract.Position position, EntryBook book) {
+        requireCapturedFeePair(position.entryCostCents(), position.estimatedRoundTripFeesCents());
         List<String> expirations = contractExpirations(position.legs());
         if (expirations == null || position.legs().stream()
                 .filter(l -> l != null && !"STOCK".equalsIgnoreCase(l.type()))
@@ -713,10 +777,8 @@ final class OutcomeController {
                 .map(Leg::strike).toList();
         var analyzed = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
                 curve, underlying.mark().doubleValue(), iv, time.years(), rate, shorts);
-        long contracts = entry.pricedLegs().stream().filter(l -> !l.isStock())
-                .mapToLong(Leg::ratio).sum() * qty;
-        long roundTripFees = io.liftandshift.strikebench.util.Fees.roundTripCents(
-                contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
+        long roundTripFees = outcomeRoundTripFees(position.entryCostCents(),
+                position.estimatedRoundTripFeesCents(), pathPosition, qty);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("probabilityMap", analyzed.probabilityMap());
         out.put("expectedValueCents", analyzed.expectedValueCents());

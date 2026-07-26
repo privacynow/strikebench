@@ -336,7 +336,7 @@ public final class HeldPositionEconomicsService {
                     + " the cost of closing this position cannot be quoted.");
         }
         var price = PackagePriceReceipt.of(request.qty(), executableCash, optionExecutableCash,
-                stockExecutableCash, fees,
+                stockExecutableCash, fees, null,
                 PackagePriceReceipt.FeeSide.CLOSING, executableCash, null,
                 io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,

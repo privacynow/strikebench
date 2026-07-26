@@ -2,6 +2,8 @@ package io.liftandshift.strikebench.plan;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.EventBus;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -103,10 +105,11 @@ class PlanServiceTest {
         // (which the desk rejects as "did not return a mutable working Plan for this new idea").
         Plan.View decided = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 create("req-decided", "AAPL", "INCOME", 30));
-        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,quote_as_of,economic_verdict,"
+        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,price_receipt,quote_as_of,economic_verdict,"
                 + "evidence_provenance,model_version,review_horizon_sessions,created_at,decision_seq) "
-                + "VALUES('dec-regression',?,1,'CASH',now(),'FAVORABLE','OBSERVED','test',30,now(),1)",
-                decided.id());
+                + "VALUES('dec-regression',?,1,'CASH',?::jsonb,now(),'FAVORABLE','OBSERVED','test',30,now(),1)",
+                decided.id(), Json.write(PackagePriceReceipt.unavailable(1,
+                        PackagePriceReceipt.FeeSide.OPENING, "cash decision")));
         assertThat(plans.get(null, decided.id()).assumptionsEditable()).isFalse();
 
         Plan.View fresh = plans.create(null, Plan.MarketKind.DEMO, null, null,

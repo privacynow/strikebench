@@ -96,6 +96,9 @@ public final class TradeService {
         /** Jackson and every internal caller bind one complete position contract. */
         @com.fasterxml.jackson.annotation.JsonCreator
         public OpenRequest {
+            if (feesOverrideCents != null && feesOverrideCents < 0) {
+                throw new IllegalArgumentException("feesOverrideCents cannot be negative");
+            }
             if (orderInstruction == null) {
                 orderInstruction = OrderInstruction.fromLegacy(proposedNetCents);
             } else if (orderInstruction.type() == OrderInstruction.Type.MARKET) {
@@ -290,7 +293,8 @@ public final class TradeService {
     /** Optional owner hook for workflows that must commit their identity beside the paper trade. */
     @FunctionalInterface
     public interface TransactionHook {
-        void afterTradeCreated(Connection connection, TradeRecord trade) throws SQLException;
+        void afterTradeCreated(Connection connection, TradeRecord trade,
+                               TradePreview executionPreview) throws SQLException;
     }
 
     @FunctionalInterface
@@ -327,6 +331,14 @@ public final class TradeService {
 
     private TradePreview previewFromPlan(OpenRequest req, Plan p, long cashBeforeCents,
                                          long reservedBeforeCents, long releasedShares) {
+        return db.with(c -> previewFromPlanOn(c, req, p, cashBeforeCents,
+                reservedBeforeCents, releasedShares));
+    }
+
+    /** Builds the canonical preview from an already-priced Plan on the caller's transaction. */
+    private TradePreview previewFromPlanOn(Connection c, OpenRequest req, Plan p,
+                                           long cashBeforeCents, long reservedBeforeCents,
+                                           long releasedShares) throws SQLException {
         if (cashBeforeCents < 0 || reservedBeforeCents < 0 || releasedShares < 0) {
             throw new IllegalArgumentException("projected Practice balances cannot be negative");
         }
@@ -336,10 +348,10 @@ public final class TradeService {
         List<String> blocks = new ArrayList<>(p.blocks);
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-            long free = Math.addExact(db.with(c -> PositionsService.heldShares(c, req.accountId(),
+            long free = Math.addExact(PositionsService.heldShares(c, req.accountId(),
                             req.symbol().toUpperCase(java.util.Locale.ROOT))
                     - PositionsService.lockedShares(c, req.accountId(),
-                            req.symbol().toUpperCase(java.util.Locale.ROOT))), releasedShares);
+                            req.symbol().toUpperCase(java.util.Locale.ROOT)), releasedShares);
             if (free < needed) {
                 blocks.add("Needs " + needed + " free shares of " + req.symbol().toUpperCase(java.util.Locale.ROOT)
                         + " but only " + Math.max(0, free) + " are free (held minus already locked)");
@@ -918,6 +930,11 @@ public final class TradeService {
 
     private TradeRecord openOn(Connection c, Account acct, String tradeId, OpenRequest req, Plan p,
                                TransactionHook hook) throws SQLException {
+        TradePreview executionPreview = previewFromPlanOn(c, req, p,
+                acct.cashCents(), acct.reservedCents(), 0);
+        if (!executionPreview.ok()) {
+            throw new TradeRejectedException(executionPreview.blockReasons());
+        }
         long cashAfter = acct.cashCents() + p.entryNet - p.fees;
         long reservedAfter = acct.reservedCents() + p.reserve;
         if (cashAfter - reservedAfter < 0) {
@@ -973,7 +990,7 @@ public final class TradeService {
         Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, has_traded=1, updated_at=? WHERE id=?",
                 cash, reserved, now, acct.id());
         TradeRecord created = getOn(c, tradeId);
-        if (hook != null) hook.afterTradeCreated(c, created);
+        if (hook != null) hook.afterTradeCreated(c, created, executionPreview);
         return created;
     }
 
@@ -2539,16 +2556,29 @@ public final class TradeService {
         // gives the receipt's additive identity something real to catch.
         long stockCashFlow = ProtocolEvaluator.stockEntryBasisCents(filled, req.qty());
 
+        // Commission is part of a priced package, not a reward for passing the mechanical gates
+        // below. A package can be perfectly priceable and still be refused for undefined risk,
+        // stale mechanics, or a $0-loss impossibility. Computing the fee here keeps those exits
+        // from publishing a priced receipt with an invented "unknown" commission while the
+        // normal path publishes the same package with a known commission.
+        Fees.Schedule feeSchedule = req.feesOverrideCents() != null
+                ? new Fees.Schedule(req.feesOverrideCents(), req.feesOverrideCents(),
+                        Math.multiplyExact(2L, req.feesOverrideCents()))
+                : feeScheduleFor(filled, req.qty());
+        long openingFees = feeSchedule.openingCents();
+
         // THE package-price receipt (§7.2). Everything it needs is settled above, so every exit
         // from here down publishes the same amounts on the same stated basis. `naturalExecutableNet`
         // — not `executableNet` — is what travels: the latter silently falls back to the recorded
         // net on a one-sided book, and a field named "executable" must never carry a price nobody
-        // can trade on. Fees are unknown at this point and stay null until they are charged.
+        // can trade on. The opening commission is known once the filled package and quantity are
+        // known, regardless of whether a later risk gate allows placement.
         Long packageObservedAt = packageObservedAt(snapshotLegs,
                 marks.underlyingAsOfMs(req.symbol(), world).orElse(null));
         PackagePriceReceipt price = PackagePriceReceipt.of(req.qty(), entryNet, optionEntryNet,
                 stockCashFlow,
-                null, PackagePriceReceipt.FeeSide.OPENING, naturalExecutableNet,
+                openingFees, feeSchedule.roundTripCents(),
+                PackagePriceReceipt.FeeSide.OPENING, naturalExecutableNet,
                 req.orderInstruction(), executability, valuationBasis,
                 packageSource(snapshotLegs), worst.name(), packageObservedAt,
                 PackagePriceReceipt.fingerprintOf(filled, req.qty(), entryNet, valuationBasis,
@@ -2575,7 +2605,7 @@ public final class TradeService {
         if (mixedExpirations) {
             if (entryNet >= 0) {
                 blocks.add("Multi-expiration credit positions can carry undefined risk after the near leg expires; blocked");
-                return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                         worst, blocks, warnings, "{}", price);
             }
             // A net debit does NOT prove defined risk: a short leg that outlives (or out-strikes)
@@ -2584,11 +2614,10 @@ public final class TradeService {
                     .uncoveredShortsWithHeldShares(filled, coverSharesPerUnit);
             if (!uncovered.isEmpty()) {
                 blocks.addAll(uncovered);
-                return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+                return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                         worst, blocks, warnings, "{}", price);
             }
             long maxLossCal = -entryNet;
-            long feesCal = feesFor(filled, req.qty());
             warnings.add("Calendar/diagonal position: max profit and probability of profit depend on future volatility and are not shown");
             Map<String, Object> snapCal = new LinkedHashMap<>();
             snapCal.put("underlying", underlying.toPlainString());
@@ -2597,9 +2626,9 @@ public final class TradeService {
             if (world != null) snapCal.put("laneTime", java.time.LocalDateTime.ofInstant(
                     nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
             snapCal.put("legs", snapshotLegs);
-            return new Plan(filled, entryNet, feesCal, 0, maxLossCal, null, List.of(), null, null,
+            return new Plan(filled, entryNet, openingFees, 0, maxLossCal, null, List.of(), null, null,
                     Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock,
-                    snapshotLegs, assignProb, List.of(), price.withFees(feesCal));
+                    snapshotLegs, assignProb, List.of(), price);
         }
 
         // Held-shares trades are risk-shaped as the COMBINED position (option legs + the held
@@ -2669,21 +2698,21 @@ public final class TradeService {
             Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
                     io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
                     snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
-                    0, null, null, null, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
+                    feeSchedule.roundTripCents(), null, null, null, worst,
+                    marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                     rfr, rateEvidence);
-            return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+            return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked, price);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
         if (combinedMaxLoss <= 0 && !shareContext) {
             blocks.add("Computed max loss is $0.00 — a risk-free position does not exist in real markets. "
                     + "The quotes feeding this trade are unreliable (stale, crossed, or expired book); refusing to fill.");
-            return new Plan(filled, entryNet, 0, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
+            return new Plan(filled, entryNet, openingFees, 0, 0, null, List.of(), null, null, Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, price);
         }
         long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
-        long fees = req.feesOverrideCents() != null ? Math.max(0, req.feesOverrideCents()) : feesFor(filled, req.qty());
         long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
 
         var riskNeutral = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.analyze(
@@ -2704,7 +2733,7 @@ public final class TradeService {
                 nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
         snapshot.put("legs", snapshotLegs);
         if (req.feesOverrideCents() != null && !req.executedFill()) {
-            snapshot.put("feeOverridePerSideCents", fees);
+            snapshot.put("feeOverridePerSideCents", openingFees);
         }
         if (shareCovered) snapshot.put("coveredByHeldShares", sharesToLock);
         if (shareContext) snapshot.put("heldShareContextShares",
@@ -2713,13 +2742,14 @@ public final class TradeService {
         Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, t, tte,
                 io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
                 snapshotLegs, req.qty(), entryNet, optionEntryNet, executableNet, packageMid, req.proposedNetCents(),
-                fees, maxLoss, maxProfit, ev, worst, marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
+                feeSchedule.roundTripCents(), maxLoss, maxProfit, ev, worst,
+                marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
                 rfr, rateEvidence);
         if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
-        return new Plan(filled, entryNet, fees, reserve, maxLoss, maxProfit,
+        return new Plan(filled, entryNet, openingFees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 pop, ev, Money.toCents(underlying), worst, blocks, warnings, Json.write(snapshot), sharesToLock,
-                snapshotLegs, assignProb, payoff, analytics, price.withFees(fees));
+                snapshotLegs, assignProb, payoff, analytics, price);
     }
 
     private static List<Map<String, Object>> chartPointMaps(PayoffCurve curve, BigDecimal spot) {
@@ -2826,7 +2856,7 @@ public final class TradeService {
                                                List<Map<String, Object>> snaps, int qty,
                                                long entryNet, long optionEntryNet,
                                                long executableNet, Long packageMid,
-                                               Long proposedNet, long fees, Long maxLoss, Long maxProfit,
+                                               Long proposedNet, long roundTripFees, Long maxLoss, Long maxProfit,
                                                Long ev, Freshness freshness, Long sourceAsOf, double rfr,
                                                io.liftandshift.strikebench.model.DataEvidence rateEvidence) {
         Map<String, Object> out = new LinkedHashMap<>();
@@ -2931,7 +2961,7 @@ public final class TradeService {
         // commissions used by EconomicAssessment and the ticket acknowledgment, not merely the
         // opening commission. Otherwise Builder, Ideas and Decide show three different numbers
         // for the same package.
-        long evAfterFees = (ev == null ? 0 : ev) - Math.multiplyExact(fees, 2L);
+        long evAfterFees = (ev == null ? 0 : ev) - roundTripFees;
         if (curve.maxLossUnbounded()) {
             verdict = "unfavorable"; reason = "Risk is UNDEFINED — the stress loss below is a scenario, not a cap.";
         } else if (ev != null && evAfterFees < 0 && pAny < 0.45) {
@@ -3628,7 +3658,12 @@ public final class TradeService {
 
     /** Opening commission for this package under the app's configured fee schedule. */
     private long feesFor(List<Leg> legs, int qty) {
-        return Fees.openingCents(Fees.optionContracts(legs, qty),
+        return feeScheduleFor(legs, qty).openingCents();
+    }
+
+    /** One captured open/close commission schedule for an exact package and quantity. */
+    private Fees.Schedule feeScheduleFor(List<Leg> legs, int qty) {
+        return Fees.schedule(Fees.optionContracts(legs, qty),
                 cfg.feePerContractCents(), cfg.feePerOrderCents());
     }
 

@@ -1,8 +1,14 @@
 package io.liftandshift.strikebench.plan;
 
+import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.TradeRecord;
+import io.liftandshift.strikebench.paper.TradePreview;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -21,5 +27,55 @@ class PlanDecisionServiceParsingTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("invalid decimal");
         assertThatThrownBy(() -> PlanDecisionService.decisionInteger(0, "ratio"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("invalid ratio");
+    }
+
+    @Test
+    void createTimeReceiptMustMatchEveryReviewedFactNotOnlyNetAndFee() {
+        PackagePriceReceipt reviewed = PackagePriceReceipt.of(1, 10_000L, 10_000L, 0L,
+                130L, 260L, PackagePriceReceipt.FeeSide.OPENING, 10_000L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "cboe", "DELAYED", 1_000L, "reviewed-fingerprint");
+        PackagePriceReceipt movedBook = PackagePriceReceipt.of(1, 10_000L, 10_000L, 0L,
+                130L, 260L, PackagePriceReceipt.FeeSide.OPENING, 10_000L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "cboe", "DELAYED", 2_000L, "different-leg-fingerprint");
+        TradeRecord trade = new TradeRecord(
+                "tr", "acct", "AAPL", "CUSTOM", TradeRecord.ACTIVE, 1, List.of(),
+                null, null, null, 20_000L, 10_000L, 50_000L, 10_000L, List.of(),
+                .5, 130L, 0L, null, null, null, "{}", false,
+                "2026-07-26T00:00:00Z", null, "2026-07-26T00:00:00Z",
+                null, 0L, null, "OBSERVED", "DELAYED", "cboe");
+
+        Map<String, Object> reviewedAnalytics = Map.of(
+                "probabilityMap", Map.of("pMaxLoss", .5),
+                "evaluatedAtEpochMs", 1_000L);
+        TradePreview reviewedFacts = preview(reviewed, reviewedAnalytics);
+        TradePreview movedPricePreview = preview(movedBook, reviewedAnalytics);
+        TradePreview movedRiskPreview = preview(reviewed, Map.of(
+                "probabilityMap", Map.of("pMaxLoss", .7),
+                "evaluatedAtEpochMs", 2_000L));
+        TradePreview sameFactsLater = preview(reviewed, Map.of(
+                "probabilityMap", Map.of("pMaxLoss", .5),
+                "evaluatedAtEpochMs", 9_000L));
+
+        assertThatThrownBy(() -> PlanDecisionService.frozenPreview(
+                reviewedFacts, trade, movedPricePreview))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("changed after review");
+        assertThatThrownBy(() -> PlanDecisionService.frozenPreview(
+                reviewedFacts, trade, movedRiskPreview))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("decision evidence changed");
+        assertThat(PlanDecisionService.frozenPreview(reviewedFacts, trade, sameFactsLater))
+                .isSameAs(sameFactsLater);
+    }
+
+    private static TradePreview preview(PackagePriceReceipt price, Map<String, Object> analytics) {
+        return new TradePreview(true, List.of(), List.of(), 50_000L, 10_000L, List.of(),
+                .5, 1_000L, 0L, 1_000_000L, 1_009_870L, 0L, 0L,
+                1_000_000L, 1_009_870L, "DELAYED", null, 20_000L, null,
+                List.of(), List.of(), analytics, price);
     }
 }

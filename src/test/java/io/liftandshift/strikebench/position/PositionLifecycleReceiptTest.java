@@ -118,7 +118,7 @@ class PositionLifecycleReceiptTest {
                 .hasMessageContaining("unavailable money fact");
         // The reconciliation now lives on the shared §7.2 receipt, so it guards every surface.
         assertThatThrownBy(() -> new io.liftandshift.strikebench.paper.PackagePriceReceipt(1,
-                -4_700L, 0L, -4_700L, 65L, -4_700L, null, null,
+                -4_700L, 0L, -4_700L, 65L, null, -4_700L, null, null,
                 io.liftandshift.strikebench.paper.PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
                 io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE,
                 "book", "REALTIME", 1L, "fp",

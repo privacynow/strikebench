@@ -64,8 +64,8 @@ public record EconomicAssessment(
 
     public static EconomicAssessment assess(Candidate c, RiskProfile risk, EvidenceProfile evidence,
                                             ScoreBreakdown score, EvalContext ctx) {
-        return assess(c, risk, evidence, ctx, score != null && score.gatePassed(),
-                score == null ? List.of() : score.gateFailures(), roundTripFees(c, ctx));
+        return assessExact(c, risk, evidence, ctx, score != null && score.gatePassed(),
+                score == null ? List.of() : score.gateFailures(), roundTripFees(c));
     }
 
     /**
@@ -79,7 +79,7 @@ public record EconomicAssessment(
     /**
      * Exact-ticket assessment: mechanical eligibility comes from the trade preview and the fees are
      * the package-price receipt's own commission
-     * ({@code PackagePriceReceipt.roundTripFeesCents()}), not a reconstructed ranking assumption.
+     * ({@code PackagePriceReceipt.estimatedRoundTripFeesCents()}), not a reconstructed ranking assumption.
      *
      * <p>§3.2: {@code roundTripFeesCents} is null when that receipt states no commission — an
      * unpriced or refused package. Callers used to hand this a substituted 0 read off
@@ -100,8 +100,11 @@ public record EconomicAssessment(
                     UNKNOWN_FEES_REASON, null, null, null, null,
                     evidence != null && evidence.observedFor("endorsement"), reasons);
         }
+        if (roundTripFeesCents < 0) {
+            throw new IllegalArgumentException("round-trip fees cannot be negative");
+        }
         return assess(c, risk, evidence, ctx, mechanicallyEligible, mechanicalFailures,
-                Math.max(0, roundTripFeesCents));
+                roundTripFeesCents);
     }
 
     private static EconomicAssessment assess(Candidate c, RiskProfile risk, EvidenceProfile evidence,
@@ -250,16 +253,11 @@ public record EconomicAssessment(
         return reasons.contains(DAILY_HISTORY_REASON);
     }
 
-    /** THE round-trip commission for a candidate (option legs only, ×2 for open+close). Reused by
-     *  the ranker so the verdict and the decision score always net the SAME fees off the same EV. */
-    static long roundTripFees(Candidate c, EvalContext ctx) {
-        if (c == null || c.legs() == null || ctx == null) return 0;
-        long contracts = c.legs().stream()
-                .filter(l -> !"STOCK".equalsIgnoreCase(l.type()))
-                .mapToLong(l -> Math.max(1, l.ratio()))
-                .sum() * Math.max(1, c.qty());
-        return io.liftandshift.strikebench.util.Fees.roundTripCents(
-                contracts, ctx.feePerContractCents(), ctx.feePerOrderCents());
+    /** THE round-trip commission for a candidate: the commission frozen into its package-price
+     * receipt, never a re-price under today's configuration. Reused by the ranker so the verdict,
+     * decision score, and outcome comparison all consume the same captured cost. */
+    static Long roundTripFees(Candidate c) {
+        return c == null || c.price() == null ? null : c.price().estimatedRoundTripFeesCents();
     }
 
     /**

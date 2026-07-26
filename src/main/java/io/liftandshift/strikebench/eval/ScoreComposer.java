@@ -65,15 +65,19 @@ public final class ScoreComposer {
         String evNote;
         Long ev = risk.evHistVolCents();
         if (ev != null && risk.maxLossCents() > 0) {
-            // R9: judged NET of round-trip commissions — a thin edge that fees eat is no edge. THE
-            // one fee formula (EconomicAssessment.roundTripFees) so the score and the verdict never
-            // net different fees off the same EV.
-            long costs = EconomicAssessment.roundTripFees(c, ctx);
-            long evNet = ev - costs;
-            long scale = EconomicAssessment.realisticPayoffScaleCents(c, risk, ctx);
-            evComp = clamp01(0.5 + (double) evNet / (2.0 * scale));
-            evNote = String.format("realized-volatility scenario EV $%s net of ~$%s round-trip fees, vs structure payoff scale $%s; market-implied EV is disclosed separately as a cost benchmark",
-                    dollars(evNet), dollars(costs), dollars(scale));
+            // R9: judged NET of the exact captured package commission. A missing fee is not a free
+            // round trip and cannot become an expected-value advantage in the ranker.
+            Long costs = EconomicAssessment.roundTripFees(c);
+            if (costs == null) {
+                evComp = 0.5;
+                evNote = "after-cost expected value unavailable — the package price receipt states no commission";
+            } else {
+                long evNet = ev - costs;
+                long scale = EconomicAssessment.realisticPayoffScaleCents(c, risk, ctx);
+                evComp = clamp01(0.5 + (double) evNet / (2.0 * scale));
+                evNote = String.format("realized-volatility scenario EV $%s net of ~$%s round-trip fees, vs structure payoff scale $%s; market-implied EV is disclosed separately as a cost benchmark",
+                        dollars(evNet), dollars(costs), dollars(scale));
+            }
         } else {
             evComp = 0.5;
             evNote = "realistic-measure EV unavailable — neutral score; market-implied cost disclosure was not substituted";

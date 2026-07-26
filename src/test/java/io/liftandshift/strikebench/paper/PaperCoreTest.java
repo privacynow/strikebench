@@ -398,7 +398,8 @@ class PaperCoreTest {
         long tradesBefore = db.query("SELECT COUNT(*) n FROM trades", row -> row.lng("n")).getFirst();
         long ledgerBefore = db.query("SELECT COUNT(*) n FROM ledger", row -> row.lng("n")).getFirst();
 
-        assertThatThrownBy(() -> trades.create(creditPutSpread(before.id(), 1), (connection, trade) -> {
+        assertThatThrownBy(() -> trades.create(creditPutSpread(before.id(), 1), (connection, trade, executionPrice) -> {
+            assertThat(executionPrice).isNotNull();
             throw new java.sql.SQLException("owner snapshot failed");
         })).hasMessageContaining("owner snapshot failed");
 

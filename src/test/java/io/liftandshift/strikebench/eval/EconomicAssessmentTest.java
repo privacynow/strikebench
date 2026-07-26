@@ -14,23 +14,28 @@ import io.liftandshift.strikebench.support.TestPrices;
 class EconomicAssessmentTest {
 
     private Candidate candidate(double pop) {
+        return candidate(pop, 130L);
+    }
+
+    private Candidate candidate(double pop, long openingFeesCents) {
         return new Candidate("DEBIT_CALL_SPREAD", "Bull call spread", "debit_vertical", "BUY 100C / SELL 105C",
                 List.of(new LegView("BUY", "CALL", "100", "2026-08-21", 1, "4.00", 100, "OPEN"),
                         new LegView("SELL", "CALL", "105", "2026-08-21", 1, "2.00", 100, "OPEN")),
-                1, TestPrices.optionOnly(1, -20_000), 30_000L, 20_000, List.of("102"), pop, 0L, 0.8,
+                1, TestPrices.withFees(1, -20_000, -20_000, openingFeesCents),
+                30_000L, 20_000, List.of("102"), pop, 0L, 0.8,
                 "DELAYED", List.of(), 0.7, "test", "test", "test", "test", "test",
                 "DIRECTIONAL", List.of("DIRECTIONAL"), null, null, null, null, false, null, null);
     }
 
     private EvalContext ctx() {
-        return new EvalContext("AAPL", 10_000, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(), 1_000_000, true, 65,
-                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
+        return new EvalContext("AAPL", 10_000, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(), 1_000_000, true,
+                0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
     }
 
     private EvalContext ctx(int daysToExpiry) {
         return new EvalContext("AMD", 50_000, java.time.LocalDate.parse("2026-07-22"),
-                daysToExpiry, 0.35, 0.25, List.of(), 10_000_000, true, 65,
-                0, 0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury",
+                daysToExpiry, 0.35, 0.25, List.of(), 10_000_000, true,
+                0.04, io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                 io.liftandshift.strikebench.model.Freshness.EOD), null);
     }
 
@@ -55,19 +60,38 @@ class EconomicAssessmentTest {
     }
 
     @Test void economicVerdictIncludesFlatOrderFeesAsWellAsContractFees() {
-        EvalContext withOrderFee = new EvalContext("AAPL", 10_000, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
-                1_000_000, true, 65, 100, 0.04,
+        EvalContext context = new EvalContext("AAPL", 10_000, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
+                1_000_000, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
         RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.50, 1_000L,
                 20_000, 0.20, List.of(), 1_000L, "test");
 
-        EconomicAssessment a = EconomicAssessment.assess(candidate(0.50), risk, observed(), pass(), withOrderFee);
+        EconomicAssessment a = EconomicAssessment.assess(candidate(0.50, 230L), risk, observed(), pass(), context);
 
         // 2 option legs x $0.65 x entry/close + $1.00 order fee x entry/close.
         assertThat(a.estimatedRoundTripFeesCents()).isEqualTo(460L);
         assertThat(a.marketEvAfterCostsCents()).isEqualTo(540L);
         assertThat(a.realizedVolEvAfterCostsCents()).isEqualTo(540L);
+    }
+
+    @Test void economicVerdictUsesTheCapturedPackageFeeNotCurrentConfiguration() {
+        RiskProfile risk = new RiskProfile(20_000, 30_000L, 0.50, 1_000L,
+                20_000, 0.20, List.of(), 1_000L, "test");
+
+        // Receipt says $2.30 to open ($4.60 round trip). EvalContext deliberately has no fee
+        // schedule: replaying or re-ranking a captured package cannot consult current config.
+        EvalContext context = new EvalContext("AAPL", 10_000,
+                java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
+                1_000_000, true, 0.04,
+                io.liftandshift.strikebench.model.DataEvidence.of(
+                        "treasury", io.liftandshift.strikebench.model.Freshness.EOD), null);
+        EconomicAssessment assessment = EconomicAssessment.assess(
+                candidate(0.50, 230L), risk, observed(), pass(), context);
+
+        assertThat(assessment.estimatedRoundTripFeesCents()).isEqualTo(460L);
+        assertThat(assessment.marketEvAfterCostsCents()).isEqualTo(540L);
+        assertThat(assessment.realizedVolEvAfterCostsCents()).isEqualTo(540L);
     }
 
     @Test void lowProbabilityAloneNeverRejectsAPositivePayoffTrade() {
@@ -95,7 +119,7 @@ class EconomicAssessmentTest {
                 .toList();
         EvalContext withHistory = new EvalContext("AAPL", 10_000,
                 java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
-                List.of(), 1_000_000, true, 65, 0, 0.04,
+                List.of(), 1_000_000, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                         io.liftandshift.strikebench.model.Freshness.EOD), null,
                 new DeclaredObjective("DIRECTIONAL", "BULLISH", 30, "ACCEPT", "test"),
@@ -120,7 +144,7 @@ class EconomicAssessmentTest {
                 .toList();
         EvalContext withHistory = new EvalContext("AAPL", 10_000,
                 java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
-                List.of(), 1_000_000, true, 65, 0, 0.04,
+                List.of(), 1_000_000, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                         io.liftandshift.strikebench.model.Freshness.EOD), null,
                 new DeclaredObjective("DIRECTIONAL", "BULLISH", 30, "ACCEPT", "test"),
@@ -144,7 +168,8 @@ class EconomicAssessmentTest {
                 "acquisition_income", "SELL 95P 2026-09-04",
                 List.of(new LegView("SELL", "PUT", "95", "2026-09-04", 1,
                         "3.00", 100, "OPEN")),
-                1, TestPrices.optionOnly(1, 30_000L), 30_000L, 920_000L, List.of("92"), 0.72,
+                1, TestPrices.withFees(1, 30_000L, 30_000L, 65L),
+                30_000L, 920_000L, List.of("92"), 0.72,
                 -5_070L, 0.9, "DELAYED", List.of(), 0.8,
                 "income", "premium", "assignment", "volatility expansion", "test",
                 "INCOME", List.of("INCOME", "ACQUIRE"), 0.28, 25.0, "92",
@@ -154,7 +179,7 @@ class EconomicAssessmentTest {
                 .toList();
         EvalContext observedLike = new EvalContext("AAPL", 10_000,
                 java.time.LocalDate.parse("2026-07-22"), 45, 0.38, 0.20,
-                List.of(), 1_000_000, true, 65, 0, 0.04,
+                List.of(), 1_000_000, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury",
                         io.liftandshift.strikebench.model.Freshness.EOD), null,
                 new DeclaredObjective("INCOME", "NEUTRAL", 30, "ACCEPT", "test"),
@@ -257,7 +282,8 @@ class EconomicAssessmentTest {
                 "SELL " + strike + type + " 2026-09-04",
                 List.of(new LegView("SELL", type, strike, "2026-09-04", 1,
                         "10.00", 100, "OPEN")),
-                1, TestPrices.optionOnly(1, 100_000L), maxProfit, heldShares ? 0 : maxLoss, List.of(), 0.70,
+                1, TestPrices.withFees(1, 100_000L, 100_000L, 65L),
+                maxProfit, heldShares ? 0 : maxLoss, List.of(), 0.70,
                 -5_000L, 0.9, "DELAYED", List.of(), 0.8,
                 "income", "premium", "tail", "volatility", "test",
                 "INCOME", List.of("INCOME"), 0.25, 15.0, null,
@@ -379,7 +405,8 @@ class EconomicAssessmentTest {
         Candidate calendar = new Candidate("CALENDAR_CALL", "Call calendar", "time", "calendar",
                 List.of(new LegView("SELL", "CALL", "100", "2026-08-21", 1, "2.00", 100, "OPEN"),
                         new LegView("BUY", "CALL", "100", "2026-09-18", 1, "4.00", 100, "OPEN")),
-                1, TestPrices.optionOnly(1, -20_000), null, 20_000, List.of(), null, null, 0.8, "DELAYED", List.of(),
+                1, TestPrices.withFees(1, -20_000, -20_000, 130L),
+                null, 20_000, List.of(), null, null, 0.8, "DELAYED", List.of(),
                 base.confidence(), base.whyConsidered(), base.bestUpside(), base.biggestRisk(),
                 base.wouldInvalidate(), base.beginnerExplanation(), base.intent(), base.intents(), null, null,
                 null, null, false, null, null);
@@ -458,7 +485,8 @@ class EconomicAssessmentTest {
     private Candidate heldCoveredCall(int qty) {
         return new Candidate("COVERED_CALL", "Covered call", "shares_income", "SELL 105C",
                 List.of(new LegView("SELL", "CALL", "105", "2026-08-21", 1, "2.00", 100, "OPEN")),
-                qty, TestPrices.optionOnly(qty, 20_000L * qty), 70_000L * qty, 0, List.of("98", "105"), 0.60, 0L, 0.8,
+                qty, TestPrices.withFees(qty, 20_000L * qty, 20_000L * qty, 65L * qty),
+                70_000L * qty, 0, List.of("98", "105"), 0.60, 0L, 0.8,
                 "DELAYED", List.of(), 0.7, "test", "test", "test", "test", "test",
                 "INCOME", List.of("INCOME", "EXIT"), 0.30, null, null, null,
                 true, 100 * qty, 980_000L * qty);

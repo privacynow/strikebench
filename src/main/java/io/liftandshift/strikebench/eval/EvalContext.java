@@ -19,8 +19,6 @@ public record EvalContext(
         List<Double> ivHistory,   // trailing ATM-IV observations for rank/percentile (may be empty)
         long buyingPowerCents,    // for the capital gate
         boolean marketOpen,
-        long feePerContractCents, // so EV can be judged NET of commissions
-        long feePerOrderCents,    // flat fee, charged once on entry and once on close
         double riskFreeRate,      // annualized r used by the shared risk-neutral approximation
         DataEvidence rateEvidence,
         PortfolioExposureContext portfolioExposure,
@@ -45,12 +43,12 @@ public record EvalContext(
      */
     public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
                        Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, long feePerContractCents,
-                       long feePerOrderCents, double riskFreeRate, DataEvidence rateEvidence,
+                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
+                       DataEvidence rateEvidence,
                        PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
                        RegimeSnapshot regime, List<Double> trailingCloses) {
         this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
+                buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, regime, trailingCloses,
                 DataEvidence.missing("daily history provenance not supplied"));
     }
@@ -58,22 +56,22 @@ public record EvalContext(
     /** Undeclared-context constructor: existing callers keep their shape. */
     public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
                        Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, long feePerContractCents,
-                       long feePerOrderCents, double riskFreeRate, DataEvidence rateEvidence,
+                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
+                       DataEvidence rateEvidence,
                        PortfolioExposureContext portfolioExposure) {
         this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
+                buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, null, null, null);
     }
 
     /** Declared-but-regimeless constructor: pre-regime callers keep their shape. */
     public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
                        Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, long feePerContractCents,
-                       long feePerOrderCents, double riskFreeRate, DataEvidence rateEvidence,
+                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
+                       DataEvidence rateEvidence,
                        PortfolioExposureContext portfolioExposure, DeclaredObjective declared) {
         this(symbol, underlyingCents, asOfDate, daysToExpiry, atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, feePerContractCents, feePerOrderCents, riskFreeRate,
+                buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, null, null);
     }
 }

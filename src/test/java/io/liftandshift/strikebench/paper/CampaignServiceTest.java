@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.sim.PathEnsembleService;
 import io.liftandshift.strikebench.sim.ScenarioCanvasSpec;
 import io.liftandshift.strikebench.sim.ScenarioSpec;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.support.TestPrices;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import org.junit.jupiter.api.AfterEach;
@@ -297,10 +298,11 @@ class CampaignServiceTest {
                 "2026-06-01T14:00:00Z", "2026-06-12T14:00:00Z", 1, 0,
                 "[{\"action\":\"SELL\",\"type\":\"PUT\",\"strike\":\"95\","
                         + "\"expiration\":\"2026-07-17\",\"ratio\":1,\"entryPrice\":\"1\",\"multiplier\":100}]");
-        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,qty,proposed_net_cents," +
+        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,qty,price_receipt," +
                         "quote_as_of,economic_verdict,evidence_provenance,model_version," +
-                        "review_horizon_sessions,decision_seq) VALUES('pdec-review',?,1,'TRADE',1,10000," +
-                        "'2026-06-01T14:00:00Z','FAVORABLE','OBSERVED','review-test',30,1)", plan.id());
+                        "review_horizon_sessions,decision_seq) VALUES('pdec-review',?,1,'TRADE',1,?::jsonb," +
+                        "'2026-06-01T14:00:00Z','FAVORABLE','OBSERVED','review-test',30,1)",
+                plan.id(), Json.write(TestPrices.withFees(1, 10_000L, 10_000L, 0L)));
         db.exec("INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type,strike_price," +
                         "expiration,ratio,multiplier,fill_price) VALUES('pdec-review',0,'SELL','PUT',95," +
                         "'2026-07-17',1,100,1.00)");

@@ -522,6 +522,7 @@ public final class PlanStrategyService {
         values.put("option_net_cents", price.optionNetPremiumCents());
         values.put("stock_cash_flow_cents", price.stockCashFlowCents());
         values.put("opening_fees_cents", price.openingFeesCents());
+        values.put("estimated_round_trip_fees_cents", price.estimatedRoundTripFeesCents());
         values.put("after_fee_net_cents", price.afterFeeNetCents());
         values.put("executable_net_cents", price.executableNetCents());
         values.put("resting_limit_net_cents", price.restingLimitNetCents());
@@ -630,6 +631,7 @@ public final class PlanStrategyService {
         return "SELECT pc.id,pc.underlying_symbol,pc.scout_thesis,pc.recommendation_id,pc.source_kind," +
                 "pc.source_evaluation_id,pc.family,pc.display_name,pc.structure_group,pc.position_label,pc.qty," +
                 "pc.entry_net_cents,pc.option_net_cents,pc.stock_cash_flow_cents,pc.opening_fees_cents," +
+                "pc.estimated_round_trip_fees_cents," +
                 "pc.after_fee_net_cents,pc.executable_net_cents,pc.resting_limit_net_cents," +
                 "pc.valuation_basis,pc.price_executability,pc.price_fee_side,pc.price_source," +
                 "pc.price_observed_at_epoch_ms,pc.price_fingerprint,pc.price_unavailable_reason," +
@@ -649,6 +651,7 @@ public final class PlanStrategyService {
                 r.str("position_label"), integerOrNull(r, "qty"),
                 new CandidatePriceRow(r.lngOrNull("entry_net_cents"), r.lngOrNull("option_net_cents"),
                         r.lngOrNull("stock_cash_flow_cents"), r.lngOrNull("opening_fees_cents"),
+                        r.lngOrNull("estimated_round_trip_fees_cents"),
                         r.lngOrNull("after_fee_net_cents"), r.lngOrNull("executable_net_cents"),
                         r.lngOrNull("resting_limit_net_cents"), r.str("valuation_basis"),
                         r.str("price_executability"), r.str("price_fee_side"), r.str("price_source"),
@@ -946,6 +949,7 @@ public final class PlanStrategyService {
 
     /** The persisted §7.2 receipt, exactly as the columns store it. */
     private record CandidatePriceRow(Long gross, Long optionNet, Long stockCashFlow, Long openingFees,
+                                     Long estimatedRoundTripFees,
                                      Long afterFeeNet, Long executableNet, Long restingLimitNet,
                                      String valuationBasis, String executability, String feeSide,
                                      String source, Long observedAt, String fingerprint,
@@ -971,6 +975,7 @@ public final class PlanStrategyService {
         return new PackagePriceReceipt(quantity,
                 longOrNull(price, "optionNetPremiumCents"), longOrNull(price, "stockCashFlowCents"),
                 longOrNull(price, "grossPackageNetCents"), longOrNull(price, "openingFeesCents"),
+                longOrNull(price, "estimatedRoundTripFeesCents"),
                 longOrNull(price, "afterFeeNetCents"), longOrNull(price, "executableNetCents"),
                 longOrNull(price, "restingLimitNetCents"),
                 PackagePriceReceipt.ValuationBasis.valueOf(basis),
@@ -1010,7 +1015,8 @@ public final class PlanStrategyService {
                             : "this candidate was stored before its price receipt existed — re-scan to price it");
         }
         return new PackagePriceReceipt(quantity, p.optionNet(), p.stockCashFlow(), p.gross(),
-                p.openingFees(), p.afterFeeNet(), p.executableNet(), p.restingLimitNet(),
+                p.openingFees(), p.estimatedRoundTripFees(), p.afterFeeNet(), p.executableNet(),
+                p.restingLimitNet(),
                 PackagePriceReceipt.ValuationBasis.valueOf(p.valuationBasis()),
                 p.executability() == null ? OrderInstruction.Executability.UNAVAILABLE
                         : OrderInstruction.Executability.valueOf(p.executability()),

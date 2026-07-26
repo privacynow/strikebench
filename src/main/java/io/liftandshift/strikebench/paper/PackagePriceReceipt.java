@@ -51,6 +51,7 @@ public record PackagePriceReceipt(
         Long stockCashFlowCents,       // signed cash of any stock leg; 0 when the package has none
         Long grossPackageNetCents,     // == optionNetPremiumCents + stockCashFlowCents (enforced)
         Long openingFeesCents,         // commission of THIS order; see feeSide. null = not known
+        Long estimatedRoundTripFeesCents, // captured open+close estimate; null = not known
         Long afterFeeNetCents,         // == grossPackageNetCents - openingFeesCents (enforced)
         Long executableNetCents,       // natural two-sided net; null when the book is one-sided
         Long restingLimitNetCents,     // the signed limit, only when the order is a LIMIT
@@ -117,8 +118,37 @@ public record PackagePriceReceipt(
         if (valuationBasis == ValuationBasis.UNAVAILABLE && (unavailableReason == null || unavailableReason.isBlank())) {
             throw new IllegalArgumentException("an unpriced package must state why it is unavailable");
         }
+        if (valuationBasis == ValuationBasis.UNAVAILABLE) {
+            if (optionNetPremiumCents != null || stockCashFlowCents != null
+                    || openingFeesCents != null || estimatedRoundTripFeesCents != null
+                    || afterFeeNetCents != null || executableNetCents != null
+                    || restingLimitNetCents != null) {
+                throw new IllegalArgumentException(
+                        "an unpriced package cannot carry financial amounts");
+            }
+            if (executability != OrderInstruction.Executability.UNAVAILABLE) {
+                throw new IllegalArgumentException(
+                        "an unpriced package must have UNAVAILABLE executability");
+            }
+        } else if (unavailableReason != null && !unavailableReason.isBlank()) {
+            throw new IllegalArgumentException(
+                    "a priced package cannot carry an unavailable reason");
+        }
         if (openingFeesCents != null && openingFeesCents < 0) {
             throw new IllegalArgumentException("fees cannot be negative");
+        }
+        if (estimatedRoundTripFeesCents != null && estimatedRoundTripFeesCents < 0) {
+            throw new IllegalArgumentException("round-trip fees cannot be negative");
+        }
+        if (feeSide == FeeSide.OPENING
+                && (openingFeesCents == null) != (estimatedRoundTripFeesCents == null)) {
+            throw new IllegalArgumentException(
+                    "an opening price must state both its opening and estimated round-trip commission");
+        }
+        if (feeSide == FeeSide.OPENING && openingFeesCents != null
+                && estimatedRoundTripFeesCents < openingFeesCents) {
+            throw new IllegalArgumentException(
+                    "estimated round-trip commission cannot be less than the opening commission");
         }
 
         // The additive invariant: the whole package is exactly its option premium plus its stock
@@ -168,26 +198,11 @@ public record PackagePriceReceipt(
     }
 
     /**
-     * THE estimated round-trip commission for this package: twice the ONE commission this receipt
-     * states. Every surface that nets an expected value against costs — ticket review, the Plan
-     * builder, tracked-package analysis — used to write
-     * {@code Math.multiplyExact(preview.feesOpenCents(), 2L)} for itself: four copies of one
-     * doubling, reading a field that was a substituted 0 whenever the package could not be priced.
-     *
-     * <p>Null when {@link #openingFeesCents} is unknown. A caller must then say the cost is
-     * unavailable rather than net an EV against a substituted zero, which publishes the package's
-     * GROSS expectation as if the round trip were free (§3.2).</p>
-     */
-    public Long roundTripFeesCents() {
-        return openingFeesCents == null ? null : Math.multiplyExact(openingFeesCents, 2L);
-    }
-
-    /**
      * §3.2 fallthrough guard: no price at all, with the reason attached. Quantity is still stated
      * because the reader still needs to know what size was being priced.
      */
     public static PackagePriceReceipt unavailable(int quantity, FeeSide feeSide, String reason) {
-        return new PackagePriceReceipt(Math.max(1, quantity), null, null, null, null, null, null, null,
+        return new PackagePriceReceipt(Math.max(1, quantity), null, null, null, null, null, null, null, null,
                 ValuationBasis.UNAVAILABLE, OrderInstruction.Executability.UNAVAILABLE,
                 null, null, null, null, feeSide == null ? FeeSide.OPENING : feeSide,
                 reason == null || reason.isBlank() ? "no package price is available" : reason);
@@ -217,6 +232,7 @@ public record PackagePriceReceipt(
                                          long optionNetPremiumCents,
                                          long stockCashFlowCents,
                                          Long feesCents,
+                                         Long estimatedRoundTripFeesCents,
                                          FeeSide feeSide,
                                          Long executableNetCents,
                                          OrderInstruction instruction,
@@ -240,6 +256,7 @@ public record PackagePriceReceipt(
                 stockCashFlowCents,
                 grossPackageNetCents,
                 fees,
+                estimatedRoundTripFeesCents,
                 fees == null ? null : grossPackageNetCents - fees,
                 executableNetCents,
                 instruction == null ? null : instruction.limitNetCents(),
@@ -262,6 +279,7 @@ public record PackagePriceReceipt(
                                              int quantity,
                                              long grossPackageNetCents,
                                              Long feesCents,
+                                             Long estimatedRoundTripFeesCents,
                                              FeeSide feeSide,
                                              Long executableNetCents,
                                              OrderInstruction instruction,
@@ -274,7 +292,8 @@ public record PackagePriceReceipt(
         return of(quantity, grossPackageNetCents,
                 ProtocolEvaluator.optionEntryBasisCents(legs, quantity, grossPackageNetCents),
                 ProtocolEvaluator.stockEntryBasisCents(legs, quantity),
-                feesCents, feeSide, executableNetCents, instruction, executability, valuationBasis,
+                feesCents, estimatedRoundTripFeesCents, feeSide, executableNetCents,
+                instruction, executability, valuationBasis,
                 source, freshness, observedAt, fingerprint);
     }
 
@@ -304,13 +323,14 @@ public record PackagePriceReceipt(
      * transformation rather than a second construction so the after-fee arithmetic stays in one
      * place — a producer that learns the fee late cannot accidentally state a different net.
      */
-    public PackagePriceReceipt withFees(long feesCents) {
+    public PackagePriceReceipt withFees(long feesCents, Long estimatedRoundTripFeesCents) {
         if (!priced()) return this;
         // Same rule as #of: the commission charged is a fact, so a negative one is a caller defect
         // that must surface, not be quietly published as a free order.
         long fees = feesCents;
         return new PackagePriceReceipt(quantity, optionNetPremiumCents, stockCashFlowCents,
-                grossPackageNetCents, fees, grossPackageNetCents - fees, executableNetCents,
+                grossPackageNetCents, fees, estimatedRoundTripFeesCents,
+                grossPackageNetCents - fees, executableNetCents,
                 restingLimitNetCents, valuationBasis, executability, source, freshness, observedAt,
                 fingerprint, feeSide, unavailableReason);
     }

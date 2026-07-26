@@ -18,9 +18,17 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.liftandshift.strikebench.support.TestPrices;
 
 class RecommendationEngineTest {
+
+    @Test
+    void negativeCommissionPolicyCannotBecomeFreeCandidateEconomics() {
+        assertThatThrownBy(() -> engine.withFees(-1, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot be negative");
+    }
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-07-08T15:30:00Z"), ZoneId.of("America/New_York"));
     private static final LocalDate TODAY = LocalDate.of(2026, 7, 8);

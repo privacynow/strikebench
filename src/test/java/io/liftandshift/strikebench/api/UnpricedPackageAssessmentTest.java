@@ -85,6 +85,25 @@ class UnpricedPackageAssessmentTest {
         @Override public Optional<LegMark> legMark(String symbol, Leg leg) { return Optional.empty(); }
     }
 
+    /** Complete two-sided evidence for proving that mechanical refusal does not erase price facts. */
+    private static final class TwoSidedMarks implements MarksSource {
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) {
+            return Optional.of(new BigDecimal("100.00"));
+        }
+        @Override public Optional<Long> underlyingAsOfMs(String symbol) {
+            return Optional.of(1_785_000_000_000L);
+        }
+        @Override public Optional<DataEvidence> underlyingEvidence(String symbol, String worldId) {
+            return Optional.of(DataEvidence.of("test-book", Freshness.DELAYED));
+        }
+        @Override public Optional<LegMark> legMark(String symbol, Leg leg) {
+            return Optional.of(new LegMark(new BigDecimal("1.00"), new BigDecimal("1.10"),
+                    new BigDecimal("1.05"), 0.30, Freshness.DELAYED,
+                    null, null, null, null,
+                    DataEvidence.of("test-book", Freshness.DELAYED), 1_785_000_000_000L));
+        }
+    }
+
     @BeforeEach
     void setUp() {
         db = TestDb.fresh();
@@ -97,6 +116,11 @@ class UnpricedPackageAssessmentTest {
     private TradeService unquotedMarket() {
         AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
         return new TradeService(db, cfg, new NoMarksAtAll(), new AuditLog(db, CLOCK), CLOCK);
+    }
+
+    private TradeService pricedMarket() {
+        AppConfig cfg = new AppConfig(Map.of("FIXTURES_ONLY", "true"));
+        return new TradeService(db, cfg, new TwoSidedMarks(), new AuditLog(db, CLOCK), CLOCK);
     }
 
     @AfterEach
@@ -127,10 +151,18 @@ class UnpricedPackageAssessmentTest {
                 OrderInstruction.market());
     }
 
+    private TradeService.OpenRequest nakedShortCall() {
+        List<Leg> legs = List.of(Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("105"), EXP, 1, BigDecimal.ZERO));
+        return new TradeService.OpenRequest(accountId, "AAPL", "CUSTOM", 1, legs, "neutral",
+                "month", "aggressive", "INCOME", false, null, null, "PLAN", "PROPOSED",
+                OrderInstruction.market());
+    }
+
     private static EvalContext ctx() {
         return new EvalContext("AAPL", 10_000L, LocalDate.parse("2026-07-08"), 44, 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
-                10_000_000L, true, 65, 0, 0.04,
+                10_000_000L, true, 0.04,
                 DataEvidence.of("treasury", Freshness.EOD), null);
     }
 
@@ -244,7 +276,7 @@ class UnpricedPackageAssessmentTest {
         assertThat(wire.at("/price/grossPackageNetCents").isNull()).isTrue();
         assertThat(wire.at("/price/openingFeesCents").isNull()).isTrue();
         assertThat(wire.at("/price/unavailableReason").asText()).contains("No market or model mark");
-        assertThat(preview.price().roundTripFeesCents()).isNull();
+        assertThat(preview.price().estimatedRoundTripFeesCents()).isNull();
     }
 
     /**
@@ -261,7 +293,7 @@ class UnpricedPackageAssessmentTest {
         Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
 
         StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate, spec(), ctx(),
-                preview.ok(), preview.blockReasons(), preview.price().roundTripFeesCents());
+                preview.ok(), preview.blockReasons(), preview.price().estimatedRoundTripFeesCents());
         EconomicAssessment economics = evaluation.assessment().economics();
 
         assertThat(economics.verdict()).isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
@@ -277,6 +309,59 @@ class UnpricedPackageAssessmentTest {
         var wire = io.liftandshift.strikebench.util.Json.MAPPER
                 .valueToTree(ApiResponses.EvaluationReceipt.of(evaluation));
         assertThat(wire.at("/assessment/economics/estimatedRoundTripFeesCents").isNumber()).isFalse();
+    }
+
+    @Test
+    void aPricedButMechanicallyBlockedPackageKeepsItsCapturedCommission() {
+        TradeService.OpenRequest request = nakedShortCall();
+        TradePreview preview = pricedMarket().analyze(request);
+
+        assertThat(preview.ok()).isFalse();
+        assertThat(preview.blockReasons()).anySatisfy(reason ->
+                assertThat(reason).containsIgnoringCase("undefined"));
+        assertThat(preview.price().priced()).isTrue();
+        assertThat(preview.price().grossPackageNetCents()).isEqualTo(10_000L);
+        assertThat(preview.price().openingFeesCents()).isEqualTo(65L);
+        assertThat(preview.price().estimatedRoundTripFeesCents()).isEqualTo(130L);
+
+        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
+        StrategyEvaluation evaluation = new StrategyEvaluator().assessExact(candidate,
+                new StrategySpec("AAPL", "CUSTOM", "INCOME", "month", "NEUTRAL",
+                        "AGGRESSIVE", "decision"),
+                ctx(), preview.ok(), preview.blockReasons(),
+                preview.price().estimatedRoundTripFeesCents());
+
+        assertThat(evaluation.assessment().economics().estimatedRoundTripFeesCents())
+                .isEqualTo(130L);
+        assertThat(evaluation.assessment().economics().reasons())
+                .doesNotContain(EconomicAssessment.UNKNOWN_FEES_REASON);
+        assertThat(evaluation.assessment().mechanics().eligible()).isFalse();
+    }
+
+    /**
+     * The API seam must preserve an unknown fee as null. This used to declare a primitive
+     * {@code long}; the method reference auto-unboxed the receipt and the controller caught an NPE,
+     * replacing a complete degraded assessment with the generic wholesale-unavailable fallback.
+     */
+    @Test
+    void theExactAssessmentApiSeamCarriesAnUnknownCommissionWithoutUnboxingIt() {
+        TradeService.OpenRequest request = creditPutSpread();
+        TradePreview preview = trades.analyze(request);
+        Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
+        TradeController.ExactAssessment seam = (symbol, exact, buyingPower, analysisContext, worldId,
+                eligible, failures, roundTripFees, exposure) -> {
+            assertThat(roundTripFees).isNull();
+            return new StrategyEvaluator().assessExact(exact, spec(), ctx(), eligible, failures,
+                    roundTripFees);
+        };
+
+        StrategyEvaluation evaluation = seam.assess("AAPL", candidate, 10_000_000L, null, null,
+                preview.ok(), preview.blockReasons(),
+                preview.price().estimatedRoundTripFeesCents(), null);
+
+        assertThat(evaluation.assessment().economics().verdict())
+                .isEqualTo(EconomicAssessment.Verdict.UNAVAILABLE);
+        assertThat(evaluation.assessment().economics().estimatedRoundTripFeesCents()).isNull();
     }
 
     /**

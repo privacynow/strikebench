@@ -2,6 +2,8 @@ package io.liftandshift.strikebench.plan;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,9 +33,11 @@ class PlanManagementServiceTest {
         Plan.View plan = plans.create(null, Plan.MarketKind.DEMO, null, null,
                 new Plan.CreateRequest("cash-review-archive", "QQQ", "INCOME", null, null,
                         "neutral", 30, null, "conservative", 0L, null, null, null));
-        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,quote_as_of,economic_verdict," +
+        db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,price_receipt,quote_as_of,economic_verdict," +
                         "evidence_provenance,model_version,review_horizon_sessions,decision_seq) " +
-                        "VALUES('pdec_archived',?,1,'CASH',now(),'MIXED','DEMO','test',30,1)", plan.id());
+                        "VALUES('pdec_archived',?,1,'CASH',?::jsonb,now(),'MIXED','DEMO','test',30,1)",
+                plan.id(), Json.write(PackagePriceReceipt.unavailable(1,
+                        PackagePriceReceipt.FeeSide.OPENING, "cash decision")));
         db.exec("UPDATE plans SET status='DECIDED_CASH' WHERE id=?", plan.id());
         Plan.View decided = plans.get(null, plan.id());
         Plan.View archived = plans.archive(null, plan.id(), new Plan.ArchiveRequest(decided.version()));

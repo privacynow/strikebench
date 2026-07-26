@@ -48,16 +48,6 @@ public final class EvaluationService {
     private final Cache<String, List<Double>> ivHistoryCache =
             Caffeine.newBuilder().maximumSize(256).expireAfterWrite(Duration.ofSeconds(60)).build();
 
-    private long feePerContractCents = 65;
-    private long feePerOrderCents;
-
-    /** Wire the complete platform commission so decision EV matches the eventual ticket. */
-    public EvaluationService withFees(long perContractCents, long perOrderCents) {
-        this.feePerContractCents = Math.max(0, perContractCents);
-        this.feePerOrderCents = Math.max(0, perOrderCents);
-        return this;
-    }
-
     public EvaluationService(MarketDataService market, Db db, Clock clock) {
         this(market, db, clock, new EventService(market, clock));
     }
@@ -312,8 +302,8 @@ public final class EvaluationService {
         // Regime is a framing lens over the SAME lane's history: vol profile from this
         // context's own inputs, trend/drawdown from this lane's candles (folded Phase 10.3).
         EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol,
-                ivHistory, buyingPowerCents, open, feePerContractCents, feePerOrderCents,
-                rate.annualRate(), rate.evidence(), portfolioExposure, declared, null, List.of(),
+                ivHistory, buyingPowerCents, open, rate.annualRate(), rate.evidence(),
+                portfolioExposure, declared, null, List.of(),
                 historySeries.evidence());
         VolatilityProfile volProfile = new VolatilityProfiler().profile(preRegime);
         List<Candle> regimeCandles = historySeries.candles();
@@ -327,8 +317,8 @@ public final class EvaluationService {
                 .map(candle -> candle.close() == null ? null : candle.close().doubleValue())
                 .filter(java.util.Objects::nonNull).toList();
         return new EvalContext(symbol, underlyingCents, today, dte, atmIv, realizedVol, ivHistory,
-                buyingPowerCents, open, feePerContractCents, feePerOrderCents, rate.annualRate(),
-                rate.evidence(), portfolioExposure, declared, regime, trailingCloses,
+                buyingPowerCents, open, rate.annualRate(), rate.evidence(),
+                portfolioExposure, declared, regime, trailingCloses,
                 historySeries.evidence());
     }
 

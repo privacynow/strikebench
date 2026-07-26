@@ -282,7 +282,8 @@ final class PlanStrategyController {
         ObjectNode candidateJson = Json.MAPPER.valueToTree(candidate);
         // §3.1/§3.2: the ONE round-trip commission off the package's own §7.2 receipt; null when
         // the package could not be priced, so no EV is published "after costs" it never paid.
-        Long roundTripFees = preview.price() == null ? null : preview.price().roundTripFeesCents();
+        Long roundTripFees = preview.price() == null ? null
+                : preview.price().estimatedRoundTripFeesCents();
         ApiResponses.EvaluationReceipt evaluation;
         try {
             evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(

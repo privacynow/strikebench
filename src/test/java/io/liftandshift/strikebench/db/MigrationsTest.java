@@ -1,6 +1,9 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.support.TestDb;
+import io.liftandshift.strikebench.util.Json;
+import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.exception.FlywayValidateException;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +22,7 @@ class MigrationsTest {
             assertThat(db.query(
                     "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank",
                     r -> r.str("version"))).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-                    "11", "12", "13");
+                    "11", "12", "13", "14");
 
             // The baseline carries its seed rows and the current column shape.
             assertThat(db.query("SELECT id FROM users ORDER BY id", r -> r.str("id")))
@@ -73,6 +76,16 @@ class MigrationsTest {
                             + "WHERE table_schema='public' AND table_name='plan_candidate' "
                             + "AND column_name='option_net_cents'",
                     r -> r.str("column_name"))).containsExactly("option_net_cents");
+            // V14: opening and round-trip commission are captured independently on candidates,
+            // and a frozen decision has one package-price receipt instead of a primitive twin.
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_candidate' "
+                            + "AND column_name='estimated_round_trip_fees_cents'",
+                    r -> r.str("column_name"))).containsExactly("estimated_round_trip_fees_cents");
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_decision' "
+                            + "AND column_name IN ('price_receipt','proposed_net_cents') ORDER BY column_name",
+                    r -> r.str("column_name"))).containsExactly("price_receipt");
             // V9: the managed backtest stores its exit knobs in the ONE management-policy
             // vocabulary, so the old max-profit/max-loss/calendar-DTE column names are gone.
             assertThat(db.query("SELECT column_name FROM information_schema.columns "
@@ -128,5 +141,139 @@ class MigrationsTest {
             assertThatThrownBy(() -> Migrations.run(db))
                     .isInstanceOf(FlywayValidateException.class);
         }
+    }
+
+    @Test void v14UpgradesHistoricalDecisionsToOneHonestPackagePriceReceipt() {
+        var cfg = TestDb.emptyConfig();
+        try (Db db = new Db(cfg.get("DB_URL"), cfg.get("DB_USER"), cfg.get("DB_PASSWORD"))) {
+            Flyway.configure()
+                    .dataSource(db.dataSource())
+                    .locations("classpath:db/migrations")
+                    .target("13")
+                    .load()
+                    .migrate();
+
+            legacyPlan(db, "plan-option", "AAPL");
+            legacyPlan(db, "plan-stock", "NVDA");
+            legacyPlan(db, "plan-unpriced", "SPY");
+            legacyPlan(db, "plan-missing-leg-price", "MSFT");
+            legacyPlan(db, "plan-zero-unavailable", "QQQ");
+
+            db.exec("INSERT INTO plan_decision(id,plan_id,context_rev,action,qty,proposed_net_cents,"
+                            + "quote_as_of,economic_verdict,evidence_provenance,model_version,"
+                            + "review_horizon_sessions,decision_seq) "
+                            + "VALUES('decision-option','plan-option',1,'TRADE',2,100000,"
+                            + "'2026-07-20T14:30:00Z','MIXED','DELAYED','decision-legacy',30,1),"
+                            + "('decision-stock','plan-stock',1,'TRADE',2,-1960000,"
+                            + "'2026-07-20T14:31:00Z','MIXED','DELAYED','decision-legacy',30,1),"
+                            + "('decision-unpriced','plan-unpriced',1,'CASH',NULL,NULL,"
+                            + "'2026-07-20T14:32:00Z','CASH','UNAVAILABLE','decision-legacy',30,1),"
+                            + "('decision-missing-leg-price','plan-missing-leg-price',1,'TRADE',1,-980000,"
+                            + "'2026-07-20T14:33:00Z','MIXED','DELAYED','decision-legacy',30,1),"
+                            + "('decision-zero-unavailable','plan-zero-unavailable',1,'TRADE',1,0,"
+                            + "'2026-07-20T14:34:00Z','UNAVAILABLE','UNAVAILABLE','decision-legacy',30,1)");
+
+            // The option-only decision already stored the full-quantity package net.
+            legacyMetric(db, "decision-option", "entryNetPremiumCents", 100000L, null);
+            legacyMetric(db, "decision-option", "feesOpenCents", 130L, null);
+            legacyMetric(db, "decision-option", "orderLimitNetCents", 99000L, null);
+            legacyMetric(db, "decision-option", "orderExecutability", null, "IMMEDIATE");
+            legacyMetric(db, "decision-option", "orderValuationBasis", null, "EXECUTABLE_BOOK");
+
+            // A buy-write's option and stock sides have to be recovered from the immutable legs,
+            // rather than mislabeling the whole package debit as option premium.
+            db.exec("INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type,"
+                            + "strike_price,expiration,ratio,bid_price,ask_price,mid_price,fill_price,iv,multiplier) "
+                            + "VALUES('decision-stock',0,'BUY','STOCK',NULL,NULL,100,100,100,100,100,NULL,1),"
+                            + "('decision-stock',1,'SELL','CALL',140,'2026-08-21',1,2,2,2,2,0.25,100)");
+            legacyMetric(db, "decision-stock", "entryNetPremiumCents", -1960000L, null);
+            legacyMetric(db, "decision-stock", "feesOpenCents", 500L, null);
+            legacyMetric(db, "decision-stock", "orderExecutability", null, "RESTING");
+            legacyMetric(db, "decision-stock", "orderValuationBasis", null, "RECORDED_FILL");
+
+            db.exec("INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type,"
+                            + "strike_price,expiration,ratio,bid_price,ask_price,mid_price,fill_price,iv,multiplier) "
+                            + "VALUES('decision-missing-leg-price',0,'BUY','STOCK',NULL,NULL,100,"
+                            + "100,100,100,100,NULL,1),"
+                            + "('decision-missing-leg-price',1,'SELL','CALL',110,'2026-08-21',1,"
+                            + "NULL,NULL,NULL,NULL,NULL,100)");
+            legacyMetric(db, "decision-missing-leg-price", "feesOpenCents", 100L, null);
+            legacyMetric(db, "decision-missing-leg-price", "orderValuationBasis", null, "RECORDED_FILL");
+            legacyMetric(db, "decision-zero-unavailable", "feesOpenCents", 0L, null);
+            legacyMetric(db, "decision-zero-unavailable", "orderValuationBasis", null, "UNAVAILABLE");
+
+            Migrations.run(db);
+
+            PackagePriceReceipt option = receipt(db, "decision-option");
+            assertThat(option.quantity()).isEqualTo(2);
+            assertThat(option.optionNetPremiumCents()).isEqualTo(100000L);
+            assertThat(option.stockCashFlowCents()).isZero();
+            assertThat(option.grossPackageNetCents()).isEqualTo(100000L);
+            assertThat(option.openingFeesCents()).isEqualTo(130L);
+            assertThat(option.estimatedRoundTripFeesCents()).isEqualTo(260L);
+            assertThat(option.afterFeeNetCents()).isEqualTo(99870L);
+            assertThat(option.restingLimitNetCents()).isEqualTo(99000L);
+            assertThat(option.valuationBasis())
+                    .isEqualTo(PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK);
+
+            PackagePriceReceipt stock = receipt(db, "decision-stock");
+            assertThat(stock.optionNetPremiumCents()).isEqualTo(40000L);
+            assertThat(stock.stockCashFlowCents()).isEqualTo(-2000000L);
+            assertThat(stock.grossPackageNetCents()).isEqualTo(-1960000L);
+            assertThat(stock.openingFeesCents()).isEqualTo(500L);
+            assertThat(stock.estimatedRoundTripFeesCents()).isEqualTo(1000L);
+            assertThat(stock.afterFeeNetCents()).isEqualTo(-1960500L);
+
+            PackagePriceReceipt unavailable = receipt(db, "decision-unpriced");
+            assertThat(unavailable.priced()).isFalse();
+            assertThat(unavailable.grossPackageNetCents()).isNull();
+            assertThat(unavailable.unavailableReason()).contains("no recorded package net");
+
+            PackagePriceReceipt missingLegPrice = receipt(db, "decision-missing-leg-price");
+            assertThat(missingLegPrice.priced()).isFalse();
+            assertThat(missingLegPrice.optionNetPremiumCents()).isNull();
+            assertThat(missingLegPrice.stockCashFlowCents()).isNull();
+            assertThat(missingLegPrice.openingFeesCents()).isNull();
+            assertThat(missingLegPrice.unavailableReason()).contains("cannot prove both sides");
+
+            PackagePriceReceipt legacyZero = receipt(db, "decision-zero-unavailable");
+            assertThat(legacyZero.priced()).isFalse();
+            assertThat(legacyZero.grossPackageNetCents()).isNull();
+            assertThat(legacyZero.openingFeesCents()).isNull();
+            assertThat(legacyZero.unavailableReason()).contains("explicitly recorded");
+
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='plan_decision' "
+                            + "AND column_name='proposed_net_cents'", r -> r.str("column_name")))
+                    .isEmpty();
+            assertThat(db.query("SELECT metric_key FROM plan_decision_metric "
+                            + "WHERE metric_key IN ('entryNetPremiumCents','feesOpenCents',"
+                            + "'orderExecutability','orderValuationBasis') ORDER BY metric_key",
+                    r -> r.str("metric_key"))).isEmpty();
+
+            assertThatThrownBy(() -> db.exec("UPDATE plan_decision SET price_receipt = "
+                    + "jsonb_set(price_receipt,'{optionNetPremiumCents}','100'::jsonb) "
+                    + "WHERE id='decision-unpriced'"))
+                    .hasMessageContaining("plan_decision_price_receipt");
+        }
+    }
+
+    private static void legacyPlan(Db db, String id, String symbol) {
+        db.exec("INSERT INTO plans(id,user_id,symbol,market_kind,status) "
+                + "VALUES(?,'local',?,'OBSERVED','ACTIVE')", id, symbol);
+        db.exec("INSERT INTO plan_context_revision(id,plan_id,rev,horizon_days,input_hash,engine_version) "
+                + "VALUES(?, ?,1,30,?,'context-legacy')", "ctx-" + id, id, "hash-" + id);
+        db.exec("UPDATE plans SET active_context_rev=1 WHERE id=?", id);
+    }
+
+    private static void legacyMetric(Db db, String decisionId, String key, Long cents, String text) {
+        db.exec("INSERT INTO plan_decision_metric(decision_id,metric_key,value_cents,value_text) "
+                + "VALUES(?,?,?,?)", decisionId, key, cents, text);
+    }
+
+    private static PackagePriceReceipt receipt(Db db, String decisionId) {
+        String raw = db.query("SELECT price_receipt::text receipt FROM plan_decision WHERE id=?",
+                r -> r.str("receipt"), decisionId).getFirst();
+        return Json.read(raw, PackagePriceReceipt.class);
     }
 }

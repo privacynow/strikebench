@@ -35,12 +35,26 @@ public final class TestPrices {
         return executable(quantity, grossPackageNetCents, optionNetPremiumCents, openingFeesCents);
     }
 
+    /** A captured asymmetric schedule, proving readers consume the receipt instead of doubling. */
+    public static PackagePriceReceipt withFeeSchedule(int quantity, long grossPackageNetCents,
+                                                      long optionNetPremiumCents,
+                                                      long openingFeesCents,
+                                                      long estimatedRoundTripFeesCents) {
+        return PackagePriceReceipt.of(quantity, grossPackageNetCents, optionNetPremiumCents,
+                grossPackageNetCents - optionNetPremiumCents,
+                openingFeesCents, estimatedRoundTripFeesCents,
+                PackagePriceReceipt.FeeSide.OPENING, grossPackageNetCents,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "DELAYED",
+                1_785_000_000_000L, "test-package-price");
+    }
+
     /** A CLOSING-side package price: what it costs to get out, on the executable book. */
     public static PackagePriceReceipt closing(int quantity, long grossCloseCashCents,
                                               long optionCloseCashCents, long closingFeesCents) {
         return PackagePriceReceipt.of(quantity, grossCloseCashCents, optionCloseCashCents,
                 grossCloseCashCents - optionCloseCashCents,
-                closingFeesCents, PackagePriceReceipt.FeeSide.CLOSING, grossCloseCashCents,
+                closingFeesCents, null, PackagePriceReceipt.FeeSide.CLOSING, grossCloseCashCents,
                 null, OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "DELAYED",
                 1_785_000_000_000L, "test-close-price");
@@ -53,7 +67,9 @@ public final class TestPrices {
                                                   long optionNetPremiumCents, Long openingFeesCents) {
         return PackagePriceReceipt.of(quantity, grossPackageNetCents, optionNetPremiumCents,
                 grossPackageNetCents - optionNetPremiumCents,
-                openingFeesCents, PackagePriceReceipt.FeeSide.OPENING, grossPackageNetCents,
+                openingFeesCents,
+                openingFeesCents == null ? null : Math.multiplyExact(2L, openingFeesCents),
+                PackagePriceReceipt.FeeSide.OPENING, grossPackageNetCents,
                 OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK, "fixture", "DELAYED",
                 1_785_000_000_000L, "test-package-price");

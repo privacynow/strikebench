@@ -958,29 +958,20 @@ public final class CampaignService {
         record Action(String kind, OffsetDateTime at, Long unrealizedCents, Long realizedCents,
                       String tradeId, Integer tradeQty) {}
         record Seen(String rule, int actionIndex, OffsetDateTime at, Long pnlCents) {}
-        // ONE basis: the frozen protocol lines are measured on the OPTION-ONLY net. The recorded
-        // proposed net is authoritative when there is no stock leg (it can carry a package-level
-        // limit the legs alone cannot reproduce); with a stock leg present the option portion is
-        // recomputed from the frozen option legs so a buy-write is never judged on its shares.
+        // ONE basis: the frozen protocol lines are measured on the option-only net published by
+        // the decision's canonical package-price receipt. No leg-price reconstruction or legacy
+        // proposed-net column can silently give a buy-write's shares to the option protocol.
         List<Decision> decisions = Db.queryOn(c,
-                "SELECT d.plan_id,d.id,d.action,d.qty,d.proposed_net_cents,d.quote_as_of," +
+                "SELECT d.plan_id,d.id,d.action,d.qty," +
+                        "(d.price_receipt->>'optionNetPremiumCents')::bigint option_net_cents,d.quote_as_of," +
                         "(SELECT MIN(l.expiration) FROM plan_decision_leg l " +
-                        "WHERE l.decision_id=d.id AND l.expiration IS NOT NULL) nearest_expiry," +
-                        "(CASE WHEN EXISTS(SELECT 1 FROM plan_decision_leg l WHERE l.decision_id=d.id " +
-                        "AND l.instrument_type='STOCK') THEN 1 ELSE 0 END) has_stock_leg," +
-                        "(SELECT COALESCE(SUM((CASE WHEN l.action='SELL' THEN 1 ELSE -1 END) " +
-                        "* ROUND(COALESCE(l.fill_price,l.mid_price,0) * l.ratio * l.multiplier * 100)),0) " +
-                        "FROM plan_decision_leg l WHERE l.decision_id=d.id " +
-                        "AND l.instrument_type<>'STOCK')::bigint option_unit_cents " +
+                        "WHERE l.decision_id=d.id AND l.expiration IS NOT NULL) nearest_expiry " +
                         "FROM campaign_plan_member cm JOIN plan_decision d ON d.plan_id=cm.plan_id " +
                         "WHERE cm.campaign_id=? AND d.action IN ('TRADE','BROKER') " +
-                        "AND d.proposed_net_cents IS NOT NULL ORDER BY d.quote_as_of,d.id",
+                        "AND d.price_receipt->>'optionNetPremiumCents' IS NOT NULL " +
+                        "ORDER BY d.quote_as_of,d.id",
                 r -> new Decision(r.str("plan_id"), r.str("id"), r.str("action"),
-                        integerOrNull(r, "qty"),
-                        r.bool("has_stock_leg")
-                                ? Math.multiplyExact(r.lng("option_unit_cents"),
-                                        Math.max(1, (long) integerOrDefault(r, "qty", 1)))
-                                : r.lng("proposed_net_cents"),
+                        integerOrNull(r, "qty"), r.lng("option_net_cents"),
                         r.odt("quote_as_of"), r.date("nearest_expiry")),
                 row.id());
         List<ProtocolAdherence> out = new ArrayList<>();
