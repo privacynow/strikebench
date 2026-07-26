@@ -126,6 +126,22 @@ class BatchQuoteAuthorityTest {
     }
 
     @Test
+    void malformedBatchMemberGetsAnUnavailableRowWithoutCallingOrErasingValidSiblings() throws Exception {
+        JsonNode batch = get("/api/quotes?symbols=..%2FAAPL,AAPL,brk-b,BRK%2FB");
+
+        assertThat(batch.get("requested").asInt()).isEqualTo(3);
+        assertThat(batch.get("quotes").size()).isEqualTo(3);
+        assertThat(row(batch, "AAPL").get("priced").asBoolean()).isTrue();
+        assertThat(row(batch, "BRK.B").get("quoteUnavailableReason").asText())
+                .contains("BRK.B");
+        JsonNode invalid = row(batch, "../AAPL");
+        assertThat(invalid.get("priced").asBoolean()).isFalse();
+        assertThat(invalid.get("quoteUnavailableReason").asText())
+                .contains("Invalid symbol")
+                .contains("no market-data request was sent");
+    }
+
+    @Test
     void everyBatchRowCarriesTheFullDisplayReceiptInEveryLane() throws Exception {
         JsonNode batch = get("/api/quotes");
         assertThat(batch.get("quotes").size()).isPositive();

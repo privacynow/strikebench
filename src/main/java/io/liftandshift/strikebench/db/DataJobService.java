@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.SnapshotService;
 import io.liftandshift.strikebench.market.UniverseService;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -458,14 +459,36 @@ public final class DataJobService {
 
     private List<String> symbolsParam(Map<String, Object> params) {
         Object raw = params.get("symbols");
-        List<String> syms = new ArrayList<>();
+        List<String> requested = new ArrayList<>();
         if (raw instanceof List<?> list) {
-            for (Object o : list) if (o != null) syms.add(o.toString().trim().toUpperCase(Locale.ROOT));
+            for (Object o : list) if (o != null && !o.toString().isBlank()) {
+                requested.add(o.toString());
+            }
         } else if (raw instanceof String s && !s.isBlank()) {
-            for (String p : s.split(",")) if (!p.isBlank()) syms.add(p.trim().toUpperCase(Locale.ROOT));
+            requested.addAll(List.of(s.split(",")));
         }
-        if (syms.isEmpty()) syms.addAll(universe.active().symbols());
-        return syms.stream().distinct().limit(200).toList();
+        if (requested.isEmpty()) requested.addAll(universe.active().symbols());
+
+        // Jobs are explicitly per-item. A malformed member becomes one FAILED item while valid
+        // siblings still run; atomic configuration endpoints use the stricter Symbol.list policy.
+        List<String> labels = new ArrayList<>();
+        java.util.Set<String> identities = new java.util.LinkedHashSet<>();
+        for (String rawSymbol : requested) {
+            if (rawSymbol == null || rawSymbol.isBlank()) continue;
+            String label;
+            try {
+                label = Symbol.normalize(rawSymbol);
+                if (!identities.add("valid:" + label)) continue;
+            } catch (IllegalArgumentException invalid) {
+                String evidence = rawSymbol.trim();
+                if (!identities.add("invalid:" + evidence)) continue;
+                label = evidence.replace('\n', ' ').replace('\r', ' ');
+                if (label.length() > 80) label = label.substring(0, 80);
+            }
+            labels.add(label);
+            if (labels.size() == 200) break;
+        }
+        return List.copyOf(labels);
     }
 
     // ---- helpers ----

@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,9 +72,22 @@ public final class SnapshotService {
         int underlyingRows = 0, optionRows = 0;
         List<String> errors = new ArrayList<>();
 
-        for (String rawSym : symbols == null ? List.<String>of() : symbols) {
-            String sym = rawSym == null ? "" : rawSym.trim().toUpperCase(java.util.Locale.ROOT);
-            if (sym.isEmpty()) continue;
+        int requestedSymbols = 0;
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        for (String raw : symbols == null ? List.<String>of() : symbols) {
+            if (raw == null || raw.isBlank()) continue;
+            String sym;
+            try {
+                sym = Symbol.normalize(raw);
+            } catch (IllegalArgumentException invalid) {
+                requestedSymbols++;
+                String evidence = raw.trim().replace('\n', ' ').replace('\r', ' ');
+                if (evidence.length() > 80) evidence = evidence.substring(0, 80);
+                errors.add(evidence + ": invalid symbol");
+                continue;
+            }
+            if (!seen.add(sym)) continue;
+            requestedSymbols++;
             try {
                 // Gather everything for this symbol first (may hit the network / caches).
                 Optional<Quote> quote = market.quote(sym);
@@ -97,10 +111,9 @@ public final class SnapshotService {
         }
 
         long ms = System.currentTimeMillis() - start;
-        int syms = symbols == null ? 0 : (int) symbols.stream().filter(s -> s != null && !s.isBlank()).count();
         log.info("snapshot {} — {} symbols, {} underlying + {} option bars, {} error(s), {} ms",
-                asof, syms, underlyingRows, optionRows, errors.size(), ms);
-        return new SnapshotResult(asof, syms, underlyingRows, optionRows, errors, ms);
+                asof, requestedSymbols, underlyingRows, optionRows, errors.size(), ms);
+        return new SnapshotResult(asof, requestedSymbols, underlyingRows, optionRows, errors, ms);
     }
 
     /** Writes one symbol's underlying + option rows in a single transaction; returns {underlying, option} counts. */

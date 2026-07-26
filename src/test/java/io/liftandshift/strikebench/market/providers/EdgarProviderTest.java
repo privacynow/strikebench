@@ -124,6 +124,38 @@ class EdgarProviderTest {
     }
 
     @Test
+    void malformedExternalRowsDoNotEraseValidTickerOrFilingRows() {
+        server.enqueue(json("""
+                {
+                  "0": {"cik_str": 320193, "ticker": "AAPL"},
+                  "1": {"cik_str": 1, "ticker": "../POISON"}
+                }
+                """));
+        server.enqueue(json("""
+                {"filings":{"recent":{
+                  "accessionNumber":["bad/path","0000320193-26-000010"],
+                  "form":["8-K","10-Q"],
+                  "filingDate":["not-a-date","2026-05-01"],
+                  "primaryDocument":["../escape.htm","aapl-20260328.htm"]
+                }}}
+                """));
+
+        assertThat(provider.news("AAPL"))
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.headline()).isEqualTo("10-Q filing");
+                    assertThat(item.url()).endsWith("/aapl-20260328.htm");
+                });
+    }
+
+    @Test
+    void unsafeRequestedTickerIsRejectedBeforeAnExternalRequest() {
+        assertThatThrownBy(() -> provider.news("../AAPL"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(server.getRequestCount()).isZero();
+    }
+
+    @Test
     void serverErrorOnSubmissionsThrows() {
         server.enqueue(json(TICKER_MAP_JSON));
         server.enqueue(new MockResponse().setResponseCode(500).setBody("boom"));

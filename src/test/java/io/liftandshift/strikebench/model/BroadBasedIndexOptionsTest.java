@@ -30,5 +30,7 @@ class BroadBasedIndexOptionsTest {
         assertThat(BroadBasedIndexOptions.isKnownRoot("XSPT")).isFalse();
         assertThat(BroadBasedIndexOptions.isKnownRoot("RUTM")).isFalse();
         assertThat(BroadBasedIndexOptions.isKnownRoot(null)).isFalse();
+        assertThat(BroadBasedIndexOptions.isKnownRoot("../SPX")).isFalse();
+        assertThat(BroadBasedIndexOptions.canonicalRoot("bad broker notation!")).isEmpty();
     }
 }

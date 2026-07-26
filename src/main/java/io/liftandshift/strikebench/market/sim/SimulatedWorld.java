@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 
 import java.math.BigDecimal;
@@ -66,9 +67,9 @@ public final class SimulatedWorld {
                                String selection, String symbol, String modelVersion,
                                double[] spotPath, double[] ivPath, double stepSeconds, double rateAnnual) {
         public ReplaySource {
-            symbol = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+            symbol = Symbol.normalize(symbol);
             selection = selection == null ? "RANDOM" : selection.trim().toUpperCase(Locale.ROOT);
-            if (symbol.isBlank() || spotPath == null || ivPath == null || spotPath.length < 2
+            if (spotPath == null || ivPath == null || spotPath.length < 2
                     || spotPath.length != ivPath.length) throw new IllegalArgumentException("replay spot/IV paths must have the same non-trivial length");
             if (!(stepSeconds > 0) || !Double.isFinite(stepSeconds)) throw new IllegalArgumentException("replay stepSeconds must be positive");
             if (!Double.isFinite(rateAnnual)) throw new IllegalArgumentException("replay rate must be finite");
@@ -98,6 +99,10 @@ public final class SimulatedWorld {
                          long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed,
                          Map<String, Double> symbolVols, Map<String, Double> symbolIvs) {
         public Config {
+            symbolBetas = canonicalMap(symbolBetas);
+            startSpots = canonicalMapOptional(startSpots);
+            symbolVols = canonicalMapOptional(symbolVols);
+            symbolIvs = canonicalMapOptional(symbolIvs);
             if (symbolBetas == null || symbolBetas.isEmpty())
                 throw new IllegalArgumentException("a simulated world needs at least one symbol");
             symbolBetas.forEach((k, v) -> {
@@ -126,7 +131,11 @@ public final class SimulatedWorld {
     }
 
     /** An immutable path event — replayed at its quantum so a restored world is bit-identical. */
-    public record WorldEvent(long quantum, String kind /* MOVE|VOL|SPEED */, String symbol, double value) {}
+    public record WorldEvent(long quantum, String kind /* MOVE|VOL|SPEED */, String symbol, double value) {
+        public WorldEvent {
+            symbol = Symbol.normalizeOptional(symbol);
+        }
+    }
 
     // Counter-RNG stream ids (mixed into the seed so streams never collide).
     private static final long S_MARKET = 0x9E3779B97F4A7C15L;
@@ -179,7 +188,7 @@ public final class SimulatedWorld {
         this.simTime = snapToSession(LocalDateTime.parse(cfg.startSimTime()));
 
         for (var e : cfg.symbolBetas().entrySet()) {
-            String sym = e.getKey().toUpperCase(Locale.ROOT);
+            String sym = e.getKey();
             double s0 = cfg.startSpots() == null ? 100.0 : cfg.startSpots().getOrDefault(e.getKey(), 100.0);
             if (replay != null && replay.symbol().equals(sym)) s0 = replay.spotAt(0);
             double beta = e.getValue();
@@ -370,12 +379,13 @@ public final class SimulatedWorld {
         if (replay != null) throw new IllegalStateException("This is an exact Plan rehearsal; market shocks would break the selected path identity.");
         if (!Double.isFinite(pct) || pct <= -0.95 || pct > 5.0)
             throw new IllegalArgumentException("move must be a finite fraction in (-95%, +500%]");
-        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        String canonical = Symbol.normalize(symbol);
+        Sym st = syms.get(canonical);
         if (st == null) throw new IllegalArgumentException("no such symbol: " + symbol);
         st.spot = Math.max(0.01, st.spot * (1 + pct));
         st.high = Math.max(st.high, st.spot);
         st.low = Math.min(st.low, st.spot);
-        events.add(new WorldEvent(quantum, "MOVE", symbol.toUpperCase(Locale.ROOT), pct));
+        events.add(new WorldEvent(quantum, "MOVE", canonical, pct));
     }
 
     public synchronized void injectVolShift(double points) {
@@ -449,11 +459,12 @@ public final class SimulatedWorld {
     public java.util.Set<String> symbols() { return syms.keySet(); }
 
     public java.util.Optional<Quote> quote(String symbol) {
-        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        String canonical = Symbol.normalize(symbol);
+        Sym st = syms.get(canonical);
         if (st == null) return java.util.Optional.empty();
         double spr = Math.max(0.01, st.spot * 0.0004);
         double prev = st.daily.isEmpty() ? st.spot : st.daily.getLast().close().doubleValue();
-        return java.util.Optional.of(new Quote(symbol.toUpperCase(Locale.ROOT),
+        return java.util.Optional.of(new Quote(canonical,
                 cfg.name() + " (simulated)", bd(st.spot), bd(st.spot - spr / 2), bd(st.spot + spr / 2),
                 bd(prev), bd(st.high), bd(st.low), 1_000_000L, true, simMillis(), "simulated", Freshness.SIMULATED));
     }
@@ -488,7 +499,8 @@ public final class SimulatedWorld {
     }
 
     public java.util.Optional<OptionChain> chain(String symbol, LocalDate exp) {
-        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        String canonical = Symbol.normalize(symbol);
+        Sym st = syms.get(canonical);
         if (st == null || exp == null || exp.isBefore(simTime.toLocalDate())) return java.util.Optional.empty();
         double spot = st.spot;
         double step = strikeStep(st.anchorSpot);
@@ -511,8 +523,8 @@ public final class SimulatedWorld {
                 px = Math.max(px, intrinsic + 0.01);
                 double half = Math.max(0.01, px * (0.01 + 0.03 * Math.abs(money) + (tte < 4.0 / 252 ? 0.01 : 0)));
                 long oi = Math.max(5, (long) (3000 * Math.exp(-8 * money * money) * (0.5 + (Math.abs(expKey % 1000) / 1000.0))));
-                var q = new OptionQuote(symbol.toUpperCase(Locale.ROOT),
-                        occ(symbol, exp, call, k), type, bd(k), exp,
+                var q = new OptionQuote(canonical,
+                        occ(canonical, exp, call, k), type, bd(k), exp,
                         bd(Math.max(0.0, px - half)), bd(px + half), bd(px),
                         oi / 10, oi, iv,
                         BlackScholes.delta(call, spot, k, tte, rateAnnual(), 0, iv),
@@ -523,7 +535,7 @@ public final class SimulatedWorld {
                 (call ? calls : puts).add(q);
             }
         }
-        return java.util.Optional.of(new OptionChain(symbol.toUpperCase(Locale.ROOT), exp, bd(spot),
+        return java.util.Optional.of(new OptionChain(canonical, exp, bd(spot),
                 calls, puts, simMillis(), "simulated", Freshness.SIMULATED));
     }
 
@@ -569,7 +581,7 @@ public final class SimulatedWorld {
 
     /** The sim close for a date: the rolled daily bar's close, else the current spot (today). */
     public java.util.Optional<BigDecimal> closeOn(String symbol, LocalDate date) {
-        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        Sym st = syms.get(Symbol.normalize(symbol));
         if (st == null) return java.util.Optional.empty();
         synchronized (this) {
             for (int i = st.daily.size() - 1; i >= 0; i--) {
@@ -581,7 +593,7 @@ public final class SimulatedWorld {
     }
 
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
-        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        Sym st = syms.get(Symbol.normalize(symbol));
         if (st == null) return List.of();
         List<Candle> out = new ArrayList<>();
         synchronized (this) {
@@ -592,7 +604,7 @@ public final class SimulatedWorld {
 
     /** Statistical self-check for validation reports: realized annualized vol of the history. */
     public double realizedVol(String symbol) {
-        Sym st = syms.get(symbol.toUpperCase(Locale.ROOT));
+        Sym st = syms.get(Symbol.normalize(symbol));
         if (st == null || st.daily.size() < 3) return Double.NaN;
         List<Candle> c;
         synchronized (this) { c = new ArrayList<>(st.daily); }
@@ -604,8 +616,16 @@ public final class SimulatedWorld {
     }
 
     private static String occ(String sym, LocalDate exp, boolean call, double strike) {
-        return sym.toUpperCase(Locale.ROOT) + exp.format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd"))
+        return Symbol.normalize(sym) + exp.format(java.time.format.DateTimeFormatter.ofPattern("yyMMdd"))
                 + (call ? "C" : "P") + String.format("%08d", Math.round(strike * 1000));
+    }
+
+    private static Map<String, Double> canonicalMap(Map<String, Double> raw) {
+        return Symbol.map(raw, "simulated-world symbol inputs");
+    }
+
+    private static Map<String, Double> canonicalMapOptional(Map<String, Double> raw) {
+        return raw == null ? null : canonicalMap(raw);
     }
 
     private static BigDecimal bd(double v) { return BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP); }

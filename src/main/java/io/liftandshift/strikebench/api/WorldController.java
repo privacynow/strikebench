@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TradeService;
@@ -163,7 +164,8 @@ final class WorldController {
         // ---- WORLD UNIVERSE BUILDER (holistic review Phase 1) ----
         java.util.LinkedHashMap<String, Double> active = new java.util.LinkedHashMap<>();
         if (b.symbols() != null) {
-            b.symbols().forEach((k, v) -> active.put(k.trim().toUpperCase(Locale.ROOT), v == null ? 1.0 : v));
+            Symbol.map(b.symbols(), "symbols")
+                    .forEach((k, v) -> active.put(k, v == null ? 1.0 : v));
         }
         if (b.includePositions() == null || b.includePositions()) {
             try {
@@ -182,7 +184,7 @@ final class WorldController {
                     .get(b.sectorKey().trim().toUpperCase(Locale.ROOT));
             if (sector == null) throw new IllegalArgumentException("unknown sector: " + b.sectorKey());
             for (String sym : sector.symbols()) {
-                String u = sym.trim().toUpperCase(Locale.ROOT);
+                String u = Symbol.normalize(sym);
                 if (all.containsKey(u)) continue;
                 if (all.size() >= io.liftandshift.strikebench.market.sim.SimulationSessions.MAX_SYMBOLS) {
                     trimmed.add(u); continue; // disclosed, never silent
@@ -199,8 +201,10 @@ final class WorldController {
         // world before it starts (never a blocking provider loop under the Create button).
         // F3: fictional status is never inferred — an unrecognized, unresolvable symbol becomes a
         // $100 demo instrument ONLY when the request explicitly allows it; otherwise excluded.
-        java.util.Map<String, Double> spots = new java.util.LinkedHashMap<>(
-                b.spots() == null ? java.util.Map.of() : b.spots());
+        java.util.Map<String, Double> spots = new java.util.LinkedHashMap<>();
+        if (b.spots() != null) {
+            spots.putAll(Symbol.map(b.spots(), "spots"));
+        }
         java.util.Map<String, String> spotBasis = new java.util.LinkedHashMap<>();
         java.util.Map<String, Double> symVols = new java.util.LinkedHashMap<>();
         java.util.Map<String, Double> symIvs = new java.util.LinkedHashMap<>();
@@ -210,7 +214,7 @@ final class WorldController {
         List<String> pending = new ArrayList<>();
         java.util.Set<String> curated = new java.util.HashSet<>();
         io.liftandshift.strikebench.market.Universes.SECTORS.values()
-                .forEach(sec -> sec.symbols().forEach(x -> curated.add(x.toUpperCase(Locale.ROOT))));
+                .forEach(sec -> sec.symbols().forEach(x -> curated.add(Symbol.normalize(x))));
         // A new session starts from the market the user is actually viewing. Demo and an
         // already-entered simulated world are local, deterministic sources; consulting the
         // Observed engine while the UI says Demo both delays creation and anchors to the wrong

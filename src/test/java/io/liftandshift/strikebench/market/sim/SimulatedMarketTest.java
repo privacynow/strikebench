@@ -26,6 +26,23 @@ class SimulatedMarketTest {
     }
 
     @Test
+    void configCanonicalizesShareClassesAndRejectsCollidingSpellings() {
+        var canonical = new SimulatedWorld.Config(
+                "w-class", "Class shares", Map.of("brk-b", 1.0),
+                Map.of("BRK/B", 500.0), "CHOP", 0.2, 1,
+                "2026-07-20T09:30:00", 1, null, null);
+        assertThat(canonical.symbolBetas()).containsOnlyKeys("BRK.B");
+        assertThat(canonical.startSpots()).containsOnlyKeys("BRK.B");
+
+        assertThatThrownBy(() -> new SimulatedWorld.Config(
+                "w-collision", "Ambiguous", Map.of("BRK.B", 1.0, "brk-b", 2.0),
+                Map.of(), "CHOP", 0.2, 1,
+                "2026-07-20T09:30:00", 1, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("more than one spelling");
+    }
+
+    @Test
     void identicalSeedsReproduceTheIdenticalWorld() {
         SimulatedWorld a = world(4242), b = world(4242);
         for (int i = 0; i < 200; i++) { a.tick(); b.tick(); }

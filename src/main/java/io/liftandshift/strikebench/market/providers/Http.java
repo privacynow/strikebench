@@ -2,9 +2,11 @@ package io.liftandshift.strikebench.market.providers;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 
@@ -75,6 +77,18 @@ public final class Http {
     /** Strips any trailing slash so base + "/path" concatenation is uniform. */
     public static String normalizeBase(String base) {
         return base != null && base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+    }
+
+    /** RFC-3986-safe path segment. Provider identifiers must never be concatenated as raw paths. */
+    public static String pathSegment(String value) {
+        if (value == null) throw new IllegalArgumentException("path segment is required");
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    /** Form/query encoding kept distinct from path encoding so provider URLs state their policy. */
+    public static String queryValue(String value) {
+        if (value == null) throw new IllegalArgumentException("query value is required");
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private static String truncate(String s) {

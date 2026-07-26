@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DataSyncStateTest {
     private Db db;
@@ -53,5 +54,69 @@ class DataSyncStateTest {
                 .isNotEqualTo(base);
         assertThat(DataSyncState.coverageHash("stooq", List.of("AAPL", "QQQ"), 2))
                 .isNotEqualTo(base);
+    }
+
+    @Test
+    void persistedLegacyAliasesAreRewrittenToOneCanonicalScheduleIdentity() {
+        db = TestDb.fresh();
+        var state = new DataSyncState(db, Clock.systemUTC());
+        state.saveSchedule("legacy-owner", true, "yahoo", List.of("MSFT"), 5);
+        db.exec("UPDATE data_sync_schedule SET symbols='brk-b,msft' WHERE user_id='legacy-owner'");
+
+        DataSyncState.Schedule schedule = state.schedule("legacy-owner");
+
+        assertThat(schedule.enabled()).isTrue();
+        assertThat(schedule.symbols()).containsExactly("BRK.B", "MSFT");
+        assertThat(db.query("SELECT symbols FROM data_sync_schedule WHERE user_id='legacy-owner'",
+                r -> r.str("symbols"))).containsExactly("BRK.B,MSFT");
+        assertThat(schedule.lastStatus()).isEqualTo("CONFIG_CHANGED");
+        assertThat(schedule.completedCoverageHash()).isNull();
+    }
+
+    @Test
+    void oneMalformedPersistedScheduleIsDisabledWithoutHidingHealthySchedules() {
+        db = TestDb.fresh();
+        var state = new DataSyncState(db, Clock.systemUTC());
+        state.saveSchedule("healthy-owner", true, "yahoo", List.of("AAPL"), 5);
+        state.saveSchedule("broken-owner", true, "yahoo", List.of("QQQ"), 5);
+        db.exec("UPDATE data_sync_schedule SET symbols='QQQ,../AAPL' WHERE user_id='broken-owner'");
+
+        assertThat(state.enabledSchedules())
+                .extracting(DataSyncState.Schedule::userId)
+                .contains("healthy-owner")
+                .doesNotContain("broken-owner");
+        DataSyncState.Schedule broken = state.schedule("broken-owner");
+        assertThat(broken.enabled()).isFalse();
+        assertThat(broken.lastStatus()).contains("INVALID_SYMBOLS").contains("invalid symbol");
+        assertThat(db.query("SELECT enabled FROM data_sync_schedule WHERE user_id='broken-owner'",
+                r -> r.intv("enabled"))).containsExactly(0);
+    }
+
+    @Test
+    void scheduleWritesRejectTwoAliasesForTheSameCanonicalSymbol() {
+        db = TestDb.fresh();
+        var state = new DataSyncState(db, Clock.systemUTC());
+
+        assertThat(state.saveSchedule("dedupe-owner", true, "yahoo",
+                List.of("AAPL", " aapl "), 5).symbols()).containsExactly("AAPL");
+        assertThatThrownBy(() -> state.saveSchedule("collision-owner", true, "yahoo",
+                List.of("BRK.B", "BRK-B"), 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("canonical symbol collision")
+                .hasMessageContaining("BRK.B");
+    }
+
+    @Test
+    void quarantinePreservesMalformedSymbolEvidenceInsteadOfRejectingTheEvidence() {
+        db = TestDb.fresh();
+        var state = new DataSyncState(db, Clock.systemUTC());
+
+        state.quarantine("quarantine-owner", null, "user_csv", "../AAPL",
+                "row 7", "invalid symbol", "../AAPL,2026-07-01,200");
+
+        assertThat(db.query("SELECT symbol,reason FROM data_quarantine "
+                        + "WHERE user_id='quarantine-owner'",
+                r -> List.of(r.str("symbol"), r.str("reason"))))
+                .containsExactly(List.of("../AAPL", "invalid symbol"));
     }
 }

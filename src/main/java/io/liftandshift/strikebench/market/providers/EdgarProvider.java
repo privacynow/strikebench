@@ -4,12 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.model.NewsItem;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.Json;
 
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -57,8 +59,8 @@ public final class EdgarProvider implements NewsFilingsProvider {
 
     @Override
     public List<NewsItem> news(String symbol) {
-        String ticker = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (ticker.isEmpty()) return List.of();
+        String ticker = Symbol.normalizeOptional(symbol);
+        if (ticker == null) return List.of();
 
         Long cik = tickerMap().get(ticker);
         if (cik == null) return List.of();
@@ -79,17 +81,28 @@ public final class EdgarProvider implements NewsFilingsProvider {
 
         List<NewsItem> items = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
-            String accessionNoDashes = accessions.get(i).asText().replace("-", "");
-            String filingUrl = ARCHIVES_HOST + "/Archives/edgar/data/" + cik + "/"
-                    + accessionNoDashes + "/" + docs.get(i).asText();
-            long publishedEpochMs = LocalDate.parse(dates.get(i).asText())
-                    .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
-            items.add(new NewsItem(
-                    ticker,
-                    forms.get(i).asText() + " filing",
-                    "SEC EDGAR",
-                    filingUrl,
-                    publishedEpochMs));
+            try {
+                String accession = accessions.get(i).asText("");
+                String accessionNoDashes = accession.replace("-", "");
+                String document = docs.get(i).asText("");
+                String form = forms.get(i).asText("");
+                if (!accession.matches("[0-9-]+") || accessionNoDashes.isBlank()
+                        || !document.matches("[A-Za-z0-9._-]+") || form.isBlank()) {
+                    continue;
+                }
+                String filingUrl = ARCHIVES_HOST + "/Archives/edgar/data/" + cik + "/"
+                        + accessionNoDashes + "/" + Http.pathSegment(document);
+                long publishedEpochMs = LocalDate.parse(dates.get(i).asText())
+                        .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
+                items.add(new NewsItem(
+                        ticker,
+                        form + " filing",
+                        "SEC EDGAR",
+                        filingUrl,
+                        publishedEpochMs));
+            } catch (RuntimeException malformedProviderRow) {
+                // One malformed filing row is unavailable; the remaining issuer filings are valid.
+            }
         }
         return List.copyOf(items);
     }
@@ -101,11 +114,22 @@ public final class EdgarProvider implements NewsFilingsProvider {
 
         JsonNode root = Json.parse(http.get(baseUrl + "/files/company_tickers.json", headers()));
         Map<String, Long> map = new HashMap<>();
+        java.util.Set<String> ambiguous = new HashSet<>();
         root.forEach(entry -> {
             String ticker = entry.path("ticker").asText("");
             long cik = entry.path("cik_str").asLong(-1);
             if (!ticker.isEmpty() && cik > 0) {
-                map.put(ticker.toUpperCase(Locale.ROOT), cik);
+                try {
+                    String canonical = Symbol.normalize(ticker);
+                    if (ambiguous.contains(canonical)) return;
+                    Long previous = map.putIfAbsent(canonical, cik);
+                    if (previous != null && previous != cik) {
+                        map.remove(canonical);
+                        ambiguous.add(canonical);
+                    }
+                } catch (IllegalArgumentException malformedProviderRow) {
+                    // External collections are row-tolerant: a bad SEC ticker cannot erase the map.
+                }
             }
         });
         Map<String, Long> frozen = Map.copyOf(map);

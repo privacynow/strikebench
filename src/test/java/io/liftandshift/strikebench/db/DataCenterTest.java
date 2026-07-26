@@ -93,6 +93,24 @@ class DataCenterTest {
     }
 
     @Test
+    void perItemJobQuarantinesMalformedMemberWithoutSuppressingValidSibling() throws Exception {
+        Ctx c = wire();
+        var job = c.jobs().start("sync_underlying",
+                Map.of("symbols", List.of("../POISON", "aapl", "AAPL"),
+                        "from", "2026-04-01", "to", "2026-06-30", "source", "stooq"), null);
+
+        var done = await(c.jobs(), job.id());
+        assertThat(done.status()).isEqualTo("DONE");
+        assertThat(c.jobs().get(job.id()).items())
+                .extracting(DataJobService.DataJobItem::label,
+                        DataJobService.DataJobItem::status)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("../POISON", "FAILED"),
+                        org.assertj.core.groups.Tuple.tuple("AAPL", "DONE"));
+        assertThat(underlyingRows("AAPL")).isGreaterThan(0);
+    }
+
+    @Test
     void unknownJobKindIsRejected() {
         Ctx c = wire();
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,

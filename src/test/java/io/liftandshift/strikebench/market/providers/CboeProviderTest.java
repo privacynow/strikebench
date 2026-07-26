@@ -120,6 +120,39 @@ class CboeProviderTest {
     }
 
     @Test
+    void malformedExternalContractRowsAreSkippedWithoutErasingValidRows() {
+        server.enqueue(new MockResponse().setBody("""
+                {"data":{"symbol":"AAPL","current_price":255.30,"options":[
+                  {"option":"../260821C00255000","bid":99,"ask":100},
+                  {"option":"AAPL260821C00255000","bid":8.10,"ask":8.40}
+                ]}}
+                """));
+
+        var expiration = LocalDate.of(2026, 8, 21);
+        assertThat(provider.expirations("AAPL")).containsExactly(expiration);
+        assertThat(provider.chain("AAPL", expiration).orElseThrow().calls())
+                .extracting(OptionQuote::occSymbol)
+                .containsExactly("AAPL260821C00255000");
+    }
+
+    @Test
+    void unsafeSymbolsAreRejectedBeforeAnyProviderPathIsBuilt() {
+        assertThatThrownBy(() -> provider.quote("../AAPL"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(server.getRequestCount()).isZero();
+    }
+
+    @Test
+    void shareClassAliasUsesProviderSpellingWithoutChangingCanonicalQuoteIdentity() throws Exception {
+        server.enqueue(new MockResponse().setBody(
+                "{\"data\":{\"symbol\":\"BRK.B\",\"current_price\":500,\"options\":[]}}"));
+
+        assertThat(provider.quote("brk/b").orElseThrow().symbol()).isEqualTo("BRK.B");
+        assertThat(server.takeRequest().getPath())
+                .isEqualTo("/api/global/delayed_quotes/options/BRK.B.json");
+    }
+
+    @Test
     void broadBasedIndexRootsAndListedSeriesUseTheSharedCboePathMapping() throws Exception {
         for (int i = 0; i < 5; i++) server.enqueue(new MockResponse().setBody(CHAIN_BODY));
 

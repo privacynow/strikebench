@@ -1,14 +1,19 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.model.Symbol;
+import io.liftandshift.strikebench.util.OwnerScope;
+
 import java.time.Clock;
 import java.time.LocalDate;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import io.liftandshift.strikebench.util.OwnerScope;
+import java.util.Map;
 
 /** Durable cursors, quarantine diagnostics, and opt-in end-of-day schedules. */
 public final class DataSyncState {
@@ -50,6 +55,7 @@ public final class DataSyncState {
 
     public void attempted(String ownerId, String source, String symbol, LocalDate from, LocalDate to) {
         String owner = ensureOwner(ownerId);
+        String sym = Symbol.normalize(symbol);
         db.exec("INSERT INTO data_sync_cursor(user_id,source_key,symbol,status,requested_from,requested_to,last_attempt_at) "
                         + "VALUES (?,?,?,'RUNNING',?,?,now()) ON CONFLICT(user_id,source_key,symbol,domain,interval_key) "
                         + "DO UPDATE SET status='RUNNING',requested_from=CASE "
@@ -60,12 +66,13 @@ public final class DataSyncState {
                         + "WHEN excluded.requested_to IS NULL THEN data_sync_cursor.requested_to "
                         + "ELSE greatest(data_sync_cursor.requested_to,excluded.requested_to) END,"
                         + "last_attempt_at=now(),updated_at=now()",
-                owner, source, symbol, from, to);
+                owner, source, sym, from, to);
     }
 
     public void succeeded(String ownerId, String source, String symbol, LocalDate from, LocalDate to,
                           LocalDate lastSuccess, long rows, boolean complete, String note) {
         String owner = ensureOwner(ownerId);
+        String sym = Symbol.normalize(symbol);
         db.exec("INSERT INTO data_sync_cursor(user_id,source_key,symbol,status,requested_from,requested_to,"
                         + "last_success_date,last_attempt_at,failure_count,rows_written,note) "
                         + "VALUES (?,?,?,?,?,?,?,now(),0,?,?) ON CONFLICT(user_id,source_key,symbol,domain,interval_key) "
@@ -81,12 +88,13 @@ public final class DataSyncState {
                         + "ELSE greatest(data_sync_cursor.last_success_date,excluded.last_success_date) END,"
                         + "last_attempt_at=now(),failure_count=0,rows_written=excluded.rows_written,"
                         + "note=excluded.note,updated_at=now()",
-                owner, source, symbol, complete ? "COMPLETE" : "PARTIAL",
+                owner, source, sym, complete ? "COMPLETE" : "PARTIAL",
                 from, to, lastSuccess, rows, cap(note, 500));
     }
 
     public void failed(String ownerId, String source, String symbol, LocalDate from, LocalDate to, String note) {
         String owner = ensureOwner(ownerId);
+        String sym = Symbol.normalize(symbol);
         db.exec("INSERT INTO data_sync_cursor(user_id,source_key,symbol,status,requested_from,requested_to,"
                         + "last_attempt_at,failure_count,note) VALUES (?,?,?,'FAILED',?,?,now(),1,?) "
                         + "ON CONFLICT(user_id,source_key,symbol,domain,interval_key) DO UPDATE SET "
@@ -97,7 +105,7 @@ public final class DataSyncState {
                         + "WHEN excluded.requested_to IS NULL THEN data_sync_cursor.requested_to "
                         + "ELSE greatest(data_sync_cursor.requested_to,excluded.requested_to) END,"
                         + "last_attempt_at=now(),failure_count=data_sync_cursor.failure_count+1,note=excluded.note,updated_at=now()",
-                owner, source, symbol, from, to, cap(note, 500));
+                owner, source, sym, from, to, cap(note, 500));
     }
 
     public List<Cursor> cursors(String ownerId) {
@@ -120,7 +128,7 @@ public final class DataSyncState {
         if (earliest == null) return;
         String owner = ensureOwner(OwnerScope.SYSTEM);
         String src = source == null || source.isBlank() ? "auto" : source.trim().toLowerCase(Locale.ROOT);
-        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String sym = Symbol.normalize(symbol);
         db.exec("INSERT INTO data_sync_cursor(user_id,source_key,symbol,earliest_available) VALUES (?,?,?,?) "
                         + "ON CONFLICT(user_id,source_key,symbol,domain,interval_key) DO UPDATE SET "
                         + "earliest_available=CASE WHEN data_sync_cursor.earliest_available IS NULL THEN excluded.earliest_available "
@@ -145,13 +153,13 @@ public final class DataSyncState {
                         + "status='DEFERRED',last_attempt_at=now(),next_allowed_at=excluded.next_allowed_at,"
                         + "note=excluded.note,updated_at=now()",
                 owner, source == null || source.isBlank() ? "auto" : source.trim().toLowerCase(Locale.ROOT),
-                symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT),
+                Symbol.normalize(symbol),
                 from, to, java.sql.Timestamp.from(nextAllowedAt), cap(note, 500));
     }
 
     /** The durable earliest-available boundary for a (source, symbol), market-wide; null if unknown. */
     public LocalDate earliestAvailable(String source, String symbol) {
-        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String sym = Symbol.normalize(symbol);
         String src = source == null || source.isBlank() || "auto".equalsIgnoreCase(source)
                 ? null : source.trim().toLowerCase(Locale.ROOT);
         List<LocalDate> rows = src == null
@@ -174,7 +182,7 @@ public final class DataSyncState {
      */
     public java.util.Optional<java.time.Instant> deferredUntil(String ownerId, String source, String symbol) {
         String owner = OwnerScope.id(ownerId);
-        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        String sym = Symbol.normalize(symbol);
         String src = source == null || source.isBlank() ? "auto" : source.trim().toLowerCase(Locale.ROOT);
         // Return the raw reset instant; the caller compares it against the injected app clock (not the
         // DB clock), so behavior is deterministic under a fixed test clock and honest in production.
@@ -191,7 +199,8 @@ public final class DataSyncState {
                            String reason, String payloadExcerpt) {
         String owner = ensureOwner(ownerId);
         db.exec("INSERT INTO data_quarantine(user_id,job_id,source_key,symbol,row_ref,reason,payload_excerpt) VALUES (?,?,?,?,?,?,?)",
-                owner, jobId, source, symbol, cap(rowRef, 80), cap(reason, 300), cap(payloadExcerpt, 500));
+                owner, jobId, source, quarantineSymbol(symbol), cap(rowRef, 80),
+                cap(reason, 300), cap(payloadExcerpt, 500));
     }
 
     public QuarantineSummary quarantineSummary(String ownerId) {
@@ -204,20 +213,21 @@ public final class DataSyncState {
     }
 
     public Schedule schedule(String ownerId) {
-        return db.query("SELECT user_id,enabled,source_key,symbols,years,last_run_date::text lrd,"
+        RawSchedule raw = db.query("SELECT user_id,enabled,source_key,symbols,years,last_run_date::text lrd,"
                         + "last_status,last_job_id,coverage_hash,completed_coverage_hash,"
                         + "updated_at::text ua FROM data_sync_schedule WHERE user_id=?",
-                r -> mapSchedule(r), OwnerScope.id(ownerId)).stream().findFirst()
-                .orElse(new Schedule(OwnerScope.id(ownerId), false, "auto", List.of(), 5,
-                        null, null, null, coverageHash("auto", List.of(), 5), null, null));
+                DataSyncState::rawSchedule, OwnerScope.id(ownerId)).stream().findFirst().orElse(null);
+        return raw == null
+                ? new Schedule(OwnerScope.id(ownerId), false, "auto", List.of(), 5,
+                        null, null, null, coverageHash("auto", List.of(), 5), null, null)
+                : readSchedule(raw);
     }
 
     public Schedule saveSchedule(String ownerId, boolean enabled, String source, List<String> symbols,
                                  int years) {
         String owner = ensureOwner(ownerId);
-        List<String> normalized = symbols == null ? List.of() : symbols.stream()
-                .filter(java.util.Objects::nonNull).map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .filter(s -> !s.isBlank()).distinct().limit(MAX_SCHEDULE_SYMBOLS).toList();
+        List<String> normalized = normalizeSymbols(symbols, true).symbols().stream()
+                .limit(MAX_SCHEDULE_SYMBOLS).toList();
         String joined = String.join(",", normalized);
         String src = source == null || source.isBlank() ? "auto" : source.trim().toLowerCase();
         int y = Math.max(1, Math.min(20, years));
@@ -233,10 +243,17 @@ public final class DataSyncState {
     }
 
     public List<Schedule> enabledSchedules() {
-        return db.query("SELECT user_id,enabled,source_key,symbols,years,last_run_date::text lrd,"
+        List<RawSchedule> stored = db.query(
+                "SELECT user_id,enabled,source_key,symbols,years,last_run_date::text lrd,"
                         + "last_status,last_job_id,coverage_hash,completed_coverage_hash,"
                         + "updated_at::text ua FROM data_sync_schedule WHERE enabled=1",
-                DataSyncState::mapSchedule);
+                DataSyncState::rawSchedule);
+        List<Schedule> valid = new ArrayList<>(stored.size());
+        for (RawSchedule raw : stored) {
+            Schedule schedule = readSchedule(raw);
+            if (schedule.enabled()) valid.add(schedule);
+        }
+        return List.copyOf(valid);
     }
 
     /** Records an attempt without advancing the completed-session cursor. */
@@ -254,14 +271,95 @@ public final class DataSyncState {
                 day, day, status, jobId, completedCoverageHash, OwnerScope.id(userId));
     }
 
-    private static Schedule mapSchedule(Db.Row r) {
-        String raw = r.str("symbols");
-        List<String> symbols = raw == null || raw.isBlank() ? List.of() : List.of(raw.split(","));
-        return new Schedule(r.str("user_id"), r.bool("enabled"), r.str("source_key"), symbols,
-                r.intv("years"), date(r.str("lrd")), r.str("last_status"),
+    private Schedule readSchedule(RawSchedule raw) {
+        try {
+            NormalizedSymbols normalized = normalizePersistedSymbols(raw.symbols());
+            String canonicalSymbols = String.join(",", normalized.symbols());
+            String canonicalHash = coverageHash(raw.source(), normalized.symbols(), raw.years());
+            String status = raw.lastStatus();
+            String completedHash = raw.completedCoverageHash();
+            if (normalized.changed() || !canonicalHash.equals(raw.coverageHash())) {
+                boolean contractChanged = !canonicalHash.equals(raw.coverageHash());
+                if (contractChanged) {
+                    db.exec("UPDATE data_sync_schedule SET symbols=?,coverage_hash=?,"
+                                    + "completed_coverage_hash=NULL,last_status='CONFIG_CHANGED',"
+                                    + "updated_at=now() WHERE user_id=?",
+                            canonicalSymbols, canonicalHash, raw.userId());
+                    status = "CONFIG_CHANGED";
+                    completedHash = null;
+                } else {
+                    db.exec("UPDATE data_sync_schedule SET symbols=?,coverage_hash=?,updated_at=now() "
+                                    + "WHERE user_id=?",
+                            canonicalSymbols, canonicalHash, raw.userId());
+                }
+            }
+            return new Schedule(raw.userId(), raw.enabled(), raw.source(), normalized.symbols(),
+                    raw.years(), raw.lastRunDate(), status, raw.lastJobId(), canonicalHash,
+                    completedHash, raw.updatedAt());
+        } catch (IllegalArgumentException invalid) {
+            String reason = cap("INVALID_SYMBOLS · " + invalid.getMessage(), 500);
+            db.exec("UPDATE data_sync_schedule SET enabled=0,last_status=?,updated_at=now() WHERE user_id=?",
+                    reason, raw.userId());
+            return new Schedule(raw.userId(), false, raw.source(), List.of(), raw.years(),
+                    raw.lastRunDate(), reason, raw.lastJobId(), raw.coverageHash(),
+                    raw.completedCoverageHash(), raw.updatedAt());
+        }
+    }
+
+    private static RawSchedule rawSchedule(Db.Row r) {
+        return new RawSchedule(r.str("user_id"), r.bool("enabled"), r.str("source_key"),
+                r.str("symbols"), r.intv("years"), date(r.str("lrd")), r.str("last_status"),
                 r.str("last_job_id"), r.str("coverage_hash"), r.str("completed_coverage_hash"),
                 r.str("ua"));
     }
+
+    private static NormalizedSymbols normalizePersistedSymbols(String joined) {
+        if (joined == null || joined.isBlank()) return new NormalizedSymbols(List.of(), false);
+        String[] members = joined.split(",", -1);
+        for (String member : members) {
+            if (member == null || member.isBlank()) {
+                throw new IllegalArgumentException("stored schedule contains a blank symbol member");
+            }
+        }
+        NormalizedSymbols normalized = normalizeSymbols(List.of(members), false);
+        return new NormalizedSymbols(normalized.symbols(),
+                !joined.equals(String.join(",", normalized.symbols())));
+    }
+
+    /**
+     * Collection boundaries may normalize spelling, but may not silently collapse two persisted
+     * identities onto one ticker. That would change the schedule's coverage contract without the
+     * owner knowing which member survived.
+     */
+    private static NormalizedSymbols normalizeSymbols(List<String> rawSymbols, boolean ignoreBlanks) {
+        Map<String, String> originals = new LinkedHashMap<>();
+        List<String> normalized = new ArrayList<>();
+        boolean changed = false;
+        for (String raw : rawSymbols == null ? List.<String>of() : rawSymbols) {
+            if (raw == null || raw.isBlank()) {
+                if (ignoreBlanks) continue;
+                throw new IllegalArgumentException("symbol is required");
+            }
+            String canonical = Symbol.normalize(raw);
+            String prior = originals.putIfAbsent(canonical, raw);
+            if (prior != null) {
+                if (prior.trim().equalsIgnoreCase(raw.trim())) {
+                    changed = true;
+                    continue;
+                }
+                throw new IllegalArgumentException("canonical symbol collision: "
+                        + prior.trim() + " and " + raw.trim() + " both resolve to " + canonical);
+            }
+            normalized.add(canonical);
+            changed |= !canonical.equals(raw.trim());
+        }
+        return new NormalizedSymbols(List.copyOf(normalized), changed);
+    }
+
+    private record RawSchedule(String userId, boolean enabled, String source, String symbols,
+                               int years, LocalDate lastRunDate, String lastStatus, String lastJobId,
+                               String coverageHash, String completedCoverageHash, String updatedAt) {}
+    private record NormalizedSymbols(List<String> symbols, boolean changed) {}
 
     /**
      * Stable identity for the exact daily observed-history coverage contract. Symbol order is not
@@ -271,9 +369,7 @@ public final class DataSyncState {
     static String coverageHash(String source, List<String> symbols, int years) {
         String src = source == null || source.isBlank()
                 ? "auto" : source.trim().toLowerCase(Locale.ROOT);
-        List<String> normalized = symbols == null ? List.of() : symbols.stream()
-                .filter(java.util.Objects::nonNull).map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .filter(s -> !s.isBlank()).distinct().sorted().toList();
+        List<String> normalized = Symbol.list(symbols).stream().sorted().toList();
         String contract = "daily-observed-underlying-v1\nsource=" + src
                 + "\nyears=" + Math.max(1, Math.min(20, years))
                 + "\nsymbols=" + String.join(",", normalized);
@@ -287,6 +383,20 @@ public final class DataSyncState {
 
     private String ensureOwner(String ownerId) {
         return db.with(c -> OwnerScope.ensure(c, ownerId));
+    }
+
+    /**
+     * Quarantine is evidence about rejected input, not a canonical identity boundary. Preserve an
+     * invalid member so the owner can diagnose it; requiring it to pass Symbol validation would
+     * make malformed CSV/provider rows impossible to quarantine.
+     */
+    private static String quarantineSymbol(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return Symbol.normalize(raw);
+        } catch (IllegalArgumentException invalid) {
+            return cap(raw.trim(), 80);
+        }
     }
 
     private static LocalDate date(String raw) { return raw == null || raw.isBlank() ? null : LocalDate.parse(raw); }

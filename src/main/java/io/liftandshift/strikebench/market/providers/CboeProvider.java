@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.util.Json;
 
@@ -233,7 +234,7 @@ public final class CboeProvider implements MarketDataProvider {
      */
     private CachedPayload fetchData(String symbol) {
         String cacheKey = BroadBasedIndexOptions.canonicalRoot(symbol)
-                .orElseGet(() -> symbol == null ? "" : symbol.trim().toUpperCase(java.util.Locale.ROOT));
+                .orElseGet(() -> Symbol.normalize(symbol));
         // Circuit breaker: while cooling from a 429 the politeness gate makes NO Cboe request (returns
         // empty) — this stops the retry storm — EXCEPT for one spaced half-open probe that tests
         // recovery so a healed provider unblocks in seconds, not 15 minutes. A probe that succeeds
@@ -250,8 +251,9 @@ public final class CboeProvider implements MarketDataProvider {
         // share the canonical SPX payload, but retain their requested symbol everywhere else.
         String cboeSymbol = BroadBasedIndexOptions.canonicalRoot(symbol)
                 .map(root -> "_" + root)
-                .orElse(symbol);
-        String url = baseUrl + "/api/global/delayed_quotes/options/" + cboeSymbol + ".json";
+                .orElseGet(() -> Symbol.of(symbol).providerAlias("cboe"));
+        String url = baseUrl + "/api/global/delayed_quotes/options/"
+                + Http.pathSegment(cboeSymbol) + ".json";
         // ONE governor owns concurrency, spacing, and the circuit breaker (HTTP 403/429/999 denial or
         // three consecutive failures trip it, announced as provider.cooldown). Cboe's own 404 and
         // S3-style "403 AccessDenied" mean "definitively no data" — caught inside and returned empty
@@ -283,7 +285,7 @@ public final class CboeProvider implements MarketDataProvider {
     }
 
     private static String normalize(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
 
     /**
@@ -297,7 +299,12 @@ public final class CboeProvider implements MarketDataProvider {
         if (raw == null) return null;
         int rootEnd = raw.length() - 15;
         if (rootEnd <= 0) return null;
-        String contractRoot = normalize(raw.substring(0, rootEnd));
+        String contractRoot;
+        try {
+            contractRoot = normalize(raw.substring(0, rootEnd));
+        } catch (IllegalArgumentException malformedProviderRow) {
+            return null;
+        }
         Optional<String> requestedCanonical = BroadBasedIndexOptions.canonicalRoot(symbol);
         if (requestedCanonical.isPresent()) {
             String requested = normalize(symbol);

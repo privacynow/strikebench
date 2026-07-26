@@ -1,7 +1,6 @@
 package io.liftandshift.strikebench.model;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -31,7 +30,14 @@ public final class BroadBasedIndexOptions {
 
     /** Returns the canonical index root for a known root or exchange series alias. */
     public static Optional<String> canonicalRoot(String symbol) {
-        String normalized = normalize(symbol);
+        String normalized;
+        try {
+            normalized = normalize(symbol);
+        } catch (IllegalArgumentException ignored) {
+            // A predicate over broker/provider input is total: unsupported notation is not an
+            // index root, and must not throw through tax, accounting, or market-data classification.
+            return Optional.empty();
+        }
         if (ROOTS.contains(normalized)) return Optional.of(normalized);
 
         for (var entry : SERIES_SUFFIXES.entrySet()) {
@@ -48,8 +54,8 @@ public final class BroadBasedIndexOptions {
     }
 
     private static String normalize(String symbol) {
-        if (symbol == null) return "";
-        String normalized = symbol.trim().toUpperCase(Locale.ROOT);
+        String normalized = Symbol.normalizeOptional(symbol);
+        if (normalized == null) return "";
         return normalized.startsWith("_") ? normalized.substring(1) : normalized;
     }
 }

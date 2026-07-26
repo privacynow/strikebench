@@ -1,4 +1,6 @@
 package io.liftandshift.strikebench.api;
+
+import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.config.JavalinConfig;
@@ -175,34 +177,45 @@ final class CoreController implements AutoCloseable {
         String world = worldParam(activeWorld.apply(ctx));
         int limit = SimulationSessions.MAX_SYMBOLS;
         if (world != null) {
-            List<String> symbols = raw == null || raw.isBlank()
-                    ? MarketUniverseView.symbolsForWorld(market, universe, world)
-                    : parseSymbols(raw);
+            List<BatchSymbol> symbols = raw == null || raw.isBlank()
+                    ? validBatch(MarketUniverseView.symbolsForWorld(market, universe, world))
+                    : parseSymbolBatch(raw);
             int requested = symbols.size();
-            List<String> bounded = symbols.stream().limit(limit).toList();
+            List<BatchSymbol> bounded = symbols.stream().limit(limit).toList();
             MarketLane lane = market.lane(world);
             List<ApiResponses.QuoteView> rows = new ArrayList<>();
-            for (String symbol : bounded) {
-                rows.add(market.quote(symbol, world)
+            for (BatchSymbol request : bounded) {
+                if (request.invalidReason() != null) {
+                    rows.add(ApiResponses.QuoteView.unavailable(request.display(), request.invalidReason()));
+                    continue;
+                }
+                rows.add(market.quote(request.canonical(), world)
                         .map(quote -> ApiResponses.QuoteView.of(quote, false))
-                        .orElseGet(() -> ApiResponses.QuoteView.unavailable(symbol,
-                                worldUnavailableReason(symbol, world, lane))));
+                        .orElseGet(() -> ApiResponses.QuoteView.unavailable(request.canonical(),
+                                worldUnavailableReason(request.canonical(), world, lane))));
             }
             ctx.json(new ApiResponses.WorldQuotes<>(rows, requested, bounded.size(),
                     requested > limit, limit, world, lane.name()));
             return;
         }
-        List<String> symbols = raw == null || raw.isBlank()
-                ? universe.active().symbols() : parseSymbols(raw);
+        List<BatchSymbol> symbols = raw == null || raw.isBlank()
+                ? validBatch(universe.active().symbols()) : parseSymbolBatch(raw);
         int requested = symbols.size();
         if (symbols.size() > limit) symbols = symbols.subList(0, limit);
         Map<String, MarketDataEngine.MarketSnapshot> priced = new LinkedHashMap<>();
-        for (var snapshot : engine.quotes(symbols)) priced.put(snapshot.symbol(), snapshot);
+        List<String> valid = symbols.stream().filter(row -> row.invalidReason() == null)
+                .map(BatchSymbol::canonical).toList();
+        for (var snapshot : engine.quotes(valid)) priced.put(snapshot.symbol(), snapshot);
         List<ApiResponses.QuoteView> rows = new ArrayList<>();
-        for (String symbol : symbols) {
-            var snapshot = priced.get(symbol);
+        for (BatchSymbol request : symbols) {
+            if (request.invalidReason() != null) {
+                rows.add(ApiResponses.QuoteView.unavailable(request.display(), request.invalidReason()));
+                continue;
+            }
+            var snapshot = priced.get(request.canonical());
             rows.add(snapshot == null
-                    ? ApiResponses.QuoteView.unavailable(symbol, engine.unavailableReason(symbol))
+                    ? ApiResponses.QuoteView.unavailable(request.canonical(),
+                            engine.unavailableReason(request.canonical()))
                     : ApiResponses.QuoteView.of(snapshot.toQuote(), snapshot.refreshing()));
         }
         ctx.json(new ApiResponses.Quotes<>(rows, requested, symbols.size(), requested > limit,
@@ -346,10 +359,39 @@ final class CoreController implements AutoCloseable {
         return result;
     }
 
-    private static List<String> parseSymbols(String raw) {
-        return java.util.Arrays.stream(raw.split(","))
-                .map(symbol -> symbol.trim().toUpperCase(Locale.ROOT))
-                .filter(symbol -> !symbol.isBlank()).distinct().toList();
+    private record BatchSymbol(String display, String canonical, String invalidReason) {}
+
+    private static List<BatchSymbol> validBatch(List<String> symbols) {
+        return Symbol.list(symbols).stream()
+                .map(symbol -> new BatchSymbol(symbol, symbol, null)).toList();
+    }
+
+    /**
+     * Read-only quote batches are row-tolerant: every nonblank requested member gets either the
+     * canonical quote receipt or an explicit invalid-symbol receipt. No malformed member reaches a
+     * provider, and it cannot erase valid siblings. Configuration mutations remain atomic/strict.
+     */
+    private static List<BatchSymbol> parseSymbolBatch(String raw) {
+        List<BatchSymbol> rows = new ArrayList<>();
+        java.util.Set<String> identities = new java.util.LinkedHashSet<>();
+        for (String member : raw.split(",")) {
+            String display = member == null ? "" : member.trim();
+            if (display.isBlank()) continue;
+            try {
+                String canonical = Symbol.normalize(display);
+                if (identities.add("valid:" + canonical)) {
+                    rows.add(new BatchSymbol(canonical, canonical, null));
+                }
+            } catch (IllegalArgumentException invalid) {
+                String safe = display.replace('\n', ' ').replace('\r', ' ');
+                String bounded = safe.substring(0, Math.min(safe.length(), 80));
+                if (identities.add("invalid:" + bounded)) {
+                    rows.add(new BatchSymbol(bounded, null,
+                            "Invalid symbol " + bounded + "; no market-data request was sent."));
+                }
+            }
+        }
+        return List.copyOf(rows);
     }
 
 

@@ -150,4 +150,17 @@ class SnapshotServiceTest {
         assertThat(count("SELECT count(*) c FROM option_bar WHERE symbol='AAPL'")).isGreaterThan(0);
         assertThat(count("SELECT count(*) c FROM option_bar WHERE symbol='NOPE'")).isZero();
     }
+
+    @Test void malformedAndAliasDuplicateMembersAreIsolatedAndCountedOnce() {
+        SnapshotService snap = service(Clock.systemUTC());
+
+        var r = snap.snapshot(List.of("../POISON", "aapl", "AAPL", "brk-b", "BRK/B"));
+
+        // Three requested identities: one malformed member, AAPL, and one canonical BRK.B alias.
+        assertThat(r.symbols()).isEqualTo(3);
+        assertThat(r.errors()).anyMatch(e -> e.contains("../POISON") && e.contains("invalid"));
+        assertThat(r.errors()).anyMatch(e -> e.startsWith("BRK.B"));
+        assertThat(r.optionRows()).isGreaterThan(0);
+        assertThat(count("SELECT count(*) c FROM option_bar WHERE symbol='AAPL'")).isGreaterThan(0);
+    }
 }

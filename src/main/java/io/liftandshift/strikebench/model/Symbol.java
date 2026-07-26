@@ -1,8 +1,11 @@
 package io.liftandshift.strikebench.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -14,13 +17,20 @@ import java.util.regex.Pattern;
  */
 public record Symbol(String value) implements Comparable<Symbol> {
 
+    /*
+     * A canonical symbol is deliberately safe to use as an identity and as input to a provider
+     * adapter. Separators may not lead, trail, repeat, or form a path. A slash is accepted only as
+     * an inbound US share-class spelling (BRK/B) and is canonicalized to BRK.B before validation.
+     */
     private static final Pattern VALID =
-            Pattern.compile("(?=.*[A-Z0-9])[A-Z0-9.^=_/-]{1,24}");
+            Pattern.compile("\\^?[A-Z0-9_]+(?:[.=-][A-Z0-9]+)*");
+    private static final Pattern SHARE_CLASS_ALIAS =
+            Pattern.compile("([A-Z0-9]{1,10})[-/]([A-Z])");
 
     public Symbol {
         value = canonical(value);
         if (value.isEmpty()) throw new IllegalArgumentException("symbol is required");
-        if (!VALID.matcher(value).matches()) {
+        if (value.length() > 24 || !VALID.matcher(value).matches()) {
             throw new IllegalArgumentException("invalid symbol: " + value);
         }
     }
@@ -56,9 +66,34 @@ public record Symbol(String value) implements Comparable<Symbol> {
         return List.copyOf(normalized);
     }
 
+    /**
+     * Canonicalizes a symbol-keyed map without silently resolving aliases by last-write-wins.
+     * A caller supplying both {@code BRK.B} and {@code BRK-B} has supplied two values for one
+     * instrument; rejecting that ambiguity is safer than changing a world or risk input invisibly.
+     */
+    public static <V> Map<String, V> map(Map<String, V> raw, String fieldName) {
+        if (raw == null) return null;
+        Map<String, V> normalized = new LinkedHashMap<>();
+        Map<String, String> origins = new LinkedHashMap<>();
+        for (var entry : raw.entrySet()) {
+            String canonical = normalize(entry.getKey());
+            String previous = origins.putIfAbsent(canonical, entry.getKey());
+            if (previous != null) {
+                throw new IllegalArgumentException((fieldName == null ? "symbol map" : fieldName)
+                        + " contains more than one spelling for " + canonical + ": "
+                        + previous + " and " + entry.getKey());
+            }
+            normalized.put(canonical, entry.getValue());
+        }
+        return Collections.unmodifiableMap(normalized);
+    }
+
     /** Provider spelling only; canonical identity remains {@link #value()}. */
     public String providerAlias(String provider) {
-        if ("yahoo".equalsIgnoreCase(provider) && value.matches("[A-Z]{1,6}\\.[A-Z]")) {
+        // Yahoo documents share classes with a dash. Other providers retain the canonical dot
+        // spelling unless their own adapter grows an independently verified mapping.
+        if ("yahoo".equalsIgnoreCase(provider)
+                && value.matches("[A-Z0-9]{1,10}\\.[A-Z]")) {
             return value.replace('.', '-');
         }
         return value;
@@ -73,6 +108,11 @@ public record Symbol(String value) implements Comparable<Symbol> {
     }
 
     private static String canonical(String raw) {
-        return raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
+        String normalized = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
+        var shareClass = SHARE_CLASS_ALIAS.matcher(normalized);
+        if (shareClass.matches()) {
+            normalized = shareClass.group(1) + "." + shareClass.group(2);
+        }
+        return normalized;
     }
 }
