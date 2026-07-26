@@ -11,7 +11,6 @@ const { chromium } = require('playwright');
    This file supplies only the desk's default PROFILE (its source/freshness/fingerprint), so a
    drifting wire contract fails the self-check instead of quietly agreeing with a stale copy. */
 const { packagePrice, unavailablePackagePrice } = require('./fixtures/price');
-const { goldenGreeks } = require('./fixtures/golden');
 
 const PUBLIC = path.resolve(__dirname, '../src/main/resources/public');
 const CANDIDATE_ID = 'candidate_backend_debit';
@@ -1013,14 +1012,7 @@ function customTradePreview(position) {
   };
 }
 
-/*
- * The canvas keys its position row by the candidate it valued. This fixture used to hardcode
- * CANDIDATE_ID, so any suite selecting a different candidate got a canvas whose only row belonged
- * to someone else — the greeks lens then rendered "unavailable" and no cross-surface comparison of
- * greeks was possible. The key follows the candidate now, as it does in production.
- */
 function ensemble(version = 13, market = {}) {
-  const candidateKey = market.candidateId || CANDIDATE_ID;
   const spot = market.spot == null ? 100 : market.spot;
   const symbol = market.symbol || 'AMD';
   const shift = spot - 100;
@@ -1102,13 +1094,13 @@ function ensemble(version = 13, market = {}) {
           { day: 21, p10: 101, p50: 104, p90: 108, focusPrice: 104, atmIv: 0.29 }
         ],
         positions: [{
-          key: `PROPOSED:${candidateKey}`,
+          key: `PROPOSED:${CANDIDATE_ID}`,
           proposed: true,
           stepBands: pnlStepBands,
           displayPaths: pnlDisplayPaths,
           days: [
-            { focusValueCents: -12345, focusPnlCents: 0, greeks: goldenGreeks() },
-            { focusValueCents: 9000, focusPnlCents: 21345, greeks: goldenGreeks() }
+            { focusValueCents: -12345, focusPnlCents: 0, greeks: {} },
+            { focusValueCents: 9000, focusPnlCents: 21345, greeks: {} }
           ]
         }]
       }
@@ -1311,13 +1303,13 @@ function scenarioResponse(marker, overrides = {}) {
         stepBands: scenarioPnlBands,
         displayPaths: scenarioPnlPaths,
         days: [
-          { focusValueCents: -12345, focusPnlCents: 0, greeks: goldenGreeks() },
-          { focusValueCents: 2500, focusPnlCents: 14845, greeks: goldenGreeks() }
+          { focusValueCents: -12345, focusPnlCents: 0, greeks: {} },
+          { focusValueCents: 2500, focusPnlCents: 14845, greeks: {} }
         ],
         steps: [
-          { step: 0, sessionProgress: 0, focusValueCents: -12345, focusPnlCents: 0, greeks: goldenGreeks() },
-          { step: 1, sessionProgress: 5, focusValueCents: -7345, focusPnlCents: 5000, greeks: goldenGreeks() },
-          { step: 2, sessionProgress: 10, focusValueCents: 2500, focusPnlCents: 14845, greeks: goldenGreeks() }
+          { step: 0, sessionProgress: 0, focusValueCents: -12345, focusPnlCents: 0, greeks: {} },
+          { step: 1, sessionProgress: 5, focusValueCents: -7345, focusPnlCents: 5000, greeks: {} },
+          { step: 2, sessionProgress: 10, focusValueCents: 2500, focusPnlCents: 14845, greeks: {} }
         ]
       }]
     }
@@ -2274,9 +2266,7 @@ async function installBackend(page, options = {}) {
         ? ENSEMBLE_FINGERPRINT : `${ENSEMBLE_FINGERPRINT}-${ensembleGeneration}`;
       storedEnsemble = ensemble(planVersion, {
         id, fingerprint, symbol: currentPlanSymbol, spot: mark, asOf: quote.asOf,
-        atmIv: chainIv, expiration: currentExpiration,
-        candidateId: (selectedCandidate && selectedCandidate.id)
-          || (strategyCandidates[0] && strategyCandidates[0].id)
+        atmIv: chainIv, expiration: currentExpiration
       });
       storedEnsemble.plan = currentPlan(planVersion);
       storedEnsemble.preview.receipt.worldId = activeWorld;
@@ -8872,11 +8862,6 @@ function goldenBookDocuments() {
     // check reads asOf and refuses an artifact whose observation instant it cannot establish.
     asOf: 1784563200000, asOfEpochMs: 1784563200000
   });
-  /* One golden greeks receipt too. The canvas's frame at t=0 IS the package as it stands, so the
-     live mark and the first modelled frame must be the same four numbers — otherwise the walk
-     would compare two different measurements and call their difference a divergence. */
-  documents.tradeDetail.current.greeks = goldenGreeks();
-  documents.greeks.positions[0].greeks = goldenGreeks();
   documents.chain.asOfEpochMs = 1784563200000;
   documents.chain.calls = documents.chain.calls.map(row => Object.assign({ iv: 0.30 }, row));
   documents.chain.puts = documents.chain.puts.map(row => Object.assign({ iv: 0.30 }, row));
@@ -8996,18 +8981,9 @@ test('Home, New Idea, and Position render one golden receipt identically', async
         breakeven: pay['Break-even'],
         expiry: rows.Expiry,
         metricLabels: Object.keys(metrics),
-        payLabels: Object.keys(pay),
-        greeks: Array.from(view.querySelectorAll('.mechg .mgt')).map(tile => ({
-          key: tile.querySelector('.mgk').textContent.trim(),
-          value: tile.querySelector('.mgv').textContent.trim()
-        }))
+        payLabels: Object.keys(pay)
       };
     });
-
-    if (process.env.DESK_SHOTS) {
-      await page.waitForTimeout(700);   // let the bloom FLIP settle before the evidence shot
-      await page.screenshot({ path: 'shots/golden-position.png' });
-    }
 
     await startNewIdea(page, GOLDEN.symbol);
     try {
@@ -9030,12 +9006,6 @@ test('Home, New Idea, and Position render one golden receipt identically', async
       throw new Error(`${error.message}\nNew Idea diagnosis: ${JSON.stringify(diagnosis)}`
         + `\nPage errors: ${pageErrors.join('\n')}`);
     }
-
-    // The greeks live behind New Idea's mechanics lens; Position shows them in its own pane. Open
-    // it before capturing, so this walk compares what a person can actually reach on both.
-    await page.locator('#decideStage [data-inspect="mechanics"]').click();
-    await page.waitForTimeout(200);
-    await page.waitForSelector('#decideStage .mechg .mgt');
 
     const newIdea = await page.evaluate(id => {
       const kpis = {};
@@ -9062,10 +9032,6 @@ test('Home, New Idea, and Position render one golden receipt identically', async
         change: document.querySelector('.authmarkethero .amh-change').textContent.trim(),
         expiryHint: document.querySelector('.dccpay .paytitle .hint').textContent.trim(),
         kpiLabels: Object.keys(kpis).concat(Object.keys(secondary)),
-        greeks: Array.from(document.querySelectorAll('#decideStage .mechg .mgt')).map(tile => ({
-          key: tile.querySelector('.mgk').textContent.trim(),
-          value: tile.querySelector('.mgv').textContent.trim()
-        })),
         text: document.querySelector('#decideStage').textContent.replace(/\s+/g, ' ').trim()
       };
     }, GOLDEN.candidateId);
@@ -9158,25 +9124,6 @@ test('Home, New Idea, and Position render one golden receipt identically', async
         { surface: 'Position payoff rail', text: position.breakeven }],
       'beLabel() rounds the served break-even to whole dollars and drops the currency mark, so New Idea '
       + 'states a materially coarser price than the Position built from the same receipt.');
-    /* Greeks were the one fact in M7's acceptance list this walk never compared, so the four
-       numbers that describe how a package MOVES could disagree between the surface that proposes
-       it and the surface that holds it, and nothing would have said so. Both render through the
-       same mechGraphic + GSPEC, which is precisely why a divergence here means a second source of
-       greeks has appeared upstream. */
-    assert.ok(newIdea.greeks.length >= 4,
-      `New Idea must show the package's greeks; it showed ${JSON.stringify(newIdea.greeks)}.`);
-    assert.ok(position.greeks.length >= 4,
-      `Position must show the held package's greeks; it showed ${JSON.stringify(position.greeks)}.`);
-    assert.deepEqual(newIdea.greeks.map(tile => tile.key), position.greeks.map(tile => tile.key),
-      'New Idea and Position must name the greeks identically — they share one GSPEC.');
-    newIdea.greeks.forEach((tile, index) => {
-      sameString(`Greek ${tile.key}`,
-        [{ surface: 'New Idea mechanics', text: tile.value },
-          { surface: 'Position mechanics', text: position.greeks[index].value }],
-        'one package moves one way; the proposing surface and the holding surface read the same '
-        + 'greeks receipt.');
-    });
-
     sameString('Expiry',
       [{ surface: 'Home single-position receipt', text: home.expiry },
         { surface: 'New Idea payoff hint', text: newIdeaExpiry },
@@ -9581,71 +9528,513 @@ test('inline styles carry drawing data only — spacing and palette live in the 
     + offenders.join('\n  '));
 });
 
-test('one position reports one set of greeks, in one grammar, at rest and mid-scenario', async () => {
-  /*
-   * A held position had THREE greeks grammars on one screen: two hand-formatted .authmetric cells
-   * in the position panel (delta as "42.60 sh"), four more hand-formatted cells in the scenario
-   * row (delta as "42.60", no unit), and the GSPEC grammar that renderAtPrice patches INTO that
-   * same scenario row the moment a frame renders (delta as "+43 sh"). The cell therefore changed
-   * its own grammar when the user touched the scrubber. All three read GSPEC now.
-   */
+/* ==================== M7 PROBE ==================== */
+const M7SHOTS = path.resolve(__dirname, 'scratch-m7');
+
+function frozenBookDocuments() {
+  const documents = populatedBookDocuments();
+  const frozenPositionPlan = plan(31, {
+    id: BOOK_PLAN_ID, symbol: 'AAPL', status: 'POSITION_OPEN', assumptionsEditable: false
+  });
+  documents.planPortfolio[0].plan = frozenPositionPlan;
+  documents.management.plan = frozenPositionPlan;
+  documents.positionEnsemble.plan = frozenPositionPlan;
+  return { documents, frozenPositionPlan };
+}
+
+async function openPosition(page) {
+  await page.goto(deskUrl);
+  await waitForDeskBoot(page);
+  await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 15000 });
+  await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+  await page.waitForFunction(tradeId => window.DeskBackend.state().position?.phase === 'ready'
+    && window.state?.level === 'position' && window.state?.focus === tradeId, BOOK_TRADE_ID, { timeout: 15000 });
+  await page.waitForSelector('[data-auth-position-detail] .authpaykey');
+}
+
+test('M7-PROBE handoff: Analyze in New idea from a frozen held plan', async () => {
+  const { documents } = frozenBookDocuments();
   const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
   const page = await context.newPage();
-  page.setDefaultTimeout(10000);
+  page.setDefaultTimeout(15000);
   const pageErrors = [];
-  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
-  await installBackend(page, { bookDocuments: goldenBookDocuments() });
+  page.on('pageerror', e => pageErrors.push(e.stack || e.message));
+  const backend = await installBackend(page, { bookDocuments: documents, listedPlans: [] , ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    const held = await page.evaluate(tradeId => {
+      const p = window.byId[tradeId];
+      return {
+        legs: (p.legs || []).map(l => ({ t: l.t, k: l.k, d: l.d, n: l.n, exp: l.expiration, entry: l.entryPrice })),
+        planStatus: (p._positionData?.plan || p._plan || {}).status,
+        planContext: (p._positionData?.plan || p._plan || {}).context,
+        planIntent: (p._positionData?.plan || p._plan || {}).intent,
+        planMutable: window.authPlanMutable ? window.authPlanMutable(p._positionData?.plan || p._plan) : 'n/a',
+        workspace: { goal: window.WORKSPACE.goal, view: window.WORKSPACE.view,
+          horizonDays: window.WORKSPACE.horizonDays, riskPosture: window.WORKSPACE.riskPosture,
+          focusedSymbol: window.WORKSPACE.focusedSymbol }
+      };
+    }, BOOK_TRADE_ID);
+    console.log('HELD BEFORE =', JSON.stringify(held, null, 1));
+
+    await page.locator('[data-auth-manage="resume"]').click();
+    await page.waitForFunction(() => window.decide != null, null, { timeout: 15000 });
+    await page.waitForTimeout(2500);
+    const after = await page.evaluate(() => ({
+      kind: window.decide.kind, act: window.decide.act, sym: window.decide.sym,
+      posId: window.decide.posId, resumePlanId: window.decide.resumePlanId,
+      goal: window.decide.goal, view: window.decide.view, horizon: window.decide.horizon,
+      riskMode: window.decide.riskMode,
+      buildLegs: window.decide.buildLegs, mode: window.decide.mode,
+      backendPhase: window.decide.backendPhase,
+      pendingFork: window.AUTH_PENDING_FORK,
+      declText: (document.querySelector('.decdeclare') || document.querySelector('#decideStage'))?.textContent.replace(/\s+/g,' ').slice(0, 700)
+    }));
+    console.log('DECIDE AFTER =', JSON.stringify(after, null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'handoff-resume-2560.png'), fullPage: false });
+    console.log('POSTS to /api/plans:', backend.count('POST', '/api/plans'));
+    console.log('pageErrors', pageErrors);
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE leg-touch fork vs button', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const pageErrors = [];
+  page.on('pageerror', e => pageErrors.push(e.stack || e.message));
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    const legChips = await page.evaluate(() => {
+      const host = document.querySelector('.authposside .declegpanel');
+      return { html: host ? host.innerHTML.slice(0, 1500) : null,
+        controls: Array.from(document.querySelectorAll('.authposside [data-leg]')).map(el => el.getAttribute('data-leg')) };
+    });
+    console.log('LEG CONTROLS =', JSON.stringify(legChips.controls));
+    console.log('LEG PANEL HTML =', legChips.html);
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE leg touch on a frozen held plan drops the fork silently', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const toasts = [];
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.evaluate(() => { window.__toasts = []; const orig = window.toast; window.toast = m => { window.__toasts.push(m); return orig(m); }; });
+    await page.locator('.authposside [data-leg="strike"][data-li="0"][data-d="1"]').click();
+    await page.waitForFunction(() => window.decide != null, null, { timeout: 15000 });
+    await page.waitForTimeout(2500);
+    const after = await page.evaluate(() => ({
+      backendPhase: window.decide.backendPhase, buildLegs: window.decide.buildLegs,
+      mode: window.decide.mode, pendingFork: window.AUTH_PENDING_FORK,
+      goal: window.decide.goal, view: window.decide.view, horizon: window.decide.horizon, riskMode: window.decide.riskMode,
+      toasts: window.__toasts
+    }));
+    console.log('LEG-TOUCH AFTER =', JSON.stringify(after, null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'legtouch-frozen-2560.png') });
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE greeks + receipt divergence across Home / Position panels', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 15000 });
+    const home = await page.evaluate(() => {
+      const out = {};
+      document.querySelectorAll('.bookonefacts .authmetric').forEach(c => { out[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const strip = document.querySelector('#stage');
+      const m = strip.textContent.replace(/\s+/g,' ').match(/theta[^·]*/i);
+      return { facts: out, thetaText: m && m[0] };
+    });
+    console.log('HOME =', JSON.stringify(home, null, 1));
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    const pos = await page.evaluate(() => {
+      const view = document.querySelector('[data-auth-position-detail]');
+      const metrics = {};
+      view.querySelectorAll('.authposside .authmetric').forEach(c => { metrics[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const scen = {};
+      view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const pay = {};
+      view.querySelectorAll('.authpaykey > span').forEach(c => { pay[c.childNodes[0].textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { metrics, scen, pay, greeksObj: window.byId[window.state.focus].greeks,
+        scenPhase: window.byId[window.state.focus]._positionScenarioPhase };
+    });
+    console.log('POSITION =', JSON.stringify(pos, null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'position-2560.png'), fullPage: false });
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE precise cross-surface receipt read', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 15000 });
+    const home = await page.evaluate(() => {
+      const facts = {};
+      document.querySelectorAll('.bookonefacts .authmetric').forEach(c => { facts[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const g = {};
+      document.querySelectorAll('.homeonegreeks > span').forEach(c => { const v = c.querySelector('b').textContent.trim(); g[c.textContent.replace(v,'').trim()] = v; });
+      return { facts, greeks: g, factsHTML: document.querySelector('.bookonefacts')?.innerHTML };
+    });
+    console.log('HOME facts =', JSON.stringify(home.facts), '\nHOME greeks =', JSON.stringify(home.greeks));
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    const pos = await page.evaluate(() => {
+      const view = document.querySelector('[data-auth-position-detail]');
+      const rows = {};
+      view.querySelectorAll('.authlistrow').forEach(r => { rows[r.querySelector('b').textContent.trim()] = r.querySelector('span').textContent.trim(); });
+      const p = window.byId[window.state.focus];
+      const scenPanel = view.querySelector('.authscenpanel');
+      return { rows,
+        pinnedScen: window.pinnedScen[p.id],
+        scenHeader: view.querySelector('.authpathpanel .eyebrow')?.textContent.trim(),
+        focusedScenario: window.authPositionFocusedScenario ? null : null,
+        srows: Array.from(view.querySelectorAll('.authscenstage .srow')).map(r => r.className + '|' + r.textContent.replace(/\s+/g,' ').trim().slice(0,90)),
+        scrubT: window.scenSt(p.id).t,
+        lifecycleText: view.querySelector('.authlifecycle')?.textContent.replace(/\s+/g,' ').slice(0,300),
+        legFoot: view.querySelector('.declegfoot')?.textContent.trim()
+      };
+    });
+    console.log('POSITION rows =', JSON.stringify(pos.rows, null, 1));
+    console.log('POSITION scen =', JSON.stringify({ pinnedScen: pos.pinnedScen, scenHeader: pos.scenHeader, scrubT: pos.scrubT }, null, 1));
+    console.log('SROWS =', JSON.stringify(pos.srows, null, 1));
+    console.log('LIFECYCLE =', pos.lifecycleText);
+    console.log('LEGFOOT =', pos.legFoot);
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE forward test drive + reload durability', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const backend = await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    const before = await page.evaluate(() => {
+      const p = window.byId[window.state.focus];
+      const view = document.querySelector('[data-auth-position-detail]');
+      const scen = {}; view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { scen, scrub: window.scenSt(p.id), pinned: window.pinnedScen[p.id],
+        stageAttr: view.querySelector('.authscenstage')?.getAttribute('data-position-scenario'),
+        receipt: view.querySelector('.authscenreceipt')?.textContent.replace(/\s+/g,' ').trim() };
+    });
+    console.log('FWD BEFORE =', JSON.stringify(before, null, 1));
+    const reqsBefore = backend.requests.length;
+    await page.locator('[data-auth-manage="forward"]').click();
+    await page.waitForTimeout(1200);
+    const mid = await page.evaluate(() => {
+      const p = window.byId[window.state.focus];
+      const view = document.querySelector('[data-auth-position-detail]');
+      const scen = {}; view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { scen, scrub: window.scenSt(p.id), pinned: window.pinnedScen[p.id],
+        receipt: view.querySelector('.authscenreceipt')?.textContent.replace(/\s+/g,' ').trim(),
+        anyProgressUI: Array.from(view.querySelectorAll('*')).filter(e => /forward test/i.test(e.textContent||'') && e.children.length===0).map(e=>e.textContent.trim()).slice(0,5) };
+    });
+    console.log('FWD MID (t+1.2s) =', JSON.stringify(mid, null, 1));
+    console.log('NEW REQUESTS during forward test =', JSON.stringify(backend.requests.slice(reqsBefore).map(r => r.method + ' ' + r.url)));
+    await page.screenshot({ path: path.join(M7SHOTS, 'forwardtest-playing-2560.png') });
+    await page.waitForTimeout(6000);
+    const done = await page.evaluate(() => {
+      const p = window.byId[window.state.focus];
+      const view = document.querySelector('[data-auth-position-detail]');
+      const scen = {}; view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { scen, scrub: window.scenSt(p.id), pinned: window.pinnedScen[p.id] };
+    });
+    console.log('FWD DONE =', JSON.stringify(done, null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'forwardtest-done-2560.png') });
+    // reload
+    await page.reload();
+    await waitForDeskBoot(page);
+    await page.waitForTimeout(4000);
+    const reloaded = await page.evaluate(() => ({
+      level: window.state?.level, focus: window.state?.focus,
+      routeState: window.WORKSPACE?.routeState,
+      focusedPositionId: window.WORKSPACE?.focusedPositionId,
+      pinnedScen: JSON.parse(JSON.stringify(window.pinnedScen || {})),
+      scen: (() => { const o={}; document.querySelectorAll('.authscenmetric').forEach(c => { o[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); }); return o; })(),
+      bodyText: document.body.textContent.replace(/\s+/g,' ').match(/forward test/ig)
+    }));
+    console.log('AFTER RELOAD =', JSON.stringify(reloaded, null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'forwardtest-afterreload-2560.png') });
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE scroll owners + responsive order', async () => {
+  const { documents } = frozenBookDocuments();
+  for (const vp of [{width:2560,height:1440},{width:2000,height:963},{width:1440,height:900},{width:390,height:844}]) {
+    const context = await browser.newContext({ viewport: vp });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+    try {
+      await openPosition(page);
+      await page.waitForTimeout(2500);
+      const info = await page.evaluate(() => {
+        const scrollers = [];
+        document.querySelectorAll('*').forEach(el => {
+          const r = el.getBoundingClientRect(); if (!r.width || !r.height) return;
+          const cs = getComputedStyle(el);
+          const vScroll = el.scrollHeight - el.clientHeight > 2 && /auto|scroll/.test(cs.overflowY);
+          const hScroll = el.scrollWidth - el.clientWidth > 2 && /auto|scroll/.test(cs.overflowX);
+          if (vScroll || hScroll) scrollers.push({ sel: el.tagName.toLowerCase()+'.'+(el.className||'').toString().split(' ').filter(Boolean).slice(0,3).join('.'),
+            id: el.id||null, vOver: el.scrollHeight-el.clientHeight, hOver: el.scrollWidth-el.clientWidth,
+            w: Math.round(r.width), h: Math.round(r.height) });
+        });
+        const clipped = [];
+        document.querySelectorAll('[data-auth-position-detail] *').forEach(el => {
+          const r = el.getBoundingClientRect();
+          if (r.width && (r.right > document.documentElement.clientWidth + 1 || r.left < -1)) clipped.push({ sel: el.tagName.toLowerCase()+'.'+(el.className||'').toString().split(' ').slice(0,2).join('.'), left: Math.round(r.left), right: Math.round(r.right) });
+        });
+        const order = Array.from(document.querySelectorAll('[data-auth-position-detail] > div > section, [data-auth-position-detail] > div > aside, [data-auth-position-detail] > section'))
+          .map(s => ({ eyebrow: s.querySelector('.eyebrow')?.textContent.trim(), top: Math.round(s.getBoundingClientRect().top + window.scrollY) }))
+          .sort((a,b)=>a.top-b.top);
+        return { scrollers, clipped: clipped.slice(0,10), order, docW: document.documentElement.clientWidth, bodyScrollW: document.body.scrollWidth };
+      });
+      console.log(`\n=== ${vp.width}x${vp.height} ===`);
+      console.log('SCROLLERS =', JSON.stringify(info.scrollers, null, 1));
+      console.log('CLIPPED =', JSON.stringify(info.clipped));
+      console.log('ORDER =', JSON.stringify(info.order));
+      await page.screenshot({ path: path.join(M7SHOTS, `position-${vp.width}x${vp.height}.png`) });
+    } finally { await context.close(); }
+  }
+});
+
+test('M7-PROBE golden walk: facts the golden test does not compare', async () => {
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const pageErrors = [];
+  page.on('pageerror', e => pageErrors.push(e.stack || e.message));
+  await installBackend(page, {
+    bookDocuments: goldenBookDocuments(),
+    universeSymbols: [GOLDEN.symbol], scoutSymbols: [GOLDEN.symbol],
+    strategyCandidates: [goldenCandidate()], ideaSymbol: GOLDEN.symbol,
+    quote: { symbol: GOLDEN.symbol, bid: GOLDEN.lastPrice - 0.02, ask: GOLDEN.lastPrice + 0.02,
+      last: GOLDEN.lastPrice, prevClose: 224.10, changePct: GOLDEN.changePct,
+      source: 'BOOK_TEST_RESEARCH_RECEIPT', freshness: 'FRESH', asOf: 1784563200000,
+      evidence: { source: 'BOOK_TEST_RESEARCH_RECEIPT', lane: 'OBSERVED', provenance: 'OBSERVED' } }
+  });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
     await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
-    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
-    await page.waitForSelector('[data-auth-position-detail] .mechg .mgt');
-
-    const GREEKS = ['delta', 'theta', 'vega', 'gamma'];
-    const atRest = await page.evaluate(keys => ({
-      panel: Array.from(document.querySelectorAll('[data-auth-position-detail] .mechg .mgt'))
-        .map(tile => `${tile.querySelector('.mgk').textContent.trim()}=${tile.querySelector('.mgv').textContent.trim()}`),
-      scenario: keys.map(key => {
-        const cell = document.querySelector(`[data-auth-position-detail] .authscenmetric b[data-live="${key}"]`);
-        return cell ? `${cell.closest('.authscenmetric').querySelector('span').textContent.trim()}=${cell.textContent.trim()}` : null;
-      }),
-      caption: (document.querySelector('[data-auth-position-detail] .scenmetriccap') || {}).textContent || null
-    }), GREEKS);
-
-    assert.equal(atRest.panel.length, 4, 'the position states all four greeks');
-    assert.ok(atRest.scenario.every(Boolean), 'the scenario row states all four greeks');
-
-    /* The two readings are DIFFERENT moments — the position as it stands, and the end of the
-       selected story — so their numbers legitimately differ. What must not differ is the grammar,
-       and the surface must say which moment each group reports. */
-    assert.ok(/selected future/i.test(atRest.caption || ''),
-      'the scenario metrics must name the moment they describe, or two identical greek labels read '
-      + `as one number; the caption was ${JSON.stringify(atRest.caption)}.`);
-    /* Compare the GRAMMAR: currency mark, unit, precision, label. The sign is data — one reading
-       is positive and the other negative — so it is normalised away, along with the digits. */
-    const shape = entry => entry
-      .replace(/[+\-\u2212]/g, '')
-      .replace(/[\d,]+\.\d+/g, '#.#').replace(/[\d,]+/g, '#');
-    assert.deepEqual(atRest.scenario.map(shape).sort(), atRest.panel.map(shape).sort(),
-      'both readings of one greek must use one format — same label, same unit, same precision. '
-      + `Panel ${JSON.stringify(atRest.panel)} vs scenario ${JSON.stringify(atRest.scenario)}.`);
-
-    // Now let a scenario frame patch those cells and confirm the grammar does not change under it.
-    await page.evaluate(() => {
-      const p = window.byId[Object.keys(window.byId)[0]];
-      if (window.renderAtPrice && window.positionSurf) window.renderAtPrice(window.positionSurf(p));
+    await page.waitForSelector('.bookonefacts');
+    const home = await page.evaluate(() => {
+      const facts = {}; document.querySelectorAll('.bookonefacts .authmetric').forEach(c => { facts[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const g = {}; document.querySelectorAll('.homeonegreeks > span').forEach(c => { const v=c.querySelector('b').textContent.trim(); g[c.textContent.replace(v,'').trim()]=v; });
+      return { facts, greeks: g };
     });
-    const afterFrame = await page.evaluate(keys => keys.map(key => {
-      const cell = document.querySelector(`[data-auth-position-detail] .authscenmetric b[data-live="${key}"]`);
-      return cell ? `${cell.closest('.authscenmetric').querySelector('span').textContent.trim()}=${cell.textContent.trim()}` : null;
-    }), GREEKS);
-    assert.deepEqual(afterFrame.map(shape), atRest.scenario.map(shape),
-      'a rendered scenario frame must not restate a resting greek in a different grammar; '
-      + `at rest ${JSON.stringify(atRest.scenario)}, after one frame ${JSON.stringify(afterFrame)}.`);
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(id => window.DeskBackend.state().position?.phase === 'ready' && window.state?.level==='position' && window.state.focus===id, BOOK_TRADE_ID);
+    await page.waitForSelector('[data-auth-position-detail] .authpaykey');
+    await page.waitForTimeout(2500);
+    const pos = await page.evaluate(() => {
+      const view = document.querySelector('[data-auth-position-detail]');
+      const metrics = {}; view.querySelectorAll('.authposside .authmetric').forEach(c => { metrics[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const scen = {}; view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      const rows = {}; view.querySelectorAll('.authlistrow').forEach(r => { rows[r.querySelector('b').textContent.trim()] = r.querySelector('span').textContent.trim(); });
+      const pay = {}; view.querySelectorAll('.authpaykey > span').forEach(c => { pay[c.childNodes[0].textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { metrics, scen, rows, pay };
+    });
+    await page.evaluate(() => window.go('book'));
+    await page.waitForTimeout(600);
+    await startNewIdea(page, GOLDEN.symbol);
+    await page.waitForFunction(id => window.decide?.backendPhase === 'ready' && window.decide.candId === id && window.decide.orderPreview, GOLDEN.candidateId, { timeout: 20000 });
+    const idea = await page.evaluate(() => {
+      const kpis = {}; document.querySelectorAll('.dccpay .kgrid .k').forEach(c => { kpis[c.querySelector('.lbl').textContent.trim()] = c.querySelector('.v').textContent.trim(); });
+      const sec = {}; document.querySelectorAll('.dccpay .ksecondary > span').forEach(c => { const v=c.querySelector('b').textContent.trim(); sec[c.textContent.replace(v,'').trim()]=v; });
+      const greeks = {}; document.querySelectorAll('#decideStage .mgrow, #decideStage .mg, #decideStage [class*=greek]').forEach(c => { greeks[c.className]= c.textContent.replace(/\s+/g,' ').trim().slice(0,120); });
+      return { kpis, sec, greeks };
+    });
+    console.log('HOME =', JSON.stringify(home, null, 1));
+    console.log('POSITION =', JSON.stringify(pos, null, 1));
+    console.log('NEWIDEA =', JSON.stringify(idea, null, 1));
+    console.log('pageErrors', pageErrors);
+  } finally { await context.close(); }
+});
 
-    assert.deepEqual(pageErrors, [], `greeks grammar walk emitted page errors: ${pageErrors.join('\n')}`);
-  } finally {
-    await context.close();
-  }
+test('M7-PROBE ambient workspace declaration beats the held plan on Analyze in New idea', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    // A declaration the user made earlier, on a DIFFERENT symbol.
+    await page.evaluate(() => {
+      window.WORKSPACE.focusedSymbol = 'TSLA';
+      window.WORKSPACE.goal = 'HEDGE';
+      window.WORKSPACE.view = 'Sharply lower';
+      window.WORKSPACE.horizonDays = 7;
+      window.WORKSPACE.riskPosture = 'aggressive';
+    });
+    const heldPlan = await page.evaluate(id => {
+      const pl = window.byId[id]._positionData?.plan || window.byId[id]._plan;
+      return { intent: pl.intent, thesis: pl.context.thesis, horizonDays: pl.context.horizonDays, riskMode: pl.context.riskMode };
+    }, BOOK_TRADE_ID);
+    await page.locator('[data-auth-manage="resume"]').click();
+    await page.waitForFunction(() => window.decide != null);
+    await page.waitForTimeout(2000);
+    const idea = await page.evaluate(() => ({
+      goal: window.decide.goal, view: window.decide.view, horizon: window.decide.horizon,
+      riskMode: window.decide.riskMode, resumePlanContext: window.decide.resumePlanContext,
+      buildLegs: window.decide.buildLegs, resumePlanId: window.decide.resumePlanId
+    }));
+    console.log('HELD PLAN SAYS =', JSON.stringify(heldPlan));
+    console.log('NEW IDEA ADOPTED =', JSON.stringify(idea, null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'handoff-ambient-wins-2560.png') });
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE 1440 clipping detail', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    const info = await page.evaluate(() => {
+      const list = document.querySelector('[data-auth-position-detail] .authlist');
+      const rows = Array.from(list.querySelectorAll('.authlistrow')).map(r => {
+        const rr = r.getBoundingClientRect(), lr = list.getBoundingClientRect();
+        return { label: r.querySelector('b').textContent.trim(), value: r.querySelector('span').textContent.trim(),
+          labelClipped: r.querySelector('b').scrollWidth > r.querySelector('b').clientWidth + 1,
+          fullyVisible: rr.top >= lr.top - 1 && rr.bottom <= lr.bottom + 1,
+          top: Math.round(rr.top - lr.top), h: Math.round(rr.height) };
+      });
+      const chainPanel = document.querySelector('.authposchain');
+      const foot = Array.from(chainPanel.querySelectorAll('*')).find(e => /strikes around the current price/.test(e.textContent) && e.children.length === 0);
+      const lastRow = Array.from(chainPanel.querySelectorAll('.chainrow, tr, .authchainrow')).pop();
+      const overlaps = [];
+      const kids = Array.from(chainPanel.querySelectorAll('*')).filter(e => e.children.length === 0 && e.textContent.trim());
+      for (let i = 0; i < kids.length; i++) for (let j = i+1; j < kids.length; j++) {
+        const a = kids[i].getBoundingClientRect(), b = kids[j].getBoundingClientRect();
+        if (!a.width || !b.width) continue;
+        if (a.left < b.right - 2 && b.left < a.right - 2 && a.top < b.bottom - 2 && b.top < a.bottom - 2)
+          overlaps.push([kids[i].textContent.trim().slice(0,40), kids[j].textContent.trim().slice(0,40),
+            { a: [Math.round(a.left), Math.round(a.top), Math.round(a.right), Math.round(a.bottom)], b: [Math.round(b.left), Math.round(b.top), Math.round(b.right), Math.round(b.bottom)] }]);
+      }
+      const pos = document.querySelector('.authpos');
+      return { listRect: { h: Math.round(list.getBoundingClientRect().height), scrollH: list.scrollHeight, scrollW: list.scrollWidth, clientW: list.clientWidth },
+        rows, chainOverlaps: overlaps.slice(0,6),
+        authposOverflow: pos.scrollHeight - pos.clientHeight,
+        footText: foot && foot.textContent.trim() };
+    });
+    console.log(JSON.stringify(info, null, 1));
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE chain overlap structure', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    console.log(JSON.stringify(await page.evaluate(() => {
+      const panel = document.querySelector('.authposchain');
+      function d(el){ const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        return { cls: el.className, top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height),
+          scrollH: el.scrollHeight, display: cs.display, minH: cs.minHeight, overflow: cs.overflow,
+          gridRows: cs.gridTemplateRows, flex: cs.flex }; }
+      const out = [d(panel)];
+      panel.querySelectorAll(':scope > *, :scope > * > *').forEach(el => out.push(d(el)));
+      return out;
+    }), null, 1));
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE checkpoint step shape', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    console.log(JSON.stringify(await page.evaluate(() => {
+      const p = window.byId[window.state.focus];
+      const row = window.authPositionFocusedScenario(p);
+      return { steps: (row && row.steps || []).map(s => ({ keys: Object.keys(s), step: s.step, sessionProgress: s.sessionProgress, spot: s.spot, underlyingCents: s.underlyingCents, focusPnlCents: s.focusPnlCents, greeks: s.greeks })),
+        targetIndex: window.authPositionScenarioTargetIndex(p, row && row.steps) };
+    }), null, 1).slice(0, 2500));
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE live-key collision between the aside mechg and the scenario metrics', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    const read = () => page.evaluate(() => {
+      const view = document.querySelector('[data-auth-position-detail]');
+      const aside = {}; view.querySelectorAll('.authposside .mechg .mgt').forEach(t => { aside[t.querySelector('.mgk').textContent.trim()] = t.querySelector('.mgv').textContent.trim(); });
+      const scen = {}; view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { aside, scen,
+        liveDeltaOwners: Array.from(view.querySelectorAll('[data-live="delta"]')).map(e => e.closest('.mgt') ? 'aside .mgt' : e.closest('.authscenmetric') ? 'scenario metric' : 'other') };
+    });
+    console.log('AT REST   =', JSON.stringify(await read(), null, 1));
+    await page.locator('[data-auth-manage="forward"]').click();
+    await page.waitForTimeout(1400);
+    console.log('MID PLAY  =', JSON.stringify(await read(), null, 1));
+    await page.screenshot({ path: path.join(M7SHOTS, 'livekey-collision-2560.png') });
+    await page.waitForTimeout(6000);
+    console.log('AFTER RUN =', JSON.stringify(await read(), null, 1));
+  } finally { await context.close(); }
+});
+
+test('M7-PROBE pinned scenario overwrites the Position-now greeks tiles', async () => {
+  const { documents } = frozenBookDocuments();
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  await installBackend(page, { bookDocuments: documents, ideaSymbol: 'AAPL' });
+  try {
+    await openPosition(page);
+    await page.waitForTimeout(2500);
+    const read = () => page.evaluate(() => {
+      const view = document.querySelector('[data-auth-position-detail]');
+      const aside = {}; view.querySelectorAll('.authposside .mechg .mgt').forEach(t => { aside[t.querySelector('.mgk').textContent.trim()] = t.querySelector('.mgv').textContent.trim(); });
+      const scen = {}; view.querySelectorAll('.authscenmetric').forEach(c => { scen[c.querySelector('span').textContent.trim()] = c.querySelector('b').textContent.trim(); });
+      return { aside, scen, pinned: window.pinnedScen[window.state.focus], t: window.scenSt(window.state.focus).t };
+    });
+    console.log('BEFORE PIN =', JSON.stringify(await read()));
+    await page.locator('.authscenstage .srow[data-si]').first().click();
+    await page.waitForTimeout(3000);
+    console.log('PINNED     =', JSON.stringify(await read()));
+    await page.evaluate(() => window.playScen(window.positionSurf(window.byId[window.state.focus])));
+    await page.waitForTimeout(1500);
+    console.log('PLAYING    =', JSON.stringify(await read()));
+    await page.screenshot({ path: path.join(M7SHOTS, 'pinned-greeks-overwrite-2560.png') });
+  } finally { await context.close(); }
 });

@@ -3828,3 +3828,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .swatch.undefined{background:var(--loss)}
 .pfhandle{cursor:ew-resize}
 [hidden]{display:none!important}
+
+/* The scenario metrics describe the END of the selected story, not the position as it stands. Both
+   readings use the same greek labels — they are the same quantities — so the group says which
+   moment it is reporting, rather than leaving two identical labels to be read as one number. */
+.scenmetriccap{margin:0 0 4px;color:var(--faint);font-size:var(--f-2xs);letter-spacing:.04em;text-transform:uppercase}

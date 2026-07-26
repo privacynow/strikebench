@@ -651,7 +651,16 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
     '<div class="authscenpanel scenpanel"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">'+deskEsc(decScenHint(p))+'</span></div>'+decScenSpectrum(p)+'</div>'+
     '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">What happens if — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the same paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
       '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(positionPathPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null))+'</div>'+
-      '<div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div><div class="authscenmetric"><span>Net delta</span><b data-live="delta">'+(authNumber(g.deltaShares)==null?'—':Number(g.deltaShares).toFixed(2))+'</b></div><div class="authscenmetric"><span>Theta / day</span><b data-live="theta">'+(authNumber(g.thetaCentsPerDay)==null?'—':money(Number(g.thetaCentsPerDay)/100))+'</b></div><div class="authscenmetric"><span>Gamma</span><b data-live="gamma">'+(authNumber(g.gammaSharesPerDollar)==null?'—':Number(g.gammaSharesPerDollar).toFixed(3))+'</b></div><div class="authscenmetric"><span>Vega / pt</span><b data-live="vega">'+(authNumber(g.vegaCentsPerPoint)==null?'—':money(Number(g.vegaCentsPerPoint)/100))+'</b></div></div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
+      '<div><div class="scenmetriccap">At the selected future — not today&rsquo;s reading</div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+(p.spot?'$'+p.spot.toFixed(2):'—')+'</b></div>'+GSPEC.map(function(sp){
+        /* These four cells are PATCHED per scenario frame by renderAtPrice, which writes
+           gfmt(sp,v) and the GSPEC class into them. Rendering them here by hand meant the resting
+           state and the scrubbed state used different grammars for one number — delta sat at
+           "4.50" until the first frame of a scrub turned the same cell into "+43 sh". Built from
+           GSPEC, rest and motion read identically. */
+        var gv=canonicalGreeks(g)[sp.key],gk=gv!=null;
+        return '<div class="authscenmetric"><span title="'+deskEsc(sp.desc)+'">'+sp.lab+'</span>'+
+          '<b data-live="'+sp.key+'" class="mgv '+(gk?sp.cls(gv):'')+'">'+gfmt(sp,gv)+'</b></div>';
+      }).join('')+'</div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     '<div class="authscenreceipt" id="authScenReceipt-'+deskEsc(p.id)+'">'+authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</div></section>';}
 function authPayKeyHTML(p){var spotPnl=p._trade&&p._trade.spotPnl||null,
     unchanged=spotPnl&&spotPnl.terminalPnlAtCurrentSpotCents!=null?authDollarsFromCents(spotPnl.terminalPnlAtCurrentSpotCents):null,bes=breakevens(p),be=bes.length?bes.slice(0,2).map(priceLevel).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',unchanged==null?'unavailable':authSigned(unchanged),unchanged==null?'':unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':profitAmount(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':lossAmount(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
@@ -675,7 +684,16 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
           ? '<span class="dim">unavailable</span>'
           : authMoney(closeRead.closeCost))+'</b></div>'+
       '<div class="authmetric"><span>Underlying</span><b>'+(p.spot?('$'+p.spot.toFixed(2)):'—')+'</b></div><div class="authmetric"><span title="Probability of profit — the estimated chance this position is profitable at expiry">POP now</span><b>'+authPct(cur.popNow)+'</b></div>'+
-      '<div class="authmetric"><span title="'+deskEsc(greekDesc('delta'))+'">Net delta</span><b>'+(authNumber(greeks.deltaShares)==null?'—':Number(greeks.deltaShares).toFixed(2)+' sh')+'</b></div><div class="authmetric"><span title="'+deskEsc(greekDesc('theta'))+'">Theta / day</span><b>'+gfmt(GSPEC[1],greeks.thetaCentsPerDay)+'</b></div></div>'+
+      '</div>'+
+      /* All four greeks, through the one component New Idea uses. Two of them used to be
+         hand-formatted .authmetric cells here and the other two did not exist, so a held package
+         could not be compared with the proposal it came from (audit M7). */
+      '<div class="lenshd sub"><span class="eyebrow">How it moves</span><span class="hint">same greeks receipt as New idea</span></div>'+
+      '<div class="mechg">'+GSPEC.map(function(sp){
+        var v=canonicalGreeks(greeks)[sp.key],known=v!=null;
+        return mechTile(sp.lab,gfmt(sp,v),mechBar(known?sp.w(v):0,known?sp.col(v):'var(--line-soft)',sp.center,known?v:1,sp.key),
+          known?sp.cue(v):'not carried by this position receipt',known?sp.cls(v):'',sp.key,sp.desc);
+      }).join('')+'</div>'+
       '<div class="lenshd sub"><span class="eyebrow">Leg workbench</span><span class="hint">'+p.legs.length+' held leg'+(p.legs.length===1?'':'s')+'</span></div>'+authPositionLegsHTML(p)+'</aside></div>'+authPositionScenarioStageHTML(p)+
     '<div class="authresearchgrid"><section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>Last</span><b>'+(authNumber(quote.last)==null?'—':'$'+Number(quote.last).toFixed(2))+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':'$'+Number(quote.bid).toFixed(2)+' / $'+Number(quote.ask).toFixed(2))+'</b></div>'+
@@ -820,6 +838,16 @@ var GSPEC=[
   {key:'gamma',lab:'Γ Gamma',desc:'How fast delta itself changes as the underlying moves — the curvature of your directional exposure',center:false,disp:function(v){return (+v).toFixed(3);}, w:function(v){return Math.min(100,Math.abs(v)/0.2*100);},col:function(){return 'var(--dim)';}, cue:function(){return 'curvature';}, cls:function(){return '';}}
 ];
 function gfmt(sp,v){ return v==null||!Number.isFinite(Number(v))?'—':sp.disp(Number(v)); }
+/* THE mapping from the backend greeks contract (deltaShares / gammaSharesPerDollar /
+   thetaCentsPerDay / vegaCentsPerPoint) onto the GSPEC keys every greek component reads. It lived
+   inline inside authoritativeFrame, so any surface that had greeks but no scenario frame — the
+   held Position — had to re-format them by hand, and did: delta printed as "42.60 sh" there and
+   "+43 sh" on New Idea, from one receipt. */
+function canonicalGreeks(g){
+  g=g||{};
+  return {delta:authNumber(g.deltaShares),gamma:authNumber(g.gammaSharesPerDollar),
+    theta:authNumber(g.thetaCentsPerDay),vega:authNumber(g.vegaCentsPerPoint)};
+}
 /* ONE source for greek plain-English definitions — reused wherever a greek label appears (mechGraphic,
    the position tiles) so the explanation never drifts (no-sprawl). */
 function greekDesc(key){for(var i=0;i<GSPEC.length;i++)if(GSPEC[i].key===key)return GSPEC[i].desc||'';return '';}

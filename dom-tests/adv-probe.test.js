@@ -9622,11 +9622,8 @@ test('one position reports one set of greeks, in one grammar, at rest and mid-sc
     assert.ok(/selected future/i.test(atRest.caption || ''),
       'the scenario metrics must name the moment they describe, or two identical greek labels read '
       + `as one number; the caption was ${JSON.stringify(atRest.caption)}.`);
-    /* Compare the GRAMMAR: currency mark, unit, precision, label. The sign is data — one reading
-       is positive and the other negative — so it is normalised away, along with the digits. */
     const shape = entry => entry
-      .replace(/[+\-\u2212]/g, '')
-      .replace(/[\d,]+\.\d+/g, '#.#').replace(/[\d,]+/g, '#');
+      .replace(/-?[\d,]+\.\d+/g, '#.#').replace(/-?[\d,]+/g, '#');
     assert.deepEqual(atRest.scenario.map(shape).sort(), atRest.panel.map(shape).sort(),
       'both readings of one greek must use one format — same label, same unit, same precision. '
       + `Panel ${JSON.stringify(atRest.panel)} vs scenario ${JSON.stringify(atRest.scenario)}.`);
@@ -9648,4 +9645,255 @@ test('one position reports one set of greeks, in one grammar, at rest and mid-sc
   } finally {
     await context.close();
   }
+});
+
+/* ================= ADVPROBE ================= */
+const ADVSHOTS = '/private/tmp/claude-501/-Users-tinker-output-optin/59dd524a-adcb-4f18-bffe-c79781e37c8f/scratchpad/advshots';
+
+function sixLegCandidate() {
+  const row = fourLegCandidate();
+  row.id = 'candidate_backend_six_leg';
+  row.label = 'Backend six leg package';
+  row.displayName = 'Backend six leg package';
+  row.legs = [
+    { type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1, multiplier: 100, strike: 85, expiration: '2026-08-21', entryPrice: 1 },
+    { type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1, multiplier: 100, strike: 90, expiration: '2026-08-21', entryPrice: 2 },
+    { type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1, multiplier: 100, strike: 95, expiration: '2026-08-21', entryPrice: 2 },
+    { type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1, multiplier: 100, strike: 105, expiration: '2026-08-21', entryPrice: 2 },
+    { type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1, multiplier: 100, strike: 110, expiration: '2026-08-21', entryPrice: 2 },
+    { type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1, multiplier: 100, strike: 115, expiration: '2026-08-21', entryPrice: 1 }
+  ];
+  return row;
+}
+
+test('ADVPROBE leg rail geometry', async () => {
+  const six = sixLegCandidate();
+  const { context, page } = await openAuthoritativeDesk({
+    strategyCandidates: [six], expectedCandidateId: six.id, viewport: { width: 2560, height: 1440 }
+  });
+  try {
+    for (const vp of [{width:2560,height:1440},{width:1920,height:1080},{width:1440,height:900},{width:1280,height:800}]) {
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(400);
+      const m = await page.evaluate(() => {
+        const rail = document.querySelector('#decideStage .declegpanel .declegs');
+        const panel = document.querySelector('#decideStage .declegpanel');
+        const support = document.querySelector('#decideStage .leftsupport');
+        const left = document.querySelector('#decideStage .dcleft');
+        const cs = rail && getComputedStyle(rail);
+        return {
+          legs: rail ? rail.querySelectorAll('.legr').length : 0,
+          railClient: rail && rail.clientHeight, railScroll: rail && rail.scrollHeight,
+          railMaxH: cs && cs.maxHeight,
+          panelH: panel && panel.clientHeight,
+          supportH: support && support.clientHeight,
+          supportMaxH: support && getComputedStyle(support).maxHeight,
+          leftW: left && left.clientWidth,
+          docScrolls: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+          addLegVisible: (()=>{ const b=document.querySelector('#decideStage .declegfoot button, #decideStage [data-leg="add"]'); if(!b) return null; const r=b.getBoundingClientRect(); return {t:r.top,b:r.bottom,h:r.height}; })()
+        };
+      });
+      console.log('ADVPROBE-LEGRAIL', vp.width+'x'+vp.height, JSON.stringify(m));
+      await page.screenshot({ path: `${ADVSHOTS}/legs6-${vp.width}x${vp.height}.png` });
+    }
+  } finally { await context.close(); }
+});
+
+test('ADVPROBE surface census', async () => {
+  const six = sixLegCandidate();
+  const { context, page } = await openAuthoritativeDesk({
+    strategyCandidates: [six], expectedCandidateId: six.id, viewport: { width: 1920, height: 1080 }
+  });
+  try {
+    for (const vp of [{width:2560,height:1440},{width:1920,height:1080},{width:1440,height:900},{width:390,height:844}]) {
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(500);
+      const m = await page.evaluate(() => {
+        const box = s => { const e=document.querySelector(s); if(!e) return null; const r=e.getBoundingClientRect();
+          return {c:e.clientHeight,s:e.scrollHeight,cw:e.clientWidth,sw:e.scrollWidth,x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),disp:getComputedStyle(e).display,ov:getComputedStyle(e).overflow}; };
+        const stage=document.querySelector('#decideStage');
+        const txt=stage?stage.innerText:'';
+        const count=(str,needle)=>str.split(needle).length-1;
+        const grid=document.querySelector('#decideStage .decgrid');
+        return {
+          gridClass: grid && grid.className,
+          packagebooknear: box('.packagebooknear'),
+          marketctx: box('.dccenter .marketlens .marketctx'),
+          histwrap: box('.dccenter .marketlens .histwrap'),
+          marketlens: box('.dccenter .marketlens'),
+          newsHint: (document.querySelector('.marketcol .lenshd.sub .hint')||{}).textContent,
+          newsLinks: document.querySelectorAll('.authnews a').length,
+          authnews: box('.authnews'),
+          moreRe: /\+\d+ more/.test(txt),
+          expCount: count(txt,'2026-08-21'),
+          cboeCount: count(txt,'CBOE_DELAYED'),
+          delayedCount: count(txt,'DELAYED'),
+          fsub: (()=>{const e=document.querySelector('.fanr .fsub'); if(!e)return null; return {cw:e.clientWidth,sw:e.scrollWidth,ws:getComputedStyle(e).whiteSpace,disp:getComputedStyle(e).display,text:e.textContent};})(),
+          fanheadCols: Array.from(document.querySelectorAll('.fanhead>*')).map(e=>({t:e.textContent.trim(),d:getComputedStyle(e).display,w:e.getBoundingClientRect().width})),
+          fanrCells: Array.from(document.querySelectorAll('.fanr.sel>*, .fanr:first-of-type>*')).map(e=>({t:e.textContent.trim().slice(0,20),d:getComputedStyle(e).display,w:e.getBoundingClientRect().width})),
+          sdesc: Array.from(document.querySelectorAll('.sdesc')).map(e=>({d:getComputedStyle(e).display,w:e.getBoundingClientRect().width,t:e.textContent.slice(0,40)})),
+          srowH: (()=>{const e=document.querySelector('.srow'); return e&&e.getBoundingClientRect().height;})(),
+          engineCopy: /families in the canonical engine/.test(txt),
+          bookTab: Array.from(document.querySelectorAll('#decideStage .undtab, #decideStage [data-und], #decideStage .lenstab')).map(e=>e.innerText.replace(/\s+/g,' ')),
+          histUnavailable: (()=>{const e=document.querySelector('.dccenter .marketlens .histwrap .unavailable, .dccenter .marketlens .unavail'); return !!e;})(),
+          legDetailClasses: Array.from(document.querySelectorAll('#decideStage .declegs .legr')).map(r=>Array.from(r.querySelectorAll('.lgm > *')).map(e=>({c:e.className,d:getComputedStyle(e).display,t:e.textContent.slice(0,28)}))),
+          legFootHint: (()=>{const e=document.querySelector('#decideStage .declegfoot .hint'); if(!e)return null; const r=e.getBoundingClientRect(); return {d:getComputedStyle(e).display,w:r.width,h:r.height,t:e.textContent.slice(0,60)};})()
+        };
+      });
+      console.log('ADVPROBE-CENSUS', vp.width+'x'+vp.height, JSON.stringify(m,null,1));
+      await page.screenshot({ path: `${ADVSHOTS}/census-${vp.width}x${vp.height}.png`, fullPage:false });
+    }
+  } finally { await context.close(); }
+});
+
+function newsDoc(n) {
+  return { symbol: 'AMD', evidence: 'ADV_NEWS', items: Array.from({length:n}, (_,i)=>({
+    headline: `AMD adversary headline ${i+1}`, summary: 'probe', source: 'Backend Newswire',
+    classification: 'MARKET_NEWS', basis: 'OBSERVED',
+    url: `https://example.test/adv-${i+1}`, publishedAt: '2026-07-20T15:30:00Z' })) };
+}
+
+test('ADVPROBE news history booktab draft', async () => {
+  const six = sixLegCandidate();
+  const { context, page } = await openAuthoritativeDesk({
+    strategyCandidates: [six], expectedCandidateId: six.id, viewport: { width: 1920, height: 1080 },
+    homeContextBySymbol: { AMD: { news: newsDoc(9) } }
+  });
+  try {
+    await page.setViewportSize({width:1920,height:1080});
+    await page.waitForTimeout(800);
+    const news = await page.evaluate(() => {
+      const stage = document.querySelector('#decideStage');
+      const an = stage.querySelector('.authnews');
+      const hint = an && an.closest('.upanel, .newscol, .marketcol') ;
+      return {
+        found: !!an,
+        hintTexts: Array.from(stage.querySelectorAll('.lenshd .hint, .lenshd.sub .hint')).map(e=>e.textContent),
+        links: stage.querySelectorAll('.authnews a').length,
+        anBox: an && {c:an.clientHeight,s:an.scrollHeight},
+        more: /\+\d+ more/.test(stage.innerText),
+        allText: Array.from(stage.querySelectorAll('*')).filter(e=>/headlines/.test(e.textContent||'') && e.children.length===0).map(e=>e.textContent)
+      };
+    });
+    console.log('ADVPROBE-NEWS', JSON.stringify(news));
+
+    const tabs = await page.evaluate(() => {
+      const t = document.querySelector('#dectab-book');
+      return { text: t && t.innerText.replace(/\s+/g,' '), all: Array.from(document.querySelectorAll('.inspecttab')).map(e=>e.innerText.replace(/\s+/g,' ')) };
+    });
+    console.log('ADVPROBE-BOOKTAB-BEFORE', JSON.stringify(tabs));
+    await page.click('#dectab-book');
+    await page.waitForTimeout(4000);
+    const tabs2 = await page.evaluate(() => ({
+      book: document.querySelector('#dectab-book')?.innerText.replace(/\s+/g,' '),
+      pane: document.querySelector('#dec-inspect-panel')?.innerText.replace(/\s+/g,' ').slice(0,220)
+    }));
+    console.log('ADVPROBE-BOOKTAB-AFTER', JSON.stringify(tabs2));
+    await page.screenshot({ path: `${ADVSHOTS}/booktab-1920.png` });
+
+    // playback controls
+    const srow = await page.$('#decideStage .srow');
+    if (srow) { await srow.click(); await page.waitForTimeout(900); }
+    const play = await page.evaluate(() => {
+      const sizes = s => Array.from(document.querySelectorAll(s)).map(e=>{const r=e.getBoundingClientRect();return {w:+r.width.toFixed(1),h:+r.height.toFixed(1),t:e.textContent.trim().slice(0,6)};});
+      const under24 = Array.from(document.querySelectorAll('#decideStage button, #decideStage [role=button], #decideStage input[type=range]'))
+        .map(e=>{const r=e.getBoundingClientRect();return {t:(e.textContent||e.getAttribute('aria-label')||'').trim().slice(0,18),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};})
+        .filter(x=>x.w>0&&(x.w<24||x.h<24));
+      return { playb: sizes('.playb'), scrub: sizes('.scrub'), spd: sizes('.spd button'), mstp: sizes('.mstp button'),
+        srxread: (()=>{const e=document.querySelector('.srx-read'); return e&&{w:e.clientWidth,sw:e.scrollWidth,t:e.textContent.slice(0,90)};})(),
+        under24Count: under24.length, under24Sample: under24.slice(0,14) };
+    });
+    console.log('ADVPROBE-PLAY', JSON.stringify(play));
+    await page.screenshot({ path: `${ADVSHOTS}/play-1920.png` });
+  } finally { await context.close(); }
+});
+
+test('ADVPROBE draft refusal visibility', async () => {
+  const four = fourLegCandidate();
+  const { context, page } = await openAuthoritativeDesk({
+    strategyCandidates: [four], expectedCandidateId: four.id, viewport: { width: 1920, height: 1080 }
+  });
+  try {
+    for (const vp of [{width:2560,height:1440},{width:1920,height:1080},{width:1440,height:900}]) {
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(400);
+      await page.click('#decideStage button[data-leg="strike"][data-d="1"]');
+      await page.waitForTimeout(1500);
+      const m = await page.evaluate(() => {
+        const foot = document.querySelector('#decideStage .declegfoot');
+        const hint = foot && foot.querySelector('.hint');
+        const r = hint && hint.getBoundingClientRect();
+        return {
+          mode: window.decide && window.decide.mode,
+          draftError: window.decide && window.decide.draftError,
+          footHTML: foot && foot.innerHTML.slice(0,240),
+          hintDisplay: hint && getComputedStyle(hint).display,
+          hintRect: r && {w:+r.width.toFixed(1),h:+r.height.toFixed(1)},
+          hintText: hint && hint.textContent,
+          useBtn: (()=>{const b=document.querySelector('[data-dec="usedraft"]'); return b && {disabled:b.disabled,t:b.textContent};})(),
+          payTitle: document.querySelector('#decideStage .paytitle, #decideStage .lenshd .eyebrow')?.textContent,
+          stageText: /draft blocked/i.test(document.querySelector('#decideStage').innerText)
+        };
+      });
+      console.log('ADVPROBE-DRAFT', vp.width+'x'+vp.height, JSON.stringify(m));
+      await page.screenshot({ path: `${ADVSHOTS}/draft-${vp.width}.png` });
+      // reset draft
+      const cancel = await page.$('[data-dec="canceldraft"]');
+      if (cancel) { await cancel.click(); await page.waitForTimeout(900); }
+    }
+  } finally { await context.close(); }
+});
+
+test('ADVPROBE history unavailable overlap', async () => {
+  const four = fourLegCandidate();
+  const six = four;
+  const ctxOpts = { strategyCandidates: [six], expectedCandidateId: six.id, viewport: { width: 1920, height: 1080 },
+    homeContextBySymbol: { AMD: { news: newsDoc(2) } } };
+  const context = await browser.newContext({ viewport: ctxOpts.viewport });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const pageErrors = [];
+  page.on('pageerror', e => pageErrors.push(e.message));
+  await installBackend(page, ctxOpts);
+  await page.route('**/api/research/*/history*', route => route.fulfill({ status: 503,
+    contentType: 'application/json', body: JSON.stringify({ error: 'Stored history is unavailable for AMD.' }) }));
+  await page.goto(deskUrl);
+  await waitForDeskBoot(page);
+  await startNewIdea(page, 'AMD');
+  await page.waitForFunction(id => window.decide && window.decide.backendPhase === 'ready' && window.decide.candId === id,
+    six.id, { timeout: 12000 });
+  try {
+    for (const vp of [{width:2560,height:1440},{width:1920,height:1080}]) {
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(900);
+      const m = await page.evaluate(() => {
+        const stage = document.querySelector('#decideStage');
+        const lens = stage.querySelector('.dccenter .marketlens');
+        const lensR = lens && lens.getBoundingClientRect();
+        const un = stage.querySelector('.histunavailable');
+        const btn = un && un.querySelector('[data-hist-refresh]');
+        const btnR = btn && btn.getBoundingClientRect();
+        // leaf-text overlap scan
+        const leaves = Array.from(stage.querySelectorAll('*')).filter(e => e.children.length === 0
+          && (e.textContent||'').trim().length > 2 && e.getBoundingClientRect().width > 2 && e.getBoundingClientRect().height > 2);
+        let pairs = 0; const samples = [];
+        for (let i=0;i<leaves.length;i++) for (let j=i+1;j<leaves.length;j++){
+          const a=leaves[i].getBoundingClientRect(), b=leaves[j].getBoundingClientRect();
+          if (a.left < b.right-1 && b.left < a.right-1 && a.top < b.bottom-1 && b.top < a.bottom-1) {
+            pairs++; if (samples.length<6) samples.push([leaves[i].textContent.trim().slice(0,32), leaves[j].textContent.trim().slice(0,32)]);
+          }
+        }
+        return { histPhase: window.HIST_STORE && window.HIST_STORE.AMD && window.HIST_STORE.AMD.phase,
+          unavailablePresent: !!un, unavailRect: un && (r=>({x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}))(un.getBoundingClientRect()),
+          lensRect: lensR && {x:Math.round(lensR.x),y:Math.round(lensR.y),w:Math.round(lensR.width),b:Math.round(lensR.bottom)},
+          btnRect: btnR && {x:Math.round(btnR.x),y:Math.round(btnR.y),w:Math.round(btnR.width),b:Math.round(btnR.bottom)},
+          overlapPairs: pairs, samples,
+          docText: /Refresh AMD market data/.test(stage.innerText),
+          dupSentence: (stage.innerText.match(/Stored history is unavailable/g)||[]).length,
+          dupUnavail: (stage.innerText.match(/Price history unavailable/g)||[]).length };
+      });
+      console.log('ADVPROBE-HIST', vp.width+'x'+vp.height, JSON.stringify(m));
+      await page.screenshot({ path: `${ADVSHOTS}/histerr-${vp.width}.png` });
+    }
+  } finally { await context.close(); }
 });

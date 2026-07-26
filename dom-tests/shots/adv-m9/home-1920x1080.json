@@ -1,0 +1,39 @@
+{
+ "viewport": {
+  "w": 1920,
+  "h": 1080
+ },
+ "researchList": [],
+ "playb": null,
+ "lrm": [],
+ "mstp": [],
+ "metricLabels": [
+  "Chance57%",
+  "Max loss−$432",
+  "Entry credit−$432",
+  "Expiry2026-08-21"
+ ],
+ "bookonefacts": [
+  "Chance57%",
+  "Max loss−$432",
+  "Entry credit−$432",
+  "Expiry2026-08-21"
+ ],
+ "tz": [],
+ "legrows": [],
+ "badges": {
+  ".badge": [
+   "reviewing"
+  ],
+  ".lifebadge": [
+   "reviewing"
+  ],
+  ".fvd": [],
+  ".dbfit": [],
+  ".backendstate": [],
+  ".declegstate": [],
+  ".mktsrc": [
+   "● PRACTICE"
+  ]
+ }
+}

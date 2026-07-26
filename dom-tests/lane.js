@@ -34,7 +34,27 @@ function die(message) {
   process.exit(1);
 }
 
-/** Every *.test.js under dom-tests, wherever it sits, grouped into exactly one lane. */
+/**
+ * Every *.test.js under dom-tests, wherever it sits, grouped into exactly one lane.
+ *
+ * Auto-discovery is deliberate — a hand-kept list is what rotted — but it has one hazard: anything
+ * dropped in here named *.test.js joins the gate, so a throwaway probe written while diagnosing a
+ * surface decides whether the build is green. The line is COMMITTED versus not: a suite the team
+ * relies on is in git; a probe someone is writing right now is not. Untracked suites are skipped
+ * and announced by name, so nothing is silently ignored and nothing uncommitted can gate a build.
+ */
+function trackedTestFiles() {
+  try {
+    const listed = require('node:child_process')
+      .execFileSync('git', ['ls-files', '--cached', '--', '*.test.js'], { cwd: HERE, encoding: 'utf8' });
+    return new Set(listed.split('\n').map(line => line.trim()).filter(Boolean));
+  } catch (error) {
+    // Not a git checkout (a release tarball, say). Fall back to running everything found.
+    return null;
+  }
+}
+const TRACKED = trackedTestFiles();
+const scratched = [];
 function testFiles(dir = HERE, prefix = '') {
   // Only dependencies and screenshot evidence are skipped; every other directory is searched,
   // so a suite cannot fall out of CI simply by moving into a subfolder.
@@ -43,8 +63,12 @@ function testFiles(dir = HERE, prefix = '') {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith('.') || skip.has(entry.name)) continue;
     const name = prefix + entry.name;
-    if (entry.isDirectory()) found.push(...testFiles(path.join(dir, entry.name), `${name}/`));
-    else if (entry.name.endsWith('.test.js')) found.push(name);
+    if (entry.isDirectory()) {
+      found.push(...testFiles(path.join(dir, entry.name), `${name}/`));
+    } else if (entry.name.endsWith('.test.js')) {
+      if (TRACKED && !TRACKED.has(name)) scratched.push(name);
+      else found.push(name);
+    }
   }
   return found;
 }
@@ -148,7 +172,8 @@ function publish(lane, shards, note) {
 
   if (process.env.GITHUB_STEP_SUMMARY) {
     const rows = shards.length
-      ? shards.map(shard => `| \`${shard.file}\`${shard.retried ? ' (retried)' : ''} | ${shard.tests} `
+      ? shards.map(shard => `| \`${shard.file}\`${shard.retried
+        ? ` (retried — ${shard.firstAttemptFail} failed first)` : ''} | ${shard.tests} `
         + `| ${shard.pass} | ${shard.fail} | ${shard.skipped} |`)
       : [`| _none_ | 0 | 0 | 0 | 0 |`];
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
@@ -188,6 +213,9 @@ async function main() {
   }
   if (!files.length) die(`no test files for the ${lane} lane; the lane cannot report green on nothing`);
 
+  for (const name of scratched) {
+    process.stdout.write(`# skipped ${name} — not committed, so it does not gate the build\n`);
+  }
   for (const name of groups.defaulted) {
     process.stdout.write(`# notice: ${name} has no lane suffix and ran as a fast contract; rename it\n`
       + `#         *.journey.test.js or *.visual.test.js if it needs the jar or the viewport matrix\n`);
@@ -202,12 +230,20 @@ async function main() {
     // Sequential shards: each one boots its own jar on a fixed port with its own fresh database,
     // so overlapping them would collide. Retry once — journeys only, per §16.2.
     for (const file of files) {
-      let shard = score(await runShard(file, env));
-      if (!shard.ok) {
-        process.stdout.write(`# retrying ${file} once (journey lane only)\n`);
-        shard = { ...score(await runShard(file, env)), retried: true };
-      }
-      shards.push(shard);
+      const first = score(await runShard(file, env));
+      if (first.ok) { shards.push(first); continue; }
+      process.stdout.write(`# retrying ${file} once (journey lane only)\n`);
+      const second = score(await runShard(file, env));
+      // The retry decides pass/fail, but the FIRST attempt's TAP is kept in the report. Replacing
+      // it lost the only record of what actually failed, so a journey that fails then passes read
+      // as a clean run and its diagnostics were gone — the opposite of what a retry is for.
+      shards.push({
+        ...second,
+        retried: true,
+        tap: `# attempt 1 of ${file} FAILED — kept as evidence; the retry below decided this shard\n`
+          + `${first.tap}# attempt 2 (retry) of ${file}\n${second.tap}`,
+        firstAttemptFail: first.fail
+      });
     }
   } else {
     // One process per file here too, so a lane's report names the file that failed and a

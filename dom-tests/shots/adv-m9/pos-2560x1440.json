@@ -1,0 +1,337 @@
+{
+ "viewport": {
+  "w": 2560,
+  "h": 1440
+ },
+ "pathpanel": {
+  "rect": {
+   "x": 1428,
+   "y": 1030,
+   "w": 1079,
+   "h": 389
+  },
+  "overflow": "hidden",
+  "overflowY": "hidden",
+  "rows": "27px 150px 15px 177.688px",
+  "clientHeight": 387,
+  "scrollHeight": 406,
+  "childRects": [
+   {
+    "cls": "lenshd",
+    "r": {
+     "x": 1438,
+     "y": 1040,
+     "w": 1059,
+     "h": 27
+    }
+   },
+   {
+    "cls": "authpathviewport",
+    "r": {
+     "x": 1438,
+     "y": 1073,
+     "w": 1059,
+     "h": 150
+    }
+   },
+   {
+    "cls": "mcpathread",
+    "r": {
+     "x": 1438,
+     "y": 1229,
+     "w": 1059,
+     "h": 15
+    }
+   },
+   {
+    "cls": "",
+    "r": {
+     "x": 1438,
+     "y": 1250,
+     "w": 1059,
+     "h": 178
+    }
+   }
+  ]
+ },
+ "pathpanelScroller": {
+  "cls": "cdetail reveal",
+  "oy": "hidden",
+  "ch": 1312,
+  "sh": 1312
+ },
+ "pathpanelMetrics": [
+  {
+   "cls": "authscenmetrics",
+   "txt": "Scenario P/L−$432Underlying$222.22Δ Delta+5 shΘ Theta / day−",
+   "r": {
+    "x": 1438,
+    "y": 1271,
+    "w": 1059,
+    "h": 108
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  },
+  {
+   "cls": "authscenmetric",
+   "txt": "Scenario P/L−$432",
+   "r": {
+    "x": 1438,
+    "y": 1271,
+    "w": 261,
+    "h": 51
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  },
+  {
+   "cls": "authscenmetric",
+   "txt": "Underlying$222.22",
+   "r": {
+    "x": 1704,
+    "y": 1271,
+    "w": 261,
+    "h": 51
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  },
+  {
+   "cls": "authscenmetric",
+   "txt": "Δ Delta+5 sh",
+   "r": {
+    "x": 1970,
+    "y": 1271,
+    "w": 261,
+    "h": 51
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  },
+  {
+   "cls": "authscenmetric",
+   "txt": "Θ Theta / day−$3",
+   "r": {
+    "x": 2236,
+    "y": 1271,
+    "w": 261,
+    "h": 51
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  },
+  {
+   "cls": "authscenmetric",
+   "txt": "V Vega / pt$6",
+   "r": {
+    "x": 1438,
+    "y": 1328,
+    "w": 261,
+    "h": 51
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  },
+  {
+   "cls": "authscenmetric",
+   "txt": "Γ Gamma0.320",
+   "r": {
+    "x": 1704,
+    "y": 1328,
+    "w": 261,
+    "h": 51
+   },
+   "inViewport": true,
+   "hitIsSelfOrChild": true
+  }
+ ],
+ "researchList": [
+  {
+   "cls": "authlist",
+   "ch": 191,
+   "sh": 191,
+   "oy": "auto",
+   "r": {
+    "x": 2199,
+    "y": 690,
+    "w": 307,
+    "h": 191
+   },
+   "rows": [
+    {
+     "t": "IdeaAAPL working idea",
+     "r": {
+      "x": 2199,
+      "y": 690,
+      "w": 307,
+      "h": 34
+     }
+    },
+    {
+     "t": "Stage—",
+     "r": {
+      "x": 2199,
+      "y": 729,
+      "w": 307,
+      "h": 34
+     }
+    },
+    {
+     "t": "Book share100% of book risk · 1st of 1",
+     "r": {
+      "x": 2199,
+      "y": 768,
+      "w": 307,
+      "h": 34
+     }
+    },
+    {
+     "t": "Expiry2026-08-21",
+     "r": {
+      "x": 2199,
+      "y": 807,
+      "w": 307,
+      "h": 34
+     }
+    },
+    {
+     "t": "Entry netpaid $432 · practice",
+     "r": {
+      "x": 2199,
+      "y": 847,
+      "w": 307,
+      "h": 34
+     }
+    }
+   ]
+  }
+ ],
+ "playb": null,
+ "lrm": [
+  {
+   "r": {
+    "x": 1676,
+    "y": 534,
+    "w": 19,
+    "h": 21
+   },
+   "color": "rgb(91, 101, 119)",
+   "bg": "rgba(0, 0, 0, 0)",
+   "txt": "✕"
+  },
+  {
+   "r": {
+    "x": 1680,
+    "y": 577,
+    "w": 19,
+    "h": 21
+   },
+   "color": "rgb(91, 101, 119)",
+   "bg": "rgba(0, 0, 0, 0)",
+   "txt": "✕"
+  }
+ ],
+ "mstp": [
+  {
+   "r": {
+    "x": 1514,
+    "y": 532,
+    "w": 22,
+    "h": 26
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 1567,
+    "y": 532,
+    "w": 22,
+    "h": 26
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 1596,
+    "y": 532,
+    "w": 22,
+    "h": 26
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 1648,
+    "y": 532,
+    "w": 22,
+    "h": 26
+   },
+   "t": "+"
+  },
+  {
+   "r": {
+    "x": 1519,
+    "y": 575,
+    "w": 22,
+    "h": 26
+   },
+   "t": "−"
+  },
+  {
+   "r": {
+    "x": 1571,
+    "y": 575,
+    "w": 22,
+    "h": 26
+   },
+   "t": "+"
+  }
+ ],
+ "metricLabels": [
+  "Chance57%",
+  "Max loss−$432",
+  "Entry credit−$432",
+  "Expiry2026-08-21",
+  "Open P/L+$247",
+  "Cost to closeunavailable",
+  "Underlying$222.22",
+  "POP now64%",
+  "Last$222.22",
+  "Bid / ask$222.20 / $222.24",
+  "ATM IV—",
+  "Market datacurrent"
+ ],
+ "bookonefacts": [
+  "Chance57%",
+  "Max loss−$432",
+  "Entry credit−$432",
+  "Expiry2026-08-21"
+ ],
+ "tz": [
+  "P/L+$247",
+  "Max loss−$432",
+  "POP64%"
+ ],
+ "legrows": [
+  "BUY CALL − 215 + − 2 + ✕ exp 2026-08-21 · fill: buy at ask 5.25",
+  "SELL CALL − 225 + − 2 + ✕ exp 2026-08-21 · fill: sell at bid 3.09"
+ ],
+ "badges": {
+  ".badge": [
+   "reviewing",
+   "SIMULATED PATHS"
+  ],
+  ".lifebadge": [
+   "reviewing"
+  ],
+  ".fvd": [],
+  ".dbfit": [],
+  ".backendstate": [],
+  ".declegstate": [],
+  ".mktsrc": [
+   "● PRACTICE"
+  ]
+ },
+ "errs": []
+}

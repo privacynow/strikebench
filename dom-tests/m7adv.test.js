@@ -9649,3 +9649,191 @@ test('one position reports one set of greeks, in one grammar, at rest and mid-sc
     await context.close();
   }
 });
+
+/* ===================== ADVERSARY PROBES (scratch, not part of any lane) ===================== */
+const ADV_DIR = path.resolve(__dirname, 'scratch-adv');
+
+async function advOpenPosition(viewport, docs) {
+  const context = await browser.newContext({ viewport });
+  const page2 = await context.newPage();
+  page2.setDefaultTimeout(8000);
+  const errors = [];
+  page2.on('pageerror', e => errors.push(e.stack || e.message));
+  const backend = await installBackend(page2, { bookDocuments: docs || populatedBookDocuments() });
+  await page2.goto(deskUrl);
+  await waitForDeskBoot(page2);
+  await page2.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 10000 });
+  await page2.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+  await page2.waitForSelector(`#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] path.focusghost`, { timeout: 10000 });
+  return { context, page: page2, backend, errors };
+}
+
+const ADV_READ = () => {
+  const detail = document.querySelector('[data-auth-position-detail]');
+  const txt = el => (el ? el.textContent.replace(/\s+/g, ' ').trim() : null);
+  const asideTiles = Array.from(detail.querySelectorAll('.authposside .mechg .mgt')).map(t => ({
+    k: txt(t.querySelector('.mgk')), v: txt(t.querySelector('.mgv')), live: t.querySelector('.mgv')?.getAttribute('data-live')
+  }));
+  const scen = Array.from(detail.querySelectorAll('.authscenmetrics .authscenmetric')).map(m => ({
+    k: txt(m.querySelector('span')), v: txt(m.querySelector('b')), live: m.querySelector('b')?.getAttribute('data-live')
+  }));
+  const payKey = Array.from(detail.querySelectorAll('.authpaykey span')).map(s => txt(s));
+  const dupes = {};
+  ['delta', 'theta', 'vega', 'gamma', 'px', 'heroProj'].forEach(k => {
+    dupes[k] = Array.from(detail.querySelectorAll(`[data-live="${k}"]`)).map(el => {
+      const path = [];
+      let n = el;
+      while (n && n !== detail) { path.unshift(n.className || n.tagName); n = n.parentElement; }
+      return path.slice(0, 3).join('>');
+    });
+  });
+  return { asideTiles, scen, payKey, dupes, scenCap: txt(detail.querySelector('.scenmetriccap')) };
+};
+
+test('ADV-1 greeks live-key collision and scenario metric coherence', async () => {
+  const { context, page, errors } = await advOpenPosition({ width: 2560, height: 1440 });
+  try {
+    const before = await page.evaluate(ADV_READ);
+    console.log('ADV-1 BEFORE', JSON.stringify(before, null, 1));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-position-2560.png'), fullPage: false });
+    // pin the biggest-down scenario tile
+    const tiles = await page.evaluate(() => Array.from(document.querySelectorAll('[data-auth-position-detail] .authscenstage .srow[data-si]')).map(r => ({ si: r.getAttribute('data-si'), t: r.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) })));
+    console.log('ADV-1 TILES', JSON.stringify(tiles));
+    const crash = tiles.find(t => /crash|−20|-20/i.test(t.t)) || tiles[0];
+    await page.locator(`[data-auth-position-detail] .authscenstage .srow[data-si="${crash.si}"]`).click();
+    await page.waitForTimeout(1500);
+    const pinned = await page.evaluate(ADV_READ);
+    console.log('ADV-1 PINNED(' + crash.t + ')', JSON.stringify(pinned, null, 1));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-pinned-2560.png') });
+    await page.evaluate(tid => { const p = window.byId[tid]; window.scenScrub(window.positionSurf(p), 0.5); }, BOOK_TRADE_ID);
+    await page.waitForTimeout(300);
+    const scrubbed = await page.evaluate(ADV_READ);
+    console.log('ADV-1 SCRUB0.5', JSON.stringify({ aside: scrubbed.asideTiles, scen: scrubbed.scen }, null, 1));
+    console.log('ADV-1 ERRORS', JSON.stringify(errors));
+  } finally { await context.close(); }
+});
+
+test('ADV-2 layout: scroll owners, authlist clipping, chain overlap', async () => {
+  for (const vp of [{ width: 2560, height: 1440 }, { width: 2000, height: 963 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const { context, page } = await advOpenPosition(vp);
+    try {
+      const m = await page.evaluate(() => {
+        const out = {};
+        const scrollers = [];
+        document.querySelectorAll('*').forEach(el => {
+          const over = el.scrollHeight - el.clientHeight;
+          if (over > 4 && el.clientHeight > 40) {
+            const cs = getComputedStyle(el);
+            if (/auto|scroll/.test(cs.overflowY)) scrollers.push({ sel: el.tagName.toLowerCase() + '.' + String(el.className).split(' ').filter(Boolean).slice(0, 2).join('.'), over });
+          }
+        });
+        out.scrollers = scrollers.slice(0, 12);
+        const doc = document.scrollingElement;
+        out.pageOver = doc.scrollHeight - doc.clientHeight;
+        const ap = document.querySelector('.authpos');
+        out.authpos = ap ? { over: ap.scrollHeight - ap.clientHeight, h: Math.round(ap.getBoundingClientRect().height) } : null;
+        const list = document.querySelector('[data-auth-position-detail] .authlist');
+        if (list) {
+          const r = list.getBoundingClientRect();
+          out.authlist = { h: Math.round(r.height), sh: list.scrollHeight, cw: list.clientWidth, sw: list.scrollWidth, over: list.scrollHeight - list.clientHeight, overflowY: getComputedStyle(list).overflowY };
+          out.rows = Array.from(list.querySelectorAll('.authlistrow')).map(row => {
+            const rr = row.getBoundingClientRect();
+            const b = row.querySelector('b');
+            return { k: b.textContent, visible: rr.top >= r.top - 1 && rr.bottom <= r.bottom + 1, labelClipped: b.scrollWidth > b.clientWidth + 1 };
+          });
+        }
+        const chain = document.querySelector('[data-auth-position-detail] .authposchain');
+        if (chain) {
+          const rows = chain.querySelector('.authchainrows');
+          out.chain = rows ? { h: Math.round(rows.getBoundingClientRect().height), sh: rows.scrollHeight, minH: getComputedStyle(rows).minHeight, ov: getComputedStyle(rows).overflow, grid: getComputedStyle(rows).gridTemplateRows } : null;
+          // overlap detection: any chain row text box intersecting the receipt text box
+          const receipt = Array.from(chain.querySelectorAll('*')).find(el => el.children.length === 0 && /strikes around the current price/.test(el.textContent));
+          if (receipt) {
+            const rr = receipt.getBoundingClientRect();
+            const hits = [];
+            chain.querySelectorAll('.authchainrows *').forEach(el => {
+              if (el.children.length) return;
+              const b = el.getBoundingClientRect();
+              if (b.width && b.height && b.left < rr.right && b.right > rr.left && b.top < rr.bottom && b.bottom > rr.top) hits.push({ t: el.textContent.trim().slice(0, 24), b: [Math.round(b.left), Math.round(b.top), Math.round(b.right), Math.round(b.bottom)] });
+            });
+            out.chainOverlap = { receipt: [Math.round(rr.left), Math.round(rr.top), Math.round(rr.right), Math.round(rr.bottom)], hits };
+          }
+        }
+        out.sections = Array.from(document.querySelectorAll('[data-auth-position-detail] .eyebrow')).map(e => ({ t: e.textContent.trim(), top: Math.round(e.getBoundingClientRect().top + (document.scrollingElement.scrollTop || 0)) }));
+        return out;
+      });
+      console.log(`ADV-2 ${vp.width}x${vp.height}`, JSON.stringify(m, null, 1));
+      await page.screenshot({ path: path.join(ADV_DIR, `adv-pos-${vp.width}x${vp.height}.png`), fullPage: false });
+    } finally { await context.close(); }
+  }
+});
+
+test('ADV-3 handoff: resume button and leg touch', async () => {
+  const { context, page, backend } = await advOpenPosition({ width: 2560, height: 1440 });
+  try {
+    const held = await page.evaluate(() => ({
+      plan: window.byId[Object.keys(window.byId)[0]]._plan || (window.byId[Object.keys(window.byId)[0]]._positionData || {}).plan,
+      legControls: Array.from(document.querySelectorAll('.authposside [data-leg]')).map(el => el.getAttribute('data-leg') + ':' + (el.getAttribute('aria-label') || ''))
+    }));
+    console.log('ADV-3 HELD PLAN', JSON.stringify(held.plan));
+    console.log('ADV-3 LEG CONTROLS', JSON.stringify(held.legControls));
+    const wsBefore = await page.evaluate(() => JSON.parse(JSON.stringify(window.WORKSPACE)));
+    console.log('ADV-3 WORKSPACE', JSON.stringify({ goal: wsBefore.goal, view: wsBefore.view, horizonDays: wsBefore.horizonDays, riskPosture: wsBefore.riskPosture, focusedSymbol: wsBefore.focusedSymbol }));
+    await page.evaluate(() => { window.__toasts = []; const orig = window.toast; window.toast = function (m) { window.__toasts.push(m); return orig.apply(this, arguments); }; });
+    await page.locator('[data-auth-position-detail] [data-auth-manage="resume"]').click();
+    await page.waitForTimeout(2000);
+    const after = await page.evaluate(() => ({
+      phase: window.DeskBackend.state().decide?.phase || window.DeskBackend.state().backendPhase || null,
+      decide: window.decide ? { sym: window.decide.sym, goal: window.decide.goal, view: window.decide.view, horizon: window.decide.horizon, riskMode: window.decide.riskMode, buildLegs: window.decide.buildLegs, resumePlanId: window.decide.resumePlanId, posId: window.decide.posId } : null,
+      toasts: window.__toasts
+    }));
+    console.log('ADV-3 AFTER RESUME', JSON.stringify(after, null, 1));
+    console.log('ADV-3 PLAN POSTS', backend.count('POST', '/api/plans'));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-resume-2560.png') });
+  } finally { await context.close(); }
+});
+
+test('ADV-4 leg touch fork on a frozen held plan', async () => {
+  const { context, page } = await advOpenPosition({ width: 2560, height: 1440 });
+  try {
+    await page.evaluate(() => { window.__toasts = []; const orig = window.toast; window.toast = function (m) { window.__toasts.push(m); return orig.apply(this, arguments); }; });
+    await page.locator('.authposside [data-leg="strike"][data-li="0"][data-d="1"]').click();
+    await page.waitForTimeout(2500);
+    const after = await page.evaluate(() => ({
+      backendPhase: (window.DeskBackend.state().decide || {}).phase || null,
+      buildLegs: window.decide ? window.decide.buildLegs : 'no decide',
+      missing: window.decide ? window.decide.missingDeclarations : null,
+      toasts: window.__toasts,
+      visible: (document.querySelector('#decide')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+    }));
+    console.log('ADV-4 AFTER LEG TOUCH', JSON.stringify(after, null, 1));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-legtouch-2560.png') });
+  } finally { await context.close(); }
+});
+
+test('ADV-5 forward test + reload durability + home entry label', async () => {
+  const { context, page, backend } = await advOpenPosition({ width: 2560, height: 1440 });
+  try {
+    const home = await page.evaluate(() => {
+      const el = document.querySelector('.bookonefacts');
+      return el ? el.textContent.replace(/\s+/g, ' ').trim() : null;
+    });
+    console.log('ADV-5 HOME RECEIPT (from position level; re-read after go book)', JSON.stringify(home));
+    const n0 = backend.requests.length;
+    await page.locator('[data-auth-position-detail] [data-auth-manage="forward"]').click();
+    await page.waitForTimeout(6000);
+    const during = backend.requests.slice(n0).map(r => r.method + ' ' + r.path);
+    const st = await page.evaluate(tid => ({ t: window.scenSt(tid).t, playing: window.scenSt(tid).playing, forwardText: Array.from(document.querySelectorAll('[data-auth-position-detail] *')).filter(e => !e.children.length && /forward test/i.test(e.textContent)).map(e => e.textContent.trim()) }), BOOK_TRADE_ID);
+    console.log('ADV-5 REQUESTS DURING FORWARD', JSON.stringify(during));
+    console.log('ADV-5 SCRUB AFTER', JSON.stringify(st));
+    const ws = await page.evaluate(() => ({ routeState: window.WORKSPACE.routeState, focusedPositionId: window.WORKSPACE.focusedPositionId }));
+    console.log('ADV-5 WORKSPACE', JSON.stringify(ws));
+    await page.reload();
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready', null, { timeout: 10000 });
+    await page.waitForTimeout(1200);
+    const afterReload = await page.evaluate(() => ({ level: window.state.level, focus: window.state.focus, routeState: window.WORKSPACE.routeState, homeReceipt: (document.querySelector('.bookonefacts') || {}).textContent?.replace(/\s+/g, ' ').trim() || null }));
+    console.log('ADV-5 AFTER RELOAD', JSON.stringify(afterReload));
+    await page.screenshot({ path: path.join(ADV_DIR, 'adv-afterreload-2560.png') });
+  } finally { await context.close(); }
+});
