@@ -22,16 +22,16 @@ class AssignmentPreferenceLensTest {
     /** A covered call: short call against shares, 40% chance the shares are called away. */
     private Candidate coveredCall(Double assignmentProb) {
         List<LegView> legs = List.of(
-                new LegView("BUY", "STOCK", null, null, 1, "252.00", 100, "OPEN"),
                 new LegView("SELL", "CALL", "260", "2026-08-21", 1, "3.00", 100, "OPEN"));
-        return new Candidate("COVERED_CALL", "Covered call", "covered_income", "BUY 100sh / SELL 260C Aug21",
-                legs, 1, TestPrices.optionOnly(1, 30_000L), 33_000L, 2_490_000L, List.of("249.00"),
+        return new Candidate("COVERED_CALL", "Covered call", "covered_income", "SELL 260C Aug21 against held shares",
+                legs, 1, TestPrices.withFees(1, 30_000L, 30_000L, 0L),
+                33_000L, 2_490_000L, List.of("249.00"),
                 0.70, "DELAYED", List.of(),
                 0.6, "Income against held shares",
                 "Keep the premium plus gains to $260", "Shares keep their downside",
                 "AAPL far above $260 caps the upside", "You collect $300 up front",
                 "EXIT", List.of("INCOME", "EXIT"),
-                assignmentProb, 4.2, null, null, false, null, null,
+                assignmentProb, 4.2, null, null, true, 100, 2_490_000L,
                 io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.55, 1_500L));
     }
 
