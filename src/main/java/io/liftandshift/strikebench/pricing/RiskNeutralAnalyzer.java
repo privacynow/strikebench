@@ -26,12 +26,15 @@ public final class RiskNeutralAnalyzer {
     public record ScenarioMass(ScenarioStory story, double underlyingMovePct, double probability) {}
 
     /**
-     * Chance that at least one short leg finishes in the money, using each selected short leg's
-     * captured IV and its exact lane-aware option clock.
+     * Chance that at least one short leg finishes in the money at one shared expiration, using
+     * each selected short leg's captured IV and its exact lane-aware option clock.
      *
      * <p>This lives with the market-implied risk owner—not Recommendation or Trade—so proposal and
      * exact-ticket paths cannot use different CDF, time, or missing-IV policies. A missing selected
-     * short-leg IV makes the fact unavailable; a silent 30% substitute is not evidence.</p>
+     * short-leg IV makes the fact unavailable; a silent 30% substitute is not evidence. Mixed
+     * expirations also stay unavailable here: their events are dependent observations of one
+     * underlying through time, so summing marginal probabilities would overstate the union. A
+     * supplied joint path ensemble is the only honest owner for that different question.</p>
      */
     public static Double assignmentProbability(
             List<Leg> legs, List<Double> ivsAligned, long underlyingCents,
@@ -56,6 +59,7 @@ public final class RiskNeutralAnalyzer {
         java.util.Set<LocalDate> expirations = new java.util.LinkedHashSet<>(lowestCall.keySet());
         expirations.addAll(highestPut.keySet());
         if (expirations.isEmpty()) return null;
+        if (expirations.size() != 1) return null;
         for (Integer index : lowestCall.values()) {
             if (!validIv(alignedIv(ivsAligned, index))) return null;
         }

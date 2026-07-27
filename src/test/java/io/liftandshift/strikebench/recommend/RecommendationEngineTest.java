@@ -617,7 +617,7 @@ class RecommendationEngineTest {
                 .findFirst().orElseThrow();
         long strikeCash = Math.addExact(cashSecuredPut.maxLossCents(),
                 cashSecuredPut.price().grossPackageNetCents());
-        assertThat(cashSecuredPut.capitalRequiredCents())
+        assertThat(cashSecuredPut.capital().economicExposureCents())
                 .as("cash collateral is strike cash, not debit cost or net maximum loss")
                 .isEqualTo(strikeCash);
         assertThat(cashSecuredPut.capital().reserveCents()).isEqualTo(strikeCash);

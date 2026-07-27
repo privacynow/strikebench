@@ -350,37 +350,54 @@ public final class AutoRecommender {
         long[] riskBudget = {0};
         List<Pick> picks = new ArrayList<>();
         java.util.Map<String, HoldingInfo> heldBySymbol = new java.util.HashMap<>();
-        for (HoldingInfo h : heldPositions) heldBySymbol.put(h.symbol(), h);
+        for (HoldingInfo h : heldPositions) heldBySymbol.put(Symbol.normalize(h.symbol()), h);
         java.util.concurrent.atomic.AtomicInteger ideasCompleted = new java.util.concurrent.atomic.AtomicInteger();
-        int ideasTotal = Math.max(1, maxPicks * intents.size());
-
+        record GoalScored(SignalEngine.Signals signals, OpportunityContext opportunity) {}
+        java.util.Map<StrategyIntent, List<GoalScored>> marketWork = new java.util.LinkedHashMap<>();
+        java.util.Map<StrategyIntent, List<HoldingInfo>> heldWork = new java.util.LinkedHashMap<>();
+        int plannedIdeas = 0;
         for (StrategyIntent intent : intents) {
-            record GoalScored(SignalEngine.Signals signals, OpportunityContext opportunity) {}
-            List<GoalScored> rankedForGoal = eligibleSignals.stream()
-                    .map(signal -> new GoalScored(signal, opportunityContext(signal, intent)))
-                    .sorted(Comparator.comparingDouble(
-                                    (GoalScored row) -> row.opportunity().score()).reversed()
-                            .thenComparing(row -> row.signals().symbol()))
-                    .toList();
             if (intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE) {
                 // Hold-based intents scan YOUR SHARES, not the universe: the question is
                 // "which holding should I harvest or protect", not "which ticker looks good".
                 List<HoldingInfo> eligible = heldPositions.stream()
                         .filter(h -> h.freeShares() >= 100)
+                        .filter(h -> {
+                            SignalEngine.Signals signal = bySymbol.get(Symbol.normalize(h.symbol()));
+                            return signal != null && signal.optionable();
+                        })
                         .limit(maxPicks).toList();
                 if (eligible.isEmpty()) {
-                    notes.add(intent == StrategyIntent.EXIT
-                            ? "Nothing to sell at a target: you hold no free 100-share lots — buy shares first"
-                            : "Nothing to protect: you hold no free 100-share lots");
-                    continue;
+                    boolean hasFreeLot = heldPositions.stream().anyMatch(h -> h.freeShares() >= 100);
+                    notes.add(hasFreeLot
+                            ? "No held 100-share lot has enough current option evidence for "
+                                    + intent.name().toLowerCase(java.util.Locale.ROOT) + " package pricing"
+                            : intent == StrategyIntent.EXIT
+                                    ? "Nothing to sell at a target: you hold no free 100-share lots — buy shares first"
+                                    : "Nothing to protect: you hold no free 100-share lots");
                 }
+                heldWork.put(intent, eligible);
+                plannedIdeas += eligible.size();
+            } else {
+                List<GoalScored> rankedForGoal = eligibleSignals.stream()
+                        .map(signal -> new GoalScored(signal, opportunityContext(signal, intent)))
+                        .sorted(Comparator.comparingDouble(
+                                        (GoalScored row) -> row.opportunity().score()).reversed()
+                                .thenComparing(row -> row.signals().symbol()))
+                        .limit(maxPicks)
+                        .toList();
+                marketWork.put(intent, rankedForGoal);
+                plannedIdeas += rankedForGoal.size();
+            }
+        }
+        int ideasTotal = plannedIdeas;
+
+        for (StrategyIntent intent : intents) {
+            if (intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE) {
+                List<HoldingInfo> eligible = heldWork.getOrDefault(intent, List.of());
                 for (HoldingInfo h : eligible) {
-                    String sym = h.symbol();
+                    String sym = Symbol.normalize(h.symbol());
                     SignalEngine.Signals s = bySymbol.get(sym);
-                    if (s == null || !s.optionable()) {
-                        skipped.add(sym + ": held, but no listed options to write against");
-                        continue;
-                    }
                     RecommendationEngine.Holdings ctx = new RecommendationEngine.Holdings(
                             h.freeShares(), h.avgCostCents(), null);
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
@@ -396,7 +413,7 @@ public final class AutoRecommender {
                 }
                 continue;
             }
-            for (GoalScored top : rankedForGoal.subList(0, Math.min(maxPicks, rankedForGoal.size()))) {
+            for (GoalScored top : marketWork.getOrDefault(intent, List.of())) {
                 SignalEngine.Signals s = top.signals();
                 HoldingInfo held = heldBySymbol.get(Symbol.normalize(s.symbol()));
                 // ACQUIRE never inherits the existing position: sharesOwned means "shares I want"

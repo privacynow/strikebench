@@ -23,7 +23,8 @@ import java.util.function.Consumer;
 final class MarketFrameBroadcaster implements AutoCloseable {
     private static final int CLIENT_QUEUE_CAPACITY = 2;
 
-    record Request(String owner, List<String> symbols, boolean customSymbols) {
+    record Request(String owner, List<QuoteBatchComposer.RequestedSymbol> symbols,
+                   boolean customSymbols) {
         Request {
             owner = owner == null ? "" : owner;
             // A default stream follows the owner's active universe dynamically. Keeping the
@@ -35,7 +36,13 @@ final class MarketFrameBroadcaster implements AutoCloseable {
 
     /** {@code quotes} is a list of {@link ApiResponses.QuoteView} rows; the transport only diffs
      *  and serializes them, so it deliberately does not re-state the row contract here. */
-    record Draft(String world, List<?> quotes, String simTime, long asOf) {
+    record StreamError(String code, String detail, boolean retryable) {}
+
+    record Draft(String world, List<?> quotes, String simTime, long asOf, StreamError error) {
+        Draft(String world, List<?> quotes, String simTime, long asOf) {
+            this(world, quotes, simTime, asOf, null);
+        }
+
         Draft {
             world = world == null ? "observed" : world;
             quotes = quotes == null ? List.of() : List.copyOf(quotes);
@@ -50,6 +57,7 @@ final class MarketFrameBroadcaster implements AutoCloseable {
             frame.put("asOf", draft.asOf());
             frame.put("world", draft.world());
             if (draft.simTime() != null) frame.put("simTime", draft.simTime());
+            if (draft.error() != null) frame.put("error", draft.error());
             return frame;
         }
     }
@@ -169,8 +177,19 @@ final class MarketFrameBroadcaster implements AutoCloseable {
                     Frame frame = new Frame(group.sequence.incrementAndGet(), draft);
                     group.lastFrame = frame;
                     for (Subscriber subscriber : group.subscribers) deliver(subscriber, frame);
-                } catch (RuntimeException ignored) {
-                    // The next interval retries; one failed source cannot terminate the shared clock.
+                } catch (RuntimeException failure) {
+                    if (group.generation.get() != generation) return;
+                    Frame priorFrame = group.lastFrame;
+                    Draft prior = priorFrame == null ? null : priorFrame.draft();
+                    Draft draft = new Draft(prior == null ? "observed" : prior.world(),
+                            List.of(), prior == null ? null : prior.simTime(),
+                            System.currentTimeMillis(),
+                            new StreamError("MARKET_STREAM_REFRESH_FAILED",
+                                    "Market quotes are temporarily unavailable; retry scheduled.", true));
+                    if (prior != null && sameContent(prior, draft)) return;
+                    Frame frame = new Frame(group.sequence.incrementAndGet(), draft);
+                    group.lastFrame = frame;
+                    for (Subscriber subscriber : group.subscribers) deliver(subscriber, frame);
                 } finally {
                     group.computing.set(false);
                     if (group.generation.get() != generation) refresh(group);
@@ -189,7 +208,8 @@ final class MarketFrameBroadcaster implements AutoCloseable {
     private static boolean sameContent(Draft left, Draft right) {
         return Objects.equals(left.world(), right.world())
                 && Objects.equals(left.quotes(), right.quotes())
-                && Objects.equals(left.simTime(), right.simTime());
+                && Objects.equals(left.simTime(), right.simTime())
+                && Objects.equals(left.error(), right.error());
     }
 
     int groupCount() { return groups.size(); }

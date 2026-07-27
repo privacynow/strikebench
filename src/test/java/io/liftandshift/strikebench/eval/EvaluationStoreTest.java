@@ -122,4 +122,19 @@ class EvaluationStoreTest {
         assertThat(recent).hasSize(2);
         assertThat(recent.getFirst()).containsEntry("symbol", "AAPL").containsKey("evidenceLevel");
     }
+
+    @Test void retainingTheSameImmutableReceiptIsIdempotent() {
+        db = TestDb.fresh();
+        EvaluationStore store = new EvaluationStore(db);
+        StrategyEvaluation evaluation = anEvaluation();
+
+        store.save(evaluation, null, null);
+        store.saveAll(List.of(evaluation), null, null);
+
+        assertThat(db.query("SELECT COUNT(*) n FROM strategy_evaluation WHERE id=?",
+                row -> row.lng("n"), evaluation.id())).containsExactly(1L);
+        assertThat(store.receipt(evaluation.id(), null, null)).isPresent();
+        assertThat(Json.parse(store.receipt(evaluation.id(), null, null).orElseThrow()))
+                .isEqualTo(Json.parse(Json.write(evaluation)));
+    }
 }

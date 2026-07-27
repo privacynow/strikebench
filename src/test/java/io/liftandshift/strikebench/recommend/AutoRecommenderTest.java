@@ -587,6 +587,25 @@ class AutoRecommenderTest {
     }
 
     @Test
+    void ideaProgressDenominatorCountsTheWorkActuallyScheduled() {
+        List<AutoRecommender.Progress> frames = new ArrayList<>();
+        auto.runWithFrontier(
+                new AutoRecommender.AutoRequest(List.of("AAPL"), List.of("month"), 5,
+                        null, null, null, null, "balanced", false,
+                        List.of("INCOME", "DIRECTIONAL"), null, null),
+                BP, List.of(), null, evaluations -> practiceContext(List.of("AAPL")), frames::add);
+
+        List<AutoRecommender.Progress> ideas = frames.stream()
+                .filter(frame -> "IDEAS".equals(frame.phase())).toList();
+        assertThat(ideas).hasSize(2);
+        assertThat(ideas).allSatisfy(frame -> assertThat(frame.phaseTotal())
+                .as("one eligible symbol × two declared goals, not maxPicks × goals")
+                .isEqualTo(2));
+        assertThat(ideas.getLast().phaseCompleted()).isEqualTo(2);
+        assertThat(frames.getLast().phaseTotal()).isEqualTo(2);
+    }
+
+    @Test
     void parallelSignalWorkNeverInvokesProgressListenerConcurrentlyOrOutOfOrder() {
         List<String> universe = List.of("AAPL", "SPY", "QQQ");
         var firstSignal = new java.util.concurrent.atomic.AtomicBoolean(true);

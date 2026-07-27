@@ -22,6 +22,10 @@ public final class EvaluationStore {
                assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
                tail_loss_cents, evidence_level, world_id, receipt)
             VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?, ?::jsonb)
+            ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id
+            WHERE strategy_evaluation.user_id=EXCLUDED.user_id
+              AND strategy_evaluation.world_id IS NOT DISTINCT FROM EXCLUDED.world_id
+              AND strategy_evaluation.receipt=EXCLUDED.receipt
             """;
 
     private final Db db;
@@ -47,7 +51,11 @@ public final class EvaluationStore {
     public void save(StrategyEvaluation e, String userId, String worldId) {
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
-            Db.execOn(c, INSERT_SQL, params(e, userId, worldId));
+            int written = Db.execOn(c, INSERT_SQL, params(e, userId, worldId));
+            if (written != 1) {
+                throw new IllegalStateException(
+                        "Evaluation id " + e.id() + " already names a different immutable receipt");
+            }
             return null;
         });
     }
@@ -73,7 +81,14 @@ public final class EvaluationStore {
                     for (int i = 0; i < p.length; i++) ps.setObject(i + 1, p[i]);
                     ps.addBatch();
                 }
-                ps.executeBatch();
+                int[] written = ps.executeBatch();
+                for (int i = 0; i < written.length; i++) {
+                    if (written[i] == 0) {
+                        throw new IllegalStateException(
+                                "Evaluation id " + evals.get(i).id()
+                                        + " already names a different immutable receipt");
+                    }
+                }
             }
             return null;
         });

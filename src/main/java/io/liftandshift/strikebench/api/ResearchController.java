@@ -292,6 +292,7 @@ final class ResearchController {
     private void expectedMove(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
+        LocalDate requestedExpiry = requestedExpiry(ctx.queryParam("expiry"));
         Optional<Quote> quote = currentQuotes.currentQuote(symbol, world);
         if (quote.isEmpty() || quote.get().mark() == null) {
             ctx.json(ExpectedMove.unavailable(symbol, "no authoritative quote")); return;
@@ -300,7 +301,8 @@ final class ResearchController {
         double spot = current.mark().doubleValue();
         java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
-        LocalDate expiry = resolveExpiry(ctx.queryParam("expiry"), activeExpirationsFor(symbol, world));
+        LocalDate expiry = requestedExpiry == null
+                ? resolveNearestExpiry(activeExpirationsFor(symbol, world)) : requestedExpiry;
         if (expiry == null) { ctx.json(ExpectedMove.unavailable(symbol, "no listed expiry")); return; }
         OptionChain chain = market.chain(symbol, expiry, world).orElse(null);
         Double iv = chain == null ? null : atmIv(chain).orElse(null);
@@ -322,10 +324,17 @@ final class ResearchController {
                 range.basis(), spot, current.source(), current.markFreshness().name(), today.toString()));
     }
 
-    private static LocalDate resolveExpiry(String param, List<LocalDate> active) {
-        if (param != null && !param.isBlank()) {
-            try { return LocalDate.parse(param.trim()); } catch (RuntimeException ignored) { /* fall through */ }
+    private static LocalDate requestedExpiry(String param) {
+        if (param == null || param.isBlank()) return null;
+        try {
+            return LocalDate.parse(param.trim());
+        } catch (java.time.format.DateTimeParseException malformed) {
+            throw new io.javalin.http.BadRequestResponse(
+                    "expiry must be a valid ISO date in YYYY-MM-DD form");
         }
+    }
+
+    private static LocalDate resolveNearestExpiry(List<LocalDate> active) {
         return active.isEmpty() ? null : active.getFirst();
     }
 

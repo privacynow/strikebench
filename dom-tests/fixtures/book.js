@@ -14,6 +14,7 @@ const wire = require('./wire');
 const math = require('./package-math');
 const { legs: legShape } = require('./legs');
 const golden = require('./golden');
+const { packagePrice } = require('./price');
 
 /** Per-contract commission, both sides, so fees scale with the package like the engine's do. */
 const FEE_PER_CONTRACT_CENTS = 50;
@@ -75,6 +76,21 @@ function tradeView(overrides) {
       maxLossCents: o.maxLossCents == null ? Math.abs(entryNet) + 100000 : o.maxLossCents }
     : math.extremes(legList, o.qty);
   const fees = feesFor(legList, o.qty);
+  const entryPrice = packagePrice({
+    quantity: o.qty,
+    optionNetPremiumCents: math.optionNetPremiumCents(legList, o.qty),
+    stockCashFlowCents: math.stockCashFlowCents(legList, o.qty),
+    openingFeesCents: fees,
+    estimatedRoundTripFeesCents: fees * 2,
+    executableNetCents: entryNet,
+    valuationBasis: 'RECORDED_FILL',
+    executability: 'IMMEDIATE',
+    source: o.dataSource,
+    freshness: o.dataAge,
+    observedAt: null,
+    fingerprint: `recorded-${o.id}-${entryNet}`,
+    feeSide: 'OPENING'
+  });
 
   const trade = {
     id: o.id,
@@ -87,13 +103,11 @@ function tradeView(overrides) {
     horizon: o.horizon,
     riskMode: o.riskMode,
     entryUnderlyingCents: o.entryUnderlyingCents,
-    entryNetPremiumCents: entryNet,
+    entryPrice: entryPrice,
     maxLossCents: extremes.maxLossCents,
     maxProfitCents: extremes.maxProfitCents,
     breakevens: mixedExpiry ? [] : math.breakevens(legList, o.qty),
     popEntry: o.popEntry,
-    feesOpenCents: fees,
-    feesCloseCents: fees,
     realizedPnlCents: o.realizedPnlCents,
     decisionPnlCents: o.realizedPnlCents,
     closeReason: o.closeReason,
@@ -109,6 +123,13 @@ function tradeView(overrides) {
     dataSource: o.dataSource,
     unrealizedPnlCents: o.unrealizedPnlCents,
     decisionUnrealizedPnlCents: o.unrealizedPnlCents,
+    currentMarketAvailability: currentMarketAvailability({
+      quoteAvailable: true,
+      closeAvailable: true,
+      decisionPnlAvailable: o.unrealizedPnlCents != null,
+      popAvailable: o.popEntry != null,
+      greeksAvailable: o.withReceipts
+    }),
     // The held-line display receipts. A mixed-expiry line carries an explicitly UNAVAILABLE
     // terminal payoff and no story checkpoints — the state that must render as "unavailable" with
     // a reason rather than falling back to a browser-drawn curve (§3.2).
@@ -121,6 +142,40 @@ function tradeView(overrides) {
       : heldScenarios(legList, o.qty, o.entryUnderlyingCents))
   };
   return wire.nonNull(trade);
+}
+
+/** `TradeService.CurrentMarketAvailability`, with one reason for every unavailable component. */
+function currentMarketAvailability(available) {
+  const a = Object.assign({
+    quoteAvailable: false,
+    closeAvailable: false,
+    decisionPnlAvailable: false,
+    popAvailable: false,
+    greeksAvailable: false
+  }, available || {});
+  function reason(ok, fact) {
+    return ok ? null : `No current ${fact} receipt is available in this fixture.`;
+  }
+  return {
+    quoteAvailable: a.quoteAvailable,
+    quoteUnavailableReason: reason(a.quoteAvailable, 'quote'),
+    closeAvailable: a.closeAvailable,
+    closeUnavailableReason: reason(a.closeAvailable, 'close'),
+    decisionPnlAvailable: a.decisionPnlAvailable,
+    decisionPnlUnavailableReason: reason(a.decisionPnlAvailable, 'position P/L'),
+    popAvailable: a.popAvailable,
+    popUnavailableReason: reason(a.popAvailable, 'probability'),
+    greeksAvailable: a.greeksAvailable,
+    greeksUnavailableReason: reason(a.greeksAvailable, 'Greeks')
+  };
+}
+
+function entryGross(trade) {
+  return trade && trade.entryPrice ? trade.entryPrice.grossPackageNetCents : null;
+}
+
+function entryFees(trade) {
+  return trade && trade.entryPrice ? trade.entryPrice.openingFeesCents : null;
 }
 
 /** The held line's terminal payoff, anchored at its OWN entry spot rather than the golden one. */
@@ -247,10 +302,10 @@ function portfolioSummary(trades, shares) {
   const openTradesUnrealizedCents = rows.reduce(
     (total, trade) => total + (trade.unrealizedPnlCents || 0), 0);
   const openTradesValueCents = rows.reduce(
-    (total, trade) => total + trade.entryNetPremiumCents + (trade.unrealizedPnlCents || 0), 0);
+    (total, trade) => total + entryGross(trade) + (trade.unrealizedPnlCents || 0), 0);
   const sharesValueCents = shareRows.reduce((total, row) => total + row.marketValueCents, 0);
   const cashCents = startingCashCents
-    + rows.reduce((total, trade) => total + trade.entryNetPremiumCents - trade.feesOpenCents, 0)
+    + rows.reduce((total, trade) => total + entryGross(trade) - entryFees(trade), 0)
     - shareRows.reduce((total, row) => total + row.shares * row.avgCostCents, 0);
   const totalValueCents = cashCents + sharesValueCents + openTradesUnrealizedCents;
   const buyingPowerCents = cashCents - reservedCents;
@@ -371,7 +426,7 @@ function portfolioHeat(trades, summary) {
     activeTrades: rows.length,
     totalMaxLossCents: totalMaxLossCents,
     reservedCents: summary ? summary.reservedCents : totalMaxLossCents,
-    shortVolTrades: rows.filter(trade => trade.entryNetPremiumCents > 0).length,
+    shortVolTrades: rows.filter(trade => entryGross(trade) > 0).length,
     bySymbolMaxLossCents: bySymbol,
     concentrationPct: totalMaxLossCents > 0
       ? Math.round(100 * worstSymbol / totalMaxLossCents) : 0,
@@ -486,7 +541,7 @@ function tradeDetail(trade) {
     tradeId: trade.id,
     ts: wire.OBSERVED_AT_ISO,
     underlyingCents: trade.entryUnderlyingCents,
-    closeCostCents: Math.abs(trade.entryNetPremiumCents) - (trade.unrealizedPnlCents || 0),
+    closeCostCents: Math.abs(entryGross(trade)) - (trade.unrealizedPnlCents || 0),
     unrealizedCents: trade.unrealizedPnlCents || 0,
     decisionUnrealizedCents: trade.unrealizedPnlCents || 0,
     popNow: trade.popEntry,
@@ -497,7 +552,8 @@ function tradeDetail(trade) {
       thetaCentsPerDay: canonical.thetaCentsPerDay,
       vegaCentsPerPoint: canonical.vegaCentsPerPoint
     },
-    legGreeks: []
+    legGreeks: [],
+    availability: trade.currentMarketAvailability
   };
   const payoff = (trade.terminalPayoff && trade.terminalPayoff.available)
     ? trade.terminalPayoff.points.map(point => ({

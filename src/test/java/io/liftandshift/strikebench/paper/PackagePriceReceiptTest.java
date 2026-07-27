@@ -181,6 +181,19 @@ class PackagePriceReceiptTest {
     }
 
     @Test
+    void unavailableReceiptsPreserveTheRequestedQuantityInsteadOfCoercingIt() {
+        assertThatThrownBy(() -> PackagePriceReceipt.unavailable(0,
+                PackagePriceReceipt.FeeSide.OPENING, "invalid package size"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity >= 1");
+        assertThatThrownBy(() -> PackagePriceReceipt.fingerprintOf(
+                List.of(shortCall("3.20")), 0, null,
+                PackagePriceReceipt.ValuationBasis.UNAVAILABLE, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity >= 1");
+    }
+
+    @Test
     void closingFeesAreDisclosedAsSuchRatherThanMislabelledAsOpening() {
         PackagePriceReceipt close = PackagePriceReceipt.of(1, -21_500L, -21_500L, 0L, 65L, null,
                 PackagePriceReceipt.FeeSide.CLOSING, -21_500L, null,

@@ -14,6 +14,7 @@ import java.time.ZoneId;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The §7.2 receipt as the candidate rail publishes it: the option-only net, the stock cash flow and
@@ -99,6 +100,18 @@ class CandidateTest {
             assertThat(price.fingerprint()).isNotBlank();
             assertThat(price.freshness()).isNotBlank();
         }
+    }
+
+    @Test
+    void candidateQuantityMustBePositiveAndMatchItsPriceReceipt() {
+        Candidate candidate = buyWrite();
+
+        assertThatThrownBy(() -> copyWithQuantity(candidate, 0, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity");
+        assertThatThrownBy(() -> copyWithQuantity(candidate, candidate.qty() + 1, candidate.price()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity");
     }
 
     /**
@@ -193,5 +206,41 @@ class CandidateTest {
                 .filter(c -> c.strategy().equals("COVERED_CALL"))
                 .filter(c -> c.legs().stream().anyMatch(leg -> leg.type().equals("STOCK")))
                 .findFirst().orElseThrow();
+    }
+
+    private static Candidate copyWithQuantity(
+            Candidate candidate,
+            int quantity,
+            PackagePriceReceipt price) {
+        return new Candidate(
+                candidate.strategy(),
+                candidate.displayName(),
+                candidate.structureGroup(),
+                candidate.label(),
+                candidate.legs(),
+                quantity,
+                price,
+                candidate.maxProfitCents(),
+                candidate.maxLossCents(),
+                candidate.breakevens(),
+                candidate.liquidityScore(),
+                candidate.freshness(),
+                candidate.warnings(),
+                candidate.confidence(),
+                candidate.whyConsidered(),
+                candidate.bestUpside(),
+                candidate.biggestRisk(),
+                candidate.wouldInvalidate(),
+                candidate.beginnerExplanation(),
+                candidate.intent(),
+                candidate.intents(),
+                candidate.assignmentProb(),
+                candidate.annualizedYieldPct(),
+                candidate.effectivePrice(),
+                candidate.intentNote(),
+                candidate.usesHeldShares(),
+                candidate.sharesNeeded(),
+                candidate.combinedMaxLossCents(),
+                candidate.marketImpliedRisk());
     }
 }

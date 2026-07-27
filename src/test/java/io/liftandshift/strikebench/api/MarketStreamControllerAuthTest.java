@@ -60,7 +60,8 @@ class MarketStreamControllerAuthTest {
         };
         AuthService auth = new AuthService(cfg, db, clock, provider);
         events = new EventBus();
-        streams = new MarketStreamController(cfg, clock, null, null, null, null, events, auth,
+        streams = new MarketStreamController(cfg, clock, new QuoteBatchComposer(null, null, null),
+                null, events, auth,
                 ctx -> OwnerScope.id(auth.currentUserId(ctx)), ignored -> "observed");
         app = Javalin.create(config -> {
             config.jetty.modifyServletContextHandler(handler -> {

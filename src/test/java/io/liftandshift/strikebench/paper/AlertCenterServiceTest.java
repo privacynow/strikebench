@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Alert center contract (spec 10.1): every alert kind appears from REAL seeded state with the
@@ -96,6 +97,14 @@ class AlertCenterServiceTest {
         assertThat(set.counts().total()).isZero();
         assertThat(set.exDividend().available()).isFalse();
         assertThat(set.exDividend().note()).contains("unavailable").contains("never guesses");
+    }
+
+    @Test
+    void malformedCommissionConfigurationIsRejectedByTheCanonicalFeePolicy() {
+        assertThatThrownBy(() -> new AlertCenterService(db, CLOCK, trades, marks,
+                symbol -> earnings, events, -1, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("commissions cannot be negative");
     }
 
     @Test

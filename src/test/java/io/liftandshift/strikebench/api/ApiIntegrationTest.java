@@ -410,7 +410,7 @@ class ApiIntegrationTest {
         assertThat(created.at("/trade/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
         assertThat(created.at("/trade/orderLimitNetCents").isMissingNode()).isTrue();
         long maxLoss = created.at("/trade/maxLossCents").asLong();
-        long feesOpen = created.at("/trade/feesOpenCents").asLong();
+        long feesOpen = created.at("/trade/entryPrice/openingFeesCents").asLong();
         assertThat(maxLoss).isPositive();
 
         JsonNode after = Json.parse(get("/api/account").body());
@@ -420,6 +420,15 @@ class ApiIntegrationTest {
         // List / detail
         JsonNode list = Json.parse(get("/api/trades?status=ACTIVE").body());
         assertThat(list.get("total").asLong()).isEqualTo(1);
+        JsonNode row = list.at("/trades/0");
+        assertThat(row.at("/entryPrice/grossPackageNetCents"))
+                .isEqualTo(created.at("/trade/entryPrice/grossPackageNetCents"));
+        assertThat(row.has("entryNetPremiumCents")).isFalse();
+        assertThat(row.has("feesOpenCents")).isFalse();
+        assertThat(row.at("/currentMarketAvailability/quoteAvailable").isBoolean()).isTrue();
+        assertThat(row.at("/currentMarketAvailability/closeAvailable").isBoolean()).isTrue();
+        assertThat(row.at("/currentMarketAvailability/popAvailable").isBoolean()).isTrue();
+        assertThat(row.at("/currentMarketAvailability/greeksAvailable").isBoolean()).isTrue();
         // B2: the roster row itself carries the exact terminal-payoff curve (>= 2 points) so the
         // held bloom/spectrum interpolates a server receipt, never a client leg engine.
         JsonNode rowPayoff = list.at("/trades/0/terminalPayoff");
@@ -756,7 +765,7 @@ class ApiIntegrationTest {
         HttpResponse<String> created = createAcknowledged(body);
         assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
         JsonNode trade = Json.parse(created.body()).get("trade");
-        assertThat(trade.get("entryNetPremiumCents").asLong()).isNegative(); // debit
+        assertThat(trade.at("/entryPrice/grossPackageNetCents").asLong()).isNegative(); // debit
         assertThat(trade.path("maxProfitCents").isMissingNode()).isTrue();   // null = omitted (model-dependent)
         transform(trade.get("id").asText(), "VOID");
     }

@@ -13,6 +13,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MarketFrameBroadcasterTest {
+    private static List<QuoteBatchComposer.RequestedSymbol> symbols(String... symbols) {
+        return java.util.Arrays.stream(symbols)
+                .map(symbol -> new QuoteBatchComposer.RequestedSymbol(symbol, symbol, null))
+                .toList();
+    }
+
     private static MarketFrameBroadcaster.Draft frame(String world, String simTime) {
         return new MarketFrameBroadcaster.Draft(world,
                 List.of(Map.of("symbol", "AAPL", "last", "100.00")), simTime, 1_000L);
@@ -20,20 +26,21 @@ class MarketFrameBroadcasterTest {
 
     @Test
     void defaultScopesFollowTheActiveUniverseInsteadOfConnectionTimeSymbols() {
-        var first = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), false);
-        var changed = new MarketFrameBroadcaster.Request("owner-a", List.of("SPY", "QQQ"), false);
-        var explicit = new MarketFrameBroadcaster.Request("owner-a", List.of("SPY", "QQQ"), true);
+        var first = new MarketFrameBroadcaster.Request("owner-a", symbols("AAPL"), false);
+        var changed = new MarketFrameBroadcaster.Request("owner-a", symbols("SPY", "QQQ"), false);
+        var explicit = new MarketFrameBroadcaster.Request("owner-a", symbols("SPY", "QQQ"), true);
 
         assertThat(first).isEqualTo(changed);
         assertThat(first.symbols()).isEmpty();
-        assertThat(explicit.symbols()).containsExactly("SPY", "QQQ");
+        assertThat(explicit.symbols()).extracting(QuoteBatchComposer.RequestedSymbol::canonical)
+                .containsExactly("SPY", "QQQ");
         assertThat(explicit).isNotEqualTo(first);
     }
 
     @Test
     void clientsWithTheSameScopeShareOneComputedFrame() throws Exception {
         AtomicInteger loads = new AtomicInteger();
-        var request = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), true);
+        var request = new MarketFrameBroadcaster.Request("owner-a", symbols("AAPL"), true);
         try (var broadcaster = new MarketFrameBroadcaster(3600, ignored -> {
             loads.incrementAndGet();
             return frame("observed", null);
@@ -57,7 +64,7 @@ class MarketFrameBroadcasterTest {
     @Test
     void simulatedClockChangesProduceAFrameEvenWhenQuotesDoNotMove() throws Exception {
         AtomicReference<String> simTime = new AtomicReference<>("2026-07-14T09:30:00-04:00");
-        var request = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), false);
+        var request = new MarketFrameBroadcaster.Request("owner-a", symbols("AAPL"), false);
         List<MarketFrameBroadcaster.Frame> received = new CopyOnWriteArrayList<>();
         CountDownLatch first = new CountDownLatch(1);
         CountDownLatch two = new CountDownLatch(2);
@@ -80,7 +87,7 @@ class MarketFrameBroadcasterTest {
         CountDownLatch releaseOld = new CountDownLatch(1);
         CountDownLatch delivered = new CountDownLatch(1);
         List<MarketFrameBroadcaster.Frame> received = new CopyOnWriteArrayList<>();
-        var request = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), false);
+        var request = new MarketFrameBroadcaster.Request("owner-a", symbols("AAPL"), false);
         try (var broadcaster = new MarketFrameBroadcaster(3600, ignored -> {
             int call = loads.incrementAndGet();
             if (call == 1) {
@@ -110,7 +117,7 @@ class MarketFrameBroadcasterTest {
         CountDownLatch slowCaughtUp = new CountDownLatch(1);
         CountDownLatch fastCaughtUp = new CountDownLatch(1);
         List<Long> slowSequences = new CopyOnWriteArrayList<>();
-        var request = new MarketFrameBroadcaster.Request("owner-a", List.of("AAPL"), false);
+        var request = new MarketFrameBroadcaster.Request("owner-a", symbols("AAPL"), false);
 
         try (var broadcaster = new MarketFrameBroadcaster(3600, ignored -> {
             int n = loads.incrementAndGet();
@@ -147,5 +154,36 @@ class MarketFrameBroadcasterTest {
             releaseSlow.countDown();
         }
         assertThat(slowSequences).containsExactly(1L, 9L, 10L);
+    }
+
+    @Test
+    void sourceFailurePublishesOneTypedRetryableErrorFrameInsteadOfGoingSilent() throws Exception {
+        AtomicInteger loads = new AtomicInteger();
+        var request = new MarketFrameBroadcaster.Request("owner-a", symbols("AAPL"), true);
+        List<MarketFrameBroadcaster.Frame> received = new CopyOnWriteArrayList<>();
+        CountDownLatch delivered = new CountDownLatch(1);
+        try (var broadcaster = new MarketFrameBroadcaster(3600, ignored -> {
+            loads.incrementAndGet();
+            throw new IllegalStateException("provider detail must not leak");
+        })) {
+            broadcaster.subscribe(request, value -> {
+                received.add(value);
+                delivered.countDown();
+            });
+            assertThat(delivered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            broadcaster.refreshNow();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (loads.get() < 2 && System.nanoTime() < deadline) Thread.sleep(5);
+            assertThat(loads).hasValue(2);
+            Thread.sleep(50);
+        }
+
+        assertThat(received).hasSize(1);
+        MarketFrameBroadcaster.StreamError error = received.getFirst().draft().error();
+        assertThat(error.code()).isEqualTo("MARKET_STREAM_REFRESH_FAILED");
+        assertThat(error.retryable()).isTrue();
+        assertThat(error.detail()).contains("retry scheduled").doesNotContain("provider detail");
+        assertThat(received.getFirst().draft().quotes()).isEmpty();
     }
 }

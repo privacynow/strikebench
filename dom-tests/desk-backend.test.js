@@ -520,13 +520,15 @@ function populatedBookDocuments() {
     horizon: 'month',
     riskMode: 'balanced',
     entryUnderlyingCents: 21111,
-    entryNetPremiumCents: -43210,
+    entryPrice: priceReceipt({
+      quantity: 2, optionNetPremiumCents: -43210, grossPackageNetCents: -43210,
+      openingFeesCents: 260, executableNetCents: -43210,
+      valuationBasis: 'RECORDED_FILL', fingerprint: 'recorded-book-trade'
+    }),
     maxLossCents: 43210,
     maxProfitCents: 156790,
     breakevens: [217.16],
     popEntry: 0.57,
-    feesOpenCents: 260,
-    feesCloseCents: 260,
     realizedPnlCents: 0,
     decisionPnlCents: 0,
     entrySnapshot: { source: 'BOOK_TEST_EXECUTABLE_RECEIPT', freshness: 'FRESH' },
@@ -540,6 +542,7 @@ function populatedBookDocuments() {
     dataSource: 'BOOK_TEST_EXECUTABLE_RECEIPT',
     unrealizedPnlCents: 24680,
     decisionUnrealizedPnlCents: 24680,
+    currentMarketAvailability: currentAvailability(),
     /* The held line's own scenario receipt (TradeController.heldScenarios): one priced checkpoint
        per NAMED story move, valued server-side through the same curve that owns its terminal
        payoff. Held positions used to have no per-move receipt at all, which is why the desk priced
@@ -799,7 +802,11 @@ function twoPositionBookDocuments() {
     id: SECOND_BOOK_TRADE_ID,
     strategy: 'PUT_DEBIT_SPREAD',
     thesis: 'Backend-owned second AAPL position ownership sentinel.',
-    entryNetPremiumCents: -28700,
+    entryPrice: priceReceipt({
+      quantity: 2, optionNetPremiumCents: -28700, grossPackageNetCents: -28700,
+      openingFeesCents: 260, executableNetCents: -28700,
+      valuationBasis: 'RECORDED_FILL', fingerprint: 'recorded-second-book-trade'
+    }),
     maxLossCents: 28700,
     maxProfitCents: 71300,
     breakevens: [207.87],
@@ -1339,7 +1346,6 @@ function customTradePreview(position) {
   return {
     preview: {
       ok: valid,
-      entryNetPremiumCents: valid ? -31000 : -62000,
       price: priceReceipt({ quantity: position.qty || 1,
         optionNetPremiumCents: valid ? -31000 : -62000, openingFeesCents: 260,
         executableNetCents: valid ? -31000 : -62000, fingerprint: 'price-custom-draft' }),
@@ -1583,6 +1589,16 @@ function priceReceipt({ quantity = 1, optionNetPremiumCents = null, stockCashFlo
   /* A few desk fixtures pin an after-fee net that differs from gross-minus-fees on purpose (a
      resting limit settles against the limit, not the book). Honour that explicitly. */
   return afterFeeNetCents == null ? built : Object.assign({}, built, { afterFeeNetCents });
+}
+
+function currentAvailability(overrides = {}) {
+  return Object.assign({
+    quoteAvailable: true, quoteUnavailableReason: null,
+    closeAvailable: true, closeUnavailableReason: null,
+    decisionPnlAvailable: true, decisionPnlUnavailableReason: null,
+    popAvailable: true, popUnavailableReason: null,
+    greeksAvailable: true, greeksUnavailableReason: null
+  }, overrides);
 }
 
 function decisionPreview(requestBody, selected = candidate(), version = 14) {
@@ -3150,7 +3166,6 @@ async function installBackend(page, options = {}) {
         const reason = 'Cannot execute AMD from a stale observed option book.';
         response.preview = Object.assign({}, response.preview, {
           ok: false,
-          entryNetPremiumCents: 0,
           maxLossCents: 0,
           maxProfitCents: 0,
           reserveCents: 0,

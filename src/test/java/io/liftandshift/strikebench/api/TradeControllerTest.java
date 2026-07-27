@@ -20,6 +20,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TradeControllerTest {
 
     @Test
+    void heldTradeWirePublishesOneEntryPriceAndTypedCurrentUnavailability() {
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
+        TradeRecord trade = new TradeRecord("tr_wire", "acct", "XYZ", "CASH_SECURED_PUT",
+                TradeRecord.ACTIVE, 1, List.of(put), "income", "30d", "balanced",
+                10_000L, 20_000L, 980_000L, 20_000L, List.of("98"), 0.7,
+                65L, 65L, null, null, null, null, false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, "OBSERVED", "DELAYED", "fixture");
+
+        TradeView wire = TradeView.of(trade).withCurrentMark(null, null,
+                TradeService.CurrentMarketAvailability.unavailable("fixture mark failed"));
+        var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(wire);
+
+        assertThat(json.at("/entryPrice/grossPackageNetCents").asLong()).isEqualTo(20_000L);
+        assertThat(json.at("/entryPrice/openingFeesCents").asLong()).isEqualTo(65L);
+        assertThat(json.has("entryNetPremiumCents")).isFalse();
+        assertThat(json.has("feesOpenCents")).isFalse();
+        assertThat(json.has("feesCloseCents")).isFalse();
+        assertThat(json.at("/currentMarketAvailability/quoteAvailable").asBoolean()).isFalse();
+        assertThat(json.at("/currentMarketAvailability/quoteUnavailableReason").asText())
+                .isEqualTo("fixture mark failed");
+        assertThat(json.at("/currentMarketAvailability/greeksUnavailableReason").asText())
+                .isEqualTo("fixture mark failed");
+    }
+
+    @Test
     void exactPreviewCandidateCarriesTheSameFingerprintWithoutRepricing() {
         LocalDate expiry = LocalDate.parse("2026-08-21");
         Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
@@ -65,6 +92,20 @@ class TradeControllerTest {
                 .isEqualTo(marketRisk.expectedValueCents());
         assertThat(candidate.legs().getFirst().quoteIv()).isEqualTo(0.4287);
         assertThat(candidate.legs().getFirst().quoteDelta()).isEqualTo(-0.3175);
+    }
+
+    @Test
+    void exactPreviewRejectsAnInvalidQuantityInsteadOfPublishingAOneLotReceipt() {
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
+        var invalid = new TradeService.OpenRequest("acct", "TEST", "CASH_SECURED_PUT", 0,
+                List.of(put), "neutral", "month", "balanced", "INCOME", false,
+                null, "TEST", "PROPOSED",
+                io.liftandshift.strikebench.paper.OrderInstruction.market());
+
+        assertThatThrownBy(() -> TradeController.exactPreviewNode(invalid, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity >= 1");
     }
 
     @Test

@@ -64,10 +64,17 @@ public record Candidate(
      * have to remember to guard. Consumers ask {@code price().priced()} and get one answer.
      */
     public Candidate {
+        if (qty < 1) {
+            throw new IllegalArgumentException("candidate requires quantity >= 1");
+        }
         if (price == null) {
             price = io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(
-                    Math.max(1, qty), io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
+                    qty, io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
                     "No package-price receipt was produced for this candidate.");
+        }
+        if (price.quantity() != qty) {
+            throw new IllegalArgumentException(
+                    "candidate quantity must match its package-price receipt quantity");
         }
         if (marketImpliedRisk == null) {
             marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
@@ -103,14 +110,4 @@ public record Candidate(
         return CapitalRequirement.of(identity, price, maxLossCents, combinedMaxLossCents,
                 usesHeldShares);
     }
-
-    /**
-     * Compatibility projection for existing candidate tables and clients. This is the canonical
-     * receipt's explicitly named economic-exposure amount, never reserve or buying-power use.
-     */
-    @JsonProperty("capitalRequiredCents")
-    public Long capitalRequiredCents() {
-        return capital().economicExposureCents();
-    }
-
 }

@@ -162,6 +162,19 @@ public final class TradeService {
                         + " must carry exactly one of a value or an unavailability reason.");
             }
         }
+
+        /**
+         * A current-mark operation failed before any component receipt could be produced. Keep that
+         * failure typed on every component instead of leaving null values whose meaning a surface
+         * would have to guess.
+         */
+        public static CurrentMarketAvailability unavailable(String reason) {
+            String named = reason == null || reason.isBlank()
+                    ? "The current market receipt for this position could not be produced."
+                    : reason;
+            return new CurrentMarketAvailability(
+                    false, named, false, named, false, named, false, named, false, named);
+        }
     }
 
     /** Dollar-delta exposure for a lane-aware before/after assessment. */
@@ -3189,8 +3202,12 @@ public final class TradeService {
 
     // ---- Package price receipt (program §7.2) ----
 
-    /** Rehydrates the exact recorded opening basis for current held-position probabilities. */
-    private static PackagePriceReceipt recordedEntryPrice(TradeRecord trade) {
+    /**
+     * Rehydrates the exact recorded opening basis for every held-position consumer. TradeRecord
+     * remains the immutable ledger storage; this is the sole typed wire/computation projection.
+     */
+    public static PackagePriceReceipt recordedEntryPrice(TradeRecord trade) {
+        if (trade == null) throw new IllegalArgumentException("recorded trade is required");
         long optionNet = ProtocolEvaluator.optionEntryBasisCents(
                 trade.legs(), trade.qty(), trade.entryNetPremiumCents());
         long stockCash = ProtocolEvaluator.stockEntryBasisCents(trade.legs(), trade.qty());

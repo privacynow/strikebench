@@ -365,10 +365,9 @@ class PlanApiIntegrationTest {
         assertThat(candidate.at("/evaluation/score/components").isArray()).isTrue();
         assertThat(candidate.at("/evaluation/evidence/perDimension").isObject()).isTrue();
         assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
-        assertThat(candidate.path("capitalRequiredCents").isIntegralNumber()).isTrue();
-        assertThat(candidate.path("capitalRequiredCents").asLong()).isGreaterThanOrEqualTo(0L);
-        assertThat(candidate.at("/capital/economicExposureCents").asLong())
-                .isEqualTo(candidate.path("capitalRequiredCents").asLong());
+        assertThat(candidate.has("capitalRequiredCents")).isFalse();
+        assertThat(candidate.at("/capital/economicExposureCents").isIntegralNumber()).isTrue();
+        assertThat(candidate.at("/capital/economicExposureCents").asLong()).isGreaterThanOrEqualTo(0L);
         assertThat(candidate.at("/capital/reserveCents").isIntegralNumber()).isTrue();
         assertThat(candidate.at("/capital/buyingPowerRequiredCents").isIntegralNumber()).isTrue();
         JsonNode terminalPayoff = candidate.at("/evaluation/risk/terminalPayoff");
@@ -395,8 +394,9 @@ class PlanApiIntegrationTest {
         }
         assertThat(latest.at("/result/candidates/0/evaluation/assessment/economics/verdict").asText())
                 .isEqualTo(candidate.at("/evaluation/assessment/economics/verdict").asText());
-        assertThat(latest.at("/result/candidates/0/capitalRequiredCents").asLong())
-                .isEqualTo(candidate.path("capitalRequiredCents").asLong());
+        assertThat(latest.at("/result/candidates/0").has("capitalRequiredCents")).isFalse();
+        assertThat(latest.at("/result/candidates/0/capital/economicExposureCents").asLong())
+                .isEqualTo(candidate.at("/capital/economicExposureCents").asLong());
         assertJsonEquivalent(latest.at("/result/candidates/0/evaluation/risk/terminalPayoff"),
                 terminalPayoff);
         assertThat(candidate.at("/evaluation/assessment/portfolioImpacts/practice/lane").asText())
@@ -435,7 +435,7 @@ class PlanApiIntegrationTest {
                 "{" + onlyCashSecuredPut + "}"));
         JsonNode candidate = baseline.at("/strategy/result/candidates/0");
         assertThat(candidate.path("strategy").asText()).isEqualTo("CASH_SECURED_PUT");
-        long capitalRequired = candidate.path("capitalRequiredCents").asLong(-1);
+        long capitalRequired = candidate.at("/capital/economicExposureCents").asLong(-1);
         assertThat(capitalRequired).isPositive();
         JsonNode crash = java.util.stream.StreamSupport.stream(
                         candidate.at("/evaluation/risk/scenarios").spliterator(), false)
@@ -446,7 +446,8 @@ class PlanApiIntegrationTest {
 
         JsonNode restored = json(get("/api/plans/" + id + "/strategy/latest"))
                 .at("/strategy/result/candidates/0");
-        assertThat(restored.path("capitalRequiredCents").asLong()).isEqualTo(capitalRequired);
+        assertThat(restored.has("capitalRequiredCents")).isFalse();
+        assertThat(restored.at("/capital/economicExposureCents").asLong()).isEqualTo(capitalRequired);
         assertJsonEquivalent(restored.path("capital"), candidate.path("capital"));
         assertJsonEquivalent(restored.at("/evaluation/risk/scenarios"),
                 candidate.at("/evaluation/risk/scenarios"));
@@ -1242,8 +1243,7 @@ class PlanApiIntegrationTest {
                 .isEqualTo(2);
         assertThat(animation.at("/receipt/focusedPackageProvenance/legCount").asInt()).isEqualTo(2);
         assertThat(animation.at("/receipt/focusedPackageProvenance/entryBasisCents").asLong())
-                .isEqualTo(opened.at("/trade/feesOpenCents").asLong()
-                        - opened.at("/trade/entryNetPremiumCents").asLong());
+                .isEqualTo(-opened.at("/trade/entryPrice/afterFeeNetCents").asLong());
         assertThat(animation.at("/receipt/focusedPackageProvenance/entryCreatedAt").asText())
                 .isEqualTo(opened.at("/trade/createdAt").asText());
         assertThat(animation.at("/receipt/focusedPackageProvenance/entrySnapshotFingerprint").asText())
@@ -1394,14 +1394,15 @@ class PlanApiIntegrationTest {
             tradeId = opened.at("/trade/id").asText();
             planVersion = opened.at("/plan/version").asLong();
             assertThat(opened.at("/trade/sharesLocked").asLong()).isEqualTo(100);
-            assertThat(opened.at("/trade/feesOpenCents").asLong()).isEqualTo(exactFees);
+            assertThat(opened.at("/trade/entryPrice/openingFeesCents").asLong())
+                    .isEqualTo(exactFees);
 
             JsonNode animation = json(post("/api/plans/" + planId
                     + "/outcomes/ensemble/paths", "{\"ensembleId\":\"" + ensembleId
                             + "\",\"focusPositionKey\":\"" + tradeId + "\",\"limit\":5}"));
             JsonNode provenance = animation.at("/receipt/focusedPackageProvenance");
-            long expectedBasis = Math.addExact(exactFees
-                            - opened.at("/trade/entryNetPremiumCents").asLong(),
+            long expectedBasis = Math.addExact(
+                    -opened.at("/trade/entryPrice/afterFeeNetCents").asLong(),
                     Math.multiplyExact(opened.at("/trade/entryUnderlyingCents").asLong(), 100L));
             assertThat(provenance.path("entryBasisCents").asLong()).isEqualTo(expectedBasis);
             assertThat(provenance.path("legCount").asInt()).isEqualTo(2);
@@ -1973,7 +1974,7 @@ class PlanApiIntegrationTest {
         assertThat(opened.at("/decision/tradeId").asText()).isEqualTo(opened.at("/trade/id").asText());
         assertThat(opened.at("/decision/legs")).hasSize(candidate.withArray("legs").size());
         assertThat(opened.at("/decision/price/grossPackageNetCents").asLong())
-                .isEqualTo(opened.at("/trade/entryNetPremiumCents").asLong());
+                .isEqualTo(opened.at("/trade/entryPrice/grossPackageNetCents").asLong());
         assertThat(opened.at("/decision/orderInstruction/type").asText()).isEqualTo("MARKET");
         assertThat(opened.at("/decision/price/executability").asText()).isEqualTo("IMMEDIATE");
         assertThat(opened.at("/decision/price/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");

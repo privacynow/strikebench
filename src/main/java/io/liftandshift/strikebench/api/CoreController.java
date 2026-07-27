@@ -1,6 +1,5 @@
 package io.liftandshift.strikebench.api;
 
-import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import io.javalin.config.JavalinConfig;
@@ -13,7 +12,6 @@ import io.liftandshift.strikebench.db.WorkspaceService;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
-import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -27,7 +25,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -53,6 +50,7 @@ final class CoreController implements AutoCloseable {
     private final AuthService auth;
     private final CboeProvider cboe;
     private final SparklineController sparklines;
+    private final QuoteBatchComposer quoteBatches;
     private final MarketStreamController streams;
     private final Function<Context, String> ownerId;
     private final Function<Context, String> activeWorld;
@@ -90,7 +88,8 @@ final class CoreController implements AutoCloseable {
         this.requireAdmin = requireAdmin;
         this.jarChanged = jarChanged;
         this.startedAt = startedAt;
-        this.streams = new MarketStreamController(cfg, clock, market, engine, universe,
+        this.quoteBatches = new QuoteBatchComposer(market, engine, universe);
+        this.streams = new MarketStreamController(cfg, clock, quoteBatches,
                 sessions, events, auth, ownerId, activeWorldFor);
     }
 
@@ -176,59 +175,14 @@ final class CoreController implements AutoCloseable {
         String raw = ctx.queryParam("symbols");
         String world = worldParam(activeWorld.apply(ctx));
         int limit = SimulationSessions.MAX_SYMBOLS;
+        QuoteBatchComposer.Result result = quoteBatches.compose(raw, world, limit);
         if (world != null) {
-            List<BatchSymbol> symbols = raw == null || raw.isBlank()
-                    ? validBatch(MarketUniverseView.symbolsForWorld(market, universe, world))
-                    : parseSymbolBatch(raw);
-            int requested = symbols.size();
-            List<BatchSymbol> bounded = symbols.stream().limit(limit).toList();
-            MarketLane lane = market.lane(world);
-            List<ApiResponses.QuoteView> rows = new ArrayList<>();
-            for (BatchSymbol request : bounded) {
-                if (request.invalidReason() != null) {
-                    rows.add(ApiResponses.QuoteView.unavailable(request.display(), request.invalidReason()));
-                    continue;
-                }
-                rows.add(engine.currentQuote(request.canonical(), world)
-                        .map(quote -> ApiResponses.QuoteView.of(quote, false))
-                        .orElseGet(() -> ApiResponses.QuoteView.unavailable(request.canonical(),
-                                worldUnavailableReason(request.canonical(), world, lane))));
-            }
-            ctx.json(new ApiResponses.WorldQuotes<>(rows, requested, bounded.size(),
-                    requested > limit, limit, world, lane.name()));
+            ctx.json(new ApiResponses.WorldQuotes<>(result.rows(), result.requested(),
+                    result.considered(), result.truncated(), limit, world, result.lane().name()));
             return;
         }
-        List<BatchSymbol> symbols = raw == null || raw.isBlank()
-                ? validBatch(universe.active().symbols()) : parseSymbolBatch(raw);
-        int requested = symbols.size();
-        if (symbols.size() > limit) symbols = symbols.subList(0, limit);
-        Map<String, MarketDataEngine.MarketSnapshot> priced = new LinkedHashMap<>();
-        List<String> valid = symbols.stream().filter(row -> row.invalidReason() == null)
-                .map(BatchSymbol::canonical).toList();
-        for (var snapshot : engine.quotes(valid)) priced.put(snapshot.symbol(), snapshot);
-        List<ApiResponses.QuoteView> rows = new ArrayList<>();
-        for (BatchSymbol request : symbols) {
-            if (request.invalidReason() != null) {
-                rows.add(ApiResponses.QuoteView.unavailable(request.display(), request.invalidReason()));
-                continue;
-            }
-            var snapshot = priced.get(request.canonical());
-            rows.add(snapshot == null
-                    ? ApiResponses.QuoteView.unavailable(request.canonical(),
-                            engine.unavailableReason(request.canonical()))
-                    : ApiResponses.QuoteView.of(snapshot.toQuote(), snapshot.refreshing()));
-        }
-        ctx.json(new ApiResponses.Quotes<>(rows, requested, symbols.size(), requested > limit,
-                limit, cfg.fixturesOnly() ? "DEMO" : "OBSERVED"));
-    }
-
-    /** Why a non-observed market has no quote for a symbol — named per lane, never guessed. */
-    private static String worldUnavailableReason(String symbol, String world, MarketLane lane) {
-        if (lane == MarketLane.DEMO) {
-            return "the demo market has no teaching quote for " + symbol;
-        }
-        return "simulated world " + world + " does not price " + symbol
-                + " — its symbol set was fixed when the world was created";
+        ctx.json(new ApiResponses.Quotes<>(result.rows(), result.requested(), result.considered(),
+                result.truncated(), limit, result.lane().name()));
     }
 
     /**
@@ -358,42 +312,6 @@ final class CoreController implements AutoCloseable {
         result.put("createdAt", account.createdAt());
         return result;
     }
-
-    private record BatchSymbol(String display, String canonical, String invalidReason) {}
-
-    private static List<BatchSymbol> validBatch(List<String> symbols) {
-        return Symbol.list(symbols).stream()
-                .map(symbol -> new BatchSymbol(symbol, symbol, null)).toList();
-    }
-
-    /**
-     * Read-only quote batches are row-tolerant: every nonblank requested member gets either the
-     * canonical quote receipt or an explicit invalid-symbol receipt. No malformed member reaches a
-     * provider, and it cannot erase valid siblings. Configuration mutations remain atomic/strict.
-     */
-    private static List<BatchSymbol> parseSymbolBatch(String raw) {
-        List<BatchSymbol> rows = new ArrayList<>();
-        java.util.Set<String> identities = new java.util.LinkedHashSet<>();
-        for (String member : raw.split(",")) {
-            String display = member == null ? "" : member.trim();
-            if (display.isBlank()) continue;
-            try {
-                String canonical = Symbol.normalize(display);
-                if (identities.add("valid:" + canonical)) {
-                    rows.add(new BatchSymbol(canonical, canonical, null));
-                }
-            } catch (IllegalArgumentException invalid) {
-                String safe = display.replace('\n', ' ').replace('\r', ' ');
-                String bounded = safe.substring(0, Math.min(safe.length(), 80));
-                if (identities.add("invalid:" + bounded)) {
-                    rows.add(new BatchSymbol(bounded, null,
-                            "Invalid symbol " + bounded + "; no market-data request was sent."));
-                }
-            }
-        }
-        return List.copyOf(rows);
-    }
-
 
     @Override
     public void close() {

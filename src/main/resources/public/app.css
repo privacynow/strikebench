@@ -1595,7 +1595,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   /* The exact held-leg count and expiration are a receipt. Give them the full second row rather
      than truncating them between the section title and its action. */
   .authposside .authposlegs>.lenshd{display:grid;grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"title action" "facts facts";gap:3px 6px;align-items:center}
+    grid-template-areas:"title action" "facts facts";gap:3px 6px;align-items:center;margin-bottom:0}
   .authposside .authposlegs>.lenshd .eyebrow{grid-area:title}
   .authposside .authposlegs>.lenshd .hint{grid-area:facts;margin-left:0;min-width:0;
     overflow:visible;text-overflow:clip;white-space:normal;line-height:1.1}
@@ -2438,14 +2438,18 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
    simply removes surplus tile height so the payoff receipt remains wholly visible. */
 @media (min-width:1900px) and (max-height:999px){
   .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{
-    min-height:34px;padding:2px 5px;row-gap:2px
+    min-height:30px;padding:2px 5px;row-gap:2px
   }
   .dccenter .scenpanel:has(.srow-ctl) .srow-ctl{
-    margin-top:3px;padding:2px 4px;gap:3px
+    grid-template-columns:minmax(120px,1fr) auto;grid-template-areas:"play steps";
+    align-items:center;margin-top:3px;padding:2px 4px;gap:5px
   }
   .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.scenplay{
     padding-top:0;padding-bottom:0
   }
+  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
+  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk,
+  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{display:none}
 }
 /* The exact package is a persistent workbench beside its ranked ideas, not a hidden mode.
    Engine ideas remain immutable; the first direct edit forks the visible package into a draft.
@@ -4072,6 +4076,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .packagebook .prmeta span:not(.prfp):not(:last-child)::after{
     margin-left:4px
   }
+  /* The receipt fingerprint is diagnostic identity, not a financial fact. The full receipt and
+     review surface retain it; the compact market context spends those pixels on source,
+     freshness, observation time, fees, and executable cash instead. */
+  .dccenter .marketlens .packagebook .prmeta .prfp{display:none}
   /* Two resting headlines fit without scrolling. Expanding the explicit +N action creates the
      one intentional list scroller; every headline remains reachable without moving the adjacent
      execution receipt or painting back through history. */
@@ -4166,16 +4174,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .understand .evsimstage{min-height:196px}
 }
 
-@media (min-width:1900px) and (max-height:999px){
-  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{min-height:30px}
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl{
-    grid-template-columns:minmax(120px,1fr) auto;grid-template-areas:"play steps";
-    align-items:center;gap:5px
-  }
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
-  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk,
-  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{display:none}
-}
 /* The mechanical protocol: one row per typed rule — what it is, the value that triggers it with
    its unit, and what the policy says to do. Values are tabular so the lines compare down the
    column, the way a rule sheet should read. */

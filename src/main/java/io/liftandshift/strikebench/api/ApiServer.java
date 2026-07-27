@@ -825,28 +825,4 @@ public final class ApiServer {
                 "Admin access required. On a public deployment, enable AUTH (+ AUTH_ADMIN_EMAILS), or set ADMIN_TOKEN and send it as X-Admin-Token.");
         }
     }
-
-
-    /**
-     * Body parse that treats the literal JSON document "null" (and blank) as an absent body —
-     * JavalinJackson throws a bare NPE ("readValue(...) must not be null") on it, which would
-     * surface as a 500 for what is plainly client input.
-     */
-    private static <T> T bodyOrNull(Context ctx, Class<T> type) {
-        String raw = ctx.body();
-        if (raw == null || raw.isBlank() || raw.trim().equals("null")) return null;
-        return ctx.bodyAsClass(type);
-    }
-
-    private static <T> T requireBody(T body) {
-        if (body == null) throw new IllegalArgumentException("request body is required");
-        return body;
-    }
-
-    private static int intParam(Context ctx, String name, int def) {
-        String v = ctx.queryParam(name);
-        if (v == null || v.isBlank()) return def;
-        try { return Integer.parseInt(v.trim()); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException(name + " must be an integer"); }
-    }
 }

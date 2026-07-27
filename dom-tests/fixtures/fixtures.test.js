@@ -684,7 +684,7 @@ test('Book aggregates are derived from the roster they summarize', () => {
 test('every held line\'s stated economics follow from its own legs', () => {
   book.positions(12).forEach(trade => {
     const expirations = new Set(trade.legs.map(leg => leg.expiration).filter(Boolean));
-    assert.equal(trade.entryNetPremiumCents,
+    assert.equal(trade.entryPrice.grossPackageNetCents,
       packageMath.entryCashCents(trade.legs, trade.qty),
       `${trade.id} states a net premium its legs do not produce`);
     if (expirations.size > 1) {
@@ -713,14 +713,14 @@ test('the golden package is the same package as an idea and as a position', () =
   const held = book.goldenHeldTrade();
   assert.equal(held.symbol, candidate.symbol);
   assert.equal(held.qty, candidate.qty);
-  assert.equal(held.entryNetPremiumCents, candidate.price.grossPackageNetCents);
+  assert.equal(held.entryPrice.grossPackageNetCents, candidate.price.grossPackageNetCents);
   assert.equal(held.maxLossCents, candidate.maxLossCents);
   assert.equal(held.maxProfitCents, candidate.maxProfitCents);
   assert.deepEqual(held.breakevens, candidate.breakevens);
   assert.equal(held.popEntry, candidate.marketImpliedRisk.probabilityMap.pAnyProfit);
   assert.deepEqual(held.greeks, golden.goldenGreeks(),
     'both surfaces report Greeks in the ONE canonical unit set');
-  assert.equal(held.feesOpenCents, candidate.price.openingFeesCents);
+  assert.equal(held.entryPrice.openingFeesCents, candidate.price.openingFeesCents);
   // The story checkpoints are the same eight moves priced off the same curve on both surfaces.
   const heldMoves = held.scenarios.map(row => row.underlyingMovePct);
   const ideaMoves = candidate.evaluation.risk.scenarios.map(row => row.underlyingMovePct);
@@ -829,7 +829,9 @@ test('the NON_NULL inclusion policy is applied, and ALWAYS is applied where the 
   assert.ok(!Object.prototype.hasOwnProperty.call(trade, 'closedAt'),
     'a null field is ABSENT under Json.MAPPER\'s NON_NULL inclusion');
   assert.ok(!Object.prototype.hasOwnProperty.call(trade, 'closeReason'));
-  assert.ok(Object.prototype.hasOwnProperty.call(trade, 'entryNetPremiumCents'));
+  assert.ok(Object.prototype.hasOwnProperty.call(trade, 'entryPrice'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(trade, 'entryNetPremiumCents'),
+    'TradeView carries only the typed recorded entry-price receipt');
   // PackagePriceReceipt is @JsonInclude(ALWAYS): the nulls are the message.
   const receipt = price.unavailablePackagePrice({ reason: 'no book' });
   assert.ok(Object.prototype.hasOwnProperty.call(receipt, 'grossPackageNetCents'));

@@ -37,7 +37,19 @@ public final class Fees {
 
     /** Total OPTION contracts across a {@code model.Leg} package at a given quantity (stock legs excluded). */
     public static long optionContracts(List<Leg> legs, int qty) {
-        return legs.stream().filter(l -> !l.isStock()).mapToLong(l -> (long) l.ratio() * qty).sum();
+        if (legs == null) throw new IllegalArgumentException("fee calculation requires package legs");
+        if (qty < 1) throw new IllegalArgumentException("fee calculation requires quantity >= 1");
+        long contracts = 0;
+        for (Leg leg : legs) {
+            if (leg == null) {
+                throw new IllegalArgumentException("fee calculation cannot contain a null leg");
+            }
+            if (!leg.isStock()) {
+                contracts = Math.addExact(contracts,
+                        Math.multiplyExact((long) leg.ratio(), qty));
+            }
+        }
+        return contracts;
     }
 
     /** Opening (one-way) commission, or 0 for a stock-only package (no option contracts). */
@@ -45,7 +57,10 @@ public final class Fees {
         if (feePerContractCents < 0 || feePerOrderCents < 0) {
             throw new IllegalArgumentException("configured commissions cannot be negative");
         }
-        if (optionContracts <= 0) return 0;
+        if (optionContracts < 0) {
+            throw new IllegalArgumentException("option contract count cannot be negative");
+        }
+        if (optionContracts == 0) return 0;
         return Math.addExact(Math.multiplyExact(optionContracts, feePerContractCents),
                 feePerOrderCents);
     }

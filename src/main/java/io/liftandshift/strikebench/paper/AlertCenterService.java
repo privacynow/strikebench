@@ -118,8 +118,11 @@ public final class AlertCenterService implements AutoCloseable {
         this.marks = marks;
         this.earnings = earnings;
         this.events = events;
-        this.feePerContractCents = Math.max(0, feePerContractCents);
-        this.feePerOrderCents = Math.max(0, feePerOrderCents);
+        // Configuration is evidence too: route it through THE commission policy rather than
+        // turning a malformed negative schedule into a fabricated free-trading assumption.
+        Fees.schedule(0, feePerContractCents, feePerOrderCents);
+        this.feePerContractCents = feePerContractCents;
+        this.feePerOrderCents = feePerOrderCents;
         this.refreshes = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "alert-center-refresh");
             thread.setDaemon(true);

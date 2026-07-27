@@ -214,7 +214,7 @@ public record PackagePriceReceipt(
      * because the reader still needs to know what size was being priced.
      */
     public static PackagePriceReceipt unavailable(int quantity, FeeSide feeSide, String reason) {
-        return new PackagePriceReceipt(Math.max(1, quantity), null, null, null, null, null, null, null, null,
+        return new PackagePriceReceipt(quantity, null, null, null, null, null, null, null, null,
                 ValuationBasis.UNAVAILABLE, OrderInstruction.Executability.UNAVAILABLE,
                 null, null, null, null, feeSide == null ? FeeSide.OPENING : feeSide,
                 reason == null || reason.isBlank() ? "no package price is available" : reason);
@@ -365,6 +365,9 @@ public record PackagePriceReceipt(
     public static String fingerprintOf(List<Leg> legs, int quantity, Long grossPackageNetCents,
                                        ValuationBasis basis, Long observedAt) {
         if (legs == null || legs.isEmpty()) return null;
+        if (quantity < 1) {
+            throw new IllegalArgumentException("package price fingerprint requires quantity >= 1");
+        }
         try {
             Map<String, Object> stable = new LinkedHashMap<>();
             stable.put("legs", legs.stream().map(PackagePriceReceipt::stableLeg).sorted().toList());

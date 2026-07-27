@@ -357,8 +357,8 @@ class PositionTransformationApiTest {
         JsonNode created = Json.parse(createAcknowledged(
                 creditPutSpread(expiration, 5, "POSITION_TRANSFORMATION_PARTIAL_TEST").toString()).body());
         String tradeId = created.at("/trade/id").asText();
-        long openingEntry = created.at("/trade/entryNetPremiumCents").asLong();
-        long openingFees = created.at("/trade/feesOpenCents").asLong();
+        long openingEntry = created.at("/trade/entryPrice/grossPackageNetCents").asLong();
+        long openingFees = created.at("/trade/entryPrice/openingFeesCents").asLong();
         long openingMaxLoss = created.at("/trade/maxLossCents").asLong();
         long reserveBefore = outstandingReserve(tradeId);
         JsonNode accountBefore = Json.parse(get("/api/account").body()).get("account");
@@ -392,9 +392,9 @@ class PositionTransformationApiTest {
         assertThat(applied.at("/trade/qty").asInt()).isEqualTo(3);
         assertThat(applied.get("actionRealizedPnlCents").asLong()).isEqualTo(actionRealized);
         assertThat(applied.get("realizedPnlToDateCents").asLong()).isEqualTo(actionRealized);
-        assertThat(applied.at("/trade/entryNetPremiumCents").asLong())
+        assertThat(applied.at("/trade/entryPrice/grossPackageNetCents").asLong())
                 .isEqualTo(remainingAllocation(openingEntry, 5, 2));
-        assertThat(applied.at("/trade/feesOpenCents").asLong())
+        assertThat(applied.at("/trade/entryPrice/openingFeesCents").asLong())
                 .isEqualTo(remainingAllocation(openingFees, 5, 2));
         assertThat(applied.at("/trade/maxLossCents").asLong())
                 .isEqualTo(remainingAllocation(openingMaxLoss, 5, 2));

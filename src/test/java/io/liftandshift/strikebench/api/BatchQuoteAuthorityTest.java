@@ -10,6 +10,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -17,6 +20,7 @@ import java.net.http.HttpResponse;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -65,6 +69,23 @@ class BatchQuoteAuthorityTest {
             if (symbol.equals(candidate.get("symbol").asText())) return candidate;
         }
         throw new AssertionError(symbol + " has no row in " + batch.get("quotes"));
+    }
+
+    private static JsonNode firstSsePayload(String path) throws Exception {
+        HttpResponse<InputStream> response = http.send(
+                HttpRequest.newBuilder(URI.create(base + path))
+                        .header("Accept", "text/event-stream").GET().build(),
+                HttpResponse.BodyHandlers.ofInputStream());
+        assertThat(response.statusCode()).isEqualTo(200);
+        try (InputStream stream = response.body();
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith("data:")) return Json.parse(line.substring(5).trim());
+            }
+        }
+        throw new AssertionError("market stream ended before publishing a data frame");
     }
 
     /** Missing and explicit-null are the same absence on a NON_NULL wire. */
@@ -165,5 +186,21 @@ class BatchQuoteAuthorityTest {
                 assertThat(quoteRow.get("quoteUnavailableReason").asText()).isNotBlank();
             }
         }
+    }
+
+    @Test
+    void streamAndRestPublishTheSameRowForEveryValidInvalidAndUnavailableRequest() throws Exception {
+        String query = "AAPL,ZZZZ,..%2FAAPL";
+        JsonNode rest = get("/api/quotes?symbols=" + query);
+        JsonNode stream = firstSsePayload("/api/market/stream?symbols=" + query);
+
+        assertThat(stream.get("quotes")).isEqualTo(rest.get("quotes"));
+        assertThat(stream.get("quotes").size()).isEqualTo(3);
+        assertThat(row(stream, "AAPL").get("priced").asBoolean()).isTrue();
+        assertThat(row(stream, "ZZZZ").get("quoteUnavailableReason").asText()).contains("ZZZZ");
+        assertThat(row(stream, "../AAPL").get("quoteUnavailableReason").asText())
+                .contains("Invalid symbol")
+                .contains("no market-data request was sent");
+        assertThat(stream.path("error").isMissingNode()).isTrue();
     }
 }

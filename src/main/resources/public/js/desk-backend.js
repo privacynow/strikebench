@@ -1569,8 +1569,9 @@
     var price = candidate.price || null;
     var identity = candidateIdentity(candidate);
     var explicitDefinedRisk = identity ? identity.definedRisk : null;
-    var requiredCapital = candidate.capitalRequiredCents == null
-      ? null : Number(candidate.capitalRequiredCents);
+    var packageCapital = candidate.capital || {};
+    var requiredCapital = packageCapital.economicExposureCents == null
+      ? null : Number(packageCapital.economicExposureCents);
     var incremental = capital.incrementalCents == null ? null : Number(capital.incrementalCents);
     var economic = capital.economicCents == null ? null : Number(capital.economicCents);
     var maxLossCents = candidate.maxLossCents == null ? null : Number(candidate.maxLossCents);
@@ -1597,7 +1598,7 @@
        "Capital." Keep capital absent instead; max loss remains available on its own field. */
     var displayCapital = requiredCapital != null ? requiredCapital
       : incremental != null ? incremental : economic != null ? economic : null;
-    var capBasis = requiredCapital != null ? 'CAPITAL_REQUIRED'
+    var capBasis = requiredCapital != null ? String(packageCapital.capitalBasis || 'CAPITAL_ECONOMIC_EXPOSURE')
       : incremental != null ? 'CAPITAL_INCREMENTAL'
       : economic != null ? 'CAPITAL_ECONOMIC' : null;
     var capUnavailableReason = displayCapital != null ? null
@@ -4326,7 +4327,8 @@
     trade = trade || {};
     return JSON.stringify(canonicalJson({
       id: trade.id, symbol: trade.symbol, strategy: trade.strategy, intent: trade.intent,
-      qty: trade.qty, entryNetPremiumCents: trade.entryNetPremiumCents,
+      qty: trade.qty,
+      entryPriceFingerprint: trade.entryPrice && trade.entryPrice.fingerprint,
       entryUnderlyingCents: trade.entryUnderlyingCents, openedAt: trade.openedAt,
       updatedAt: trade.updatedAt, status: trade.status, legs: trade.legs || []
     }));

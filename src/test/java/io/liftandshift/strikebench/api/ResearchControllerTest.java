@@ -146,6 +146,17 @@ class ResearchControllerTest {
         assertThat(body.at("/quote/freshness").asText()).isEqualTo("UNAVAILABLE");
     }
 
+    @Test
+    void malformedExpectedMoveExpiryIsA400InsteadOfFallingBackToAnotherContract() throws Exception {
+        HttpResponse<String> response = http.send(
+                HttpRequest.newBuilder(URI.create(base
+                        + "/api/research/AAPL/expected-move?expiry=not-a-date")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).as("body=%s", response.body()).isEqualTo(400);
+        assertThat(response.body()).contains("expiry").contains("YYYY-MM-DD");
+    }
+
     /**
      * The realized one-month ±1σ envelope is now a backend receipt: {@code bandUp}/{@code bandDn}
      * per bar equal {@code sma20 · exp(±rv20 · √(21/252))} off the SAME rv20/sma20 the response

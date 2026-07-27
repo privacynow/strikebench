@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,7 +26,22 @@ class FeesTest {
     @Test
     void zeroOptionContractsCarryNoOptionCommission() {
         assertThat(Fees.roundTripCents(0, 65, 100)).isZero();
-        assertThat(Fees.roundTripCents(-3, 65, 100)).isZero();
+    }
+
+    @Test
+    void malformedPackageAndContractCountsAreRejectedInsteadOfBecomingFree() {
+        assertThatThrownBy(() -> Fees.optionContracts(null, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("package legs");
+        assertThatThrownBy(() -> Fees.optionContracts(List.of(), 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity");
+        assertThatThrownBy(() -> Fees.optionContracts(Arrays.asList((Leg) null), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("null leg");
+        assertThatThrownBy(() -> Fees.roundTripCents(-3, 65, 100))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("contract count");
     }
 
     @Test

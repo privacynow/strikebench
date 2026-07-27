@@ -554,11 +554,22 @@ final class DiscoveryController {
                     .header("X-Accel-Buffering", "no");
             ScoutStreamWriter stream = new ScoutStreamWriter(ctx.outputStream(), ctx);
             try {
+                java.util.concurrent.atomic.AtomicReference<RuntimeException> durabilityFailure =
+                        new java.util.concurrent.atomic.AtomicReference<>();
                 AutoRecommender.AutoResult result = auto.runWithFrontier(finalReq,
                         destinationBuyingPower, held, worldParam(world), contextFactory,
-                        progress -> stream.write(new ScoutStreamFrame(
-                                "progress", progress, null, null)));
-                retainScoutedPackages(result, owner, worldParam(world));
+                        progress -> {
+                            if (durabilityFailure.get() != null) return;
+                            try {
+                                retainScoutedPick(progress.pick(), owner, worldParam(world));
+                                stream.write(new ScoutStreamFrame(
+                                        "progress", progress, null, null));
+                            } catch (RuntimeException failure) {
+                                durabilityFailure.compareAndSet(null, failure);
+                            }
+                        });
+                if (durabilityFailure.get() != null) throw durabilityFailure.get();
+                requireScoutedPackages(result, owner, worldParam(world));
                 stream.write(new ScoutStreamFrame("complete", null, result, null));
             } catch (RuntimeException failure) {
                 log.warn("Progressive Universe Scout failed after its response began");
@@ -572,22 +583,25 @@ final class DiscoveryController {
         }
         AutoRecommender.AutoResult result = auto.runWithFrontier(finalReq, destinationBuyingPower,
                 held, worldParam(world), contextFactory);
-        retainScoutedPackages(result, owner, worldParam(world));
+        requireScoutedPackages(result, owner, worldParam(world));
         ctx.json(result);
     }
 
     /**
      * Audit §8.2: every row the Scout surfaced is retained as its own immutable evaluation, in the
      * market lane that priced it, so clicking that row later opens THAT package. Retention is
-     * observational — a storage failure must not turn a completed scan into a failed one, and no
-     * row is ever re-priced or re-ranked on the way in.
+     * a precondition of delivery: a row cannot claim an exact Analyze action until that exact
+     * package can be reloaded. No row is ever re-priced or re-ranked on the way in.
      */
-    private void retainScoutedPackages(AutoRecommender.AutoResult result, String owner, String world) {
-        try {
-            evaluations.persist(AutoRecommender.surfaced(result), owner, world);
-        } catch (RuntimeException e) {
-            log.warn("Scanned packages could not be retained for exact adoption");
-            log.debug("Scout retention failure", e);
+    private void requireScoutedPackages(AutoRecommender.AutoResult result,
+                                         String owner, String world) {
+        evaluations.persist(AutoRecommender.surfaced(result), owner, world);
+    }
+
+    /** Progressive rows earn their Analyze action one pick at a time, before they leave the server. */
+    private void retainScoutedPick(AutoRecommender.Pick pick, String owner, String world) {
+        if (pick != null && pick.horizons() != null && !pick.horizons().isEmpty()) {
+            evaluations.persist(AutoRecommender.surfaced(List.of(pick)), owner, world);
         }
     }
 

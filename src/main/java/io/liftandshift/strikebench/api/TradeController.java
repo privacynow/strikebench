@@ -183,21 +183,40 @@ final class TradeController {
         for (TradeRecord trade : result.trades()) {
             TradeView row = TradeView.of(trade);
             if (TradeRecord.ACTIVE.equals(trade.status())) {
+                TradeService.MarkView mark = null;
                 try {
-                    TradeService.MarkView mark = trades.currentMark(trade.id());
-                    if (mark != null && mark.unrealizedCents() != null) {
-                        row = row.withUnrealized(mark.unrealizedCents(),
-                                mark.decisionUnrealizedCents() == null
-                                        ? mark.unrealizedCents() : mark.decisionUnrealizedCents());
+                    mark = trades.currentMark(trade.id());
+                    if (mark == null) {
+                        row = row.withCurrentMark(null, null,
+                                TradeService.CurrentMarketAvailability.unavailable(
+                                        "The current market service returned no receipt for this position."));
+                    } else {
+                        row = row.withCurrentMark(mark.unrealizedCents(),
+                                mark.decisionUnrealizedCents() == null && mark.unrealizedCents() != null
+                                        ? mark.unrealizedCents() : mark.decisionUnrealizedCents(),
+                                mark.availability());
                     }
+                } catch (Exception failure) {
+                    String reason = failure.getMessage() == null || failure.getMessage().isBlank()
+                            ? "The current market receipt for this position could not be produced."
+                            : failure.getMessage();
+                    row = row.withCurrentMark(null, null,
+                            TradeService.CurrentMarketAvailability.unavailable(reason));
+                    log.warn("Current paper-trade list mark is unavailable for {}", trade.id());
+                    log.debug("Paper-trade list mark detail for " + trade.id(), failure);
+                }
+                try {
                     // The held bloom/spectrum and Greeks strip read exact server receipts off the
                     // roster row. Full tail analysis remains owned by the lifecycle evaluation;
                     // this compact row never substitutes fallback IV or event assumptions.
                     row = row.withHeldReceipts(heldTerminalPayoff(trade),
                             mark == null ? null : mark.greeks(),
                             heldScenarios(trade), heldSpotPnl(trade, mark));
-                } catch (Exception ignored) {
-                    // A missing live mark leaves these optional list values unavailable.
+                } catch (Exception failure) {
+                    // A secondary visualization receipt must not erase a valid current-market
+                    // receipt. Keep the row's market truth and omit only the failed enrichment.
+                    log.warn("Held paper-trade display receipts are unavailable for {}", trade.id());
+                    log.debug("Held paper-trade display receipt detail for " + trade.id(), failure);
                 }
             }
             rows.add(row);
@@ -645,7 +664,19 @@ final class TradeController {
         // status — a closed package still has an exact recorded curve — because the second
         // `payoff` list that used to carry it for non-active trades is deleted.
         boolean active = TradeRecord.ACTIVE.equals(trade.status());
-        TradeView view = TradeView.of(trade).withHeldReceipts(
+        TradeView view = TradeView.of(trade);
+        if (active) {
+            view = view.withCurrentMark(
+                    current == null ? null : current.unrealizedCents(),
+                    current == null ? null
+                            : current.decisionUnrealizedCents() == null
+                                    ? current.unrealizedCents() : current.decisionUnrealizedCents(),
+                    current == null
+                            ? TradeService.CurrentMarketAvailability.unavailable(
+                                    currentUnavailableReason)
+                            : current.availability());
+        }
+        view = view.withHeldReceipts(
                 heldTerminalPayoff(trade),
                 current == null ? null : current.greeks(),
                 active ? heldScenarios(trade) : List.of(),
@@ -818,16 +849,23 @@ final class TradeController {
     private static ExactPreviewFacts exactPreviewFacts(
             TradeService.OpenRequest request,
             io.liftandshift.strikebench.paper.TradePreview preview) {
+        if (request == null || request.qty() < 1) {
+            throw new IllegalArgumentException("exact package preview requires quantity >= 1");
+        }
         ExactPreviewDescription description = exactPreviewDescription(request);
         List<LegView> legs = exactPreviewLegs(request, preview);
         List<Map<String, Object>> markedLegs = preview.legs() == null ? List.of() : preview.legs();
         Long combinedMaxLoss = combinedMaximumLossCents(request, preview);
         Integer sharesNeeded = exactPreviewSharesNeeded(request);
         PackagePriceReceipt price = preview.price() == null
-                ? PackagePriceReceipt.unavailable(Math.max(1, request.qty()),
+                ? PackagePriceReceipt.unavailable(request.qty(),
                         PackagePriceReceipt.FeeSide.OPENING,
                         "No package-price receipt was produced for this exact package.")
                 : preview.price();
+        if (price.quantity() != request.qty()) {
+            throw new IllegalArgumentException(
+                    "exact package quantity must match its package-price receipt quantity");
+        }
         long optionLegCount = request.legs().stream().filter(leg -> !leg.isStock()).count();
         List<Map<String, Object>> optionMarks = markedLegs.stream()
                 .filter(mark -> !"STOCK".equals(mark.get("type"))).toList();

@@ -1,21 +1,14 @@
 package io.liftandshift.strikebench.api;
 
-import io.liftandshift.strikebench.model.Symbol;
-
 import io.javalin.http.Context;
 import io.javalin.http.sse.SseClient;
 import io.liftandshift.strikebench.auth.AuthService;
 import io.liftandshift.strikebench.config.AppConfig;
-import io.liftandshift.strikebench.market.MarketDataEngine;
-import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.util.EventBus;
 
 import java.time.Clock;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -23,9 +16,7 @@ import java.util.function.Predicate;
 /** Market-state and typed-hint SSE transports. */
 final class MarketStreamController implements AutoCloseable {
     private final Clock clock;
-    private final MarketDataService market;
-    private final MarketDataEngine engine;
-    private final UniverseService universe;
+    private final QuoteBatchComposer quoteBatches;
     private final SimulationSessions sessions;
     private final EventBus events;
     private final AuthService auth;
@@ -34,15 +25,12 @@ final class MarketStreamController implements AutoCloseable {
     private final MarketFrameBroadcaster broadcaster;
     private final Runnable unsubscribeWorldEvents;
 
-    MarketStreamController(AppConfig cfg, Clock clock, MarketDataService market,
-                           MarketDataEngine engine, UniverseService universe,
+    MarketStreamController(AppConfig cfg, Clock clock, QuoteBatchComposer quoteBatches,
                            SimulationSessions sessions, EventBus events, AuthService auth,
                            Function<Context, String> ownerId,
                            Function<String, String> activeWorldFor) {
         this.clock = clock;
-        this.market = market;
-        this.engine = engine;
-        this.universe = universe;
+        this.quoteBatches = quoteBatches;
         this.sessions = sessions;
         this.events = events;
         this.auth = auth;
@@ -59,9 +47,8 @@ final class MarketStreamController implements AutoCloseable {
 
     void marketStream(SseClient client) {
         String raw = client.ctx().queryParam("symbols");
-        List<String> symbols = raw == null || raw.isBlank()
-                ? universe.active().symbols()
-                : Symbol.list(java.util.Arrays.asList(raw.split(","))).stream().limit(60).toList();
+        List<QuoteBatchComposer.RequestedSymbol> symbols = raw == null || raw.isBlank()
+                ? List.of() : QuoteBatchComposer.parse(raw);
         String streamOwner = ownerId.apply(client.ctx());
         client.keepAlive();
         var request = new MarketFrameBroadcaster.Request(streamOwner, symbols,
@@ -75,42 +62,15 @@ final class MarketStreamController implements AutoCloseable {
 
     private MarketFrameBroadcaster.Draft loadFrame(MarketFrameBroadcaster.Request request) {
         String world = activeWorldFor.apply(request.owner());
-        List<ApiResponses.QuoteView> rows = quoteRows(world, request.owner(),
-                request.customSymbols(), request.symbols());
+        QuoteBatchComposer.Result result = quoteBatches.compose(
+                request.customSymbols() ? request.symbols() : null,
+                io.liftandshift.strikebench.market.MarketLane.worldParam(world), 60);
         String simTime = null;
         if (!"observed".equals(world)) {
             simTime = sessions.getOrRestore(world, request.owner())
                     .map(session -> session.simTime().toString()).orElse(null);
         }
-        return new MarketFrameBroadcaster.Draft(world, rows, simTime, clock.millis());
-    }
-
-    /** The live tape serves the SAME typed row as the /api/quotes batch — one shape, one price. */
-    private List<ApiResponses.QuoteView> quoteRows(String world, String owner, boolean customSymbols,
-                                                   List<String> requestedSymbols) {
-        List<ApiResponses.QuoteView> rows = new ArrayList<>();
-        if ("observed".equals(world)) {
-            List<String> symbols = customSymbols ? requestedSymbols : universe.active().symbols();
-            for (var snapshot : engine.quotes(symbols)) {
-                rows.add(ApiResponses.QuoteView.of(snapshot.toQuote(), snapshot.refreshing()));
-            }
-            return rows;
-        }
-        List<String> symbols;
-        if ("demo".equals(world)) {
-            symbols = !customSymbols
-                    ? market.worldSymbols("demo").map(List::copyOf).orElse(List.of())
-                    : requestedSymbols;
-        } else {
-            symbols = sessions.getOrRestore(world, owner)
-                    .map(session -> List.copyOf(session.config().symbolBetas().keySet()))
-                    .orElse(List.of());
-        }
-        for (String symbol : symbols) {
-            engine.currentQuote(symbol, world)
-                    .ifPresent(quote -> rows.add(ApiResponses.QuoteView.of(quote, false)));
-        }
-        return rows;
+        return new MarketFrameBroadcaster.Draft(world, result.rows(), simTime, clock.millis());
     }
 
     void eventStream(SseClient client) {

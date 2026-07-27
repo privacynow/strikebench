@@ -558,7 +558,7 @@ final class WorldController {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", t.id()); m.put("symbol", t.symbol()); m.put("strategy", t.strategy());
                 m.put("status", t.status()); m.put("qty", t.qty());
-                m.put("entryNetPremiumCents", t.entryNetPremiumCents());
+                m.put("entryPrice", TradeService.recordedEntryPrice(t));
                 m.put("realizedPnlCents", t.realizedPnlCents());
                 Long decisionPnl = t.decisionPnlCents() != null ? t.decisionPnlCents() : t.realizedPnlCents();
                 m.put("decisionPnlCents", decisionPnl);

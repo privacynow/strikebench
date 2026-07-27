@@ -43,4 +43,18 @@ class RiskNeutralAssignmentTest {
         assertThat(RiskNeutralAnalyzer.assignmentProbability(
                 List.of(expired), List.of(0.30), 10_000, LANE_NOW, 0.04)).isNull();
     }
+
+    @Test
+    void mixedExpirationsStayUnavailableInsteadOfSummingDependentMarginals() {
+        Leg nearPut = Leg.option(LegAction.SELL, OptionType.PUT,
+                new BigDecimal("95"), EXPIRY, 1, BigDecimal.ONE);
+        Leg farCall = Leg.option(LegAction.SELL, OptionType.CALL,
+                new BigDecimal("110"), EXPIRY.plusMonths(1), 1, BigDecimal.ONE);
+
+        assertThat(RiskNeutralAnalyzer.assignmentProbability(
+                List.of(nearPut, farCall), List.of(0.30, 0.30),
+                10_000, LANE_NOW, 0.04))
+                .as("one underlying observed at two dates needs a joint path law")
+                .isNull();
+    }
 }

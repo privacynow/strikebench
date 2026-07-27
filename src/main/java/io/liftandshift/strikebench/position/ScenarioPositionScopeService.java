@@ -131,8 +131,8 @@ public final class ScenarioPositionScopeService {
                     authority));
         }
         long heldShares = TradeService.heldShareContextSharesForDisplay(trade);
-        long entryBasis = Math.addExact(Math.negateExact(trade.entryNetPremiumCents()),
-                trade.feesOpenCents());
+        var entryPrice = TradeService.recordedEntryPrice(trade);
+        long entryBasis = Math.negateExact(entryPrice.afterFeeNetCents());
         if (heldShares > 0) {
             if (trade.entryUnderlyingCents() <= 0) {
                 throw new IllegalStateException("held-share position is missing its exact entry underlying price");
@@ -144,7 +144,7 @@ public final class ScenarioPositionScopeService {
         }
         var p = new PositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
                 PositionDomain.ExecutionLane.PRACTICE, symbol, trade.qty(),
-                trade.entryNetPremiumCents(), asOf, legs);
+                entryPrice.grossPackageNetCents(), asOf, legs);
         var provenance = new PositionPackageFingerprint.EntryProvenance(
                 trade.createdAt(), trade.dataProvenance(), trade.dataAge(), trade.dataSource(),
                 PositionPackageFingerprint.entrySnapshotFingerprint(trade.entrySnapshotJson()));

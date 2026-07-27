@@ -644,7 +644,6 @@ public final class PlanStrategyService {
                 r.family(), restoredPrice, r.maxLoss(), r.combinedMaxLoss(),
                 Boolean.TRUE.equals(r.usesHeld()));
         n.set("capital", Json.MAPPER.valueToTree(capital));
-        put(n, "capitalRequiredCents", capital.economicExposureCents());
         put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness());
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
         put(n, "biggestRisk", r.risk()); put(n, "wouldInvalidate", r.invalidate());
