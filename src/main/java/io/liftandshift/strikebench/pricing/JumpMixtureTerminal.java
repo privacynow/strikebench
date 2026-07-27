@@ -95,13 +95,22 @@ public final class JumpMixtureTerminal {
     }
 
     /**
-     * Calibrate the distribution — a verbatim port of the desk's {@code tailParams}. {@code ivRankPct}
-     * defaults to the desk's 55 when the caller has no rank; {@code expectedMovePct} is the horizon
-     * 1-sigma move in percent (IV*sqrt(T)*100), defaulting to the desk's 6 when unavailable.
+     * Calibrate the distribution from supplied evidence. Missing regime, move, or stance inputs are
+     * never replaced with the former browser fixture's 55/6/base defaults: those substitutions
+     * published a precise tail probability even when the market evidence needed to support it did
+     * not exist.
      */
     public static JumpMixtureTerminal of(String sectorLabel, double ivRankPct, double expectedMovePct,
                                          GapStance stance, boolean eventSoon, String eventName) {
-        if (stance == null) stance = GapStance.BASE;
+        if (stance == null) {
+            throw new IllegalArgumentException("jump-tail stance is required");
+        }
+        if (!Double.isFinite(ivRankPct) || ivRankPct < 0.0 || ivRankPct > 100.0) {
+            throw new IllegalArgumentException("jump-tail IV rank must be within 0..100");
+        }
+        if (!Double.isFinite(expectedMovePct) || expectedMovePct <= 0.0) {
+            throw new IllegalArgumentException("jump-tail expected move must be positive");
+        }
         String key = resolveKey(sectorLabel);
         SectorPrior sec = SECTOR_PRIORS.getOrDefault(key, DEFAULT_PRIOR);
         double dial = stance.dial;
@@ -113,11 +122,10 @@ public final class JumpMixtureTerminal {
                 0.05, 0.30);
         double muJ = Math.log(1 - gap);            // log-return jump: mean = the gap
         double dJ = 0.05;                          // small dispersion
-        double em = expectedMovePct > 0 ? expectedMovePct : 6.0;   // desk's (c.em || 6)
-        double vBody = Math.pow(em / 100.0, 2);    // body keeps the full IV-implied vol
+        double vBody = Math.pow(expectedMovePct / 100.0, 2); // body keeps the full IV-implied vol
         double drift = -0.5 * vBody;               // martingale body; down-jumps left uncompensated
         return new JumpMixtureTerminal(L, muJ, dJ, vBody, Math.sqrt(vBody), drift, gap,
-                "default".equals(key) ? "—" : key, eventSoon, eventName, stance);
+                "default".equals(key) ? "Broad market" : key, eventSoon, eventName, stance);
     }
 
     /**
@@ -212,9 +220,14 @@ public final class JumpMixtureTerminal {
                             boolean lossUnbounded, long maxLossCents,
                             DoubleUnaryOperator payoffCentsAtPrice, String unavailableReason) {
         if (!available || spot <= 0 || payoffCentsAtPrice == null) {
-            return new Tail(SCHEMA, MODEL, false, GapStance.BASE.name(), null, null, null, BASIS,
-                    unavailableReason != null ? unavailableReason
-                            : "No single-expiration curve / positive underlying anchor for the jump-mixture tail.");
+            return unavailable(unavailableReason != null ? unavailableReason
+                    : "No single-expiration curve / positive underlying anchor for the jump-mixture tail.");
+        }
+        if (!Double.isFinite(ivRankPct) || ivRankPct < 0.0 || ivRankPct > 100.0) {
+            return unavailable("Jump-tail probability requires an observed IV rank within 0..100.");
+        }
+        if (!Double.isFinite(expectedMovePct) || expectedMovePct <= 0.0) {
+            return unavailable("Jump-tail probability requires a positive horizon expected move from option IV.");
         }
         Receipt calm = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.CALM, eventSoon, eventName)
                 .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
@@ -223,6 +236,15 @@ public final class JumpMixtureTerminal {
         Receipt tense = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.TENSE, eventSoon, eventName)
                 .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
         return new Tail(SCHEMA, MODEL, true, GapStance.BASE.name(), base, calm, tense, BASIS, null);
+    }
+
+    /** An explicit unavailable receipt for callers that cannot support the tail distribution. */
+    public static Tail unavailable(String reason) {
+        String namedReason = reason == null || reason.isBlank()
+                ? "The jump-mixture tail is unavailable because its required evidence was not supplied."
+                : reason;
+        return new Tail(SCHEMA, MODEL, false, GapStance.BASE.name(), null, null, null, BASIS,
+                namedReason);
     }
 
     /**

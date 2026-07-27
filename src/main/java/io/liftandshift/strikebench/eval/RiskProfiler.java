@@ -106,16 +106,21 @@ public final class RiskProfiler {
             // The desk's former client Merton tail, now a backend receipt — one per calm/base/tense.
             String sectorLabel = ctx.symbol() == null || ctx.symbol().isBlank()
                     ? null : Universes.allocationSectorLabel(ctx.symbol());
-            double ivRankPct = ctx.regime() != null && ctx.regime().ivRankPct() != null
-                    ? ctx.regime().ivRankPct() : 55.0;
-            double expectedMovePct = ctx.atmIv() != null && ctx.atmIv() > 0
-                    && ctx.hasModelTime()
-                    ? ctx.atmIv() * Math.sqrt(ctx.yearsToExpiry()) * 100.0 : 0.0;
-            boolean eventSoon = ctx.regime() != null && Boolean.TRUE.equals(ctx.regime().eventSoon());
-            jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel, ivRankPct, expectedMovePct,
-                    eventSoon, null, !points.isEmpty(), pc.maxLossUnbounded(), maxLoss,
-                    s -> pc.profitAtCents(BigDecimal.valueOf(s)),
-                    points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
+            String tailEvidenceGap = jumpTailEvidenceGap(ctx);
+            if (tailEvidenceGap != null) {
+                jumpTail = unavailableJumpTail(tailEvidenceGap);
+            } else {
+                double expectedMovePct =
+                        ctx.atmIv() * Math.sqrt(ctx.yearsToExpiry()) * 100.0;
+                jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel,
+                        ctx.regime().ivRankPct(), expectedMovePct,
+                        ctx.regime().eventSoon(), null, !points.isEmpty(),
+                        pc.maxLossUnbounded(), maxLoss,
+                        s -> pc.profitAtCents(BigDecimal.valueOf(s)),
+                        points.isEmpty()
+                                ? "The captured evaluation has no positive underlying anchor."
+                                : null);
+            }
         } catch (RuntimeException e) {
             // Degrade to extremes-only rather than fail the whole evaluation.
             terminalPayoff = unavailableTerminalPayoff(
@@ -211,7 +216,37 @@ public final class RiskProfiler {
     }
 
     private static JumpMixtureTerminal.Tail unavailableJumpTail(String reason) {
-        return JumpMixtureTerminal.tail(0.0, null, 55.0, 0.0, false, null, false, false, 0L, null, reason);
+        return JumpMixtureTerminal.unavailable(reason);
+    }
+
+    /**
+     * Names the first missing observation required by the physical tail lane. Null means the lane
+     * is supported. In particular, an unknown event calendar is not equivalent to "no event."
+     */
+    static String jumpTailEvidenceGap(EvalContext ctx) {
+        if (ctx.regime() == null) {
+            return "Jump-tail probability is unavailable because no market-regime receipt was captured.";
+        }
+        if (ctx.regime().ivRankPct() == null
+                || !Double.isFinite(ctx.regime().ivRankPct())
+                || ctx.regime().ivRankPct() < 0.0
+                || ctx.regime().ivRankPct() > 100.0) {
+            return "Jump-tail probability is unavailable because observed IV rank is missing.";
+        }
+        if (ctx.atmIv() == null || !Double.isFinite(ctx.atmIv()) || ctx.atmIv() <= 0.0) {
+            return "Jump-tail probability is unavailable because an ATM option IV is missing.";
+        }
+        if (!ctx.hasModelTime()) {
+            return "Jump-tail probability is unavailable because option time to expiry is missing.";
+        }
+        if (ctx.regime().eventSoon() == null) {
+            String eventBasis = ctx.regime().eventBasis();
+            return eventBasis == null || eventBasis.isBlank()
+                    ? "Jump-tail probability is unavailable because event proximity is unknown."
+                    : "Jump-tail probability is unavailable because event proximity is unknown: "
+                            + eventBasis;
+        }
+        return null;
     }
 
     /**

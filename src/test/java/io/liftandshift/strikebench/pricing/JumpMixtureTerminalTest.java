@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.function.DoubleUnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The real-world / tail lane is a SEPARATE distribution from the risk-neutral lognormal, and it is
@@ -132,6 +133,27 @@ class JumpMixtureTerminalTest {
         assertThat(tail.base()).isNull();
         assertThat(tail.pop()).isNull();
         assertThat(tail.unavailableReason()).contains("mixed-expiration");
+    }
+
+    @Test void missingCalibrationEvidenceNeverFallsBackToBrowserFixtureDefaults() {
+        PayoffCurve shortPut = PayoffCurve.of(
+                List.of(opt(LegAction.SELL, OptionType.PUT, "90", "2.00")), 1);
+
+        JumpMixtureTerminal.Tail missingMove = JumpMixtureTerminal.tail(
+                SPOT, SECTOR, 55.0, 0.0, false, null, true,
+                false, shortPut.maxLossCents(), payoffCents(shortPut), null);
+        JumpMixtureTerminal.Tail missingRank = JumpMixtureTerminal.tail(
+                SPOT, SECTOR, Double.NaN, EM_PCT, false, null, true,
+                false, shortPut.maxLossCents(), payoffCents(shortPut), null);
+
+        assertThat(missingMove.available()).isFalse();
+        assertThat(missingMove.unavailableReason()).contains("expected move");
+        assertThat(missingRank.available()).isFalse();
+        assertThat(missingRank.unavailableReason()).contains("IV rank");
+        assertThatThrownBy(() -> JumpMixtureTerminal.of(
+                SECTOR, 55.0, EM_PCT, null, false, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stance");
     }
 
     /** A defined-risk credit put spread is also down-gap exposed: its POP drops too. */
