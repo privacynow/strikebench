@@ -164,17 +164,24 @@ The current local verification entry points are:
 
 ```bash
 docker compose up -d db
-mvn -q clean package
+mvn -q clean
+mkdir -p target/surefire-reports
+node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
+mvn -q package
+git rev-parse HEAD > target/surefire-reports/source.sha
+node scripts/artifact-manifest.cjs write
 cd dom-tests
 npm ci
 npx playwright install chromium
-npm run test:ci       # declarations, SPA, fixture, grown-state, responsive, auth, Book, Learn
-npm run test:live     # observed-provider journey; requires network/source availability
+npm run test:ci       # deterministic contracts, exact packaged-jar journeys, visual matrix
 
-# Read-only quote, chain, research, history, and news capture from an already-running
-# local server (defaults to NVDA); files go to a private temporary directory.
+# Scheduled/manual real-provider readiness is separate from push CI. This read-only helper
+# validates typed quote, chain, research, history, expiration, and news responses from an
+# already-running Observed server (defaults to NVDA) and preserves every raw body.
 scripts/live-market-probe.sh
 ```
 
-CI records one TAP report per browser suite and runs `node scripts/release-matrix.mjs`; the
-generated report is the source of exact test totals for that branch tip.
+The backend job builds and tests the release jar once, writes its source-SHA/SHA-256 manifest, and
+the packaged journey lane downloads that exact artifact without rebuilding it. CI records one TAP
+aggregate for each browser lane and runs `node scripts/release-matrix.mjs`; the generated report is
+the source of exact test totals for that branch tip.

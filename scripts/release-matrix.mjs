@@ -31,17 +31,25 @@ export function junitResult(expectedSha, dir = path.join(target, 'surefire-repor
     throw new Error(`Surefire evidence was produced from source ${source}, but HEAD is ${expectedSha}.`);
   }
   /*
-   * Surefire writes one XML per test class and never removes an old one. A directory holding
-   * reports from two different runs — a focused `-Dtest=…` followed by a full run, or a class that
-   * was renamed — sums into a total that never existed: this published 1,220 for a suite that had
-   * just run 1,216. Reports must come from ONE run, which means their timestamps cluster.
+   * Surefire writes one XML per test class and never removes an old one. A run-start marker made
+   * after `mvn clean` proves every report belongs to this exact run without assuming a large suite
+   * finishes inside an arbitrary ten-minute timestamp cluster.
    */
-  const stamped = files.map(name => ({ name, at: fs.statSync(path.join(dir, name)).mtimeMs }));
-  const newest = Math.max(...stamped.map(entry => entry.at));
-  const stale = stamped.filter(entry => newest - entry.at > 10 * 60 * 1000);
+  const runStartFile = path.join(dir, 'run-start.epoch');
+  if (!fs.existsSync(runStartFile)) {
+    throw new Error('Surefire evidence carries no run-start marker. Run `mvn clean`, write '
+      + '`Date.now()` to target/surefire-reports/run-start.epoch, then run the full suite.');
+  }
+  const runStart = Number(fs.readFileSync(runStartFile, 'utf8').trim());
+  if (!Number.isSafeInteger(runStart) || runStart <= 0) {
+    throw new Error('Surefire run-start marker is not an epoch-millisecond integer.');
+  }
+  const stale = files.filter(name =>
+    // Coarse filesystems may round mtime down; one second does not let an earlier test run pass.
+    fs.statSync(path.join(dir, name)).mtimeMs + 1_000 < runStart);
   if (stale.length) {
-    throw new Error(`${stale.length} Surefire report(s) predate the newest by more than ten `
-      + `minutes (${stale.slice(0, 4).map(entry => entry.name).join(', ')}`
+    throw new Error(`${stale.length} Surefire report(s) predate this run `
+      + `(${stale.slice(0, 4).join(', ')}`
       + `${stale.length > 4 ? ', …' : ''}). They are from an earlier run and would be summed into a `
       + 'total that never executed. Delete target/surefire-reports and run the full suite.');
   }
@@ -50,17 +58,19 @@ export function junitResult(expectedSha, dir = path.join(target, 'surefire-repor
     const tag = xml.match(/<testsuite\b[^>]*>/)?.[0];
     if (!tag) throw new Error(`No testsuite result in ${name}`);
     total.tests += attribute(tag, 'tests');
-    total.failures += attribute(tag, 'failures') + attribute(tag, 'errors');
+    total.testFailures += attribute(tag, 'failures') + attribute(tag, 'errors');
     total.skipped += attribute(tag, 'skipped');
     return total;
-  }, { tests: 0, failures: 0, skipped: 0 });
+  }, { tests: 0, testFailures: 0, skipped: 0 });
+  // A skipped backend test is an unexecuted release contract, not a green assertion.
+  result.failures = result.testFailures + result.skipped;
   if (result.tests === 0) {
     throw new Error('Surefire reports contain zero tests. A required backend lane cannot be '
       + 'published as green without executing a test.');
   }
-  if (result.failures + result.skipped > result.tests) {
+  if (result.failures > result.tests) {
     throw new Error(`Surefire reports carry impossible totals: ${result.tests} tests but `
-      + `${result.failures} failures/errors + ${result.skipped} skipped exceeds that total.`);
+      + `${result.testFailures} failures/errors + ${result.skipped} skipped exceeds that total.`);
   }
   return result;
 }

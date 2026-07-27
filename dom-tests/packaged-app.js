@@ -65,6 +65,20 @@ async function freePort() {
   return port;
 }
 
+/**
+ * A journey owns its application port. Ambient PORT commonly points at the developer's running
+ * desk (7070); inheriting it can make readiness succeed against that unrelated process after the
+ * child under test fails to bind. Only an explicit harness option may select a port.
+ */
+async function resolvePackagedPort(options = {}, allocate = freePort) {
+  if (options.port == null || options.port === '') return allocate();
+  const port = Number(options.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`packaged journey port must be an integer from 1 to 65535, got ${options.port}`);
+  }
+  return port;
+}
+
 async function waitForReady(base, server, log, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -89,14 +103,17 @@ function safeLabel(value) {
 }
 
 async function startPackagedApp(options = {}) {
-  const label = safeLabel(options.label);
+  const attempt = String(process.env.STRIKEBENCH_JOURNEY_ATTEMPT || '1')
+    .replace(/[^0-9a-z_.-]+/gi, '-');
+  // A permitted second attempt must never overwrite the only evidence of the first failure.
+  const label = `${safeLabel(options.label)}.attempt-${attempt}.pid-${process.pid}`;
   const jar = path.resolve(options.jar || process.env.JAR || DEFAULT_JAR);
   if (!fs.existsSync(jar)) {
     throw new Error(`packaged journey requires ${jar}; build it before running this suite`);
   }
 
+  const port = await resolvePackagedPort(options);
   const pg = freshDb();
-  const port = Number(options.port || process.env.PORT || await freePort());
   const base = `http://127.0.0.1:${port}`;
   const requestedEnv = typeof options.env === 'function'
     ? options.env({ base, port: String(port) }) : (options.env || {});
@@ -122,6 +139,12 @@ async function startPackagedApp(options = {}) {
   let browser = null;
   try {
     await waitForReady(base, server, log);
+    // Close the small bind/readiness race: a pre-existing server must not satisfy readiness while
+    // the child selected for this journey is already exiting.
+    await delay(50);
+    if (!processIsRunning(server)) {
+      throw new Error(`packaged server exited after a foreign process satisfied readiness\n${log()}`);
+    }
     browser = await launchChromium();
   } catch (error) {
     if (processIsRunning(server)) {
@@ -245,5 +268,6 @@ module.exports = {
   freePort,
   ISOLATED_PRODUCT_ENV,
   packagedEnvironment,
+  resolvePackagedPort,
   startPackagedApp
 };

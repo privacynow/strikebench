@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: false
 
 # This is the only workflow allowed to contact real market providers. It preserves every raw
-# response for diagnosis and fails closed when curl cannot complete a request or any API read
-# returns non-2xx. Push/PR CI stays deterministic and provider-free.
+# response for diagnosis and fails closed on transport, non-2xx, malformed JSON, or a response that
+# violates the endpoint's typed semantic contract. Push/PR CI stays deterministic/provider-free.
 jobs:
   observed-provider-gate:
     runs-on: ubuntu-latest
@@ -40,7 +40,9 @@ jobs:
           exit 1
 
       - name: Package the jar under test
-        run: mvn -q clean package -DskipTests
+        run: |
+          mvn -q clean package -DskipTests
+          node scripts/artifact-manifest.cjs write
 
       # AppConfig defaults already point at the docker-compose database on 7070, and
       # FIXTURES_ONLY defaults to false, which is the whole point here: real providers.
@@ -64,7 +66,7 @@ jobs:
           {
             echo '### Live provider gate'
             echo ''
-            echo 'Raw HTTP status per read (transport errors and non-2xx responses fail this gate):'
+            echo 'Raw HTTP status per read (transport, HTTP, JSON, and typed-contract failures fail this gate):'
             echo ''
             echo '```'
             cat target/live-capture/http-status.txt
@@ -80,4 +82,5 @@ jobs:
           path: |
             target/live-capture
             target/live-server.log
+            target/strikebench-artifact.json
           retention-days: 14

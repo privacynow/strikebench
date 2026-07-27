@@ -39,11 +39,28 @@ jobs:
           docker compose logs db
           exit 1
 
+      - name: Start one clean backend evidence run
+        run: |
+          mvn -q clean
+          mkdir -p target/surefire-reports
+          node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
+
       - name: Backend matrix and release jar
-        run: mvn -q clean package
+        run: mvn -q package
 
       - name: Bind backend evidence to this source
-        run: git rev-parse HEAD > target/surefire-reports/source.sha
+        run: |
+          git rev-parse HEAD > target/surefire-reports/source.sha
+          node scripts/artifact-manifest.cjs write
+
+      - name: Preserve the exact jar tested by the backend matrix
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-jar
+          path: |
+            target/strikebench.jar
+            target/strikebench-artifact.json
+          retention-days: 14
 
       - name: Preserve backend evidence
         if: always()
@@ -104,6 +121,7 @@ jobs:
   # fixture to that same lifecycle owner. lane.js refuses to start if target/strikebench.jar is
   # missing or older than the application sources it is meant to contain.
   browser-journeys:
+    needs: backend
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -135,8 +153,14 @@ jobs:
           docker compose logs db
           exit 1
 
-      - name: Package the jar under test
-        run: mvn -q clean package -DskipTests
+      - name: Download the exact backend-tested jar
+        uses: actions/download-artifact@v4
+        with:
+          name: release-jar
+          path: target
+
+      - name: Verify packaged artifact identity
+        run: node scripts/artifact-manifest.cjs verify target/strikebench.jar target/strikebench-artifact.json "$GITHUB_SHA" --require-clean
 
       - name: Install browser runtime
         working-directory: dom-tests
@@ -236,6 +260,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Refuse a summary for failed or cancelled upstream jobs
+        env:
+          UPSTREAM_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e '
+            const jobs = JSON.parse(process.env.UPSTREAM_RESULTS);
+            const bad = Object.entries(jobs).filter(([, value]) => value.result !== "success");
+            if (bad.length) {
+              throw new Error(`release inputs did not all succeed: ${bad.map(([name, value]) =>
+                `${name}=${value.result}`).join(", ")}`);
+            }
+          '
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with:

@@ -22,8 +22,13 @@ const {
 } = require('./lane');
 const {
   ISOLATED_PRODUCT_ENV,
-  packagedEnvironment
+  packagedEnvironment,
+  resolvePackagedPort
 } = require('./packaged-app');
+const {
+  createArtifactManifest,
+  verifyArtifactManifest
+} = require('../scripts/artifact-manifest.cjs');
 
 const matrixModule = pathToFileURL(
   path.resolve(__dirname, '..', 'scripts', 'release-matrix.mjs')
@@ -151,10 +156,16 @@ test('Surefire evidence requires the exact full source SHA', async () => {
   const { junitResult } = await import(matrixModule);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-surefire-evidence-'));
   try {
+    fs.writeFileSync(path.join(dir, 'run-start.epoch'), `${Date.now()}\n`);
     fs.writeFileSync(path.join(dir, 'TEST-example.xml'),
       '<testsuite tests="4" failures="1" errors="1" skipped="1"></testsuite>');
     fs.writeFileSync(path.join(dir, 'source.sha'), `${SHA}\n`);
-    assert.deepEqual(junitResult(SHA, dir), { tests: 4, failures: 2, skipped: 1 });
+    assert.deepEqual(junitResult(SHA, dir), {
+      tests: 4,
+      testFailures: 2,
+      skipped: 1,
+      failures: 3
+    });
     fs.writeFileSync(path.join(dir, 'TEST-example.xml'),
       '<testsuite tests="0" failures="0" errors="0" skipped="0"></testsuite>');
     assert.throws(() => junitResult(SHA, dir), /contain zero tests/);
@@ -168,6 +179,46 @@ test('Surefire evidence requires the exact full source SHA', async () => {
     assert.throws(() => junitResult(SHA, dir), /not a full commit SHA/);
     fs.unlinkSync(path.join(dir, 'source.sha'));
     assert.throws(() => junitResult(SHA, dir), /carries no source SHA/);
+    fs.writeFileSync(path.join(dir, 'source.sha'), `${SHA}\n`);
+    fs.unlinkSync(path.join(dir, 'run-start.epoch'));
+    assert.throws(() => junitResult(SHA, dir), /no run-start marker/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('one artifact manifest binds source identity and jar bytes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-artifact-receipt-'));
+  const jar = path.join(dir, 'strikebench.jar');
+  const manifest = path.join(dir, 'strikebench-artifact.json');
+  try {
+    fs.writeFileSync(jar, 'the exact packaged application');
+    const written = createArtifactManifest(jar, manifest, {
+      sourceSha: SHA,
+      sourceDirty: false
+    });
+    assert.equal(written.sourceSha, SHA);
+    assert.equal(written.sourceDirty, false);
+    assert.equal(verifyArtifactManifest(jar, manifest, {
+      expectedSha: SHA,
+      requireClean: true
+    }).jarSha256, written.jarSha256);
+    assert.throws(() => verifyArtifactManifest(jar, manifest, {
+      expectedSha: OTHER_SHA
+    }), /built from.*expected/);
+    fs.appendFileSync(jar, '\nmodified after the receipt');
+    assert.throws(() => verifyArtifactManifest(jar, manifest, {
+      expectedSha: SHA
+    }), /size is|SHA-256 is/);
+    fs.writeFileSync(jar, 'the exact packaged application');
+    createArtifactManifest(jar, manifest, {
+      sourceSha: SHA,
+      sourceDirty: true
+    });
+    assert.throws(() => verifyArtifactManifest(jar, manifest, {
+      expectedSha: SHA,
+      requireClean: true
+    }), /dirty application source tree/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -512,6 +563,30 @@ test('packaged journeys cannot override provider, database, background-job, or p
   }
 });
 
+test('packaged journeys ignore ambient PORT and validate only an explicit private port', async () => {
+  const previous = process.env.PORT;
+  process.env.PORT = '7070';
+  try {
+    let allocations = 0;
+    const allocated = await resolvePackagedPort({}, async () => {
+      allocations += 1;
+      return 7199;
+    });
+    assert.equal(allocated, 7199);
+    assert.equal(allocations, 1,
+      'ambient PORT must not bypass private-port allocation');
+    assert.equal(await resolvePackagedPort({ port: 7201 }, async () => {
+      throw new Error('an explicit port must not allocate another one');
+    }), 7201);
+    await assert.rejects(resolvePackagedPort({ port: 0 }), /integer from 1 to 65535/);
+    await assert.rejects(resolvePackagedPort({ port: 65_536 }), /integer from 1 to 65535/);
+    await assert.rejects(resolvePackagedPort({ port: '12.5' }), /integer from 1 to 65535/);
+  } finally {
+    if (previous == null) delete process.env.PORT;
+    else process.env.PORT = previous;
+  }
+});
+
 test('push CI invokes only committed deterministic lanes and the scheduled provider gate is fail closed', () => {
   const ci = fs.readFileSync(path.resolve(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
   const live = fs.readFileSync(
@@ -535,8 +610,18 @@ test('push CI invokes only committed deterministic lanes and the scheduled provi
   }
   assert.match(ci, /test -e target\/target/,
     'release aggregation must reject the nested artifact layout that previously lost evidence');
+  const backendBlock = ci.match(/\n  backend:\n([\s\S]*?)\n  # Lane \(a\):/)?.[1] || '';
+  const journeyBlock = ci.match(/\n  browser-journeys:\n([\s\S]*?)\n  # Lane \(c\):/)?.[1] || '';
+  assert.match(backendBlock, /node scripts\/artifact-manifest\.cjs write/);
+  assert.match(backendBlock, /name: release-jar/);
+  assert.match(journeyBlock, /needs: backend/);
+  assert.match(journeyBlock, /uses: actions\/download-artifact@v4[\s\S]*name: release-jar/);
+  assert.match(journeyBlock,
+    /node scripts\/artifact-manifest\.cjs verify target\/strikebench\.jar target\/strikebench-artifact\.json/);
+  assert.doesNotMatch(journeyBlock, /\bmvn\b/,
+    'packaged journeys must drive the exact backend-tested artifact, not rebuild another jar');
   assert.match(live, /scripts\/live-market-probe\.sh/);
-  assert.match(live, /non-2xx responses fail this gate/i);
+  assert.match(live, /typed semantic contract/i);
 
   const packageJson = JSON.parse(fs.readFileSync(
     path.resolve(__dirname, 'package.json'), 'utf8'));
@@ -547,6 +632,7 @@ test('push CI invokes only committed deterministic lanes and the scheduled provi
   const invokedFiles = [
     ['ci.yml', 'dom-tests/lane.js'],
     ['ci.yml', 'scripts/release-matrix.mjs'],
+    ['ci.yml', 'scripts/artifact-manifest.cjs'],
     ['live-providers.yml', 'scripts/live-market-probe.sh']
   ];
   for (const [workflow, relative] of invokedFiles) {
@@ -555,7 +641,7 @@ test('push CI invokes only committed deterministic lanes and the scheduled provi
   }
 });
 
-test('live provider probe preserves evidence and fails on transport or non-2xx responses', () => {
+test('live provider probe validates typed JSON, selects an expiration date, and fails closed', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'strikebench-live-probe-contract-'));
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
@@ -577,17 +663,42 @@ if [[ "\${FAKE_CURL_MODE:-ok}" == transport ]]; then
   exit 7
 fi
 mkdir -p "$(dirname "$out")"
-if [[ "$url" == *"/expirations"* ]]; then
-  printf '{"expirations":[]}' > "$out"
-else
+printf '%s\\n' "$url" >> "\${OUT_DIR}/fake-requests.log"
+if [[ -n "\${FAKE_MALFORMED_PATH:-}" && "$url" == *"\${FAKE_MALFORMED_PATH}"* ]]; then
+  printf '{"broken":' > "$out"
+elif [[ -n "\${FAKE_BAD_PATH:-}" && "$url" == *"\${FAKE_BAD_PATH}"* ]]; then
   printf '{"ok":true}' > "$out"
+else
+  case "$url" in
+    */api/health)
+      printf '{"ok":true,"startedAt":"2026-07-27T00:00:00Z","jarChangedSinceBoot":false}' > "$out" ;;
+    */api/config)
+      printf '{"fixturesOnly":false,"world":"observed","marketLane":"OBSERVED"}' > "$out" ;;
+    */api/status)
+      printf '{"ok":true,"asOf":"2026-07-27T00:00:00Z","domains":{}}' > "$out" ;;
+    */api/world)
+      printf '{"world":"observed","revision":7,"workspace":{}}' > "$out" ;;
+    */api/market/engine)
+      printf '{"enabled":true,"running":true,"symbols":[]}' > "$out" ;;
+    *"/api/quotes?symbols=NVDA")
+      printf '{"marketLane":"OBSERVED","quotes":[{"symbol":"NVDA","priced":true,"displayPrice":190.25,"source":"CBOE","freshness":"DELAYED"}]}' > "$out" ;;
+    */api/research/NVDA/history*)
+      printf '{"symbol":"NVDA","range":"6m","candles":[{"date":"2026-07-24","close":190.25}],"source":"YAHOO","freshness":"EOD","coverage":{}}' > "$out" ;;
+    */api/research/NVDA/news)
+      printf '{"symbol":"NVDA","items":[],"aggregate":{},"evidence":"UNAVAILABLE"}' > "$out" ;;
+    */api/research/NVDA/expirations)
+      printf '{"symbol":"NVDA","asOfDate":"2026-07-27","expirations":[{"date":"2026-09-18","tradingSessions":38,"calendarDays":53}]}' > "$out" ;;
+    *"/api/research/NVDA/chain?expiration=2026-09-18")
+      printf '{"underlying":"NVDA","expiration":"2026-09-18","underlyingPrice":190.25,"calls":[{"strike":190}],"puts":[{"strike":190}],"source":"CBOE","freshness":"DELAYED"}' > "$out" ;;
+    */api/research/NVDA)
+      printf '{"symbol":"NVDA","marketLane":"OBSERVED","quote":{"symbol":"NVDA","priced":true,"displayPrice":190.25},"evidence":{},"expirations":["2026-09-18"]}' > "$out" ;;
+    *)
+      printf '{"unexpected":"%s"}' "$url" > "$out" ;;
+  esac
 fi
 printf '%s' "\${FAKE_CURL_STATUS:-200}"
 `);
   fs.chmodSync(fakeCurl, 0o755);
-  const fakeJq = path.join(bin, 'jq');
-  fs.writeFileSync(fakeJq, '#!/usr/bin/env bash\nexit 0\n');
-  fs.chmodSync(fakeJq, 0o755);
   const script = path.resolve(__dirname, '..', 'scripts', 'live-market-probe.sh');
   const run = (name, extra) => spawnSync('bash', [script], {
     encoding: 'utf8',
@@ -605,6 +716,11 @@ printf '%s' "\${FAKE_CURL_STATUS:-200}"
     assert.equal(healthy.status, 0, healthy.stderr);
     assert.match(fs.readFileSync(path.join(dir, 'healthy', 'http-status.txt'), 'utf8'),
       /^200 \/api\/health/m);
+    assert.match(fs.readFileSync(path.join(dir, 'healthy', 'manifest.txt'), 'utf8'),
+      /selected_expiration=2026-09-18/);
+    assert.match(fs.readFileSync(path.join(dir, 'healthy', 'fake-requests.log'), 'utf8'),
+      /\/api\/research\/NVDA\/chain\?expiration=2026-09-18/,
+      'the typed expiration object must lead to an actual chain read');
 
     const non2xx = run('non2xx', { FAKE_CURL_STATUS: '503' });
     assert.equal(non2xx.status, 1);
@@ -617,6 +733,19 @@ printf '%s' "\${FAKE_CURL_STATUS:-200}"
     assert.equal(transport.status, 1);
     assert.match(transport.stderr, /transport failure \(curl exit 7; HTTP 000\)/);
     assert.match(transport.stderr, /failed closed/);
+
+    const semanticallyInvalid = run('semantic-invalid', { FAKE_BAD_PATH: '/api/quotes' });
+    assert.equal(semanticallyInvalid.status, 1);
+    assert.match(semanticallyInvalid.stderr,
+      /quote: HTTP 200 but response violates priced observed QuoteView/);
+    assert.equal(fs.readFileSync(path.join(dir, 'semantic-invalid', 'quote.json'), 'utf8'),
+      '{"ok":true}',
+      'the invalid 200 body remains preserved for diagnosis');
+
+    const malformed = run('malformed', { FAKE_MALFORMED_PATH: '/api/research/NVDA/news' });
+    assert.equal(malformed.status, 1);
+    assert.match(malformed.stderr,
+      /news: HTTP 200 but response violates typed ResearchNews/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

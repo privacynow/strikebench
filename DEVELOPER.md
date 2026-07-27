@@ -237,45 +237,44 @@ were doing and quietly prepares the next step.
 
 ```bash
 docker compose up -d db
-mvn -q clean package                                # JUnit + fresh release jar
+mvn -q clean
+mkdir -p target/surefire-reports
+node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
+mvn -q package                                      # JUnit + the one release jar
+git rev-parse HEAD > target/surefire-reports/source.sha
+node scripts/artifact-manifest.cjs write             # source SHA + exact jar SHA-256
 cd dom-tests
 npm ci
 npx playwright install chromium
 npm run test:ci                                     # complete deterministic browser matrix
-npm run test:live                                   # observed Cboe/EDGAR lane
 ```
 
-`npm run test:ci` runs these owned suites in order:
+`npm run test:ci` runs these three owned lanes in order:
 
 | Script | Contract |
 |---|---|
-| `test:defaults` | explicit declarations and absence of silent defaults |
-| `test:scenario` | one Scenario form/state across Beginner and Expert |
-| `test:spa` | mounted destination/component identity and render-call boundary |
-| `test:fixture` | full deterministic product journey and rendered-label audit |
-| `test:seeded` | grown-database product walk |
-| `test:audit` | responsive/geometry sweep |
-| `test:auth` | auth-on signed-out and signed-in ownership journey |
-| `test:bookrisk` | aggregate Book Risk lane |
-| `test:adoption` | adopted-position fresh-eyes/campaign review at 2560 and 390 |
-| `test:learn` | registry completeness and searchable Learn route |
+| `test:contracts` | deterministic source-served API, receipt, state, exact-string, and no-silent-default contracts |
+| `test:journeys` | the exact manifested release jar, a fresh database/private port per shard, canonical product journeys, and auth-on security |
+| `test:visual` | Home/Position/New Idea content-state geometry and action matrix at every required viewport |
 
-The DOM suites use Playwright against the real jar and isolated temporary databases. Page errors,
-5xx responses, horizontal overflow, clipped controls, and inaccessible geometry fail the owning
-suite. The responsive audit covers **2560**, 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS
-pixels. The fixture/grown-state suites and the live-provider suite test different evidence lanes;
-neither substitutes for the other.
+The journey suites use Playwright against the manifested jar and isolated temporary databases.
+The contract and visual lanes serve the committed frontend against typed deterministic fixtures.
+Page errors, 5xx responses, horizontal overflow, clipped controls, inaccessible geometry, skipped
+required capabilities, and zero-test shards fail their owning lane. The visual matrix covers
+**2560**, 2048, 2000×963, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels.
 
-CI records one TAP file per browser suite under `target/`, then runs
+CI records one TAP aggregate per browser lane under `target/`, then runs
 `node scripts/release-matrix.mjs`. The script sums actual Surefire and TAP reports, fails on any
-reported failure, writes `target/release-matrix.md`, and publishes it to the workflow summary.
+failure, skip, cancellation, TODO, missing capability, dirty source receipt, or artifact mismatch;
+it writes `target/release-matrix.md` and publishes it to the workflow summary.
 `.github/workflows/ci.yml` owns the deterministic release matrix on every push/PR;
-`live-providers.yml` owns the observed-provider run on its weekday schedule and manual dispatch.
+`live-providers.yml` owns the semantically validated Observed-provider run on its weekday schedule
+and manual dispatch. `scripts/live-market-probe.sh` is its read-only capture/validation owner.
 Exact counts come from those generated reports, never from a copied documentation total.
 
-After deleting or renaming test classes, use `mvn -q clean package`; incremental Maven output can
-retain stale compiled tests. Do not rebuild the jar while a browser suite is running: the app's
-changed-jar guard intentionally refuses the mismatched process.
+After deleting or renaming test classes, use the clean sequence above; incremental Maven output can
+retain stale compiled tests. Do not rebuild the jar while a browser suite is running. Journey
+tests verify the manifest before boot and the app's changed-jar guard rejects an on-disk mutation.
 
 Browser tabs share one origin-wide market/event stream pair through a short leader lease and
 `BroadcastChannel`; followers consume relayed frames and retain an ordinary polling fallback until

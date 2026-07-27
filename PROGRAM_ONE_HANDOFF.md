@@ -182,7 +182,12 @@ Start PostgreSQL and generate a clean backend artifact before browser work:
 
 ```bash
 docker compose up -d db
-mvn -q clean package
+mvn -q clean
+mkdir -p target/surefire-reports
+node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
+mvn -q package
+git rev-parse HEAD > target/surefire-reports/source.sha
+node scripts/artifact-manifest.cjs write
 ```
 
 Install and run the complete non-network browser matrix:
@@ -194,17 +199,14 @@ npx playwright install chromium
 npm run test:ci
 ```
 
-The current browser matrix comprises explicit-declaration/defaults, Scenario form, SPA identity,
-fixture journey, grown-state, responsive audit, auth-on, Book Risk, adoption review, and Learn
-coverage/route suites. The observed-provider suite is separate because it exercises live Cboe and
-EDGAR behavior:
+The current browser matrix has three canonical lanes: deterministic receipt/state contracts,
+packaged-jar product/auth journeys, and the complete visual/geometry matrix. The journey lane
+verifies the jar's source-SHA/SHA-256 manifest and never rebuilds it. Observed-provider readiness is
+separate because it contacts real services; `.github/workflows/live-providers.yml` invokes
+`scripts/live-market-probe.sh` on schedule/manual dispatch and fails on HTTP, JSON, or typed-contract
+violations.
 
-```bash
-cd dom-tests
-npm run test:live
-```
-
-CI writes each suite's TAP output under `target/dom-*.tap`, then runs:
+CI writes each lane's TAP aggregate under `target/dom-*.tap`, then runs:
 
 ```bash
 node scripts/release-matrix.mjs

@@ -15,11 +15,15 @@
 const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { verifyArtifactManifest } = require('../scripts/artifact-manifest.cjs');
 
 const HERE = __dirname;
 const ROOT = path.resolve(HERE, '..');
 const TARGET = path.join(ROOT, 'target');
 const JAR = process.env.JAR ? path.resolve(process.env.JAR) : path.join(TARGET, 'strikebench.jar');
+const JAR_MANIFEST = process.env.JAR_MANIFEST
+  ? path.resolve(process.env.JAR_MANIFEST)
+  : path.join(path.dirname(JAR), 'strikebench-artifact.json');
 const APP_SOURCES = path.join(ROOT, 'src', 'main');
 const LANES = ['contracts', 'journeys', 'visual'];
 /*
@@ -510,6 +514,17 @@ function requirePackagedJar() {
     die(`the journey lane runs the browser against the packaged jar, and ${rel(JAR)} does not exist.\n`
       + `      build it first: ${build}`);
   }
+  let receipt;
+  try {
+    receipt = verifyArtifactManifest(JAR, JAR_MANIFEST, {
+      expectedSha: SOURCE.sha || undefined,
+      requireClean: false
+    });
+  } catch (error) {
+    die(`the packaged journey artifact is not bound to this checkout: ${error.message}\n`
+      + `      rebuild and write its receipt: ${build} && `
+      + `node scripts/artifact-manifest.cjs write`);
+  }
   const jar = fs.statSync(JAR);
   // The browser drives the packaged application, not just its static files. A backend-only edit
   // can change every receipt the desk consumes, so Java, migrations and public resources all
@@ -519,7 +534,8 @@ function requirePackagedJar() {
     die(`${rel(newest.file)} is newer than ${rel(JAR)}. The journey lane would report on a jar that\n`
       + `      predates the desk it is verifying. Rebuild: ${build}`);
   }
-  process.stdout.write(`# packaged artifact ${rel(JAR)} (${jar.size} bytes, built ${jar.mtime.toISOString()})\n`);
+  process.stdout.write(`# packaged artifact ${rel(JAR)} (${jar.size} bytes, `
+    + `sha256 ${receipt.jarSha256}, source ${receipt.sourceSha})\n`);
 }
 
 /**
@@ -690,12 +706,16 @@ async function main() {
   if (lane === 'journeys') {
     requirePackagedJar();
     env.JAR = JAR; // pin the artifact so no shard can quietly fall back to serving raw source
+    env.JAR_MANIFEST = JAR_MANIFEST;
     shards = [];
     // Sequential shards: each suite owns a fresh database/server/browser. Product journeys may
     // retry once; deterministic packaged security contracts may not.
     for (const file of files) {
       const spec = { file, label: file, timeoutMs: 180_000 };
-      const first = score(await runShard(spec, env));
+      const first = score(await runShard(spec, {
+        ...env,
+        STRIKEBENCH_JOURNEY_ATTEMPT: '1'
+      }));
       if (first.ok) { shards.push(first); continue; }
       /*
        * dom-auth needs a jar and database, but it is a deterministic security contract. A rerun
@@ -707,7 +727,10 @@ async function main() {
         continue;
       }
       process.stdout.write(`# retrying ${file} once (packaged journey only)\n`);
-      const second = score(await runShard(spec, env));
+      const second = score(await runShard(spec, {
+        ...env,
+        STRIKEBENCH_JOURNEY_ATTEMPT: '2'
+      }));
       // The retry decides pass/fail, but the FIRST attempt's TAP is kept in the report. Replacing
       // it lost the only record of what actually failed, so a journey that fails then passes read
       // as a clean run and its diagnostics were gone — the opposite of what a retry is for.
@@ -716,7 +739,8 @@ async function main() {
         retried: true,
         tap: `# attempt 1 of ${file} FAILED — kept as evidence; the retry below decided this shard\n`
           + `${first.tap}# attempt 2 (retry) of ${file}\n${second.tap}`,
-        firstAttemptFail: first.fail + first.infrastructureFail + first.cancelled + first.todo
+        firstAttemptFail: first.fail + first.infrastructureFail + first.skipped
+          + first.cancelled + first.todo
       });
     }
   } else {

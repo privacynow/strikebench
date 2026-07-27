@@ -292,13 +292,17 @@ does not freeze a count that can become stale.
 
 | Release | Closure evidence |
 |---|---|
-| R0 | `dom.test.js` contracts-as-code and rendered-label tests; `no-silent-defaults.test.js` |
-| R1 | public Evidence handoff/fan persistence browser tests; `PlanDeclarationLifecycleTest`; `PlanStrategyDeclarationTest` |
+| R0 | `desk-backend.test.js`, `api-contract.test.js`, and `css-contract.test.js` contracts-as-code and exact rendered-receipt tests |
+| R1 | public evidence/fan persistence contracts; `PlanDeclarationLifecycleTest`; `PlanStrategyDeclarationTest` |
 | R2 | `PlanApiIntegrationTest` strategy competition, one-ensemble Outcomes, decision freeze, rehearsal/review cases |
-| R3 | `spa-identity.test.js`; canonical-route/same-hash Workspace browser cases; atomic broker promotion integration |
+| R3 | canonical Home/New Idea/Position identity in `desk.journey.test.js`; workspace contracts; atomic broker promotion integration |
 | R4 | `ObjectiveCoherenceTest`; `CampaignServiceTest`; `ScenarioCanvasTest`; composite and objective-lens suites |
-| R5 | `AlertCenterServiceTest`; `BookRiskServiceTest`; `BrokerStatementParserTest`; `BrokerImportServiceTest`; `PlanAdoptionBatchTest`; `dom-bookrisk.test.js` |
-| R6 | `NewsSentimentScorerTest`; `dom-learn-coverage.test.js`; `dom-learn.test.js`; `adoption-review.test.js`; `dom-audit.test.js`; `scenario-form.test.js` |
+| R5 | `AlertCenterServiceTest`; `BookRiskServiceTest`; broker/import/adoption tests; Position and populated-Book browser contracts |
+| R6 | `NewsSentimentScorerTest`; required-capability inventory; `desk.visual.test.js` full content-state/viewport matrix; packaged auth journey |
+
+The current executable browser gates are `test:contracts`, `test:journeys`, and `test:visual`.
+Historical suite names in the traceability narrative below record where a requirement originated;
+they are not current commands or release-lane identities.
 
 ### A.2 Battery traceability
 
