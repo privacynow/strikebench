@@ -3356,6 +3356,49 @@ async function declareWorkbench(page, opts = {}) {
     && window.homeIdea?.horizon && window.homeIdea?.riskMode);
 }
 
+function definedRiskCompensation(evaluationId, symbol = 'AAPL') {
+  return {
+    evaluationId,
+    symbol,
+    strategy: 'PUT_CREDIT_SPREAD',
+    label: 'Premium compensation',
+    score: 77.4,
+    premium: {
+      kind: 'DEFINED_RISK_PERIOD_PREMIUM',
+      premiumCents: 44700,
+      denominatorCents: 105000,
+      holdingPeriodDays: 28,
+      periodReturnPct: 42.5714285714,
+      annualizedPct: null,
+      basis: 'Net opening premium after commission divided by exact defined-risk economic exposure.'
+    },
+    components: []
+  };
+}
+
+async function scoutRowReceipt(row) {
+  return row.evaluate(node => ({
+    tag: node.tagName,
+    stage: node.getAttribute('data-scout-stage'),
+    evaluationId: node.getAttribute('data-auth-evaluation'),
+    resultKey: node.getAttribute('data-auth-result-key'),
+    analyzeSymbol: node.getAttribute('data-auth-analyze-symbol'),
+    name: node.querySelector('.opportunitymain>b')?.childNodes[0]?.textContent.trim(),
+    facts: Object.fromEntries(Array.from(node.querySelectorAll('[data-scout-fact]')).map(fact => [
+      fact.getAttribute('data-scout-fact'), fact.textContent.trim()
+    ])),
+    lanes: Object.fromEntries(Array.from(node.querySelectorAll('[data-scout-lane]')).map(lane => [
+      lane.getAttribute('data-scout-lane'), {
+        label: lane.querySelector('i')?.textContent.trim(),
+        value: lane.querySelector('b')?.textContent.trim(),
+        detail: lane.querySelector('small')?.textContent.trim()
+      }
+    ])),
+    action: node.querySelector('.opportunitygo')?.textContent.trim(),
+    text: node.textContent.replace(/\s+/g, ' ').trim()
+  }));
+}
+
 async function startNewIdea(page, symbol = 'AMD') {
   /* Reaching analysis is not a boot-race test. Wait on the governed universe receipt that makes
      the requested symbol actionable instead of hoping it arrives within the locator's default
@@ -5794,6 +5837,256 @@ test('Position composes ready and unavailable futures without desktop clipping o
     assert.deepEqual(unavailable.pageErrors, []);
   } finally {
     await unavailable.context.close();
+  }
+});
+
+test('Position keeps recorded payoff and saved futures when the current executable mark is unavailable', async () => {
+  const context = await browser.newContext({ viewport: { width: 2000, height: 963 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const documents = populatedBookDocuments();
+  const detailedTrade = JSON.parse(JSON.stringify(documents.tradeDetail.trade));
+  /* Reproduce a lean Book roster followed by the complete focused receipt. The recorded payoff
+     and scenarios deliberately exist only on GET /api/trades/:id; today's executable mark does
+     not exist at all. */
+  delete documents.activeTrades[0].terminalPayoff;
+  delete documents.activeTrades[0].spotPnl;
+  delete documents.activeTrades[0].scenarios;
+  documents.tradeDetail.trade = detailedTrade;
+  documents.tradeDetail.current = null;
+  documents.tradeDetail.analysis = lifecycleAnalysisFixture({
+    presentation: {
+      evidenceState: 'CURRENT_MARK_UNAVAILABLE',
+      actionable: false,
+      userFacingVerdict: 'No verdict · current mark unavailable',
+      userFacingStatus: 'Current mark unavailable',
+      tone: 'WARNING',
+      trigger: {
+        code: 'CURRENT_MARK_UNAVAILABLE',
+        label: 'Current mark unavailable',
+        dimension: 'MECHANICS',
+        status: 'BLOCKED',
+        basis: 'The exact executable close mark is missing from the backend receipt.'
+      },
+      sortPriority: 1
+    },
+    decision: {
+      verdict: 'NEEDS_EVIDENCE',
+      summary: 'NO VERDICT: current executable close evidence is unavailable; no action is recommended.'
+    }
+  });
+  documents.tradeDetail.analysis.lifecycle.currentChoice.close = {
+    executable: false, price: null, unavailableReason: 'The current executable close mark is unavailable.'
+  };
+  await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
+    await page.waitForSelector(`#authPay-${BOOK_TRADE_ID} path`);
+    await page.waitForTimeout(500);
+    const result = await page.evaluate(tradeId => {
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      const payoff = host?.querySelector(`#authPay-${CSS.escape(tradeId)}`);
+      const fan = host?.querySelector(`#authPath-${CSS.escape(tradeId)}`);
+      const stage = host?.querySelector('.authscenstage');
+      const legs = host?.querySelector('.authposlegs');
+      const legRows = Array.from(legs?.querySelectorAll('.legr') || []);
+      const text = host?.textContent.replace(/\s+/g, ' ').trim() || '';
+      const rect = node => node?.getBoundingClientRect();
+      const inside = (owner, node) => {
+        const a = rect(owner), b = rect(node);
+        return !!a && !!b && b.top >= a.top - 1 && b.bottom <= a.bottom + 1
+          && b.left >= a.left - 1 && b.right <= a.right + 1;
+      };
+      return {
+        text,
+        payoffPaths: payoff?.querySelectorAll('path').length || 0,
+        fanPaths: fan?.querySelectorAll('[data-fan-line]').length || 0,
+        scenarioState: stage?.getAttribute('data-position-scenario'),
+        legRows: legRows.length,
+        legsContained: legRows.every(row => inside(legs, row) && inside(host, row)),
+        legsBox: rect(legs) && {
+          top: Math.round(rect(legs).top), bottom: Math.round(rect(legs).bottom)
+        },
+        legBoxes: legRows.map(row => ({
+          top: Math.round(rect(row).top), bottom: Math.round(rect(row).bottom)
+        })),
+        hostClient: host?.clientHeight || 0,
+        hostScroll: host?.scrollHeight || 0,
+        payoffInside: inside(host, payoff),
+        fanInside: inside(stage, fan),
+        horizontalOverflow: document.documentElement.scrollWidth
+          > document.documentElement.clientWidth + 1
+      };
+    }, BOOK_TRADE_ID);
+    assert.ok(result.payoffPaths > 0,
+      'the entry-owned terminal payoff renders without a current executable close');
+    assert.ok(result.fanPaths > 0,
+      'the saved authoritative fan values the exact held package without a current mark');
+    assert.equal(result.scenarioState, 'ready');
+    assert.match(result.text, /No verdict · current mark unavailable/i);
+    assert.match(result.text, /exact executable close mark is missing/i);
+    assert.match(result.text, /Closing cash flow\s*unavailable/i);
+    assert.match(result.text, /Management unavailable/i);
+    assert.doesNotMatch(result.text,
+      /PositionAnimation|frame-selection|lifecycle contract|omitted the exact/i,
+      'backend contract vocabulary never becomes recovery copy');
+    assert.equal(result.horizontalOverflow, false);
+    assert.equal(result.hostScroll <= result.hostClient + 2, true,
+      `the unavailable-current-mark state fits the full desktop canvas (${JSON.stringify(result)})`);
+    assert.equal(result.payoffInside && result.fanInside, true);
+    assert.equal(result.legRows, 2);
+    assert.equal(result.legsContained, true,
+      `the unavailable-current-mark evidence receipt does not clip the exact held legs (${JSON.stringify(result)})`);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-current-mark-unavailable-2000x963.png`,
+        fullPage: true
+      });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(250);
+    const mobile = await page.evaluate(tradeId => {
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      const legs = Array.from(host?.querySelectorAll('.authposlegs .legr') || []);
+      const targets = Array.from(host?.querySelectorAll(
+        '[data-auth-position-retry],[data-auth-manage="resume"]') || []);
+      const verticalOwners = Array.from(host?.querySelectorAll(
+        '.authnews,.declegs,.authpathviewport,.authresearchgrid') || [])
+        .filter(node => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))
+        .map(node => String(node.className || ''));
+      return {
+        horizontalOverflow: document.documentElement.scrollWidth
+          > document.documentElement.clientWidth + 1,
+        hostOverflowY: host && getComputedStyle(host).overflowY,
+        verticalOwners,
+        legRows: legs.length,
+        targetHeights: targets.map(node => node.getBoundingClientRect().height),
+        payoffPaths: host?.querySelectorAll(`#authPay-${CSS.escape(tradeId)} path`).length || 0,
+        fanPaths: host?.querySelectorAll(`#authPath-${CSS.escape(tradeId)} [data-fan-line]`).length || 0
+      };
+    }, BOOK_TRADE_ID);
+    assert.equal(mobile.horizontalOverflow, false);
+    assert.equal(mobile.hostOverflowY, 'visible');
+    assert.deepEqual(mobile.verticalOwners, [],
+      'missing-current-mark Position uses the page as its only mobile scroll owner');
+    assert.equal(mobile.legRows, 2);
+    assert.equal(mobile.payoffPaths > 0 && mobile.fanPaths > 0, true);
+    assert.equal(mobile.targetHeights.every(height => height >= 40), true,
+      `mobile recovery/edit actions remain touch targets (${JSON.stringify(mobile.targetHeights)})`);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-current-mark-unavailable-390x844.png`,
+        fullPage: true
+      });
+    }
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position path refusal is compact, actionable, and never exposes transport contract language', async () => {
+  const context = await browser.newContext({ viewport: { width: 2000, height: 963 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    positionScenarioWrongProjectionGrid: true
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="error"]`);
+    const before = await page.evaluate(tradeId => {
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      const stage = host?.querySelector('.authscenstage');
+      return {
+        text: stage?.textContent.replace(/\s+/g, ' ').trim() || '',
+        height: stage?.getBoundingClientRect().height || 0,
+        hostClient: host?.clientHeight || 0,
+        hostScroll: host?.scrollHeight || 0,
+        retry: !!stage?.querySelector('[data-auth-position-futures-retry]'),
+        canonicalEditCount: document.querySelectorAll('[data-auth-manage="resume"]').length
+      };
+    }, BOOK_TRADE_ID);
+    assert.match(before.text, /Possible futures unavailable/i);
+    assert.doesNotMatch(before.text,
+      /PositionAnimation|frame-selection|lifecycle contract|omitted the exact/i);
+    assert.equal(before.retry, true);
+    assert.equal(before.canonicalEditCount, 1,
+      'path recovery reuses the one exact held-package edit journey');
+    assert.ok(before.height > 0 && before.height <= 110,
+      `a rejected saved fan is a compact recovery receipt (${before.height}px)`);
+    assert.equal(before.hostScroll <= before.hostClient + 2, true);
+
+    const requestsBefore = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).length;
+    await page.locator('[data-auth-position-futures-retry]').click();
+    await page.waitForFunction(tradeId => document.querySelector(
+      `#authScenStage-${tradeId}[data-position-scenario="error"]`),
+    BOOK_TRADE_ID);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const count = backend.requests.filter(row => row.method === 'POST'
+        && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).length;
+      if (count > requestsBefore) break;
+      await page.waitForTimeout(50);
+    }
+    const requestsAfter = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).length;
+    assert.ok(requestsAfter > requestsBefore, 'Retry paths repeats only the stored-fan valuation read');
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-path-refusal-2000x963.png`,
+        fullPage: true
+      });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(250);
+    const mobile = await page.evaluate(tradeId => {
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      const stage = host?.querySelector('.authscenstage');
+      const targets = Array.from(stage?.querySelectorAll('button') || []);
+      const verticalOwners = Array.from(host?.querySelectorAll(
+        '.authnews,.declegs,.authpathviewport,.authresearchgrid') || [])
+        .filter(node => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))
+        .map(node => String(node.className || ''));
+      return {
+        horizontalOverflow: document.documentElement.scrollWidth
+          > document.documentElement.clientWidth + 1,
+        hostOverflowY: host && getComputedStyle(host).overflowY,
+        verticalOwners,
+        stageHeight: stage?.getBoundingClientRect().height || 0,
+        targetHeights: targets.map(node => node.getBoundingClientRect().height)
+      };
+    }, BOOK_TRADE_ID);
+    assert.equal(mobile.horizontalOverflow, false);
+    assert.equal(mobile.hostOverflowY, 'visible');
+    assert.deepEqual(mobile.verticalOwners, []);
+    assert.ok(mobile.stageHeight <= 170,
+      `mobile path refusal remains a compact receipt (${mobile.stageHeight}px)`);
+    assert.equal(mobile.targetHeights.every(height => height >= 40), true,
+      `mobile path recovery actions remain touch targets (${JSON.stringify(mobile.targetHeights)})`);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-path-refusal-390x844.png`,
+        fullPage: true
+      });
+    }
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
   }
 });
 
@@ -10116,35 +10409,29 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
+  const exactPick = scoutFixtures.pick(0, { symbol: 'MU' });
+  const exactEvaluation = exactPick.horizons[0].candidates[0].evaluation;
+  const compensation = [definedRiskCompensation(exactEvaluation.id, 'MU')];
   const scoutResponse = {
     searched: 105,
-    picks: [{
-      symbol: 'MU',
-      opportunity: { score: 84, summary: 'Rich volatility with liquid income structures.' },
-      bestIdea: {
-        evaluationId: 'eval-mu',
-        family: 'CASH_SECURED_PUT', displayName: 'Cash-secured put',
-        economicVerdict: 'FAVORABLE', realizedVolEvAfterCostsCents: 16100
-      }
-    }],
-    compensation: [{ symbol: 'MU', strategy: 'CASH_SECURED_PUT', score: 77.4 }],
+    picks: [exactPick],
+    compensation,
     frontier: {
       schemaVersion: 'redeployment-frontier-v1',
       universe: { source: 'CONFIGURED', label: 'Active optionable universe', symbols: ['MU', 'AMD', 'NVDA'] },
       destinationAccountId: 'acct-practice',
       decisionRanking: [{
-        evaluationId: 'eval-mu', symbol: 'MU', strategy: 'CASH_SECURED_PUT',
+        evaluationId: exactEvaluation.id, symbol: 'MU', strategy: 'PUT_CREDIT_SPREAD',
         decisionScore: 84, economicVerdict: 'FAVORABLE', qualification: 'QUALIFIED',
+        identity: {
+          key: exactPick.bestIdea.resultKey,
+          evaluationId: exactEvaluation.id,
+          expiration: '2026-08-21'
+        },
         dataCompleteness: { status: 'OBSERVED_COMPLETE' },
         bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
       }],
-      compensationRanking: [{
-        symbol: 'MU', strategy: 'CASH_SECURED_PUT', score: 77.4,
-        components: [{
-          name: 'Annualized premium yield', weight: 0.35, value: 0.91,
-          note: '27.3%/yr on the collateral, IF repeatable'
-        }]
-      }],
+      compensationRanking: compensation,
       notes: ['Decision economics and compensation are independent rankings.']
     }
   };
@@ -10222,12 +10509,32 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
 
     assert.deepEqual(result, scoutResponse,
       'the bridge preserves the canonical Scout response for the Home lens');
-    assert.match(await page.locator('.opportunityrow').textContent(),
-      /MU.*Cash-secured put.*favorable.*qualified.*Book improves.*\+\$161.*after costs/i,
-      'Home turns the canonical frontier into a useful package and Book-fit lens');
-    assert.match(await page.locator('.opportunitycomp').textContent(),
-      /Premium richness.*separate view.*MU 77.*27\.3%\/yr on the collateral.*high premium alone never outranks sound economics/i,
-      'carry compensation remains visibly separate from the decision order');
+    const receipt = await scoutRowReceipt(page.locator('.opportunityrow').first());
+    assert.deepEqual(receipt.facts, {
+      expiry: 'Exp 2026-08-21',
+      net: 'Net credit $450',
+      capital: 'Capital $1,050',
+      'max-loss': 'Max loss $1,050'
+    }, 'Home shows the exact dated package facts supplied by its retained evaluation');
+    assert.deepEqual(receipt.lanes, {
+      economics: {
+        label: 'Economics', value: 'Favorable', detail: '+$74 after costs · Qualified'
+      },
+      evidence: {
+        label: 'Evidence & events', value: 'Observed Complete', detail: 'Crosses Earnings'
+      },
+      compensation: {
+        label: 'Compensation', value: '$447 premium',
+        detail: 'on $1,050 · 28d · 42.57% period · not annualized'
+      },
+      book: {
+        label: 'Book effect', value: 'Improves', detail: 'Destination-Book checks applied'
+      }
+    }, 'the four independent lanes retain their own authority and units');
+    assert.equal(receipt.tag, 'BUTTON');
+    assert.equal(receipt.action, 'Analyze →');
+    assert.equal(await page.locator('.opportunitycomp').count(), 0,
+      'the exact Compensation lane is the sole visible owner; no duplicate premium footer remains');
     const request = backend.requests.find(row => row.method === 'POST'
       && row.path === '/api/research/scout');
     assert.deepEqual(request.body, {
@@ -10279,7 +10586,7 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
         dataCompleteness: { status: 'OBSERVED_COMPLETE' },
         bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
       }],
-      compensationRanking: [],
+      compensationRanking: [definedRiskCompensation('evaluation_other_package', 'MU')],
       notes: ['Decision economics and compensation are independent rankings.']
     }
   };
@@ -10394,8 +10701,20 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
     assert.equal(progressive.marketVisible, true);
 
     await page.waitForSelector('#authHomeOpportunity .opportunityrows:not(.provisional) .opportunityrow');
-    assert.match(await page.locator('#authHomeOpportunity .opportunityrow').textContent(),
-      /MU.*Put credit spread.*favorable.*qualified.*Book improves.*\+\$74.*after costs.*Analyze/i);
+    const completedWithoutCompensation = await scoutRowReceipt(
+      page.locator('#authHomeOpportunity .opportunityrow').first());
+    assert.equal(completedWithoutCompensation.lanes.economics.value, 'Favorable');
+    assert.equal(completedWithoutCompensation.lanes.economics.detail,
+      '+$74 after costs · Qualified');
+    assert.equal(completedWithoutCompensation.lanes.book.value, 'Improves');
+    assert.deepEqual(completedWithoutCompensation.lanes.compensation, {
+      label: 'Compensation',
+      value: 'Unavailable',
+      detail: 'No compensation receipt for this package'
+    }, 'a same-symbol compensation row for another package is not substituted for this package');
+    assert.doesNotMatch(completedWithoutCompensation.text,
+      /\$0 premium|0\.00%|24\.6%\/yr gross/i,
+      'Home never substitutes zero or candidate yield for a missing compensation receipt');
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(100);
@@ -10504,12 +10823,7 @@ test('Scout lifecycle streams exact rows, cancels and fails without losing work,
       bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
     }],
     compensationRanking: [{
-      evaluationId: evaluation.id,
-      symbol: 'AAPL',
-      strategy: 'PUT_CREDIT_SPREAD',
-      label: 'Premium compensation',
-      score: 77.4,
-      components: []
+      ...definedRiskCompensation(evaluation.id, 'AAPL')
     }],
     notes: ['Decision economics and compensation are independent rankings.']
   };
@@ -10584,9 +10898,32 @@ test('Scout lifecycle streams exact rows, cancels and fails without losing work,
     assert.equal(await partialRow.getAttribute('data-auth-evaluation'), evaluation.id);
     assert.equal(await partialRow.getAttribute('data-auth-result-key'),
       partialPick.bestIdea.resultKey);
-    assert.match((await partialRow.textContent()).replace(/\s+/g, ' '),
-      /AAPL.*Put credit spread.*Favorable.*Exp 2026-08-21.*Net credit \$450.*Capital \$1,050.*Max loss \$1,050.*Premium 24\.6%\/yr gross.*Goal Income.*Observed evidence.*Book check pending.*\+\$74 after costs.*Analyze/i,
-      'the first streamed row is already an exact, actionable package receipt');
+    const partialReceipt = await scoutRowReceipt(partialRow);
+    assert.deepEqual(partialReceipt.facts, {
+      expiry: 'Exp 2026-08-21',
+      net: 'Net credit $450',
+      capital: 'Capital $1,050',
+      'max-loss': 'Max loss $1,050'
+    }, 'the first streamed row already contains exact package facts');
+    assert.deepEqual(partialReceipt.lanes, {
+      economics: {
+        label: 'Economics', value: 'Favorable', detail: '+$74 after costs'
+      },
+      evidence: {
+        label: 'Evidence & events', value: 'Observed', detail: 'Crosses Earnings'
+      },
+      compensation: {
+        label: 'Compensation', value: 'Unavailable',
+        detail: 'No compensation receipt for this package'
+      },
+      book: {
+        label: 'Book effect', value: 'Pending', detail: 'Applied after the scan completes'
+      }
+    }, 'a progressive row names all four lanes without inventing a compensation fallback');
+    assert.doesNotMatch(partialReceipt.text, /\$0 premium|0\.00%|24\.6%\/yr gross/i,
+      'missing compensation is unavailable, never zero or the candidate annualized-yield fallback');
+    assert.equal(partialReceipt.tag, 'BUTTON');
+    assert.equal(partialReceipt.action, 'Analyze →');
     assert.match((await page.locator('.scoutprogress').textContent()).replace(/\s+/g, ' '),
       /2 considered.*1 eligible.*3 priced.*1 retained/i,
       'the four monotonic counts are visible while the scan is still running');
@@ -10629,9 +10966,24 @@ test('Scout lifecycle streams exact rows, cancels and fails without losing work,
     assert.equal(await page.evaluate(() => window.__scoutAttempts), 3);
     const completeRow = page.locator('#authHomeOpportunity .opportunityrow').first();
     assert.equal(await completeRow.getAttribute('data-scout-stage'), 'complete');
-    assert.match((await completeRow.textContent()).replace(/\s+/g, ' '),
-      /AAPL.*Put credit spread.*Favorable.*Qualified.*Exp 2026-08-21.*Net credit \$450.*Capital \$1,050.*Max loss \$1,050.*Compensation 77.*Goal Income.*Observed complete evidence.*Book Improves.*\+\$74 after costs.*Analyze/i,
-      'completion enriches the same exact package with final compensation and Book receipts');
+    const completeReceipt = await scoutRowReceipt(completeRow);
+    assert.deepEqual(completeReceipt.facts, partialReceipt.facts,
+      'completion enriches the same exact package instead of replacing it');
+    assert.deepEqual(completeReceipt.lanes, {
+      economics: {
+        label: 'Economics', value: 'Favorable', detail: '+$74 after costs · Qualified'
+      },
+      evidence: {
+        label: 'Evidence & events', value: 'Observed Complete', detail: 'Crosses Earnings'
+      },
+      compensation: {
+        label: 'Compensation', value: '$447 premium',
+        detail: 'on $1,050 · 28d · 42.57% period · not annualized'
+      },
+      book: {
+        label: 'Book effect', value: 'Improves', detail: 'Destination-Book checks applied'
+      }
+    }, 'completion fills compensation and Book lanes from their exact backend receipts');
     assert.match((await page.locator('#authHomeOpportunity').textContent()).replace(/\s+/g, ' '),
       /5 considered.*4 eligible.*9 priced.*1 retained/i);
 
@@ -12446,8 +12798,10 @@ test('chain slices use a served anchor or render an explicitly unanchored listed
         unanchoredRows: window.authHomeOptionRows(unanchored, null).map(row => row.strike),
         anchoredRows: window.authHomeOptionRows(anchored, null).map(row => row.strike),
         unanchoredMentions: /price anchor unavailable/i.test(unanchoredHtml),
-        unanchoredAtm: /class="atm"/.test(unanchoredHtml),
-        anchoredAtm: /class="atm"/.test(anchoredHtml)
+        /* The strike is now its own actionable control inside the chain row. Assert the
+           semantic class token rather than the old one-class element serialization. */
+        unanchoredAtm: /class="[^"]*\batm\b[^"]*"/.test(unanchoredHtml),
+        anchoredAtm: /class="[^"]*\batm\b[^"]*"/.test(anchoredHtml)
       };
     });
     assert.deepEqual(result.unanchoredRows, [40, 50, 60, 70, 80, 90, 100, 110, 120],

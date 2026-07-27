@@ -653,6 +653,30 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
     + `${clip.client} — "${clip.text}"`));
   (await ideaMajorOverlaps(page)).forEach(hit =>
     failures.push(`${prefix}: major regions overlap: ${hit}`));
+  const evidenceCollisions = await page.evaluate(() => Array.from(
+    document.querySelectorAll('#decideStage .evgrid .evrow')).flatMap((row, index) => {
+    const key = row.querySelector('.evk');
+    const value = row.querySelector('.evtxt');
+    if (!key || !value) return [];
+    const rowBox = row.getBoundingClientRect();
+    const keyBox = key.getBoundingClientRect();
+    const valueBox = value.getBoundingClientRect();
+    const collides = keyBox.right > valueBox.left + 1;
+    const escapes = keyBox.left < rowBox.left - 1 || valueBox.right > rowBox.right + 1;
+    return collides || escapes ? [{
+      index,
+      key: (key.textContent || '').trim(),
+      value: (value.textContent || '').trim(),
+      keyRight: Math.round(keyBox.right),
+      valueLeft: Math.round(valueBox.left),
+      rowLeft: Math.round(rowBox.left),
+      rowRight: Math.round(rowBox.right),
+      valueRight: Math.round(valueBox.right)
+    }] : [];
+  }));
+  evidenceCollisions.forEach(collision =>
+    failures.push(`${prefix}: Evidence row ${collision.index + 1} overlaps or escapes: `
+      + `${JSON.stringify(collision)}`));
 
   const legs = await page.evaluate(() => Array.from(
     document.querySelectorAll('#decideStage .declegpanel .legr')).map(row => {
@@ -1201,26 +1225,38 @@ test('one-position Home fan uses the shared path kernel and keeps its exact fact
     `one-position Book fan/facts diverge across desktop sizes:\n  ${failures.join('\n  ')}`);
 });
 
-test('Home chain rows preview and keyboard-pin the existing market chart rail', async () => {
+test('Home chain books stage exact contracts while strike controls preview and pin the chart', async () => {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   try {
-    await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'idle' });
+    await installWorld(page, {
+      positions: 4, workingIdeas: 5, scout: 'idle',
+      idea: { primaryLegCount: 4 }
+    });
     await bootHome(page);
+    for (const selector of [
+      '[data-auth-scout-goal="INCOME"]',
+      '[data-auth-workbench-view="Neutral"]',
+      '[data-auth-workbench-horizon="45 trading days"]',
+      '[data-auth-workbench-risk="Balanced"]'
+    ]) {
+      await page.locator(selector).click();
+    }
     const row = page.locator('#chainBand .authchainrow[data-chain-k]').first();
-    await row.waitFor();
+    const strikeButton = row.locator('[data-chain-pin]');
+    await strikeButton.waitFor();
     const strike = await row.getAttribute('data-chain-k');
 
-    await row.focus();
+    await strikeButton.focus();
     assert.match(await page.locator('#chainBand [data-hist-cross]').textContent(),
       new RegExp(`strike\\s+${String(strike).replace('.', '\\.')}`, 'i'),
       'keyboard focus previews the selected strike on the market chart');
 
-    await row.press('Enter');
-    assert.equal(await row.getAttribute('aria-pressed'), 'true',
+    await strikeButton.press('Enter');
+    assert.equal(await strikeButton.getAttribute('aria-pressed'), 'true',
       'Enter pins the focused chain strike');
     assert.equal(await row.evaluate(node => node.classList.contains('on')), true,
       'the pinned strike remains visibly selected');
@@ -1229,14 +1265,35 @@ test('Home chain rows preview and keyboard-pin the existing market chart rail', 
       new RegExp(`strike\\s+${String(strike).replace('.', '\\.')}`, 'i'),
       'the chart rail survives focus leaving the pinned row');
 
-    await row.focus();
-    await row.press('Enter');
-    assert.equal(await row.getAttribute('aria-pressed'), 'false',
+    await strikeButton.focus();
+    await strikeButton.press('Enter');
+    assert.equal(await strikeButton.getAttribute('aria-pressed'), 'false',
       'choosing the same strike again unpins it');
     assert.equal(await page.locator('#chainBand [data-hist-cross]').textContent(), '',
       'unpinning clears the shared chart rail');
-    assert.equal(await page.locator('#stage.lv-book').count(), 1,
-      'chain inspection remains on Home and does not invent a second journey');
+    const buyCall = row.locator('[data-chain-open="BUY_CALL"]');
+    await buyCall.click();
+    await page.locator('#decideStage.on').waitFor();
+    try {
+      await page.waitForFunction(expected => {
+        const leg = document.querySelector('#decideStage .declegs .legr');
+        return leg && leg.textContent.includes(String(expected));
+      }, strike, { timeout: 10000 });
+    } catch (error) {
+      const diagnosis = await page.evaluate(() => ({
+        pendingFork: window.AUTH_PENDING_FORK,
+        phase: window.decide && window.decide.backendPhase,
+        mode: window.decide && window.decide.mode,
+        draftError: window.decide && window.decide.draftError,
+        text: document.querySelector('#decideStage')?.innerText.slice(0, 2000)
+      }));
+      throw new Error(`exact Home chain leg did not arrive: ${JSON.stringify(diagnosis)}`, { cause: error });
+    }
+    assert.match(await page.locator('#decideStage .declegs .legr').first().textContent(),
+      /BUY\s*CALL/i, 'the ask action stages a buy call, not an ambiguous strike-only idea');
+    assert.equal(await page.locator('#decideStage .declegs .legr').first().textContent()
+      .then(text => text.includes(String(strike))), true,
+    'the exact Home strike survives into canonical New Idea');
     assert.deepEqual(pageErrors, [], `chain inspection emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();

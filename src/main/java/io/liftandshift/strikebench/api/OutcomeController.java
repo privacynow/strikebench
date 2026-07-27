@@ -228,12 +228,18 @@ final class OutcomeController {
 
     private long scenarioRoundTripFees(
             io.liftandshift.strikebench.sim.PathPosition position, int qty) {
-        long contracts = (position == null ? List.<Leg>of() : position.legs())
-                .stream().filter(l -> !l.isStock())
-                .mapToLong(l -> Math.max(1, l.ratio())).sum() * Math.max(1, qty);
         // THE one fee formula (also correctly charges no option order fee on a stock-only package).
         return io.liftandshift.strikebench.util.Fees.roundTripCents(
-                contracts, cfg.feePerContractCents(), cfg.feePerOrderCents());
+                scenarioOptionContracts(position, qty),
+                cfg.feePerContractCents(), cfg.feePerOrderCents());
+    }
+
+    static long scenarioOptionContracts(
+            io.liftandshift.strikebench.sim.PathPosition position, int qty) {
+        if (position == null) {
+            throw new IllegalArgumentException("scenario fee calculation requires a position");
+        }
+        return io.liftandshift.strikebench.util.Fees.optionContracts(position.legs(), qty);
     }
 
     /**

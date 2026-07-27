@@ -228,6 +228,7 @@ test('the shipped jar completes Home to canonical New Idea without a source-serv
   governedSymbol = await openCanonicalIdea(page);
 
   const receipt = await page.evaluate(() => ({
+    planId: window.DeskBackend.state().plan.id,
     planSymbol: window.DeskBackend.state().plan.symbol,
     selectedId: window.DeskBackend.state().selected?.id,
     candidateId: window.decide.candId,
@@ -252,12 +253,57 @@ test('the shipped jar completes Home to canonical New Idea without a source-serv
   assert.ok(receipt.candidateRows > 0);
   assert.ok(receipt.legRows > 0);
 
+  await page.waitForSelector('#mcFan .fan-interaction');
+  const visibleAnalysis = await page.evaluate(() => {
+    const fan = document.querySelector('#mcFan');
+    const stats = document.querySelector('.ensembleresult .mcstats');
+    const wrap = document.querySelector('.decwrap');
+    const fanBox = fan?.getBoundingClientRect();
+    const statsBox = stats?.getBoundingClientRect();
+    const scrollingAncestors = [];
+    for (let node = fan?.parentElement; node && !node.classList.contains('decgrid');
+      node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (['auto', 'scroll'].includes(style.overflowY)
+          && node.scrollHeight > node.clientHeight + 2) {
+        scrollingAncestors.push(node.className || node.tagName);
+      }
+    }
+    return {
+      fanWidth: fanBox?.width || 0,
+      fanHeight: fanBox?.height || 0,
+      statsVisible: !!statsBox && statsBox.width > 0 && statsBox.height > 0,
+      scrollingAncestors,
+      deskScroll: wrap ? wrap.scrollHeight - wrap.clientHeight : null,
+      pageScroll: document.documentElement.scrollHeight - document.documentElement.clientHeight
+    };
+  });
+  assert.ok(visibleAnalysis.fanWidth > 300 && visibleAnalysis.fanHeight > 180,
+    `the shipped Evidence & Paths fan must be a visible analysis surface: ${JSON.stringify(visibleAnalysis)}`);
+  assert.equal(visibleAnalysis.statsVisible, true,
+    'the fan statistics remain visible with the plot');
+  assert.deepEqual(visibleAnalysis.scrollingAncestors, [],
+    'the shipped fan cannot be buried in a nested desktop scroller');
+  assert.ok(visibleAnalysis.deskScroll <= 2 && visibleAnalysis.pageScroll <= 2,
+    `canonical New Idea must fit the 1920x1080 desktop canvas: ${JSON.stringify(visibleAnalysis)}`);
+
   await page.locator('[data-dec="inspect"][data-inspect="fit"]').click();
   await page.waitForFunction(() =>
     document.querySelector('[data-dec="inspect"][data-inspect="fit"]')?.classList.contains('on'));
   await page.locator('[data-dec="back"]').first().click();
   await page.waitForSelector('#board');
   await page.waitForFunction(() => window.decide == null);
+
+  const workingIdea = page.locator(`[data-auth-plan-id="${receipt.planId}"]`);
+  await workingIdea.waitFor();
+  await workingIdea.click();
+  await page.waitForFunction(expected => window.decide?.backendPhase === 'ready'
+      && String(window.DeskBackend.state().plan?.id || '') === String(expected),
+    receipt.planId, { timeout: 90_000 });
+  assert.equal(await page.evaluate(() => window.decide.sym), governedSymbol,
+    'the Home working-idea row resumes the same durable Plan rather than starting a lookalike idea');
+  await page.locator('[data-dec="back"]').first().click();
+  await page.waitForFunction(() => window.decide == null && document.querySelector('#board'));
 
   assert.deepEqual(app.pageErrors, [], `packaged Desk page errors:\n${app.pageErrors.join('\n')}`);
   assert.deepEqual(app.serverErrors, [],
