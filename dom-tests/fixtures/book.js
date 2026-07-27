@@ -121,33 +121,6 @@ function tradeView(overrides) {
     dataProvenance: o.dataProvenance,
     dataAge: o.dataAge,
     dataSource: o.dataSource,
-    unrealizedPnlCents: o.unrealizedPnlCents,
-    decisionUnrealizedPnlCents: o.unrealizedPnlCents,
-    currentUnderlyingCents: o.entryUnderlyingCents,
-    currentClosePrice: packagePrice({
-      quantity: o.qty,
-      optionNetPremiumCents: math.optionNetPremiumCents(legList, o.qty),
-      stockCashFlowCents: math.stockCashFlowCents(legList, o.qty),
-      openingFeesCents: fees,
-      estimatedRoundTripFeesCents: null,
-      executableNetCents: entryNet,
-      valuationBasis: 'EXECUTABLE_BOOK',
-      executability: 'IMMEDIATE',
-      source: o.dataSource,
-      freshness: o.dataAge,
-      observedAt: wire.OBSERVED_AT_MS,
-      fingerprint: `closing-${o.id}-${entryNet}`,
-      feeSide: 'CLOSING'
-    }),
-    indicativeUnrealizedPnlCents: o.unrealizedPnlCents,
-    indicativeDecisionUnrealizedPnlCents: o.unrealizedPnlCents,
-    currentMarketAvailability: currentMarketAvailability({
-      quoteAvailable: true,
-      closeAvailable: true,
-      decisionPnlAvailable: o.unrealizedPnlCents != null,
-      popAvailable: o.popEntry != null,
-      greeksAvailable: o.withReceipts
-    }),
     // The held-line display receipts. A mixed-expiry line carries an explicitly UNAVAILABLE
     // terminal payoff and no story checkpoints — the state that must render as "unavailable" with
     // a reason rather than falling back to a browser-drawn curve (§3.2).
@@ -155,7 +128,6 @@ function tradeView(overrides) {
       : mixedExpiry
         ? golden.goldenTerminalPayoff({ available: false })
         : heldTerminalPayoff(legList, o.qty, o.entryUnderlyingCents, o.payoffSpanPct),
-    greeks: o.withReceipts ? golden.goldenGreeks() : null,
     scenarios: o.withReceipts && !mixedExpiry
       ? {
         available: true,
@@ -174,7 +146,43 @@ function tradeView(overrides) {
           : 'Named held-position scenarios were not requested.'
       }
   };
-  return wire.nonNull(trade);
+  const row = wire.nonNull(trade);
+  const currentClosePrice = packagePrice({
+    quantity: o.qty,
+    optionNetPremiumCents: math.optionNetPremiumCents(legList, o.qty),
+    stockCashFlowCents: math.stockCashFlowCents(legList, o.qty),
+    openingFeesCents: fees,
+    estimatedRoundTripFeesCents: null,
+    executableNetCents: entryNet,
+    valuationBasis: 'EXECUTABLE_BOOK',
+    executability: 'IMMEDIATE',
+    source: o.dataSource,
+    freshness: o.dataAge,
+    observedAt: wire.OBSERVED_AT_MS,
+    fingerprint: `closing-${o.id}-${entryNet}`,
+    feeSide: 'CLOSING'
+  });
+  const availability = currentMarketAvailability({
+    quoteAvailable: true,
+    closeAvailable: true,
+    decisionPnlAvailable: o.unrealizedPnlCents != null,
+    popAvailable: o.popEntry != null,
+    greeksAvailable: o.withReceipts
+  });
+  // These are fixture-source facts used to compose the canonical sibling MarkView. They are
+  // deliberately non-enumerable: TradeView no longer carries current-market aliases, so neither
+  // Object.keys nor JSON serialization can publish them on the roster wire.
+  Object.defineProperties(row, {
+    unrealizedPnlCents: { value: o.unrealizedPnlCents, enumerable: false },
+    decisionUnrealizedPnlCents: { value: o.unrealizedPnlCents, enumerable: false },
+    currentUnderlyingCents: { value: o.entryUnderlyingCents, enumerable: false },
+    currentClosePrice: { value: currentClosePrice, enumerable: false },
+    indicativeUnrealizedPnlCents: { value: o.unrealizedPnlCents, enumerable: false },
+    indicativeDecisionUnrealizedPnlCents: { value: o.unrealizedPnlCents, enumerable: false },
+    currentMarketAvailability: { value: availability, enumerable: false },
+    greeks: { value: o.withReceipts ? golden.goldenGreeks() : null, enumerable: false }
+  });
+  return row;
 }
 
 /** `TradeService.CurrentMarketAvailability`, with one reason for every unavailable component. */
@@ -347,8 +355,18 @@ function positions(count, options) {
 }
 
 /** `ApiResponses.TradePage` — the envelope `/api/trades` returns. */
+function tradeViewContract(trade) {
+  const row = Object.assign({}, trade);
+  [
+    'unrealizedPnlCents', 'decisionUnrealizedPnlCents', 'currentUnderlyingCents',
+    'currentClosePrice', 'indicativeUnrealizedPnlCents',
+    'indicativeDecisionUnrealizedPnlCents', 'currentMarketAvailability', 'greeks'
+  ].forEach(field => delete row[field]);
+  return row;
+}
+
 function tradePage(trades, overrides) {
-  const rows = trades || [];
+  const rows = (trades || []).map(tradeViewContract);
   return Object.assign({ trades: rows, total: rows.length, page: 0, size: 100 }, overrides || {});
 }
 
@@ -645,7 +663,7 @@ function tradeDetail(trade) {
       price: String(point.price), profitCents: point.profitCents
     })) : [];
   return {
-    trade: trade,
+    trade: tradeViewContract(trade),
     current: current,
     marksHistory: [
       Object.assign({}, current, { ts: '2026-07-23T20:00:00Z',
@@ -665,21 +683,22 @@ function tradeDetail(trade) {
  */
 function bookDocuments(options) {
   const settings = Object.assign({ positions: 1, shares: 0 }, options || {});
-  const trades = positions(settings.positions);
+  const sourceTrades = positions(settings.positions);
+  const trades = sourceTrades.map(tradeViewContract);
   const shares = sharePositions(settings.shares);
-  const summary = portfolioSummary(trades, shares);
-  const greeks = portfolioGreeks(trades);
-  const heat = portfolioHeat(trades, summary);
+  const summary = portfolioSummary(sourceTrades, shares);
+  const greeks = portfolioGreeks(sourceTrades);
+  const heat = portfolioHeat(sourceTrades, summary);
   return {
     activeTrades: trades,
-    tradePage: tradePage(trades),
+    tradePage: tradePage(sourceTrades),
     sharePositions: shares,
     positionBook: { positions: shares, note: shares.length ? null : 'No share positions.' },
     summary: summary,
     heat: heat,
     greeks: greeks,
-    bookRisk: bookRisk(greeks, trades, heat, wire.ACCOUNT_ID),
-    tradeDetails: trades.reduce((byId, trade) => {
+    bookRisk: bookRisk(greeks, sourceTrades, heat, wire.ACCOUNT_ID),
+    tradeDetails: sourceTrades.reduce((byId, trade) => {
       byId[trade.id] = tradeDetail(trade);
       return byId;
     }, {})

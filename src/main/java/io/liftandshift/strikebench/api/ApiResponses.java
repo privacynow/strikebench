@@ -313,9 +313,13 @@ public final class ApiResponses {
     public record Jobs<T>(T jobs) {}
     public record Account<T>(T account) {}
     public record AccountLedger<T, U>(T account, U ledger) {}
-    public record Expirations<T>(String symbol, String asOfDate, T expirations) {}
+    public record Expirations<T>(String symbol, String asOfDate, T expirations,
+                                 ExpirationSelection selection) {}
     /** One expiration with its distance in both units, so no consumer has to count days itself. */
     public record ExpirationDistance(String date, int tradingSessions, int calendarDays) {}
+    /** Server-owned listed-contract choice; consumers render it and never re-select from rows. */
+    public record ExpirationSelection(String date, Integer requestedHorizonSessions,
+                                      Integer tradingSessions, Integer calendarDays, String basis) {}
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
     /**

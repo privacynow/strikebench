@@ -425,10 +425,16 @@ class ApiIntegrationTest {
                 .isEqualTo(created.at("/trade/entryPrice/grossPackageNetCents"));
         assertThat(row.has("entryNetPremiumCents")).isFalse();
         assertThat(row.has("feesOpenCents")).isFalse();
-        assertThat(row.at("/currentMarketAvailability/quoteAvailable").isBoolean()).isTrue();
-        assertThat(row.at("/currentMarketAvailability/closeAvailable").isBoolean()).isTrue();
-        assertThat(row.at("/currentMarketAvailability/popAvailable").isBoolean()).isTrue();
-        assertThat(row.at("/currentMarketAvailability/greeksAvailable").isBoolean()).isTrue();
+        // The roster carries durable trade facts and independent held-display receipts. Live
+        // mark/POP/Greeks/close-price facts have one wire owner: detail.current.
+        assertThat(row.has("unrealizedPnlCents")).isFalse();
+        assertThat(row.has("decisionUnrealizedPnlCents")).isFalse();
+        assertThat(row.has("currentUnderlyingCents")).isFalse();
+        assertThat(row.has("currentClosePrice")).isFalse();
+        assertThat(row.has("indicativeUnrealizedPnlCents")).isFalse();
+        assertThat(row.has("indicativeDecisionUnrealizedPnlCents")).isFalse();
+        assertThat(row.has("currentMarketAvailability")).isFalse();
+        assertThat(row.has("greeks")).isFalse();
         // B2: the roster row itself carries the exact terminal-payoff curve (>= 2 points) so the
         // held bloom/spectrum interpolates a server receipt, never a client leg engine.
         JsonNode rowPayoff = list.at("/trades/0/terminalPayoff");
@@ -436,13 +442,6 @@ class ApiIntegrationTest {
         assertThat(rowPayoff.get("schemaVersion").asText()).isEqualTo("risk-terminal-payoff-1");
         assertThat(rowPayoff.get("points").size()).isGreaterThanOrEqualTo(2);
         assertThat(rowPayoff.at("/points/0/price").asDouble()).isPositive();
-        // §5.3: held greeks in the ONE canonical shape ride the roster row (short-put-spread => positive delta).
-        JsonNode rowGreeks = list.at("/trades/0/greeks");
-        assertThat(rowGreeks.get("deltaShares").asDouble()).isGreaterThan(0);
-        assertThat(rowGreeks.has("thetaCentsPerDay")).isTrue();
-        assertThat(rowGreeks.has("vegaCentsPerPoint")).isTrue();
-        assertThat(rowGreeks.has("gammaSharesPerDollar")).isTrue();
-        assertOnlyCanonicalGreeks(list);
         // §5.4: the roster row also carries the ENGINE's "if price holds" figure, with the spot and
         // the basis it quotes — the browser no longer interpolates that number itself.
         JsonNode rowSpotPnl = list.at("/trades/0/spotPnl");
@@ -467,9 +466,20 @@ class ApiIntegrationTest {
                         .movePointRight(2).longValueExact());
         assertOnlyCanonicalGreeks(detail);
         assertThat(detail.at("/current/popNow").asDouble()).isBetween(0.0, 1.0);
+        assertThat(detail.at("/current/greeks/deltaShares").isNumber()).isTrue();
+        assertThat(detail.at("/current/currentClosePrice/fingerprint").asText()).isNotBlank();
+        assertThat(detail.at("/current/currentClosePrice/valuationBasis").asText()).isNotBlank();
         assertThat(detail.at("/current/availability/quoteAvailable").asBoolean()).isTrue();
         assertThat(detail.at("/current/availability/popAvailable").asBoolean()).isTrue();
         assertThat(detail.at("/current/availability/greeksAvailable").asBoolean()).isTrue();
+        assertThat(detail.at("/trade").has("unrealizedPnlCents")).isFalse();
+        assertThat(detail.at("/trade").has("decisionUnrealizedPnlCents")).isFalse();
+        assertThat(detail.at("/trade").has("currentUnderlyingCents")).isFalse();
+        assertThat(detail.at("/trade").has("currentClosePrice")).isFalse();
+        assertThat(detail.at("/trade").has("indicativeUnrealizedPnlCents")).isFalse();
+        assertThat(detail.at("/trade").has("indicativeDecisionUnrealizedPnlCents")).isFalse();
+        assertThat(detail.at("/trade").has("currentMarketAvailability")).isFalse();
+        assertThat(detail.at("/trade").has("greeks")).isFalse();
         assertThat(detail.at("/analysis/lifecycle/history/available").asBoolean()).isTrue();
         assertThat(detail.at("/analysis/lifecycle/currentChoice/freshEyesQuestion").asText())
                 .contains("Would you open the exact position");
@@ -625,19 +635,16 @@ class ApiIntegrationTest {
 
         assertOnlyCanonicalGreeks(greeks);
 
-        // §5.3: the detail's position greeks, its per-leg rows and the trade view all speak the ONE
-        // canonical shape — the same four names in the same units — so no surface has to choose.
+        // §5.3: the detail's current position Greeks and its per-leg rows speak the ONE canonical
+        // shape. TradeView carries durable trade facts and does not mirror current-market Greeks.
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());
-        assertThat(detail.at("/current/greeks/deltaShares").asDouble()).isGreaterThan(0);
+        JsonNode canonical = detail.at("/current/greeks");
+        assertThat(canonical.get("deltaShares").asDouble()).isGreaterThan(0);
         assertThat(detail.at("/current/legGreeks").size()).isEqualTo(1);
         JsonNode legRow = detail.at("/current/legGreeks/0");
         assertThat(legRow.at("/greeks/deltaShares").asDouble()).isGreaterThan(0);
         assertThat(legRow.has("thetaCentsPerSharePerDay")).isFalse();
-        JsonNode canonical = detail.at("/trade/greeks");
-        assertThat(canonical.get("deltaShares").asDouble())
-                .isEqualTo(detail.at("/current/greeks/deltaShares").asDouble());
-        assertThat(canonical.get("thetaCentsPerDay").asDouble())
-                .isEqualTo(detail.at("/current/greeks/thetaCentsPerDay").asDouble());
+        assertThat(detail.at("/trade").has("greeks")).isFalse();
         // The leg rows add up to the position figure in that same unit.
         assertThat(legRow.at("/greeks/thetaCentsPerDay").asDouble())
                 .isEqualTo(canonical.get("thetaCentsPerDay").asDouble());

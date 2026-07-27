@@ -154,7 +154,6 @@ final class TradeController {
     }
     record HeldReceipts(
             io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff terminalPayoff,
-            io.liftandshift.strikebench.model.GreeksView greeks,
             ApiResponses.HeldScenarios scenarios,
             ApiResponses.HeldSpotPnl spotPnl) {}
     private record StockOrderRequest(String symbol, Long shares) {}
@@ -190,42 +189,19 @@ final class TradeController {
         for (TradeRecord trade : result.trades()) {
             TradeView row = TradeView.of(trade);
             if (TradeRecord.ACTIVE.equals(trade.status())) {
-                TradeService.MarkView mark = null;
                 Quote positionQuote = null;
                 try {
-                    mark = trades.currentMark(trade.id());
-                    if (mark == null) {
-                        row = row.withCurrentMark(null, null,
-                                null, null, null, null,
-                                TradeService.CurrentMarketAvailability.unavailable(
-                                        "The current market service returned no receipt for this position."));
-                    } else {
-                        row = attachCurrentMark(row, mark);
-                        positionQuote = mark.underlyingQuote();
-                    }
-                } catch (Exception failure) {
-                    String reason = failure.getMessage() == null || failure.getMessage().isBlank()
-                            ? "The current market receipt for this position could not be produced."
-                            : failure.getMessage();
-                    row = row.withCurrentMark(null, null, null, null, null, null,
-                            TradeService.CurrentMarketAvailability.unavailable(reason));
-                    log.warn("Current paper-trade list mark is unavailable for {}", trade.id());
-                    log.debug("Paper-trade list mark detail for " + trade.id(), failure);
+                    positionQuote = trades.currentUnderlyingQuote(trade.id()).orElse(null);
+                } catch (RuntimeException failure) {
+                    log.debug("Paper-trade list underlying quote unavailable for " + trade.id(),
+                            failure);
                 }
-                if (positionQuote == null) {
-                    try {
-                        positionQuote = trades.currentUnderlyingQuote(trade.id()).orElse(null);
-                    } catch (RuntimeException failure) {
-                        log.debug("Paper-trade list underlying quote unavailable for " + trade.id(),
-                                failure);
-                    }
-                }
-                // The held bloom/spectrum and Greeks strip read exact server receipts off the
-                // roster row. Each receipt is composed independently: failure to produce one
-                // visualization must never erase the valid siblings already owned by the engine.
-                HeldReceipts held = heldReceipts(trade, mark, positionQuote, true);
-                row = row.withHeldReceipts(held.terminalPayoff(), held.greeks(),
-                        held.scenarios(), held.spotPnl());
+                // The held bloom/spectrum reads exact server receipts off the roster row. Each
+                // receipt is composed independently: failure to produce one visualization must
+                // never erase the valid siblings already owned by the engine. Current Greeks
+                // remain exclusively on TradeDetail.current.
+                HeldReceipts held = heldReceipts(trade, positionQuote, true);
+                row = row.withHeldReceipts(held.terminalPayoff(), held.scenarios(), held.spotPnl());
             }
             rows.add(row);
         }
@@ -640,6 +616,10 @@ final class TradeController {
         if (TradeRecord.ACTIVE.equals(trade.status())) {
             try {
                 current = trades.currentMark(id);
+                if (current == null) {
+                    currentUnavailableReason =
+                            "The current market service returned no receipt for this position.";
+                }
             } catch (Exception e) {
                 currentUnavailableReason = e.getMessage() == null || e.getMessage().isBlank()
                         ? "The current market receipt for this position could not be produced."
@@ -685,47 +665,22 @@ final class TradeController {
         // `payoff` list that used to carry it for non-active trades is deleted.
         boolean active = TradeRecord.ACTIVE.equals(trade.status());
         TradeView view = TradeView.of(trade);
-        if (active) {
-            if (current == null) {
-                TradeService.CurrentMarketAvailability availability =
-                        TradeService.CurrentMarketAvailability.unavailable(
-                                currentUnavailableReason);
-                Long independentUnderlying = positionQuote == null || positionQuote.mark() == null
-                        ? null : Money.toCents(positionQuote.mark());
-                if (independentUnderlying != null) {
-                    availability = availability.withQuote(true, null);
-                }
-                view = view.withCurrentMark(independentUnderlying, null, null, null,
-                        null, null, availability);
-            } else {
-                view = attachCurrentMark(view, current);
-            }
-        }
-        HeldReceipts held = heldReceipts(trade, current, positionQuote, active);
-        view = view.withHeldReceipts(held.terminalPayoff(), held.greeks(),
-                held.scenarios(), held.spotPnl());
+        HeldReceipts held = heldReceipts(trade, positionQuote, active);
+        view = view.withHeldReceipts(held.terminalPayoff(), held.scenarios(), held.spotPnl());
         return new ApiResponses.TradeDetail<>(view, current, quote, currentUnavailableReason,
                 trades.marksHistory(id, 50), audit.forTrade(id, 50), analysis);
     }
 
-    /** Attach the exact two current P/L lanes; a missing decision receipt stays unavailable. */
-    static TradeView attachCurrentMark(TradeView view, TradeService.MarkView mark) {
-        return view.withCurrentMark(mark.underlyingCents(), mark.currentClosePrice(),
-                mark.unrealizedCents(), mark.decisionUnrealizedCents(),
-                mark.indicativeUnrealizedCents(), mark.indicativeDecisionUnrealizedCents(),
-                mark.availability());
-    }
-
     /**
      * Compose held-position display receipts without coupling their availability. Terminal payoff
-     * and named scenarios are recorded-entry facts; Greeks and spot P/L are current-market facts.
+     * and named scenarios are recorded-entry facts; spot P/L is a current-quote fact. Current
+     * package marks, POP, Greeks, and close-price evidence belong only to TradeDetail.current.
      * A failure in any one producer is contained to that receipt and must not erase its siblings.
      */
     static HeldReceipts heldReceipts(
-            TradeRecord trade, TradeService.MarkView mark, Quote positionQuote, boolean active) {
+            TradeRecord trade, Quote positionQuote, boolean active) {
         return composeHeldReceipts(trade.id(),
                 () -> heldTerminalPayoff(trade),
-                mark == null ? null : mark.greeks(),
                 active ? () -> heldScenarios(trade, positionQuote) : null,
                 active ? () -> heldSpotPnl(trade, positionQuote) : () -> null);
     }
@@ -737,7 +692,6 @@ final class TradeController {
     static HeldReceipts composeHeldReceipts(
             String tradeId,
             Supplier<io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff> payoffSupplier,
-            io.liftandshift.strikebench.model.GreeksView greeks,
             Supplier<ApiResponses.HeldScenarios> scenariosSupplier,
             Supplier<ApiResponses.HeldSpotPnl> spotPnlSupplier) {
         io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff;
@@ -773,7 +727,7 @@ final class TradeController {
             spotPnl = ApiResponses.HeldSpotPnl.unavailable(reason);
             logHeldReceiptFailure(tradeId, "spot P/L", failure);
         }
-        return new HeldReceipts(payoff, greeks, scenarios, spotPnl);
+        return new HeldReceipts(payoff, scenarios, spotPnl);
     }
 
     private static String heldReceiptFailure(String receipt, RuntimeException failure) {

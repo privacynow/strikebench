@@ -101,4 +101,37 @@ class OptionTimeTest {
         assertThat(atClose.hasModelTime()).isFalse();
         assertThat(atClose.basis()).contains("terminal value");
     }
+
+    @Test
+    void listedExpirationSelectionUsesOneHolidayAwareTradingSessionAuthority() {
+        OptionTime.ListedExpirationSelection nearest = OptionTime.selectListedExpiration(
+                List.of(LocalDate.of(2026, 7, 6), LocalDate.of(2026, 7, 7)),
+                Instant.parse("2026-07-02T16:00:00Z"),
+                null);
+        OptionTime.ListedExpirationSelection twoSessions = OptionTime.selectListedExpiration(
+                List.of(LocalDate.of(2026, 7, 6), LocalDate.of(2026, 7, 7)),
+                Instant.parse("2026-07-02T16:00:00Z"),
+                2);
+
+        assertThat(nearest.expiration()).isEqualTo(LocalDate.of(2026, 7, 6));
+        assertThat(nearest.tradingSessions()).isEqualTo(1);
+        assertThat(nearest.requestedHorizonSessions()).isNull();
+        assertThat(twoSessions.expiration()).isEqualTo(LocalDate.of(2026, 7, 7));
+        assertThat(twoSessions.tradingSessions()).isEqualTo(2);
+        assertThat(twoSessions.basis()).contains("exchange trading calendar");
+    }
+
+    @Test
+    void listedExpirationSelectionNamesAnEmptyFieldAndRejectsInvalidHorizons() {
+        OptionTime.ListedExpirationSelection empty = OptionTime.selectListedExpiration(
+                List.of(), Instant.parse("2026-07-02T16:00:00Z"), 30);
+
+        assertThat(empty.expiration()).isNull();
+        assertThat(empty.basis()).isEqualTo("no active listed expiration is available");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        OptionTime.selectListedExpiration(
+                                List.of(FRIDAY), Instant.parse("2026-07-02T16:00:00Z"), 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("between 1 and 756");
+    }
 }

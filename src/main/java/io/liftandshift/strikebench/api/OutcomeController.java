@@ -555,7 +555,9 @@ final class OutcomeController {
                             int qty, String worldId, EntryBook book, List<String> contractExpirations) {
         List<java.time.LocalDate> exps = book != null ? book.expirations() : market.expirations(symbol, worldId);
         if (exps.isEmpty()) return null;
-        java.time.LocalDate today = market.laneToday(worldId, clock);
+        java.time.Instant laneNow = market.laneNow(worldId, clock);
+        java.time.LocalDate today = java.time.LocalDate.ofInstant(
+                laneNow, io.liftandshift.strikebench.market.MarketHours.EASTERN);
         Double atmIv = null;
         java.math.BigDecimal spotBd = null;
         List<ExecutablePackagePricer.LegBook> priceInputs = new ArrayList<>();
@@ -578,12 +580,10 @@ final class OutcomeController {
                 exp = java.time.LocalDate.parse(exactRaw);
                 if (!exps.contains(exp)) return null;
             } else {
-                // Generic scenario: nearest listed expiration to the requested trading-session horizon.
-                java.time.LocalDate target = io.liftandshift.strikebench.market.MarketHours
-                        .tradingDateAfter(today, position.expiryDay(leg));
-                exp = exps.stream()
-                        .min(java.util.Comparator.comparingLong(e2 -> Math.abs(java.time.temporal.ChronoUnit.DAYS.between(e2, target))))
-                        .orElse(null);
+                // Generic scenario: the same server-owned listed-expiration selection receipt
+                // consumed by Research. No controller or browser gets a private date policy.
+                exp = io.liftandshift.strikebench.market.OptionTime.selectListedExpiration(
+                        exps, laneNow, position.expiryDay(leg)).expiration();
             }
             if (exp == null) return null;
             var chain = (book != null ? book.chain(exp) : market.chain(symbol, exp, worldId)).orElse(null);

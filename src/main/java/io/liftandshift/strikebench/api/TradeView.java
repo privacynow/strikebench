@@ -1,7 +1,6 @@
 package io.liftandshift.strikebench.api;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import io.liftandshift.strikebench.model.GreeksView;
 import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradeRecord;
@@ -43,18 +42,8 @@ public record TradeView(
         String dataProvenance,
         String dataAge,
         String dataSource,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Long unrealizedPnlCents,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Long decisionUnrealizedPnlCents,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Long currentUnderlyingCents,
-        @JsonInclude(JsonInclude.Include.NON_NULL) PackagePriceReceipt currentClosePrice,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Long indicativeUnrealizedPnlCents,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Long indicativeDecisionUnrealizedPnlCents,
-        @JsonInclude(JsonInclude.Include.NON_NULL)
-        TradeService.CurrentMarketAvailability currentMarketAvailability,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff terminalPayoff,
-        @JsonInclude(JsonInclude.Include.NON_NULL)
-        GreeksView greeks,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         ApiResponses.HeldScenarios scenarios,
         @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -82,26 +71,10 @@ public record TradeView(
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
                 t.intent(), t.sharesLocked(), orderInstruction, t.dataProvenance(),
-                t.dataAge(), t.dataSource(), null, null, null, null, null, null, null,
-                null, null, null, null);
-    }
-
-    public TradeView withCurrentMark(Long currentUnderlying, PackagePriceReceipt closePrice,
-                                     Long unrealized, Long decisionUnrealized,
-                                     Long indicativeUnrealized, Long indicativeDecisionUnrealized,
-                                     TradeService.CurrentMarketAvailability availability) {
-        return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
-                entryUnderlyingCents, entryPrice, maxLossCents, maxProfitCents,
-                breakevens, popEntry, realizedPnlCents,
-                decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
-                updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
-                dataSource, unrealized, decisionUnrealized, currentUnderlying, closePrice,
-                indicativeUnrealized, indicativeDecisionUnrealized, availability, terminalPayoff,
-                greeks, scenarios, spotPnl);
+                t.dataAge(), t.dataSource(), null, null, null);
     }
 
     public TradeView withHeldReceipts(io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff,
-                                      GreeksView heldGreeks,
                                       ApiResponses.HeldScenarios heldScenarios,
                                       ApiResponses.HeldSpotPnl heldSpotPnl) {
         return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
@@ -109,9 +82,6 @@ public record TradeView(
                 breakevens, popEntry, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
-                dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents,
-                currentUnderlyingCents, currentClosePrice, indicativeUnrealizedPnlCents,
-                indicativeDecisionUnrealizedPnlCents, currentMarketAvailability, payoff, heldGreeks,
-                heldScenarios, heldSpotPnl);
+                dataSource, payoff, heldScenarios, heldSpotPnl);
     }
 }

@@ -2175,6 +2175,39 @@ function positionScenarioResponse(body, options = {}) {
   };
 }
 
+function expirationDocumentWithSelection(document, rawHorizon) {
+  const copy = JSON.parse(JSON.stringify(document || {}));
+  const requested = rawHorizon == null || rawHorizon === '' ? null : Number(rawHorizon);
+  const rows = Array.isArray(copy.expirations) ? copy.expirations : [];
+  const candidates = rows.map(row => typeof row === 'string'
+    ? { date: row, tradingSessions: null, calendarDays: null } : row)
+    .filter(row => row && row.date);
+  let selected = candidates[0] || null;
+  if (requested != null && Number.isFinite(requested)) {
+    const measured = candidates.filter(row => Number.isFinite(Number(row.tradingSessions)));
+    if (measured.length) {
+      selected = measured.slice().sort((left, right) =>
+        Math.abs(Number(left.tradingSessions) - requested)
+        - Math.abs(Number(right.tradingSessions) - requested)
+        || String(left.date).localeCompare(String(right.date)))[0];
+    }
+  }
+  copy.selection = {
+    date: selected && selected.date || null,
+    requestedHorizonSessions: requested,
+    tradingSessions: selected && selected.tradingSessions == null
+      ? null : Number(selected.tradingSessions),
+    calendarDays: selected && selected.calendarDays == null
+      ? null : Number(selected.calendarDays),
+    basis: selected
+      ? requested == null
+        ? 'nearest active listed expiration because no horizon was declared'
+        : `closest active listed expiration to the declared ${requested} trading sessions; distance uses the exchange trading calendar`
+      : 'no active listed expiration is available'
+  };
+  return copy;
+}
+
 async function installBackend(page, options = {}) {
   await page.addInitScript(() => {
     /* Test-only receipt lookup. Product code draws the server-owned curve and does not expose a
@@ -2219,6 +2252,15 @@ async function installBackend(page, options = {}) {
     ? options.strategyCatalog : strategyCatalog();
   const tradeDetails = bookDocuments.tradeDetails || (bookDocuments.tradeDetail
     ? { [BOOK_TRADE_ID]: bookDocuments.tradeDetail } : {});
+  if (options.bookTradeCurrentConflict) {
+    Object.keys(tradeDetails).forEach(id => {
+      const detail = tradeDetails[id];
+      if (!detail || !detail.trade) return;
+      tradeDetails[id] = Object.assign({}, detail, {
+        trade: Object.assign({}, detail.trade, options.bookTradeCurrentConflict)
+      });
+    });
+  }
   const managementByPlan = bookDocuments.managementByPlan || (bookDocuments.management
     ? { [BOOK_PLAN_ID]: bookDocuments.management } : {});
   const positionEnsembleByPlan = bookDocuments.positionEnsembleByPlan
@@ -2691,6 +2733,10 @@ async function installBackend(page, options = {}) {
       if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
       response = JSON.parse(JSON.stringify(
         homeContextBySymbol[homeResearchSymbol][homeResearchPart]));
+      if (homeResearchPart === 'expirations') {
+        response = expirationDocumentWithSelection(
+          response, url.searchParams.get('horizonSessions'));
+      }
       if (homeResearchPart === 'chain') {
         currentExpiration = url.searchParams.get('expiration') || response.expiration;
         response.expiration = currentExpiration;
@@ -2706,7 +2752,8 @@ async function installBackend(page, options = {}) {
       response = bookDocuments.history;
     } else if (method === 'GET' && url.pathname === '/api/research/AAPL/expirations'
         && bookDocuments.expirations) {
-      response = bookDocuments.expirations;
+      response = expirationDocumentWithSelection(
+        bookDocuments.expirations, url.searchParams.get('horizonSessions'));
     } else if (method === 'GET' && url.pathname === '/api/research/AAPL/chain'
         && bookDocuments.chain) {
       currentExpiration = url.searchParams.get('expiration') || bookDocuments.chain.expiration;
@@ -2862,8 +2909,9 @@ async function installBackend(page, options = {}) {
         planEligibility: 'Ready for the active observed market.'
       };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD/expirations') {
-      response = { asOfDate: '2026-07-20',
-        expirations: [{ date: '2026-08-21', tradingSessions: 24, calendarDays: 32 }] };
+      response = expirationDocumentWithSelection({ asOfDate: '2026-07-20',
+        expirations: [{ date: '2026-08-21', tradingSessions: 24, calendarDays: 32 }] },
+      url.searchParams.get('horizonSessions'));
     } else if (method === 'GET' && url.pathname === '/api/research/AMD/chain') {
       currentExpiration = url.searchParams.get('expiration') || '2026-08-21';
       response = {
@@ -6535,6 +6583,22 @@ test('Position contains six exact mixed-expiry legs across desktop seams and the
           documentScrollHeight: document.documentElement.scrollHeight,
           heroHeight: rect(host?.querySelector('.authposhero'))?.height || 0,
           scenarioHeight: rect(scenario)?.height || 0,
+          scenarioPanelRect: (() => {
+            const box = rect(scenarioPanel);
+            return box && { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+          })(),
+          scenarioPanelClient: scenarioPanel?.clientHeight || 0,
+          scenarioPanelScroll: scenarioPanel?.scrollHeight || 0,
+          scenarioRowRects: scenarioRows.map(row => {
+            const box = rect(row);
+            return box && { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+          }),
+          scenarioNameWidths: scenarioRows.map(row => {
+            const name = row.querySelector('.snm');
+            return name && {
+              text: name.textContent.trim(), client: name.clientWidth, scroll: name.scrollWidth
+            };
+          }),
           researchHeight: rect(host?.querySelector('.authresearchgrid'))?.height || 0,
           horizontalOverflow: document.documentElement.scrollWidth
             > document.documentElement.clientWidth + 1,
@@ -8373,7 +8437,7 @@ test('a simulated-world symbol exclusion cannot optimistically flip the visible 
       const before = window.DeskBackend.state();
       try {
         await window.DeskBackend.transitionWorld('sim', Object.assign({}, before.context, {
-          symbol: 'AMD', goal: 'Income', view: 'Neutral', horizon: '1 day'
+          symbol: 'AMD', goal: 'Income', view: 'Neutral', horizonDays: 1
         }));
         return { rejected: false };
       } catch (error) {

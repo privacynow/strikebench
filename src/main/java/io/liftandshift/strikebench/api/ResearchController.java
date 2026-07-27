@@ -301,8 +301,11 @@ final class ResearchController {
         double spot = current.mark().doubleValue();
         java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
-        LocalDate expiry = requestedExpiry == null
-                ? resolveNearestExpiry(activeExpirationsFor(symbol, world)) : requestedExpiry;
+        LocalDate expiry = requestedExpiry;
+        if (expiry == null) {
+            expiry = io.liftandshift.strikebench.market.OptionTime.selectListedExpiration(
+                    activeExpirationsFor(symbol, world), laneNow, null).expiration();
+        }
         if (expiry == null) { ctx.json(ExpectedMove.unavailable(symbol, "no listed expiry")); return; }
         OptionChain chain = market.chain(symbol, expiry, world).orElse(null);
         Double iv = chain == null ? null : atmIv(chain).orElse(null);
@@ -334,10 +337,6 @@ final class ResearchController {
         }
     }
 
-    private static LocalDate resolveNearestExpiry(List<LocalDate> active) {
-        return active.isEmpty() ? null : active.getFirst();
-    }
-
     private Optional<Double> atmIv(OptionChain chain) {
         BigDecimal spot = chain.underlyingPrice();
         return chain.calls().stream().filter(option -> option.iv() != null)
@@ -356,15 +355,41 @@ final class ResearchController {
         String world = activeWorld.apply(ctx);
         java.time.Instant now = market.laneNow(worldParam(world), clock);
         LocalDate asOf = LocalDate.ofInstant(now, MarketHours.EASTERN);
+        Integer horizonSessions = requestedHorizonSessions(ctx.queryParam("horizonSessions"));
+        List<LocalDate> active = activeExpirations(market.expirations(symbol, world), now);
+        var selected = io.liftandshift.strikebench.market.OptionTime
+                .selectListedExpiration(active, now, horizonSessions);
         // §7.3: the distance to an expiration is a market-calendar fact, not a weekday count.
         // The browser used to walk Mon-Fri from asOfDate to decide which expiration the whole
         // Desk trades, so every market holiday shifted its choice away from the server's.
         ctx.json(new ApiResponses.Expirations<>(symbol, asOf.toString(),
-                activeExpirations(market.expirations(symbol, world), now).stream()
+                active.stream()
                         .map(date -> new ApiResponses.ExpirationDistance(date.toString(),
                                 MarketHours.tradingDaysBetween(asOf, date),
                                 (int) java.time.temporal.ChronoUnit.DAYS.between(asOf, date)))
-                        .toList()));
+                        .toList(),
+                new ApiResponses.ExpirationSelection(
+                        selected.expiration() == null ? null : selected.expiration().toString(),
+                        selected.requestedHorizonSessions(),
+                        selected.tradingSessions(),
+                        selected.calendarDays(),
+                        selected.basis())));
+    }
+
+    private static Integer requestedHorizonSessions(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        final int value;
+        try {
+            value = Integer.parseInt(raw.trim());
+        } catch (NumberFormatException malformed) {
+            throw new io.javalin.http.BadRequestResponse(
+                    "horizonSessions must be an integer between 1 and 756");
+        }
+        if (value < 1 || value > 756) {
+            throw new io.javalin.http.BadRequestResponse(
+                    "horizonSessions must be between 1 and 756");
+        }
+        return value;
     }
 
     private void chain(Context ctx) {

@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TradeControllerTest {
 
     @Test
-    void heldTradeWirePublishesOneEntryPriceAndTypedCurrentUnavailability() {
+    void heldTradeWirePublishesRecordedFactsWithoutDuplicatingTheCurrentMark() {
         Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
                 LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
         TradeRecord trade = new TradeRecord("tr_wire", "acct", "XYZ", "CASH_SECURED_PUT",
@@ -33,8 +33,7 @@ class TradeControllerTest {
                 "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
                 null, "OBSERVED", "DELAYED", "fixture");
 
-        TradeView wire = TradeView.of(trade).withCurrentMark(null, null, null, null, null, null,
-                TradeService.CurrentMarketAvailability.unavailable("fixture mark failed"));
+        TradeView wire = TradeView.of(trade);
         var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(wire);
 
         assertThat(json.at("/entryPrice/grossPackageNetCents").asLong()).isEqualTo(20_000L);
@@ -42,15 +41,18 @@ class TradeControllerTest {
         assertThat(json.has("entryNetPremiumCents")).isFalse();
         assertThat(json.has("feesOpenCents")).isFalse();
         assertThat(json.has("feesCloseCents")).isFalse();
-        assertThat(json.at("/currentMarketAvailability/quoteAvailable").asBoolean()).isFalse();
-        assertThat(json.at("/currentMarketAvailability/quoteUnavailableReason").asText())
-                .isEqualTo("fixture mark failed");
-        assertThat(json.at("/currentMarketAvailability/greeksUnavailableReason").asText())
-                .isEqualTo("fixture mark failed");
+        assertThat(json.has("unrealizedPnlCents")).isFalse();
+        assertThat(json.has("decisionUnrealizedPnlCents")).isFalse();
+        assertThat(json.has("currentUnderlyingCents")).isFalse();
+        assertThat(json.has("currentClosePrice")).isFalse();
+        assertThat(json.has("indicativeUnrealizedPnlCents")).isFalse();
+        assertThat(json.has("indicativeDecisionUnrealizedPnlCents")).isFalse();
+        assertThat(json.has("currentMarketAvailability")).isFalse();
+        assertThat(json.has("greeks")).isFalse();
     }
 
     @Test
-    void independentUnderlyingQuoteSurvivesAWholePackageMarkFailure() {
+    void currentMarkFactsExistOnlyUnderTradeDetailCurrent() {
         Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
                 LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
         TradeRecord trade = new TradeRecord("tr_quote_only", "acct", "XYZ", "CASH_SECURED_PUT",
@@ -59,21 +61,23 @@ class TradeControllerTest {
                 65L, 65L, null, null, null, null, false,
                 "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
                 null, "OBSERVED", "DELAYED", "fixture");
-        var availability = TradeService.CurrentMarketAvailability
-                .unavailable("option package failed")
-                .withQuote(true, null);
+        TradeService.MarkView current = new TradeService.MarkView(
+                trade.id(), "2026-07-16T12:00:00Z", 10_125L, 1_500L,
+                12_345L, null, 0.7, "DELAYED", new GreeksView(20, -0.5, 700, -900),
+                List.of());
+        var detail = new ApiResponses.TradeDetail<>(
+                TradeView.of(trade), current, null, null, List.of(), List.of(), null);
+        var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(detail);
 
-        TradeView wire = TradeView.of(trade).withCurrentMark(
-                10_125L, null, null, null, null, null, availability);
-        var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(wire);
-
-        assertThat(json.at("/currentUnderlyingCents").asLong()).isEqualTo(10_125L);
-        assertThat(json.at("/currentMarketAvailability/quoteAvailable").asBoolean()).isTrue();
-        assertThat(json.at("/currentMarketAvailability/quoteUnavailableReason").isMissingNode())
-                .isTrue();
-        assertThat(json.at("/currentMarketAvailability/closeAvailable").asBoolean()).isFalse();
-        assertThat(json.at("/currentMarketAvailability/closeUnavailableReason").asText())
-                .isEqualTo("option package failed");
+        assertThat(json.at("/current/underlyingCents").asLong()).isEqualTo(10_125L);
+        assertThat(json.at("/current/unrealizedCents").asLong()).isEqualTo(12_345L);
+        assertThat(json.at("/current/popNow").asDouble()).isEqualTo(0.7);
+        assertThat(json.at("/current/greeks/deltaShares").asDouble()).isEqualTo(20.0);
+        assertThat(json.at("/current/availability/quoteAvailable").asBoolean()).isTrue();
+        assertThat(json.at("/trade").has("currentUnderlyingCents")).isFalse();
+        assertThat(json.at("/trade").has("unrealizedPnlCents")).isFalse();
+        assertThat(json.at("/trade").has("currentMarketAvailability")).isFalse();
+        assertThat(json.at("/trade").has("greeks")).isFalse();
     }
 
     @Test
@@ -87,7 +91,6 @@ class TradeControllerTest {
                 "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
                 null, "OBSERVED", "DELAYED", "fixture");
         var payoff = TradeController.heldTerminalPayoff(trade);
-        var greeks = new GreeksView(20, -0.5, 700, -900);
         var scenarios = TradeController.heldScenarios(
                 trade, quote("100.00", Freshness.DELAYED));
         var spotPnl = new ApiResponses.HeldSpotPnl(
@@ -96,23 +99,21 @@ class TradeControllerTest {
         TradeController.HeldReceipts payoffFailed = TradeController.composeHeldReceipts(
                 trade.id(),
                 () -> { throw new IllegalStateException("curve fixture failed"); },
-                greeks, () -> scenarios, () -> spotPnl);
+                () -> scenarios, () -> spotPnl);
 
         assertThat(payoffFailed.terminalPayoff().available()).isFalse();
         assertThat(payoffFailed.terminalPayoff().unavailableReason())
                 .contains("terminal payoff").contains("curve fixture failed");
-        assertThat(payoffFailed.greeks()).isSameAs(greeks);
         assertThat(payoffFailed.scenarios().available()).isTrue();
         assertThat(payoffFailed.scenarios()).isSameAs(scenarios);
         assertThat(payoffFailed.spotPnl()).isSameAs(spotPnl);
 
         TradeController.HeldReceipts scenariosFailed = TradeController.composeHeldReceipts(
-                trade.id(), () -> payoff, greeks,
+                trade.id(), () -> payoff,
                 () -> { throw new IllegalStateException("story fixture failed"); },
                 () -> spotPnl);
 
         assertThat(scenariosFailed.terminalPayoff()).isSameAs(payoff);
-        assertThat(scenariosFailed.greeks()).isSameAs(greeks);
         assertThat(scenariosFailed.scenarios().available()).isFalse();
         assertThat(scenariosFailed.scenarios().values()).isEmpty();
         assertThat(scenariosFailed.scenarios().unavailableReason())
@@ -120,11 +121,10 @@ class TradeControllerTest {
         assertThat(scenariosFailed.spotPnl()).isSameAs(spotPnl);
 
         TradeController.HeldReceipts spotFailed = TradeController.composeHeldReceipts(
-                trade.id(), () -> payoff, greeks, () -> scenarios,
+                trade.id(), () -> payoff, () -> scenarios,
                 () -> { throw new IllegalStateException("spot fixture failed"); });
 
         assertThat(spotFailed.terminalPayoff()).isSameAs(payoff);
-        assertThat(spotFailed.greeks()).isSameAs(greeks);
         assertThat(spotFailed.scenarios().available()).isTrue();
         assertThat(spotFailed.scenarios()).isSameAs(scenarios);
         assertThat(spotFailed.spotPnl().terminalPnlAtCurrentSpotCents()).isNull();
@@ -133,24 +133,28 @@ class TradeControllerTest {
     }
 
     @Test
-    void controllerDoesNotSubstituteLegacyPackagePnlForAMissingDecisionPnl() {
+    void historicalDecisionPnlAndCurrentDecisionPnlRemainDistinct() {
         Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
                 LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
         TradeRecord trade = new TradeRecord("tr_no_decision_pnl", "acct", "XYZ",
                 "CASH_SECURED_PUT", TradeRecord.ACTIVE, 1, List.of(put), "income", "30d",
                 "balanced", 10_000L, 20_000L, 980_000L, 20_000L, List.of("98"), 0.7,
-                65L, 65L, null, null, null, null, false,
+                65L, 65L, 55L, 65L, null, null, false,
                 "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
                 null, "OBSERVED", "DELAYED", "fixture");
         TradeService.MarkView legacyOnly = new TradeService.MarkView(
                 trade.id(), "2026-07-16T12:00:00Z", 10_000L, 1_500L,
                 12_345L, null, 0.7, "DELAYED", null, List.of());
 
-        TradeView attached = TradeController.attachCurrentMark(TradeView.of(trade), legacyOnly);
+        var detail = new ApiResponses.TradeDetail<>(
+                TradeView.of(trade), legacyOnly, null, null, List.of(), List.of(), null);
+        var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(detail);
 
-        assertThat(attached.unrealizedPnlCents()).isEqualTo(12_345L);
-        assertThat(attached.decisionUnrealizedPnlCents()).isNull();
-        assertThat(attached.currentMarketAvailability().decisionPnlAvailable()).isFalse();
+        assertThat(json.at("/trade/decisionPnlCents").asLong()).isEqualTo(65L);
+        assertThat(json.at("/current/unrealizedCents").asLong()).isEqualTo(12_345L);
+        assertThat(json.at("/current/decisionUnrealizedCents").isMissingNode()).isTrue();
+        assertThat(json.at("/current/availability/decisionPnlAvailable").asBoolean()).isFalse();
+        assertThat(json.at("/trade").has("decisionUnrealizedPnlCents")).isFalse();
     }
 
     @Test

@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.model.Leg;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -28,6 +29,83 @@ public final class OptionTime {
         EXPIRED,
         NO_OPTION,
         PARTIAL
+    }
+
+    /**
+     * The one server-owned choice of a listed expiration for a trading-session horizon.
+     *
+     * <p>{@code requestedHorizonSessions == null} means the caller made no horizon declaration,
+     * so the nearest active listed contract is selected. A declared horizon is matched against
+     * the exchange-calendar session distance carried by {@link Measure}; calendar-day or browser
+     * weekday approximations never participate.</p>
+     */
+    public record ListedExpirationSelection(
+            LocalDate expiration,
+            Integer requestedHorizonSessions,
+            Integer tradingSessions,
+            Integer calendarDays,
+            String basis
+    ) {
+        public ListedExpirationSelection {
+            if (basis == null || basis.isBlank()) {
+                throw new IllegalArgumentException("listed-expiration selection basis is required");
+            }
+            if (expiration == null
+                    && (tradingSessions != null || calendarDays != null)) {
+                throw new IllegalArgumentException(
+                        "an unavailable listed expiration cannot carry distances");
+            }
+        }
+    }
+
+    /**
+     * Selects one active listed expiration using the same market-lane clock and holiday-aware
+     * session distance used by every other option-time consumer.
+     */
+    public static ListedExpirationSelection selectListedExpiration(
+            List<LocalDate> expirations,
+            Instant laneNow,
+            Integer requestedHorizonSessions
+    ) {
+        if (laneNow == null) throw new IllegalArgumentException("market-lane instant is required");
+        if (requestedHorizonSessions != null
+                && (requestedHorizonSessions < 1 || requestedHorizonSessions > 756)) {
+            throw new IllegalArgumentException(
+                    "horizonSessions must be between 1 and 756");
+        }
+
+        List<Measure> active = expirations == null ? List.of() : expirations.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .map(expiration -> toExpiry(laneNow, expiration))
+                .filter(Measure::live)
+                .sorted(Comparator.comparing(Measure::expiration))
+                .toList();
+        if (active.isEmpty()) {
+            return new ListedExpirationSelection(null, requestedHorizonSessions,
+                    null, null, "no active listed expiration is available");
+        }
+
+        Measure selected = requestedHorizonSessions == null
+                ? active.getFirst()
+                : active.stream()
+                        .min(Comparator
+                                .comparingInt((Measure measure) ->
+                                        Math.abs(measure.sessions()
+                                                - requestedHorizonSessions))
+                                .thenComparing(Measure::expiration))
+                        .orElseThrow();
+        String basis = requestedHorizonSessions == null
+                ? "nearest active listed expiration because no horizon was declared"
+                : "closest active listed expiration to the declared "
+                        + requestedHorizonSessions
+                        + " trading sessions; distance uses the exchange trading calendar";
+        return new ListedExpirationSelection(
+                selected.expiration(),
+                requestedHorizonSessions,
+                selected.sessions(),
+                Math.toIntExact(selected.calendarDays()),
+                basis);
     }
 
     /**

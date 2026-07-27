@@ -72,23 +72,52 @@ class ResearchControllerTest {
         }
     }
 
+    /** A provider with an exact listed-date field for market-calendar selection tests. */
+    private static final class ExactExpirationFixture implements MarketDataProvider {
+        private final FixtureProvider delegate;
+        private final List<LocalDate> expirations;
+        ExactExpirationFixture(FixtureProvider delegate, List<LocalDate> expirations) {
+            this.delegate = delegate;
+            this.expirations = List.copyOf(expirations);
+        }
+        @Override public String name() { return delegate.name(); }
+        @Override public Set<Domain> domains() { return delegate.domains(); }
+        @Override public List<SymbolMatch> lookup(String query) { return delegate.lookup(query); }
+        @Override public Optional<Quote> quote(String symbol) { return delegate.quote(symbol); }
+        @Override public List<LocalDate> expirations(String symbol) {
+            return "AAPL".equals(symbol) ? expirations : List.of();
+        }
+        @Override public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
+            return Optional.empty();
+        }
+        @Override public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
+            return delegate.candles(symbol, from, to);
+        }
+    }
+
     @BeforeEach
     void setUp() {
+        FixtureProvider fixture = new FixtureProvider(CLOCK);
+        startApp(CLOCK, new QuotelessFixture(fixture), fixture);
+    }
+
+    private void startApp(Clock testClock, MarketDataProvider fixture,
+                          FixtureProvider supportFixture) {
         Map<String, String> conf = new HashMap<>(TestDb.freshConfig());
         conf.put("FIXTURES_ONLY", "true");
         AppConfig cfg = new AppConfig(conf);
         db = Db.forConfig(cfg);
 
-        FixtureProvider fixture = new FixtureProvider(CLOCK);
-        MarketDataService market = new MarketDataService(List.of(fixture), List.of(fixture), List.of(fixture));
-        // Mount the quote-suppressed fixture behind the explicit Demo lane. history/options still resolve.
-        market.setDemoSources(new QuotelessFixture(fixture), fixture, fixture);
+        MarketDataService market = new MarketDataService(
+                List.of(fixture), List.of(supportFixture), List.of(supportFixture));
+        // Mount the supplied exact test provider behind the explicit Demo lane.
+        market.setDemoSources(fixture, supportFixture, supportFixture);
 
-        EventService events = new EventService(market, db, CLOCK);
-        EvaluationService evaluations = new EvaluationService(market, db, CLOCK);
+        EventService events = new EventService(market, db, testClock);
+        EvaluationService evaluations = new EvaluationService(market, db, testClock);
         MarketDataEngine currentQuotes =
-                new MarketDataEngine(market, new UniverseService(db, cfg, CLOCK), cfg, CLOCK);
-        ResearchController research = new ResearchController(cfg, db, CLOCK, market, currentQuotes,
+                new MarketDataEngine(market, new UniverseService(db, cfg, testClock), cfg, testClock);
+        ResearchController research = new ResearchController(cfg, db, testClock, market, currentQuotes,
                 events, evaluations,
                 ctx -> "test-user",
                 ctx -> "demo",
@@ -155,6 +184,102 @@ class ResearchControllerTest {
 
         assertThat(response.statusCode()).as("body=%s", response.body()).isEqualTo(400);
         assertThat(response.body()).contains("expiry").contains("YYYY-MM-DD");
+    }
+
+    @Test
+    void expirationsSelectNearestListedContractWhenHorizonIsUndeclared() throws Exception {
+        JsonNode body = get("/api/research/AAPL/expirations");
+        JsonNode rows = body.withArray("expirations");
+
+        assertThat(rows).isNotEmpty();
+        assertThat(body.at("/selection/date").asText())
+                .isEqualTo(rows.get(0).path("date").asText());
+        assertThat(body.at("/selection/requestedHorizonSessions").isNull()
+                || body.at("/selection/requestedHorizonSessions").isMissingNode()).isTrue();
+        assertThat(body.at("/selection/tradingSessions").asInt())
+                .isEqualTo(rows.get(0).path("tradingSessions").asInt());
+        assertThat(body.at("/selection/calendarDays").asInt())
+                .isEqualTo(rows.get(0).path("calendarDays").asInt());
+        assertThat(body.at("/selection/basis").asText())
+                .contains("nearest active listed expiration")
+                .contains("no horizon was declared");
+    }
+
+    @Test
+    void expirationsSelectClosestListedContractToDeclaredTradingSessionHorizon() throws Exception {
+        int requested = 12;
+        JsonNode body = get("/api/research/AAPL/expirations?horizonSessions=" + requested);
+        JsonNode rows = body.withArray("expirations");
+        JsonNode expected = java.util.stream.StreamSupport.stream(rows.spliterator(), false)
+                .min(java.util.Comparator
+                        .comparingInt((JsonNode row) ->
+                                Math.abs(row.path("tradingSessions").asInt() - requested))
+                        .thenComparing(row -> row.path("date").asText()))
+                .orElseThrow();
+
+        assertThat(body.at("/selection/date").asText())
+                .isEqualTo(expected.path("date").asText());
+        assertThat(body.at("/selection/requestedHorizonSessions").asInt())
+                .isEqualTo(requested);
+        assertThat(body.at("/selection/tradingSessions").asInt())
+                .isEqualTo(expected.path("tradingSessions").asInt());
+        assertThat(body.at("/selection/basis").asText())
+                .contains("declared 12 trading sessions")
+                .contains("exchange trading calendar");
+    }
+
+    @Test
+    void expirationDistancesAndSelectionUseTheHolidayAwareServerCalendar() throws Exception {
+        if (app != null) app.stop();
+        if (db != null) db.close();
+        app = null;
+        db = null;
+
+        Clock holidayClock = Clock.fixed(Instant.parse("2026-07-02T16:00:00Z"),
+                ZoneId.of("America/New_York"));
+        FixtureProvider delegate = new FixtureProvider(holidayClock);
+        startApp(holidayClock, new ExactExpirationFixture(delegate, List.of(
+                LocalDate.of(2026, 7, 6),
+                LocalDate.of(2026, 7, 7))), delegate);
+
+        JsonNode body = get("/api/research/AAPL/expirations?horizonSessions=2");
+        JsonNode rows = body.withArray("expirations");
+
+        assertThat(body.path("asOfDate").asText()).isEqualTo("2026-07-02");
+        assertThat(rows.get(0).path("date").asText()).isEqualTo("2026-07-06");
+        assertThat(rows.get(0).path("tradingSessions").asInt()).isEqualTo(1);
+        assertThat(rows.get(0).path("calendarDays").asInt()).isEqualTo(4);
+        assertThat(rows.get(1).path("date").asText()).isEqualTo("2026-07-07");
+        assertThat(rows.get(1).path("tradingSessions").asInt()).isEqualTo(2);
+        // A Mon–Fri counter would choose July 6; the NYSE holiday-aware authority chooses July 7.
+        assertThat(body.at("/selection/date").asText()).isEqualTo("2026-07-07");
+    }
+
+    @Test
+    void emptyExpirationFieldReturnsAnExplicitUnavailableSelection() throws Exception {
+        JsonNode body = get("/api/research/VTSAX/expirations?horizonSessions=30");
+
+        assertThat(body.withArray("expirations").size()).isZero();
+        assertThat(body.at("/selection/date").isNull()
+                || body.at("/selection/date").isMissingNode()).isTrue();
+        assertThat(body.at("/selection/requestedHorizonSessions").asInt()).isEqualTo(30);
+        assertThat(body.at("/selection/basis").asText())
+                .isEqualTo("no active listed expiration is available");
+    }
+
+    @Test
+    void invalidExpirationHorizonIsA400InsteadOfSilentlySelectingAContract() throws Exception {
+        for (String invalid : List.of("0", "757", "2.5", "month")) {
+            HttpResponse<String> response = http.send(
+                    HttpRequest.newBuilder(URI.create(base
+                            + "/api/research/AAPL/expirations?horizonSessions=" + invalid))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            assertThat(response.statusCode()).as("invalid=%s body=%s", invalid, response.body())
+                    .isEqualTo(400);
+            assertThat(response.body()).contains("horizonSessions");
+        }
     }
 
     /**

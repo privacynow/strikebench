@@ -756,8 +756,10 @@ test('Book aggregates are derived from the roster they summarize', () => {
     assert.equal(documents.summary.openTradesCount, count);
     assert.equal(documents.summary.reservedCents,
       trades.reduce((total, trade) => total + trade.maxLossCents, 0));
+    const read = book.practiceBookRead(documents);
     assert.equal(documents.summary.openTradesUnrealizedCents,
-      trades.reduce((total, trade) => total + (trade.unrealizedPnlCents || 0), 0));
+      Object.values(read.snapshot.marksByTrade)
+        .reduce((total, mark) => total + (mark.decisionUnrealizedCents || 0), 0));
     assert.equal(documents.heat.activeTrades, count);
     assert.equal(documents.heat.totalMaxLossCents, documents.summary.reservedCents);
     assert.equal(documents.greeks.activeTrades, count);

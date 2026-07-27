@@ -288,6 +288,214 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
   min-width:var(--step-value-min);padding:0 3px;text-align:center;
   color:var(--text);font-family:var(--mono);font-size:var(--f-sm)
 }
+
+/* ScenarioSpectrum owns its complete internal grammar here. Surfaces may place and size the
+   panel, but they do not restyle tiles or playback controls by route or viewport. The component
+   responds to its own inline size, so New Idea and Position render the same facts the same way. */
+.scenpanel{
+  container:scenario-spectrum / inline-size;
+  display:flex;flex:none;flex-direction:column;gap:7px;min-width:0;min-height:0
+}
+.scenpanel .smx.barmode{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:5px 0
+}
+.scenpanel .srow{
+  position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"name odds" "pl value";align-items:center;
+  column-gap:4px;row-gap:2px;min-width:0;min-height:36px;padding:3px 5px;
+  overflow:hidden;border:1px solid transparent;border-radius:7px;
+  background:transparent;color:inherit;text-align:left;cursor:pointer;font-size:var(--f-sm);
+  transition:background var(--mo-quick) var(--mo-ease),border-color var(--mo-quick) var(--mo-ease),transform var(--mo-quick) var(--mo-ease)
+}
+.scenpanel .srow:hover,.scenpanel .srow.hot{background:var(--row-hover)}
+.scenpanel .srow:hover{border-color:var(--line);transform:translateY(-1px)}
+.scenpanel .srow .sn{
+  grid-area:name;display:grid;grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;gap:2px;min-width:0
+}
+.scenpanel .srow .sn .snm{
+  display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--text);font-size:var(--f-xs);font-weight:650;line-height:1.2
+}
+.scenpanel .srow .sn .snfull{display:block}
+.scenpanel .srow .sn .snshort{display:none}
+.scenpanel .srow .sn .smv{
+  flex:none;font-family:var(--mono);font-size:var(--f-xs);line-height:1
+}
+.scenpanel .scenarioodds{
+  grid-area:odds;display:flex;justify-self:end;align-items:center;gap:3px;min-width:0
+}
+.scenpanel .scenarioodds .sprob{
+  font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);line-height:1
+}
+.scenpanel .scenarioodds .cg{width:12px;height:11px;flex:none;opacity:.6}
+.scenpanel .srow .sdesc,.scenpanel .srow .slk,.scenpanel .srow .splay{display:none}
+.scenpanel .srow .smv.up{color:var(--profit)}
+.scenpanel .srow .smv.dn{color:var(--loss)}
+.scenpanel .srow .smv.fl{color:var(--faint)}
+.scenpanel .srow .sbw{
+  grid-area:pl;position:relative;height:12px;
+  border:1px solid var(--line-soft);border-radius:3px;background:var(--surface-control)
+}
+.scenpanel .srow .sbw::before{
+  content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--faint)
+}
+.scenpanel .srow .sb{position:absolute;top:1px;bottom:1px;border-radius:2px}
+.scenpanel .srow .sb.p{left:50%;background:var(--profit)}
+.scenpanel .srow .sb.n{right:50%;background:var(--loss)}
+.scenpanel .srow .sv{
+  grid-area:value;min-width:62px;text-align:right;font-family:var(--mono);font-weight:650
+}
+.scenpanel .srow.best{background:rgba(65,200,146,.09)}
+.scenpanel .srow.best .snm{color:var(--profit)}
+.scenpanel .srow.worst{background:rgba(243,93,100,.09)}
+.scenpanel .srow.worst .snm{color:var(--loss)}
+.scenpanel .srow.likely{
+  border-color:rgba(70,213,181,.45);box-shadow:inset 2px 0 0 var(--accent)
+}
+.scenpanel .srow.live{
+  background:var(--accent-wash);box-shadow:inset 2px 0 0 var(--accent)
+}
+.scenpanel .srow.live .snm{color:var(--accent)}
+.scenpanel .srow.pinned{
+  background:var(--accent-wash);border-color:var(--accent-2);
+  box-shadow:inset 2px 0 0 var(--accent)
+}
+.scenpanel .srow.pinned .snm{color:var(--accent)}
+
+.scenpanel .srow-ctl{
+  grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr);
+  grid-template-areas:"play" "steps";align-items:center;gap:6px;
+  min-width:0;max-width:100%;margin-top:6px;padding:5px 6px;
+  border:1px solid var(--line-soft);border-left:2px solid var(--accent);
+  border-radius:7px;background:var(--surface-control);cursor:default;
+  transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)
+}
+.scenpanel .srx-read{
+  font-size:var(--f-2xs);color:var(--dim);line-height:1.35;text-align:center;
+  display:flex;align-items:center;gap:5px
+}
+.scenpanel .srx-read b{color:var(--text)}
+.scenpanel .srx-read b.pos{color:var(--profit)}
+.scenpanel .srx-read b.neg{color:var(--loss)}
+.scenpanel .scenplay{
+  grid-area:play;display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;
+  padding:0;border:0;border-radius:6px;background:transparent
+}
+.scenpanel .scenplay .playb{transition:background .12s,color .12s}
+.scenpanel .scenplay .tk{
+  flex:none;white-space:nowrap;color:var(--dim);
+  font-family:var(--mono);font-size:var(--f-2xs);letter-spacing:.02em
+}
+.scenpanel .scenplay .tk.now,.scenpanel .scenplay .tk.end{display:none}
+.scenpanel .scenplay .tk.pos{color:var(--profit)}
+.scenpanel .scenplay .tk.neg{color:var(--loss)}
+.scenpanel .scenplay .scrub{
+  flex:1;min-width:32px;block-size:var(--control-hit);margin:0;
+  -webkit-appearance:none;appearance:none;border-radius:3px;cursor:pointer;
+  background:linear-gradient(90deg,var(--accent-2),var(--accent)) center/100% 4px no-repeat
+}
+.scenpanel .scenplay .scrub::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--text);border:2px solid var(--accent);cursor:grab;
+  box-shadow:0 1px 3px rgba(0,0,0,.5)
+}
+.scenpanel .scenplay .scrub::-moz-range-thumb{
+  width:14px;height:14px;border-radius:50%;background:var(--text);
+  border:2px solid var(--accent);cursor:grab
+}
+.scenpanel .scenplay .scrub:active::-webkit-slider-thumb{cursor:grabbing}
+.scenpanel .scenplay .spd{
+  flex:none;display:inline-flex;border:1px solid var(--line-soft);
+  border-radius:5px;overflow:hidden
+}
+.scenpanel .scenplay .spd button{
+  inline-size:var(--control-hit);block-size:var(--control-hit);min-inline-size:var(--control-hit);
+  padding:0;border:0;border-left:1px solid var(--line-soft);
+  background:var(--surface-control-raised);color:var(--dim);
+  font-family:var(--mono);font-size:var(--f-2xs);cursor:pointer
+}
+.scenpanel .scenplay .spd button:first-child{border-left:0}
+.scenpanel .scenplay .spd button.on{background:var(--accent-2);color:var(--text)}
+.scenpanel .smstps{
+  grid-area:steps;display:flex;align-items:center;justify-content:flex-start;
+  flex-wrap:wrap;gap:5px;min-width:0;max-width:100%
+}
+.scenpanel .smstps .mstp{flex:none;border-radius:5px}
+.scenpanel .smstps .mstp .ml{padding:0 6px}
+.scenpanel .smstps .mstp .mv{
+  min-width:38px;padding:0 3px;font-size:var(--f-2xs)
+}
+.scenpanel .smstps .mstp .mv.pos{color:var(--profit)}
+.scenpanel .smstps .mstp .mv.neg{color:var(--loss)}
+.scenpanel .smstps .mstp .mv.warn{color:var(--caution)}
+.scenpanel .smstps .tunit{display:inline-flex;border-left:1px solid var(--line-soft)}
+.scenpanel .smstps .tunit button{
+  inline-size:var(--control-hit);block-size:var(--control-hit);
+  padding:0;border:0;border-left:1px solid var(--line-soft);
+  background:var(--surface-control-raised);color:var(--dim);
+  font-family:var(--mono);font-size:var(--f-2xs);cursor:pointer;text-transform:uppercase
+}
+.scenpanel .smstps .tunit button:first-child{border-left:0}
+.scenpanel .smstps .tunit button.on{background:var(--accent-2);color:var(--text)}
+.scenpanel .scenmatch{
+  margin-left:auto;color:var(--faint);font:700 var(--f-2xs)/1 var(--mono);white-space:nowrap
+}
+.scenpanel .scenmatch.neg{color:var(--loss)}
+.scenpanel .microcta.iconbtn{border-radius:50%;font-size:0}
+.scenpanel .microcta.iconbtn::before,.scenpanel .microcta.iconbtn::after{
+  content:"";position:absolute;left:50%;top:50%;width:8px;height:1.5px;
+  border-radius:1px;background:currentColor
+}
+.scenpanel .microcta.iconbtn::before{transform:translate(-50%,-50%) rotate(45deg)}
+.scenpanel .microcta.iconbtn::after{transform:translate(-50%,-50%) rotate(-45deg)}
+.scenpanel .customstory{
+  grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:6px 9px;
+  border:1px solid var(--accent-2);border-radius:8px;background:var(--accent-wash)
+}
+.scenpanel .customstory .csdot{
+  width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;
+  box-shadow:0 0 0 3px rgba(57,199,212,.15)
+}
+.scenpanel .customstory .cslbl{
+  display:flex;align-items:baseline;gap:7px;min-width:0;font-size:var(--f-xs);color:var(--dim)
+}
+.scenpanel .customstory .cslbl b{color:var(--text)}
+.scenpanel .customstory .cslbl span{
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.scenpanel .scensum{
+  display:flex;align-items:baseline;flex-wrap:wrap;gap:9px 18px;
+  margin-top:0;padding:7px 2px 1px;border-top:1px solid var(--line-soft);font-size:var(--f-sm)
+}
+.scenpanel .scensum .e{display:flex;align-items:baseline;gap:7px}
+.scenpanel .scensum .e .lbl{margin-bottom:1px}
+.scenpanel .scensum .e .v{font-family:var(--mono);font-weight:600}
+.scenpanel .scensum .range{margin-left:auto}
+.scenpanel .scensum .sumshort{display:none}
+
+@container scenario-spectrum (min-width:900px){
+  .scenpanel .srow-ctl{
+    grid-template-columns:minmax(180px,1fr) auto;
+    grid-template-areas:"play steps";gap:8px
+  }
+  .scenpanel .smstps{flex-wrap:nowrap}
+}
+@container scenario-spectrum (max-width:800px){
+  .scenpanel .srow{
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"name name" "pl value"
+  }
+  .scenpanel .srow .sn{gap:3px;overflow:hidden;padding-right:56px}
+  .scenpanel .srow .sn .snm{
+    white-space:normal;overflow:visible;text-overflow:clip;line-height:1.1
+  }
+  .scenpanel .scenarioodds{position:absolute;right:6px;top:5px}
+}
+@container scenario-spectrum (max-width:600px){
+  .scenpanel .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .scenpanel .srow{min-height:58px}
+}
 }
 
 @layer primitives{
@@ -816,10 +1024,6 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 /* inline close confirm — no separate Decide subscreen */
 .closebar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:11px 13px;border:1px solid var(--loss);border-radius:9px;background:var(--loss-wash)}
 .closetext{flex:1;min-width:240px;font-size:var(--f-sm);color:var(--text);line-height:1.5}
-/* ACTIONABLE scenarios (bloom only) — click a row to pin a what-if on the payoff */
-.focus .srow{cursor:pointer}
-.focus .srow.pinned{background:var(--accent-wash);box-shadow:inset 2px 0 0 var(--accent)}
-.focus .srow.pinned .snm{color:var(--accent)}
 .whatif{margin-top:auto;padding:8px 2px 2px;border-top:1px solid var(--line-soft);display:flex;flex-direction:column;gap:7px}
 .whatif .wf-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .whatif .wf-main{font-size:var(--f-xs);color:var(--dim);line-height:1.4;min-width:0}
@@ -831,25 +1035,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .magctl .magb:hover{border-color:var(--accent-2);color:var(--text)}
 .magctl .magv{font-family:var(--mono);font-weight:700;font-size:var(--f-sm);min-width:40px;text-align:center}
 .magctl .magv.pos{color:var(--profit)} .magctl .magv.neg{color:var(--loss)}
-/* scenario playback timeline — now ▶───────● target-move, with speed */
-.scenplay{display:flex;align-items:center;gap:9px;padding:6px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--surface-control)}
-.scenplay .playb{transition:background .12s,color .12s}
-.scenplay .tk{font-family:var(--mono);font-size:var(--f-2xs);letter-spacing:.02em;color:var(--dim);white-space:nowrap;flex:none}
-.scenplay .tk.pos{color:var(--profit)} .scenplay .tk.neg{color:var(--loss)}
-.scenplay .scrub{flex:1;min-width:70px;-webkit-appearance:none;appearance:none;height:4px;border-radius:3px;background:linear-gradient(90deg,var(--accent-2),var(--accent));cursor:pointer;margin:0}
-.scenplay .scrub::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;border-radius:50%;background:var(--text);border:2px solid var(--accent);cursor:grab;box-shadow:0 1px 3px rgba(0,0,0,.5)}
-.scenplay .scrub::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--text);border:2px solid var(--accent);cursor:grab}
-.scenplay .scrub:active::-webkit-slider-thumb{cursor:grabbing}
-.scenplay .magctl.end{flex:none;border:0;background:none;padding:0;gap:3px}
-.scenplay .magctl.end .magb{width:19px;height:19px;font-size:var(--f-sm)}
-.scenplay .magctl.end .magv{min-width:38px;font-size:var(--f-xs)}
-.scenplay .spd{flex:none;display:inline-flex;border:1px solid var(--line-soft);border-radius:5px;overflow:hidden}
-.scenplay .spd button{border:0;background:var(--surface-control-raised);color:var(--dim);font-family:var(--mono);font-size:var(--f-2xs);padding:3px 6px;cursor:pointer;border-left:1px solid var(--line-soft)}
-.scenplay .spd button:first-child{border-left:0}
-.scenplay .spd button.on{background:var(--accent-2);color:var(--text)}
 .whatif .wf-main .wf-mv{font-family:var(--mono);color:var(--dim)}
-/* (scenario assumption steppers now reuse the canonical .mstp family inline in the pinned row —
-   the bespoke .scenasm/.asmc/.magb block was deleted; see .smstps near the .srow rules) */
 .pfhandle rect{fill-opacity:.42;transition:fill-opacity var(--mo-quick) var(--mo-ease)}
 .pfhandle:hover rect{fill-opacity:1}
 
@@ -1032,76 +1218,8 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 /* B — numbers row under the payoff (reuses .kgrid.boxed/.k) */
 .numrow .v{font-size:var(--f-sm)}
 
-.smx.barmode{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:5px 0}
-/* Terminal tile: full scenario name + move, then probability and P/L on their own readable lines.
-   The selected tile remains in place while one shared control ribbon opens beneath the spectrum. */
-.srow{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name name" "odds odds" "pl value";
-  align-items:center;column-gap:8px;row-gap:4px;min-height:64px;padding:6px 8px;border:1px solid transparent;border-radius:7px;
-  min-width:0;overflow:hidden;background:transparent;color:inherit;text-align:left;cursor:pointer;font-size:var(--f-sm);transition:background var(--mo-quick) var(--mo-ease),border-color var(--mo-quick) var(--mo-ease),transform var(--mo-quick) var(--mo-ease)}
-.srow:hover,.srow.hot{background:var(--row-hover)}
-.srow:hover{border-color:var(--line);transform:translateY(-1px)}
-.srow .sn{grid-area:name;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;min-width:0}
-.srow .sn .snm{display:block;color:var(--text);font-weight:650;white-space:normal;line-height:1.2;
-  min-width:0;overflow:hidden;text-overflow:ellipsis}
-.srow .sn .snshort{display:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srow .sn .smv{font-family:var(--mono);font-size:var(--f-xs);line-height:1;flex:none}
-.scenarioodds{display:none;grid-area:odds;justify-self:end;align-items:center;gap:3px;min-width:0}
-.scenarioodds .sprob{font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);line-height:1}
-.scenarioodds .cg{width:18px;height:11px;flex:none;opacity:.6}
-.srow .sdesc{display:none;grid-area:desc;color:var(--faint);font-size:var(--f-xs);line-height:1.3}
-.srow .smv.up{color:var(--profit)} .srow .smv.dn{color:var(--loss)} .srow .smv.fl{color:var(--faint)}
-.srow .slk{grid-area:odds;display:flex;align-items:center;gap:6px;min-width:0}
-.srow .slk-b{flex:1;height:4px;background:var(--track);border-radius:2px;overflow:hidden}
-.srow .slk-b i{display:block;height:100%;background:var(--accent-2);border-radius:2px}
-.srow .slk-n{font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);width:auto;min-width:34px;max-width:44px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:clip;flex:none;line-height:1}
-.srow .sbw{grid-area:pl;position:relative;height:12px;background:var(--surface-control);border-radius:3px;border:1px solid var(--line-soft)}
-.srow .sbw::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--faint)}
-.srow .sb{position:absolute;top:1px;bottom:1px;border-radius:2px}
-.srow .sb.p{left:50%;background:var(--profit)} .srow .sb.n{right:50%;background:var(--loss)}
-.srow .sv{grid-area:value;text-align:right;font-family:var(--mono);font-weight:650;min-width:62px}
-.srow .splay{position:absolute;right:5px;top:5px;width:10px;height:10px;opacity:0;color:var(--faint);transition:opacity var(--mo-quick) var(--mo-ease)}
-.srow .splay::before{content:"";position:absolute;left:2px;top:1px;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:6px solid currentColor}
-.srow .splay.pause::before,.srow .splay.pause::after{content:"";position:absolute;top:1px;width:2px;height:8px;border:0;background:currentColor}
-.srow .splay.pause::before{left:2px}.srow .splay.pause::after{left:6px}
-.srow:hover .splay,.srow.pinned .splay,.srow.live .splay{opacity:1}
-.srow.pinned .splay,.srow.live .splay{color:var(--accent)}
-.srow.best{background:rgba(65,200,146,.09)} .srow.best .snm{color:var(--profit)}
-.srow.worst{background:rgba(243,93,100,.09)} .srow.worst .snm{color:var(--loss)}
-.srow.likely{border-color:rgba(70,213,181,.45);box-shadow:inset 2px 0 0 var(--accent)}
-.srow.live{background:var(--accent-wash);box-shadow:inset 2px 0 0 var(--accent)} .srow.live .snm{color:var(--accent)}
-/* selected tile marks the cause; the shared ribbon below owns playback + assumptions */
-.srow.pinned{background:var(--accent-wash);border-color:var(--accent-2);box-shadow:inset 2px 0 0 var(--accent)}
-.srow.pinned .snm{color:var(--accent)}
-.srow-ctl{grid-column:1/-1;display:flex;flex-direction:column;gap:7px;padding:9px 10px;border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:7px;background:var(--surface-control);cursor:default;min-width:0;max-width:100%;
-  transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
-.srx-read{font-size:var(--f-2xs);color:var(--dim);line-height:1.35;text-align:center;display:flex;align-items:center;gap:5px}
-.srx-read b{color:var(--text)} .srx-read b.pos{color:var(--profit)} .srx-read b.neg{color:var(--loss)}
-.microcta.iconbtn{border-radius:50%;font-size:0}
-.microcta.iconbtn::before,.microcta.iconbtn::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:1.5px;border-radius:1px;background:currentColor}
-.microcta.iconbtn::before{transform:translate(-50%,-50%) rotate(45deg)}
-.microcta.iconbtn::after{transform:translate(-50%,-50%) rotate(-45deg)}
-.smstps{display:flex;justify-content:center;flex-wrap:wrap;gap:8px}
-.smstps .mstp{border-radius:5px}
-.smstps .mstp .ml{padding:0 6px}
-.smstps .mstp .mv{min-width:44px;font-size:var(--f-xs);padding:0 3px}
-.smstps .mstp .mv.pos{color:var(--profit)} .smstps .mstp .mv.neg{color:var(--loss)} .smstps .mstp .mv.warn{color:var(--caution)}
-.smstps .tunit{display:inline-flex;border-left:1px solid var(--line-soft)}
-.smstps .tunit button{border:0;border-left:1px solid var(--line-soft);background:var(--surface-control-raised);color:var(--dim);font-family:var(--mono);font-size:var(--f-2xs);width:var(--control-hit);height:var(--control-hit);cursor:pointer;text-transform:uppercase}
-.smstps .tunit button:first-child{border-left:0}
-.smstps .tunit button.on{background:var(--accent-2);color:var(--text)}
-.srow-ctl .scenplay{padding:4px 8px}
 /* greek values while a scenario animates + the projected hero P/L (glow keeps semantic colors) */
 .mgv.breath,.expv.proj-live{text-shadow:0 0 9px rgba(57,199,212,.35)}
-.scensum{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px 18px;padding:7px 2px 1px;margin-top:auto;
-  border-top:1px solid var(--line-soft);font-size:var(--f-sm)}
-.scensum .e .lbl{margin-bottom:1px} .scensum .e .v{font-family:var(--mono);font-weight:600}
-.scensum .e{display:flex;align-items:baseline;gap:7px}.scensum .range{margin-left:auto}
-/* `margin-top:auto` existed to pin the summary to the bottom of a FIXED-height panel. The Decide
-   panel is content-sized now, and the auto margin was still claiming free space that the panel no
-   longer has — putting the summary row outside its own box and on top of the market caption below
-   it at 1440x900. The summary sits after the tiles, where it belongs. */
-.dccenter .scenpanel .scensum{margin-top:0}
-.scensum .sumshort{display:none}
 
 /* C — DEPTH BAND (three quiet lenses) — deliberately RECESSIVE: it must read as
    secondary to the payoff+decision hero, so type is smaller and titles are muted. */
@@ -1158,12 +1276,6 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   .focus .card .decacts{grid-area:acts;margin-top:0;align-self:center}
   .focus .card .decband{gap:6px;padding-top:8px;padding-bottom:8px;margin-bottom:7px}
   .focus .card .decbridge{padding-top:6px;line-height:1.35}
-  .focus .card .srow-ctl{display:grid;
-    grid-template-columns:minmax(0,1fr) minmax(500px,1.2fr) auto;
-    grid-template-areas:"read play steps";align-items:center;gap:12px;padding:6px 8px}
-  .focus .card .srow-ctl>.srx-read{grid-area:read;text-align:left}
-  .focus .card .srow-ctl>.scenplay{grid-area:play}
-  .focus .card .srow-ctl>.smstps{grid-area:steps;flex-wrap:nowrap}
   .focus .card .depth{margin-top:8px;gap:10px}
   .focus .card .depth .lens{padding:8px 10px;gap:7px}
   .focus .card .depth>.mechlens{display:grid;
@@ -1189,10 +1301,6 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   .focus .card>.cdetail{padding:7px 14px 5px}
   .focus .card .decband{gap:4px;padding:6px 12px;margin-bottom:5px}
   .focus .card .decbridge{padding-top:4px;line-height:1.25}
-  .focus .card .srow-ctl{padding:2px 6px;gap:6px;min-height:32px}
-  .focus .card .srow-ctl .srx-read{line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .focus .card .srow-ctl .scenplay{padding:0 3px}
-  .focus .card .srow-ctl .smstps{gap:4px}
   .focus .card .depth{margin-top:6px;gap:8px}
   .focus .card .depth .lens{padding:6px 8px;gap:5px}
   .focus .card .depth .lensnews{padding-top:3px}
@@ -1257,7 +1365,6 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .tmplbtn:hover{border-color:var(--accent-2);color:var(--text)}
 .mstp.wide{display:inline-flex;width:100%}
 .mstp.wide .mv{flex:1;text-align:left;font-size:var(--f-sm)}
-.scenpanel{flex:none}
 /* thin top spine: back · title · objective chips · recommendation (horizontal) */
 .dectop{position:relative;flex:none;display:flex;align-items:center;gap:13px;padding:1px}
 .dectop .decttl{font-weight:800;font-size:var(--f-lg);white-space:nowrap}
@@ -1464,8 +1571,9 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authscenstage.unavailable .authpositionnotice b{display:inline;margin:0}
 .authpositionnoticeactions{display:inline-flex;align-items:center;gap:6px;margin-left:auto;white-space:nowrap}
 .authscenarioarea{display:grid;grid-template-columns:minmax(540px,1.12fr) minmax(400px,.88fr);gap:10px;min-width:0;flex:1;min-height:clamp(225px,25vh,300px)}
-.authscenpanel,.authpathpanel{min-width:0;min-height:0;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);padding:9px;overflow:hidden}
-.authscenpanel{display:flex;flex-direction:column;gap:7px}
+.authscenpanel,.authpathpanel{min-width:0;min-height:0;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel);overflow:hidden}
+.authscenpanel{padding:7px}
+.authpathpanel{padding:9px}
 .authpathpanel{display:grid;grid-template-rows:auto minmax(90px,1fr) auto;gap:6px}.authpathviewport{min-width:0;min-height:0;display:flex;overflow:hidden}.authpathviewport>.authpositionnotice{flex:1}.authpathchart{width:100%;height:100%;min-height:0;display:block;overflow:hidden}
 .pathfan text{font-family:var(--mono);font-size:9px;fill:var(--faint)}
 .pathfan .fan-grid{stroke:var(--line-soft);stroke-dasharray:2 4}
@@ -1556,26 +1664,6 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
     max-height:none;overflow:visible;gap:3px}
   .authposside:has(.authposlegs .legr:nth-child(3)) .authposlegs .lgm{
     flex-wrap:wrap;white-space:normal;overflow:visible}
-  /* A six-leg package earns hero height from its contracts, so its scenario spectrum switches to
-     the same compact, evidence-complete tile grammar already used by New Idea. Four named stories
-     per row still show the full name, move, path odds and P/L; repeated vertical label rows do not
-     force the second scenario row below the bounded desktop canvas. */
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .smx.barmode{
-    gap:3px;margin:2px 0}
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .srow{
-    min-height:46px;padding:3px 5px;row-gap:2px;
-    grid-template-areas:"name odds" "pl value"}
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .srow .sn{
-    padding-right:0}
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .srow .snm{
-    white-space:nowrap;font-size:var(--f-xs)}
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .scenarioodds{
-    display:flex}
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .slk,
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel .splay{
-    display:none}
-  .authpos:has(.authposlegs .legr:nth-child(5)) .authscenpanel:has(.srow-ctl)>.lenshd{
-    display:none}
   /* Six endpoint readings fit on one compact row at desktop. Their risk journey remains visible
      below the fan, but no implicit grid row can be clipped by the fixed-height Position canvas. */
   .authpathpanel{grid-template-rows:auto minmax(105px,1fr) auto;gap:3px}
@@ -1611,8 +1699,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .dccenter .decpay{flex:1 1 auto;height:auto;min-height:130px;width:100%;display:block;border:1px solid var(--line-soft);
   border-radius:9px;background:var(--panel-2)}
 .dccenter .paytitle{margin-bottom:2px}
-.dccenter .scenpanel{flex:none;height:auto}
-.dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr))}
+.dccenter .scenpanel{height:auto}
 .dccenter .numrow{flex:none}
 /* LEFT — ideas lead, then the exact package, with the linked risk/reward map as supporting
    context. Screens/caps is summoned over this single rail instead of becoming another destination. */
@@ -1668,10 +1755,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 @media (min-width:1900px) and (min-height:1000px){
   /* Wide canvases use the same two-row centre ownership as every other desktop. Width enriches
      the plot and receipts; it does not install a second sizing algorithm. */
-  .dccenter .scenpanel{display:flex;min-height:0;flex-direction:column}
-  .dccenter .scenpanel .smx.barmode{flex:0 0 auto;grid-auto-rows:min-content}
-  .dccenter .scenpanel .srow{grid-template-areas:"name odds" "pl value";align-content:center}
-  .dccenter .scenpanel .sdesc{display:none}
+  .dccenter .scenpanel{min-height:0}
 }
 /* compact governor — smaller sliders, tighter rows; a control strip, not the headline */
 .dcleft .govpanel{padding:10px 12px;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2)}
@@ -1702,14 +1786,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 /* ---- Decide RIGHT column: Understand (mechanics + evidence/sim + book) then Execute ---- */
 .dcright{gap:12px}
 .understand{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;container:understand / inline-size;overflow:hidden}
-.dccenter .scenpanel{container:scenarios / inline-size}
 @media (max-width:1700px){
   .decgrid,.decdock{--dec-left:clamp(340px,28vw,500px);--dec-right:clamp(300px,25vw,440px);gap:9px}
   .decwrap{padding-left:10px;padding-right:10px}
-  .srow{padding-left:6px;padding-right:6px;column-gap:6px}
-  .srow .sn{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start}
-  .srow .sn .snfull{display:block}.srow .sn .snshort{display:none}
-  .scensum .sumfull{display:none}.scensum .sumshort{display:inline}
   .tmplbtn .tmpllong{display:none}.tmplbtn .tmplshort{display:inline}
   .dcleft .srchd.sub{min-width:0;gap:5px}.dcleft .srchd.sub .lbl{flex:none;white-space:nowrap;margin-right:0}
   .dcleft .srchd.sub .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
@@ -1739,17 +1818,6 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .dccenter .decpay{min-height:110px}
   .dccenter .kgrid.calm .k{padding-top:5px;padding-bottom:5px}
   .dccenter .ksecondary{margin-top:2px;gap:10px}
-  .dccenter .scenpanel{padding:4px 7px}
-  .dccenter .scenpanel .lenshd{margin-bottom:1px}
-  .dccenter .smx.barmode{gap:3px;margin:2px 0}
-  .dccenter .srow{grid-template-areas:"name odds" "pl value";min-height:44px;padding:4px 6px;row-gap:2px;font-size:12px}
-  .dccenter .srow .sn{height:auto;overflow:hidden;padding-right:0}
-  .dccenter .srow .snm{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:11px;line-height:1}
-  .dccenter .srow .sn .smv{font-size:10px}
-  .dccenter .srow .scenarioodds{display:flex}.dccenter .srow .slk{display:none}
-  .dccenter .srow .slk-b{height:3px}
-  .dccenter .srow .sbw{height:9px}
-  .dccenter .scensum{padding-top:2px;gap:3px 8px;font-size:var(--f-2xs);line-height:1.05}
   .dccenter .tmplrow{flex-wrap:nowrap;gap:4px;margin:0}.dccenter .tmplrow .lbl{font-size:var(--f-2xs)}
   .dccenter .tmplbtn{padding:2px 6px;font-size:11px}
   .dccenter .leghd{margin:3px 0 2px}.dccenter .leghd .hint{display:none}
@@ -1795,16 +1863,6 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .inspectpane .ensembleresult .mcstats{grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 12px}
   .inspectpane .ensembleresult .mcs{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:4px}
   .inspectpane .ensembleresult .mck,.inspectpane .ensembleresult .mcv{font-size:10px}
-  .scenpanel:has(.srow-ctl) .scensum{display:none}
-  .scenpanel:has(.srow-ctl) .srow[data-si]{grid-template-areas:"name odds" "pl value"}
-  .scenpanel:has(.srow-ctl) .srow[data-si] .slk{display:none}
-  .scenpanel .srow-ctl{grid-column:1/-1;display:grid;
-    grid-template-columns:minmax(0,.82fr) minmax(150px,1.18fr);grid-template-areas:"read play" "steps steps";gap:3px 6px;padding:4px 5px}
-  .scenpanel .srow-ctl>.srx-read{grid-area:read;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .scenpanel .srow-ctl>.scenplay{grid-area:play;padding:0 3px;gap:5px}
-  .scenpanel .srow-ctl .scenplay .spd button{padding:2px 4px}
-  .scenpanel .srow-ctl>.smstps{grid-area:steps;flex-wrap:nowrap;gap:4px}
-  .scenpanel .srow-ctl .mstp .mv{min-width:35px;font-size:10px}
   .dccenter:has(.srow-ctl) .decpay{min-height:92px}
 }
 @media (min-width:1001px) and (max-width:1899px) and (min-height:851px) and (max-height:1150px),
@@ -1814,18 +1872,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .dcright{overflow:hidden}
   .dccenter .marketlens .histchart{flex:1;height:auto;min-height:72px}
   .dccenter .marketlens .histstrip{display:none}
-  .dccenter .scenpanel{display:flex;height:auto;min-height:0;flex-direction:column;padding:8px 10px 7px}
-  .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:4px 0}
-  .dccenter .scenpanel .srow{grid-template-areas:"name odds" "pl value";min-height:42px;padding:4px 6px;row-gap:3px}
-  .dccenter .scenpanel .srow .sn{padding-right:0}
-  .dccenter .scenpanel .srow .scenarioodds{display:flex}.dccenter .scenpanel .srow .slk{display:none}
-  /* `margin-top:auto` here overrode the generic reset and pushed the summary past the panel's own
-     box — measured 686..699 against a panel ending at 673, landing on the history caption below it
-     at 1440x900. The panel is content-sized now, so there is nothing to push against. */
-  .dccenter .scenpanel .scensum{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px 10px;
-    margin-top:0;padding-top:3px;font-size:var(--f-xs);white-space:nowrap}
-  .dccenter .scenpanel:has(.srow-ctl)>.lenshd,.dccenter .scenpanel:has(.srow-ctl) .scensum{display:none}
-  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{min-height:35px;padding-top:2px;padding-bottom:2px}
+  .dccenter .scenpanel{height:auto;min-height:0}
 }
 .execute{flex:none}
 .usechead{font-size:var(--f-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent-2);font-weight:700;margin-bottom:1px}
@@ -2253,65 +2300,6 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .ssread .sslead{font-weight:700;color:var(--text)}.ssread .ssmove{font-family:var(--mono);color:var(--faint)}
 .ssread .sspl{font-family:var(--mono);font-weight:800}.ssread .sspl.pos{color:var(--profit)}.ssread .sspl.neg{color:var(--loss)}
 .ssread .ssrange{margin-left:auto;color:var(--faint);font-size:var(--f-2xs)}
-.scenpanel .srow-ctl{margin-top:7px}
-/* The shared scenario toolbar responds to its own width. Readout + playback lead, while the
-   existing assumption steppers share one compact row; only a genuinely wide center places all
-   three groups side by side. This keeps the same controls and stable DOM without vertical spill. */
-.dccenter .scenpanel .srow-ctl{display:grid;grid-template-columns:minmax(0,1fr);
-  grid-template-areas:"play" "steps";align-items:center;gap:5px;padding:4px 5px;min-width:0;max-width:100%}
-.dccenter .scenpanel .srow-ctl>.scenplay{grid-area:play;padding:1px 4px;gap:5px;min-width:0;max-width:100%}
-.dccenter .scenpanel .srow-ctl>.scenplay .scrub{min-width:24px}
-.dccenter .scenpanel .srow-ctl .scenplay .spd button{padding:2px 4px}
-.dccenter .scenpanel .srow-ctl>.smstps{grid-area:steps;align-items:center;flex-wrap:wrap;gap:5px;min-width:0;max-width:100%}
-.dccenter .scenpanel .srow-ctl .mstp{flex:none}
-.dccenter .scenpanel .srow-ctl .mstp .mv{min-width:38px;font-size:var(--f-2xs)}
-.dccenter .scenpanel .srow-ctl .scenmatch{margin-left:auto;color:var(--faint);font:700 var(--f-2xs)/1 var(--mono);white-space:nowrap}
-.dccenter .scenpanel .srow-ctl .scenmatch.neg{color:var(--loss)}
-@container scenarios (min-width:1100px){
-  .dccenter .scenpanel .srow-ctl{grid-template-columns:minmax(350px,1fr) auto;
-    grid-template-areas:"play steps";gap:8px;padding:5px 7px}
-  .dccenter .scenpanel .srow-ctl>.smstps{flex-wrap:nowrap}
-}
-@container scenarios (max-width:800px){
-  /* Keep the compact spectrum to two rows without letting the exact P/L column size its name.
-     Odds are a small top-right receipt; the name spans the complete tile and reserves that fixed
-     corner. A three-row workaround preserved the words but stole height from the payoff. */
-  .dccenter .scenpanel .srow{
-    grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"name name" "pl value"
-  }
-  .dccenter .scenpanel .srow .sn{gap:3px;overflow:hidden;padding-right:56px}
-  .dccenter .scenpanel .srow .sn .snm{display:block;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.1}
-  .dccenter .scenpanel .srow .sn .snfull{display:block}
-  .dccenter .scenpanel .srow .sn .snshort{display:none}
-  .dccenter .scenpanel .srow .scenarioodds{display:flex;position:absolute;right:6px;top:5px}
-  .dccenter .scenpanel .srow .slk{display:none}
-  .dccenter .scenpanel .srow .splay{display:none}
-  /* Playback earns its own shared toolbar by tightening the eight story tiles, not by stealing
-     the payoff chart's receipt. Name/move, odds/glyph and P/L remain present in the same tile. */
-  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{min-height:44px;padding:4px 6px}
-}
-@media (min-width:1900px) and (min-height:1000px){
-  .dccenter .scenpanel:has(.srow-ctl) .smx.barmode{grid-template-rows:repeat(2,minmax(0,1fr)) auto;grid-auto-rows:auto}
-}
-/* A 2000×963 application viewport is wide but vertically constrained. Playback still retains all
-   eight stories, exact P/L, odds, lifecycle, scrub, speed, move/vol/time and clear controls; it
-   simply removes surplus tile height so the payoff receipt remains wholly visible. */
-@media (min-width:1900px) and (max-height:999px){
-  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{
-    min-height:30px;padding:2px 5px;row-gap:2px
-  }
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl{
-    grid-template-columns:minmax(120px,1fr) auto;grid-template-areas:"play steps";
-    align-items:center;margin-top:3px;padding:2px 4px;gap:5px
-  }
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.scenplay{
-    padding-top:0;padding-bottom:0
-  }
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
-  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk{font-size:9px}
-  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{font-size:9px}
-}
 /* The exact package is a persistent workbench beside its ranked ideas, not a hidden mode.
    Engine ideas remain immutable; the first direct edit forks the visible package into a draft.
    Every exact leg owns a full-width row. Longer structures use a bounded vertical workbench,
@@ -2984,11 +2972,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .dccpay{height:auto;overflow:visible}
   .dccenter .decpay,.dccenter:has(.declegs) .decpay,.dccenter:has(.srow-ctl) .decpay,
   .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:230px;min-height:230px;max-height:none}
-  .dccenter .scenpanel{height:auto;min-height:0;overflow:visible;padding:9px 10px}
-  .dccenter .scenpanel .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
-  .dccenter .srow{min-height:66px;grid-template-areas:"name odds" "pl value"}
-  .dccenter .srow .sn{padding-right:0}
-  .dccenter .srow .scenarioodds{display:flex}.dccenter .srow .slk{display:none}
+  .dccenter .scenpanel{height:auto;min-height:0;overflow:visible}
   .understand,.understand .inspectwell{height:auto;min-height:0;overflow:visible}
   .understand .inspectpane{height:auto;min-height:0;overflow:visible}
   /* On one narrow column the page owns scrolling. The evidence fan uses a readable landscape
@@ -3067,10 +3051,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      Give it the full row of the pulse footer and let the Shape button drop below it. */
   .authmarketpulse .authpulsefoot{flex-wrap:wrap;row-gap:5px}
   .authmarketpulse .authpulsefoot>span{white-space:normal;overflow:visible;text-overflow:clip;flex:1 1 100%;min-width:0;line-height:1.3}
-  /* Decision-brief EV read is a sentence — wrap it on mobile instead of a one-line ellipsis.
-     Scenario short-names likewise wrap rather than clip in the compact name cell. */
+  /* Decision-brief EV read is a sentence — wrap it on mobile instead of a one-line ellipsis. */
   .understand .decisionbrief .dbread{white-space:normal;overflow:visible;text-overflow:clip}
-  .srow .sn .snm{white-space:normal;overflow:visible;text-overflow:clip}
   .fan .fanhead{display:none}
   .fan .fanr{display:grid;grid-template-columns:30px repeat(5,minmax(0,1fr)) 24px;
     grid-template-areas:"icon name name name name name fit" "net net loss loss chance chance chance" "cap cap cap ev ev ev ev";
@@ -3099,14 +3081,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .declegpanel .declegs .lgm{white-space:normal;line-height:1.3}
   .dccenter .decpay,.dccenter:has(.declegs) .decpay,.dccenter:has(.srow-ctl) .decpay,
   .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:210px;min-height:210px}
-  .dccenter .srow{padding:6px;column-gap:5px}.dccenter .srow .sv{min-width:54px}
-  .dccenter .scenpanel .srow-ctl{grid-template-columns:1fr;grid-template-areas:"play" "steps";gap:5px}
-  .dccenter .scenpanel .srow-ctl>.scenplay,.dccenter .scenpanel .srow-ctl>.smstps{width:100%;min-width:0;max-width:100%}
-  .dccenter .scenpanel .srow-ctl>.smstps{flex-wrap:wrap;justify-content:flex-start}
-  .dccenter .scenpanel .srow-ctl .scenplay .tk{display:none}
-  .dccenter .scenpanel .srow-ctl .scenplay{gap:3px}
-  .dccenter .scenpanel .srow-ctl .scenplay .scrub{height:40px;
-    background:linear-gradient(90deg,var(--accent-2),var(--accent)) center/100% 4px no-repeat}
   .authcompare .acrow{grid-template-columns:minmax(110px,1fr) repeat(2,minmax(62px,.7fr))}.authcompare .acrow>*:nth-child(4),.authcompare .acrow>*:nth-child(5){display:none}
   .kgrid.calm{grid-template-columns:1fr!important}.ksecondary{gap:7px 12px}
   .inspectrail{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -3115,9 +3089,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dockrow{grid-template-columns:minmax(0,1fr) 40px;grid-template-areas:"order edit" "fill fill" "place place"}
   .dockrow .btn.place{width:100%}
   .reviewchecks{grid-template-columns:1fr}.reviewacts{white-space:normal;justify-content:stretch}.reviewacts .btn{flex:1}
-}
-@media (max-width:340px){
-  .dccenter .scenpanel .smx.barmode{grid-template-columns:minmax(0,1fr)}
 }
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important;animation:none!important}

@@ -455,9 +455,8 @@ function authPositionPnlPresentation(p){
       ' receipt. It is orientation only, not a close quote or management signal.'};
   return {label:'Open P/L',value:null,available:false,indicative:false,reason:current.reason};
 }
-function authCurrentCloseCash(trade,current,availability){
-  var fact=availability&&availability.close||{},price=current&&current.currentClosePrice
-      ||trade&&trade.currentClosePrice||null;
+function authCurrentCloseCash(current,availability){
+  var fact=availability&&availability.close||{},price=current&&current.currentClosePrice||null;
   return fact.available===true&&price&&price.afterFeeNetCents!=null
     ?authDollarsFromCents(price.afterFeeNetCents):null;
 }
@@ -1268,7 +1267,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
   var payoffReason=p.terminalPayoff&&p.terminalPayoff.unavailableReason
     ||'The recorded position does not contain a complete terminal-payoff receipt.';
   var pnlRead=authPositionPnlPresentation(p),
-      closeValue=authCurrentCloseCash(p._trade,cur,availability),
+      closeValue=authCurrentCloseCash(cur,availability),
       closeFact=authCurrentFact(availability,'close',closeValue),
       quoteFact=authCurrentFact(availability,'quote',p.spot),
       popFact=authCurrentFact(availability,'pop',authNumber(cur.popNow));
@@ -2743,7 +2742,6 @@ function authHomeOptionRows(row,spot,maximum){
   rows.sort(function(a,b){return a.strike-b.strike;});
   return rows;
 }
-function authHomeBook(q){var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask);if(bid==null||ask==null)return '—';if(bid<=0&&ask<=0)return '—';return bid.toFixed(2)+' / '+ask.toFixed(2);}
 function authHomeBookActions(q,type,strike){
   var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask),kind=String(type||'').toUpperCase(),
       strikeText=Number(strike).toFixed(Number(strike)%1?1:0);
@@ -3700,7 +3698,6 @@ function authInvalidateOpportunity(renderMode){
   if(renderMode==='results')authPatchScoutResult();
   else if(renderMode!=='none')authRenderOpportunityFrame();
 }
-function authResetOpportunity(){authInvalidateOpportunity('full');}
 function authChangeWorkspaceDeclaration(patch,fields,options){
   patch=patch||{};options=options||{};
   var keys=Object.keys(patch),changed=keys.some(function(key){
@@ -4803,28 +4800,16 @@ function authPositionEvent(payload){var phase=payload.phase,ps=payload.position|
      component obeys CurrentMarketAvailability; an absent executable close does not erase a valid
      quote/POP/Greeks receipt, and a stale mark cannot masquerade as today's P/L. */
   p.currentAvailability=authCurrentAvailability(cur.availability);
-  /* Position detail owns an independent QuoteView. A complete package mark can fail because one
-     option leg lacks an executable close while the underlying quote remains valid. Preserve that
-     independent receipt instead of inheriting the package-wide failure stamped on `current`. */
-  var detailQuote=detail.quote||{},detailQuoteCents=detailQuote.priced===true
-      &&authNumber(detailQuote.displayPrice)!=null
-    ?Math.round(Number(detailQuote.displayPrice)*100):null;
-  if(detailQuoteCents!=null)p.currentAvailability.quote={available:true,reason:null};
   var quoteFact=authCurrentFact(p.currentAvailability,'quote',
-        authDollarsFromCents(authNumber(trade.currentUnderlyingCents)==null
-          ?authNumber(cur.underlyingCents)==null?detailQuoteCents:cur.underlyingCents
-          :trade.currentUnderlyingCents)),
+        authDollarsFromCents(cur.underlyingCents)),
       pnlFact=authCurrentFact(p.currentAvailability,'decisionPnl',
-        authDollarsFromCents(authNumber(trade.decisionUnrealizedPnlCents)==null
-          ?cur.decisionUnrealizedCents:trade.decisionUnrealizedPnlCents)),
+        authDollarsFromCents(cur.decisionUnrealizedCents)),
       popFact=authCurrentFact(p.currentAvailability,'pop',authNumber(cur.popNow)),
       greeksFact=authCurrentFact(p.currentAvailability,'greeks',cur.greeks||null);
   p.spot=quoteFact.available?quoteFact.value:null;
   p.pnl=pnlFact.available?pnlFact.value:null;
-  p.indicativePnl=authDollarsFromCents(
-    authNumber(trade.indicativeDecisionUnrealizedPnlCents)==null
-      ?cur.indicativeDecisionUnrealizedCents:trade.indicativeDecisionUnrealizedPnlCents);
-  p.currentClosePrice=cur.currentClosePrice||trade.currentClosePrice||null;
+  p.indicativePnl=authDollarsFromCents(cur.indicativeDecisionUnrealizedCents);
+  p.currentClosePrice=cur.currentClosePrice||null;
   p.indicativeBasis=p.currentClosePrice&&p.currentClosePrice.valuationBasis||null;
   p.pop=popFact.available?Number(popFact.value)*100:null;
   p.greeks=greeksFact.available?greeksFact.value:null;
@@ -6256,14 +6241,6 @@ function decHead(){
   var crumbTail=decide.kind==='idea'?'New idea':(decide.sym+' · '+decide.act);
   return '<div class="dechead"><button class="dback" data-dec="back">← Back</button>'+
     '<span class="dtitle">Decide</span><span class="dctx">'+crumbTail+'</span></div>';
-}
-function objChip(label,opts,cur,key){
-  /* Component identity is the CLASS; the variant is a DATA ATTRIBUTE. That keeps the class space
-     statically analyzable (every class in the CSS is a literal in the source) while the variant
-     stays available to styling and tests via [data-objchip="..."]. */
-  return '<span class="objchip" data-objchip="'+deskEsc(key)+'"><span class="ok">'+label+'</span><span class="oseg">'+
-    opts.map(function(o){return '<button data-obj="'+key+'" data-val="'+o+'" class="'+(o===cur?'on':'')+'">'+o+'</button>';}).join('')+
-    '</span></span>';
 }
 function ideaObjChip(label,key,current){
   var canonical=canonicalIdeaDeclarationValue(key,current);

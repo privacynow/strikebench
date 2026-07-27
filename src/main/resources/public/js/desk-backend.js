@@ -213,9 +213,8 @@
 
   function horizonDays(context) {
     var ownsDays = context && Object.prototype.hasOwnProperty.call(context, 'horizonDays');
-    var raw = ownsDays ? context.horizonDays : context && context.horizon;
-    if (context && (ownsDays || Object.prototype.hasOwnProperty.call(context, 'horizon'))
-        && (raw == null || String(raw).trim() === '')) return null;
+    var raw = ownsDays ? context.horizonDays : null;
+    if (context && ownsDays && (raw == null || String(raw).trim() === '')) return null;
     var parsed = raw == null ? null : Number(String(raw).match(/\d+/) && String(raw).match(/\d+/)[0]);
     // Absence is a declaration fact (like intentOf/thesisOf): an undeclared horizon stays null and
     // is surfaced as "horizon undeclared" — the adapter never fabricates a 45-session default.
@@ -246,12 +245,7 @@
     return null;
   }
 
-  /*
-   * One declaration dialect crosses the presentation/bridge boundary. Legacy `horizon` is read
-   * only while callers migrate; it is immediately normalized to the Plan's integer horizonDays.
-   * Commands such as evaluation adoption, world transition, and retry ownership never enter this
-   * value object.
-   */
+  /* One declaration dialect crosses the presentation/bridge boundary. */
   function normalizeIdeaDeclaration(raw) {
     raw = raw || {};
     var symbol = String(raw.symbol || '').trim().toUpperCase();
@@ -275,28 +269,15 @@
     };
   }
 
-  /* Each row of the expirations receipt states its own distance in trading sessions, computed by
-     the market calendar that also owns holidays. The browser picks the nearest to the declared
-     horizon; it does not count days. */
   function expirationDate(row) { return row && typeof row === 'object' ? row.date : row; }
-  function expirationSessions(row) {
-    var n = row && typeof row === 'object' ? Number(row.tradingSessions) : NaN;
-    return Number.isFinite(n) ? n : null;
+  function expirationPath(encodedSymbol, horizonSessions) {
+    var path = '/api/research/' + encodedSymbol + '/expirations';
+    return horizonSessions == null ? path
+      : path + '?horizonSessions=' + encodeURIComponent(horizonSessions);
   }
-  function chooseExpiration(expirations, targetSessions) {
-    var rows = (Array.isArray(expirations) ? expirations : []).filter(function (row) {
-      return expirationSessions(row) != null && expirationDate(row);
-    });
-    if (!rows.length) return null;
-    // No declared horizon means no target to be near: the nearest listed expiration is the only
-    // honest choice, and the caller labels it as such.
-    rows.sort(targetSessions == null
-      ? function (a, b) { return expirationSessions(a) - expirationSessions(b); }
-      : function (a, b) {
-        return Math.abs(expirationSessions(a) - targetSessions)
-          - Math.abs(expirationSessions(b) - targetSessions);
-      });
-    return expirationDate(rows[0]);
+  function selectedExpiration(document) {
+    var selection = document && document.selection || {};
+    return selection.date ? String(selection.date) : null;
   }
 
   var FRESHNESS_RANK = {
@@ -549,11 +530,6 @@
     return snapshot && Array.isArray(snapshot.activeTrades) ? snapshot.activeTrades : [];
   }
 
-  function practiceBookShares(data) {
-    var book = data && data.practiceBook;
-    return book && Array.isArray(book.sharePositions) ? book.sharePositions : [];
-  }
-
   function optionalValidatedSlot(slot, label, validator) {
     slot = objectSlot(slot, label);
     if (!slot || !slot.available) return slot;
@@ -593,7 +569,7 @@
       api.getFresh('/api/status'),
       api.getFresh('/api/world'),
       api.get('/api/research/' + encoded),
-      api.get('/api/research/' + encoded + '/expirations'),
+      api.get(expirationPath(encoded, targetDays)),
       optionalFresh('/api/account')
     ]);
     if (seq !== state.requestSeq) return null;
@@ -613,7 +589,7 @@
     assertEvidenceLane(quote.evidence, identity.marketLane, 'Quote');
     var mark = researchMark(research), spot = mark.value;
     if (!(spot > 0)) throw new Error(symbol + ' has no canonical market-owned display price.');
-    var expiration = chooseExpiration(base[4] && base[4].expirations, targetDays);
+    var expiration = selectedExpiration(base[4]);
     if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
     notify('loading', { operation: 'option-chain', symbol: symbol, expiration: expiration });
     var chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
@@ -636,7 +612,9 @@
     var market = {
       config: base[0], status: base[1], world: base[2], research: research, quote: quote,
       expirations: (base[4].expirations || []).map(expirationDate), expiration: expiration, chain: chain,
-      expirationBasis: targetDays == null ? 'NEAREST_LISTED' : 'DECLARED_HORIZON',
+      expirationSelection: base[4].selection||null,
+      expirationBasis: base[4].selection&&base[4].selection.basis||null,
+      expirationAsOf: base[4].asOfDate||null,
       account: base[5] && base[5].account || null,
       identity: identity,
       spot: spot, provenance: marketEvidence(identity, quote, chain, base[4], mark)
@@ -857,16 +835,10 @@
       .sort(function (a, b) {
         var time = String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
         return time || Number(b.version || 0) - Number(a.version || 0);
-      });
+    });
     for (var i = 0; i < candidates.length; i++) {
-      var listed = candidates[i], exact;
-      try {
-        exact = await requireApi().getFresh('/api/plans/' + encodeURIComponent(listed.id));
-      } catch (error) {
-        // Older deterministic Desk fixtures did not expose the detail read. Production does.
-        if (!error || error.status !== 404) throw error;
-        exact = listed;
-      }
+      var listed = candidates[i];
+      var exact = await requireApi().getFresh('/api/plans/' + encodeURIComponent(listed.id));
       if (seq !== state.requestSeq) return null;
       if (samePlan(exact, identity)) return exact;
     }
@@ -3441,16 +3413,21 @@
       // windows, never distinct provider or API reads.
       marketSlot('history:max:' + symbol,
         '/api/research/' + encoded + '/history?range=max'),
-      seeded ? present('expirations:' + symbol, '/api/research/' + encoded + '/expirations', {
+      seeded ? present('expirations:' + symbol, expirationPath(encoded, declaredHorizon), {
         symbol: symbol, expirations: marketSeed.expirations || [],
-        asOfDate: marketSeed.expirationAsOf || null
+        asOfDate: marketSeed.expirationAsOf || null,
+        selection: marketSeed.expirationSelection||{
+          date:marketSeed.expiration||null,
+          requestedHorizonSessions:declaredHorizon,
+          tradingSessions:null,calendarDays:null,
+          basis:marketSeed.expirationBasis||null
+        }
       }) : marketSlot('expirations:' + symbol,
-        '/api/research/' + encoded + '/expirations')
+        expirationPath(encoded, declaredHorizon))
     ]).then(async function (base) {
       var expirationSlot = objectSlot(base[3], symbol + ' option expirations');
       var envelope = expirationSlot && expirationSlot.available ? expirationSlot.value : {};
-      var expiration = seeded ? marketSeed.expiration
-        : chooseExpiration(envelope.expirations, declaredHorizon);
+      var expiration = selectedExpiration(envelope);
       var chainSlot = seeded && String(marketSeed.expiration || '') === String(expiration)
         ? await present('chain:' + symbol, '/api/research/' + encoded + '/chain', marketSeed.chain)
         : expiration
@@ -3621,7 +3598,7 @@
       // The full option/research document is fetched for one focused symbol only. Its response
       // remains in the shared API cache for New Idea, while the bounded watch uses cheap quotes.
       var api = requireApi(), encoded = encodeURIComponent(detail);
-      if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
+      if (api.prefetch) api.prefetch(expirationPath(encoded, horizonDays(workspaceContext)));
       hydrateBookFocusedContext(seq, contextSeq, before, data, detail);
     } catch (error) {
       publishBookContext(seq, contextSeq, data, {
@@ -3680,7 +3657,7 @@
     var before = await readIdentitySnapshot();
     if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return null;
     var api = requireApi(), encoded = encodeURIComponent(symbol);
-    if (api.prefetch) api.prefetch('/api/research/' + encoded + '/expirations');
+    if (api.prefetch) api.prefetch(expirationPath(encoded, horizonDays(workspaceContext)));
     await hydrateBookFocusedContext(seq, contextSeq, before, data, symbol, options);
     return contextSeq === bookContextRequestSeq ? data.homeContext : null;
   }
