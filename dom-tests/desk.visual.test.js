@@ -1881,6 +1881,114 @@ test('desktop Market receipts own disjoint rows across complete and degraded lan
     `Market/history sibling ownership failed:\n  ${failures.join('\n  ')}`);
 });
 
+test('captured package and nearby chain keep every exact fact inside one non-scrolling owner', async () => {
+  const viewports = [
+    { width: 2000, height: 963, name: '2000x963' },
+    { width: 1920, height: 1080, name: '1920x1080' },
+    { width: 2560, height: 1440, name: '2560x1440' },
+    { width: 1440, height: 900, name: '1440x900' },
+    { width: 1000, height: 800, name: '1000x800' },
+    { width: 390, height: 844, name: '390x844' }
+  ];
+  const failures = [];
+  for (const viewport of viewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    page.setDefaultTimeout(22000);
+    try {
+      await installWorld(page, {
+        positions: 4,
+        workingIdeas: 5,
+        scout: 'idle',
+        idea: { primaryLegCount: 4 }
+      });
+      await bootHome(page);
+      await openNewIdea(page);
+      await page.waitForFunction(() => {
+        const market = window.decide && window.decide._marketCtx;
+        return market && market.phase !== 'loading'
+          && document.querySelectorAll('#decideStage .packagebooknear .authchainrow').length === 2;
+      });
+      await page.waitForTimeout(80);
+      const measured = await page.evaluate(() => {
+        const owner = document.querySelector('#decideStage .marketlens .packagebook');
+        const receipt = owner && owner.querySelector('.pricereceipt');
+        const near = owner && owner.querySelector('.packagebooknear');
+        const rect = element => {
+          const value = element && element.getBoundingClientRect();
+          return value && {
+            left: value.left, top: value.top, right: value.right, bottom: value.bottom,
+            width: value.width, height: value.height
+          };
+        };
+        const inside = (child, parent) => child.left >= parent.left - 1
+          && child.right <= parent.right + 1
+          && child.top >= parent.top - 1
+          && child.bottom <= parent.bottom + 1;
+        const exactFacts = owner ? Array.from(owner.querySelectorAll(
+          '.prhd .hint, .prk, .prv, .prmeta span, .authchainhead>*, '
+          + '.authchainrow>*, .compactchainreceipt'
+        )) : [];
+        const ownerRect = rect(owner);
+        const receiptRect = rect(receipt);
+        const nearRect = rect(near);
+        const children = near ? Array.from(near.children).map(element => ({
+          text: (element.textContent || '').replace(/\s+/g, ' ').trim(),
+          rect: rect(element)
+        })) : [];
+        return {
+          owner: ownerRect,
+          receipt: receiptRect,
+          near: nearRect,
+          ownerOverflowY: owner && getComputedStyle(owner).overflowY,
+          nearOverflowY: near && getComputedStyle(near).overflowY,
+          childrenInside: !!nearRect && children.every(child =>
+            child.rect && inside(child.rect, nearRect)),
+          clippedFacts: exactFacts.filter(element =>
+            element.scrollWidth > element.clientWidth + 1
+              || element.scrollHeight > element.clientHeight + 1).map(element => ({
+            text: (element.textContent || '').replace(/\s+/g, ' ').trim(),
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight
+          })),
+          text: (owner && owner.textContent || '').replace(/\s+/g, ' ').trim()
+        };
+      });
+      const label = viewport.name;
+      if (!measured.owner || !measured.receipt || !measured.near) {
+        failures.push(`${label}: captured receipt or nearby-chain owner is absent`);
+        continue;
+      }
+      if (!measured.childrenInside) {
+        failures.push(`${label}: a nearby-chain child paints outside its owner`);
+      }
+      if (measured.clippedFacts.length) {
+        failures.push(`${label}: exact facts are clipped ${JSON.stringify(measured.clippedFacts)}`);
+      }
+      if (['auto', 'scroll'].includes(measured.ownerOverflowY)
+          || ['auto', 'scroll'].includes(measured.nearOverflowY)) {
+        failures.push(`${label}: package evidence introduced a nested vertical scroller`);
+      }
+      for (const expected of [
+        'Option net', 'Package net', 'Opening fees', 'After fees',
+        'Executable now', 'Call bid / ask', 'Put bid / ask'
+      ]) {
+        if (!measured.text.includes(expected)) {
+          failures.push(`${label}: exact package/chain fact "${expected}" is absent`);
+        }
+      }
+    } catch (error) {
+      failures.push(`${viewport.name}: ${error.message.split('\n')[0]}`);
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `Captured-package geometry failed:\n  ${failures.join('\n  ')}`);
+});
+
 test('the expected-move overlay draws the backend range, never a reusable client cone', async () => {
   const failures = [];
   for (const state of ['ready', 'stale', 'missing', 'error']) {

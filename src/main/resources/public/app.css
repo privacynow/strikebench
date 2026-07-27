@@ -1811,7 +1811,6 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .inspectpane .cohprose{padding-top:5px;font-size:var(--f-2xs);line-height:1.3}
   .inspectpane .tailpanel{padding:6px 7px}.inspectpane .tailpanel .lenshd{margin-bottom:1px}
   .inspectpane .tailmain{font-size:var(--f-xs);line-height:1.3;margin:2px 0}.inspectpane .tailsub{font-size:var(--f-2xs);line-height:1.25}
-  .inspectpane .gapdial button{padding-left:6px;padding-right:6px}
   .inspectpane .fitbudget{margin-top:5px;padding:6px 7px}
   .inspectpane .mechg{gap:4px;margin-top:2px}.inspectpane .mgt{padding:5px 6px}.inspectpane .mgbar{margin:3px 0 2px}
   .inspectpane .mgc{font-size:var(--f-2xs)}.inspectpane .mechstats{gap:4px 8px;margin-top:5px}
@@ -2104,17 +2103,11 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .tailpanel .eyebrow{color:var(--loss);display:inline-flex;align-items:center}
 .tailpanel .eyebrow .tdot{width:6px;height:6px;border-radius:50%;background:var(--loss);margin-right:6px;box-shadow:0 0 0 3px rgba(243,93,100,.13)}
 .tailpanel .tev{font-size:var(--f-xs);color:var(--caution);font-weight:700}
-.tailpanel .gapdial{margin-left:auto}
 .tailmain{font-size:var(--f-sm);line-height:1.5;color:var(--dim);margin:3px 0 4px}
 .tailmain b{color:var(--text)} .tailmain b.neg{color:var(--loss)} .tailmain b.pos{color:var(--profit)}
 .tailmain .tmax{font-size:var(--f-xs);color:var(--loss);border:1px solid var(--loss);border-radius:4px;padding:0 4px;margin-left:1px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
 .tailsub{font-size:var(--f-xs);line-height:1.4;color:var(--faint)}
 .tailsub b{color:var(--text)}
-.gapdial{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-.gapdial button{border:0;background:0;color:var(--faint);font-size:var(--f-xs);font-weight:700;padding:2px 8px;cursor:pointer;border-left:1px solid var(--line-soft)}
-.gapdial button:first-child{border-left:0}
-.gapdial button.on{background:var(--accent-2);color:var(--text)}
-.gapdial button:not(.on):hover{color:var(--text)}
 /* book impact — graphical */
 .upanel .bkbar{height:9px;border-radius:5px;background:var(--line-soft);overflow:hidden;display:flex;margin:2px 0 5px}
 .upanel .bkbar .bkexist{background:var(--accent-2);opacity:.55;height:100%}
@@ -4025,7 +4018,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      remains in the DOM and in the execution dock, while this placement reserves real height for
      the separately-owned nearby chain instead of clipping it behind the receipt. */
   .dccenter .marketlens .packagebook:has(.packagebooknear){
-    display:grid;grid-template-rows:max-content minmax(72px,1fr);gap:2px
+    display:grid;grid-template-rows:max-content max-content;align-content:start;gap:2px
   }
   .dccenter .marketlens .packagebook .pricereceipt{
     width:100%;min-width:0;max-width:100%;margin-top:2px;padding:4px 6px;box-sizing:border-box
@@ -4033,23 +4026,34 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .packagebook .pricereceipt .prhd,
   .dccenter .marketlens .packagebook .prgrid,
   .dccenter .marketlens .packagebook .prmeta{width:100%;min-width:0;max-width:100%}
-  .dccenter .marketlens .packagebook .pricereceipt .prhd{margin-bottom:2px}
+  .dccenter .marketlens .packagebook .pricereceipt .prhd{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;
+    gap:4px;margin-bottom:2px;line-height:1.15
+  }
+  .dccenter .marketlens .packagebook .pricereceipt .prhd .eyebrow,
   .dccenter .marketlens .packagebook .pricereceipt .prhd .hint{
-    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+    min-width:0;font-size:var(--f-2xs);line-height:1.15;overflow:visible;
+    text-overflow:clip;white-space:normal
   }
   .dccenter .marketlens .packagebook .prgrid{
-    grid-template-columns:repeat(3,minmax(0,1fr));gap:0 6px
+    grid-template-columns:repeat(2,minmax(0,1fr));gap:1px 8px
   }
   .dccenter .marketlens .packagebook .prrow{
-    flex-direction:column;align-items:flex-start;gap:0;overflow:hidden;line-height:1.1
+    flex-direction:row;align-items:baseline;gap:4px;overflow:visible;line-height:1.15
   }
   .dccenter .marketlens .packagebook .prk,
-  .dccenter .marketlens .packagebook .prv{font-size:var(--f-2xs)}
+  .dccenter .marketlens .packagebook .prv{
+    min-width:0;font-size:var(--f-2xs);line-height:1.15;white-space:nowrap
+  }
   .dccenter .marketlens .packagebook .prmeta{
-    margin-top:2px;gap:4px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap
+    margin-top:2px;gap:1px 4px;flex-wrap:wrap;overflow:visible;
+    font-size:var(--f-2xs);line-height:1.15;white-space:normal
   }
   .dccenter .marketlens .packagebook .prmeta span{
-    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+    min-width:0;overflow:visible;text-overflow:clip;white-space:nowrap
+  }
+  .dccenter .marketlens .packagebook .prmeta span:not(.prfp):not(:last-child)::after{
+    margin-left:4px
   }
   /* Two resting headlines fit without scrolling. Expanding the explicit +N action creates the
      one intentional list scroller; every headline remains reachable without moving the adjacent
@@ -4069,15 +4073,20 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .packagebooknear{display:grid;grid-template-columns:minmax(0,1fr) auto;
     grid-template-areas:"head more" "rows rows" "receipt receipt";align-content:start;gap:1px 5px;margin-top:1px;padding-top:1px}
   .dccenter .marketlens .packagebooknear .authchainhead,
-  .dccenter .marketlens .packagebooknear .authchainrow{grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:4px;padding-inline:4px;line-height:1.35}
-  .dccenter .marketlens .packagebooknear .authchainhead{grid-area:head;height:15px;padding-block:0}
+  .dccenter .marketlens .packagebooknear .authchainrow{
+    grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);
+    gap:4px;padding-inline:4px;line-height:1.2
+  }
+  .dccenter .marketlens .packagebooknear .authchainhead{
+    grid-area:head;height:14px;padding-block:0
+  }
   .dccenter .marketlens .packagebooknear .authchainrows{grid-area:rows}
-  .dccenter .marketlens .packagebooknear .authchainrow{height:20px;padding-block:0}
+  .dccenter .marketlens .packagebooknear .authchainrow{height:18px;padding-block:0}
   .dccenter .marketlens .packagebooknear .authchainrows{gap:1px}
   .dccenter .marketlens .packagebooknear .compactchainreceipt{grid-area:receipt;align-self:center;margin:0;padding:0;border:0;
-    min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.15}
+    min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.1}
   .dccenter .marketlens .packagebooknear .chainmore{
-    grid-area:more;align-self:center;min-height:15px;margin:0;padding:0 4px;font-size:var(--f-2xs)
+    grid-area:more;align-self:center;min-height:14px;margin:0;padding:0 4px;font-size:var(--f-2xs)
   }
   .dccenter .marketlens .authnews.compactnews{gap:3px}
   .dccenter .marketlens .authnews.compactnews a{padding:3px 5px;line-height:1.25}
