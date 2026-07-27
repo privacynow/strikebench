@@ -83,6 +83,23 @@ public final class DecisionDeclarationPolicy {
         return StrategyIntent.parse(intent);
     }
 
+    /**
+     * Validates a Plan-owned exact trading-session horizon without substituting a decision default.
+     * Plan creation may persist an undeclared horizon, but outcome generation, review scheduling,
+     * and order construction may not silently turn that absence into a one-month decision.
+     */
+    public static int requirePlanHorizon(String operation, Integer sessions) {
+        if (sessions == null) {
+            throw new IllegalArgumentException(operation
+                    + " requires an explicit horizon; no decision default was substituted");
+        }
+        if (sessions < 1 || sessions > 756) {
+            throw new IllegalArgumentException(operation
+                    + " horizon must be an exact trading-session value from 1 through 756");
+        }
+        return sessions;
+    }
+
     private static void require(String operation, Map<String, Object> required) {
         List<String> missing = required.entrySet().stream()
                 .filter(entry -> absent(entry.getValue()))

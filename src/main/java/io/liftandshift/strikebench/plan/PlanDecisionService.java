@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.paper.PackagePriceReceipt;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
+import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
@@ -250,9 +251,8 @@ public final class PlanDecisionService {
         }
         // The Plan context's horizon is a TRADING-SESSION count (Horizon.exactTradingSessions), so the
         // receipt freezes sessions. Only reviewDueDate() may turn them into a calendar date.
-        int reviewHorizonSessions = input.plan().context().horizonDays() == null
-                ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
-                : input.plan().context().horizonDays();
+        int reviewHorizonSessions = DecisionDeclarationPolicy.requirePlanHorizon(
+                "Plan decision review", input.plan().context().horizonDays());
         Long frozenMaxLossCents = trade == null
                 ? preview.maxLossCents()
                 : Long.valueOf(trade.maxLossCents());

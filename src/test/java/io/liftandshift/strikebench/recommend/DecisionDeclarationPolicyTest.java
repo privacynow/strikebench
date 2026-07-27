@@ -72,6 +72,22 @@ final class DecisionDeclarationPolicyTest {
                 .hasMessageContaining("maximum 756d");
     }
 
+    @Test
+    void planDecisionBoundariesRequireTheExactDeclaredSessionHorizon() {
+        assertThatNoException().isThrownBy(() ->
+                DecisionDeclarationPolicy.requirePlanHorizon("Plan outcome generation", 45));
+        assertThatThrownBy(() ->
+                DecisionDeclarationPolicy.requirePlanHorizon("Plan outcome generation", null))
+                .hasMessageContaining("explicit horizon")
+                .hasMessageContaining("no decision default was substituted");
+        assertThatThrownBy(() ->
+                DecisionDeclarationPolicy.requirePlanHorizon("Plan outcome generation", 0))
+                .hasMessageContaining("1 through 756");
+        assertThatThrownBy(() ->
+                DecisionDeclarationPolicy.requirePlanHorizon("Plan outcome generation", 757))
+                .hasMessageContaining("1 through 756");
+    }
+
     private static RecommendationEngine.Request request(String thesis, String horizon, String risk) {
         return new RecommendationEngine.Request("AAPL", thesis, horizon, risk,
                 null, null, null, null, true, false, "INCOME", null, null);

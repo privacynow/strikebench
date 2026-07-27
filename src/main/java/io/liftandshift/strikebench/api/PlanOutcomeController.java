@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.plan.PlanManagementService;
 import io.liftandshift.strikebench.plan.PlanOutcomeService;
 import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.plan.PlanStrategyService;
+import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
 import io.liftandshift.strikebench.sim.PathEnsembleService;
 import io.liftandshift.strikebench.sim.SimulationEngine;
 import io.liftandshift.strikebench.util.Json;
@@ -907,9 +908,8 @@ final class PlanOutcomeController {
     private static io.liftandshift.strikebench.sim.ScenarioSpec planScenarioSpec(
             io.liftandshift.strikebench.plan.Plan.View plan,
             io.liftandshift.strikebench.sim.ScenarioSpec raw) {
-        int days = plan.context().horizonDays() == null
-                ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
-                : plan.context().horizonDays();
+        int days = DecisionDeclarationPolicy.requirePlanHorizon(
+                "Plan outcome generation", plan.context().horizonDays());
         var base = raw == null
                 ? io.liftandshift.strikebench.sim.ScenarioSpec.preset(
                     io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP, days, 0, 4242L, 500)

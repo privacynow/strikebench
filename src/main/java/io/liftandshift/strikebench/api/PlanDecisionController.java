@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.plan.PlanDecisionService;
 import io.liftandshift.strikebench.plan.PlanManagementService;
 import io.liftandshift.strikebench.plan.PlanRehearsalService;
 import io.liftandshift.strikebench.plan.PlanService;
+import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
 import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.util.Json;
 
@@ -250,10 +251,10 @@ final class PlanDecisionController {
         int candidateQty = candidate.path("qty").asInt();
         if (candidateQty < 1) throw new IllegalStateException("selected candidate qty must be positive");
         int qty = body.qty() == null ? candidateQty : body.qty();
+        int horizonSessions = DecisionDeclarationPolicy.requirePlanHorizon(
+                "Plan order construction", plan.context().horizonDays());
         return new TradeOpenRequest(plan.symbol(), strategy, qty, legs,
-                plan.context().thesis(), (plan.context().horizonDays() == null
-                        ? io.liftandshift.strikebench.model.Horizon.MONTH.tradingSessions()
-                        : plan.context().horizonDays()) + "d",
+                plan.context().thesis(), horizonSessions + "d",
                 plan.context().riskMode(), plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
                 candidate.path("recommendationId").asText(null), body.feesOverrideCents(),
                 freezeAnalyzedPackage ? "ANALYZE" : "PLAN",
